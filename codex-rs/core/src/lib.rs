@@ -47,6 +47,7 @@ pub use codex_protocol::protocol::EnvironmentConfig;
 pub use codex_thread::BackgroundTerminalInfo;
 pub use codex_thread::CodexThread;
 pub use codex_thread::CodexThreadSettingsOverrides;
+pub use codex_thread::ConfigRefreshOutcome;
 pub use codex_thread::GuardianAuthorizationVersion;
 pub use codex_thread::GuardianRootMessage;
 pub use codex_thread::GuardianRootSnapshot;

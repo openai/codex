@@ -3,6 +3,7 @@ use super::*;
 use codex_mcp::McpServerSource;
 use codex_mcp::ReadResourceRequestParams;
 use codex_mcp::resolve_oauth_callback;
+use std::future::Future;
 
 use crate::thread_state::ThreadStateManager;
 
@@ -43,13 +44,17 @@ impl McpRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
-    pub(crate) async fn mcp_server_refresh(
+    pub(crate) fn mcp_server_refresh(
         &self,
         params: Option<()>,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.mcp_server_refresh_response(params)
-            .await
-            .map(|response| Some(response.into()))
+    ) -> impl Future<Output = Result<Option<ClientResponsePayload>, JSONRPCErrorError>> + Send + '_
+    {
+        // Keep refresh state behind a pointer before returning to the shared request handler.
+        Box::pin(async move {
+            self.mcp_server_refresh_response(params)
+                .await
+                .map(|response| Some(response.into()))
+        })
     }
 
     pub(crate) async fn mcp_server_status_list(

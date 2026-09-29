@@ -361,9 +361,12 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
     }
 
     // Reapplying an enabled config keeps the same recording lifetime.
-    session
-        .refresh_runtime_config((*session.get_config().await).clone())
-        .await;
+    let current_config = session.get_config().await;
+    let config = current_config.as_ref().clone();
+    assert_eq!(
+        session.refresh_runtime_config(current_config, config).await,
+        crate::ConfigRefreshOutcome::Published
+    );
     // Await in reverse order: each result must already own its record before history attachment.
     let mut outputs = Vec::new();
     for (arguments, future) in pending.into_iter().rev() {
@@ -413,12 +416,15 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
                 .expect("dispatched direct call"),
         );
     }
-    let mut config = (*session.get_config().await).clone();
+    let current_config = session.get_config().await;
+    let mut config = current_config.as_ref().clone();
     config
         .features
         .disable(Feature::ExecutedToolCallMetadata)
         .expect("disable metadata");
-    session.refresh_runtime_config(config.clone()).await;
+    let _ = session
+        .refresh_runtime_config(current_config, config.clone())
+        .await;
     let result = pending
         .remove(0)
         .await
@@ -438,7 +444,8 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
         .features
         .enable(Feature::ExecutedToolCallMetadata)
         .expect("re-enable metadata");
-    session.refresh_runtime_config(config).await;
+    let current_config = session.get_config().await;
+    let _ = session.refresh_runtime_config(current_config, config).await;
     let result = pending
         .pop()
         .expect("call prepared before disable")

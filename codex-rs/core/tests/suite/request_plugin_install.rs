@@ -1427,7 +1427,11 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
         "the refreshed installed-plugin cache should filter the cached recommendation"
     );
     drop(requests);
-    test.codex.refresh_runtime_config(test.config.clone()).await;
+    let current_config = test.codex.config().await;
+    let _ = test
+        .codex
+        .refresh_runtime_config(current_config, test.config.clone())
+        .await;
     test.submit_turn("check whether Calendar is still installed")
         .await?;
     let requests = mock.requests();

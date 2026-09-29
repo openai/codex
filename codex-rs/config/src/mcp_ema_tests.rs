@@ -109,97 +109,51 @@ fn ema_profiles_and_auth_modes_preserve_non_project_authority() {
 #[test]
 fn ema_registrations_require_one_atomic_non_project_source() {
     let (system, user, project) = local_sources("ema-registration-sources");
-    for (section, authorization, protected_changes) in [
-        (
-            "mcp_servers.enterprise",
-            r#"
-            auth='ema_auth'
-            oauth_resource='https://resource.example'
-            oauth.client_id='resource-client'
-            oauth.authorization_server_issuer='https://as.example'
-        "#,
-            &[
-                "oauth_resource='https://other.example'",
-                "oauth.client_id='other-client'",
-                "oauth.authorization_server_issuer='https://other-as.example'",
-            ] as &[&str],
-        ),
-        (
-            "plugins.\"sample@test\".mcp_servers.enterprise.ema_auth",
-            r#"
-            resource='https://resource.example'
-            client_id='resource-client'
-            authorization_server_issuer='https://as.example'
-        "#,
-            &[
-                "resource='https://other.example'",
-                "client_id='other-client'",
-                "authorization_server_issuer='https://other-as.example'",
-            ],
-        ),
+    let registration = r#"[mcp_servers.enterprise]
+url='https://resource.example/mcp'
+auth='ema_auth'
+scopes=['tools']
+oauth_resource='https://resource.example'
+oauth.client_id='resource-client'
+oauth.authorization_server_issuer='https://as.example'"#;
+    for (source, allowed) in [
+        (system.clone(), true),
+        (user.clone(), true),
+        (project.clone(), false),
     ] {
-        let registration = format!(
-            "[{section}]\nurl='https://resource.example/mcp'\nscopes=['tools']\n{authorization}"
-        );
-        for (source, allowed) in [
-            (system.clone(), true),
-            (user.clone(), true),
-            (project.clone(), false),
-        ] {
-            assert_eq!(
-                valid_ema_layers(vec![(source, registration.as_str())]),
-                allowed,
-                "{section}"
-            );
-        }
-        for change in protected_changes.iter().copied().chain([
-            "url='https://other.example/mcp'",
-            "url='https://resource.example/mcp/other'",
-            "scopes=['admin']",
-        ]) {
-            let overlay = format!("[{section}]\n{change}");
-            assert!(
-                !valid_ema_layers(vec![
-                    (system.clone(), &registration),
-                    (project.clone(), &overlay)
-                ]),
-                "{section}: {change}"
-            );
-        }
-        let higher = registration.replace("tools", "managed-tools");
-        assert!(
-            !valid_ema_layers(vec![
-                (system.clone(), &registration),
-                (user.clone(), &higher),
-                (project.clone(), &registration)
-            ]),
-            "project rollback: {section}"
-        );
-        let policy_section = section.strip_suffix(".ema_auth").unwrap_or(section);
-        let policy = format!(
-            "[{policy_section}]\nenabled=false\n[{policy_section}.tools.read]\napproval_mode='prompt'"
-        );
-        assert!(valid_ema_layers(vec![
-            (system.clone(), &registration),
-            (project.clone(), &policy)
-        ]));
-        if section.ends_with(".ema_auth") {
-            for required in [
-                "url='https://resource.example/mcp'\n",
-                "resource='https://resource.example'\n",
-            ] {
-                assert!(
-                    !valid_ema_layers(vec![(system.clone(), &registration.replace(required, ""))]),
-                    "missing {required}"
-                );
-            }
-        } else {
-            assert!(valid_ema_layers(vec![
-                (system.clone(), &registration),
-                (project.clone(), "[mcp_servers.enterprise]\nauth='ema_auth'")
-            ]));
-        }
+        assert_eq!(valid_ema_layers(vec![(source, registration)]), allowed);
     }
+    for change in [
+        "oauth_resource='https://other.example'",
+        "oauth.client_id='other-client'",
+        "oauth.authorization_server_issuer='https://other-as.example'",
+        "url='https://other.example/mcp'",
+        "url='https://resource.example/mcp/other'",
+        "scopes=['admin']",
+    ] {
+        let overlay = format!("[mcp_servers.enterprise]\n{change}");
+        assert!(!valid_ema_layers(vec![
+            (system.clone(), registration),
+            (project.clone(), &overlay),
+        ]));
+    }
+    let higher = registration.replace("tools", "managed-tools");
+    assert!(!valid_ema_layers(vec![
+        (system.clone(), registration),
+        (user, &higher),
+        (project.clone(), registration),
+    ]));
+    assert!(valid_ema_layers(vec![
+        (system.clone(), registration),
+        (
+            project.clone(),
+            "[mcp_servers.enterprise]\nenabled=false\n[mcp_servers.enterprise.tools.read]\napproval_mode='prompt'"
+        ),
+    ]));
+    assert!(valid_ema_layers(vec![
+        (system, registration),
+        (project, "[mcp_servers.enterprise]\nauth='ema_auth'"),
+    ]));
 }
 
 #[test]
@@ -219,32 +173,6 @@ fn project_cannot_reenable_trusted_disabled_ema_registration() {
     assert!(valid_ema_layers(vec![
         (system, &enabled),
         (project, "[mcp_servers.enterprise]\nenabled=false")
-    ]));
-}
-
-#[test]
-fn project_cannot_reenable_trusted_disabled_ema_plugin() {
-    let (system, _, project) = local_sources("ema-disabled-plugin");
-    let trusted = r#"
-        [plugins."sample@test".mcp_servers.enterprise]
-        enabled=false
-        [plugins."sample@test".mcp_servers.enterprise.ema_auth]
-        url='https://resource.example/mcp'
-        client_id='resource-client'
-        authorization_server_issuer='https://as.example'
-        resource='https://resource.example'
-    "#;
-    let project_enable = "[plugins.\"sample@test\".mcp_servers.enterprise]\nenabled=true";
-    assert!(!valid_ema_layers(vec![
-        (system.clone(), trusted),
-        (project.clone(), project_enable)
-    ]));
-    assert!(valid_ema_layers(vec![
-        (system, trusted),
-        (
-            project,
-            "[plugins.\"sample@test\".mcp_servers.enterprise]\nenabled=false"
-        )
     ]));
 }
 

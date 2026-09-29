@@ -294,7 +294,8 @@ async fn start_embedded_app_server(
     environment_manager: Arc<EnvironmentManager>,
     embedded_network_policy: codex_app_server_client::EmbeddedNetworkPolicy,
 ) -> color_eyre::Result<InProcessAppServerClient> {
-    start_embedded_app_server_with(
+    // Keep embedded startup state off the caller's stack during session transitions.
+    Box::pin(start_embedded_app_server_with(
         arg0_paths,
         config,
         cli_kv_overrides,
@@ -307,7 +308,7 @@ async fn start_embedded_app_server(
         environment_manager,
         embedded_network_policy,
         InProcessAppServerClient::start,
-    )
+    ))
     .await
 }
 

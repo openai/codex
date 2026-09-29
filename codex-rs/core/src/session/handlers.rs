@@ -238,7 +238,7 @@ pub fn refresh_mcp_servers(sess: &Session) {
 }
 
 pub async fn reload_user_config(sess: &Arc<Session>) {
-    sess.reload_user_config_layer().await;
+    Box::pin(sess.reload_user_config_layer()).await;
 }
 
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {

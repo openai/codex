@@ -357,11 +357,21 @@ pub(super) async fn reload_user_config(
     config_manager: &ConfigManager,
     thread_manager: &ThreadManager,
 ) {
+    // Reload owns several config snapshots; do not inline that future into dispatch.
+    Box::pin(reload_user_config_inner(config_manager, thread_manager)).await;
+}
+
+async fn reload_user_config_inner(config_manager: &ConfigManager, thread_manager: &ThreadManager) {
     if let Err(err) = config_manager
         .load_latest_config(/*fallback_cwd*/ None)
         .await
     {
         tracing::warn!("failed to rebuild user config for runtime refresh: {err}");
+        for thread_id in thread_manager.list_thread_ids().await {
+            if let Ok(thread) = thread_manager.get_thread(thread_id).await {
+                thread.disable_mcp_enterprise_auth().await;
+            }
+        }
         return;
     }
     let thread_ids = thread_manager.list_thread_ids().await;
@@ -369,22 +379,53 @@ pub(super) async fn reload_user_config(
         let Ok(thread) = thread_manager.get_thread(thread_id).await else {
             continue;
         };
-        let current_config = thread.config().await;
-        let next_config = match config_manager
-            .load_latest_config_with_session_layers(
-                &current_config.config_layer_stack,
-                &current_config.cwd,
-            )
-            .await
-        {
-            Ok(config) => config,
-            Err(err) => {
-                tracing::warn!(%thread_id, %err, "failed to reload thread configuration");
-                continue;
+        for attempt in 0..4 {
+            let current_config = thread.config().await;
+            let next_config = match config_manager
+                .load_latest_config_with_session_layers(
+                    &current_config.config_layer_stack,
+                    &current_config.cwd,
+                )
+                .await
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    tracing::warn!(%thread_id, %err, "failed to reload thread configuration");
+                    thread.disable_mcp_enterprise_auth().await;
+                    break;
+                }
+            };
+            let current_requirements = current_config.config_layer_stack.requirements();
+            let next_requirements = next_config.config_layer_stack.requirements();
+            let promote_mcp = current_requirements.mcp_servers != next_requirements.mcp_servers
+                || current_requirements.plugins != next_requirements.plugins
+                || current_requirements.feature_requirements
+                    != next_requirements.feature_requirements;
+            let outcome = if promote_mcp {
+                // Keep the loaded MCP map and its requirements under one owner,
+                // then reload the user update from that owner.
+                Box::pin(thread.refresh_mcp_config(current_config, next_config)).await
+            } else {
+                // Keep runtime refresh state off the request dispatcher's stack.
+                Box::pin(thread.refresh_runtime_config(current_config, next_config)).await
+            };
+            match outcome {
+                codex_core::ConfigRefreshOutcome::Published => {
+                    if !promote_mcp {
+                        break;
+                    }
+                }
+                codex_core::ConfigRefreshOutcome::Stale => {}
+                codex_core::ConfigRefreshOutcome::Rejected => {
+                    tracing::warn!(%thread_id, "stopped user configuration reload after rejected refresh");
+                    break;
+                }
             }
-        };
-        // Keep runtime refresh state off the request dispatcher's stack.
-        Box::pin(thread.refresh_runtime_config(next_config)).await;
+            if attempt == 3 {
+                thread.disable_mcp_enterprise_auth().await;
+                tracing::warn!(%thread_id, "configuration kept changing during user reload; enterprise MCP disabled");
+            }
+        }
     }
 }
 
@@ -842,6 +883,8 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::map_requirements_to_api;
+    use super::reload_user_config;
+    use crate::config_manager::ConfigManager;
     use codex_app_server_protocol::AllowDenyRequirement;
     use codex_app_server_protocol::AutoReviewRequirements;
     use codex_app_server_protocol::BrowserUseAccessApprovalLifetime;
@@ -858,21 +901,98 @@ mod tests {
     use codex_config::BrowserUseAccessApprovalLifetimeToml;
     use codex_config::BrowserUseOriginPolicyToml;
     use codex_config::BrowserUseRequirementsToml;
+    use codex_config::CloudConfigBundleLoader;
     use codex_config::ComputerUseMacosRequirementsToml;
     use codex_config::ComputerUseRequirementsToml;
     use codex_config::ComputerUseWindowsExeRequirementToml;
     use codex_config::ComputerUseWindowsRequirementsToml;
     use codex_config::ConfigRequirementsToml;
+    use codex_config::LoaderOverrides;
     use codex_config::ModelsRequirementsToml;
     use codex_config::NewThreadModelDefaultsToml;
     use codex_config::WindowsRequirementsToml;
     use codex_config::types::FeedbackConfigToml;
+    use codex_config::types::ToolSuggestDisabledTool;
+    use codex_exec_server::EnvironmentManager;
+    use codex_login::CodexAuth;
     use codex_protocol::config_types::ForcedLoginMethod;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn reload_user_config_preserves_promoted_mcp_allowlist_denial() -> anyhow::Result<()> {
+        let home = tempfile::tempdir()?;
+        let managed_config_path = home.path().join("managed_config.toml");
+        std::fs::write(
+            &managed_config_path,
+            r#"
+[features]
+use_xaa = true
+[mcp_enterprise_managed_auth.idp]
+issuer = "https://idp.example"
+client_id = "idp-client"
+[mcp_servers.enterprise]
+url = "https://resource.example/mcp"
+auth = "ema_auth"
+oauth_resource = "https://resource.example/mcp"
+[mcp_servers.enterprise.oauth]
+client_id = "mcp-client"
+"#,
+        )?;
+        let requirements_path = home.path().join("requirements.toml");
+        std::fs::write(
+            &requirements_path,
+            "[mcp_servers.enterprise.identity]\nurl = 'https://resource.example/mcp'\n",
+        )?;
+        let config_manager = ConfigManager::new_for_tests(
+            home.path().to_path_buf(),
+            Vec::new(),
+            LoaderOverrides::with_managed_config_path_for_tests(managed_config_path),
+            CloudConfigBundleLoader::default(),
+        );
+        let initial = config_manager
+            .load_latest_config(Some(home.path().to_path_buf()))
+            .await?;
+        let thread_manager = codex_core::test_support::thread_manager_with_models_provider_and_home(
+            CodexAuth::from_api_key("dummy"),
+            initial.model_provider.clone(),
+            initial.codex_home.to_path_buf(),
+            Arc::new(EnvironmentManager::default_for_tests()),
+        );
+        let thread = thread_manager
+            .start_thread(codex_core::StartThreadOptions::new(initial))
+            .await?
+            .thread;
+        assert!(thread.config().await.mcp_servers.get()["enterprise"].enabled);
+
+        std::fs::write(&requirements_path, "[mcp_servers]\n")?;
+        std::fs::write(
+            home.path().join(codex_config::CONFIG_TOML_FILE),
+            "[tool_suggest]\ndisabled_tools = [{ type = 'connector', id = 'calendar' }]\n",
+        )?;
+        reload_user_config(&config_manager, &thread_manager).await;
+
+        let refreshed = thread.config().await;
+        assert_eq!(
+            refreshed
+                .config_layer_stack
+                .requirements()
+                .mcp_servers
+                .as_ref()
+                .map(|requirements| &requirements.value),
+            Some(&BTreeMap::new())
+        );
+        assert!(!refreshed.mcp_servers.get()["enterprise"].enabled);
+        assert_eq!(
+            refreshed.tool_suggest.disabled_tools,
+            vec![ToolSuggestDisabledTool::connector("calendar")]
+        );
+        Ok(())
+    }
 
     fn map_test_requirements(
         requirements: ConfigRequirementsToml,

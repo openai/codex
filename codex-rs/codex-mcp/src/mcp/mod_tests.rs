@@ -132,7 +132,7 @@ pub(crate) fn test_elicitation_config(
 }
 
 #[test]
-fn ema_catalog_supports_configured_installed_and_selected_plugins_without_widening_policy() {
+fn ema_catalog_allows_only_configured_servers_without_widening_policy() {
     let server: McpServerConfig = serde_json::from_value(serde_json::json!({
         "url": "https://resource.example/mcp", "auth": "ema_auth",
         "oauth": { "client_id": "resource-client", "authorization_server_issuer": "https://as.example" }
@@ -179,11 +179,9 @@ fn ema_catalog_supports_configured_installed_and_selected_plugins_without_wideni
         });
         let servers = effective_mcp_servers(&config, /*auth*/ None);
         for name in ["configured", "installed", "selected"] {
-            assert_eq!(servers[name].enabled(), xaa_enabled && !denied, "{name}");
-            assert_eq!(
-                servers[name].config().oauth_idp(),
-                xaa_enabled.then_some(&idp)
-            );
+            let eligible = name == "configured" && xaa_enabled;
+            assert_eq!(servers[name].enabled(), eligible && !denied, "{name}");
+            assert_eq!(servers[name].config().oauth_idp(), eligible.then_some(&idp));
             assert_eq!(servers[name].config().auth, McpServerAuth::EmaAuth);
         }
     }

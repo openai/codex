@@ -143,9 +143,10 @@ async fn local_compaction_respects_tool_metadata_state(
     assert!(metadata_bytes > 2 * 1024 * 1024);
 
     if !metadata_enabled {
-        let mut config = (*session.get_config().await).clone();
+        let current_config = session.get_config().await;
+        let mut config = current_config.as_ref().clone();
         config.features.disable(Feature::ExecutedToolCallMetadata)?;
-        session.refresh_runtime_config(config).await;
+        let _ = session.refresh_runtime_config(current_config, config).await;
     }
 
     let mock = responses::mount_sse_once(

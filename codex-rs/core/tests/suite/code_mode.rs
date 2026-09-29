@@ -2742,12 +2742,16 @@ async fn code_mode_result_metadata_follows_runtime_recording_enablement() -> Res
     );
     for (call_id, enabled) in [("call-off", false), ("call-on", true)] {
         if enabled {
+            let current_config = test.codex.config().await;
             let mut config = test.config.clone();
             config
                 .features
                 .enable(Feature::ExecutedToolCallMetadata)
                 .unwrap();
-            test.codex.refresh_runtime_config(config).await;
+            let _ = test
+                .codex
+                .refresh_runtime_config(current_config, config)
+                .await;
             // Runtime recording changes without updating the session's execution features.
             assert!(
                 !test
@@ -2910,7 +2914,11 @@ async fn code_mode_result_metadata_keeps_prepared_call_binding_across_runtime_re
             /*originator*/ None,
         )),
     };
-    test.codex.refresh_runtime_config(test.config.clone()).await;
+    let current_config = test.codex.config().await;
+    let _ = test
+        .codex
+        .refresh_runtime_config(current_config, test.config.clone())
+        .await;
     release_tx.send(()).unwrap();
     let wait = responses::mount_function_call_agent_response(
         &server,

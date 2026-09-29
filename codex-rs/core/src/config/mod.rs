@@ -176,6 +176,8 @@ mod permission_profile_selection;
 mod permissions;
 mod requirements;
 mod resolved_permission_profile;
+mod runtime_refresh;
+pub(crate) use runtime_refresh::RuntimeConfigRefresh;
 #[cfg(test)]
 mod schema;
 mod token_budget_startup;

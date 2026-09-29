@@ -194,12 +194,18 @@ async fn guardian_conversation_history(scenario: HistoryScenario) -> anyhow::Res
                 "requires approval on the parent",
             ),
         ] {
+            let current_config = test.codex.config().await;
             let mut config = test.config.clone();
             config.config_layer_stack = config.config_layer_stack.with_user_config(
                 &config.codex_home.join("config.toml"),
                 toml::from_str(policy)?,
             )?;
-            test.codex.refresh_runtime_config(config).await;
+            assert_eq!(
+                test.codex
+                    .refresh_runtime_config(current_config, config)
+                    .await,
+                codex_core::ConfigRefreshOutcome::Published
+            );
             let followup =
                 responses::mount_sse_sequence(&server, review_responses(label, &actions[1..]))
                     .await;

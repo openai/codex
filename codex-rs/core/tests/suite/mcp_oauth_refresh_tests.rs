@@ -206,16 +206,23 @@ async fn oauth_mode_refresh_replaces_the_live_connection(
     assert_eq!(startup_control.initialize_attempts(), 1);
 
     for (enabled, expected_initializations) in [(true, 2), (true, 2), (false, 3)] {
+        let current_config = fixture.codex.config().await;
         let mut refreshed_config = fixture.config.clone();
         refreshed_config
             .features
             .set_enabled(Feature::McpOAuthRefreshCoordination, enabled)?;
         match refresh_path {
             ConfigRefreshPath::Runtime => {
-                fixture.codex.refresh_runtime_config(refreshed_config).await;
+                let _ = fixture
+                    .codex
+                    .refresh_runtime_config(current_config, refreshed_config)
+                    .await;
             }
             ConfigRefreshPath::Mcp => {
-                fixture.codex.refresh_mcp_config(refreshed_config).await;
+                let _ = fixture
+                    .codex
+                    .refresh_mcp_config(current_config, refreshed_config)
+                    .await;
             }
         }
         // A normal tool call reconciles the refreshed config without forcing a reconnect.

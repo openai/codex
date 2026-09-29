@@ -16,6 +16,7 @@ use crate::agents_md_manager::SessionInstructions;
 use crate::compact::InitialContextInjection;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
+use crate::config::RuntimeConfigRefresh;
 use crate::context::ContextualUserFragment;
 use crate::context::DeveloperInstructions;
 use crate::context::TurnAborted;
@@ -2028,8 +2029,11 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
     };
     assert!(session.hooks().preview_session_start(&request).is_empty());
 
+    let current_config = session.get_config().await;
     let next_config = load_latest_config_for_session(&session).await;
-    session.refresh_runtime_config(next_config).await;
+    let _ = session
+        .refresh_runtime_config(current_config, next_config)
+        .await;
 
     assert_eq!(session.hooks().preview_session_start(&request).len(), 1);
     Ok(())
@@ -2089,8 +2093,20 @@ disabled_tools = [
     let mut next_config = load_latest_config_for_session(&session).await;
     next_config.model = Some("gpt-5.4".to_string());
     next_config.notify = Some(vec!["echo".to_string()]);
+    let mcp_protocol_enabled = !original.features.enabled(Feature::Mcp20260728);
+    let apps_protocol_enabled = !original.features.enabled(Feature::CodexAppsMcp20260728);
+    next_config
+        .features
+        .set_enabled(Feature::Mcp20260728, mcp_protocol_enabled)
+        .expect("set MCP protocol rollout");
+    next_config
+        .features
+        .set_enabled(Feature::CodexAppsMcp20260728, apps_protocol_enabled)
+        .expect("set Codex Apps MCP protocol rollout");
 
-    session.refresh_runtime_config(next_config).await;
+    let _ = session
+        .refresh_runtime_config(Arc::clone(&original), next_config)
+        .await;
 
     let config = session.get_config().await;
     let apps_toml = config
@@ -2112,6 +2128,14 @@ disabled_tools = [
     assert_eq!(config.model, original.model);
     assert_eq!(config.notify, original.notify);
     assert_eq!(
+        config.features.enabled(Feature::Mcp20260728),
+        mcp_protocol_enabled
+    );
+    assert_eq!(
+        config.features.enabled(Feature::CodexAppsMcp20260728),
+        apps_protocol_enabled
+    );
+    assert_eq!(
         config.tool_suggest.disabled_tools,
         vec![
             ToolSuggestDisabledTool::connector("calendar"),
@@ -2120,9 +2144,38 @@ disabled_tools = [
     );
 }
 
+#[test_case::test_case(false; "published")]
+#[test_case::test_case(true; "rejected")]
 #[tokio::test]
-async fn refresh_mcp_config_replaces_managed_server_and_plugin_requirements() {
+async fn refresh_mcp_config_replaces_managed_server_and_plugin_requirements(reject: bool) {
     let (session, _turn_context) = make_session_and_context().await;
+    let original = session.get_config().await;
+    if reject {
+        let mut config = original.as_ref().clone();
+        let mut layers: Vec<_> = config
+            .config_layer_stack
+            .all_layers_low_to_high()
+            .filter(|layer| !matches!(layer.name, codex_config::ConfigLayerSource::SessionFlags))
+            .cloned()
+            .collect();
+        layers.push(codex_config::ConfigLayerEntry::new(
+            codex_config::ConfigLayerSource::SessionFlags,
+            toml::from_str("features = 'invalid retained features'").unwrap(),
+        ));
+        config.config_layer_stack = ConfigLayerStack::new(
+            layers,
+            config.config_layer_stack.requirements().clone(),
+            config.config_layer_stack.requirements_toml().clone(),
+        )
+        .unwrap();
+        session
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .original_config_do_not_use = Arc::new(config);
+    }
+    let original = session.get_config().await;
     let server = serde_json::from_value::<McpServerConfig>(json!({
         "url": "https://example.com/mcp",
         "enabled": true
@@ -2137,12 +2190,22 @@ async fn refresh_mcp_config_replaces_managed_server_and_plugin_requirements() {
         codex_config::PluginRequirementsToml {
             mcp_servers: Some(std::collections::BTreeMap::from([(
                 "beta".to_string(),
-                requirement,
+                requirement.clone(),
             )])),
         },
     )]);
 
-    let mut next_config = session.get_config().await.as_ref().clone();
+    let mut next_config = original.as_ref().clone();
+    let mcp_protocol_enabled = !original.features.enabled(Feature::Mcp20260728);
+    let apps_protocol_enabled = !original.features.enabled(Feature::CodexAppsMcp20260728);
+    next_config
+        .features
+        .set_enabled(Feature::Mcp20260728, mcp_protocol_enabled)
+        .expect("set MCP protocol rollout");
+    next_config
+        .features
+        .set_enabled(Feature::CodexAppsMcp20260728, apps_protocol_enabled)
+        .expect("set Codex Apps MCP protocol rollout");
     next_config.mcp_servers = codex_config::Constrained::normalized(
         HashMap::from([("beta".to_string(), server.clone())]),
         |mut servers: HashMap<String, McpServerConfig>| {
@@ -2152,11 +2215,29 @@ async fn refresh_mcp_config_replaces_managed_server_and_plugin_requirements() {
     )
     .expect("valid refreshed MCP constraints");
     let mut requirements = next_config.config_layer_stack.requirements().clone();
+    let mcp_requirements = BTreeMap::from([("beta".to_string(), requirement)]);
+    requirements.mcp_servers = Some(Sourced::new(
+        mcp_requirements.clone(),
+        RequirementSource::LegacyManagedConfigTomlFromMdm,
+    ));
     requirements.plugins = Some(Sourced::new(
         plugin_requirements.clone(),
         RequirementSource::LegacyManagedConfigTomlFromMdm,
     ));
+    let feature_requirements: codex_config::FeatureRequirementsToml =
+        serde_json::from_value(json!({"secret_auth_storage": false})).unwrap();
+    requirements.feature_requirements = Some(Sourced::new(
+        feature_requirements.clone(),
+        RequirementSource::LegacyManagedConfigTomlFromMdm,
+    ));
+    next_config.features = crate::config::ManagedFeatures::from_configured(
+        next_config.features.get().clone(),
+        requirements.feature_requirements.clone(),
+    )
+    .unwrap();
     let mut requirements_toml = next_config.config_layer_stack.requirements_toml().clone();
+    requirements_toml.feature_requirements = Some(feature_requirements);
+    requirements_toml.mcp_servers = Some(mcp_requirements);
     requirements_toml.plugins = Some(plugin_requirements.clone());
     let layers = next_config
         .config_layer_stack
@@ -2166,9 +2247,35 @@ async fn refresh_mcp_config_replaces_managed_server_and_plugin_requirements() {
     next_config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
         .expect("managed MCP and plugin requirements");
 
-    session.refresh_mcp_config(next_config).await;
+    let outcome = session
+        .refresh_mcp_config(Arc::clone(&original), next_config)
+        .await;
+    assert_eq!(
+        outcome,
+        if reject {
+            crate::ConfigRefreshOutcome::Rejected
+        } else {
+            crate::ConfigRefreshOutcome::Published
+        }
+    );
 
     let config = session.get_config().await;
+    assert!(!config.features.enabled(Feature::SecretAuthStorage));
+    assert!(
+        config
+            .config_layer_stack
+            .requirements()
+            .feature_requirements
+            .is_some()
+    );
+    assert_eq!(
+        config.features.enabled(Feature::Mcp20260728),
+        mcp_protocol_enabled
+    );
+    assert_eq!(
+        config.features.enabled(Feature::CodexAppsMcp20260728),
+        apps_protocol_enabled
+    );
     let mut managed_servers = config.mcp_servers.clone();
     managed_servers
         .set(HashMap::from([
@@ -2176,10 +2283,13 @@ async fn refresh_mcp_config_replaces_managed_server_and_plugin_requirements() {
             ("beta".to_string(), server.clone()),
         ]))
         .expect("apply refreshed managed MCP constraints");
-    assert_eq!(
-        managed_servers.get(),
-        &HashMap::from([("beta".to_string(), server.clone())])
+    assert!(
+        !managed_servers
+            .get()
+            .get("alpha")
+            .is_some_and(|server| server.enabled)
     );
+    assert_eq!(managed_servers.get()["beta"], server);
     assert_eq!(
         config
             .config_layer_stack
@@ -2197,6 +2307,73 @@ async fn refresh_mcp_config_replaces_managed_server_and_plugin_requirements() {
     config.apply_plugin_mcp_server_requirements("example-plugin", &mut plugin_servers);
     assert!(!plugin_servers["alpha"].enabled);
     assert!(plugin_servers["beta"].enabled);
+    let reloaded = config.resolve_runtime_refresh(&config, RuntimeConfigRefresh::User);
+    if let Ok(reloaded) = reloaded {
+        assert_eq!(
+            reloaded.config_layer_stack.requirements().plugins,
+            config.config_layer_stack.requirements().plugins
+        );
+    } else {
+        assert!(reject);
+    }
+}
+
+#[test_case::test_case(RuntimeConfigRefresh::User; "user refresh")]
+#[test_case::test_case(RuntimeConfigRefresh::Mcp; "MCP refresh")]
+#[tokio::test]
+async fn refresh_config_rejects_stale_owner_without_effects(scope: RuntimeConfigRefresh) {
+    let (session, _turn_context) = make_session_and_context().await;
+    let stale_owner = session.get_config().await;
+    let mut stale_config = stale_owner.as_ref().clone();
+    stale_config
+        .features
+        .set_enabled(
+            Feature::Mcp20260728,
+            !stale_owner.features.enabled(Feature::Mcp20260728),
+        )
+        .expect("set MCP protocol rollout");
+    assert_eq!(
+        session
+            .refresh_runtime_config(Arc::clone(&stale_owner), stale_owner.as_ref().clone())
+            .await,
+        crate::ConfigRefreshOutcome::Published
+    );
+    let current_owner = session.get_config().await;
+    assert!(session.mcp_refresh.claim());
+
+    assert_eq!(
+        session
+            .refresh_config(stale_owner, stale_config, scope)
+            .await,
+        crate::ConfigRefreshOutcome::Stale
+    );
+
+    assert!(Arc::ptr_eq(&current_owner, &session.get_config().await));
+    assert!(!session.mcp_refresh.is_pending());
+}
+
+#[tokio::test]
+async fn refresh_file_config_rejects_stale_owner_without_effects() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let stale_owner = session.get_config().await;
+    assert_eq!(
+        session
+            .refresh_runtime_config(Arc::clone(&stale_owner), stale_owner.as_ref().clone())
+            .await,
+        crate::ConfigRefreshOutcome::Published
+    );
+    let current_owner = session.get_config().await;
+    assert!(session.mcp_refresh.claim());
+
+    assert_eq!(
+        session
+            .refresh_file_config(Arc::clone(&stale_owner), stale_owner.as_ref().clone())
+            .await,
+        crate::ConfigRefreshOutcome::Stale
+    );
+
+    assert!(Arc::ptr_eq(&current_owner, &session.get_config().await));
+    assert!(!session.mcp_refresh.is_pending());
 }
 
 #[test]
@@ -3771,8 +3948,11 @@ disabled_tools = [
 "#,
     )
     .expect("write user config");
+    let current_config = session.get_config().await;
     let next_config = load_latest_config_for_session(&session).await;
-    session.refresh_runtime_config(next_config).await;
+    let _ = session
+        .refresh_runtime_config(current_config, next_config)
+        .await;
 
     let expected_disabled_tools = vec![
         ToolSuggestDisabledTool::connector("calendar"),
@@ -13095,4 +13275,66 @@ async fn session_start_hooks_require_project_trust_without_config_toml() -> std:
     }
 
     Ok(())
+}
+
+#[tokio::test]
+async fn rejected_mcp_refresh_then_corrected_user_config_blocks_ordinary_replacement() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let base = session.get_config().await;
+    let enterprise: McpServerConfig = serde_json::from_value(json!({
+        "url": "https://enterprise.example/mcp", "auth": "ema_auth", "enabled": true
+    }))
+    .unwrap();
+    let ordinary: McpServerConfig = serde_json::from_value(json!({
+        "url": "https://ordinary.example/mcp", "enabled": true
+    }))
+    .unwrap();
+    let mut initial = base.as_ref().clone();
+    initial.mcp_servers = crate::config::Constrained::allow_any(HashMap::from([(
+        "enterprise".to_string(),
+        enterprise,
+    )]));
+    initial.config_layer_stack = ConfigLayerStack::new(
+        vec![codex_config::ConfigLayerEntry::new(
+            codex_config::ConfigLayerSource::User {
+                file: initial.codex_home.join(CONFIG_TOML_FILE),
+                profile: None,
+            },
+            toml::from_str("features = 'invalid retained features'").unwrap(),
+        )],
+        base.config_layer_stack.requirements().clone(),
+        base.config_layer_stack.requirements_toml().clone(),
+    )
+    .unwrap();
+    session
+        .state
+        .lock()
+        .await
+        .session_configuration
+        .original_config_do_not_use = Arc::new(initial);
+    let current = session.get_config().await;
+    let mut corrected = base.as_ref().clone();
+    corrected.mcp_servers = crate::config::Constrained::allow_any(HashMap::from([(
+        "enterprise".to_string(),
+        ordinary,
+    )]));
+    assert_eq!(
+        session.refresh_mcp_config(current, corrected.clone()).await,
+        crate::ConfigRefreshOutcome::Rejected
+    );
+    let rejected = session.get_config().await;
+    assert!(rejected.mcp_enterprise_managed_auth.is_none());
+    assert_eq!(
+        session.refresh_runtime_config(rejected, corrected).await,
+        crate::ConfigRefreshOutcome::Published
+    );
+    let final_config = session.get_config().await;
+    assert!(
+        !final_config
+            .mcp_servers
+            .get()
+            .get("enterprise")
+            .is_some_and(|server| server.enabled),
+        "rejection must not permit same-name ordinary-auth replacement in this session"
+    );
 }

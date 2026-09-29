@@ -6,6 +6,7 @@ use anyhow::Result;
 use codex_config::LoaderOverrides;
 use codex_config::McpServerAuth;
 use codex_config::test_support::CloudConfigBundleFixture;
+use codex_core::ConfigRefreshOutcome;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::set_project_trust_level;
 use codex_login::CodexAuth;
@@ -16,27 +17,83 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
-use serde_json::json;
 use tempfile::tempdir;
 use test_case::test_case;
 use wiremock::MockServer;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn refresh_ema_denial_clears_authority_for_configured_servers() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let endpoint = MockServer::start().await;
+    let responses_server = responses::start_mock_server().await;
+    let home = Arc::new(tempdir()?);
+    let url = format!("{}/mcp", endpoint.uri());
+    let policy = |revision| {
+        format!(
+            "[features]\nuse_xaa = true\napps = false\nsecret_auth_storage = false\n\
+             [mcp_enterprise_managed_auth.idp]\nissuer = '{}/idp-{revision}'\nclient_id = 'client-{revision}'\n\
+             [mcp_servers.enterprise]\nurl = '{url}'\nauth = 'ema_auth'\noauth_resource = 'resource-{revision}'\n",
+            endpoint.uri(),
+        )
+    };
+    let fixture = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_auth(CodexAuth::from_api_key("test-api-key"))
+        .with_cloud_config_bundle(CloudConfigBundleFixture::loader_with_enterprise_config(
+            policy(1),
+        ))
+        .build_with_auto_env(&responses_server)
+        .await?;
+    let (before, _) = fixture.codex.current_mcp_config_and_runtime_context().await;
+    let current_config = fixture.codex.config().await;
+    let refreshed = ConfigBuilder::default()
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(fixture.config.cwd.to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::enterprise_config(policy(2))
+                .add_enterprise_requirement("[features]\nuse_xaa = false\n")
+                .into_loader(),
+        )
+        .build()
+        .await?;
+    assert_eq!(
+        fixture
+            .codex
+            .refresh_mcp_config(current_config, refreshed)
+            .await,
+        ConfigRefreshOutcome::Published
+    );
+    let (after, _) = fixture.codex.current_mcp_config_and_runtime_context().await;
+    let old_servers = codex_mcp::configured_mcp_servers(&before);
+    let new_servers = codex_mcp::configured_mcp_servers(&after);
+    let old = old_servers["enterprise"]
+        .ema_registration()
+        .expect("original registration");
+    assert!(old_servers["enterprise"].enabled);
+    assert!(
+        !new_servers["enterprise"].enabled,
+        "managed XAA opt-out must apply"
+    );
+    assert_eq!(old.resource(), Some("resource-1"));
+    assert!(new_servers["enterprise"].ema_registration().is_none());
+    fixture.codex.shutdown_and_wait().await?;
+    assert!(endpoint.received_requests().await.unwrap().is_empty());
+    Ok(())
+}
 
 #[derive(Clone, Copy)]
 enum ActivationScenario {
     FeatureDisabled,
     MissingIdp,
-    PluginSelfOptIn,
     OperatorEnabled,
 }
 
 #[test_case(ActivationScenario::FeatureDisabled; "feature disabled")]
 #[test_case(ActivationScenario::MissingIdp; "missing IdP")]
-#[test_case(ActivationScenario::PluginSelfOptIn; "plugin cannot select enterprise auth")]
 #[test_case(ActivationScenario::OperatorEnabled; "operator registration is eligible for startup")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn enterprise_activation_respects_managed_config_and_plugin_ownership(
-    scenario: ActivationScenario,
-) -> Result<()> {
+async fn enterprise_activation_respects_configuration(scenario: ActivationScenario) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
     let responses_server = responses::start_mock_server().await;
@@ -52,19 +109,9 @@ async fn enterprise_activation_respects_managed_config_and_plugin_ownership(
             "[mcp_enterprise_managed_auth.idp]\nissuer = {issuer:?}\nclient_id = \"idp-client\"\n"
         ));
     }
-    if matches!(scenario, ActivationScenario::PluginSelfOptIn) {
-        let plugin_root = super::plugins::write_sample_plugin_manifest_and_config(&home);
-        std::fs::write(
-            plugin_root.join(".mcp.json"),
-            serde_json::to_vec(&json!({"mcpServers": {"enterprise": {
-                "url": resource, "auth": "ema_auth", "oauth": {"client_id": "mcp-client"}
-            }}}))?,
-        )?;
-    } else {
-        managed_config.push_str(&format!(
-            "[mcp_servers.enterprise]\nurl = {resource:?}\nauth = \"ema_auth\"\n[mcp_servers.enterprise.oauth]\nclient_id = \"mcp-client\"\n"
-        ));
-    }
+    managed_config.push_str(&format!(
+        "[mcp_servers.enterprise]\nurl = {resource:?}\nauth = \"ema_auth\"\n[mcp_servers.enterprise.oauth]\nclient_id = \"mcp-client\"\n"
+    ));
     let fixture = test_codex()
         .with_home(home)
         .with_auth(CodexAuth::from_api_key("test-api-key"))
@@ -76,7 +123,6 @@ async fn enterprise_activation_respects_managed_config_and_plugin_ownership(
     let (runtime_config, _) = fixture.codex.current_mcp_config_and_runtime_context().await;
     let expected_enabled = match scenario {
         ActivationScenario::FeatureDisabled | ActivationScenario::MissingIdp => Some(false),
-        ActivationScenario::PluginSelfOptIn => None,
         ActivationScenario::OperatorEnabled => Some(true),
     };
     assert_eq!(

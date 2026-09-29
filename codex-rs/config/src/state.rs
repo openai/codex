@@ -307,6 +307,21 @@ impl ConfigLayerStack {
         self.ignore_user_and_project_exec_policy_rules
     }
 
+    /// Retains session layers while adopting current MCP, plugin, and feature restrictions.
+    /// Rejected refreshes must not restore an earlier policy on the next user reload.
+    pub fn with_mcp_requirements_from(&self, incoming: &Self) -> Self {
+        let mut stack = self.clone();
+        stack.requirements.mcp_servers = incoming.requirements.mcp_servers.clone();
+        stack.requirements.plugins = incoming.requirements.plugins.clone();
+        stack.requirements.feature_requirements =
+            incoming.requirements.feature_requirements.clone();
+        stack.requirements_toml.mcp_servers = incoming.requirements_toml.mcp_servers.clone();
+        stack.requirements_toml.plugins = incoming.requirements_toml.plugins.clone();
+        stack.requirements_toml.feature_requirements =
+            incoming.requirements_toml.feature_requirements.clone();
+        stack
+    }
+
     pub(crate) fn with_startup_warnings(mut self, startup_warnings: Vec<String>) -> Self {
         self.startup_warnings = Some(startup_warnings);
         self

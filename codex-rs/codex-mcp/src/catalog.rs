@@ -522,10 +522,13 @@ impl McpCatalogBuilder {
                     let mut registration = *registration;
                     let persist_disabled_name =
                         registration.source.disabled_registration_is_name_veto()
-                            && !matches!(
-                                registration.config.disabled_reason,
-                                Some(McpServerDisabledReason::EmaRegistration)
-                            );
+                            && !(matches!(
+                                registration.source,
+                                McpServerSource::Plugin(_) | McpServerSource::SelectedPlugin(_)
+                            ) && matches!(
+                                registration.config.auth,
+                                codex_config::McpServerAuth::EmaAuth
+                            ));
                     if !registration.config.enabled || disabled_server_names.contains(&name) {
                         registration.config.enabled = false;
                         if persist_disabled_name {
@@ -537,9 +540,10 @@ impl McpCatalogBuilder {
                         registration.config.auth,
                         codex_config::McpServerAuth::EmaAuth
                     ) {
-                        let allowed = ema_idp.as_ref().is_some_and(|idp| {
-                            registration.config.resolve_ema_registration(idp).is_ok()
-                        });
+                        let allowed = matches!(&registration.source, McpServerSource::Config)
+                            && ema_idp.as_ref().is_some_and(|idp| {
+                                registration.config.resolve_ema_registration(idp).is_ok()
+                            });
                         // EMA denial must not become a persistent name veto.
                         registration.config.enabled &= allowed;
                     }

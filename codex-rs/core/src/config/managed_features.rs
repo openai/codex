@@ -118,6 +118,28 @@ impl ManagedFeatures {
         self.set(next)
     }
 
+    /// Refresh ordinary MCP feature values and pins without changing session-static features.
+    pub(crate) fn refresh_mcp_features(&mut self, next: &Self) -> ConstraintResult<()> {
+        let mut refreshed = self.clone();
+        let mut values = self.get().clone();
+        for feature in [
+            Feature::EnableMcpApps,
+            Feature::SecretAuthStorage,
+            Feature::McpOAuthRefreshCoordination,
+        ] {
+            values.set_enabled(feature, next.enabled(feature));
+            if let Some(enabled) = next.pinned_features.get(&feature) {
+                refreshed.pinned_features.insert(feature, *enabled);
+            } else {
+                refreshed.pinned_features.remove(&feature);
+            }
+        }
+        refreshed.value.source = next.value.source.clone().or(refreshed.value.source);
+        refreshed.set(values)?;
+        *self = refreshed;
+        Ok(())
+    }
+
     pub fn enable(&mut self, feature: Feature) -> ConstraintResult<()> {
         self.set_enabled(feature, /*enabled*/ true)
     }

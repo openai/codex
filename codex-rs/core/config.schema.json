@@ -3517,14 +3517,6 @@
           },
           "type": "array"
         },
-        "ema_auth": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/PluginMcpServerEmaAuthConfig"
-            }
-          ],
-          "description": "Host-configured EMA registration; the plugin still owns its endpoint."
-        },
         "enabled": {
           "default": true,
           "description": "When `false`, Codex skips initializing this plugin MCP server.",
@@ -3545,39 +3537,6 @@
           "type": "object"
         }
       },
-      "type": "object"
-    },
-    "PluginMcpServerEmaAuthConfig": {
-      "additionalProperties": false,
-      "description": "Resource registration applied through an existing per-plugin policy overlay. The enterprise IdP is selected separately by trusted host configuration.",
-      "properties": {
-        "authorization_server_issuer": {
-          "type": "string"
-        },
-        "client_id": {
-          "type": "string"
-        },
-        "resource": {
-          "type": "string"
-        },
-        "scopes": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "url": {
-          "description": "Exact plugin endpoint approved by the host; never overrides the declaration.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "authorization_server_issuer",
-        "client_id",
-        "resource",
-        "url"
-      ],
       "type": "object"
     },
     "ProfileTui": {

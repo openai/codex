@@ -4386,6 +4386,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         Some("OAuth sign-in is still pending."),
     );
 
+    let current_config = fixture.codex.config().await;
     let mut refreshed_config = fixture.config.clone();
     let mut refreshed_servers = refreshed_config.mcp_servers.get().clone();
     let discovered_server = refreshed_servers
@@ -4398,9 +4399,9 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         .set(refreshed_servers)
         .expect("test MCP servers should accept the discovered OAuth server");
     let discovered_turn = tokio::time::timeout(Duration::from_secs(5), async {
-        fixture
+        let _ = fixture
             .codex
-            .refresh_runtime_config(refreshed_config.clone())
+            .refresh_runtime_config(current_config, refreshed_config.clone())
             .await;
         fixture
             .codex
@@ -4444,7 +4445,11 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         )
         .await?
     );
-    fixture.codex.refresh_runtime_config(refreshed_config).await;
+    let current_config = fixture.codex.config().await;
+    let _ = fixture
+        .codex
+        .refresh_runtime_config(current_config, refreshed_config)
+        .await;
     let logged_out_startup = tokio::time::timeout(
         Duration::from_secs(5),
         wait_for_event(&fixture.codex, |event| {

@@ -344,6 +344,14 @@ and migration remain supported so resuming, reading, and forking those threads
 preserves the surviving history. This disk compatibility does not require restoring
 support for new `thread/rollback` requests.
 
+# MCP configuration reload
+
+`config/mcpServer/reload` returns an error when a loaded thread rejects the
+refreshed enterprise policy. The rejected thread retains its previous configuration
+layers with enterprise MCP disabled. Other planned thread refreshes are processed
+before the rejection is reported, so an error does not imply that no changes were
+applied. Correct the policy before retrying the reload.
+
 # Selected workspace routing
 
 The experimental `account/read.workspaceRouting` response field returns the selected ChatGPT workspace's `chatgptAccountId`, resolved HTTPS `backendOrigin`, and backend-provided `accountRoutingOverride`. The routing value is `us`, `us_cr`, or the explicit `NO_CONSTRAINT` value. API-only and signed-out accounts return `null` and do not need `accounts/check`.

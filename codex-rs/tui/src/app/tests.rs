@@ -8175,7 +8175,7 @@ async fn remembered_current_cwd_stays_at_launch_across_in_app_resumes() -> Resul
         Arc::new(EnvironmentManager::default_for_tests()),
     ))
     .await?;
-    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
     app.config = config;
     app.launch_cwd = launch_cwd.clone();
     app.state_db = state_db;

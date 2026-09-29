@@ -1021,9 +1021,15 @@ pub struct PluginMcpServerConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 
-    /// Host-configured EMA registration; the plugin still owns its endpoint.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ema_auth: Option<PluginMcpServerEmaAuthConfig>,
+    /// Retired EMA overlays must disable the server instead of losing their auth policy.
+    #[serde(
+        default,
+        rename = "ema_auth",
+        deserialize_with = "unsupported_plugin_ema_auth",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    #[schemars(skip)]
+    pub has_unsupported_ema_auth: bool,
 
     /// Approval mode for tools in this server unless a tool override exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1046,7 +1052,7 @@ impl Default for PluginMcpServerConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            ema_auth: None,
+            has_unsupported_ema_auth: false,
             default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
@@ -1055,46 +1061,11 @@ impl Default for PluginMcpServerConfig {
     }
 }
 
-/// Resource registration applied through an existing per-plugin policy overlay.
-/// The enterprise IdP is selected separately by trusted host configuration.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PluginMcpServerEmaAuthConfig {
-    /// Exact plugin endpoint approved by the host; never overrides the declaration.
-    pub url: String,
-    pub client_id: String,
-    pub authorization_server_issuer: String,
-    #[serde(default)]
-    pub scopes: Vec<String>,
-    pub resource: String,
-}
-
-impl PluginMcpServerEmaAuthConfig {
-    pub fn apply(&self, server: &mut McpServerConfig) {
-        let registration_error = if self.resource.trim().is_empty() {
-            Some("plugin EMA registration requires a resource")
-        } else if !server.matches_requirement(&crate::McpServerRequirement::Identity {
-            identity: crate::McpServerIdentity::Url {
-                url: self.url.clone(),
-            },
-        }) {
-            Some("plugin endpoint does not match its EMA registration")
-        } else {
-            None
-        };
-        if registration_error.is_some() && server.enabled {
-            server.enabled = false;
-            server.disabled_reason = Some(crate::McpServerDisabledReason::EmaRegistration);
-        }
-        server.auth = McpServerAuth::EmaAuth;
-        let oauth = server.oauth.get_or_insert_default();
-        oauth.client_id = Some(self.client_id.clone());
-        oauth.authorization_server_issuer = Some(self.authorization_server_issuer.clone());
-        server.scopes = Some(self.scopes.clone());
-        oauth.ema_registration = None;
-        oauth.ema_registration_error = registration_error;
-        server.oauth_resource = Some(self.resource.clone());
-    }
+fn unsupported_plugin_ema_auth<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde::de::IgnoredAny::deserialize(deserializer).map(|_| true)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]

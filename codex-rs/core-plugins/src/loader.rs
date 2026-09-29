@@ -966,9 +966,9 @@ async fn load_plugin(
 }
 
 fn apply_plugin_mcp_server_policy(config: &mut McpServerConfig, policy: &PluginMcpServerConfig) {
-    config.enabled = policy.enabled;
-    if let Some(ema) = &policy.ema_auth {
-        ema.apply(config);
+    config.enabled = policy.enabled && !policy.has_unsupported_ema_auth;
+    if policy.has_unsupported_ema_auth {
+        config.auth = codex_config::McpServerAuth::EmaAuth;
     }
     if let Some(approval_mode) = policy.default_tools_approval_mode {
         config.default_tools_approval_mode = Some(approval_mode);
@@ -1437,9 +1437,9 @@ pub fn apply_configured_plugin_mcp_server_policies(
 ) {
     for (name, server) in servers {
         if let Some(policy) = policies.get(name) {
-            server.enabled &= policy.enabled;
-            if let Some(ema) = &policy.ema_auth {
-                ema.apply(server);
+            server.enabled &= policy.enabled && !policy.has_unsupported_ema_auth;
+            if policy.has_unsupported_ema_auth {
+                server.auth = codex_config::McpServerAuth::EmaAuth;
             }
             let declared_approval_mode = server.default_tools_approval_mode.unwrap_or_default();
 

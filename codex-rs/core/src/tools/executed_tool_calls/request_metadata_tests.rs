@@ -427,6 +427,33 @@ fn direct_retained_metadata_budget_sheds_results_then_calls_across_refresh() {
 }
 
 #[tokio::test]
+async fn stale_runtime_refresh_preserves_recording_state() {
+    let (session, _turn) = crate::session::tests::make_session_and_context().await;
+    let calls = session.services.executed_tool_calls.clone();
+    assert!(calls.lock_state().is_none());
+    let stale_owner = session.get_config().await;
+    let mut stale_config = stale_owner.as_ref().clone();
+    stale_config
+        .features
+        .enable(Feature::ExecutedToolCallMetadata)
+        .expect("enable executed tool call metadata");
+    assert_eq!(
+        session
+            .refresh_mcp_config(Arc::clone(&stale_owner), stale_owner.as_ref().clone())
+            .await,
+        crate::ConfigRefreshOutcome::Published
+    );
+
+    assert_eq!(
+        session
+            .refresh_runtime_config(stale_owner, stale_config)
+            .await,
+        crate::ConfigRefreshOutcome::Stale
+    );
+    assert!(calls.lock_state().is_none());
+}
+
+#[tokio::test]
 async fn recorder_refreshes_without_changing_execution_features_or_claiming_missing_history() {
     struct MetadataLookup<'a>(std::cell::Cell<usize>, JsonValue, &'a ExecutedToolCalls);
 
@@ -462,11 +489,14 @@ async fn recorder_refreshes_without_changing_execution_features_or_claiming_miss
     let mut retry_cache = HashMap::new();
     let mut prior_generation = None;
     for (index, enabled) in [false, true, false, true].into_iter().enumerate() {
+        let current_config = session.get_config().await;
         next_config
             .features
             .set_enabled(Feature::ExecutedToolCallMetadata, enabled)
             .expect("test feature must be configurable");
-        session.refresh_runtime_config(next_config.clone()).await;
+        let _ = session
+            .refresh_runtime_config(current_config, next_config.clone())
+            .await;
         assert_eq!(calls.lock_state().is_some(), enabled);
         // A legacy file reload has no new rollout snapshot and must keep this setting.
         session.reload_user_config_layer().await;
@@ -509,6 +539,21 @@ async fn recorder_refreshes_without_changing_execution_features_or_claiming_miss
         );
         assert_eq!(tool_calls_complete(&direct_output), enabled.then_some(true));
 
+        if enabled {
+            // Reapplying an enabled config must preserve already-recorded calls.
+            let prepared = calls.prepare_direct_call(&call, &ToolCallSource::Direct, &step);
+            let current_config = session.get_config().await;
+            assert_eq!(
+                session
+                    .refresh_runtime_config(current_config, next_config.clone())
+                    .await,
+                crate::ConfigRefreshOutcome::Published
+            );
+            let mut replay = output(&call.call_id);
+            calls.attach_direct_call_to_output(&mut replay, prepared);
+            assert_eq!(replay, direct_output);
+        }
+
         let cell = CellId::new(format!("cell-{index}"));
         let origin = format!("exec-{index}");
         calls.start_cell(&cell, &origin);
@@ -523,7 +568,13 @@ async fn recorder_refreshes_without_changing_execution_features_or_claiming_miss
         nested.set_tool_result_metadata(ToolResultMetadata::new(&json!({})));
         if enabled {
             // Reapplying an enabled config must preserve pending calls and their metadata.
-            session.refresh_runtime_config(next_config.clone()).await;
+            let current_config = session.get_config().await;
+            assert_eq!(
+                session
+                    .refresh_runtime_config(current_config, next_config.clone())
+                    .await,
+                crate::ConfigRefreshOutcome::Published
+            );
         }
         calls.finish_cell_recording(&cell);
         let mut prompt = vec![exec_input(&origin), exec_output(&origin)];
