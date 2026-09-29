@@ -2166,6 +2166,7 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
         },
     )?;
     write_models_cache(codex_home.path()).await?;
+    let collector = super::auth_storage_originator::configure_collector(codex_home.path()).await?;
 
     mock_device_code_usercode(&mock_server, /*interval_seconds*/ 0).await;
     mock_device_code_token_success(&mock_server).await;
@@ -2184,10 +2185,17 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
         .without_auto_env()
         .with_env_overrides(&[
             ("OPENAI_API_KEY", None),
+            ("OTEL_METRIC_EXPORT_INTERVAL", Some("200")),
             (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
         ])
-        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .build()
         .await?;
+    mcp.initialize_with_client_info(ClientInfo {
+        name: "codex_vscode".into(),
+        title: None,
+        version: "1".into(),
+    })
+    .await?;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
     let login: LoginAccountResponse =
@@ -2231,6 +2239,7 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
         codex_home.path().join("auth.json").exists(),
         "auth.json should be created when device code login succeeds"
     );
+    super::auth_storage_originator::assert_saved_originators(&collector, &["codex_vscode"]).await?;
     Ok(())
 }
 

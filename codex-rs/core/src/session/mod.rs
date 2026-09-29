@@ -91,6 +91,7 @@ use codex_models_manager::manager::SharedModelsManager;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_network_proxy::normalize_host;
+use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_otel::current_span_trace_id;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
@@ -822,6 +823,7 @@ impl Session {
         );
         let service_tier =
             get_service_tier(config.service_tier.clone(), fast_mode_enabled, &model_info);
+        let storage_originator = AuthStorageOriginator::from_client_name(&originator);
         let session_configuration = SessionConfiguration {
             provider: create_model_provider(
                 config.model_provider.clone(),
@@ -930,11 +932,11 @@ impl Session {
 
         // This task will run until Op::Shutdown is received.
         let session_for_loop = Arc::clone(&session);
-        let session_loop_handle = tokio::spawn(async move {
+        let session_loop_handle = tokio::spawn(storage_originator.scope(async move {
             submission_loop(session_for_loop, configured_config, rx_sub)
                 .instrument(info_span!("session_loop", thread_id = %thread_id))
                 .await;
-        });
+        }));
         let io = SessionIo {
             tx_sub,
             rx_event,

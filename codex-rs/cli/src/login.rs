@@ -46,6 +46,8 @@ const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
 const ACCESS_TOKEN_LOGIN_DISABLED_MESSAGE: &str =
     "Access token login is disabled. Use API key login instead.";
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
+const DEFAULT_LOGIN_LOG_FILTER: &str =
+    "codex_cli=info,codex_core=info,codex_login=info,codex_otel::auth_storage=warn";
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
 ///
@@ -94,7 +96,7 @@ fn init_login_file_logging(config: &Config) -> Option<WorkerGuard> {
 
     let (non_blocking, guard) = non_blocking(log_file);
     let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("codex_cli=info,codex_core=info,codex_login=info"));
+        .unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOGIN_LOG_FILTER));
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_target(true)
@@ -618,6 +620,10 @@ fn safe_format_key(key: &str) -> String {
     let suffix = &key[key.len() - 5..];
     format!("{prefix}***{suffix}")
 }
+
+#[cfg(test)]
+#[path = "login_storage_tests.rs"]
+mod storage_tests;
 
 #[cfg(test)]
 mod tests {

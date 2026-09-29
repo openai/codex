@@ -1,5 +1,7 @@
 use chrono::DateTime;
 use chrono::Utc;
+use codex_otel::auth_storage::Operation;
+use codex_otel::auth_storage::Store;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
@@ -17,6 +19,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tracing::warn;
+
+#[path = "storage_error.rs"]
+mod storage_error;
+
+#[path = "storage_telemetry.rs"]
+mod storage_telemetry;
 
 use super::BedrockAccessKeysAuth;
 use super::BedrockApiKeyAuth;
@@ -251,44 +259,50 @@ fn compute_store_key(codex_home: &Path) -> std::io::Result<String> {
 #[derive(Clone, Debug)]
 struct DirectKeyringAuthStorage {
     codex_home: PathBuf,
+    mode: AuthCredentialsStoreMode,
     keyring_store: Arc<dyn KeyringStore>,
 }
 
 impl DirectKeyringAuthStorage {
-    fn new(codex_home: PathBuf, keyring_store: Arc<dyn KeyringStore>) -> Self {
+    fn new(
+        codex_home: PathBuf,
+        keyring_store: Arc<dyn KeyringStore>,
+        mode: AuthCredentialsStoreMode,
+    ) -> Self {
         Self {
             codex_home,
             keyring_store,
+            mode,
         }
     }
 
     fn load_from_keyring(&self, key: &str) -> std::io::Result<Option<AuthDotJson>> {
-        match self.keyring_store.load(KEYRING_SERVICE, key) {
-            Ok(Some(serialized)) => serde_json::from_str(&serialized).map(Some).map_err(|err| {
-                std::io::Error::other(format!(
-                    "failed to deserialize CLI auth from keyring: {err}"
-                ))
+        match self
+            .keyring_store
+            .load(KEYRING_SERVICE, key)
+            .map_err(std::io::Error::from)
+            .map_err(|error| {
+                storage_error::with_context("failed to load CLI auth from keyring", error)
+            })? {
+            Some(serialized) => serde_json::from_str(&serialized).map(Some).map_err(|err| {
+                storage_error::with_context("failed to deserialize CLI auth from keyring", err)
             }),
-            Ok(None) => Ok(None),
-            Err(error) => Err(std::io::Error::other(format!(
-                "failed to load CLI auth from keyring: {}",
-                error.message()
-            ))),
+            None => Ok(None),
         }
     }
 
     fn save_to_keyring(&self, key: &str, value: &str) -> std::io::Result<()> {
-        match self.keyring_store.save(KEYRING_SERVICE, key, value) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                let message = format!(
-                    "failed to write OAuth tokens to keyring: {}",
-                    error.message()
-                );
-                warn!("{message}");
-                Err(std::io::Error::other(message))
-            }
-        }
+        self.keyring_store
+            .save(KEYRING_SERVICE, key, value)
+            .map_err(std::io::Error::from)
+            .map_err(|error| {
+                let error =
+                    storage_error::with_context("failed to write OAuth tokens to keyring", error);
+                if self.mode == AuthCredentialsStoreMode::Keyring {
+                    warn!("{error}");
+                }
+                error
+            })
     }
 }
 
@@ -303,9 +317,17 @@ impl AuthStorageBackend for DirectKeyringAuthStorage {
         // Simpler error mapping per style: prefer method reference over closure
         let serialized = serde_json::to_string(auth).map_err(std::io::Error::other)?;
         self.save_to_keyring(&key, &serialized)?;
-        if let Err(err) = delete_file_if_exists(&self.codex_home) {
+        let mut telemetry = storage_telemetry::telemetry(
+            self.mode,
+            AuthKeyringBackendKind::Direct,
+            Operation::Cleanup,
+        );
+        let result = delete_file_if_exists(&self.codex_home);
+        telemetry.record_delete_attempt(Store::File, &result);
+        if let Err(err) = &result {
             warn!("failed to remove CLI auth fallback file: {err}");
         }
+        drop(telemetry);
         Ok(())
     }
 
@@ -314,8 +336,9 @@ impl AuthStorageBackend for DirectKeyringAuthStorage {
         let keyring_removed = self
             .keyring_store
             .delete(KEYRING_SERVICE, &key)
-            .map_err(|err| {
-                std::io::Error::other(format!("failed to delete auth from keyring: {err}"))
+            .map_err(std::io::Error::from)
+            .map_err(|error| {
+                storage_error::with_context("failed to delete auth from keyring", error)
             })?;
         let file_removed = delete_file_if_exists(&self.codex_home)?;
         Ok(keyring_removed || file_removed)
@@ -325,6 +348,7 @@ impl AuthStorageBackend for DirectKeyringAuthStorage {
 #[derive(Clone)]
 struct SecretsKeyringAuthStorage {
     codex_home: PathBuf,
+    mode: AuthCredentialsStoreMode,
     direct_storage: DirectKeyringAuthStorage,
     secrets_manager: SecretsManager,
 }
@@ -338,9 +362,13 @@ impl Debug for SecretsKeyringAuthStorage {
 }
 
 impl SecretsKeyringAuthStorage {
-    fn new(codex_home: PathBuf, keyring_store: Arc<dyn KeyringStore>) -> Self {
+    fn new(
+        codex_home: PathBuf,
+        keyring_store: Arc<dyn KeyringStore>,
+        mode: AuthCredentialsStoreMode,
+    ) -> Self {
         let direct_storage =
-            DirectKeyringAuthStorage::new(codex_home.clone(), Arc::clone(&keyring_store));
+            DirectKeyringAuthStorage::new(codex_home.clone(), Arc::clone(&keyring_store), mode);
         let secrets_manager = SecretsManager::new_with_keyring_store_and_namespace(
             codex_home.clone(),
             SecretsBackendKind::Local,
@@ -349,6 +377,7 @@ impl SecretsKeyringAuthStorage {
         );
         Self {
             codex_home,
+            mode,
             direct_storage,
             secrets_manager,
         }
@@ -360,15 +389,17 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
         match self
             .secrets_manager
             .get(&SecretScope::Global, &CODEX_AUTH_SECRET_NAME)
-            .map_err(|err| {
-                std::io::Error::other(format!(
-                    "failed to load CLI auth from encrypted auth storage: {err}"
-                ))
+            .map_err(|error| {
+                storage_error::with_context(
+                    "failed to load CLI auth from encrypted auth storage",
+                    error,
+                )
             })? {
             Some(serialized) => serde_json::from_str(&serialized).map(Some).map_err(|err| {
-                std::io::Error::other(format!(
-                    "failed to deserialize CLI auth from encrypted auth storage: {err}"
-                ))
+                storage_error::with_context(
+                    "failed to deserialize CLI auth from encrypted auth storage",
+                    err,
+                )
             }),
             None => Ok(None),
         }
@@ -378,15 +409,27 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
         let serialized = serde_json::to_string(auth).map_err(std::io::Error::other)?;
         self.secrets_manager
             .set(&SecretScope::Global, &CODEX_AUTH_SECRET_NAME, &serialized)
-            .map_err(|err| {
-                let message =
-                    format!("failed to write OAuth tokens to encrypted auth storage: {err}");
-                warn!("{message}");
-                std::io::Error::other(message)
+            .map_err(|error| {
+                let error = storage_error::with_context(
+                    "failed to write OAuth tokens to encrypted auth storage",
+                    error,
+                );
+                if self.mode == AuthCredentialsStoreMode::Keyring {
+                    warn!("{error}");
+                }
+                error
             })?;
-        if let Err(err) = delete_file_if_exists(&self.codex_home) {
+        let mut telemetry = storage_telemetry::telemetry(
+            self.mode,
+            AuthKeyringBackendKind::Secrets,
+            Operation::Cleanup,
+        );
+        let result = delete_file_if_exists(&self.codex_home);
+        telemetry.record_delete_attempt(Store::File, &result);
+        if let Err(err) = &result {
             warn!("failed to remove CLI auth fallback file: {err}");
         }
+        drop(telemetry);
         Ok(())
     }
 
@@ -394,10 +437,11 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
         let keyring_removed = self
             .secrets_manager
             .delete(&SecretScope::Global, &CODEX_AUTH_SECRET_NAME)
-            .map_err(|err| {
-                std::io::Error::other(format!(
-                    "failed to delete auth from encrypted auth storage: {err}"
-                ))
+            .map_err(|error| {
+                storage_error::with_context(
+                    "failed to delete auth from encrypted auth storage",
+                    error,
+                )
             })?;
         let file_removed = delete_file_if_exists(&self.codex_home)?;
         let direct_removed = self.direct_storage.delete()?;
@@ -409,6 +453,7 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
 struct AutoAuthStorage {
     keyring_storage: Arc<dyn AuthStorageBackend>,
     file_storage: Arc<FileAuthStorage>,
+    keyring_backend_kind: AuthKeyringBackendKind,
 }
 
 impl AutoAuthStorage {
@@ -422,37 +467,76 @@ impl AutoAuthStorage {
                 codex_home.clone(),
                 keyring_store,
                 keyring_backend_kind,
+                AuthCredentialsStoreMode::Auto,
             ),
             file_storage: Arc::new(FileAuthStorage::new(codex_home)),
+            keyring_backend_kind,
         }
     }
 }
 
 impl AuthStorageBackend for AutoAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
-        match self.keyring_storage.load() {
+        let mut telemetry = storage_telemetry::telemetry(
+            AuthCredentialsStoreMode::Auto,
+            self.keyring_backend_kind,
+            Operation::Load,
+        );
+        let result = self.keyring_storage.load();
+        telemetry.record_load_attempt(
+            storage_telemetry::keyring_store(self.keyring_backend_kind),
+            &result,
+        );
+        match result {
             Ok(Some(auth)) => Ok(Some(auth)),
-            Ok(None) => self.file_storage.load(),
+            Ok(None) => {
+                let result = self.file_storage.load();
+                telemetry.record_load_attempt(Store::File, &result);
+                result
+            }
             Err(err) => {
                 warn!("failed to load CLI auth from keyring, falling back to file storage: {err}");
-                self.file_storage.load()
+                telemetry.record_secure_error(&err);
+                let result = self.file_storage.load();
+                telemetry.record_load_attempt(Store::File, &result);
+                result
             }
         }
     }
 
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
-        match self.keyring_storage.save(auth) {
+        let mut telemetry = storage_telemetry::telemetry(
+            AuthCredentialsStoreMode::Auto,
+            self.keyring_backend_kind,
+            Operation::Save,
+        );
+        let result = self.keyring_storage.save(auth);
+        telemetry.record_save_attempt(
+            storage_telemetry::keyring_store(self.keyring_backend_kind),
+            &result,
+        );
+        match result {
             Ok(()) => Ok(()),
             Err(err) => {
                 warn!("failed to save auth to keyring, falling back to file storage: {err}");
-                self.file_storage.save(auth)
+                telemetry.record_secure_error(&err);
+                let result = self.file_storage.save(auth);
+                telemetry.record_save_attempt(Store::File, &result);
+                result
             }
         }
     }
 
     fn delete(&self) -> std::io::Result<bool> {
         // Keyring storage will delete from disk as well
-        self.keyring_storage.delete()
+        let mut telemetry = storage_telemetry::telemetry(
+            AuthCredentialsStoreMode::Auto,
+            self.keyring_backend_kind,
+            Operation::Delete,
+        );
+        let result = self.keyring_storage.delete();
+        telemetry.record_delete_attempt(Store::Multiple, &result);
+        result
     }
 }
 
@@ -514,10 +598,10 @@ fn create_auth_storage_with_store(
     keyring_store: Arc<dyn KeyringStore>,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Arc<dyn AuthStorageBackend> {
-    match mode {
+    let storage: Arc<dyn AuthStorageBackend> = match mode {
         AuthCredentialsStoreMode::File => Arc::new(FileAuthStorage::new(codex_home)),
         AuthCredentialsStoreMode::Keyring => {
-            create_keyring_auth_storage(codex_home, keyring_store, keyring_backend_kind)
+            create_keyring_auth_storage(codex_home, keyring_store, keyring_backend_kind, mode)
         }
         AuthCredentialsStoreMode::Auto => Arc::new(AutoAuthStorage::new(
             codex_home,
@@ -525,21 +609,27 @@ fn create_auth_storage_with_store(
             keyring_backend_kind,
         )),
         AuthCredentialsStoreMode::Ephemeral => Arc::new(EphemeralAuthStorage::new(codex_home)),
-    }
+    };
+    storage_telemetry::observe(storage, mode, keyring_backend_kind)
 }
 
 fn create_keyring_auth_storage(
     codex_home: PathBuf,
     keyring_store: Arc<dyn KeyringStore>,
     keyring_backend_kind: AuthKeyringBackendKind,
+    mode: AuthCredentialsStoreMode,
 ) -> Arc<dyn AuthStorageBackend> {
     match keyring_backend_kind {
-        AuthKeyringBackendKind::Direct => {
-            Arc::new(DirectKeyringAuthStorage::new(codex_home, keyring_store))
-        }
-        AuthKeyringBackendKind::Secrets => {
-            Arc::new(SecretsKeyringAuthStorage::new(codex_home, keyring_store))
-        }
+        AuthKeyringBackendKind::Direct => Arc::new(DirectKeyringAuthStorage::new(
+            codex_home,
+            keyring_store,
+            mode,
+        )),
+        AuthKeyringBackendKind::Secrets => Arc::new(SecretsKeyringAuthStorage::new(
+            codex_home,
+            keyring_store,
+            mode,
+        )),
     }
 }
 

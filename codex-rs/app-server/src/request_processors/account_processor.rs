@@ -13,6 +13,7 @@ use codex_login::LoginOnboardingEntrypoint;
 use codex_login::login_with_bedrock_access_keys;
 use codex_mcp::ema_auth_scope;
 use codex_model_provider::is_supported_amazon_bedrock_region;
+use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_rmcp_client::EnterpriseOAuthCredentialGuard;
 
 mod bedrock_setup;
@@ -678,7 +679,7 @@ impl AccountRequestProcessor {
         let processor = self.clone();
         let active_login = self.active_login.clone();
         let auth_url = server.auth_url.clone();
-        tokio::spawn(async move {
+        let task = async move {
             let (success, error_msg, onboarding_entrypoint) = match tokio::time::timeout(
                 LOGIN_CHATGPT_TIMEOUT,
                 server.block_until_done_with_callback_result(),
@@ -715,7 +716,8 @@ impl AccountRequestProcessor {
             if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
                 *guard = None;
             }
-        });
+        };
+        tokio::spawn(AuthStorageOriginator::current().scope(task));
 
         Ok(LoginAccountResponse::Chatgpt {
             login_id: login_id.to_string(),
@@ -759,7 +761,7 @@ impl AccountRequestProcessor {
 
         let processor = self.clone();
         let active_login = self.active_login.clone();
-        tokio::spawn(async move {
+        let task = async move {
             let (success, error_msg) = tokio::select! {
                 _ = cancel.cancelled() => {
                     (false, Some("Login was not completed".to_string()))
@@ -785,7 +787,8 @@ impl AccountRequestProcessor {
             if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
                 *guard = None;
             }
-        });
+        };
+        tokio::spawn(AuthStorageOriginator::current().scope(task));
 
         Ok(LoginAccountResponse::ChatgptDeviceCode {
             login_id: login_id.to_string(),

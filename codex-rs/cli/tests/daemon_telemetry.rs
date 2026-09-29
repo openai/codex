@@ -53,8 +53,14 @@ async fn foreground_update_respects_consent_and_reports_unconfirmed() -> anyhow:
             continue;
         }
         let body: Value = serde_json::from_slice(&requests[0].body)?;
-        let metric = &body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0];
-        assert_eq!(metric["name"], "codex.daemon.update");
+        let metric = body["resourceMetrics"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|resource| resource["scopeMetrics"].as_array().into_iter().flatten())
+            .flat_map(|scope| scope["metrics"].as_array().into_iter().flatten())
+            .find(|metric| metric["name"] == "codex.daemon.update")
+            .context("daemon update metric")?;
         assert!(
             metric["sum"]["dataPoints"][0]["attributes"]
                 .as_array()

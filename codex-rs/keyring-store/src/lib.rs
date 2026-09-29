@@ -5,7 +5,6 @@ use std::fmt;
 use std::fmt::Debug;
 use tracing::trace;
 
-#[derive(Debug)]
 pub enum CredentialStoreError {
     Other(KeyringError),
 }
@@ -16,9 +15,7 @@ impl CredentialStoreError {
     }
 
     pub fn message(&self) -> String {
-        match self {
-            Self::Other(error) => error.to_string(),
-        }
+        self.to_string()
     }
 
     pub fn into_error(self) -> KeyringError {
@@ -31,18 +28,33 @@ impl CredentialStoreError {
 impl fmt::Display for CredentialStoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Other(KeyringError::Ambiguous(items)) => {
+                write!(f, "Entry is matched by {} credentials", items.len())
+            }
             Self::Other(error) => write!(f, "{error}"),
         }
+    }
+}
+
+impl fmt::Debug for CredentialStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
     }
 }
 
 impl Error for CredentialStoreError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            // Do not expose payload-bearing variants to error-chain formatters.
+            Self::Other(KeyringError::Ambiguous(_) | KeyringError::BadEncoding(_)) => None,
             Self::Other(error) => Some(error),
         }
     }
 }
+
+#[cfg(test)]
+#[path = "error_display_tests.rs"]
+mod error_display_tests;
 
 mod error_kind;
 

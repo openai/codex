@@ -9,6 +9,8 @@ mod app_list;
 mod app_read;
 mod application_network;
 mod attestation;
+#[path = "auth_storage_originator_tests.rs"]
+mod auth_storage_originator;
 mod auto_env;
 mod bedrock_setup;
 mod client_metadata;

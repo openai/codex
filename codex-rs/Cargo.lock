@@ -3814,6 +3814,7 @@ dependencies = [
  "jsonwebtoken",
  "keyring",
  "once_cell",
+ "opentelemetry_sdk",
  "os_info",
  "pretty_assertions",
  "rand 0.9.3",
