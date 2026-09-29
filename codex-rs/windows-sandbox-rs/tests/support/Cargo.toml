@@ -1,0 +1,15 @@
+[package]
+name = "codex-windows-sandbox-test-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[target.'cfg(windows)'.dependencies]
+dirs = { workspace = true }

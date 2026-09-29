@@ -102,4 +102,5 @@ features = [
 version = "0.52"
 
 [dev-dependencies]
+codex-windows-sandbox-test-support = { workspace = true }
 pretty_assertions = { workspace = true }

@@ -33,6 +33,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxType;
 use codex_utils_path_uri::PathUri;
+use codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard;
 use futures::TryStreamExt;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
@@ -456,6 +457,7 @@ async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy(
 async fn file_system_elevated_relative_read_denial_uses_policy_cwd(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
+    let _account_guard = WindowsSandboxAccountTestGuard::acquire()?;
     // Both implementations re-enter this test binary; the elevated backend finds its helpers
     // next to that binary, while Cargo and Bazel provide them separately.
     let test_exe = std::env::current_exe()?;

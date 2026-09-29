@@ -43,6 +43,9 @@ max-threads = 1
 [test-groups.windows_sandbox_legacy_sessions]
 max-threads = 1
 
+[test-groups.windows_sandbox_accounts]
+max-threads = 1
+
 [test-groups.windows_process_heavy]
 max-threads = 2
 
@@ -81,6 +84,23 @@ test-group = 'app_server_integration_local'
 # sensitive to Windows runner process-startup stalls when many cases launch at once.
 filter = 'package(codex-core) & kind(test) & test(apply_patch_cli)'
 test-group = 'core_apply_patch_cli_integration'
+
+[[profile.default.overrides]]
+# These cases share the runner's elevated sandbox accounts. Queue them before
+# starting their timeout; their file lock still coordinates other test processes.
+platform = 'cfg(windows)'
+filter = '''
+    (package(codex-core) & (
+        test(windows_sandbox_cli_preserves_managed_deny_reads_across_launches) |
+        test(windows_elevated_does_not_create_missing_workspace_metadata) |
+        test(windows_elevated_enforces_deny_read_and_protects_setup_marker) |
+        test(windows_elevated_unified_exec_enforces_large_recursive_deny_reads) |
+        test(windows_elevated_approved_git_pull_preserves_deny_read)
+    )) |
+    (package(codex-exec-server) & test(file_system_elevated_relative_read_denial_uses_policy_cwd)) |
+    (package(codex-windows-sandbox) & test(elevated_non_tty_cmd_forwards_env_output_and_exit))
+'''
+test-group = 'windows_sandbox_accounts'
 
 [[profile.default.overrides]]
 # These tests create restricted-token Windows child processes and private desktops.

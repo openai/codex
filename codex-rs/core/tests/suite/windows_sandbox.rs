@@ -25,6 +25,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::user_input::UserInput;
+use codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard;
 use core_test_support::PathExt;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -41,7 +42,6 @@ use serde_json::json;
 use serial_test::serial;
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -75,32 +75,21 @@ impl Drop for EnvVarGuard {
 }
 
 enum TestCodexHome {
-    Persistent(PathBuf, File),
-    Temporary(TempDir, File),
+    Persistent(PathBuf),
+    Temporary(TempDir),
 }
 
 impl TestCodexHome {
     fn path(&self) -> &Path {
         match self {
-            Self::Persistent(path, _account_lock) => path.as_path(),
-            Self::Temporary(temp_dir, _account_lock) => temp_dir.path(),
+            Self::Persistent(path) => path.as_path(),
+            Self::Temporary(temp_dir) => temp_dir.path(),
         }
     }
 }
 
 fn codex_home_for_windows_sandbox_test(name: &str) -> anyhow::Result<TestCodexHome> {
-    // Bazel shards and nextest processes share Windows accounts. Hold this lock
-    // through the test so they cannot rotate each other's credentials mid-launch.
-    let lock_path = dirs::data_local_dir()
-        .context("resolve local app data for the Windows sandbox test lock")?
-        .join("codex-windows-sandbox-integration-test.lock");
-    let lock = File::options()
-        .read(true)
-        .append(true)
-        .create(true)
-        .open(lock_path)?;
-    lock.lock().context("lock Windows sandbox test accounts")?;
-
+    // Only tests that use the elevated accounts also take the shared account guard.
     if let Some(test_tmpdir) = std::env::var_os("TEST_TMPDIR") {
         // The elevated backend provisions machine-local sandbox users. Bazel
         // retries run in the same Windows VM, so keep CODEX_HOME stable within
@@ -108,10 +97,10 @@ fn codex_home_for_windows_sandbox_test(name: &str) -> anyhow::Result<TestCodexHo
         let codex_home = PathBuf::from(test_tmpdir).join(name);
         std::fs::create_dir_all(&codex_home)
             .with_context(|| format!("create stable test CODEX_HOME {}", codex_home.display()))?;
-        return Ok(TestCodexHome::Persistent(codex_home, lock));
+        return Ok(TestCodexHome::Persistent(codex_home));
     }
 
-    Ok(TestCodexHome::Temporary(TempDir::new()?, lock))
+    Ok(TestCodexHome::Temporary(TempDir::new()?))
 }
 
 fn stage_windows_sandbox_helpers() -> anyhow::Result<()> {
@@ -205,6 +194,7 @@ fn assert_managed_deny_probe(output: &std::process::Output, launch: usize) -> an
 #[test]
 #[serial(codex_home)]
 fn windows_sandbox_cli_preserves_managed_deny_reads_across_launches() -> anyhow::Result<()> {
+    let _account_guard = WindowsSandboxAccountTestGuard::acquire()?;
     let codex_home =
         codex_home_for_windows_sandbox_test("windows-cli-managed-deny-read-codex-home")?;
 
@@ -415,6 +405,7 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
 #[tokio::test]
 #[serial(codex_home)]
 async fn windows_elevated_does_not_create_missing_workspace_metadata() -> anyhow::Result<()> {
+    let _account_guard = WindowsSandboxAccountTestGuard::acquire()?;
     let codex_home =
         codex_home_for_windows_sandbox_test("windows-elevated-missing-metadata-codex-home")?;
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
@@ -540,6 +531,7 @@ $rules = foreach ($name in @('codex_sandbox_offline_block_inbound', 'codex_sandb
 #[tokio::test]
 #[serial(codex_home)]
 async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyhow::Result<()> {
+    let _account_guard = WindowsSandboxAccountTestGuard::acquire()?;
     let codex_home = codex_home_for_windows_sandbox_test("windows-elevated-deny-read-codex-home")?;
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
     stage_windows_sandbox_helpers()?;
@@ -680,6 +672,7 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial(codex_home)]
 async fn windows_elevated_unified_exec_enforces_large_recursive_deny_reads() -> anyhow::Result<()> {
+    let _account_guard = WindowsSandboxAccountTestGuard::acquire()?;
     let codex_home =
         codex_home_for_windows_sandbox_test("windows-elevated-tool-runtime-deny-read-codex-home")?;
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
@@ -857,6 +850,7 @@ async fn windows_elevated_approved_git_pull_preserves_deny_read() -> anyhow::Res
     use EventMsg::ExecCommandEnd;
     use EventMsg::TurnComplete;
 
+    let _account_guard = WindowsSandboxAccountTestGuard::acquire()?;
     let codex_home = codex_home_for_windows_sandbox_test("windows-elevated-git-pull-deny-read")?;
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
     stage_windows_sandbox_helpers()?;

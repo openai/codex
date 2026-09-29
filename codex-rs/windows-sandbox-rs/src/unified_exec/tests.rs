@@ -16,6 +16,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
 use codex_utils_pty::ProcessSignal;
+use codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;
@@ -302,6 +303,8 @@ fn legacy_non_tty_cmd_emits_output() {
 
 #[test]
 fn elevated_non_tty_cmd_forwards_env_output_and_exit() {
+    let _account_guard =
+        WindowsSandboxAccountTestGuard::acquire().expect("lock Windows sandbox test accounts");
     let _guard = legacy_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
