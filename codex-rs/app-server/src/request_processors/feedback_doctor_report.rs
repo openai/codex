@@ -106,7 +106,7 @@ pub(crate) async fn doctor_feedback_report(
 }
 
 fn doctor_command(executable: &Path, cwd: &Path, codex_home: &Path) -> Command {
-    let mut command = Command::new(executable);
+    let mut command = Command::from(codex_utils_process::background_command(executable));
     command
         .arg("--cd")
         .arg(cwd)

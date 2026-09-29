@@ -37,7 +37,7 @@ impl PluginGitMode {
     /// Creates a Git command with the repository-environment policy for this operation.
     /// Automatic remote lookups and initial clones must also select a trusted repository.
     pub(crate) fn command(self, git_binary: &Path) -> Command {
-        let mut command = Command::new(git_binary);
+        let mut command = codex_utils_process::background_command(git_binary);
         command.args(["-c", codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG]);
         if matches!(self, Self::Automatic) {
             command.env("GIT_OPTIONAL_LOCKS", "0");

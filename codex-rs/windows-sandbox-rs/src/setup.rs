@@ -386,7 +386,7 @@ fn run_setup_refresh_payload(b64: &str, codex_home: &Path) -> Result<()> {
         }
     };
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
-    let mut cmd = Command::new(&exe);
+    let mut cmd = codex_utils_process::background_command(&exe);
     crate::launch_environment::configure_command(&mut cmd, b64)?;
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -925,6 +925,10 @@ fn verify_setup_completed(codex_home: &Path) -> Result<()> {
         ))
     }
 }
+
+#[cfg(test)]
+#[path = "setup_refresh_tests.rs"]
+mod refresh_tests;
 
 fn run_setup_exe(
     payload: &ElevationPayload,

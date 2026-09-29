@@ -171,7 +171,7 @@ impl AwsCredentialExport {
             ));
         }
 
-        let mut command = Command::new(program);
+        let mut command = Command::from(codex_utils_process::background_command(program));
         command
             .args(self.config.args.iter().map(Deref::deref))
             .stdin(Stdio::null())

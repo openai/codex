@@ -100,7 +100,7 @@ pub fn create_cwd_junction(requested_cwd: &Path, log_dir: Option<&Path>) -> Opti
         &format!("junction: creating via cmd /c mklink /J {link_quoted} {target_quoted}"),
         log_dir,
     );
-    let output = match std::process::Command::new("cmd")
+    let output = match codex_utils_process::background_command("cmd")
         .raw_arg("/c")
         .raw_arg("mklink")
         .raw_arg("/J")

@@ -2134,6 +2134,7 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-json-to-toml",
  "codex-utils-path-uri",
+ "codex-utils-process",
  "codex-utils-pty",
  "codex-web-search-extension",
  "codex-websocket-auth",
@@ -2550,6 +2551,7 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-path",
  "codex-utils-path-uri",
+ "codex-utils-process",
  "codex-utils-pty",
  "codex-utils-redacted-string",
  "codex-websocket-auth",
@@ -2965,6 +2967,7 @@ dependencies = [
  "codex-utils-path",
  "codex-utils-path-uri",
  "codex-utils-plugins",
+ "codex-utils-process",
  "codex-utils-pty",
  "codex-utils-redacted-string",
  "codex-utils-stream-parser",
@@ -3084,6 +3087,7 @@ dependencies = [
  "codex-utils-path",
  "codex-utils-path-uri",
  "codex-utils-plugins",
+ "codex-utils-process",
  "dirs",
  "flate2",
  "futures",
@@ -3201,6 +3205,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-home-dir",
  "codex-utils-path-uri",
+ "codex-utils-process",
  "codex-utils-pty",
  "codex-utils-redacted-string",
  "codex-utils-rustls-provider",
@@ -3459,6 +3464,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
+ "codex-utils-process",
  "codex-utils-pty",
  "futures",
  "gix",
@@ -3634,6 +3640,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-output-truncation",
  "codex-utils-path-uri",
+ "codex-utils-process",
  "codex-utils-pty",
  "futures",
  "libc",
@@ -3794,6 +3801,7 @@ dependencies = [
  "codex-protocol",
  "codex-secrets",
  "codex-terminal-detection",
+ "codex-utils-process",
  "codex-utils-template",
  "codex-workload-identity",
  "core_test_support",
@@ -4005,6 +4013,7 @@ dependencies = [
  "codex-protocol",
  "codex-response-debug-context",
  "codex-secrets",
+ "codex-utils-process",
  "codex-utils-redacted-string",
  "http 1.4.0",
  "pretty_assertions",
@@ -4409,6 +4418,7 @@ dependencies = [
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-path",
+ "codex-utils-process",
  "pretty_assertions",
  "regex",
  "serde",
@@ -5065,6 +5075,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-utils-process"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "tokio",
+]
+
+[[package]]
 name = "codex-utils-pty"
 version = "0.0.0"
 dependencies = [
@@ -5254,6 +5272,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-process",
  "codex-utils-pty",
  "codex-utils-string",
  "dirs-next",

@@ -72,7 +72,7 @@ async fn query_channel(wevtutil: &Path, channel: Channel) -> Option<Vec<Evidence
         .map(|id| format!("EventID={id}"))
         .collect::<Vec<_>>()
         .join(" or ");
-    let mut child = Command::new(wevtutil)
+    let mut child = Command::from(codex_utils_process::background_command(wevtutil))
         .args(["qe", channel.1])
         .arg(format!(
             "/q:*[System[({events}) and TimeCreated[timediff(@SystemTime) <= 604800000]]]"
