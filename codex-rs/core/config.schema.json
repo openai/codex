@@ -713,6 +713,9 @@
             "analytics_plan_history": {
               "type": "boolean"
             },
+            "api_key_cyber_access_programs": {
+              "type": "boolean"
+            },
             "api_key_model_discovery": {
               "type": "boolean"
             },
@@ -6738,6 +6741,9 @@
           "type": "boolean"
         },
         "analytics_plan_history": {
+          "type": "boolean"
+        },
+        "api_key_cyber_access_programs": {
           "type": "boolean"
         },
         "api_key_model_discovery": {

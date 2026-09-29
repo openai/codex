@@ -534,6 +534,8 @@ async fn recorder_refreshes_without_changing_execution_features_or_claiming_miss
                 crate::ConfigRefreshOutcome::Published
             );
             let mut replay = output(&call.call_id);
+            // Replay the same history item across the configuration refresh.
+            replay.set_id(direct_output.id().cloned());
             calls.attach_direct_call_to_output(&mut replay, prepared);
             assert_eq!(replay, direct_output);
         }

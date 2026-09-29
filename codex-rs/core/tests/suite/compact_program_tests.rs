@@ -254,6 +254,30 @@ async fn model_switch_program_pair(
             Arc::clone(&resumed.codex)
         }
     };
+    if matches!(history, History::ApiKeyResume) {
+        // Resuming a ChatGPT turn does not enable the API-key rollout features.
+        let error = submit_pair(&thread, next_model, Some(CyberAccessProgram::DaybreakRed))
+            .await
+            .expect_err("API-key selections require the rollout features");
+        assert!(
+            error
+                .to_string()
+                .contains("Cyber access programs are disabled for this API-key session.")
+        );
+        thread.shutdown_and_wait().await?;
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("recorded fixture requests")
+                .iter()
+                .filter(|request| request.method == "POST" && request.url.path() == "/v1/responses")
+                .count(),
+            1,
+            "only the original ChatGPT turn should reach inference"
+        );
+        return Ok(());
+    }
     let summary = if local {
         ev_assistant_message("summary", "summary of surviving history")
     } else {
@@ -277,17 +301,7 @@ async fn model_switch_program_pair(
     submit_pair(&thread, next_model, Some(CyberAccessProgram::DaybreakRed)).await?;
     thread.shutdown_and_wait().await?;
     let requests = requests.requests();
-    let authorized = !matches!(history, History::ApiKeyResume);
-    let old_program = if authorized {
-        expected_program
-    } else {
-        Value::Null
-    };
-    let new_program = if authorized {
-        json!({"cyber": "daybreak_red"})
-    } else {
-        Value::Null
-    };
+    let new_program = json!({"cyber": "daybreak_red"});
     let actual = requests
         .iter()
         .map(|request| {
@@ -302,7 +316,7 @@ async fn model_switch_program_pair(
     }
     following.push(json!([next_model, new_program]));
     assert_eq!(&actual[1..], following.as_slice());
-    assert_eq!(actual[0], json!([previous_model, old_program]));
+    assert_eq!(actual[0], json!([previous_model, expected_program]));
     if !local {
         assert_eq!(requests[0].inputs_of_type("compaction_trigger").len(), 1);
     }

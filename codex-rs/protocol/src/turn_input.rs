@@ -142,7 +142,7 @@ pub enum TurnInputMode {
     Steer { expected_turn_id: String },
 }
 
-/// Requested cyber treatment for a ChatGPT-authenticated Codex turn.
+/// Requested cyber treatment for an OpenAI model turn.
 /// Authorization and model-tier restrictions remain server-owned.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]

@@ -159,10 +159,10 @@ async fn recover_turn_restores_cyber_access_program_without_making_it_sticky() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cyber_access_program_omits_api_key_and_spoofed_custom_provider() -> Result<()> {
+async fn cyber_access_program_omits_spoofed_custom_providers() -> Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
     for (auth, provider_id) in [
-        (CodexAuth::from_api_key("test-key"), "openai"),
+        (CodexAuth::from_api_key("test-key"), "custom"),
         (CodexAuth::create_dummy_chatgpt_auth_for_testing(), "custom"),
     ] {
         let server = responses::start_mock_server().await;
