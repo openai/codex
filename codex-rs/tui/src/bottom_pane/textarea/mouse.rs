@@ -63,16 +63,6 @@ impl TextArea {
         (!range.is_empty()).then_some(range)
     }
 
-    pub(super) fn delete_mouse_selection(&mut self) -> bool {
-        let Some(range) = self.mouse_selection_range() else {
-            return false;
-        };
-        // A pointer-selected edit cannot be replayed as a keyboard-relative Vim command.
-        self.vim_commands = VimCommandState::default();
-        self.replace_range(range, "");
-        true
-    }
-
     pub(crate) fn handle_mouse(&mut self, event: MouseEvent, state: TextAreaState) -> bool {
         let area = self.rendered_area.get();
         let dragging = self.mouse_selection.as_ref().is_some_and(|s| s.dragging);

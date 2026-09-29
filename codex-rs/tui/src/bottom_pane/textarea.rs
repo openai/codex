@@ -16,6 +16,7 @@
 //! Visible web URLs carry their complete terminal hyperlink destination across wrapped rows;
 //! masked rendering never exposes hyperlink destinations.
 //! Mouse selection uses those same visual rows and keeps graphemes and elements atomic.
+//! The editing module resolves replacement targets shared by insertion and paste-context inspection.
 
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::is_altgr;
@@ -50,12 +51,14 @@ use std::ops::Range;
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 
+mod editing;
 mod hyperlinks;
 mod mouse;
 mod vim;
 mod vim_commands;
 mod vim_search;
 mod wrapping;
+
 use self::vim::VimMode;
 use self::vim::VimMotion;
 use self::vim::VimOperator;
@@ -67,6 +70,7 @@ use self::vim_commands::VimCommandState;
 use self::vim_commands::VimEditTarget;
 use self::vim_commands::VimInsertPosition;
 pub(crate) use self::vim_commands::VimPersistentState;
+pub(crate) use editing::EditTarget;
 
 const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
 
@@ -439,16 +443,6 @@ impl TextArea {
 
     pub fn text(&self) -> &str {
         &self.text
-    }
-
-    pub fn insert_str(&mut self, text: &str) {
-        let replaced_selection = !text.is_empty() && self.delete_mouse_selection();
-        self.record_vim_inserted_text(text);
-        if self.is_vim_replace_mode() && !replaced_selection {
-            self.replace_vim_text(text);
-        } else {
-            self.insert_str_at(self.cursor_pos, text);
-        }
     }
 
     pub fn insert_str_at(&mut self, pos: usize, text: &str) {
@@ -1721,17 +1715,6 @@ impl TextArea {
         self.elements.sort_by_key(|e| e.range.start);
 
         true
-    }
-
-    pub fn insert_element(&mut self, text: &str) -> u64 {
-        self.delete_mouse_selection();
-        let start = self.clamp_pos_for_insertion(self.cursor_pos);
-        self.insert_str_at(start, text);
-        let end = start + text.len();
-        let id = self.add_element(start..end);
-        // Place cursor at end of inserted element
-        self.set_cursor(end);
-        id
     }
 
     fn add_element(&mut self, range: Range<usize>) -> u64 {

@@ -530,7 +530,11 @@ fn startup_draft_bottom_pane(
             effects: Default::default(),
             skills: None,
         },
-        ChatComposerConfig::plain_text(),
+        ChatComposerConfig {
+            // Keep partial pastes literal until the startup draft is handed off.
+            blockquote_paste_enabled: false,
+            ..ChatComposerConfig::plain_text()
+        },
     );
     bottom_pane.set_context_window_pending(/*pending*/ true);
     bottom_pane
