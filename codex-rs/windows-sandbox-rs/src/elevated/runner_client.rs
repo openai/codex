@@ -409,11 +409,12 @@ pub(crate) fn spawn_runner_transport(
             &mut pi,
         )
     };
+    // Preserve the failure code before SetErrorMode can overwrite it.
+    let spawn_error = (spawn_res == 0).then(|| unsafe { GetLastError() });
     unsafe {
         SetErrorMode(previous_error_mode);
     }
-    if spawn_res == 0 {
-        let err = unsafe { GetLastError() };
+    if let Some(err) = spawn_error {
         return Err(RunnerLogonError { code: err }.into());
     }
     // Keep the process pinned through the entire startup handshake. Pipes close
