@@ -54,6 +54,8 @@ mod approvals;
 mod audio_truncation;
 mod auth_recovery_policy;
 mod auto_review;
+#[path = "bedrock_multi_agent_tests.rs"]
+mod bedrock_multi_agent;
 mod catalog_permission_messages;
 mod cli_stream;
 mod client;
