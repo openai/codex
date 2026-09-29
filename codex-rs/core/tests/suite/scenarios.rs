@@ -130,6 +130,9 @@ mod mxc;
 #[path = "scenarios_tools_namespace_budget.rs"]
 mod tools_namespace_budget;
 
+#[path = "scenarios_skill_catalog_dedup.rs"]
+mod skill_catalog_dedup;
+
 fn skills_extensions() -> Arc<ExtensionRegistry<Config>> {
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     install(&mut extensions, |config: &Config| SkillsExtensionConfig {

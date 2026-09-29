@@ -15,11 +15,12 @@ use crate::catalog::SkillCatalog;
 use crate::provider::SkillListQuery;
 use crate::provider::attribute_executor_plugins;
 use crate::render::AvailableSkillsRender;
+use crate::render::PreparedSkillCatalog;
 use crate::render::RenderedSkillCatalogs;
 use crate::render::SkillCatalogRenderPolicy;
 use crate::render::SkillMetadataBudget;
 use crate::render::render_available_skills;
-use crate::render::render_combined_available_skills;
+use crate::render::render_prepared_skill_catalogs;
 use crate::render::skill_metadata_budget;
 use crate::render_observability::CatalogSurface;
 use crate::render_observability::record_catalog_render;
@@ -265,6 +266,11 @@ impl<'a> CatalogContext<'a> {
     ) -> [RenderedCatalogContribution; 3] {
         let total_limit = self.metadata_budget.limit();
         let default_cloud_limit = total_limit - total_limit / FILESYSTEM_BUDGET_DIVISOR;
+        let mut executor = PreparedSkillCatalog::new(
+            &catalogs.executor.catalog,
+            SkillCatalogRenderPolicy::ExtensionCompatible,
+        );
+        executor.prefer_cloud_skills(&catalogs.cloud.catalog);
         // Identify the full visible cloud inventory before budgeting, including entries
         // a previous cap omitted. Executor readiness and provider warnings are not inputs.
         let cloud_metadata = catalogs
@@ -307,14 +313,17 @@ impl<'a> CatalogContext<'a> {
             });
         allocation.cloud_limit = allocation.cloud_limit.min(default_cloud_limit);
         let (mut rendered, mut filesystem_budget) =
-            self.render_with_cloud_limit(&catalogs, allocation.cloud_limit);
+            self.render_with_cloud_limit(&catalogs, &executor, allocation.cloud_limit);
 
-        if let Some(cloud_limit) =
-            self.rebalance_to_retain_all_skills(&catalogs, &rendered, allocation.cloud_limit)
-        {
+        if let Some(cloud_limit) = self.rebalance_to_retain_all_skills(
+            &catalogs,
+            &executor,
+            &rendered,
+            allocation.cloud_limit,
+        ) {
             allocation.cloud_limit = cloud_limit;
             (rendered, filesystem_budget) =
-                self.render_with_cloud_limit(&catalogs, allocation.cloud_limit);
+                self.render_with_cloud_limit(&catalogs, &executor, allocation.cloud_limit);
         }
 
         [
@@ -341,6 +350,7 @@ impl<'a> CatalogContext<'a> {
     fn rebalance_to_retain_all_skills(
         &self,
         catalogs: &CatalogContributions,
+        executor: &PreparedSkillCatalog<'_>,
         rendered: &RenderedSkillCatalogs,
         current_cloud_limit: usize,
     ) -> Option<usize> {
@@ -352,10 +362,16 @@ impl<'a> CatalogContext<'a> {
             return None;
         }
 
-        let shared = render_combined_available_skills(
-            &catalogs.executor.catalog,
-            &catalogs.cloud.catalog,
-            &catalogs.host.catalog,
+        let shared = render_prepared_skill_catalogs(
+            executor,
+            &PreparedSkillCatalog::new(
+                &catalogs.cloud.catalog,
+                SkillCatalogRenderPolicy::ExtensionCompatible,
+            ),
+            &PreparedSkillCatalog::new(
+                &catalogs.host.catalog,
+                SkillCatalogRenderPolicy::CoreCompatible,
+            ),
             self.metadata_budget,
             self.include_usage,
         );
@@ -378,6 +394,7 @@ impl<'a> CatalogContext<'a> {
     fn render_with_cloud_limit(
         &self,
         catalogs: &CatalogContributions,
+        executor: &PreparedSkillCatalog<'_>,
         cloud_limit: usize,
     ) -> (RenderedSkillCatalogs, SkillMetadataBudget) {
         if !self.config.include_instructions {
@@ -398,10 +415,16 @@ impl<'a> CatalogContext<'a> {
         let filesystem_budget = self
             .metadata_budget
             .with_limit(self.metadata_budget.limit().saturating_sub(cloud_cost));
-        let mut rendered = render_combined_available_skills(
-            &catalogs.executor.catalog,
-            &SkillCatalog::default(),
-            &catalogs.host.catalog,
+        let mut rendered = render_prepared_skill_catalogs(
+            executor,
+            &PreparedSkillCatalog::new(
+                &SkillCatalog::default(),
+                SkillCatalogRenderPolicy::ExtensionCompatible,
+            ),
+            &PreparedSkillCatalog::new(
+                &catalogs.host.catalog,
+                SkillCatalogRenderPolicy::CoreCompatible,
+            ),
             filesystem_budget,
             self.include_usage,
         );

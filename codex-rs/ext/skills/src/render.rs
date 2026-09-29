@@ -474,6 +474,10 @@ pub(crate) struct RenderedSkillCatalogs {
     pub(crate) host: Option<AvailableSkillsRender>,
 }
 
+#[path = "render_dedup.rs"]
+mod dedup;
+pub(crate) use dedup::PreparedSkillCatalog;
+
 impl AvailableSkillsRender {
     /// Count the metadata charged by the allocator, including aliases and omission notices.
     pub(crate) fn metadata_cost(
@@ -522,139 +526,65 @@ pub(crate) fn render_available_skills(
     budget: SkillMetadataBudget,
     include_skills_usage_instructions: bool,
 ) -> Option<AvailableSkillsRender> {
-    let mut entries = catalog
-        .entries
-        .iter()
-        .filter(|entry| entry.is_model_visible())
-        .collect::<Vec<_>>();
-    policy.order_entries(&mut entries);
-    if entries.is_empty() {
-        return None;
-    }
-
-    let absolute = render_catalog(
-        entries
-            .iter()
-            .map(|entry| SkillLine::new(entry, policy))
-            .collect(),
-        budget,
-        Vec::new(),
-        SkillPromptKind::Unaliased,
-        policy,
-    );
-    let selected = if let Some(aliased) =
-        build_aliased_catalog(&entries, policy, budget, include_skills_usage_instructions)
-        && aliased_render_is_better(
-            &aliased,
-            &absolute,
-            budget,
-            include_skills_usage_instructions,
-        ) {
-        aliased
-    } else {
-        absolute
-    };
-
-    Some(AvailableSkillsRender {
-        prompt_kind: selected.prompt_kind,
-        skill_root_lines: selected.skill_root_lines,
-        skill_lines: selected.skill_lines,
-        preserve_empty_fragment: policy == SkillCatalogRenderPolicy::CoreCompatible,
-        report: selected.report,
-    })
+    PreparedSkillCatalog::new(catalog, policy).render(budget, include_skills_usage_instructions)
 }
 
-pub(crate) fn render_combined_available_skills(
-    executor_catalog: &SkillCatalog,
-    cloud_catalog: &SkillCatalog,
-    host_catalog: &SkillCatalog,
+pub(crate) fn render_prepared_skill_catalogs(
+    executor: &PreparedSkillCatalog<'_>,
+    cloud: &PreparedSkillCatalog<'_>,
+    host: &PreparedSkillCatalog<'_>,
     budget: SkillMetadataBudget,
     include_skills_usage_instructions: bool,
 ) -> RenderedSkillCatalogs {
-    let mut executor_entries = executor_catalog
-        .entries
-        .iter()
-        .filter(|entry| entry.is_model_visible())
-        .collect::<Vec<_>>();
-    let mut cloud_entries = cloud_catalog
-        .entries
-        .iter()
-        .filter(|entry| entry.is_model_visible())
-        .collect::<Vec<_>>();
-    let mut host_entries = host_catalog
-        .entries
-        .iter()
-        .filter(|entry| entry.is_model_visible())
-        .collect::<Vec<_>>();
-    SkillCatalogRenderPolicy::ExtensionCompatible.order_entries(&mut executor_entries);
-    SkillCatalogRenderPolicy::ExtensionCompatible.order_entries(&mut cloud_entries);
-    SkillCatalogRenderPolicy::CoreCompatible.order_entries(&mut host_entries);
     let nonempty_catalog_count = [
-        !executor_entries.is_empty(),
-        !cloud_entries.is_empty(),
-        !host_entries.is_empty(),
+        !executor.entries.is_empty(),
+        !cloud.entries.is_empty(),
+        !host.entries.is_empty(),
     ]
     .into_iter()
     .filter(|nonempty| *nonempty)
     .count();
     if nonempty_catalog_count <= 1 {
         return RenderedSkillCatalogs {
-            executor: render_available_skills(
-                executor_catalog,
-                SkillCatalogRenderPolicy::ExtensionCompatible,
-                budget,
-                include_skills_usage_instructions,
-            ),
-            cloud: render_available_skills(
-                cloud_catalog,
-                SkillCatalogRenderPolicy::ExtensionCompatible,
-                budget,
-                include_skills_usage_instructions,
-            ),
-            host: render_available_skills(
-                host_catalog,
-                SkillCatalogRenderPolicy::CoreCompatible,
-                budget,
-                include_skills_usage_instructions,
-            ),
+            executor: executor.render(budget, include_skills_usage_instructions),
+            cloud: cloud.render(budget, include_skills_usage_instructions),
+            host: host.render(budget, include_skills_usage_instructions),
         };
     }
 
-    let extension_policy = SkillCatalogRenderPolicy::ExtensionCompatible;
-    let host_policy = SkillCatalogRenderPolicy::CoreCompatible;
     let absolute = render_combined_lines(
-        CatalogLines::unaliased(&executor_entries, extension_policy),
-        CatalogLines::unaliased(&cloud_entries, extension_policy),
-        CatalogLines::unaliased(&host_entries, host_policy),
+        executor.unaliased(),
+        cloud.unaliased(),
+        host.unaliased(),
         budget,
     );
 
     let mut selected = absolute;
     let host_only_aliases = build_aliased_combined_catalog(
-        CatalogLines::unaliased(&executor_entries, extension_policy),
-        CatalogLines::unaliased(&cloud_entries, extension_policy),
-        CatalogLines::aliased(&host_entries, host_policy),
+        executor.unaliased(),
+        cloud.unaliased(),
+        host.aliased(),
         budget,
         include_skills_usage_instructions,
     );
     let executor_only_aliases = build_aliased_combined_catalog(
-        CatalogLines::aliased(&executor_entries, extension_policy),
-        CatalogLines::unaliased(&cloud_entries, extension_policy),
-        CatalogLines::unaliased(&host_entries, host_policy),
+        executor.aliased(),
+        cloud.unaliased(),
+        host.unaliased(),
         budget,
         include_skills_usage_instructions,
     );
     let cloud_only_aliases = build_aliased_combined_catalog(
-        CatalogLines::unaliased(&executor_entries, extension_policy),
-        CatalogLines::aliased(&cloud_entries, extension_policy),
-        CatalogLines::unaliased(&host_entries, host_policy),
+        executor.unaliased(),
+        cloud.aliased(),
+        host.unaliased(),
         budget,
         include_skills_usage_instructions,
     );
     let all_source_aliases = build_aliased_combined_catalog(
-        CatalogLines::aliased(&executor_entries, extension_policy),
-        CatalogLines::aliased(&cloud_entries, extension_policy),
-        CatalogLines::aliased(&host_entries, host_policy),
+        executor.aliased(),
+        cloud.aliased(),
+        host.aliased(),
         budget,
         include_skills_usage_instructions,
     );
@@ -709,8 +639,12 @@ impl<'a> CatalogLines<'a> {
         }
     }
 
-    fn aliased(entries: &[&'a SkillCatalogEntry], policy: SkillCatalogRenderPolicy) -> Self {
-        let Some(plan) = build_alias_plan(entries) else {
+    fn aliased(
+        entries: &[&'a SkillCatalogEntry],
+        policy: SkillCatalogRenderPolicy,
+        alias_plan: Option<&AliasPlan>,
+    ) -> Self {
+        let Some(plan) = alias_plan.filter(|_| !entries.is_empty()) else {
             return Self::unaliased(entries, policy);
         };
 
@@ -725,7 +659,7 @@ impl<'a> CatalogLines<'a> {
                     SkillLine::with_locator(
                         entry,
                         policy,
-                        render_skill_locator_with_aliases(entry, &plan),
+                        render_skill_locator_with_aliases(entry, plan),
                     )
                 })
                 .collect(),
@@ -1014,12 +948,11 @@ fn available_skills_fragment(
 }
 
 fn build_aliased_catalog(
-    entries: &[&SkillCatalogEntry],
+    catalog: CatalogLines<'_>,
     policy: SkillCatalogRenderPolicy,
     budget: SkillMetadataBudget,
     include_skills_usage_instructions: bool,
 ) -> Option<RenderedCatalog> {
-    let catalog = CatalogLines::aliased(entries, policy);
     if catalog.root_lines.is_empty() {
         return None;
     }

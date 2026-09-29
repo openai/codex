@@ -20,6 +20,25 @@ use crate::catalog_prompt::render_available_skills_body;
 use crate::loader::HostSkillRoot;
 use crate::loader::load_and_merge_host_skill_roots;
 
+fn render_combined_available_skills(
+    executor_catalog: &SkillCatalog,
+    cloud_catalog: &SkillCatalog,
+    host_catalog: &SkillCatalog,
+    budget: SkillMetadataBudget,
+    include_skills_usage_instructions: bool,
+) -> RenderedSkillCatalogs {
+    render_prepared_skill_catalogs(
+        &PreparedSkillCatalog::new(
+            executor_catalog,
+            SkillCatalogRenderPolicy::ExtensionCompatible,
+        ),
+        &PreparedSkillCatalog::new(cloud_catalog, SkillCatalogRenderPolicy::ExtensionCompatible),
+        &PreparedSkillCatalog::new(host_catalog, SkillCatalogRenderPolicy::CoreCompatible),
+        budget,
+        include_skills_usage_instructions,
+    )
+}
+
 #[test]
 fn skill_prompt_contents_are_bounded_at_utf8_boundaries() {
     let contents = format!("{}é", "a".repeat(MAX_SKILL_PROMPT_BYTES - 1));
@@ -28,6 +47,61 @@ fn skill_prompt_contents_are_bounded_at_utf8_boundaries() {
 
     assert_eq!(bounded.len(), MAX_SKILL_PROMPT_BYTES - 1);
     assert_eq!(truncated, true);
+}
+
+#[test]
+fn prebudget_dedup_can_choose_full_locators_over_preserved_aliases() {
+    let hidden_root = format!("skill://executor/{}", "long-package-root/".repeat(40));
+    let mut hidden = entry(
+        "demo:hidden",
+        "Hidden duplicate.",
+        /*short_description*/ None,
+    )
+    .with_alias_root(hidden_root.clone());
+    hidden.authority.kind = SkillSourceKind::Executor;
+    hidden.id = SkillPackageId(format!("{hidden_root}/hidden"));
+    let mut visible = entry(
+        "other:visible",
+        "Keep this description.",
+        /*short_description*/ None,
+    )
+    .with_alias_root("skill://short");
+    visible.authority.kind = SkillSourceKind::Executor;
+    visible.id = SkillPackageId("skill://short/visible".to_string());
+    let executor = SkillCatalog {
+        entries: vec![hidden.clone(), visible],
+        warnings: Vec::new(),
+    };
+    hidden.authority.kind = SkillSourceKind::Cloud;
+    let cloud = SkillCatalog {
+        entries: vec![hidden],
+        warnings: Vec::new(),
+    };
+    let mut prepared =
+        PreparedSkillCatalog::new(&executor, SkillCatalogRenderPolicy::ExtensionCompatible);
+    prepared.prefer_cloud_skills(&cloud);
+    let rendered = prepared
+        .render(
+            SkillMetadataBudget::Characters(300),
+            /*include_skills_usage_instructions*/ false,
+        )
+        .expect("remaining executor skill should render");
+    assert!(rendered.skill_root_lines.is_empty());
+    assert_eq!(
+        rendered.skill_lines,
+        vec![
+            "- other:visible: Keep this description. (executor package: skill://short/visible)"
+                .to_string(),
+        ]
+    );
+    assert_eq!(
+        rendered.report,
+        SkillRenderReport {
+            total_count: 1,
+            included_count: 1,
+            ..Default::default()
+        }
+    );
 }
 
 fn entry(name: &str, description: &str, short_description: Option<&str>) -> SkillCatalogEntry {
