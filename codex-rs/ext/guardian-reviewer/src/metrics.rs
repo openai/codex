@@ -106,6 +106,13 @@ fn guardian_review_metric_tags(
     reviewed_action: &GuardianReviewedAction,
 ) -> Vec<(&'static str, String)> {
     vec![
+        (
+            "context_mode",
+            result
+                .guardian_context_mode
+                .unwrap_or("unknown")
+                .to_string(),
+        ),
         ("decision", decision_tag(result.decision).to_string()),
         (
             "terminal_status",
@@ -436,6 +443,7 @@ mod tests {
         let (attrs, value) = counter_point(&snapshot, GUARDIAN_REVIEW_COUNT_METRIC);
 
         let expected_base_tags = BTreeMap::from([
+            ("context_mode".to_string(), "unknown".to_string()),
             ("action".to_string(), expected_action.to_string()),
             (
                 "approval_request_source".to_string(),

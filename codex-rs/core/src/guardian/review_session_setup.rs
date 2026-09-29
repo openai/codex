@@ -207,13 +207,22 @@ pub(crate) async fn run_guardian_review_session(
     pool: Arc<ReviewerPool<GuardianReviewSession>>,
     params: GuardianReviewSessionParams,
 ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
-    match prepare_review(params).await {
+    let context_mode = GuardianContextMode::from_history(
+        params
+            .parent_history
+            .conversation_history_snapshot()
+            .as_ref(),
+    );
+    let (outcome, mut analytics) = match prepare_review(params).await {
         Ok(prepared) => pool.review(prepared).await,
         Err(error) => (
             GuardianReviewSessionOutcome::PromptBuildFailed(error),
             GuardianReviewAnalyticsResult::without_session(),
         ),
-    }
+    };
+    // Keep the captured mode even when preparation or reviewer startup fails.
+    analytics.guardian_context_mode = Some(context_mode.as_str());
+    (outcome, analytics)
 }
 
 pub(super) async fn prepare_review(

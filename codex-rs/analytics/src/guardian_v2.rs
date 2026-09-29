@@ -21,6 +21,7 @@ pub struct GuardianV2Event {
 #[serde(untagged)]
 pub enum GuardianV2EventKind {
     Classification {
+        guardian_context_mode: &'static str,
         outcome: &'static str,
         risk_level: Option<&'static str>,
         duration_ms: u64,

@@ -292,6 +292,7 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
         .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::GuardianReview(Box::new(
                 GuardianReviewEventParams {
+                    guardian_context_mode: None,
                     thread_id: "thread-guardian".to_string(),
                     turn_id: "turn-guardian".to_string(),
                     review_id: "review-guardian".to_string(),

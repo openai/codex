@@ -400,6 +400,7 @@ pub enum GuardianReviewedAction {
 
 #[derive(Clone, Serialize)]
 pub struct GuardianReviewEventParams {
+    pub guardian_context_mode: Option<&'static str>,
     pub thread_id: String,
     pub turn_id: String,
     pub review_id: String,
@@ -479,6 +480,7 @@ impl GuardianReviewTrackContext {
         completed_at_ms: u64,
     ) -> GuardianReviewEventParams {
         GuardianReviewEventParams {
+            guardian_context_mode: result.guardian_context_mode,
             thread_id: self.thread_id.clone(),
             turn_id: self.turn_id.clone(),
             review_id: self.review_id.clone(),
@@ -531,6 +533,7 @@ impl GuardianReviewTrackContext {
 
 #[derive(Debug)]
 pub struct GuardianReviewAnalyticsResult {
+    pub guardian_context_mode: Option<&'static str>,
     pub decision: GuardianReviewDecision,
     pub terminal_status: GuardianReviewTerminalStatus,
     pub failure_reason: Option<GuardianReviewFailureReason>,
@@ -556,6 +559,7 @@ pub struct GuardianReviewAnalyticsResult {
 impl GuardianReviewAnalyticsResult {
     pub fn without_session() -> Self {
         Self {
+            guardian_context_mode: None,
             decision: GuardianReviewDecision::Denied,
             terminal_status: GuardianReviewTerminalStatus::FailedClosed,
             failure_reason: None,

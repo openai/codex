@@ -15,6 +15,15 @@ pub enum GuardianContextMode {
 }
 
 impl GuardianContextMode {
+    /// Stable, bounded label for the context actually selected for a review.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::Independent => "independent",
+            Self::ThreadOwned => "thread_owned",
+        }
+    }
+
     /// Read reviewer policy from the same snapshot as its evidence, including delayed reviews.
     pub fn from_history(history: &dyn ConversationHistorySnapshot) -> Self {
         if history.uses_independent_review_history() {

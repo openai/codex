@@ -1675,12 +1675,18 @@ max_recent_non_user_entries = 8
             RecordedMetric::Counter(
                 CLASSIFICATION_METRIC.to_owned(),
                 1,
-                vec![("outcome".to_owned(), "success".to_owned())],
+                vec![
+                    ("outcome".to_owned(), "success".to_owned()),
+                    ("context_mode".to_owned(), "thread_owned".to_owned())
+                ],
             ),
             RecordedMetric::Histogram(
                 CLASSIFICATION_DURATION_METRIC.to_owned(),
                 classification_duration_ms,
-                vec![("outcome".to_owned(), "success".to_owned())],
+                vec![
+                    ("outcome".to_owned(), "success".to_owned()),
+                    ("context_mode".to_owned(), "thread_owned".to_owned())
+                ],
             ),
         ])
         .chain([

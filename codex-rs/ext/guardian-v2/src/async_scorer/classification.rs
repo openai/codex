@@ -211,6 +211,7 @@ impl Classification {
                 score_progress.fail_closed(sampled_at);
                 record_classification(
                     metrics.as_deref(),
+                    context_mode,
                     classification_started_at.elapsed(),
                     "failure",
                     Some("context_build_error"),
@@ -364,6 +365,7 @@ impl Classification {
         };
         record_classification(
             metrics.as_deref(),
+            context_mode,
             duration,
             outcome,
             result.is_err().then_some(failure_reason),
@@ -376,6 +378,7 @@ impl Classification {
                 model: parent_model.as_ref().map(|model| model.slug.clone()),
                 occurred_at_ms: codex_analytics::now_unix_millis(),
                 kind: GuardianV2EventKind::Classification {
+                    guardian_context_mode: context_mode.as_str(),
                     outcome,
                     risk_level: classification_risk,
                     duration_ms: u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),

@@ -118,6 +118,7 @@ impl GuardianV2Extension {
             score_progress.observe_js_execution();
         }
         let metrics = score_progress.metrics.clone();
+        let context_mode = GuardianContextMode::from_history(input.conversation_history.as_ref());
         let analytics = input.session_store.get::<AnalyticsEventsClient>();
         let sampled_at = SystemTime::now();
         let tool_call_index = score_progress.observe(&input);
@@ -150,6 +151,7 @@ impl GuardianV2Extension {
                 score_progress.invalidate(tool_call_index);
                 record_classification(
                     metrics.as_deref(),
+                    context_mode,
                     classification_started_at.elapsed(),
                     "failure",
                     Some("thread_context_error"),
@@ -194,6 +196,7 @@ impl GuardianV2Extension {
                 score_progress.fail_closed(sampled_at);
                 record_classification(
                     metrics.as_deref(),
+                    context_mode,
                     classification_started_at.elapsed(),
                     "failure",
                     Some("configuration_error"),
@@ -216,7 +219,6 @@ impl GuardianV2Extension {
         let guardian_evidence = input
             .thread_store
             .get_or_init(GuardianReviewEvidence::default);
-        let context_mode = GuardianContextMode::from_history(input.conversation_history.as_ref());
         let selected_compaction = match select_parent_compaction(
             context_mode,
             &guardian_config,
@@ -237,6 +239,7 @@ impl GuardianV2Extension {
                 score_progress.fail_closed(sampled_at);
                 record_classification(
                     metrics.as_deref(),
+                    context_mode,
                     classification_started_at.elapsed(),
                     outcome,
                     failure_reason,
@@ -259,6 +262,7 @@ impl GuardianV2Extension {
                 score_progress.fail_closed(sampled_at);
                 record_classification(
                     metrics.as_deref(),
+                    context_mode,
                     classification_started_at.elapsed(),
                     "failure",
                     Some("input_too_large"),
@@ -270,6 +274,7 @@ impl GuardianV2Extension {
                 score_progress.fail_closed(sampled_at);
                 record_classification(
                     metrics.as_deref(),
+                    context_mode,
                     classification_started_at.elapsed(),
                     "failure",
                     Some("action_serialization_error"),
@@ -314,6 +319,7 @@ impl GuardianV2Extension {
             score_progress.fail_closed(sampled_at);
             record_classification(
                 metrics.as_deref(),
+                context_mode,
                 classification_started_at.elapsed(),
                 "failure",
                 Some("permission_resolution_error"),
