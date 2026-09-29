@@ -1,58 +1,63 @@
-//! Verify embedded TUI reasoning configuration and metadata on its outbound model request.
+//! Verify TUI reasoning defaults and server-owned settings on outbound model requests.
 
 use super::*;
 use crate::legacy_core::config::ConfigBuilder;
 use codex_app_server_protocol::ServerNotification;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Verbosity;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
 #[tokio::test]
-async fn embedded_reasoning_defaults_reach_responses() -> Result<()> {
-    for (settings, summary, stream_options) in [
-        ("", json!(null), json!(null)),
+async fn reasoning_defaults_reach_responses() -> Result<()> {
+    for (settings, summary, stream_options, mode) in [
+        ("", json!(null), json!(null), ThreadParamsMode::Embedded),
         (
             "[features]\nconcurrent_reasoning_summaries = false",
             json!(null),
             json!(null),
+            ThreadParamsMode::Embedded,
         ),
         (
             "[features]\nconcurrent_reasoning_summaries = true",
             json!(null),
             json!(null),
+            ThreadParamsMode::Embedded,
         ),
         (
             "model_reasoning_summary = 'detailed'",
             json!("detailed"),
             json!(null),
+            ThreadParamsMode::Embedded,
         ),
         (
             "model_reasoning_summary = 'detailed'\n[features]\nconcurrent_reasoning_summaries = true",
             json!("detailed"),
             json!({"reasoning_summary_delivery": "sequential_cutoff"}),
+            ThreadParamsMode::Embedded,
         ),
         (
             "model_reasoning_summary = 'none'\n[features]\nconcurrent_reasoning_summaries = true",
             json!(null),
             json!(null),
+            ThreadParamsMode::Embedded,
+        ),
+        (
+            "model_reasoning_summary = 'detailed'\nmodel_verbosity = 'high'",
+            json!("detailed"),
+            json!(null),
+            ThreadParamsMode::Remote,
         ),
     ] {
         let server = responses::start_mock_server().await;
-        let response = responses::mount_sse_once(
-            &server,
-            responses::sse(vec![
-                responses::ev_response_created("response"),
-                responses::ev_completed("response"),
-            ]),
-        )
-        .await;
         let home = tempfile::tempdir()?;
         let base_url = server.uri();
         std::fs::write(
             home.path().join("config.toml"),
             format!(
                 r#"
-model = "gpt-5.2"
+model = "gpt-5.5"
 model_provider = "reasoning-test"
 {settings}
 [model_providers.reasoning-test]
@@ -64,72 +69,106 @@ stream_max_retries = 0
 "#
             ),
         )?;
-        let config = ConfigBuilder::default()
+        let mut config = ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
             .build()
             .await?;
         let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
+        app_server.thread_params_mode = mode;
+        if mode == ThreadParamsMode::Remote {
+            config.model_reasoning_summary = Some(ReasoningSummary::Concise);
+            config.model_verbosity = Some(Verbosity::Low);
+        }
         let started = app_server.start_thread(&config).await?;
-        let turn = app_server
-            .turn_start(
-                started.session.thread_id,
-                "tui-user-message".to_string(),
-                vec![UserInput::Text {
-                    text: "hello".to_string(),
-                    text_elements: Vec::new(),
-                }],
-                config.cwd.to_path_buf(),
-                /*approval_policy*/ None,
-                /*approvals_reviewer*/ None,
-                TurnPermissionsOverride::Preserve,
-                &config.workspace_roots,
-                started.session.model.clone(),
-                /*effort*/ None,
-                /*summary*/ None,
-                /*service_tier*/ None,
-                /*collaboration_mode*/ None,
-                /*personality*/ None,
-                /*output_schema*/ None,
-            )
-            .await?;
-        tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 30), async {
-            while let Some(event) = app_server.next_event().await {
-                if let AppServerEvent::ServerNotification(notification) = event
-                    && let ServerNotification::TurnCompleted(completed) = *notification
-                {
-                    assert_eq!(
-                        completed.turn.status,
-                        codex_app_server_protocol::TurnStatus::Completed
-                    );
-                    return;
+        for resume in [false, true] {
+            if resume {
+                if mode != ThreadParamsMode::Remote {
+                    break;
                 }
+                app_server.shutdown().await?;
+                app_server = crate::start_embedded_app_server_for_picker(&config).await?;
+                app_server.thread_params_mode = mode;
+                app_server
+                    .resume_thread(
+                        &crate::local_settings::LocalSettings::from(&config),
+                        config.clone(),
+                        started.session.thread_id,
+                        ResumeModelSettings::RestoreFromThread,
+                    )
+                    .await?;
             }
-            panic!("app-server disconnected before completing the turn");
-        })
-        .await?;
-        let body = response.single_request().body_json();
-        assert_eq!(
-            json!({"summary": body["reasoning"]["summary"], "stream_options": body["stream_options"]}),
-            json!({"summary": summary, "stream_options": stream_options}),
-            "settings: {settings}"
-        );
-        let metadata: serde_json::Value = serde_json::from_str(
-            body["client_metadata"]["x-codex-turn-metadata"]
-                .as_str()
-                .expect("canonical turn metadata"),
-        )?;
-        assert_eq!(
-            (
-                &metadata["thread_id"],
-                &metadata["turn_id"],
-                &metadata["turn_trigger"],
-            ),
-            (
-                &json!(started.session.thread_id),
-                &json!(turn.turn.id),
-                &json!("user"),
+            let response = responses::mount_sse_once(
+                &server,
+                responses::sse(vec![
+                    responses::ev_response_created("response"),
+                    responses::ev_completed("response"),
+                ]),
             )
-        );
+            .await;
+            let turn = app_server
+                .turn_start(
+                    started.session.thread_id,
+                    "tui-user-message".to_string(),
+                    vec![UserInput::Text {
+                        text: "hello".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    config.cwd.to_path_buf(),
+                    /*approval_policy*/ None,
+                    /*approvals_reviewer*/ None,
+                    TurnPermissionsOverride::Preserve,
+                    &config.workspace_roots,
+                    started.session.model.clone(),
+                    /*effort*/ None,
+                    /*summary*/ None,
+                    /*service_tier*/ None,
+                    /*collaboration_mode*/ None,
+                    /*personality*/ None,
+                    /*output_schema*/ None,
+                )
+                .await?;
+            tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 30), async {
+                while let Some(event) = app_server.next_event().await {
+                    if let AppServerEvent::ServerNotification(notification) = event
+                        && let ServerNotification::TurnCompleted(completed) = *notification
+                    {
+                        assert_eq!(
+                            completed.turn.status,
+                            codex_app_server_protocol::TurnStatus::Completed
+                        );
+                        return;
+                    }
+                }
+                panic!("app-server disconnected before completing the turn");
+            })
+            .await?;
+            let body = response.single_request().body_json();
+            assert_eq!(
+                json!({"summary": body["reasoning"]["summary"], "stream_options": body["stream_options"]}),
+                json!({"summary": summary, "stream_options": stream_options}),
+                "settings: {settings}"
+            );
+            if mode == ThreadParamsMode::Remote {
+                assert_eq!(body["text"]["verbosity"], json!("high"));
+            }
+            let metadata: serde_json::Value = serde_json::from_str(
+                body["client_metadata"]["x-codex-turn-metadata"]
+                    .as_str()
+                    .expect("canonical turn metadata"),
+            )?;
+            assert_eq!(
+                (
+                    &metadata["thread_id"],
+                    &metadata["turn_id"],
+                    &metadata["turn_trigger"],
+                ),
+                (
+                    &json!(started.session.thread_id),
+                    &json!(turn.turn.id),
+                    &json!("user"),
+                )
+            );
+        }
         app_server.shutdown().await?;
     }
     Ok(())

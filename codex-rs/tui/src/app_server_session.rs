@@ -1837,18 +1837,6 @@ fn config_request_overrides_from_config(
             .map(std::string::ToString::to_string),
     );
     insert(
-        "model_reasoning_summary",
-        config
-            .model_reasoning_summary
-            .map(|summary| summary.to_string()),
-    );
-    insert(
-        "model_verbosity",
-        config
-            .model_verbosity
-            .map(|verbosity| verbosity.to_string()),
-    );
-    insert(
         "personality",
         personality_opt_out_only(config.personality).map(|personality| personality.to_string()),
     );
@@ -1856,6 +1844,23 @@ fn config_request_overrides_from_config(
         "web_search",
         Some(config.web_search_mode.value().to_string()),
     );
+    // Only winning launch choices may replace server defaults or saved thread settings.
+    let origins = config.config_layer_stack.origins();
+    let effective = config.config_layer_stack.effective_config();
+    for key in ["model_reasoning_summary", "model_verbosity"] {
+        if origins.get(key).is_some_and(|origin| {
+            matches!(
+                origin.name,
+                ConfigLayerSource::SessionFlags
+                    | ConfigLayerSource::User {
+                        profile: Some(_),
+                        ..
+                    }
+            )
+        }) {
+            overrides.insert(key.to_string(), serde_json::json!(effective[key]));
+        }
+    }
     if config.bypass_hook_trust {
         overrides.insert("bypass_hook_trust".to_string(), true.into());
     }
@@ -3381,12 +3386,11 @@ mod tests {
         let string = |value: &str| serde_json::Value::String(value.to_string());
         let expected_config = HashMap::from([
             ("model_reasoning_effort".to_string(), string("high")),
-            ("model_reasoning_summary".to_string(), string("detailed")),
-            ("model_verbosity".to_string(), string("low")),
             ("web_search".to_string(), string("disabled")),
             ("bypass_hook_trust".to_string(), true.into()),
         ]);
         let mut expected_start_config = expected_config.clone();
+        expected_start_config.insert("model_reasoning_summary".to_string(), string("detailed"));
         expected_start_config.insert(
             "features".to_string(),
             serde_json::json!({"concurrent_reasoning_summaries": false}),
@@ -3394,6 +3398,71 @@ mod tests {
         assert_eq!(start.config, Some(expected_start_config));
         assert_eq!(resume.config, Some(expected_config.clone()));
         assert_eq!(fork.config, Some(expected_config));
+    }
+
+    #[tokio::test]
+    async fn config_overrides_forward_explicit_summary_and_verbosity() -> Result<()> {
+        let home = tempfile::tempdir()?;
+        let workspace = home.path().join("workspace");
+        std::fs::create_dir_all(workspace.join(".codex"))?;
+        std::fs::write(
+            home.path().join("config.toml"),
+            format!(
+                "model_reasoning_summary = \"concise\"\nmodel_verbosity = \"low\"\n[projects.{}]\ntrust_level = \"trusted\"\n",
+                toml::Value::String(workspace.to_string_lossy().into_owned()),
+            ),
+        )?;
+        let profile = AbsolutePathBuf::from_absolute_path(home.path().join("work.config.toml"))?;
+        std::fs::write(
+            &profile,
+            "model_reasoning_summary = \"detailed\"\nmodel_verbosity = \"high\"\n",
+        )?;
+        for (selected_profile, project, cli, expected) in [
+            (false, false, false, [None, None]),
+            (true, false, false, [Some("detailed"), Some("high")]),
+            (false, false, true, [Some("auto"), Some("medium")]),
+            (true, false, true, [Some("auto"), Some("medium")]),
+            (true, true, false, [None, None]),
+            (true, true, true, [Some("auto"), Some("medium")]),
+        ] {
+            std::fs::write(
+                workspace.join(".codex/config.toml"),
+                if project {
+                    "model_reasoning_summary = \"concise\"\nmodel_verbosity = \"low\"\n"
+                } else {
+                    ""
+                },
+            )?;
+            let config = ConfigBuilder::default()
+                .codex_home(home.path().to_path_buf())
+                .harness_overrides(ConfigOverrides {
+                    cwd: Some(workspace.clone()),
+                    ..ConfigOverrides::default()
+                })
+                .loader_overrides(codex_config::LoaderOverrides {
+                    user_config_path: selected_profile.then(|| profile.clone()),
+                    user_config_profile: selected_profile.then(|| "work".parse().unwrap()),
+                    ..codex_config::LoaderOverrides::without_managed_config_for_tests()
+                })
+                .cli_overrides(if cli {
+                    vec![
+                        ("model_reasoning_summary".to_string(), "auto".into()),
+                        ("model_verbosity".to_string(), "medium".into()),
+                    ]
+                } else {
+                    Vec::new()
+                })
+                .build()
+                .await?;
+            let overrides =
+                config_request_overrides_from_config(&config).expect("config overrides");
+            assert_eq!(
+                ["model_reasoning_summary", "model_verbosity"]
+                    .map(|key| overrides.get(key).and_then(serde_json::Value::as_str)),
+                expected,
+            );
+        }
+        Ok(())
     }
 
     #[tokio::test]
@@ -3418,16 +3487,10 @@ mod tests {
         assert_eq!(params.model_provider, None);
         assert_eq!(
             params.config,
-            Some(HashMap::from([
-                (
-                    "model_reasoning_summary".to_string(),
-                    serde_json::Value::String("detailed".to_string()),
-                ),
-                (
-                    "web_search".to_string(),
-                    serde_json::Value::String("cached".to_string()),
-                ),
-            ]))
+            Some(HashMap::from([(
+                "web_search".to_string(),
+                serde_json::Value::String("cached".to_string()),
+            )]))
         );
     }
 
