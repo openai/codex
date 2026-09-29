@@ -106,6 +106,7 @@ async fn ordinary_transport_transitions_use_the_resolved_incoming_map() {
                 layered_config(&base, command, "", "", "").await,
                 layered_config(&base, "", url, "", "").await,
             ),
+            RuntimeConfigRefresh::UserFiles => unreachable!(),
         };
         let refreshed = current.resolve_runtime_refresh(&incoming, scope).unwrap();
         assert_eq!(refreshed.mcp_servers.get(), incoming.mcp_servers.get());

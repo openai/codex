@@ -243,8 +243,10 @@ impl ConfigLayerEntry {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub struct ConfigLayerStack {
+    /// Runtime-only EMA authority; it does not change the configuration's contents.
+    cloud_config_binding: Option<crate::CloudConfigBundleBinding>,
     /// Cached TOML projection derived only from `requirements_toml`.
     /// Construction validates provider definitions and reports serialization errors,
     /// so `effective_config()` can replace complete entries without a fallible conversion.
@@ -273,6 +275,29 @@ pub struct ConfigLayerStack {
     pub(crate) is_projectless: bool,
 }
 
+impl PartialEq for ConfigLayerStack {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            cloud_config_binding: _,
+            model_provider_requirements,
+            layers,
+            requirements,
+            requirements_toml,
+            ignore_user_and_project_exec_policy_rules,
+            startup_warnings,
+            is_projectless,
+        } = self;
+        model_provider_requirements == &other.model_provider_requirements
+            && layers == &other.layers
+            && requirements == &other.requirements
+            && requirements_toml == &other.requirements_toml
+            && *ignore_user_and_project_exec_policy_rules
+                == other.ignore_user_and_project_exec_policy_rules
+            && startup_warnings == &other.startup_warnings
+            && is_projectless == &other.is_projectless
+    }
+}
+
 impl ConfigLayerStack {
     pub fn new(
         layers: Vec<ConfigLayerEntry>,
@@ -285,6 +310,7 @@ impl ConfigLayerStack {
             &requirements_toml,
         )?);
         Ok(Self {
+            cloud_config_binding: None,
             model_provider_requirements,
             layers,
             requirements,
@@ -305,6 +331,18 @@ impl ConfigLayerStack {
 
     pub fn ignore_user_and_project_exec_policy_rules(&self) -> bool {
         self.ignore_user_and_project_exec_policy_rules
+    }
+
+    pub fn with_cloud_config_binding(
+        mut self,
+        binding: Option<crate::CloudConfigBundleBinding>,
+    ) -> Self {
+        self.cloud_config_binding = binding;
+        self
+    }
+
+    pub fn cloud_config_binding(&self) -> Option<&crate::CloudConfigBundleBinding> {
+        self.cloud_config_binding.as_ref()
     }
 
     /// Retains session layers while adopting current MCP, plugin, and feature restrictions.
@@ -437,6 +475,7 @@ impl ConfigLayerStack {
         }
         Ok(Self {
             layers,
+            cloud_config_binding: self.cloud_config_binding.clone(),
             model_provider_requirements: self.model_provider_requirements.clone(),
             requirements: self.requirements.clone(),
             requirements_toml: self.requirements_toml.clone(),
@@ -473,6 +512,7 @@ impl ConfigLayerStack {
         }
         Self {
             layers,
+            cloud_config_binding: self.cloud_config_binding.clone(),
             model_provider_requirements: self.model_provider_requirements.clone(),
             requirements: self.requirements.clone(),
             requirements_toml: self.requirements_toml.clone(),

@@ -253,6 +253,7 @@ mod role_overrides {
             config.config_layer_stack.requirements().clone(),
             config.config_layer_stack.requirements_toml().clone(),
         )?
+        .with_cloud_config_binding(config.config_layer_stack.cloud_config_binding().cloned())
         .with_user_and_project_exec_policy_rules_ignored(
             config
                 .config_layer_stack

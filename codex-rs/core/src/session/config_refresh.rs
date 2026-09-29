@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::RuntimeConfigRefresh;
 use crate::session::Session;
+use codex_config::CloudConfigBundleBindingStatus;
 use codex_config::McpServerAuth;
 use codex_features::Feature;
 use tracing::warn;
@@ -51,7 +52,7 @@ impl Session {
         next_config: Config,
         scope: RuntimeConfigRefresh,
     ) -> ConfigRefreshOutcome {
-        let (mut config, outcome, rejection_kind) =
+        let (mut config, mut outcome, rejection_kind) =
             match expected_config.resolve_runtime_refresh(&next_config, scope) {
                 Ok(config) => (config, ConfigRefreshOutcome::Published, None),
                 Err(error) => {
@@ -90,18 +91,20 @@ impl Session {
                     (config, ConfigRefreshOutcome::Rejected, Some(error.kind()))
                 }
             };
-        for (feature, description) in [
-            (Feature::Mcp20260728, "MCP protocol"),
-            (Feature::CodexAppsMcp20260728, "Codex Apps MCP protocol"),
-        ] {
-            if let Err(err) = config
-                .features
-                .set_enabled(feature, next_config.features.enabled(feature))
-            {
-                warn!("failed to refresh {description} config: {err}");
+        if !matches!(scope, RuntimeConfigRefresh::UserFiles) {
+            for (feature, description) in [
+                (Feature::Mcp20260728, "MCP protocol"),
+                (Feature::CodexAppsMcp20260728, "Codex Apps MCP protocol"),
+            ] {
+                if let Err(err) = config
+                    .features
+                    .set_enabled(feature, next_config.features.enabled(feature))
+                {
+                    warn!("failed to refresh {description} config: {err}");
+                }
             }
         }
-        let config = Arc::new(config);
+        let mut config = Arc::new(config);
         let notify_contributors = !matches!(scope, RuntimeConfigRefresh::Mcp)
             && !self.services.extensions.config_contributors().is_empty();
         let (previous_config, new_config) = {
@@ -113,11 +116,40 @@ impl Session {
             ) {
                 return ConfigRefreshOutcome::Stale;
             }
+            // User-only refreshes retain the current managed inputs and their
+            // admission binding. Only MCP refreshes can publish a new policy.
+            let policy_guard = matches!(scope, RuntimeConfigRefresh::Mcp)
+                .then(|| next_config.config_layer_stack.cloud_config_binding())
+                .flatten()
+                .map(|binding| binding.read());
+            let policy_status = policy_guard
+                .as_ref()
+                .map(|guard| guard.status)
+                .unwrap_or(CloudConfigBundleBindingStatus::Current);
+            match policy_status {
+                CloudConfigBundleBindingStatus::Current => {}
+                CloudConfigBundleBindingStatus::Stale => return ConfigRefreshOutcome::Stale,
+                CloudConfigBundleBindingStatus::Suspended => {
+                    // Publish ordinary changes under the last valid requirements,
+                    // but revoke enterprise authority until a valid policy is loaded.
+                    let config = Arc::make_mut(&mut config);
+                    config.disable_mcp_enterprise_auth();
+                    config.config_layer_stack = config
+                        .config_layer_stack
+                        .clone()
+                        .with_cloud_config_binding(/*binding*/ None);
+                    outcome = ConfigRefreshOutcome::Rejected;
+                }
+            }
             if let Some(rejection_kind) = rejection_kind {
                 warn!(
                     ?rejection_kind,
                     "disabling enterprise MCP after rejected configuration refresh"
                 );
+            }
+            if matches!(scope, RuntimeConfigRefresh::UserFiles) {
+                self.services.skills_service.clear_cache();
+                self.services.plugins_manager.clear_cache();
             }
             // A host refresh carries current rollout settings for recording. A
             // legacy file reload uses its original snapshot and bypasses this path.
@@ -129,6 +161,7 @@ impl Session {
             let previous_config = notify_contributors
                 .then(|| self.build_effective_session_config(&state.session_configuration));
             state.session_configuration.original_config_do_not_use = Arc::clone(&config);
+            drop(policy_guard);
             if matches!(scope, RuntimeConfigRefresh::Mcp) {
                 self.services.mcp_runtime.invalidate_resource_caches();
             }

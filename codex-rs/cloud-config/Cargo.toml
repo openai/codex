@@ -21,6 +21,7 @@ hmac = "0.12.1"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "rt", "sync", "time"] }
 tracing = { workspace = true }
@@ -29,7 +30,6 @@ tracing = { workspace = true }
 codex-agent-identity = { workspace = true }
 codex-core = { workspace = true }
 pretty_assertions = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "time"] }
 
 [lib]

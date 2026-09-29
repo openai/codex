@@ -362,10 +362,7 @@ pub(super) async fn reload_user_config(
 }
 
 async fn reload_user_config_inner(config_manager: &ConfigManager, thread_manager: &ThreadManager) {
-    if let Err(err) = config_manager
-        .load_latest_config(/*fallback_cwd*/ None)
-        .await
-    {
+    if let Err(err) = config_manager.load_config_layers(/*cwd*/ None).await {
         tracing::warn!("failed to rebuild user config for runtime refresh: {err}");
         for thread_id in thread_manager.list_thread_ids().await {
             if let Ok(thread) = thread_manager.get_thread(thread_id).await {

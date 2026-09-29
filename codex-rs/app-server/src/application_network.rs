@@ -77,18 +77,23 @@ impl ConfigManager {
         let local_sources = self.load_local_network_policy(revision).await?;
         let cloud_config = self.current_cloud_config_bundle();
         let result = async {
-            let cloud = cloud_config.get().await.map_err(io::Error::other)?;
+            let cloud_snapshot = cloud_config.get_snapshot().await;
+            let cloud = cloud_snapshot.bundle.clone().map_err(io::Error::other)?;
             let application = local_sources.compose(
                 cloud
                     .as_ref()
                     .map(|bundle| bundle.requirements_toml.clone())
                     .unwrap_or_default(),
             )?;
-            Ok::<_, io::Error>((destination_policy(application.as_ref()), cloud))
+            Ok::<_, io::Error>((
+                destination_policy(application.as_ref()),
+                cloud,
+                cloud_snapshot,
+            ))
         }
         .await;
         match result {
-            Ok((policy, cloud)) => {
+            Ok((policy, cloud, cloud_snapshot)) => {
                 let mut current = self.network_policy_snapshot.write().map_err(|_| {
                     io::Error::other("application network policy snapshot lock poisoned")
                 })?;
@@ -99,7 +104,7 @@ impl ConfigManager {
                 let next = ApplicationPolicySnapshot {
                     revision,
                     policy,
-                    cloud: cloud.clone(),
+                    cloud,
                 };
                 // Concurrent config loads may finish together if their actual inputs are unchanged.
                 let snapshot = match current.as_ref() {
@@ -111,7 +116,7 @@ impl ConfigManager {
                     }
                 };
                 Ok(ApplicationPolicyLoad {
-                    cloud_config: CloudConfigBundleLoader::new(async move { Ok(cloud) }),
+                    cloud_config: CloudConfigBundleLoader::from_snapshot(cloud_snapshot),
                     snapshot,
                 })
             }

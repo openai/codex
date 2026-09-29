@@ -59,9 +59,15 @@ where
         refresh_task,
     });
 
+    let snapshot_lifetime = Arc::clone(&lifetime);
+    let policy = lifetime.service.policy.clone();
     let loader = CloudConfigBundleLoader::from_getter(move || {
         let lifetime = Arc::clone(&lifetime);
         async move { lifetime.service.get_latest().await }
+    })
+    .with_ema_policy_snapshots(policy, move || {
+        let lifetime = Arc::clone(&snapshot_lifetime);
+        async move { lifetime.service.get_latest_snapshot().await }
     });
     (loader, abort_handle)
 }

@@ -10,13 +10,17 @@ use chrono::Duration as ChronoDuration;
 use chrono::Utc;
 use codex_config::AbsolutePathBuf;
 use codex_config::CloudConfigBundle;
+use codex_config::CloudConfigBundlePolicyRevision;
 use hmac::Hmac;
 use hmac::Mac;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Sha256;
+use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
+use tempfile::NamedTempFile;
 use thiserror::Error;
 use tokio::fs;
 
@@ -125,12 +129,12 @@ impl CloudConfigBundleCache {
         }
     }
 
-    pub(super) async fn save(
+    pub(super) async fn prepare(
         &self,
         chatgpt_user_id: Option<String>,
         account_id: Option<String>,
         bundle: CloudConfigBundle,
-    ) -> Result<(), CloudConfigBundleCacheError> {
+    ) -> Result<StagedCloudConfigBundleCache, CloudConfigBundleCacheError> {
         let now = Utc::now();
         let expires_at = now
             .checked_add_signed(
@@ -154,16 +158,45 @@ impl CloudConfigBundleCache {
         })
         .map_err(|_| CloudConfigBundleCacheError)?;
 
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .await
+        let destination = self.path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let parent = destination.parent().ok_or(CloudConfigBundleCacheError)?;
+            std::fs::create_dir_all(parent).map_err(|_| CloudConfigBundleCacheError)?;
+            let mut temporary =
+                NamedTempFile::new_in(parent).map_err(|_| CloudConfigBundleCacheError)?;
+            temporary
+                .write_all(&serialized)
                 .map_err(|_| CloudConfigBundleCacheError)?;
-        }
+            Ok(StagedCloudConfigBundleCache {
+                temporary,
+                destination,
+            })
+        })
+        .await
+        .map_err(|_| CloudConfigBundleCacheError)?
+    }
+}
 
-        fs::write(&self.path, serialized)
-            .await
-            .map_err(|_| CloudConfigBundleCacheError)?;
-        Ok(())
+pub(super) struct StagedCloudConfigBundleCache {
+    temporary: NamedTempFile,
+    destination: PathBuf,
+}
+
+impl StagedCloudConfigBundleCache {
+    pub(super) async fn publish_if_current(
+        self,
+        revision: CloudConfigBundlePolicyRevision,
+    ) -> Result<(), CloudConfigBundleCacheError> {
+        tokio::task::spawn_blocking(move || {
+            revision.commit_if_current(|| {
+                self.temporary
+                    .persist(self.destination)
+                    .map(|_| ())
+                    .map_err(|_| CloudConfigBundleCacheError)
+            })
+        })
+        .await
+        .map_err(|_| CloudConfigBundleCacheError)?
     }
 }
 

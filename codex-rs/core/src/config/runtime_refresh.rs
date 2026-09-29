@@ -23,6 +23,7 @@ mod tests;
 pub(crate) enum RuntimeConfigRefresh {
     User,
     Mcp,
+    UserFiles,
 }
 
 #[derive(Default, Deserialize)]
@@ -38,7 +39,7 @@ impl Config {
         scope: RuntimeConfigRefresh,
     ) -> std::io::Result<Self> {
         let layers = match scope {
-            RuntimeConfigRefresh::User => self
+            RuntimeConfigRefresh::User | RuntimeConfigRefresh::UserFiles => self
                 .config_layer_stack
                 .with_user_layer_from(&incoming.config_layer_stack),
             RuntimeConfigRefresh::Mcp => Self::layer_stack_preserving_session(
@@ -59,14 +60,28 @@ impl Config {
             FeatureConfigSource::default(),
             FeatureOverrides::default(),
         );
-        // These existing operational controls also accept host runtime overrides.
+        // These operational controls accept host defaults beneath explicit layer values.
         // Enterprise opt-in always comes from trusted layers instead.
         for feature in [
             Feature::SecretAuthStorage,
             Feature::McpOAuthRefreshCoordination,
         ] {
-            // A publication wait may have allowed a newer host/user override.
-            configured_features.set_enabled(feature, incoming.features.enabled(feature));
+            if matches!(scope, RuntimeConfigRefresh::UserFiles) {
+                let explicitly_configured = cfg.features.as_ref().is_some_and(|features| {
+                    features
+                        .entries()
+                        .keys()
+                        .any(|key| codex_features::feature_for_key(key) == Some(feature))
+                });
+                if !explicitly_configured
+                    && let Some(enabled) = self.runtime_feature_defaults.get(&feature)
+                {
+                    configured_features.set_enabled(feature, *enabled);
+                }
+            } else {
+                // A publication wait may have allowed a newer host/user override.
+                configured_features.set_enabled(feature, incoming.features.enabled(feature));
+            }
         }
         let features = ManagedFeatures::from_configured(
             configured_features,
@@ -95,6 +110,11 @@ impl Config {
                 .map(|(name, server)| (name.clone(), server.clone())),
         );
         let mut config = self.clone();
+        if !matches!(scope, RuntimeConfigRefresh::UserFiles) {
+            config.runtime_feature_defaults = incoming.runtime_feature_defaults.clone();
+            config.mcp_optional_startup_grace = incoming.mcp_optional_startup_grace;
+            config.mcp_oauth_credentials_store_mode = incoming.mcp_oauth_credentials_store_mode;
+        }
         config
             .features
             .refresh_mcp_features(&features)
@@ -138,10 +158,10 @@ impl Config {
                         .get(name)
                         .is_some_and(|server| server.enabled)
             });
-        config.mcp_optional_startup_grace = incoming.mcp_optional_startup_grace;
-        config.mcp_oauth_credentials_store_mode = incoming.mcp_oauth_credentials_store_mode;
-        if !matches!(scope, RuntimeConfigRefresh::Mcp) {
+        if matches!(scope, RuntimeConfigRefresh::User) {
             config.active_project = incoming.active_project.clone();
+        }
+        if !matches!(scope, RuntimeConfigRefresh::Mcp) {
             config.tool_suggest = resolve_tool_suggest_config_from_layer_stack(&layers);
         }
         config.config_layer_stack = layers;

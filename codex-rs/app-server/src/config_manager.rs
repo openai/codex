@@ -160,6 +160,7 @@ impl ConfigManager {
             http_client_factory,
         );
         if let Ok(mut guard) = self.cloud_config_bundle.write() {
+            guard.retire_ema_policy();
             *guard = loader;
         } else {
             warn!("failed to update cloud config bundle loader");
@@ -168,6 +169,7 @@ impl ConfigManager {
 
     pub(crate) fn clear_cloud_config_bundle_loader(&self) {
         if let Ok(mut guard) = self.cloud_config_bundle.write() {
+            guard.retire_ema_policy();
             *guard = CloudConfigBundleLoader::default();
         } else {
             warn!("failed to clear cloud config bundle loader");
@@ -212,21 +214,19 @@ impl ConfigManager {
         session_layers: &ConfigLayerStack,
         cwd: &Path,
     ) -> std::io::Result<Config> {
-        let refreshed_config = self.load_latest_config(Some(cwd.to_path_buf())).await?;
+        let codex_home = AbsolutePathBuf::from_absolute_path(&self.codex_home)?;
+        let layers = self
+            .load_config_layers_for_cwd(AbsolutePathBuf::from_absolute_path(cwd)?)
+            .await?;
         let mut config = Config::rebuild_with_session_layers(
             session_layers,
             cwd.to_path_buf(),
-            &refreshed_config.config_layer_stack,
-            refreshed_config.codex_home.clone(),
-            refreshed_config
-                .zsh_path
-                .clone()
-                .map(AbsolutePathBuf::try_from)
-                .transpose()?,
+            &layers,
+            codex_home,
+            /*default_zsh_path*/ None,
         )
         .await?;
-        config.application_network_policy = refreshed_config.application_network_policy;
-        config.application_auth_route_config = refreshed_config.application_auth_route_config;
+        self.apply_network_policy(&mut config);
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);
         Ok(config)
@@ -594,6 +594,10 @@ pub(crate) fn apply_runtime_feature_enablement(
     config: &mut Config,
     runtime_feature_enablement: &BTreeMap<String, bool>,
 ) {
+    config.runtime_feature_defaults = runtime_feature_enablement
+        .iter()
+        .filter_map(|(name, enabled)| feature_for_key(name).map(|feature| (feature, *enabled)))
+        .collect();
     let protected_features = protected_feature_keys(&config.config_layer_stack);
     for (name, enabled) in runtime_feature_enablement {
         if protected_features.contains(name) {

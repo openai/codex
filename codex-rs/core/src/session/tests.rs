@@ -11,6 +11,8 @@ use super::step_settings::StepSettingsUpdate;
 pub(crate) use super::step_settings::tests::update_selected_settings_for_test;
 use super::turn_context::TurnEnvironment;
 use super::*;
+#[path = "config_refresh_tests.rs"]
+mod config_refresh_tests;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::agents_md_manager::SessionInstructions;
 use crate::compact::InitialContextInjection;
@@ -2320,6 +2322,7 @@ async fn refresh_mcp_config_replaces_managed_server_and_plugin_requirements(reje
 
 #[test_case::test_case(RuntimeConfigRefresh::User; "user refresh")]
 #[test_case::test_case(RuntimeConfigRefresh::Mcp; "MCP refresh")]
+#[test_case::test_case(RuntimeConfigRefresh::UserFiles; "file refresh")]
 #[tokio::test]
 async fn refresh_config_rejects_stale_owner_without_effects(scope: RuntimeConfigRefresh) {
     let (session, _turn_context) = make_session_and_context().await;
@@ -2344,30 +2347,6 @@ async fn refresh_config_rejects_stale_owner_without_effects(scope: RuntimeConfig
     assert_eq!(
         session
             .refresh_config(stale_owner, stale_config, scope)
-            .await,
-        crate::ConfigRefreshOutcome::Stale
-    );
-
-    assert!(Arc::ptr_eq(&current_owner, &session.get_config().await));
-    assert!(!session.mcp_refresh.is_pending());
-}
-
-#[tokio::test]
-async fn refresh_file_config_rejects_stale_owner_without_effects() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let stale_owner = session.get_config().await;
-    assert_eq!(
-        session
-            .refresh_runtime_config(Arc::clone(&stale_owner), stale_owner.as_ref().clone())
-            .await,
-        crate::ConfigRefreshOutcome::Published
-    );
-    let current_owner = session.get_config().await;
-    assert!(session.mcp_refresh.claim());
-
-    assert_eq!(
-        session
-            .refresh_file_config(Arc::clone(&stale_owner), stale_owner.as_ref().clone())
             .await,
         crate::ConfigRefreshOutcome::Stale
     );

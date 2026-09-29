@@ -54,10 +54,7 @@ async fn reload_mcp_config_with_policy(
     for pass in 0..3 {
         let host_loaded = match policy {
             ReloadPolicy::BestEffort => true,
-            ReloadPolicy::Strict => match config_manager
-                .load_latest_config(/*fallback_cwd*/ None)
-                .await
-            {
+            ReloadPolicy::Strict => match config_manager.load_config_layers(/*cwd*/ None).await {
                 Ok(_) => true,
                 Err(err) => {
                     load_error.get_or_insert(err);
@@ -147,6 +144,9 @@ async fn reload_mcp_config_with_policy(
 fn disabled_enterprise_config(current_config: &Config) -> Config {
     let mut config = current_config.clone();
     config.disable_mcp_enterprise_auth();
+    config.config_layer_stack = config
+        .config_layer_stack
+        .with_cloud_config_binding(/*binding*/ None);
     config
 }
 
