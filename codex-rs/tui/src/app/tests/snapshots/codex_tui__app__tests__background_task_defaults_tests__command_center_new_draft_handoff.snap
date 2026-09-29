@@ -14,7 +14,7 @@ attached:
 
 › draft during startup
 
-  GPT-6-Astra default · /tmp/project
+  GPT-6.1-Sol default · /tmp/project
 
 owned=true
 startup:
@@ -27,4 +27,4 @@ attached:
 
 › draft during startup
 
-  GPT-6-Astra default · /tmp/project
+  GPT-6.1-Sol default · /tmp/project
