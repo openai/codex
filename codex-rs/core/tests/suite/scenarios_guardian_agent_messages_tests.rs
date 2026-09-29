@@ -1,6 +1,5 @@
 //! Guardian retains native encrypted parent replies across incremental reviews.
 
-use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
@@ -9,7 +8,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
-use codex_protocol::turn_input::TurnInput;
+use codex_protocol::protocol::Op;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses;
@@ -90,10 +89,13 @@ async fn encrypted_parent_reply_survives_incremental_guardian_reviews() -> anyho
         /*trigger_turn*/ true,
     );
     let expected = serde_json::to_value(communication.to_model_input_item())?;
+    // TurnComplete can arrive before the previous turn finishes teardown. Queue
+    // the reply through the same mailbox path used by real agent messages.
     test.codex
-        .start_turn_if_idle(TurnInputRequest::new(TurnInput::InterAgentCommunication(
+        .submit(Op::InterAgentCommunication {
             communication,
-        )))
+            start_options: Default::default(),
+        })
         .await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
