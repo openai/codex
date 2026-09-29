@@ -233,19 +233,36 @@ pub(crate) fn default_exec_approval_requirement(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SandboxOverride {
     NoOverride,
+    EscalatedSandboxWithRestrictions,
     BypassSandboxFirstAttempt,
+}
+
+impl SandboxOverride {
+    pub(crate) fn ensure_native_sandbox(self, sandbox: SandboxType) -> Result<(), ToolError> {
+        if self == Self::EscalatedSandboxWithRestrictions && sandbox == SandboxType::None {
+            return Err(ToolError::Rejected(
+                "command escalation with denied reads requires an available filesystem sandbox"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn sandbox_override_for_first_attempt(
     sandbox_permissions: SandboxPermissions,
     exec_approval_requirement: &ExecApprovalRequirement,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    already_approved: bool,
 ) -> SandboxOverride {
-    // Deny-read restrictions are part of the active permission policy. Running
-    // without a filesystem sandbox would discard them, even if the command was
-    // otherwise approved by rules or explicit escalation.
+    // Only actual approval of an explicit escalation may widen the filesystem;
+    // a command allow rule does not authorize removing filesystem restrictions.
     if !unsandboxed_execution_allowed(file_system_sandbox_policy) {
-        return SandboxOverride::NoOverride;
+        return if sandbox_permissions.requires_escalated_permissions() && already_approved {
+            SandboxOverride::EscalatedSandboxWithRestrictions
+        } else {
+            SandboxOverride::NoOverride
+        };
     }
 
     // ExecPolicy `Allow` can intentionally imply full trust (Skip + bypass_sandbox=true),

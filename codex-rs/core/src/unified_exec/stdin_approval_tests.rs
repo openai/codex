@@ -29,6 +29,7 @@ fn terminal_permissions(profile: &PermissionProfile) -> TerminalPermissions {
         },
         sandbox_source: TerminalSandboxSource::Native,
         launch_permissions: SandboxPermissions::UseDefault,
+        filesystem_escalated: false,
         additional_permissions: None,
         internal_permissions: None,
     }

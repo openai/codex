@@ -9,6 +9,10 @@ use codex_features::Feature;
 use codex_protocol::approvals::ExecApprovalKind;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GranularApprovalConfig;
@@ -189,6 +193,123 @@ async fn stdin_reviews_retained_grants_after_turn_permissions_expire() -> Result
         "{output}"
     );
     assert_eq!(harness.read_file_text("allowed/result").await?, "allowed");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stdin_reviews_escalated_terminal_with_denied_reads_before_delivering_input() -> Result<()>
+{
+    skip_if_target_windows!(Ok(()), "uses a POSIX interactive shell");
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config.features.enable(Feature::WriteStdinApproval).unwrap();
+        config
+            .features
+            .enable(Feature::ExecPermissionApprovals)
+            .unwrap();
+        config.features.enable(Feature::UnifiedExec).unwrap();
+        config.features.disable(Feature::ShellZshFork).unwrap();
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        let mut file_system = PermissionProfile::read_only().file_system_sandbox_policy();
+        file_system.entries.push(FileSystemSandboxEntry::new(
+            FileSystemPath::GlobPattern {
+                pattern: "**/secret.env".into(),
+            },
+            FileSystemAccessMode::Deny,
+        ));
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::from_runtime_permissions(
+                &file_system,
+                NetworkSandboxPolicy::Restricted,
+            ))
+            .unwrap();
+    }))
+    .await?;
+    let codex = &harness.test().codex;
+    harness.write_file("secret.env", "secret").await?;
+    let _open = mount_function_call_agent_response(
+        harness.server(),
+        "open",
+        &json!({"cmd":"/bin/bash --noprofile --norc", "tty":true, "yield_time_ms":200, "sandbox_permissions":"require_escalated", "justification":"open an escalated terminal"}).to_string(),
+        "exec_command",
+    ).await;
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "open terminal".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let launch = wait_for_event_match(codex, |event| match event {
+        EventMsg::ExecApprovalRequest(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(launch.kind, ExecApprovalKind::Command);
+    codex
+        .submit(Op::ExecApproval {
+            id: launch.effective_approval_id(),
+            turn_id: Some(launch.turn_id),
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let _writes = mount_sse_sequence(harness.server(), vec![
+        tool_response("denied", "write_stdin", json!({"session_id":1000,"chars":"printf denied > denied-marker\n"})),
+        tool_response("allowed", "write_stdin", json!({"session_id":1000,"chars":"if test -e denied-marker || cat secret.env; then exit 12; fi; printf approved > approved-marker; exit\n"})),
+        sse(vec![ev_completed("done")]),
+    ]).await;
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "send input".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    for (id, decision) in [
+        ("denied", ReviewDecision::denied("blocked input")),
+        ("allowed", ReviewDecision::Approved),
+    ] {
+        let request = wait_for_event_match(codex, |event| match event {
+            EventMsg::ExecApprovalRequest(request) => Some(request.clone()),
+            _ => None,
+        })
+        .await;
+        assert_eq!(
+            (
+                request.kind,
+                request.call_id.as_str(),
+                request.effective_approval_id().as_str()
+            ),
+            (ExecApprovalKind::WriteStdin, "open", id)
+        );
+        assert!(!harness.path_exists("denied-marker").await?);
+        assert!(!harness.path_exists("approved-marker").await?);
+        codex
+            .submit(Op::ExecApproval {
+                id: request.effective_approval_id(),
+                turn_id: Some(request.turn_id),
+                decision,
+            })
+            .await?;
+    }
+    let mut process_end = None;
+    let mut turn_completed = false;
+    while process_end.is_none() || !turn_completed {
+        match wait_for_event(codex, |_| true).await {
+            EventMsg::ExecCommandEnd(event) if event.call_id == "open" => process_end = Some(event),
+            EventMsg::TurnComplete(_) => turn_completed = true,
+            EventMsg::ExecApprovalRequest(request) => {
+                anyhow::bail!("unexpected additional stdin approval: {request:?}")
+            }
+            _ => {}
+        }
+    }
+    let process_end = process_end.expect("retained terminal should finish");
+    assert_eq!(process_end.exit_code, 0);
+    assert!(!harness.path_exists("denied-marker").await?);
+    assert_eq!(harness.read_file_text("approved-marker").await?, "approved");
     Ok(())
 }
 

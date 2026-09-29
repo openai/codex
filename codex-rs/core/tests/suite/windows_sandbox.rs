@@ -1,4 +1,7 @@
 use anyhow::Context;
+use codex_config::types::ApprovalsReviewer;
+use codex_core::TurnInputRequest;
+use codex_core::config::Constrained;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecParams;
 use codex_core::exec::process_exec_tool_call;
@@ -17,6 +20,11 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::user_input::UserInput;
 use core_test_support::PathExt;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -26,14 +34,18 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use serial_test::serial;
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 use tempfile::TempDir;
 
 struct EnvVarGuard {
@@ -63,20 +75,32 @@ impl Drop for EnvVarGuard {
 }
 
 enum TestCodexHome {
-    Persistent(PathBuf),
-    Temporary(TempDir),
+    Persistent(PathBuf, File),
+    Temporary(TempDir, File),
 }
 
 impl TestCodexHome {
     fn path(&self) -> &Path {
         match self {
-            Self::Persistent(path) => path.as_path(),
-            Self::Temporary(temp_dir) => temp_dir.path(),
+            Self::Persistent(path, _account_lock) => path.as_path(),
+            Self::Temporary(temp_dir, _account_lock) => temp_dir.path(),
         }
     }
 }
 
 fn codex_home_for_windows_sandbox_test(name: &str) -> anyhow::Result<TestCodexHome> {
+    // Bazel shards and nextest processes share Windows accounts. Hold this lock
+    // through the test so they cannot rotate each other's credentials mid-launch.
+    let lock_path = dirs::data_local_dir()
+        .context("resolve local app data for the Windows sandbox test lock")?
+        .join("codex-windows-sandbox-integration-test.lock");
+    let lock = File::options()
+        .read(true)
+        .append(true)
+        .create(true)
+        .open(lock_path)?;
+    lock.lock().context("lock Windows sandbox test accounts")?;
+
     if let Some(test_tmpdir) = std::env::var_os("TEST_TMPDIR") {
         // The elevated backend provisions machine-local sandbox users. Bazel
         // retries run in the same Windows VM, so keep CODEX_HOME stable within
@@ -84,10 +108,10 @@ fn codex_home_for_windows_sandbox_test(name: &str) -> anyhow::Result<TestCodexHo
         let codex_home = PathBuf::from(test_tmpdir).join(name);
         std::fs::create_dir_all(&codex_home)
             .with_context(|| format!("create stable test CODEX_HOME {}", codex_home.display()))?;
-        return Ok(TestCodexHome::Persistent(codex_home));
+        return Ok(TestCodexHome::Persistent(codex_home, lock));
     }
 
-    Ok(TestCodexHome::Temporary(TempDir::new()?))
+    Ok(TestCodexHome::Temporary(TempDir::new()?, lock))
 }
 
 fn stage_windows_sandbox_helpers() -> anyhow::Result<()> {
@@ -823,5 +847,156 @@ async fn windows_elevated_unified_exec_enforces_large_recursive_deny_reads() -> 
         "exec_command leaked exact-path-denied file contents: {output:?}"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(codex_home)]
+async fn windows_elevated_approved_git_pull_preserves_deny_read() -> anyhow::Result<()> {
+    use EventMsg::ExecApprovalRequest;
+    use EventMsg::ExecCommandEnd;
+    use EventMsg::TurnComplete;
+
+    let codex_home = codex_home_for_windows_sandbox_test("windows-elevated-git-pull-deny-read")?;
+    let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
+    stage_windows_sandbox_helpers()?;
+    let home = dunce::canonicalize(codex_home.path())?.abs();
+    let builder = test_codex()
+        .with_windows_cmd_shell()
+        .with_config(move |config| {
+            config.codex_home = home;
+            config.set_windows_elevated_sandbox_enabled(true);
+            config.prefer_mxc = false;
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::User;
+            config.features.enable(Feature::UnifiedExec).unwrap();
+            let mut filesystem = FileSystemSandboxPolicy::workspace_write(
+                &[],
+                /*exclude_tmpdir_env_var*/ true,
+                /*exclude_slash_tmp*/ true,
+            );
+            filesystem.entries.extend(
+                [
+                    config.cwd.join("exact-secret.txt").into(),
+                    FileSystemPath::GlobPattern {
+                        pattern: "**/*.env".into(),
+                    },
+                ]
+                .map(|path| FileSystemSandboxEntry::new(path, FileSystemAccessMode::Deny)),
+            );
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::from_runtime_permissions(
+                    &filesystem,
+                    NetworkSandboxPolicy::Restricted,
+                ))
+                .unwrap();
+        })
+        .with_workspace_setup(|cwd, _fs| async move {
+            std::fs::write(cwd.join("exact-secret.txt"), "exact secret")?;
+            std::fs::write(cwd.join("secret.env"), "glob secret")?;
+            Ok(())
+        });
+    let harness = TestCodexHarness::with_builder(builder).await?;
+    let git = |cwd: &Path, args: &[&str]| -> anyhow::Result<String> {
+        let output = Command::new("git")
+            .args(["-c", "commit.gpgsign=false"])
+            .current_dir(cwd)
+            .args(args)
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    };
+    let upstream = TempDir::new()?;
+    let upstream = upstream.path();
+    let upstream_path = upstream.to_str().context("UTF-8 upstream path")?;
+    let cwd = harness.cwd();
+    let read = |name| std::fs::read_to_string(cwd.join(name));
+    let init = ["init", "--initial-branch=main"];
+    let commit = ["commit", "-am", "fixture"];
+    git(upstream, &init)?;
+    git(upstream, &["config", "user.name", "Codex Test"])?;
+    git(upstream, &["config", "user.email", "codex@test.com"])?;
+    std::fs::write(upstream.join("tracked.txt"), "before\n")?;
+    git(upstream, &["add", "tracked.txt"])?;
+    git(upstream, &commit)?;
+    git(cwd, &init)?;
+    git(cwd, &["pull", "-q", "--ff-only", upstream_path, "main"])?;
+    let fetch_head = cwd.join(".git/FETCH_HEAD");
+    std::fs::remove_file(&fetch_head)?;
+    std::fs::write(upstream.join("tracked.txt"), "after\n")?;
+    git(upstream, &commit)?;
+    let expected = git(upstream, &["rev-parse", "HEAD"])?;
+    let bundle = cwd.join("upstream.bundle");
+    let bundle_path = bundle.to_str().context("UTF-8 bundle path")?;
+    git(upstream, &["bundle", "create", bundle_path, "--all"])?;
+
+    let args = json!({"cmd": concat!(
+        "git pull --quiet --ff-only .\\upstream.bundle main || exit /b 10 & ",
+        "type tracked.txt >NUL || exit /b 11 & ",
+        "type exact-secret.txt >NUL 2>NUL && exit /b 12 & ",
+        "type secret.env >NUL 2>NUL && exit /b 13 & ",
+        "echo git-and-denials-ok>git-and-denials-ok.txt || exit /b 14 & exit /b 0"
+    ), "sandbox_permissions": "require_escalated",
+        "justification": "Can I pull the fixture repository?",
+        "yield_time_ms": 30_000, "tty": false, "login": false,
+    });
+    let call_id = "git-pull";
+    core_test_support::responses::mount_function_call_agent_response(
+        harness.server(),
+        call_id,
+        &args.to_string(),
+        "exec_command",
+    )
+    .await;
+    let codex = &harness.test().codex;
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "pull the fixture repository".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let approval = wait_for_event(codex, |event| {
+        matches!(event, ExecApprovalRequest(_) | TurnComplete(_))
+    })
+    .await;
+    let ExecApprovalRequest(approval) = approval else {
+        anyhow::bail!("expected approval before git ran: {approval:?}");
+    };
+    assert_eq!(approval.call_id, call_id);
+    assert!(!fetch_head.exists());
+    assert!(!cwd.join("git-and-denials-ok.txt").exists());
+    assert_eq!(read("tracked.txt")?.trim(), "before");
+    codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    let mut process_end = None;
+    let mut turn_completed = false;
+    while process_end.is_none() || !turn_completed {
+        match wait_for_event_with_timeout(codex, |_| true, Duration::from_secs(120)).await {
+            ExecCommandEnd(event) if event.call_id == call_id => process_end = Some(event),
+            TurnComplete(_) => turn_completed = true,
+            ExecApprovalRequest(request) => {
+                anyhow::bail!("unexpected additional Git approval: {request:?}")
+            }
+            _ => {}
+        }
+    }
+    let result = process_end.expect("approved Git process should finish");
+    let output = &result.aggregated_output;
+    assert_eq!(result.exit_code, 0, "sandbox output: {output}");
+    assert_eq!(read("git-and-denials-ok.txt")?.trim(), "git-and-denials-ok");
+    assert!(read(".git/FETCH_HEAD")?.starts_with(&expected));
+    assert_eq!(read("tracked.txt")?.trim(), "after");
+    assert_eq!(read("exact-secret.txt")?, "exact secret");
+    assert_eq!(read("secret.env")?, "glob secret");
     Ok(())
 }
