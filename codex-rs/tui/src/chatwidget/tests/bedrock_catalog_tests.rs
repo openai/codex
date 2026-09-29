@@ -13,13 +13,13 @@ async fn bedrock_astra_model_and_reasoning_pickers() {
         (
             "mantle",
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
-            "openai.gpt-6-sol",
+            "openai.gpt-6.1-sol",
             "openai.gpt-6-astra",
         ),
         (
             "runtime",
             ModelProviderInfo::create_amazon_bedrock_runtime_provider(/*aws*/ None),
-            "global.openai.gpt-6-sol",
+            "global.openai.gpt-6.1-sol",
             "global.openai.gpt-6-astra",
         ),
     ] {
@@ -30,6 +30,13 @@ async fn bedrock_astra_model_and_reasoning_pickers() {
                 HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
             )
             .await;
+        assert_eq!(
+            presets
+                .iter()
+                .find(|preset| preset.is_default)
+                .map(|preset| preset.model.as_str()),
+            Some(default_model),
+        );
         let astra = presets
             .iter()
             .find(|model| model.model == astra_model)
