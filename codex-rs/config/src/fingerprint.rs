@@ -52,9 +52,9 @@ pub(super) fn record_origins(
 }
 
 pub fn version_for_toml(value: &TomlValue) -> String {
-    let json = serde_json::to_value(value).unwrap_or(JsonValue::Null);
-    let canonical = canonical_json(&json);
-    let serialized = serde_json::to_vec(&canonical).unwrap_or_default();
+    let mut json = serde_json::to_value(value).unwrap_or(JsonValue::Null);
+    json.sort_all_objects();
+    let serialized = serde_json::to_vec(&json).unwrap_or_default();
     let mut hasher = Sha256::new();
     hasher.update(serialized);
     let hash = hasher.finalize();
@@ -65,20 +65,6 @@ pub fn version_for_toml(value: &TomlValue) -> String {
     format!("sha256:{hex}")
 }
 
-fn canonical_json(value: &JsonValue) -> JsonValue {
-    match value {
-        JsonValue::Object(map) => {
-            let mut sorted = serde_json::Map::new();
-            let mut keys = map.keys().cloned().collect::<Vec<_>>();
-            keys.sort();
-            for key in keys {
-                if let Some(val) = map.get(&key) {
-                    sorted.insert(key, canonical_json(val));
-                }
-            }
-            JsonValue::Object(sorted)
-        }
-        JsonValue::Array(items) => JsonValue::Array(items.iter().map(canonical_json).collect()),
-        other => other.clone(),
-    }
-}
+#[cfg(test)]
+#[path = "fingerprint_tests.rs"]
+mod tests;
