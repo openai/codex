@@ -317,6 +317,7 @@ allow-git = [
     "https://github.com/hyperium/h3",
     "https://github.com/juberti-oai/rust-sdks.git",
     "https://github.com/microsoft/mxc",
+    "https://github.com/modelcontextprotocol/rust-sdk",
     "https://github.com/openai-oss-forks/crossterm",
     "https://github.com/openai-oss-forks/tokio-tungstenite",
     "https://github.com/openai-oss-forks/tungstenite-rs",

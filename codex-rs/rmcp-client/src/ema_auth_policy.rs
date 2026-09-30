@@ -29,26 +29,6 @@ pub(crate) fn ema_reauthentication_required(message: &'static str) -> anyhow::Er
     anyhow::Error::new(EmaAuthFailure::ReauthenticationRequired).context(message)
 }
 
-pub(crate) fn safe_oauth_error_code(code: Option<&str>) -> &str {
-    code.filter(|code| {
-        matches!(
-            *code,
-            "invalid_request"
-                | "invalid_client"
-                | "invalid_grant"
-                | "invalid_scope"
-                | "invalid_target"
-                | "unauthorized_client"
-                | "unsupported_grant_type"
-                | "access_denied"
-                | "temporarily_unavailable"
-                | "server_error"
-                | "insufficient_user_authentication"
-        )
-    })
-    .unwrap_or("OAuth token request rejected")
-}
-
 pub(crate) fn validate_ema_public_client_auth(
     advertised_methods: Option<&Value>,
     issuer_description: &str,

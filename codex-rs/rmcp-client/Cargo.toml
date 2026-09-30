@@ -34,7 +34,7 @@ keyring = { workspace = true, features = ["crypto-rust"] }
 memchr = { workspace = true }
 oauth2 = "5"
 rmcp = { workspace = true, default-features = false, features = [
-    "auth",
+    "auth-enterprise-managed",
     "base64",
     "client",
     "macros",

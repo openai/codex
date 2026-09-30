@@ -19,6 +19,8 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::*;
+use crate::ema_auth_policy::validate_ema_oauth_endpoint;
+use crate::ema_claims::ID_JAG_TOKEN_TYPE;
 use crate::ema_claims::validate_oidc_identity_assertion;
 
 fn http_client() -> Arc<dyn HttpClient> {
@@ -42,7 +44,7 @@ fn unique_form_fields(body: &[u8]) -> HashMap<String, String> {
 
 fn jwt(claims: &Value) -> String {
     format!(
-        "{}.{}.signature",
+        "{}.{}.c2lnbmF0dXJl",
         URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256","typ":"oauth-id-jag+jwt"}"#),
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims).expect("serialize claims"))
     )
@@ -68,6 +70,25 @@ fn jag_response(claims: &Value) -> Value {
 
 fn token_response() -> Value {
     json!({"access_token":"resource-token","token_type":"Bearer","expires_in":300})
+}
+
+async fn exchange(server: &MockServer, refresh_token: &str) -> Result<EmaAccessToken> {
+    let issuer = format!("{}/idp", server.uri());
+    let audience = format!("{}/as", server.uri());
+    exchange_id_jag(EmaIdJagExchangeRequest {
+        resource: &format!("{}/mcp", server.uri()),
+        scopes: &[],
+        mcp_client_id: "mcp-client",
+        authorization_server_issuer: &audience,
+        authorization_server_token_endpoint: &format!("{audience}/token"),
+        idp_token_endpoint: &format!("{issuer}/token"),
+        idp_issuer: &issuer,
+        idp_client_id: "idp-client",
+        refresh_token: refresh_token.to_string(),
+        idp_http_client: http_client(),
+        resource_http_client: http_client(),
+    })
+    .await
 }
 
 #[tokio::test]
@@ -185,168 +206,73 @@ async fn public_client_round_trip_preserves_signed_narrowing() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn signed_claims_and_resource_tokens_cannot_widen_authority() -> Result<()> {
-    let requested = HashSet::from(["files.read", "files.write"]);
-    let original = claims(
-        "https://idp.example",
-        "https://as.example",
-        "https://mcp.example",
-    );
-    let binding = || IdJagBinding {
-        issuer: "https://idp.example",
-        audience: "https://as.example",
-        client_id: "mcp-client",
-        resource: "https://mcp.example",
-        requested_scopes: &requested,
-    };
-    let valid: IdJagResponse = serde_json::from_value(jag_response(&original))?;
-    let granted = valid.validate(binding())?;
-    assert_eq!(granted, HashSet::from(["files.read".to_string()]));
-    for (requested_scopes, signed_scope, response_scope, valid) in [
-        ("", Some("files.read"), Some("files.read"), true),
-        ("", Some("files.read"), None, true),
-        ("", None, None, true),
-        ("files.read", Some("files.read"), None, true),
-        ("files.read files.write", Some("files.read"), None, false),
-        (
-            "files.read",
-            Some("files.read files.write"),
-            Some("files.read files.write"),
-            false,
-        ),
-        ("files.read", None, None, false),
-        ("", Some("files.read"), Some("files.write"), false),
-        ("", Some(" \t"), None, false),
-        ("", Some("files.read files.read"), Some("files.read"), false),
-        ("", Some("files.read"), Some(" \t"), false),
-        ("", Some("files.read"), Some("files.read files.read"), false),
+#[tokio::test]
+async fn sdk_validation_rejects_unsupported_authorization_before_returning_a_bearer() {
+    for location in [
+        "signed claims",
+        "IdP response",
+        "resource response",
+        "signed scope",
     ] {
-        let requested_scopes = requested_scopes.split_ascii_whitespace().collect();
-        let mut scoped_claims = original.clone();
-        scoped_claims
-            .as_object_mut()
-            .expect("ID-JAG claims")
-            .remove("scope");
-        if let Some(scope) = signed_scope {
-            scoped_claims["scope"] = json!(scope);
-        }
-        let mut response = jag_response(&scoped_claims);
-        response
-            .as_object_mut()
-            .expect("ID-JAG response")
-            .remove("scope");
-        if let Some(scope) = response_scope {
-            response["scope"] = json!(scope);
-        }
-        let response: IdJagResponse = serde_json::from_value(response)?;
-        let result = response.validate(IdJagBinding {
-            requested_scopes: &requested_scopes,
-            ..binding()
-        });
-        assert_eq!(
-            result.is_ok(),
-            valid,
-            "requested {requested_scopes:?}, signed {signed_scope:?}, response {response_scope:?}"
+        let server = MockServer::builder().start().await;
+        let original = claims(
+            &format!("{}/idp", server.uri()),
+            &format!("{}/as", server.uri()),
+            &format!("{}/mcp", server.uri()),
         );
-        if let Ok(granted) = result {
-            assert_eq!(
-                granted,
-                signed_scope
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect::<HashSet<_>>()
-            );
-            for (scope, valid_token) in [
-                (None, true),
-                (Some("files.read"), signed_scope.is_some()),
-                (Some("files.read files.write"), false),
-            ] {
-                let mut response = token_response();
-                if let Some(scope) = scope {
-                    response["scope"] = json!(scope);
+        let mut jag = jag_response(&original);
+        let mut bearer = token_response();
+        let details = json!([{"type": "payment_initiation"}]);
+        match location {
+            "signed claims" | "signed scope" => {
+                let mut changed = original;
+                if location == "signed claims" {
+                    changed["authorization_details"] = details;
+                } else {
+                    changed["scope"] = json!("files.read\tfiles.write");
                 }
-                let response: McpAccessTokenResponse = serde_json::from_value(response)?;
-                assert_eq!(
-                    response.validate("https://mcp.example", &granted).is_ok(),
-                    valid_token,
-                    "ID-JAG {signed_scope:?}, bearer {scope:?}"
-                );
+                jag = jag_response(&changed);
             }
+            "IdP response" => jag["authorization_details"] = details,
+            "resource response" => bearer["authorization_details"] = details,
+            _ => unreachable!(),
         }
-    }
-    let mut rotated = jag_response(&original);
-    rotated["refresh_token"] = json!("unsupported-jag-refresh-token");
-    let response: IdJagResponse = serde_json::from_value(rotated)?;
-    assert!(response.validate(binding()).is_err());
-    for header in [
-        json!({"alg": "ES256", "typ": "JWT"}),
-        json!({"alg": "ES256"}),
-        json!({"alg": "none", "typ": "oauth-id-jag+jwt"}),
-    ] {
-        let mut changed = jag_response(&original);
-        changed["access_token"] = json!(format!(
-            "{}.{}.signature",
-            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header)?),
-            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&original)?),
-        ));
-        let response: IdJagResponse = serde_json::from_value(changed)?;
-        assert!(
-            response.validate(binding()).is_err(),
-            "accepted invalid ID-JAG header {header}"
-        );
-    }
-    for (field, value) in [
-        ("iss", json!("https://attacker.example")),
-        ("aud", json!("https://attacker.example")),
-        ("client_id", json!("other-client")),
-        ("sub", json!("")),
-        ("jti", json!("")),
-        ("exp", json!(0)),
-        ("iat", json!(u64::MAX)),
-        ("scope", json!("files.admin")),
-        (
-            "resource",
-            json!(["https://mcp.example", "https://other.example"]),
-        ),
-    ] {
-        let mut changed = original.clone();
-        changed[field] = value;
-        let response: IdJagResponse = serde_json::from_value(jag_response(&changed))?;
-        assert!(
-            response.validate(binding()).is_err(),
-            "accepted changed {field}"
-        );
-    }
-    for (field, value) in [
-        ("scope", json!("files.read files.write")),
-        ("scope", json!("files.read files.read")),
-        ("resource", json!("https://other.example")),
-        ("expires_in", json!(0)),
-        ("refresh_token", json!("refresh")),
-        ("token_type", json!("N_A")),
-        ("access_token", json!("")),
-    ] {
-        let mut changed = token_response();
-        changed[field] = value;
-        let response: McpAccessTokenResponse = serde_json::from_value(changed)?;
-        assert!(
-            response.validate("https://mcp.example", &granted).is_err(),
-            "accepted changed {field}"
-        );
-    }
-    let mut explicit_binding = token_response();
-    explicit_binding["resource"] = json!("https://mcp.example");
-    explicit_binding["scope"] = json!("files.read");
-    let response: McpAccessTokenResponse = serde_json::from_value(explicit_binding)?;
-    assert_eq!(
-        response.validate("https://mcp.example", &granted)?,
-        EmaAccessToken {
-            access_token: "resource-token".to_string(),
-            expires_in: Some(Duration::from_secs(300)),
+        let resource_requested = location == "resource response";
+        for (endpoint, response, count) in [
+            ("/idp/token", jag, 1),
+            ("/as/token", bearer, u64::from(resource_requested)),
+        ] {
+            Mock::given(method("POST"))
+                .and(path(endpoint))
+                .respond_with(ResponseTemplate::new(200).set_body_json(response))
+                .expect(count)
+                .mount(&server)
+                .await;
         }
-    );
-    Ok(())
+        let error = exchange(&server, "refresh-token")
+            .await
+            .expect_err("SDK must reject unsupported authorization");
+        assert_eq!(
+            error.downcast_ref::<EmaError>(),
+            Some(&EmaError::InvalidResponse {
+                stage: if resource_requested {
+                    EmaExchangeStage::ResourceAuthorizationServer
+                } else {
+                    EmaExchangeStage::IdentityProvider
+                },
+                message: if location == "signed scope" {
+                    "malformed or duplicate scopes"
+                } else {
+                    "authorization_details is not supported"
+                },
+            }),
+            "{location}"
+        );
+        assert_eq!(
+            server.received_requests().await.expect("requests").len(),
+            if resource_requested { 2 } else { 1 }
+        );
+    }
 }
 
 #[test]
@@ -384,72 +310,65 @@ fn identity_and_credential_destinations_are_bound() {
 }
 
 #[tokio::test]
-async fn provider_errors_cannot_reflect_credentials() {
+async fn provider_errors_preserve_credential_policy_without_reflecting_credentials() {
     const SENTINEL: &str = "secret-assertion-sentinel";
-    for (code, expected) in [
-        (SENTINEL, "OAuth token request rejected"),
-        ("invalid_grant", "invalid_grant"),
-        (
-            "insufficient_user_authentication",
-            "insufficient_user_authentication",
-        ),
+    for (endpoint, grant_source) in [
+        ("/idp/token", EmaInvalidGrantSource::EnterpriseIdentity),
+        ("/as/token", EmaInvalidGrantSource::ResourceAuthorization),
     ] {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/token"))
-            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
-                "error":code,"error_description":SENTINEL,
-            })))
-            .mount(&server)
-            .await;
-        let error = post_form::<Value>(
-            &http_client(),
-            &format!("{}/token", server.uri()),
-            &[("subject_token", SENTINEL)],
-            "test-client",
-            EmaInvalidGrantSource::EnterpriseIdentity,
-            "test token exchange",
-        )
-        .await
-        .expect_err("provider error should fail");
-        match code {
-            "invalid_grant" => assert_eq!(
-                error.downcast_ref::<EmaAuthFailure>(),
-                Some(&EmaAuthFailure::InvalidGrant {
-                    grant_source: EmaInvalidGrantSource::EnterpriseIdentity,
-                })
-            ),
-            "insufficient_user_authentication" => assert_eq!(
-                error.downcast_ref::<EmaAuthFailure>(),
-                Some(&EmaAuthFailure::InsufficientUserAuthentication)
-            ),
-            _ => assert_eq!(error.downcast_ref::<EmaAuthFailure>(), None),
+        for code in [
+            SENTINEL,
+            "invalid_grant",
+            "insufficient_user_authentication",
+            "malformed",
+        ] {
+            let server = MockServer::builder().start().await;
+            if endpoint == "/as/token" {
+                let jag = jag_response(&claims(
+                    &format!("{}/idp", server.uri()),
+                    &format!("{}/as", server.uri()),
+                    &format!("{}/mcp", server.uri()),
+                ));
+                Mock::given(method("POST"))
+                    .and(path("/idp/token"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(jag))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+            }
+            let response = if code == "malformed" {
+                ResponseTemplate::new(200).set_body_json(json!({"expires_in": SENTINEL}))
+            } else {
+                ResponseTemplate::new(400).set_body_json(json!({
+                    "error":code,"error_description":SENTINEL,
+                }))
+            };
+            Mock::given(method("POST"))
+                .and(path(endpoint))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            let error = exchange(&server, SENTINEL)
+                .await
+                .expect_err("provider error should fail");
+            let expected = match code {
+                "invalid_grant" => Some(EmaAuthFailure::InvalidGrant { grant_source }),
+                "insufficient_user_authentication" => {
+                    Some(EmaAuthFailure::InsufficientUserAuthentication)
+                }
+                _ => None,
+            };
+            assert_eq!(error.downcast_ref::<EmaAuthFailure>(), expected.as_ref());
+            assert!(
+                !format!("{error:#?}").contains(SENTINEL),
+                "provider reflected a credential"
+            );
+            assert_eq!(
+                server.received_requests().await.expect("requests").len(),
+                if endpoint == "/as/token" { 2 } else { 1 },
+                "exchange must not retry a rejected grant"
+            );
         }
-        let error = error.to_string();
-        assert!(!error.contains(SENTINEL), "provider reflected a credential");
-        assert!(error.ends_with(expected), "{error}");
     }
-    let server = MockServer::start().await;
-    let mut malformed = token_response();
-    malformed["expires_in"] = json!(SENTINEL);
-    Mock::given(method("POST"))
-        .and(path("/token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(malformed))
-        .mount(&server)
-        .await;
-    let error = post_form::<McpAccessTokenResponse>(
-        &http_client(),
-        &format!("{}/token", server.uri()),
-        &[],
-        "test-client",
-        EmaInvalidGrantSource::EnterpriseIdentity,
-        "test token exchange",
-    )
-    .await
-    .err()
-    .expect("malformed response should fail");
-    assert!(
-        !format!("{error:#}").contains(SENTINEL),
-        "parser reflected a credential"
-    );
 }
