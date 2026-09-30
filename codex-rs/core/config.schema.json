@@ -759,6 +759,9 @@
             "bedrock_setup_wizard": {
               "type": "boolean"
             },
+            "browser_annotation_api": {
+              "type": "boolean"
+            },
             "browser_use": {
               "type": "boolean"
             },
@@ -6803,6 +6806,9 @@
           "type": "boolean"
         },
         "bedrock_setup_wizard": {
+          "type": "boolean"
+        },
+        "browser_annotation_api": {
           "type": "boolean"
         },
         "browser_use": {

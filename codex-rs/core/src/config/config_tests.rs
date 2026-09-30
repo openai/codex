@@ -11657,6 +11657,7 @@ async fn browser_feature_requirements_are_valid() -> std::io::Result<()> {
                 r#"
 [features]
 in_app_browser = false
+browser_annotation_api = false
 browser_use = false
 browser_use_full_cdp_access = false
 "#,
@@ -11666,6 +11667,7 @@ browser_use_full_cdp_access = false
         .await?;
 
     assert!(!config.features.enabled(Feature::InAppBrowser));
+    assert!(!config.features.enabled(Feature::BrowserAnnotationApi));
     assert!(!config.features.enabled(Feature::BrowserUse));
     assert!(!config.features.enabled(Feature::BrowserUseFullCdpAccess));
 

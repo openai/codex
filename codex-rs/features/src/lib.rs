@@ -264,6 +264,11 @@ pub enum Feature {
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
     InAppBrowser,
+    /// Allow websites to open and customize annotation tools in desktop apps.
+    /// Ordinary user-driven annotation is independent of this gate.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    BrowserAnnotationApi,
     /// Allow the in-app chat pane in desktop apps.
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
@@ -1514,6 +1519,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::InAppBrowser,
         key: "in_app_browser",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::BrowserAnnotationApi,
+        key: "browser_annotation_api",
         stage: Stage::Stable,
         default_enabled: true,
     },
