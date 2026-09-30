@@ -272,6 +272,11 @@ pub enum Feature {
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
     InAppDictation,
+    /// Allow in-app Voice in desktop apps.
+    ///
+    /// Requirements-only gate: this should be set from requirements, not user config.
+    /// Permission does not establish Voice availability or provider support.
+    InAppVoice,
     /// Allow desktop apps to run local automations.
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
@@ -1521,6 +1526,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::InAppDictation,
         key: "in_app_dictation",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::InAppVoice,
+        key: "in_app_voice",
         stage: Stage::Stable,
         default_enabled: true,
     },

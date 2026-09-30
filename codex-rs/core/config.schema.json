@@ -939,6 +939,9 @@
             "in_app_updates": {
               "type": "boolean"
             },
+            "in_app_voice": {
+              "type": "boolean"
+            },
             "instant_interrupt": {
               "type": "boolean"
             },
@@ -6980,6 +6983,9 @@
           "type": "boolean"
         },
         "in_app_updates": {
+          "type": "boolean"
+        },
+        "in_app_voice": {
           "type": "boolean"
         },
         "instant_interrupt": {

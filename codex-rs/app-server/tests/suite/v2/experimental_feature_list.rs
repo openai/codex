@@ -6,6 +6,7 @@ use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
+use codex_app_server_protocol::ConfigRequirementsReadResponse;
 use codex_app_server_protocol::ExperimentalFeature;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
@@ -90,6 +91,52 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
     };
 
     assert_eq!(actual, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn experimental_feature_list_reports_managed_in_app_voice() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        "[features]\nin_app_voice = false\n",
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+
+    let request_id = mcp.send_config_requirements_read_request().await?;
+    let requirements =
+        read_response::<ConfigRequirementsReadResponse>(&mut mcp, request_id).await?;
+    let request_id = mcp
+        .send_experimental_feature_list_request(ExperimentalFeatureListParams::default())
+        .await?;
+    let features = read_response::<ExperimentalFeatureListResponse>(&mut mcp, request_id).await?;
+
+    assert_eq!(
+        (
+            requirements
+                .requirements
+                .and_then(|requirements| requirements.feature_requirements),
+            features
+                .data
+                .into_iter()
+                .find(|feature| feature.name == "in_app_voice"),
+        ),
+        (
+            Some(BTreeMap::from([("in_app_voice".to_string(), false)])),
+            Some(ExperimentalFeature {
+                name: "in_app_voice".to_string(),
+                stage: ExperimentalFeatureStage::Stable,
+                display_name: None,
+                description: None,
+                announcement: None,
+                enabled: false,
+                default_enabled: true,
+            }),
+        ),
+    );
     Ok(())
 }
 
