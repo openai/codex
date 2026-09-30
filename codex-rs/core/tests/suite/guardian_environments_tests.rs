@@ -292,6 +292,174 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_reviews_with_offline_primary_executor() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let executor_url = format!("ws://{}", listener.local_addr()?);
+    let (attach, connection) = tokio::sync::oneshot::channel();
+    let (disconnect, stop) = tokio::sync::oneshot::channel();
+    let executor = AbortOnDropHandle::new(tokio::spawn(serve_environment_with_instruction_files(
+        listener,
+        "",
+        Some(
+            "---\nname: guardian-fixture-skill\ndescription: Source executor skill catalog entry.\n---\nUse the source skill.\n",
+        ),
+        connection,
+        stop,
+    )));
+    attach.send(()).expect("attach primary executor");
+
+    let environment_id = "guardian-primary";
+    let (request_permission, pending_permission) = tokio::sync::oneshot::channel();
+    let (model, _) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: Some(pending_permission),
+            body: sse(vec![
+                ev_function_call(
+                    "permission",
+                    "request_permissions",
+                    &json!({
+                        "environment_id": environment_id,
+                        "permissions": {"network": {"enabled": true}},
+                        "reason": "Review permission while the executor is offline.",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("parent"),
+            ]),
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_assistant_message("deny", r#"{"outcome":"deny"}"#),
+                ev_completed("review"),
+            ]),
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![ev_completed("done")]),
+        }],
+    ])
+    .await;
+
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    codex_skills_extension::install(&mut extensions, |config: &Config| {
+        codex_skills_extension::SkillsExtensionConfig {
+            include_instructions: config.include_skill_instructions,
+            max_context_tokens: config.skill_max_context_tokens,
+            bundled_skills_enabled: false,
+            cloud_skill_enabled: false,
+            shadow_selection_enabled: false,
+        }
+    });
+    let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_model_info_override("guardian-offline-skills-parent", |info| {
+            info.guardian = None;
+            info.auto_review_model_override = Some(info.slug.clone());
+        })
+        .with_config(|config| {
+            // Isolate skill discovery from the unchanged repository-instruction discovery path.
+            config.project_doc_max_bytes = 0;
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            // Start the reviewer only after the executor goes offline, not during prewarm.
+            config.approvals_reviewer = ApprovalsReviewer::User;
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::read_only())
+                .expect("set read-only permissions");
+            config
+                .features
+                .enable(Feature::RequestPermissionsTool)
+                .expect("enable permission requests");
+            config
+                .features
+                .disable(Feature::SkipHostSkillDiscovery)
+                .expect("keep host skill discovery enabled for the parent");
+            config
+                .features
+                .disable(Feature::DeferredExecutor)
+                .expect("disable deferred executor");
+        })
+        // This test supplies its own executor mock, using host-native paths.
+        .build_with_streaming_server(&model)
+        .await?;
+    let manager = test.thread_manager.environment_manager();
+    manager.upsert_environment(
+        environment_id.to_owned(),
+        executor_url,
+        /*connect_timeout*/ None,
+    )?;
+    manager
+        .get_environment(environment_id)
+        .context("primary executor")?
+        .wait_until_ready()
+        .await?;
+    let mut primary = test.executor_environment().selection().clone();
+    primary.environment_id = environment_id.to_owned();
+    primary.config =
+        EnvironmentConfigState::Ready(environment_config_for_selection(&test.config, &primary));
+
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Do not grant network permission.".to_owned(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![primary],
+                )),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    timeout(
+        Duration::from_secs(/*secs*/ 10),
+        model.wait_for_request_count(/*count*/ 1),
+    )
+    .await
+    .context("parent must discover skills and reach the model while online")?;
+    disconnect.send(()).expect("disconnect primary executor");
+    executor.await?;
+    request_permission.send(()).expect("request permission");
+
+    timeout(
+        Duration::from_secs(/*secs*/ 10),
+        model.wait_for_request_count(/*count*/ 2),
+    )
+    .await
+    .context("Guardian startup and turn creation must not wait for host skill discovery")?;
+    let requests = model.requests().await;
+    let parent: Value = serde_json::from_slice(&requests[0])?;
+    let review: Value = serde_json::from_slice(&requests[1])?;
+    assert!(
+        parent["input"]
+            .to_string()
+            .contains("guardian-fixture-skill"),
+        "parent must advertise the skill discovered on its executor"
+    );
+    assert_eq!(
+        review["client_metadata"]["x-openai-subagent"],
+        json!("guardian")
+    );
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::GuardianAssessment(assessment)
+            if assessment.status == GuardianAssessmentStatus::Denied)
+    })
+    .await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.codex.shutdown_and_wait().await?;
+    model.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_revalidates_allow_with_offline_secondary_executor() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let listener = TcpListener::bind("127.0.0.1:0").await?;

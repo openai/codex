@@ -619,7 +619,12 @@ async fn warm_plugins_and_skills_for_session_init(
     skills_service: Arc<HostSkillsService>,
     turn_environments: &TurnEnvironmentSnapshot,
     extensions: &codex_extension_api::ExtensionRegistry<Config>,
+    session_source: &SessionSource,
 ) -> Vec<SkillError> {
+    // Guardian does not consume skills, including the legacy empty-registry catalog.
+    if crate::guardian::is_basic_session_source(session_source) {
+        return Vec::new();
+    }
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     if config.features.enabled(Feature::SkipHostSkillDiscovery)
@@ -1450,6 +1455,7 @@ impl Session {
                 Arc::clone(&skills_service),
                 &resolved_environments,
                 extensions.as_ref(),
+                &session_configuration.session_source,
             )
             .instrument(info_span!(
                 "session_init.plugin_skill_warmup",
