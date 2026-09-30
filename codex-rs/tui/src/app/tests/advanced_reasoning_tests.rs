@@ -27,6 +27,7 @@ async fn fork_current_session_preserves_conversation_ultra() -> Result<()> {
         reasoning_effort: Some(ReasoningEffortConfig::Ultra),
         ..test_thread_session(source_thread_id, test_path_buf("/tmp/project"))
     });
+    app.ensure_thread_channel(source_thread_id);
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
 
@@ -39,6 +40,12 @@ async fn fork_current_session_preserves_conversation_ultra() -> Result<()> {
 
     assert!(matches!(control, AppRunControl::Continue));
     assert_ne!(app.chat_widget.thread_id(), Some(source_thread_id));
+    assert!(
+        !app.agents_overview
+            .dispatched_requests
+            .contains_key(&source_thread_id)
+    );
+    assert!(!app.thread_event_channels.contains_key(&source_thread_id));
     assert_eq!(app.chat_widget.current_model(), "gpt-5.4");
     assert_eq!(
         app.chat_widget.current_reasoning_effort(),

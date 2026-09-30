@@ -1366,20 +1366,29 @@ async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths() 
         )
         .send(),
     );
-    let registration = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), events.recv())
-        .await?
-        .expect("fork registration event");
-    let AppEvent::DynamicToolThreadStarted { thread, .. } = &registration else {
-        panic!("expected the MCP fork to register")
-    };
-    let forked_thread_id = ThreadId::from_string(&thread.id)?;
-    let expected_thread = thread.clone();
+    let mut registered_ids = Vec::new();
     let mut tui = crate::tui::test_support::make_test_tui()?;
-    Box::pin(app.handle_event(&mut tui, &mut app_server, registration)).await?;
-    assert_eq!(
-        app.agents_overview.threads[&forked_thread_id],
-        Some(expected_thread)
-    );
+    for _ in 0..2 {
+        let registration = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), events.recv())
+            .await?
+            .expect("fork registration event");
+        let AppEvent::DynamicToolThreadStarted { thread, .. } = &registration else {
+            panic!("expected the MCP fork to register")
+        };
+        let forked_thread_id = ThreadId::from_string(&thread.id)?;
+        let expected_thread = thread.clone();
+        if registered_ids.is_empty() {
+            assert!(recorded_params(&requests, "thread/fork").is_empty());
+        }
+        Box::pin(app.handle_event(&mut tui, &mut app_server, registration)).await?;
+        assert_eq!(
+            app.agents_overview.threads[&forked_thread_id],
+            Some(expected_thread)
+        );
+        registered_ids.push(forked_thread_id);
+    }
+    assert_eq!(registered_ids[0], fork_source);
+    let forked_thread_id = registered_ids[1];
     let forked = forked.await??;
     assert!(forked.status().is_success());
     assert!(forked.text().await?.contains(&forked_thread_id.to_string()));

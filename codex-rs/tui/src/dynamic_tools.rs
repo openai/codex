@@ -565,6 +565,13 @@ async fn execute_inner(
                 .thread_id
                 .unwrap_or_else(|| params.thread_id.clone());
             let thread = read_thread(&handle, &thread_id).await?;
+            // Keep source requests routable while the fork is being created.
+            register_background_thread(
+                app_event_tx,
+                thread.clone(),
+                /*task_tools_available*/ false,
+            )
+            .await?;
             let before_turn_id = if same_thread_id(&thread_id, &params.thread_id) {
                 Some(params.turn_id)
             } else if matches!(thread.status, ThreadStatus::Active { .. }) {

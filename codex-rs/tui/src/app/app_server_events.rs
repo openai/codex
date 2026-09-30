@@ -688,6 +688,7 @@ impl App {
         }
         if let Some(thread_id) = thread_id
             && self.primary_thread_id != Some(thread_id)
+            && self.active_thread_id != Some(thread_id)
             && !unsupported_request
             && !background_voice
             && let Some(requests) = self.agents_overview.dispatched_requests.get_mut(&thread_id)
