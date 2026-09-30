@@ -1,3 +1,6 @@
+use crate::context::UserGoalUpdate;
+use codex_protocol::ResponseItemId;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::RemoteCompactionV2Output;
@@ -17,6 +20,7 @@ use codex_rollout_trace::CompactionTraceContext;
 use tracing::info;
 
 pub(super) struct RemoteCompactV2Attempt {
+    pub(super) input_goal_ids: HashSet<ResponseItemId>,
     pub(super) trace_input_history: Option<Vec<ResponseItem>>,
     pub(super) prompt_input: Vec<ResponseItem>,
     pub(super) prompt_input_metadata: Vec<Option<CodexHarnessMetadata>>,
@@ -37,6 +41,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
 ) -> CodexResult<RemoteCompactV2Attempt> {
     let turn_context = &step_context.turn;
     let mut history = sess.clone_history().await;
+    let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
     let base_instructions = sess.get_prompt_base_instructions().await;
     let (rewritten_outputs, estimated_deleted_tokens) =
         trim_function_call_history_to_fit_context_window(
@@ -122,6 +127,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
     let mut prompt_input = prompt.input;
     prompt_input.pop();
     Ok(RemoteCompactV2Attempt {
+        input_goal_ids,
         trace_input_history,
         prompt_input,
         prompt_input_metadata,

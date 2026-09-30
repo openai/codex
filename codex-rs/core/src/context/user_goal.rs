@@ -3,10 +3,12 @@
 //! Oversized objectives are omitted whole so truncation cannot turn a restriction into a grant.
 
 use super::ContextualUserFragment;
+use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ThreadGoalStatus;
+use std::collections::HashSet;
 
 const MAX_OBJECTIVE_BYTES: usize = 700;
 
@@ -22,6 +24,17 @@ pub enum UserGoalUpdate {
 
 impl UserGoalUpdate {
     pub(crate) const OMITTED_OBJECTIVE_KIND: &str = "user.goal.omitted";
+
+    /// Captures accepted goal instructions at a compaction input boundary.
+    pub(crate) fn message_ids<'a>(
+        items: impl Iterator<Item = &'a ResponseItem>,
+    ) -> HashSet<ResponseItemId> {
+        items
+            .filter(|item| Self::message_text(item).is_some())
+            .filter_map(ResponseItem::id)
+            .cloned()
+            .collect()
+    }
 
     /// Reads only a host-annotated goal instruction, never a matching text wrapper alone.
     pub(crate) fn message_text(item: &ResponseItem) -> Option<&str> {

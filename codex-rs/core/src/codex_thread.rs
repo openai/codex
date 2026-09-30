@@ -755,8 +755,7 @@ impl CodexThread {
         &self,
         update: crate::context::UserGoalUpdate,
     ) -> CodexResult<()> {
-        self.session.record_user_goal_update(update).await;
-        self.checkpoint_preparation().await?;
+        self.session.record_user_goal_update(update).await?;
         Ok(())
     }
 

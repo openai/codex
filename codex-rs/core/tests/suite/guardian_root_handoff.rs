@@ -260,13 +260,15 @@ pub(crate) async fn handoff_scenario() -> Result<Vec<ResponsesRequest>> {
     let checkpoint: CompactedItem = serde_json::from_value(json!({
         "message":"Root checkpoint.", "replacement_history":[], "retained_context":history.retained_context(),
     }))?;
+    test.codex
+        .append_rollout_items(&[RolloutItem::Compacted(checkpoint)])
+        .await?;
     test.codex.flush_rollout().await?;
-    let mut rollout = test
+    let rollout = test
         .codex
         .load_history(/*include_archived*/ false)
         .await?
         .items;
-    rollout.push(RolloutItem::Compacted(checkpoint));
     test.codex =
         crate::suite::guardian_checkpoint_migration::resume(&test, &test.codex, rollout).await?;
     expected.insert(

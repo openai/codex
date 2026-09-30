@@ -1493,6 +1493,7 @@ impl AppServerSession {
             .request_typed(ClientRequest::ThreadGoalSet {
                 request_id,
                 params: ThreadGoalSetParams {
+                    origin: Some(codex_app_server_protocol::ThreadGoalMutationOrigin::User),
                     thread_id: thread_id.to_string(),
                     objective,
                     status,
@@ -1512,6 +1513,7 @@ impl AppServerSession {
             .request_typed(ClientRequest::ThreadGoalClear {
                 request_id,
                 params: ThreadGoalClearParams {
+                    origin: Some(codex_app_server_protocol::ThreadGoalMutationOrigin::User),
                     thread_id: thread_id.to_string(),
                 },
             })

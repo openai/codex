@@ -1192,6 +1192,35 @@ impl Session {
             e
         })?;
         let session_result: anyhow::Result<Arc<Self>> = async {
+            if let InitialHistory::Resumed(resumed) = &mut initial_history
+                // A header identifies a stored snapshot. Headerless histories are explicitly
+                // supplied by callers (for example, imports) and must not be replaced from disk.
+                && matches!(
+                    resumed.history.first(),
+                    Some(RolloutItem::SessionMeta(meta)) if meta.meta.id == resumed.conversation_id
+                )
+                && let Some(live_thread) = live_thread.as_ref()
+                && thread_store.as_any().is::<LocalThreadStore>()
+            {
+                // The initial snapshot predates writer ownership. A cold goal edit may have
+                // completed in between, including while V1 resume_agent was loading history.
+                // Reload under the live writer's ownership before publishing replayed context.
+                let items = match session_configuration.history_mode {
+                    ThreadHistoryMode::Legacy => {
+                        live_thread.load_history(/*include_archived*/ true).await?.items
+                    }
+                    ThreadHistoryMode::Paginated => {
+                        thread_store
+                            .load_latest_model_context(codex_thread_store::LoadThreadHistoryParams {
+                                thread_id,
+                                include_archived: true,
+                            })
+                            .await?
+                            .items
+                    }
+                };
+                resumed.history = Arc::new(items);
+            }
             let rollout_path = if let Some(live_thread) = live_thread.as_ref() {
                 live_thread.local_rollout_path().await?
             } else {

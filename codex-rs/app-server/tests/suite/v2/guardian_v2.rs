@@ -78,6 +78,9 @@ use super::mcp_tool::start_mcp_server_with_tools;
 #[path = "guardian_sync_session_tests.rs"]
 mod sync_sessions;
 
+#[path = "guardian_goal_tests.rs"]
+mod goals;
+
 #[path = "guardian_v2_history_tests.rs"]
 mod history;
 

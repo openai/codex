@@ -4055,7 +4055,6 @@ impl Session {
                 .get_or_insert_default()
                 .compaction_model_hash = metadata.compaction_model_hash;
         }
-        let replacement_history = items.clone();
         // Wait for accepted updates to finish persisting, then keep later updates from
         // overtaking the current settings snapshot while its checkpoint is written.
         let _settings_guard = thread_settings::acquire_persistence_lock(self).await;
@@ -4076,6 +4075,26 @@ impl Session {
                     }
                     (!retained.is_empty()).then(|| WorldStateSnapshot::from(&retained))
                 });
+            // Goal edits are published outside the running task. Keep edits accepted after
+            // the compaction input snapshot, in their original order, after its replacement.
+            let replacement_goal_ids = crate::context::UserGoalUpdate::message_ids(
+                items.iter().map(|envelope| &envelope.item),
+            );
+            items.extend(
+                state
+                    .history
+                    .annotated_items()
+                    .iter()
+                    .filter(|envelope| {
+                        crate::context::UserGoalUpdate::message_text(&envelope.item).is_some()
+                            && envelope.item.id().is_some_and(|id| {
+                                !metadata.input_goal_ids.contains(id)
+                                    && !replacement_goal_ids.contains(id)
+                            })
+                    })
+                    .cloned(),
+            );
+            let replacement_history = items.clone();
             state.replace_annotated_history(
                 items,
                 reference_context_item.clone(),
@@ -4530,9 +4549,10 @@ impl Session {
         world_state: Arc<WorldState>,
     ) -> u64 {
         let turn_context = step_context.turn.as_ref();
+        let history = self.clone_history().await;
+        let input_goal_ids = crate::context::UserGoalUpdate::message_ids(history.raw_items());
         let retained_client_developer_messages =
             if self.enabled(Feature::RetainClientDeveloperMessages) {
-                let history = self.clone_history().await;
                 crate::compact_remote_v2::truncate_retained_messages_for_remote_compaction(
                     history
                         .annotated_items()
@@ -4565,6 +4585,7 @@ impl Session {
             Some(turn_context_item),
             Some(world_state),
             CompactedHistoryMetadata {
+                input_goal_ids,
                 message: String::new(),
                 window_number,
                 window_ids,

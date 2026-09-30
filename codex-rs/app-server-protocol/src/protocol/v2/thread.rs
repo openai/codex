@@ -841,11 +841,24 @@ impl From<codex_protocol::protocol::ThreadGoal> for ThreadGoal {
     }
 }
 
+/// Distinguishes explicit user actions from automatic goal lifecycle mutations.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ThreadGoalMutationOrigin {
+    User,
+    Automatic,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadGoalSetParams {
     pub thread_id: String,
+    /// Missing provenance does not supply user authorization.
+    #[ts(optional = nullable)]
+    pub origin: Option<ThreadGoalMutationOrigin>,
     #[ts(optional = nullable)]
     pub objective: Option<String>,
     #[ts(optional = nullable)]
@@ -886,6 +899,9 @@ pub struct ThreadGoalGetResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadGoalClearParams {
     pub thread_id: String,
+    /// Missing provenance does not supply user authorization.
+    #[ts(optional = nullable)]
+    pub origin: Option<ThreadGoalMutationOrigin>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

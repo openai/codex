@@ -19274,6 +19274,17 @@
     "ThreadGoalClearParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadGoalMutationOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Missing provenance does not supply user authorization."
+        },
         "threadId": {
           "type": "string"
         }
@@ -19340,6 +19351,14 @@
       "title": "ThreadGoalGetResponse",
       "type": "object"
     },
+    "ThreadGoalMutationOrigin": {
+      "description": "Distinguishes explicit user actions from automatic goal lifecycle mutations.",
+      "enum": [
+        "user",
+        "automatic"
+      ],
+      "type": "string"
+    },
     "ThreadGoalSetParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -19348,6 +19367,17 @@
             "string",
             "null"
           ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadGoalMutationOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Missing provenance does not supply user authorization."
         },
         "status": {
           "anyOf": [

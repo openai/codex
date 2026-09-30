@@ -3749,6 +3749,17 @@ impl ThreadRequestProcessor {
             }
         };
         let (thread_history, resume_source_thread) = resume_result?;
+        // Path-based resume can use an empty request thread ID. Coordinate once its real
+        // identity is known; unrelated loaded threads never wait for this cold startup.
+        let _goal_resume_guard = if let InitialHistory::Resumed(resumed) = &thread_history {
+            Some(
+                self.thread_state_manager
+                    .lock_goal_resume(resumed.conversation_id)
+                    .await,
+            )
+        } else {
+            None
+        };
         if let InitialHistory::Resumed(resumed) = &thread_history
             && self
                 .pending_thread_unloads
@@ -3948,7 +3959,8 @@ impl ThreadRequestProcessor {
         let mut config = match prepared_config.take() {
             Some(prepared) if prepared.state == config_state => prepared.config,
             _ => {
-                // Config loading can call back into Desktop; release the permit during host work.
+                // Config loading can call back into Desktop; release both locks during host work.
+                drop(_goal_resume_guard);
                 drop(_thread_list_state_permit);
                 let config = self
                     .config_manager

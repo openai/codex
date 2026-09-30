@@ -5247,13 +5247,6 @@ class ThreadExtra(BaseModel):
     )
 
 
-class ThreadGoalClearParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    thread_id: Annotated[str, Field(alias="threadId")]
-
-
 class ThreadGoalClearResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -5273,6 +5266,11 @@ class ThreadGoalGetParams(BaseModel):
         populate_by_name=True,
     )
     thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadGoalMutationOrigin(Enum):
+    user = "user"
+    automatic = "automatic"
 
 
 class ThreadGoalStatus(Enum):
@@ -6865,15 +6863,6 @@ class ThreadGoalGetRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["thread/goal/get"], Field(title="Thread/goal/getRequestMethod")]
     params: ThreadGoalGetParams
-
-
-class ThreadGoalClearRequest(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Annotated[Literal["thread/goal/clear"], Field(title="Thread/goal/clearRequestMethod")]
-    params: ThreadGoalClearParams
 
 
 class ThreadMetadataUpdateRequest(BaseModel):
@@ -9812,6 +9801,17 @@ class ThreadGoal(BaseModel):
     updated_at: Annotated[int, Field(alias="updatedAt")]
 
 
+class ThreadGoalClearParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    origin: Annotated[
+        ThreadGoalMutationOrigin | None,
+        Field(description="Missing provenance does not supply user authorization."),
+    ] = None
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
 class ThreadGoalGetResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -9824,6 +9824,10 @@ class ThreadGoalSetParams(BaseModel):
         populate_by_name=True,
     )
     objective: str | None = None
+    origin: Annotated[
+        ThreadGoalMutationOrigin | None,
+        Field(description="Missing provenance does not supply user authorization."),
+    ] = None
     status: ThreadGoalStatus | None = None
     thread_id: Annotated[str, Field(alias="threadId")]
     token_budget: Annotated[int | None, Field(alias="tokenBudget")] = None
@@ -10522,6 +10526,15 @@ class ThreadGoalSetRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["thread/goal/set"], Field(title="Thread/goal/setRequestMethod")]
     params: ThreadGoalSetParams
+
+
+class ThreadGoalClearRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["thread/goal/clear"], Field(title="Thread/goal/clearRequestMethod")]
+    params: ThreadGoalClearParams
 
 
 class ThreadListRequest(BaseModel):

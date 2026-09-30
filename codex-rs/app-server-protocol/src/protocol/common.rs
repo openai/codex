@@ -2522,6 +2522,7 @@ mod tests {
         let thread_goal_set = ClientRequest::ThreadGoalSet {
             request_id: request_id(),
             params: v2::ThreadGoalSetParams {
+                origin: None,
                 thread_id: "goal-thread".to_string(),
                 objective: Some("ship it".to_string()),
                 status: None,
@@ -4440,6 +4441,7 @@ mod tests {
         let set_request = ClientRequest::ThreadGoalSet {
             request_id: RequestId::Integer(1),
             params: v2::ThreadGoalSetParams {
+                origin: None,
                 thread_id: "thr_123".to_string(),
                 objective: Some("ship goal mode".to_string()),
                 status: Some(v2::ThreadGoalStatus::Active),
@@ -4455,6 +4457,7 @@ mod tests {
         let clear_request = ClientRequest::ThreadGoalClear {
             request_id: RequestId::Integer(3),
             params: v2::ThreadGoalClearParams {
+                origin: None,
                 thread_id: "thr_123".to_string(),
             },
         };

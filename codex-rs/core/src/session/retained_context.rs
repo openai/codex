@@ -1,5 +1,6 @@
 //! Orders retained inputs at acceptance, assistant messages at stream start,
 //! and Code Mode messages at confirmed delivery.
+//! Explicit goal authorization becomes live only after its persistence barrier succeeds.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -11,10 +12,13 @@ use std::task::Poll;
 
 use crate::context::ContextualUserFragment;
 use crate::context::UserGoalUpdate;
+use codex_history::CodexHarnessMetadata;
+use codex_history::ResponseItemEnvelope;
 use codex_history::RetainedContextEvent;
 use codex_history::RetainedUserMessage;
 use codex_history::RolloutItem;
 use codex_protocol::models::ResponseItem;
+use codex_thread_store::PersistContext;
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -77,17 +81,47 @@ impl Session {
     }
 
     /// Records authorization without adding pending input or reopening an active turn.
-    pub(crate) async fn record_user_goal_update(&self, update: UserGoalUpdate) {
+    pub(crate) async fn record_user_goal_update(
+        &self,
+        update: UserGoalUpdate,
+    ) -> std::io::Result<()> {
         // Goal metadata must not initialize a model step, even on a goal-first thread.
         // Keep context construction off callers' stacks, including the TUI RPC dispatcher.
         let context = Box::pin(self.new_inject_items_context()).await;
+        // Earlier Code Mode messages may need the persistence lock before this can return.
+        let user_input_order = self.reserve_user_input_order().await;
         let _guard = thread_settings::acquire_persistence_lock(self).await;
-        self.record_conversation_items(
-            &context,
-            context.model_info(),
-            &[ContextualUserFragment::into(update)],
-        )
-        .await;
+        let mut item = ContextualUserFragment::into(update);
+        Self::stamp_response_item_for_history(&mut item, &context.sub_id);
+        Self::assign_missing_response_item_id(&mut item);
+        let mut item = ResponseItemEnvelope {
+            item,
+            metadata: Some(CodexHarnessMetadata {
+                user_input_order: Some(user_input_order),
+                ..Default::default()
+            }),
+        };
+        if let Some(live_thread) = self.live_thread() {
+            // Capture settings under the same permit as the instruction, including when a
+            // goal creates the rollout. No fallible settings catch-up runs after publication.
+            live_thread
+                .append_items(&[
+                    RolloutItem::EventMsg(thread_settings::applied_event(self).await),
+                    RolloutItem::ResponseItem(item.clone()),
+                ])
+                .await
+                .map_err(std::io::Error::other)?;
+        }
+        // A failed append or checkpoint must not change live authorization or its revision.
+        self.try_ensure_rollout_materialized(PersistContext::ThreadPreparation)
+            .await?;
+        self.state.lock().await.history.record_annotated_items(
+            std::slice::from_mut(&mut item),
+            context.model_info().truncation_policy.into(),
+        );
+        self.send_raw_response_items(&context, std::slice::from_ref(&item.item))
+            .await;
+        Ok(())
     }
 
     pub(crate) async fn reserve_user_input_order(&self) -> u64 {
