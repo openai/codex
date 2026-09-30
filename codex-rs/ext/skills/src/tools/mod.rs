@@ -25,6 +25,9 @@ use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpResourceClient;
+use codex_otel::SessionTelemetry;
+use codex_otel::SkillInvocationEvent;
+use codex_otel::SkillInvocationType;
 use codex_otel::sanitize_metric_tag_value;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -99,6 +102,7 @@ pub(crate) fn skill_tools(
 #[derive(Clone)]
 pub(crate) struct SkillAnalytics {
     client: AnalyticsEventsClient,
+    telemetry: Option<Arc<SessionTelemetry>>,
     metrics: Option<Arc<dyn ExtensionMetrics>>,
     turn_metrics: Option<Arc<SkillTurnMetrics>>,
     thread_id: String,
@@ -115,6 +119,7 @@ impl SkillAnalytics {
 
         Some(Self {
             client: client.as_ref().clone(),
+            telemetry: session_store.get::<SessionTelemetry>(),
             metrics: session_store
                 .get::<SkillsSessionState>()
                 .and_then(|state| state.extension_metrics.clone()),
@@ -137,6 +142,22 @@ impl SkillAnalytics {
         turn_id: String,
         invocation_type: InvocationType,
     ) {
+        if let Some(telemetry) = &self.telemetry {
+            telemetry
+                .as_ref()
+                .clone()
+                .with_model(&model, &model)
+                .skill_invocation(SkillInvocationEvent {
+                    turn_id: &turn_id,
+                    skill_name: &skill.name,
+                    scope: skill.analytics_scope,
+                    plugin_id: skill.plugin_id.as_deref(),
+                    invocation_type: match invocation_type {
+                        InvocationType::Explicit => SkillInvocationType::Explicit,
+                        InvocationType::Implicit => SkillInvocationType::Implicit,
+                    },
+                });
+        }
         let turn_metrics = self
             .turn_metrics
             .as_ref()

@@ -9,6 +9,7 @@ mod agent_response;
 mod guardian_assessment;
 mod network_policy;
 mod otlp;
+mod skill_invocation;
 mod targets;
 mod tool_result;
 
@@ -33,6 +34,8 @@ pub use crate::metrics::runtime_metrics::RuntimeMetricsSummary;
 pub use crate::metrics::timer::Timer;
 pub use crate::metrics::*;
 pub use crate::provider::OtelProvider;
+pub use crate::skill_invocation::SkillInvocationEvent;
+pub use crate::skill_invocation::SkillInvocationType;
 pub use crate::trace_context::context_from_w3c_trace_context;
 pub use crate::trace_context::current_span_trace_id;
 pub use crate::trace_context::current_span_w3c_trace_context;

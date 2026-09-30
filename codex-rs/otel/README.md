@@ -96,6 +96,32 @@ let manager = SessionTelemetry::new(
 manager.user_prompt(&prompt_items);
 ```
 
+### Skill invocation logs
+
+`codex.skill_invocation` records explicit skill injection and detected implicit use,
+including reads through the skills tools. It contains `skill.name`,
+`skill.invocation_type` (`explicit` or `implicit`), `conversation.id`, `turn.id`,
+model and client metadata, and available `skill.scope`, `skill.plugin_id`,
+`user.id`, and `user.account_id`. The user ID identifies the authenticated ChatGPT
+user; the account ID identifies the workspace. Missing identity fields are omitted,
+including the user ID for API-key authentication.
+
+The event excludes skill contents, descriptions, resource paths, email addresses,
+prompts, tool arguments, and tool output. It reports detected use, not successful
+task completion. Shell-based implicit detection is best effort and is deduplicated
+per skill within a turn; explicit injection and later implicit access are distinct
+events. Skill-tool reads retain their existing invocation behavior.
+
+Skill events use the existing OTEL log exporter and are included automatically
+when `otel.exporter` points to an OTLP HTTP or gRPC destination. The default
+`otel.exporter = "none"` exports no logs. No additional configuration or skill-event
+opt-in is required; the destination also receives the other existing log events.
+
+```toml
+[otel]
+exporter = { otlp-http = { endpoint = "https://collector.example.com/v1/logs", protocol = "json" } }
+```
+
 ### Agent response logs
 
 Set `otel.log_agent_responses = true` with an OTLP HTTP or gRPC log exporter to

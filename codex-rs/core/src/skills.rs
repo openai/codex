@@ -8,6 +8,8 @@ use codex_analytics::TrackEventsContext;
 use codex_analytics::build_track_events_context;
 use codex_extension_api::SkillInvocationInput;
 use codex_extension_api::SkillInvocationKind;
+use codex_otel::SkillInvocationEvent;
+use codex_otel::SkillInvocationType;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::protocol::SkillScope;
 use codex_skills::SkillMetadata;
@@ -86,6 +88,15 @@ pub(crate) async fn emit_explicit_skill_invocations(
         {
             continue;
         }
+        turn_context
+            .session_telemetry
+            .skill_invocation(SkillInvocationEvent {
+                turn_id: &turn_context.sub_id,
+                skill_name: &skill.name,
+                scope: Some(skill.scope),
+                plugin_id: skill.plugin_id.as_deref(),
+                invocation_type: SkillInvocationType::Explicit,
+            });
         for contributor in sess.services.extensions.skill_invocation_contributors() {
             contributor
                 .on_skill_invocation(SkillInvocationInput {
@@ -160,6 +171,18 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     if !inserted {
         return;
     }
+    turn_context
+        .session_telemetry
+        .skill_invocation(SkillInvocationEvent {
+            turn_id: &turn_context.sub_id,
+            skill_name: &skill_name,
+            scope: match &invocation.location {
+                SkillInvocationLocation::Host { scope, .. } => Some(*scope),
+                SkillInvocationLocation::Resource { scope, .. } => *scope,
+            },
+            plugin_id: invocation.plugin_id.as_deref(),
+            invocation_type: SkillInvocationType::Implicit,
+        });
     let skill_name_tag = sanitize_metric_tag_value(skill_name.as_str());
     let plugin_id_tag =
         sanitize_metric_tag_value(invocation.plugin_id.as_deref().unwrap_or("unattributed"));
