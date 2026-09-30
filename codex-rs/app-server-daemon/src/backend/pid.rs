@@ -394,6 +394,8 @@ impl PidBackend {
             }
         };
         if matches!(self.command_kind, PidCommandKind::AppServer { .. }) {
+            // Match first-party clients' default while preserving explicit analytics opt-outs.
+            args.push("--analytics-default-enabled".into());
             for (name, enabled) in &self.feature_overrides {
                 args.extend(["-c".into(), format!("features.{name}={enabled}").into()]);
             }

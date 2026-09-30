@@ -602,7 +602,13 @@ fn app_server_remote_control_uses_runtime_flag() {
 
     assert_eq!(
         backend.command_args(),
-        vec!["app-server", "--remote-control", "--listen", "unix://"]
+        vec![
+            "app-server",
+            "--remote-control",
+            "--listen",
+            "unix://",
+            "--analytics-default-enabled"
+        ]
     );
 }
 
@@ -616,7 +622,12 @@ fn app_server_disabled_remote_control_uses_compatible_args_and_runtime_env() {
 
     assert_eq!(
         backend.command_args(),
-        vec!["app-server", "--listen", "unix://"]
+        vec![
+            "app-server",
+            "--listen",
+            "unix://",
+            "--analytics-default-enabled"
+        ]
     );
     assert_eq!(
         backend.command_env(),
