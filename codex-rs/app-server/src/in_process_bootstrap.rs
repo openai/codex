@@ -92,7 +92,8 @@ impl EmbeddedNetworkPolicy {
                     .restrict_to_endpoints(endpoint.parse().into_iter().collect()),
             ),
         )
-        .with_local_bootstrap_factory(factory);
+        .with_local_bootstrap_factory(factory)
+        .with_application_network_policy(self.effective.policy());
         auth
     }
 }
