@@ -9,14 +9,21 @@ use std::path::PathBuf;
 pub struct LocalStateDbStartupError {
     database_path: PathBuf,
     detail: String,
+    #[source]
+    source: anyhow::Error,
 }
 
 impl LocalStateDbStartupError {
-    pub fn new(database_path: PathBuf, detail: String) -> Self {
+    pub fn new(database_path: PathBuf, source: anyhow::Error) -> Self {
         Self {
             database_path,
-            detail,
+            detail: format!("{source:#}"),
+            source,
         }
+    }
+
+    pub fn is_corruption(&self) -> bool {
+        codex_state::is_sqlite_corruption_error(&self.source)
     }
 
     pub fn database_path(&self) -> &Path {

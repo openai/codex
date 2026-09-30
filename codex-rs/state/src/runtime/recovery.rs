@@ -7,7 +7,7 @@
 //! task-local scope to notify users after recovery; backup behavior is unchanged
 //! outside that scope.
 
-use std::borrow::Cow;
+use sqlx::error::DatabaseError;
 use std::cell::RefCell;
 use std::future::Future;
 use std::path::Path;
@@ -139,37 +139,28 @@ fn sqlite_error_source_is_corruption(source: &(dyn std::error::Error + 'static))
         );
     }
 
-    let Some(err) = source.downcast_ref::<sqlx::Error>() else {
+    let sqlite_error = source
+        .downcast_ref::<sqlx::sqlite::SqliteError>()
+        .or_else(|| {
+            source
+                .downcast_ref::<sqlx::Error>()?
+                .as_database_error()?
+                .try_downcast_ref::<sqlx::sqlite::SqliteError>()
+        });
+    let Some(err) = sqlite_error else {
         return false;
     };
 
-    let sqlx::Error::Database(database_error) = err else {
-        return false;
-    };
-
-    sqlite_error_detail_is_corruption(database_error.message())
-        || database_error
-            .code()
-            .is_some_and(sqlite_database_code_is_corruption)
-}
-
-fn sqlite_database_code_is_corruption(code: Cow<'_, str>) -> bool {
-    matches!(
-        code.as_ref().to_ascii_lowercase().as_str(),
-        "11" | "26" | "sqlite_corrupt" | "sqlite_notadb"
-    )
-}
-
-pub fn sqlite_error_detail_is_corruption(detail: &str) -> bool {
-    let detail = detail.to_ascii_lowercase();
-    detail.contains("database disk image is malformed")
-        || detail.contains("database schema is malformed")
-        || detail.contains("database is corrupt")
-        || detail.contains("file is not a database")
-        || detail.contains("sqlite_corrupt")
-        || detail.contains("sqlite_notadb")
-        || detail.contains("(code: 11)")
-        || detail.contains("(code: 26)")
+    // SQLx exposes SQLite's extended result code as a decimal string.
+    err.code()
+        .and_then(|code| code.parse::<i32>().ok())
+        .is_some_and(|code| {
+            matches!(
+                libsqlite3_sys::Error::new(code).code,
+                libsqlite3_sys::ErrorCode::DatabaseCorrupt
+                    | libsqlite3_sys::ErrorCode::NotADatabase
+            )
+        })
 }
 
 pub fn sqlite_error_detail_is_lock(detail: &str) -> bool {
