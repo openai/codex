@@ -458,14 +458,26 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
 }
 
 #[cfg(unix)]
-#[test_case(false, false, "bash", 1; "local_pipe_recovery")]
-#[test_case(false, true, "bash", 1; "local_tty_recovery")]
-#[test_case(true, false, "bash", 1; "remote_pipe_recovery")]
-#[test_case(true, true, "bash", 1; "remote_tty_recovery")]
-#[test_case(false, false, "bash", 3; "local_retry_budget_exhausted")]
-#[test_case(true, false, "bash", 3; "remote_retry_budget_exhausted")]
-#[cfg_attr(target_os = "macos", test_case(false, false, "zsh", 1; "local_zsh_recovery"))]
-#[cfg_attr(target_os = "macos", test_case(true, false, "zsh", 1; "remote_zsh_recovery"))]
+#[derive(Clone, Copy)]
+enum CaptureFailure {
+    Exit(i32),
+    Cancel,
+    Timeout,
+}
+
+#[cfg(unix)]
+#[test_case(false, false, "bash", 1, CaptureFailure::Exit(7); "local_pipe_recovery")]
+#[test_case(false, true, "bash", 1, CaptureFailure::Exit(7); "local_tty_recovery")]
+#[test_case(true, false, "bash", 1, CaptureFailure::Exit(7); "remote_pipe_recovery")]
+#[test_case(true, true, "bash", 1, CaptureFailure::Exit(7); "remote_tty_recovery")]
+#[test_case(false, false, "bash", 3, CaptureFailure::Exit(7); "local_retry_budget_exhausted")]
+#[test_case(true, false, "bash", 3, CaptureFailure::Exit(7); "remote_retry_budget_exhausted")]
+#[test_case(false, false, "bash", 1, CaptureFailure::Exit(0); "local_invalid_output_recovery")]
+#[cfg_attr(target_os = "macos", test_case(false, false, "zsh", 1, CaptureFailure::Exit(0); "local_zsh_invalid_output_recovery"))]
+#[cfg_attr(target_os = "macos", test_case(false, false, "zsh", 1, CaptureFailure::Exit(7); "local_zsh_recovery"))]
+#[cfg_attr(target_os = "macos", test_case(true, false, "zsh", 1, CaptureFailure::Exit(7); "remote_zsh_recovery"))]
+#[test_case(false, false, "bash", 1, CaptureFailure::Cancel; "cancel_capture")]
+#[test_case(false, false, "bash", 1, CaptureFailure::Timeout; "timeout_capture")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial_test::serial(remote_exec_server)]
 async fn shell_snapshot_v2_capture_failure_falls_back_and_retries(
@@ -473,6 +485,7 @@ async fn shell_snapshot_v2_capture_failure_falls_back_and_retries(
     tty: bool,
     shell_name: &str,
     failures_before_repair: usize,
+    failure: CaptureFailure,
 ) -> Result<()> {
     if use_remote
         && let Some(warning) =
@@ -489,9 +502,21 @@ async fn shell_snapshot_v2_capture_failure_falls_back_and_retries(
         "zsh" => ("/bin/zsh", ".zshrc"),
         name => anyhow::bail!("unsupported test shell {name}"),
     };
+    let child_pids = home.path().join("startup-pids");
+    let _cleanup = shell_snapshot::StartupProcesses(child_pids.clone());
+    // Sandboxed remote PIDs may be namespace-local; check descendants on the native path.
+    let startup_child = if use_remote {
+        ""
+    } else {
+        "/bin/sleep 30 >/dev/null 2>&1 &\nprintf '%s\\n' \"$!\" >> \"$HOME/startup-pids\"\n"
+    };
+    let finish = match failure {
+        CaptureFailure::Exit(code) => format!("exit {code}"),
+        CaptureFailure::Cancel | CaptureFailure::Timeout => "wait".to_string(),
+    };
     std::fs::write(
         home.path().join(profile_name),
-        "printf x >> \"$HOME/captures\"\nexit 7\n",
+        format!("printf x >> \"$HOME/captures\"\n{startup_child}{finish}\n"),
     )?;
     let policy = ExecEnvPolicy {
         inherit: ShellEnvironmentPolicyInherit::All,
@@ -537,12 +562,47 @@ async fn shell_snapshot_v2_capture_failure_falls_back_and_retries(
 
     for attempt in 0..failures_before_repair {
         params.process_id = ProcessId::from(format!("snapshot-fallback-{attempt}"));
-        let fallback = context.backend.start(params.clone()).await?;
-        let fallback_output = collect_process_output_from_events(fallback.process).await?;
-        assert_eq!(
-            fallback_output,
-            ("original".to_string(), String::new(), Some(0), true)
-        );
+        let mut start = context.backend.start(params.clone());
+        if matches!(failure, CaptureFailure::Cancel) {
+            tokio::select! {
+                result = &mut start => anyhow::bail!("capture finished before cancellation: {}", result.is_ok()),
+                _ = async {
+                    while std::fs::read_to_string(&child_pids).unwrap_or_default().trim().is_empty() {
+                        sleep(Duration::from_millis(20)).await;
+                    }
+                } => {}
+            }
+            drop(start);
+        } else {
+            let fallback = start.await?;
+            assert_eq!(
+                collect_process_output_from_events(fallback.process).await?,
+                ("original".to_string(), String::new(), Some(0), true)
+            );
+        }
+        if !use_remote {
+            let pids = std::fs::read_to_string(&child_pids)?;
+            let pid = pids
+                .split_whitespace()
+                .last()
+                .context("startup child PID")?;
+            timeout(Duration::from_secs(5), async {
+                loop {
+                    let output = std::process::Command::new("/bin/ps")
+                        .args(["-o", "stat=", "-p", pid])
+                        .output()?;
+                    let state = String::from_utf8(output.stdout)?;
+                    if state.trim().is_empty() || state.trim().starts_with('Z') {
+                        // Forget the completed child before retries can reuse its PID.
+                        std::fs::remove_file(&child_pids)?;
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                    sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .context("failed capture left its startup child running")??;
+        }
         // A real remote executor has its own clock; the unit test uses a
         // paused clock to check requests made during the one-second backoff.
         sleep(Duration::from_millis(1100)).await;

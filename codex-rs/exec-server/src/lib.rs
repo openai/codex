@@ -49,6 +49,8 @@ mod server;
 mod shell_snapshot;
 #[cfg(unix)]
 mod shell_snapshot_file;
+#[cfg(unix)]
+mod shell_snapshot_process;
 mod telemetry;
 mod trace_context;
 mod websocket_pong_watchdog;

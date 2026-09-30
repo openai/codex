@@ -34,6 +34,7 @@ use crate::protocol::ExecParams;
 use crate::protocol::ShellSnapshotRequest;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
+use crate::shell_snapshot_process::SnapshotCapture;
 use crate::telemetry::ExecServerTelemetry;
 
 const MAX_CACHED_SNAPSHOTS: usize = 16;
@@ -359,8 +360,7 @@ async fn capture_snapshot(
         .envs(&prepared.env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
+        .stderr(Stdio::null());
     if let Some(arg0) = &prepared.arg0 {
         command.arg0(arg0);
     }
@@ -377,7 +377,7 @@ async fn capture_snapshot(
             });
         }
     }
-    let mut child = command.spawn().map_err(|err| {
+    let mut child = SnapshotCapture::spawn(&mut command).map_err(|err| {
         (
             "spawn_failed",
             internal_error(format!("cannot capture shell snapshot: {err}")),
@@ -410,7 +410,7 @@ async fn capture_snapshot(
                 )),
             ));
         }
-        let status = child.wait().await.map_err(|err| {
+        let status = child.wait_for_exit().await.map_err(|err| {
             (
                 "wait_failed",
                 internal_error(format!("cannot finish shell snapshot: {err}")),
@@ -452,6 +452,7 @@ async fn capture_snapshot(
     })?;
     let mut snapshot = parse_snapshot(shell_type, captured, params.env_policy.as_ref())?;
     snapshot.file_source = flag == b"1\0";
+    child.preserve_helpers();
     Ok(snapshot)
 }
 
