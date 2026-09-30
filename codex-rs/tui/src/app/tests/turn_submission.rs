@@ -359,6 +359,38 @@ async fn misalignment_policy_in_parent_stops_active_side_conversation() -> Resul
 }
 
 #[tokio::test]
+async fn launch_permissions_preserve_server_owned_constrained_profile() -> Result<()> {
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    app.harness_overrides.sandbox_mode =
+        Some(codex_protocol::config_types::SandboxMode::DangerFullAccess);
+    app.config
+        .permissions
+        .set_permission_profile(PermissionProfile::Disabled)?;
+    app.remember_launch_permissions();
+    let mut profile = PermissionProfile::workspace_write();
+    let PermissionProfile::Managed {
+        file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+        ..
+    } = &mut profile
+    else {
+        unreachable!("workspace-write uses managed permissions");
+    };
+    entries.push(FileSystemSandboxEntry {
+        path: FileSystemPath::GlobPattern {
+            pattern: "**/*.secret".into(),
+        },
+        access: FileSystemAccessMode::Deny,
+        missing_path_behavior: None,
+    });
+    app.config.permissions.set_permission_profile(profile)?;
+    app.harness_overrides.sandbox_mode =
+        Some(codex_protocol::config_types::SandboxMode::WorkspaceWrite);
+    app.remember_launch_permissions();
+    assert_eq!(app.runtime_permission_profile_override, None);
+    Ok(())
+}
+
+#[tokio::test]
 async fn unsupported_legacy_permissions_are_shown_without_exiting() -> Result<()> {
     let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     let mut tui = crate::tui::test_support::make_test_tui()?;

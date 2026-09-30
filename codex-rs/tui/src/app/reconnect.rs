@@ -147,6 +147,11 @@ impl App {
         {
             session.approval_policy = policy;
         }
+        if let Some(reviewer) = self.runtime_approvals_reviewer_override
+            && reviewer == cached.approvals_reviewer
+        {
+            session.approvals_reviewer = reviewer;
+        }
         if let Some(profile) = &self.runtime_permission_profile_override
             && profile.permission_profile == cached.permission_profile
             && profile.active_permission_profile == cached.active_permission_profile

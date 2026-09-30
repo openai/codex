@@ -12,6 +12,22 @@ use tokio::net::TcpListener;
 use super::disconnect::serve_reconnect_requests;
 
 #[tokio::test]
+async fn reconnect_restores_launch_reviewer_without_a_profile_override() -> Result<()> {
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    let mut cached = test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf());
+    cached.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    app.primary_thread_id = Some(cached.thread_id);
+    app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    app.harness_overrides.approvals_reviewer = Some(ApprovalsReviewer::AutoReview);
+    app.remember_launch_permissions();
+    let mut resumed = cached.clone();
+    resumed.approvals_reviewer = ApprovalsReviewer::User;
+    app.restore_runtime_permissions(&mut resumed, &cached);
+    assert_eq!(resumed, cached);
+    Ok(())
+}
+
+#[tokio::test]
 async fn reconnect_restores_history_permissions_and_resumes_unsent_input() -> Result<()> {
     for (recovered_queue, edit_offline, resume_error_code, deferred_notice, notice_enabled) in [
         (true, false, -32603, false, false),

@@ -1038,6 +1038,7 @@ impl App {
                 self.local_settings = self.local_settings.reloaded(&config);
                 self.refresh_server_version_overview_notice(CODEX_CLI_VERSION);
                 self.config = config;
+                self.remember_launch_permissions();
 
                 let name_error = if let Some(name) = new_thread_name {
                     match app_server

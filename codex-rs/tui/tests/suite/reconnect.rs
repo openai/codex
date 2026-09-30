@@ -16,10 +16,13 @@ use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Result<()> {
-    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    core_test_support::skip_if_sandbox!(Ok(()));
+    // Use a workspace without project-specific permission requirements.
+    let workspace = tempfile::tempdir()?;
+    let workspace_path = workspace.path().canonicalize()?;
     // macOS's default temporary directory leaves too little room for the control socket path.
     let codex_home = tempfile::tempdir_in("/tmp")?;
-    write_test_config(codex_home.path(), &repo_root)?;
+    write_test_config(codex_home.path(), &workspace_path)?;
     let config_path = codex_home.path().join("config.toml");
     let config = std::fs::read_to_string(&config_path)?;
     std::fs::write(
@@ -31,11 +34,15 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
     let listener = UnixListener::bind(socket.as_path())?;
     let (disconnect_tx, mut disconnect_rx) = tokio::sync::oneshot::channel();
     let (restore_tx, restore_rx) = tokio::sync::oneshot::channel();
-    let server_cwd = repo_root.clone();
+    let (complete_tx, mut complete_rx) = tokio::sync::oneshot::channel();
+    let (submitted_tx, submitted_rx) = tokio::sync::oneshot::channel();
+    let server_cwd = workspace_path.clone();
     let id = "00000000-0000-0000-0000-000000000001";
     let server = tokio::spawn(async move {
         let mut methods = Vec::new();
         let mut restore_rx = Some(restore_rx);
+        let mut recovered_completed = false;
+        let mut submitted_tx = Some(submitted_tx);
         let thread = json!({
             "id": id, "sessionId": id, "preview": "", "ephemeral": false,
             "modelProvider": "openai", "createdAt": 1, "updatedAt": 2,
@@ -53,6 +60,16 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
             };
             loop {
                 let frame = tokio::select! {
+                    _ = &mut complete_rx, if connection == 6 && !recovered_completed => {
+                        recovered_completed = true;
+                        socket.send(Message::Text(json!({
+                            "method": "turn/completed", "params": {
+                                "threadId": id, "turn": {"id": "running", "status": "completed", "error": null,
+                                    "items": [{"type": "agentMessage", "id": "completed-item", "text": "Recovered turn completed."}]}
+                            }
+                        }).to_string().into())).await?;
+                        continue;
+                    }
                     _ = &mut disconnect_rx, if connection == 0 => {
                         socket.close(/*msg*/ None).await?;
                         break;
@@ -105,9 +122,34 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
                     }
                     "configRequirements/read" => json!({"requirements": null}),
                     "thread/start" | "thread/resume" => {
+                        let starting = request.method == "thread/start";
+                        if !starting {
+                            let params = request.params.as_ref().unwrap();
+                            assert_eq!(
+                                json!([
+                                    params["approvalPolicy"],
+                                    params["sandbox"],
+                                    params["permissions"]
+                                ]),
+                                json!([null, null, null])
+                            );
+                        }
                         json!({"thread": thread, "model": "gpt-5.6-terra", "modelProvider": "openai",
-                            "cwd": server_cwd, "approvalPolicy": "never", "approvalsReviewer": "user",
-                            "sandbox": {"type": "readOnly"}, "reasoningEffort": null})
+                            "cwd": server_cwd, "approvalPolicy": if starting { "never" } else { "on-request" }, "approvalsReviewer": "user",
+                            "sandbox": {"type": if starting { "dangerFullAccess" } else { "readOnly" }}, "reasoningEffort": null})
+                    }
+                    "turn/start" => {
+                        let params = request.params.as_ref().unwrap();
+                        assert_eq!(params["input"][0]["text"], "preserved-draft!");
+                        assert_eq!(
+                            json!([
+                                params["approvalPolicy"],
+                                params["sandboxPolicy"],
+                                params["permissions"]
+                            ]),
+                            json!(["never", {"type": "dangerFullAccess"}, null])
+                        );
+                        json!({"turn": {"id": "fresh", "items": [], "status": "inProgress", "error": null}})
                     }
                     "thread/read" => json!({"thread": thread}),
                     "thread/goal/get" => json!({"goal": null}),
@@ -132,6 +174,9 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
                             .into(),
                     ))
                     .await?;
+                if request.method == "turn/start" {
+                    submitted_tx.take().unwrap().send(()).unwrap();
+                }
                 if connection == 6 && request.method == "thread/resume" {
                     // Keep the recovered turn running: its output must appear without waiting
                     // for turn/completed or rebuilding the transcript.
@@ -152,7 +197,8 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
         }
         Ok::<_, anyhow::Error>(methods)
     });
-    let mut terminal = PtyCodex::start(&repo_root, codex_home, &["--no-alt-screen"])?;
+    let mut terminal =
+        PtyCodex::start(&workspace_path, codex_home, &["--yolo", "--no-alt-screen"])?;
     terminal.wait_for_startup()?;
     let mut disconnect_tx = Some(disconnect_tx);
     let mut restore_tx = Some(restore_tx);
@@ -199,6 +245,10 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
         "draft and notification did not remain visible after recovery; screen:\n{}",
         terminal.screen_contents()
     );
+    complete_tx.send(()).unwrap();
+    terminal.wait_for_screen("Recovered turn completed.")?;
+    terminal.write_input(b"\r")?;
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 10), submitted_rx).await??;
     drop(terminal);
     let methods = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), server).await???;
     assert_eq!(
@@ -208,6 +258,12 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
             .count(),
         6
     );
-    assert!(!methods.iter().any(|method| method == "turn/start"));
+    assert_eq!(
+        methods
+            .iter()
+            .filter(|method| *method == "turn/start")
+            .count(),
+        1
+    );
     Ok(())
 }

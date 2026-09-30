@@ -775,6 +775,9 @@ impl App {
                     .set_workspace_roots(self.config.permissions.workspace_roots().to_vec());
             }
             self.config = destination_config;
+            if is_new_session {
+                self.remember_launch_permissions();
+            }
             if !read_only {
                 let approval = self.config.permissions.approval_policy.value();
                 if self

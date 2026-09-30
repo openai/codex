@@ -7,6 +7,78 @@ use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn new_sessions_preserve_yolo_launch_and_later_permission_choices() -> Result<()> {
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    app.harness_overrides.approval_policy = Some(AskForApproval::Never.to_core());
+    app.harness_overrides.sandbox_mode =
+        Some(codex_protocol::config_types::SandboxMode::DangerFullAccess);
+    let (mut server, requests, proxy) = start_recording_app_server(
+        &app.config,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    )
+    .await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut loaded_config = app.config.clone();
+    loaded_config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest.to_core())?;
+    loaded_config
+        .permissions
+        .set_permission_profile(PermissionProfile::read_only())?;
+    let loaded = server.start_thread(&loaded_config).await?;
+    app.select_agents_overview_thread(&mut tui, &mut server, loaded.session.thread_id)
+        .await?;
+    for picker_change in [false, true] {
+        if picker_change {
+            app.chat_widget
+                .set_approval_policy(AskForApproval::OnRequest);
+            app.chat_widget
+                .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+                    PermissionProfile::read_only(),
+                    ActivePermissionProfile::new(":read-only"),
+                ))?;
+            app.adopt_server_permissions();
+        }
+        app.start_fresh_session(
+            &mut tui,
+            &mut server,
+            /*session_start_source*/ None,
+            /*initial_user_message*/ None,
+            /*new_thread_name*/ None,
+        )
+        .await;
+        let cached = app.primary_session_configured.as_ref().unwrap().clone();
+        let mut resumed = cached.clone();
+        resumed.approval_policy = AskForApproval::OnRequest;
+        resumed.permission_profile = PermissionProfile::read_only();
+        resumed.active_permission_profile = None;
+        app.restore_runtime_permissions(&mut resumed, &cached);
+        assert_eq!(resumed, cached);
+    }
+    let params = recorded_params(&requests, "thread/start");
+    assert_eq!(
+        params
+            .iter()
+            .skip(1)
+            .map(|params| serde_json::json!({
+                "approvalPolicy": params["approvalPolicy"],
+                "sandbox": params["sandbox"],
+                "permissions": params["permissions"],
+            }))
+            .collect::<Vec<_>>(),
+        vec![
+            serde_json::json!({"approvalPolicy": "never", "sandbox": "danger-full-access", "permissions": null}),
+            serde_json::json!({"approvalPolicy": "on-request", "sandbox": null, "permissions": ":read-only"}),
+        ]
+    );
+    server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
 async fn new_session_preserves_vim_line_yank() -> Result<()> {
     let (mut app, _events, _ops) = make_test_app_with_channels().await;
     let home = tempdir()?;

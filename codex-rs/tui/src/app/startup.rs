@@ -3,6 +3,7 @@
 //! Owns the main app run loop from app-server bootstrap through terminal shutdown. Startup input
 //! remains isolated from protected interactive requests until the initialized composer owns it.
 //! Queued resume history replaces the provisional loading frame only when it is ready to render.
+//! Explicit local launch permissions remain runtime overrides across new sessions and reconnects.
 
 use super::reconnect::ReconnectState;
 use super::*;
@@ -121,6 +122,41 @@ pub(super) fn startup_model(
 }
 
 impl App {
+    /// Keep explicit local launch choices available for new sessions and reconnect recovery.
+    pub(super) fn remember_launch_permissions(&mut self) {
+        if self.app_server_target.thread_params_mode()
+            == crate::app_server_session::ThreadParamsMode::Remote
+        {
+            return;
+        }
+        let selected = crate::resume_permissions::ResumePermissions::from_overrides(
+            &self.config,
+            &self.harness_overrides,
+        );
+        if selected.approval_policy {
+            self.runtime_approval_policy_override = Some(RuntimeApprovalPolicyOverride::Explicit(
+                self.config.permissions.approval_policy.value().into(),
+            ));
+        }
+        if selected.approvals_reviewer {
+            self.runtime_approvals_reviewer_override = Some(self.config.approvals_reviewer);
+        }
+        if selected.profile {
+            let profile = RuntimePermissionProfileOverride::from_config(&self.config);
+            // The server owns constrained profiles that legacy turn parameters cannot express.
+            self.runtime_permission_profile_override =
+                (profile.active_permission_profile.is_some()
+                    || crate::app_server_session::turn_permissions_overrides(
+                        TurnPermissionsOverride::LegacySandbox(
+                            self.config.permissions.effective_permission_profile(),
+                        ),
+                        self.config.cwd.as_path(),
+                    )
+                    .is_ok())
+                .then_some(profile);
+        }
+    }
+
     /// Keep the provisional loading frame until queued history reaches the owned transcript.
     /// Visible startup decisions and the agent overview must still render immediately.
     pub(super) fn render_startup_frame(
@@ -889,6 +925,7 @@ See the Codex keymap documentation for supported actions and examples."
             #[cfg(test)]
             _test_codex_home: None,
         };
+        app.remember_launch_permissions();
         if !tui.is_terminal_focused() {
             app.recap.note_focus_lost(Instant::now());
         }
