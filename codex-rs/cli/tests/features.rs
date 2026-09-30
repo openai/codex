@@ -363,6 +363,8 @@ fn no_daemon_rejects_agents_and_explicit_remote_targets() -> Result<()> {
         "--no-daemon --remote ws://localhost:9999 agents",
         "--no-daemon --remote ws://localhost:9999",
         "--no-daemon --remote ws://localhost:9999 archive example",
+        "--no-daemon --remote ws://localhost:9999 unarchive example",
+        "--no-daemon --remote ws://localhost:9999 delete --force 123e4567-e89b-12d3-a456-426614174000",
         "--no-daemon --remote ws://localhost:9999 queue --thread example --message hello",
         "--remote ws://localhost:9999 resume --no-daemon --last",
         "--no-daemon fork --remote ws://localhost:9999 session-name",

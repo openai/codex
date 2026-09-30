@@ -2,6 +2,8 @@
 //!
 //! The CLI commands are thin app-server clients: resolve a user-provided UUID or exact session
 //! name, then call the corresponding app-server RPC.
+//! Explicit remote session commands, including queue, leave authentication and execution to
+//! the selected server without initializing the caller's credentials or runtime.
 
 use std::io::IsTerminal;
 use std::io::Write;
@@ -11,6 +13,7 @@ use std::sync::Arc;
 
 use crate::Cli;
 use crate::app_server_session::AppServerSession;
+use crate::app_server_session::ThreadParamsMode;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::load_config_toml_with_layer_stack;
@@ -245,6 +248,25 @@ pub(super) async fn start_app_server_for_session_command(
             profile_v2,
         ));
         launch_loader_overrides.user_config_profile = Some(profile_v2.clone());
+    }
+
+    if let Some(endpoint) = explicit_remote_endpoint {
+        // Validate config before connecting, but leave authentication and execution
+        // to the selected server even when this caller has workload identity set.
+        launch_loader_overrides.ignore_login_requirements = true;
+        ConfigBuilder::default()
+            .codex_home(codex_home)
+            .cli_overrides(cli_kv_overrides)
+            .loader_overrides(launch_loader_overrides)
+            .strict_config(strict_config)
+            .build()
+            .await
+            .wrap_err("failed to load config.toml")?;
+        return Ok(AppServerSession::new(
+            super::connect_remote_app_server(endpoint).await?,
+            ThreadParamsMode::Remote,
+        )
+        .with_remote_cwd_override(cli.cwd.clone()));
     }
 
     let workload_identity_selected = codex_login::is_workload_identity_selected();
