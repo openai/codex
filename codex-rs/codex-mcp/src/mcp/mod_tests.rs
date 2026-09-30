@@ -103,6 +103,7 @@ pub(crate) fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         config_layer_stack: codex_config::ConfigLayerStack::default(),
         approvals_reviewer: codex_config::types::ApprovalsReviewer::default(),
         environment_cwds: HashMap::new(),
+        environment_use_mxc: HashMap::new(),
         server_permission_profiles: HashMap::new(),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,

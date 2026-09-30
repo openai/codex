@@ -790,6 +790,8 @@ pub struct SandboxState {
     pub sandbox_cwd: PathUri,
     #[serde(default)]
     pub use_legacy_landlock: bool,
+    #[serde(default)]
+    pub use_mxc: bool,
 }
 
 /// Runtime context used when resolving per-server MCP environments.
@@ -1161,6 +1163,7 @@ mod tests {
             codex_linux_sandbox_exe: None,
             sandbox_cwd,
             use_legacy_landlock: false,
+            use_mxc: false,
         };
 
         let serialized = serde_json::to_value(&sandbox_state).expect("serialize sandbox state");

@@ -9,6 +9,7 @@ use super::*;
 use crate::mcp::McpRuntimeProjection;
 use codex_config::McpServerDisabledReason;
 use codex_config::McpServerTransportConfig;
+use codex_file_system::WindowsSandboxSelection;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ElicitationReviewerHandle;
 use codex_mcp::McpServerRegistration;
@@ -337,6 +338,25 @@ impl Session {
             .environment_cwds
             .entry(codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string())
             .or_insert_with(|| PathUri::from_abs_path(&desired.config.cwd));
+        config.environment_use_mxc = desired
+            .environments
+            .turn_environments()
+            .map(|environment| {
+                (
+                    environment.selection.environment_id.clone(),
+                    environment.windows_sandbox_selection_for_turn_metadata()
+                        == WindowsSandboxSelection::Mxc,
+                )
+            })
+            .collect();
+        config
+            .environment_use_mxc
+            .entry(codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string())
+            .or_insert(
+                cfg!(windows)
+                    && desired.config.effective_local_windows_sandbox_type()
+                        == SandboxType::WindowsMxc,
+            );
         let mcp_servers = effective_mcp_servers(&config, auth.as_ref());
         config.set_server_permission_profiles(
             &mcp_servers,

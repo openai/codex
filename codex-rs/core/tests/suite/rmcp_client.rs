@@ -2114,20 +2114,22 @@ async fn local_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() ->
     Ok(())
 }
 
-#[test_case("rmcp", false, false, false, Some("catalog policy"), Some("native catalog policy"); "both disabled")]
-#[test_case("rmcp", true, false, false, Some("catalog policy"), Some("native catalog policy"); "auto review required")]
-#[test_case("rmcp", false, true, false, Some("catalog policy"), Some("native catalog policy"); "disabled")]
-#[test_case("rmcp", true, true, false, Some("catalog policy"), Some("native catalog policy"); "both enabled")]
-#[test_case("rmcp", false, false, true, Some("catalog policy"), Some("native catalog policy"); "attachment-owned permissions preserve foreign workspace roots")]
-#[test_case("node_repl", false, false, false, Some("  # Policy A\r\n{literal} <raw> & café\n"), Some("\t# Native A\n{{literal}} & desktop\r\n"); "node repl raw policy")]
-#[test_case("cua_repl", false, false, false, Some("\t# Policy B\n${literal} </policy>\r\n "), Some("  # Native B\r\n<computer> ${native}\n "); "cua repl raw policy")]
-#[test_case("node_repl", false, false, false, None, None; "node repl missing policy")]
-#[test_case("cua_repl", false, false, false, Some(""), Some("native retained"); "cua repl empty policy")]
-#[test_case("node_repl", false, false, false, Some(" \r\n\t"), Some("native retained"); "node repl blank policy")]
-#[test_case("node_repl", false, false, false, None, Some("native retained"); "node repl missing browser policy")]
-#[test_case("cua_repl", false, false, false, Some("browser retained"), None; "cua repl missing computer policy")]
-#[test_case("node_repl", false, false, false, Some("browser retained"), Some(""); "node repl empty computer policy")]
-#[test_case("cua_repl", false, false, false, Some("browser retained"), Some(" \r\n\t"); "cua repl blank computer policy")]
+#[test_case("rmcp", false, false, false, Some("catalog policy"), Some("native catalog policy"), false; "both disabled")]
+#[test_case("rmcp", true, false, false, Some("catalog policy"), Some("native catalog policy"), false; "auto review required")]
+#[test_case("rmcp", false, true, false, Some("catalog policy"), Some("native catalog policy"), false; "disabled")]
+#[test_case("rmcp", true, true, false, Some("catalog policy"), Some("native catalog policy"), false; "both enabled")]
+#[test_case("rmcp", false, false, true, Some("catalog policy"), Some("native catalog policy"), false; "attachment-owned permissions preserve foreign workspace roots")]
+#[test_case("node_repl", false, false, false, Some("  # Policy A\r\n{literal} <raw> & café\n"), Some("\t# Native A\n{{literal}} & desktop\r\n"), false; "node repl raw policy")]
+#[test_case("cua_repl", false, false, false, Some("\t# Policy B\n${literal} </policy>\r\n "), Some("  # Native B\r\n<computer> ${native}\n "), false; "cua repl raw policy")]
+#[test_case("node_repl", false, false, false, None, None, false; "node repl missing policy")]
+#[test_case("cua_repl", false, false, false, Some(""), Some("native retained"), false; "cua repl empty policy")]
+#[test_case("node_repl", false, false, false, Some(" \r\n\t"), Some("native retained"), false; "node repl blank policy")]
+#[test_case("node_repl", false, false, false, None, Some("native retained"), false; "node repl missing browser policy")]
+#[test_case("cua_repl", false, false, false, Some("browser retained"), None, false; "cua repl missing computer policy")]
+#[test_case("node_repl", false, false, false, Some("browser retained"), Some(""), false; "node repl empty computer policy")]
+#[test_case("cua_repl", false, false, false, Some("browser retained"), Some(" \r\n\t"), false; "cua repl blank computer policy")]
+#[test_case("cua_repl", false, false, false, None, None, true; "mxc backend handoff")]
+#[test_case("cua_repl", false, false, true, None, None, true; "mxc preference does not leak to attachment")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn stdio_mcp_tool_call_includes_sandbox_state_meta(
     server_name: &'static str,
@@ -2136,6 +2138,7 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta(
     attachment_owned_permissions: bool,
     browser_policy: Option<&str>,
     computer_policy: Option<&str>,
+    prefer_mxc: bool,
 ) -> anyhow::Result<()> {
     // TODO(anp): Remove after packaging a Windows stdio test server for Wine exec.
     skip_if_wine_exec!(
@@ -2209,6 +2212,7 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta(
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model("gpt-5.5")
         .with_config(move |config| {
+            config.prefer_mxc = prefer_mxc;
             insert_mcp_server(
                 config,
                 server_name,
@@ -2418,6 +2422,7 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta(
             codex_linux_sandbox_exe: fixture.config.codex_linux_sandbox_exe.clone(),
             sandbox_cwd: PathUri::from_abs_path(&fixture.config.cwd),
             use_legacy_landlock: false,
+            use_mxc: prefer_mxc && cfg!(windows) && !attachment_owned_permissions,
         }
     );
 

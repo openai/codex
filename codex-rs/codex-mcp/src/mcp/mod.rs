@@ -160,6 +160,8 @@ pub struct McpConfig {
     pub approvals_reviewer: ApprovalsReviewer,
     /// Working directories for the exact environment handles used by this runtime.
     pub environment_cwds: HashMap<String, PathUri>,
+    /// Effective backends captured with the environment handles, including local fallback.
+    pub environment_use_mxc: HashMap<String, bool>,
     /// Explicit server permissions; unresolved or unavailable servers have no entry.
     pub server_permission_profiles: HashMap<String, PermissionProfile>,
     /// Optional path to `codex-linux-sandbox` for sandboxed MCP tool execution.
