@@ -2021,8 +2021,10 @@ name = "codex-ansi-escape"
 version = "0.0.0"
 dependencies = [
  "ansi-to-tui",
+ "pretty_assertions",
  "ratatui",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
