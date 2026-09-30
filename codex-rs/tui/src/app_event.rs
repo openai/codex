@@ -277,6 +277,11 @@ pub(crate) struct AgentsOverviewThreadRefresh {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, IntoStaticStr)]
 pub(crate) enum AppEvent {
+    SecuritySetupLoaded {
+        request_id: uuid::Uuid,
+        identity: crate::security_setup::Identity,
+        notice: crate::security_setup::Notice,
+    },
     OpenDaemonMenu,
     ConfirmDaemonUpdate(crate::update_action::DaemonUpdateSource),
     RunDaemonUpdate(crate::update_action::DaemonUpdateSource),
