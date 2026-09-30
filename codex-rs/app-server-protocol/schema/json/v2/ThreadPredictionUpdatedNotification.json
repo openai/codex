@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadPredictionResult": {
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "completed"
+              ],
+              "title": "CompletedThreadPredictionResultType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "CompletedThreadPredictionResult",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "failed"
+              ],
+              "title": "FailedThreadPredictionResultType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FailedThreadPredictionResult",
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "properties": {
+    "result": {
+      "$ref": "#/definitions/ThreadPredictionResult"
+    },
+    "sourceTurnId": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "result",
+    "sourceTurnId",
+    "threadId"
+  ],
+  "title": "ThreadPredictionUpdatedNotification",
+  "type": "object"
+}

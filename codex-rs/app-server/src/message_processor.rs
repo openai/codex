@@ -11,6 +11,7 @@ use crate::current_time::app_server_time_provider;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_params;
 use crate::error_code::invalid_request;
+use crate::error_code::method_not_found;
 use crate::extensions::ThreadExtensionDependencies;
 use crate::extensions::app_server_extension_event_sink;
 use crate::extensions::thread_extensions;
@@ -1443,6 +1444,9 @@ impl MessageProcessor {
                     .thread_unarchive(request_id.clone(), params)
                     .await
             }
+            ClientRequest::ThreadPredictionRequest { .. } => Err(method_not_found(
+                "thread/prediction/request is not implemented yet",
+            )),
             ClientRequest::ThreadCompactStart { params, .. } => {
                 self.thread_processor
                     .thread_compact_start(&request_id, params)

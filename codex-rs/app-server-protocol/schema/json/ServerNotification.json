@@ -5474,6 +5474,67 @@
       ],
       "type": "object"
     },
+    "ThreadPredictionResult": {
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "completed"
+              ],
+              "title": "CompletedThreadPredictionResultType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "CompletedThreadPredictionResult",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "failed"
+              ],
+              "title": "FailedThreadPredictionResultType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FailedThreadPredictionResult",
+          "type": "object"
+        }
+      ]
+    },
+    "ThreadPredictionUpdatedNotification": {
+      "properties": {
+        "result": {
+          "$ref": "#/definitions/ThreadPredictionResult"
+        },
+        "sourceTurnId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "result",
+        "sourceTurnId",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadProjectUpdatedNotification": {
       "properties": {
         "projectId": {
@@ -7151,6 +7212,26 @@
         "params"
       ],
       "title": "Thread/goal/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/prediction/updated"
+          ],
+          "title": "Thread/prediction/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadPredictionUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/prediction/updatedNotification",
       "type": "object"
     },
     {

@@ -526,6 +526,8 @@ export type { ThreadMetadataGitInfoUpdateParams } from "./ThreadMetadataGitInfoU
 export type { ThreadMetadataUpdateParams } from "./ThreadMetadataUpdateParams";
 export type { ThreadMetadataUpdateResponse } from "./ThreadMetadataUpdateResponse";
 export type { ThreadNameUpdatedNotification } from "./ThreadNameUpdatedNotification";
+export type { ThreadPredictionResult } from "./ThreadPredictionResult";
+export type { ThreadPredictionUpdatedNotification } from "./ThreadPredictionUpdatedNotification";
 export type { ThreadProjectUpdatedNotification } from "./ThreadProjectUpdatedNotification";
 export type { ThreadQueueChangedNotification } from "./ThreadQueueChangedNotification";
 export type { ThreadReadParams } from "./ThreadReadParams";

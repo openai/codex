@@ -61,6 +61,7 @@ from .v2_all import ThreadDeletedNotification
 from .v2_all import ThreadGoalClearedNotification
 from .v2_all import ThreadGoalUpdatedNotification
 from .v2_all import ThreadNameUpdatedNotification
+from .v2_all import ThreadPredictionUpdatedNotification
 from .v2_all import ThreadProjectUpdatedNotification
 from .v2_all import ThreadQueueChangedNotification
 from .v2_all import ThreadRealtimeClosedNotification
@@ -144,6 +145,7 @@ KnownNotificationPayload: TypeAlias = (
     | ThreadGoalClearedNotification
     | ThreadGoalUpdatedNotification
     | ThreadNameUpdatedNotification
+    | ThreadPredictionUpdatedNotification
     | ThreadProjectUpdatedNotification
     | ThreadQueueChangedNotification
     | ThreadRealtimeClosedNotification
@@ -230,6 +232,7 @@ NOTIFICATION_MODELS: dict[str, type[KnownNotificationPayload]] = {
     "thread/goal/cleared": ThreadGoalClearedNotification,
     "thread/goal/updated": ThreadGoalUpdatedNotification,
     "thread/name/updated": ThreadNameUpdatedNotification,
+    "thread/prediction/updated": ThreadPredictionUpdatedNotification,
     "thread/project/updated": ThreadProjectUpdatedNotification,
     "thread/queue/changed": ThreadQueueChangedNotification,
     "thread/realtime/closed": ThreadRealtimeClosedNotification,
