@@ -95,6 +95,7 @@ pub use trusted_skills::TrustedSkills;
 pub use trusted_tool::TrustedTool;
 mod reviews;
 pub use reviews::MAX_PREVIOUS_REVIEWS;
+pub use reviews::PreviousReview;
 pub use reviews::PreviousReviews;
 pub use reviews::RenderedReviewEvidence;
 pub use reviews::ReviewEvidence;

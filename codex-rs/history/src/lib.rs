@@ -65,6 +65,10 @@ pub struct CodexHarnessMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guardian_sources: Vec<RetainedSource>,
 
+    /// Completed sync reviews delivered by this complete Guardian message. Host-only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guardian_review_ids: Vec<codex_protocol::ResponseItemId>,
+
     /// This complete message delivered the meaning of retained source-order labels.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub guardian_source_order_guidance: bool,
@@ -143,8 +147,9 @@ where
 }
 
 impl CodexHarnessMetadata {
-    /// Shortened messages no longer prove delivery of complete original instructions.
+    /// Shortened messages no longer prove complete instruction or review delivery.
     pub fn mark_retained_sources_incomplete(&mut self) {
+        self.guardian_review_ids.clear();
         self.guardian_source_order_guidance = false;
         if let Some(source) = &mut self.retained_source {
             source.complete = false;

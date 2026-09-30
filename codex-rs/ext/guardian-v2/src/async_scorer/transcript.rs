@@ -88,7 +88,7 @@ impl TranscriptConfig {
         &self,
         input: ContextInput<'_>,
     ) -> Result<RenderedContext, SectionError> {
-        let (mut context, _) = self.collect_context(input)?.compose(/*cursor*/ None)?;
+        let (mut context, _) = self.collect_context(input)?.compose(/*cursor*/ None, &[])?;
         context.deduplicate_transcript_instructions();
         Ok(context)
     }
@@ -178,9 +178,11 @@ impl CollectedTranscript {
     }
 
     pub(super) fn compose(
-        self,
+        mut self,
         cursor: Option<TranscriptCursor>,
+        reviewer_history: &[codex_history::ResponseItemEnvelope],
     ) -> Result<(ComposedContext, TranscriptCursor), SectionError> {
+        self.context.retain_new_reviews(reviewer_history);
         let (selection, next) = self.select(cursor);
         let (entries, offset, presentation) = match selection {
             TranscriptSelection::Full(entries) => (entries, 0, ContextPresentation::Async),

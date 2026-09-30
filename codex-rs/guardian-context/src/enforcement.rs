@@ -271,7 +271,7 @@ impl ComposedContext {
             {
                 self.truncations.push(TruncationObservation {
                     component: section.id,
-                    original_bytes: serde_json::to_vec(&message.content)
+                    original_bytes: serde_json::to_vec(&message.content.item)
                         .map_or(usize::MAX, |bytes| bytes.len()),
                     retained_bytes: 0,
                 });

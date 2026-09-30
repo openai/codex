@@ -698,7 +698,12 @@ async fn sampler_reuses_parent_compaction_only_for_matching_model_hashes() -> Re
         request.parent_compaction_hash = parent_hash.map(str::to_owned);
         request.input.insert(
             /*index*/ 0,
-            PreviousReviews::try_from_fragments(vec!["trusted review".to_owned()])?.into_message(),
+            PreviousReviews::try_from_fragments(vec![codex_guardian_context::PreviousReview {
+                id: ResponseItemId::from_server("review-trusted".to_owned()),
+                fragment: "trusted review".to_owned(),
+            }])?
+            .into_annotated_message()
+            .into_item(),
         );
 
         let result = sampler.sample(request).await;
@@ -992,7 +997,12 @@ async fn sampler_retries_expired_websockets_on_another_warm_connection() -> Resu
     let mut request = sample_request("turn-1");
     request.input.insert(
         /*index*/ 0,
-        PreviousReviews::try_from_fragments(vec!["trusted review".to_owned()])?.into_message(),
+        PreviousReviews::try_from_fragments(vec![codex_guardian_context::PreviousReview {
+            id: ResponseItemId::from_server("review-trusted".to_owned()),
+            fragment: "trusted review".to_owned(),
+        }])?
+        .into_annotated_message()
+        .into_item(),
     );
     request.input.insert(
         /*index*/ 1,

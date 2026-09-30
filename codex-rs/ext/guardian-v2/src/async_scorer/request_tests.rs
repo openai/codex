@@ -40,8 +40,11 @@ fn collect(history: &History, images: &[ContentItem]) -> CollectedTranscript {
         reason: None,
     };
     let reviews =
-        PreviousReviews::try_from_fragments(vec!["Approved reading README.md only.".to_owned()])
-            .unwrap();
+        PreviousReviews::try_from_fragments(vec![codex_guardian_context::PreviousReview {
+            id: ResponseItemId::from_server("review-readme".to_owned()),
+            fragment: "Approved reading README.md only.".to_owned(),
+        }])
+        .unwrap();
     TranscriptConfig::default()
         .collect_context(ContextInput {
             target: ContextTarget::Async,
@@ -153,9 +156,7 @@ fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_image
     assert!(
         matches!(&second.input[committed.len()].item, ResponseItem::Message { role, .. } if role == "user")
     );
-    assert!(second.input[committed.len()..].iter().any(
-        |item| matches!(&item.item, ResponseItem::Message { role, .. } if role == "developer")
-    ));
+    assert!(!delta.contains("Approved reading README.md only."));
     // A rebuilt conversation must receive the current images again.
     let rebuilt = config
         .prepare_retained(&evidence, &mut ConversationState::default(), INPUT_BUDGET)

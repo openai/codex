@@ -5,9 +5,12 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
-    let message = crate::PreviousReviews::try_from_fragments(vec!["host-attested review".into()])
-        .unwrap()
-        .into_message();
+    let message = crate::PreviousReviews::try_from_fragments(vec![crate::PreviousReview {
+        id: codex_protocol::ResponseItemId::new("review"),
+        fragment: "host-attested review".into(),
+    }])
+    .unwrap()
+    .into_annotated_message();
     let sections = || {
         vec![
             SectionOutput {
@@ -41,7 +44,7 @@ fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
                     text: "second".into()
                 }
             ]),
-            message.clone(),
+            message.item.clone(),
             user_message(vec![ContentItem::InputText {
                 text: "third".into()
             }]),

@@ -49,7 +49,7 @@ pub struct CollectedContext {
 #[derive(Clone, PartialEq)]
 pub(crate) enum SectionDelivery {
     UserContent(Vec<Budgeted<ContentItem>>),
-    Message(Budgeted<Box<ResponseItem>>),
+    Message(Budgeted<Box<ResponseItemEnvelope>>),
 }
 
 /// Rendered evidence with a stable identity, independent of its source type.
@@ -137,20 +137,22 @@ impl CollectedContext {
                 ContextSection::PreviousReviews(reviews) => (
                     6,
                     "previous_reviews",
-                    SectionDelivery::Message(Budgeted::required(Box::new(reviews.into_message()))),
+                    SectionDelivery::Message(Budgeted::required(Box::new(
+                        reviews.into_annotated_message(),
+                    ))),
                 ),
                 ContextSection::TrustedTool(tool) => (
                     7,
                     "trusted_tool",
                     SectionDelivery::Message(Budgeted::required(Box::new(
-                        ContextualUserFragment::into(tool),
+                        ResponseItemEnvelope::new(ContextualUserFragment::into(tool)),
                     ))),
                 ),
                 ContextSection::TrustedSkills(skills) => (
                     8,
                     "trusted_skills",
                     SectionDelivery::Message(Budgeted::required(Box::new(
-                        ContextualUserFragment::into(skills),
+                        ResponseItemEnvelope::new(ContextualUserFragment::into(skills)),
                     ))),
                 ),
                 ContextSection::RootConversation { items } => {
@@ -210,7 +212,7 @@ impl CollectedContext {
                                     SectionOutput {
                                         id: "conversation_transcript",
                                         delivery: SectionDelivery::Message(Budgeted {
-                                            content: message,
+                                            content: Box::new(ResponseItemEnvelope::new(*message)),
                                             retention: entry.retention,
                                             source: entry.source,
                                         }),
@@ -425,7 +427,7 @@ impl ComposedContext {
                             std::mem::take(&mut metadata),
                         ));
                     }
-                    messages.push(ResponseItemEnvelope::new(*message.content));
+                    messages.push(*message.content);
                 }
             }
         }

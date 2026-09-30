@@ -73,10 +73,12 @@ fn changing_attestations_preserves_history_before_the_current_action() {
         let profile = ContextProfile::asynchronous();
         let mut previous_prefix = None;
         for generation in 0..2 {
-            let reviews = PreviousReviews::try_from_fragments(vec![format!(
-                "Host-attested decision {generation}: denied."
-            )])
-            .unwrap();
+            let reviews =
+                PreviousReviews::try_from_fragments(vec![codex_guardian_context::PreviousReview {
+                    id: codex_protocol::ResponseItemId::new("review"),
+                    fragment: format!("Host-attested decision {generation}: denied."),
+                }])
+                .unwrap();
             let tool = TrustedTool {
                 server: format!("server-{generation}"),
                 connector_id: None,
@@ -130,7 +132,7 @@ fn changing_attestations_preserves_history_before_the_current_action() {
             assert_eq!(
                 suffix,
                 [
-                    reviews.into_message(),
+                    reviews.into_annotated_message().into_item(),
                     ContextualUserFragment::into(tool),
                     ContextualUserFragment::into(skills),
                     user_message(action.render(ActionPresentation::Async)),

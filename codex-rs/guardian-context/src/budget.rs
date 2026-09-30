@@ -152,7 +152,7 @@ impl ComposedContext {
                     .iter()
                     .map(|item| &item.content)
                     .fold(SectionCost::default(), SectionCost::add_content),
-                SectionDelivery::Message(message) => match message.content.as_ref() {
+                SectionDelivery::Message(message) => match &message.content.item {
                     ResponseItem::Message { content, .. } => content
                         .iter()
                         .fold(SectionCost::default(), SectionCost::add_content),
@@ -214,7 +214,7 @@ pub(super) fn section_tokens(section: &SectionOutput) -> usize {
             .iter()
             .map(|item| content_tokens(&item.content))
             .fold(content_framing_tokens(content.len()), usize::saturating_add),
-        SectionDelivery::Message(message) => estimate_input_tokens(&message.content),
+        SectionDelivery::Message(message) => estimate_input_tokens(&message.content.item),
     }
 }
 

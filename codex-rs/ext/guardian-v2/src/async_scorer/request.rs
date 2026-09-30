@@ -1,7 +1,7 @@
 //! Admits classifier requests before moving committed history, without advancing the cursor.
 //! The complete immutable prefix, setup and new evidence share the classifier input limit.
-//! Instruction delivery metadata stays with history; previously delivered evidence is
-//! omitted from new input before budgeting, using the same instruction filtering as sync.
+//! Instruction and sync-review delivery metadata stay with history. Previously delivered
+//! evidence is omitted before budgeting, using the same instruction filtering as sync.
 
 use codex_guardian_context::TranscriptCursor;
 use codex_guardian_context::TruncationObservation;
@@ -35,13 +35,12 @@ impl LunaSamplingRequest {
         }) {
             return None;
         }
-        let (mut context, _) = evidence.clone().compose(cursor).ok()?;
-        context.retain_new_instructions(
-            conversation
-                .snapshot()
-                .map(|snapshot| snapshot.history().as_slice())
-                .unwrap_or_default(),
-        );
+        let history = conversation
+            .snapshot()
+            .map(|snapshot| snapshot.history().as_slice())
+            .unwrap_or_default();
+        let (mut context, _) = evidence.clone().compose(cursor, history).ok()?;
+        context.retain_new_instructions(history);
         if let Some(snapshot) = conversation.snapshot() {
             context.retain_images(|image, _| {
                 !snapshot.history().iter().any(|item| match &item.item {

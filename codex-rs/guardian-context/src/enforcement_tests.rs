@@ -143,9 +143,12 @@ fn planned_action_budget_omits_descriptions_without_changing_arguments() {
 
 #[test]
 fn budget_reserves_existing_context_and_preserves_required_messages() {
-    let trusted = crate::PreviousReviews::try_from_fragments(vec!["verified review".to_owned()])
-        .unwrap()
-        .into_message();
+    let trusted = crate::PreviousReviews::try_from_fragments(vec![crate::PreviousReview {
+        id: codex_protocol::ResponseItemId::new("review"),
+        fragment: "verified review".to_owned(),
+    }])
+    .unwrap()
+    .into_annotated_message();
     let image = ContentItem::InputImage {
         image: ImageReference::Inline {
             image_url: "data:image/png;base64,AAAA".to_owned(),
@@ -213,7 +216,7 @@ fn budget_reserves_existing_context_and_preserves_required_messages() {
                 text("latest tool evidence"),
                 image.clone()
             ]),
-            trusted.clone(),
+            trusted.item.clone(),
             user_message(vec![text("exact action"), text("evidence omitted")]),
         ]
     );
@@ -231,7 +234,7 @@ fn budget_reserves_existing_context_and_preserves_required_messages() {
         without_image.into_messages(),
         vec![
             user_message(vec![text("user restriction"), text("latest tool evidence")]),
-            trusted.clone(),
+            trusted.item.clone(),
             user_message(vec![text("exact action"), text("evidence omitted")]),
         ]
     );

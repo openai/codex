@@ -197,14 +197,17 @@ impl Classification {
                     && review.root_review_context_revision == root_review_context_revision
             })
             .map(|review| {
-                let review = render_review_evidence(ReviewEvidence {
+                let rendered = render_review_evidence(ReviewEvidence {
                     correlation: &review.correlation,
                     decision: &review.decision,
                     action: &review.action,
                     rationale: review.rationale.as_deref(),
                 });
-                truncations.extend(review.truncations);
-                GuardianReviewEvidenceFragment::new(review.body).render()
+                truncations.extend(rendered.truncations);
+                codex_guardian_context::PreviousReview {
+                    id: review.delivery_id.clone(),
+                    fragment: GuardianReviewEvidenceFragment::new(rendered.body).render(),
+                }
             })
             .collect::<Vec<_>>();
         let transcript =

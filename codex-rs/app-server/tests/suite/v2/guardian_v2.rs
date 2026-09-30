@@ -179,6 +179,7 @@ struct MockResponsesState {
     guardian_requests: Mutex<Vec<Value>>,
     luna_requests: Mutex<Vec<Value>>,
     luna_connections: AtomicUsize,
+    luna_completions: AtomicUsize,
     root_thread_id: Mutex<Option<String>>,
     allow_luna: Notify,
     allow_guardian_review: Notify,
@@ -242,6 +243,7 @@ enum GuardianToolScope {
 #[derive(Clone, Copy)]
 enum ThreadLifecycle {
     New,
+    ReviewContinuations,
     RequiredModelSwitch,
     UserInputRestriction,
     UserInputEmpty,
@@ -621,14 +623,17 @@ async fn luna_response(state: &MockResponsesState, request: Value) -> Vec<Value>
     } else {
         "high"
     };
+    let completion = state.luna_completions.fetch_add(1, Ordering::Relaxed);
+    let response_id = format!("luna-score-{completion}");
+    let message_id = format!("luna-score-message-{completion}");
     vec![
-        responses::ev_response_created("luna-score"),
+        responses::ev_response_created(&response_id),
         responses::ev_output_text_delta(classification),
-        responses::ev_assistant_message("luna-score-message", classification),
+        responses::ev_assistant_message(&message_id, classification),
         if state.fail_after_classification {
-            json!({"type":"response.failed", "response":{"id":"luna-score", "error":{"code":"server_error", "message":"stream failed after score"}}})
+            json!({"type":"response.failed", "response":{"id":response_id, "error":{"code":"server_error", "message":"stream failed after score"}}})
         } else {
-            responses::ev_completed("luna-score")
+            responses::ev_completed(&response_id)
         },
     ]
 }
@@ -690,6 +695,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
     classifier_mode: codex_protocol::openai_models::AsyncClassifierMode,
 ) -> Result<()> {
     let fail_after_classification = matches!(risk, GuardianRisk::LowWithStreamFailure);
+    let review_continuations = matches!(lifecycle, ThreadLifecycle::ReviewContinuations);
     let risk = if fail_after_classification {
         GuardianRisk::Low
     } else {
@@ -727,7 +733,8 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         GuardianRisk::Threshold => (0.5, 2),
         GuardianRisk::High => (0.95, 2),
     };
-    let expected_guardian_reviews = expected_guardian_reviews
+    let expected_guardian_reviews = (expected_guardian_reviews
+        + usize::from(review_continuations && expected_guardian_reviews == 2))
         * if matches!(review_outcome, ReviewOutcome::Malformed) {
             3
         } else {
@@ -741,6 +748,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         review_outcome,
         transcript_content,
         mcp_server_name: Some(server_name),
+        mcp_tool_sequence: review_continuations.then_some(&[TEST_TOOL_NAME; 3]),
         root_worker: lifecycle.uses_root_worker(),
         root_user_restriction: matches!(lifecycle, ThreadLifecycle::RootUserRestriction),
         root_user_input_restriction: lifecycle.has_root_user_input(),
@@ -932,6 +940,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
     }
     let original_thread_id = match lifecycle {
         ThreadLifecycle::New
+        | ThreadLifecycle::ReviewContinuations
         | ThreadLifecycle::RequiredModelSwitch
         | ThreadLifecycle::UserInputRestriction
         | ThreadLifecycle::UserInputEmpty
@@ -980,6 +989,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         .await?;
     let thread = match lifecycle {
         ThreadLifecycle::New
+        | ThreadLifecycle::ReviewContinuations
         | ThreadLifecycle::RequiredModelSwitch
         | ThreadLifecycle::UserInputRestriction
         | ThreadLifecycle::UserInputEmpty
@@ -1203,6 +1213,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         if matches!(
             lifecycle,
             ThreadLifecycle::New
+                | ThreadLifecycle::ReviewContinuations
                 | ThreadLifecycle::Resume
                 | ThreadLifecycle::Fork
                 | ThreadLifecycle::RootUserRestriction
@@ -1216,7 +1227,9 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                 .as_array()
                 .expect("second Luna request input should be an array");
             assert_eq!(
-                input.iter().any(|item| item["id"] == "luna-score-message"),
+                input.iter().any(|item| item["id"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("luna-score-message-"))),
                 retained
             );
             if retained {
@@ -1455,6 +1468,53 @@ async fn guardian_v2_routes_scoped_tool_approvals(
             wait_for_guardian_reviews(responses_state.as_ref(), expected_guardian_reviews).await?;
         }
         responses_state.allow_luna.notify_one();
+        if review_continuations {
+            let third_sample = wait_for_luna_request(responses_state.as_ref(), /*index*/ 2).await?;
+            assert!(
+                !third_sample.to_string().contains("guardian_review_ids"),
+                "review delivery metadata must stay out of the model request"
+            );
+            let previous_reviews = sync_review_fragments(&second_sample);
+            let reviews = sync_review_fragments(&third_sample);
+            let has_new_review = matches!(risk, GuardianRisk::High);
+            assert_eq!(previous_reviews.len(), 1);
+            assert_eq!(reviews.len(), 1 + usize::from(has_new_review));
+            assert_eq!(reviews[0], previous_reviews[0]);
+            if has_new_review {
+                assert!(reviews[1].contains("guardian-action-1"));
+            }
+            let input = third_sample["input"]
+                .as_array()
+                .expect("third classifier input");
+            if classifier_mode == "conversation" && !fail_after_classification {
+                let previous = second_sample["input"]
+                    .as_array()
+                    .expect("second classifier input");
+                assert_eq!(&input[..previous.len()], previous);
+                assert_eq!(
+                    input
+                        .iter()
+                        .filter_map(|item| item["id"].as_str())
+                        .filter(|id| id.starts_with("luna-score-message-"))
+                        .collect::<Vec<_>>(),
+                    vec!["luna-score-message-0", "luna-score-message-1"],
+                );
+                let delta = json!({ "input": &input[previous.len()..] });
+                assert_eq!(
+                    sync_review_fragments(&delta),
+                    reviews[1..],
+                    "a retained continuation must append only newly completed sync reviews"
+                );
+            } else {
+                assert!(
+                    !input.iter().any(|item| item["id"]
+                        .as_str()
+                        .is_some_and(|id| id.starts_with("luna-score-message-"))),
+                    "snapshot and failed-stream recovery must start with fresh history"
+                );
+            }
+            responses_state.allow_luna.notify_one();
+        }
     } else {
         responses_state.allow_guardian_review.notify_one();
     }
@@ -1567,7 +1627,10 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         .into_iter()
         .filter(|method| method == "autoApprovalReview/strictReviewRequired")
         .count();
-    assert_eq!(strict_review_count, usize::from(requires_strict_review));
+    assert_eq!(
+        strict_review_count,
+        usize::from(requires_strict_review) * if review_continuations { 2 } else { 1 }
+    );
     if requires_strict_review {
         let review_started: ItemGuardianApprovalReviewStartedNotification = timeout(
             TIMEOUT,
@@ -1756,7 +1819,9 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                 .as_array()
                 .expect("fresh classifier input");
             assert!(
-                !input.iter().any(|item| item["id"] == "luna-score-message"),
+                !input.iter().any(|item| item["id"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("luna-score-message-"))),
                 "new user instructions must invalidate the previous classifier conversation"
             );
             let text = serde_json::to_string(input)?;
