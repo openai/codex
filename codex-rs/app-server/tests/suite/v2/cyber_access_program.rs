@@ -201,12 +201,16 @@ async fn turn_start_forwards_explicit_cyber_access_program() -> Result<()> {
 }
 
 #[tokio::test]
-async fn api_key_cyber_access_program_requires_both_features() -> Result<()> {
+async fn api_key_cyber_access_program_requires_only_forwarding_feature() -> Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let expected_programs = [
         None,
         None,
+        None,
+        Some(json!({"cyber": "daybreak_blue"})),
+        Some(json!({"cyber": "daybreak_red"})),
+        Some(json!({"cyber": "standard"})),
         None,
         Some(json!({"cyber": "daybreak_blue"})),
         Some(json!({"cyber": "daybreak_red"})),
@@ -224,15 +228,21 @@ async fn api_key_cyber_access_program_requires_both_features() -> Result<()> {
     let home = TempDir::new()?;
     let mut app = start_api_key_app(home.path(), &server).await?;
     set_api_key_cyber_access_programs(&mut app, /*enabled*/ true).await?;
-    for disabled_feature in [
-        Some("api_key_cyber_access_programs"),
-        Some("api_key_model_discovery"),
-        None,
-    ] {
+    for (forwarding_enabled, discovery_enabled) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
         let thread = app
             .start_thread(ThreadStartParams {
-                config: disabled_feature
-                    .map(|feature| HashMap::from([(format!("features.{feature}"), json!(false))])),
+                config: Some(HashMap::from([
+                    (
+                        "features.api_key_cyber_access_programs".to_owned(),
+                        json!(forwarding_enabled),
+                    ),
+                    (
+                        "features.api_key_model_discovery".to_owned(),
+                        json!(discovery_enabled),
+                    ),
+                ])),
                 ..Default::default()
             })
             .await?
@@ -254,7 +264,7 @@ async fn api_key_cyber_access_program_requires_both_features() -> Result<()> {
                     ..Default::default()
                 })
                 .await?;
-            if program.is_some() && disabled_feature.is_some() {
+            if program.is_some() && !forwarding_enabled {
                 assert_eq!(completed.turn.status, TurnStatus::Failed);
                 assert_eq!(
                     completed.turn.error,
@@ -642,7 +652,7 @@ async fn start_api_key_app(home: &Path, server: &MockServer) -> Result<TestAppSe
     std::fs::write(
         home.join("config.toml"),
         format!(
-            "model = \"gpt-6-sol\"\nopenai_base_url = \"{}/v1\"\n[features]\napi_key_model_discovery = true\n",
+            "model = \"gpt-6-sol\"\nopenai_base_url = \"{}/v1\"\n[features]\napi_key_model_discovery = false\n",
             server.uri()
         ),
     )?;

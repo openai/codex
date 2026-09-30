@@ -18,9 +18,7 @@ impl ApiKeyCyberAccessPrograms {
     pub(crate) fn from_config(config: &crate::config::Config) -> Self {
         if config.model_provider_id != codex_model_provider_info::OPENAI_PROVIDER_ID {
             Self::UnsupportedProvider
-        } else if config.features.enabled(Feature::ApiKeyCyberAccessPrograms)
-            && config.features.enabled(Feature::ApiKeyModelDiscovery)
-        {
+        } else if config.features.enabled(Feature::ApiKeyCyberAccessPrograms) {
             Self::Enabled
         } else {
             Self::Disabled
