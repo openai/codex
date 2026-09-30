@@ -8,6 +8,7 @@ use codex_exec_server::ExecServerClient;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FsCloseParams;
+use codex_exec_server::FsOpenMode;
 use codex_exec_server::FsOpenParams;
 use codex_exec_server::FsReadBlockParams;
 use codex_exec_server::FsReadBlockResponse;
@@ -227,6 +228,7 @@ async fn read_block_supports_non_sequential_offsets_and_lengths() -> Result<()> 
         .fs_open(FsOpenParams {
             handle_id: Uuid::new_v4().simple().to_string(),
             path: PathUri::from_host_native_path(path)?,
+            mode: FsOpenMode::Read,
             sandbox: None,
         })
         .await?;
@@ -293,6 +295,7 @@ async fn open_enforces_the_per_connection_limit_and_close_releases_capacity() ->
             .fs_open(FsOpenParams {
                 handle_id: Uuid::new_v4().simple().to_string(),
                 path: path.clone(),
+                mode: FsOpenMode::Read,
                 sandbox: None,
             })
             .await?;
@@ -303,6 +306,7 @@ async fn open_enforces_the_per_connection_limit_and_close_releases_capacity() ->
         .fs_open(FsOpenParams {
             handle_id: Uuid::new_v4().simple().to_string(),
             path: path.clone(),
+            mode: FsOpenMode::Read,
             sandbox: None,
         })
         .await
@@ -327,6 +331,7 @@ async fn open_enforces_the_per_connection_limit_and_close_releases_capacity() ->
         .fs_open(FsOpenParams {
             handle_id: Uuid::new_v4().simple().to_string(),
             path,
+            mode: FsOpenMode::Read,
             sandbox: None,
         })
         .await?;
@@ -352,6 +357,7 @@ async fn open_rejects_handle_ids_longer_than_32_bytes() -> Result<()> {
         .fs_open(FsOpenParams {
             handle_id: "x".repeat(33),
             path: PathUri::from_host_native_path(path)?,
+            mode: FsOpenMode::Read,
             sandbox: None,
         })
         .await

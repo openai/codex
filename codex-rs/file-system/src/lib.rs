@@ -39,6 +39,8 @@ use std::task::Poll;
 
 /// Maximum chunk size returned by [`ExecutorFileSystem::read_file_stream`].
 pub const FILE_READ_CHUNK_SIZE: usize = 1024 * 1024;
+/// Maximum decoded chunk size accepted by a streamed filesystem write.
+pub const FILE_WRITE_CHUNK_SIZE: usize = 1024 * 1024;
 /// Maximum accepted directory depth for a filesystem walk.
 pub const MAX_WALK_DEPTH: usize = 64;
 /// Maximum accepted directory count, including the walk root.

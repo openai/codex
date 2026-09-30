@@ -11,6 +11,7 @@ use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
 use crate::protocol::FS_READ_BLOCK_METHOD;
 use crate::protocol::FsCloseParams;
+use crate::protocol::FsOpenMode;
 use crate::protocol::FsOpenParams;
 use crate::protocol::FsReadBlockParams;
 
@@ -37,6 +38,7 @@ pub(super) async fn open(
         .fs_open(FsOpenParams {
             handle_id: registration.handle_id.clone(),
             path,
+            mode: FsOpenMode::Read,
             sandbox: sandbox.cloned(),
         })
         .await

@@ -28,6 +28,7 @@ use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
+use crate::protocol::FsOpenMode;
 use crate::protocol::FsOpenParams;
 use crate::protocol::FsOpenResponse;
 use crate::protocol::FsReadBlockParams;
@@ -122,6 +123,12 @@ impl FileSystemHandler {
         params: FsOpenParams,
     ) -> Result<FsOpenResponse, JSONRPCErrorError> {
         validate_file_handle_id(&params.handle_id)?;
+        // TODO(anp): Enable replacement opens when writable file streams are implemented.
+        if params.mode == FsOpenMode::Replace {
+            return Err(invalid_request(
+                "exec-server does not support writable file streams".to_string(),
+            ));
+        }
         let file = self
             .file_system
             .open_file_for_read(&params.path, params.sandbox.as_ref())
