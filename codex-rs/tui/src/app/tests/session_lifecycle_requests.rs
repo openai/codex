@@ -996,13 +996,22 @@ async fn archive_current_thread_reports_success_only_after_archiving() -> Result
 #[tokio::test]
 async fn archive_current_thread_returns_shared_servers_to_agents() -> Result<()> {
     let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:4500")?;
-    for target in [
+    for (target, attachment, side_exists) in [
         AppServerTarget::LocalDaemon {
             allow_embedded_fallback: true,
             endpoint: endpoint.clone(),
         },
         AppServerTarget::Remote { endpoint },
-    ] {
+    ]
+    .into_iter()
+    .flat_map(|target| {
+        [
+            (ThreadEventAttachment::Live, true),
+            (ThreadEventAttachment::ReplayOnly, true),
+            (ThreadEventAttachment::ReplayOnly, false),
+        ]
+        .map(|(attachment, side_exists)| (target.clone(), attachment, side_exists))
+    }) {
         let (mut app, _codex_home) = make_history_test_app().await?;
         let thread_id =
             create_history_rollout(&app.config, ThreadHistoryMode::Legacy, "archive me")?;
@@ -1020,17 +1029,26 @@ async fn archive_current_thread_returns_shared_servers_to_agents() -> Result<()>
                 crate::app_server_session::ResumeModelSettings::RestoreFromThread,
             )
             .await?;
-        let mut side_config = app.config.clone();
-        side_config.ephemeral = true;
-        let side = server
-            .fork_side_thread(
-                &app.local_settings,
-                side_config,
-                thread_id,
-                /*selected_profile*/ None,
-            )
-            .await?;
-        let side_id = side.session.thread_id;
+        let side_id = if side_exists {
+            let mut side_config = app.config.clone();
+            side_config.ephemeral = true;
+            server
+                .fork_side_thread(
+                    &app.local_settings,
+                    side_config,
+                    thread_id,
+                    /*selected_profile*/ None,
+                )
+                .await?
+                .session
+                .thread_id
+        } else {
+            // The saved side transcript outlived its ephemeral server thread.
+            ThreadId::new()
+        };
+        if attachment == ThreadEventAttachment::ReplayOnly {
+            app.ensure_thread_channel(side_id).mark_replay_only();
+        }
         app.side_threads
             .insert(side_id, SideThreadState::new(thread_id));
         app.app_server_target = target;
@@ -1072,6 +1090,10 @@ async fn archive_current_thread_returns_shared_servers_to_agents() -> Result<()>
         assert_eq!(
             recorded_params(&requests, "thread/unsubscribe"),
             vec![serde_json::json!({"threadId": side_id.to_string()})]
+        );
+        assert_eq!(
+            recorded_params(&requests, "turn/interrupt"),
+            vec![serde_json::json!({"threadId": side_id.to_string(), "turnId": ""})]
         );
         assert!(app.chat_widget.composer_is_empty());
         assert_eq!(

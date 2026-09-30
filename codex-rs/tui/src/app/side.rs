@@ -550,6 +550,19 @@ impl App {
             } else {
                 app_server.startup_interrupt(thread_id).await
             };
+        // Replay-only sides may still be running after reconnect, so always interrupt.
+        // If the ephemeral thread is gone, let unsubscribe and local cleanup finish.
+        if let Err(TypedRequestError::Server { method, source }) = &interrupt_result
+            && method == "turn/interrupt"
+            && source.code == -32600
+            && source.message == format!("thread not found: {thread_id}")
+            && self
+                .thread_event_channels
+                .get(&thread_id)
+                .is_some_and(|channel| channel.attachment() == ThreadEventAttachment::ReplayOnly)
+        {
+            return Ok(());
+        }
         interrupt_result.map_err(|err| {
             format!("Failed to close side conversation {thread_id}; it is still open: {err}")
         })
