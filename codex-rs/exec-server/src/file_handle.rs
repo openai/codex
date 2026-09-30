@@ -6,7 +6,7 @@ use std::sync::Arc;
 use codex_file_system::FILE_READ_CHUNK_SIZE;
 use tokio::sync::Mutex;
 
-const MAX_OPEN_FILE_READS: usize = 128;
+const MAX_OPEN_FILES: usize = 128;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct FileReadBlock {
@@ -15,11 +15,11 @@ pub(crate) struct FileReadBlock {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct FileReadHandleManager {
+pub(crate) struct FileHandleManager {
     handles: Arc<Mutex<HashMap<String, Arc<File>>>>,
 }
 
-impl FileReadHandleManager {
+impl FileHandleManager {
     pub(crate) async fn open(
         &self,
         handle_id: String,
@@ -33,10 +33,10 @@ impl FileReadHandleManager {
                 format!("file read handle `{handle_id}` already exists"),
             ));
         }
-        if handles.len() >= MAX_OPEN_FILE_READS {
+        if handles.len() >= MAX_OPEN_FILES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("at most {MAX_OPEN_FILE_READS} file reads may be open per connection"),
+                format!("at most {MAX_OPEN_FILES} file reads may be open per connection"),
             ));
         }
         handles.insert(handle_id.clone(), file);
