@@ -267,7 +267,7 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
         prepend_path_dirs: environment_info.prepend_path_dirs.clone(),
         ..EnvironmentInfo::local()
     };
-    assert_eq!(environment_info, expected_info);
+    assert_eq!(environment_info.as_ref(), &expected_info);
     std::fs::remove_file(&manifest)?;
     assert_eq!(client.force_environment_info().await?, expected_info);
 

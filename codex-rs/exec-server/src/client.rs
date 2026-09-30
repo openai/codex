@@ -290,7 +290,7 @@ struct Inner {
     session_id: OnceLock<String>,
     retired: CancellationToken,
     /// Caches metadata from initialization or the first successful info request for this client's lifetime.
-    environment_info: OnceCell<EnvironmentInfo>,
+    environment_info: OnceCell<Arc<EnvironmentInfo>>,
     reconnect_strategy: Option<ExecServerReconnectStrategy>,
 }
 
@@ -652,7 +652,7 @@ impl HttpClient for LazyRemoteExecServerClient {
 
 impl LazyRemoteExecServerClient {
     pub(crate) async fn environment_info(&self) -> Result<EnvironmentInfo, ExecServerError> {
-        self.get().await?.environment_info().await
+        Ok(self.get().await?.environment_info().await?.as_ref().clone())
     }
 }
 
@@ -827,11 +827,11 @@ impl ExecServerClient {
         self.call(EXEC_METHOD, &params).await
     }
 
-    /// Returns cached executor metadata, fetching it lazily if initialization omitted it.
-    pub async fn environment_info(&self) -> Result<EnvironmentInfo, ExecServerError> {
+    /// Returns shared cached executor metadata, fetching it lazily if initialization omitted it.
+    pub async fn environment_info(&self) -> Result<Arc<EnvironmentInfo>, ExecServerError> {
         self.inner
             .environment_info
-            .get_or_try_init(|| self.force_environment_info())
+            .get_or_try_init(|| async { self.force_environment_info().await.map(Arc::new) })
             .await
             .cloned()
     }
@@ -1292,7 +1292,7 @@ impl ExecServerClient {
             .await?;
         if let Some(info) = initialize_response.environment_info {
             assert!(
-                client.inner.environment_info.set(info).is_ok(),
+                client.inner.environment_info.set(Arc::new(info)).is_ok(),
                 "new client metadata cache must be empty"
             );
         }
@@ -2668,10 +2668,13 @@ mod tests {
         })
         .await?;
 
-        assert_eq!(client.environment_info().await?, expected_info);
+        let info = client.environment_info().await?;
+        assert_eq!(info.as_ref(), &expected_info);
         server.await?;
         // The server is gone, so a cloned client must use the shared cache.
-        assert_eq!(client.clone().environment_info().await?, expected_info);
+        let cached_info = client.clone().environment_info().await?;
+        assert_eq!(cached_info.as_ref(), &expected_info);
+        assert!(Arc::ptr_eq(&info, &cached_info));
         Ok(())
     }
 
