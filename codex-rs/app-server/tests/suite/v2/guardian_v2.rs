@@ -188,6 +188,7 @@ struct MockResponsesState {
     context_metrics_recorded: Notify,
     luna_score: f64,
     invalid_classification: bool,
+    fail_after_classification: bool,
     review_outcome: ReviewOutcome,
     transcript_content: TranscriptContent,
     mcp_server_name: Option<&'static str>,
@@ -220,6 +221,7 @@ enum TranscriptContent {
 #[derive(Clone, Copy)]
 enum GuardianRisk {
     Low,
+    LowWithStreamFailure,
     Threshold,
     High,
     InvalidResponse,
@@ -524,10 +526,10 @@ async fn parent_response(
                     item["call_id"] == "guardian-action-0" && item["type"] == "function_call_output"
                 })
                 .expect("first tool result after root revocation");
+            let output = output.to_string();
             assert!(
-                output
-                    .to_string()
-                    .contains("Tool execution was declined by Guardian."),
+                output.contains("Tool execution was declined by Guardian.")
+                    || output.contains("This action was rejected due to unacceptable risk."),
                 "the refreshed review must deny the first tool after revocation: {output}"
             );
         }
@@ -623,7 +625,11 @@ async fn luna_response(state: &MockResponsesState, request: Value) -> Vec<Value>
         responses::ev_response_created("luna-score"),
         responses::ev_output_text_delta(classification),
         responses::ev_assistant_message("luna-score-message", classification),
-        responses::ev_completed("luna-score"),
+        if state.fail_after_classification {
+            json!({"type":"response.failed", "response":{"id":"luna-score", "error":{"code":"server_error", "message":"stream failed after score"}}})
+        } else {
+            responses::ev_completed("luna-score")
+        },
     ]
 }
 
@@ -666,10 +672,13 @@ async fn guardian_v2_routes_tool_approvals(
         transcript_content,
         GuardianToolScope::AllTools,
         /*sensitive_action*/ None,
+        codex_protocol::openai_models::AsyncClassifierMode::Snapshot,
     )
     .await
 }
 
+// Keep the independent approval scenario inputs explicit at each call site.
+#[allow(clippy::too_many_arguments)]
 async fn guardian_v2_routes_scoped_tool_approvals(
     risk: GuardianRisk,
     lifecycle: ThreadLifecycle,
@@ -678,7 +687,14 @@ async fn guardian_v2_routes_scoped_tool_approvals(
     transcript_content: TranscriptContent,
     scope: GuardianToolScope,
     sensitive_action: Option<bool>,
+    classifier_mode: codex_protocol::openai_models::AsyncClassifierMode,
 ) -> Result<()> {
+    let fail_after_classification = matches!(risk, GuardianRisk::LowWithStreamFailure);
+    let risk = if fail_after_classification {
+        GuardianRisk::Low
+    } else {
+        risk
+    };
     let server_name = match scope {
         GuardianToolScope::AllTools => TEST_SERVER_NAME,
         GuardianToolScope::ComputerUseOnly { server_name } => server_name,
@@ -705,7 +721,9 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         {
             (0.25, 1)
         }
-        GuardianRisk::Low | GuardianRisk::InvalidResponse => (0.25, 2),
+        GuardianRisk::Low | GuardianRisk::LowWithStreamFailure | GuardianRisk::InvalidResponse => {
+            (0.25, 2)
+        }
         GuardianRisk::Threshold => (0.5, 2),
         GuardianRisk::High => (0.95, 2),
     };
@@ -719,6 +737,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
     let responses_state = Arc::new(MockResponsesState {
         luna_score,
         invalid_classification: matches!(risk, GuardianRisk::InvalidResponse),
+        fail_after_classification,
         review_outcome,
         transcript_content,
         mcp_server_name: Some(server_name),
@@ -874,6 +893,10 @@ async fn guardian_v2_routes_scoped_tool_approvals(
     } else {
         "prompt"
     };
+    let classifier_mode = match classifier_mode {
+        codex_protocol::openai_models::AsyncClassifierMode::Snapshot => "snapshot",
+        codex_protocol::openai_models::AsyncClassifierMode::Conversation => "conversation",
+    };
     let mut mock_config = MockResponsesConfig::new(&responses_url)
         .with_model(MODEL)
         .with_provider_config("supports_websockets = false")
@@ -883,7 +906,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
             analytics_server.uri(),
         ))
         .with_extra_config(&format!(
-            "[mcp_servers.{server_name}]\nurl = \"{mcp_server_url}/mcp\"\ndefault_tools_approval_mode = \"{tool_approval_mode}\"\n\n[analytics]\nenabled = true\n\n[otel]\nmetrics_exporter = {{ otlp-http = {{ endpoint = \"{responses_url}/metrics\", protocol = \"json\" }} }}\n\n[features.guardianv2]\nenabled = true{guardian_scope_config}"
+            "[mcp_servers.{server_name}]\nurl = \"{mcp_server_url}/mcp\"\ndefault_tools_approval_mode = \"{tool_approval_mode}\"\n\n[analytics]\nenabled = true\n\n[otel]\nmetrics_exporter = {{ otlp-http = {{ endpoint = \"{responses_url}/metrics\", protocol = \"json\" }} }}\n\n[features.guardianv2]\nenabled = true\nasync_classifier_mode = \"{classifier_mode}\"{guardian_scope_config}"
         ))
         .enable_feature(Feature::GuardianApproval);
     if lifecycle.has_user_input() || lifecycle.has_root_user_input() {
@@ -1177,6 +1200,57 @@ async fn guardian_v2_routes_scoped_tool_approvals(
             submit_user_input_response(&mut app_server, answers).await?;
         }
         let second_sample = wait_for_luna_request(responses_state.as_ref(), /*index*/ 1).await?;
+        if matches!(
+            lifecycle,
+            ThreadLifecycle::New
+                | ThreadLifecycle::Resume
+                | ThreadLifecycle::Fork
+                | ThreadLifecycle::RootUserRestriction
+                | ThreadLifecycle::RootRestrictionDuringClassification
+        ) {
+            let retained = classifier_mode == "conversation"
+                && !fail_after_classification
+                && !matches!(risk, GuardianRisk::InvalidResponse)
+                && !late_root_restriction;
+            let input = second_sample["input"]
+                .as_array()
+                .expect("second Luna request input should be an array");
+            assert_eq!(
+                input.iter().any(|item| item["id"] == "luna-score-message"),
+                retained
+            );
+            if retained {
+                let first = luna_request["input"]
+                    .as_array()
+                    .expect("first Luna request input should be an array");
+                assert_eq!(&input[..first.len()], first);
+                let delta = serde_json::to_string(&input[first.len()..])?;
+                assert!(delta.contains("TRANSCRIPT DELTA START"));
+                if matches!(
+                    lifecycle,
+                    ThreadLifecycle::New | ThreadLifecycle::RootUserRestriction
+                ) {
+                    assert!(
+                        delta.contains("guardian-0"),
+                        "the new tool evidence must be included"
+                    );
+                    assert!(
+                        !delta.contains(USER_CONTEXT),
+                        "unchanged user instructions must stay in the retained prefix instead of being appended again"
+                    );
+                    assert!(
+                        !delta.contains(">>> RETAINED USER INSTRUCTIONS START"),
+                        "a tool-only delta must not append the old retained-instruction section"
+                    );
+                }
+            } else {
+                assert!(!second_sample.to_string().contains("TRANSCRIPT DELTA START"));
+                assert!(
+                    second_sample.to_string().contains(USER_CONTEXT),
+                    "snapshot requests and rebuilt conversations must include the user instructions"
+                );
+            }
+        }
         if mixed_evidence {
             let input = second_sample["input"].as_array().expect("Luna input");
             assert_eq!(
@@ -1675,6 +1749,23 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         }
         let post_authorization_change_sample =
             wait_for_luna_request(responses_state.as_ref(), /*index*/ 2).await?;
+        if classifier_mode == "conversation"
+            && matches!(lifecycle, ThreadLifecycle::RootUserRestriction)
+        {
+            let input = post_authorization_change_sample["input"]
+                .as_array()
+                .expect("fresh classifier input");
+            assert!(
+                !input.iter().any(|item| item["id"] == "luna-score-message"),
+                "new user instructions must invalidate the previous classifier conversation"
+            );
+            let text = serde_json::to_string(input)?;
+            assert!(!text.contains("TRANSCRIPT DELTA START"));
+            assert!(
+                text.contains(USER_CONTEXT),
+                "rebuilding must restore the earlier user instructions"
+            );
+        }
         assert_eq!(
             post_authorization_change_sample["prompt_cache_key"],
             format!("guardian-v2:{reviewed_thread_id}")
@@ -1833,7 +1924,8 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                     event["event_params"]["risk_level"]
                 ]),
                 match risk {
-                    GuardianRisk::Low => json!(["success", "low"]),
+                    GuardianRisk::Low | GuardianRisk::LowWithStreamFailure =>
+                        json!(["success", "low"]),
                     GuardianRisk::Threshold | GuardianRisk::High => json!(["success", "high"]),
                     GuardianRisk::InvalidResponse => json!(["failure", null]),
                 }
@@ -1874,19 +1966,6 @@ async fn guardian_v2_routes_scoped_tool_approvals(
     mcp_server_handle.abort();
     responses_server.abort();
     Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_v2_low_risk_actions_skip_subsequent_reviews() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-    guardian_v2_routes_tool_approvals(
-        GuardianRisk::Low,
-        ThreadLifecycle::New,
-        ModelReviewRequirement::Optional,
-        ReviewOutcome::Allow,
-        TranscriptContent::Normal,
-    )
-    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2120,6 +2199,7 @@ async fn guardian_v2_inherits_root_user_skills_for_delegated_workers() -> Result
             server_name: "node_repl",
         },
         /*sensitive_action*/ None,
+        codex_protocol::openai_models::AsyncClassifierMode::Snapshot,
     )
     .await
 }
@@ -2142,6 +2222,7 @@ async fn guardian_v2_computer_use_only_scopes_classification_and_fast_reviews(
         TranscriptContent::Normal,
         GuardianToolScope::ComputerUseOnly { server_name },
         /*sensitive_action*/ None,
+        codex_protocol::openai_models::AsyncClassifierMode::Snapshot,
     )
     .await
 }
@@ -2439,6 +2520,7 @@ async fn guardian_v2_required_model_computer_use_preserves_strict_approval(
         TranscriptContent::Normal,
         GuardianToolScope::ComputerUseOnly { server_name },
         sensitive_action,
+        codex_protocol::openai_models::AsyncClassifierMode::Snapshot,
     )
     .await
 }
@@ -2460,6 +2542,7 @@ async fn guardian_v2_discards_sync_reviews_after_user_input_answer(
             server_name: "node_repl",
         },
         /*sensitive_action*/ None,
+        codex_protocol::openai_models::AsyncClassifierMode::Snapshot,
     )
     .await
 }
@@ -2482,6 +2565,7 @@ async fn guardian_v2_validates_user_input_before_history_truncation(
             server_name: "node_repl",
         },
         /*sensitive_action*/ None,
+        codex_protocol::openai_models::AsyncClassifierMode::Snapshot,
     )
     .await
 }
@@ -2504,6 +2588,7 @@ async fn guardian_v2_propagates_root_user_input_to_worker_reviews(
             server_name: "node_repl",
         },
         /*sensitive_action*/ None,
+        codex_protocol::openai_models::AsyncClassifierMode::Snapshot,
     )
     .await
 }
@@ -2542,19 +2627,6 @@ async fn guardian_v2_threshold_score_requires_full_reviews() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_v2_required_model_bypasses_scoring_and_runs_full_reviews() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-    guardian_v2_routes_tool_approvals(
-        GuardianRisk::Low,
-        ThreadLifecycle::New,
-        ModelReviewRequirement::Required,
-        ReviewOutcome::Allow,
-        TranscriptContent::Normal,
-    )
-    .await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_v2_required_model_cannot_reuse_a_cached_score_for_skipped_exec() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_wine_exec!(
@@ -2564,32 +2636,6 @@ async fn guardian_v2_required_model_cannot_reuse_a_cached_score_for_skipped_exec
     guardian_v2_routes_tool_approvals(
         GuardianRisk::Low,
         ThreadLifecycle::RequiredModelSwitch,
-        ModelReviewRequirement::Optional,
-        ReviewOutcome::Allow,
-        TranscriptContent::Normal,
-    )
-    .await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resumed_thread_ignores_persisted_guardian_score() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-    guardian_v2_routes_tool_approvals(
-        GuardianRisk::Low,
-        ThreadLifecycle::Resume,
-        ModelReviewRequirement::Optional,
-        ReviewOutcome::Allow,
-        TranscriptContent::Normal,
-    )
-    .await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn forked_thread_ignores_persisted_guardian_score() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-    guardian_v2_routes_tool_approvals(
-        GuardianRisk::Low,
-        ThreadLifecycle::Fork,
         ModelReviewRequirement::Optional,
         ReviewOutcome::Allow,
         TranscriptContent::Normal,
@@ -2635,6 +2681,10 @@ async fn guardian_v2_low_scores_require_current_authorization(
             server_name: "node_repl",
         },
         /*sensitive_action*/ None,
+        codex_protocol::openai_models::AsyncClassifierMode::Snapshot,
     )
     .await
 }
+
+#[path = "guardian_stateful_async_tests.rs"]
+mod stateful_async;

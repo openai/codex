@@ -202,7 +202,7 @@ pub(in crate::async_scorer) async fn proxy_websocket_servers_with_http(
     Ok(format!("http://{address}/v1"))
 }
 
-pub(super) fn sampler_config(base_url: String) -> LunaSamplerConfig {
+pub(in crate::async_scorer) fn sampler_config(base_url: String) -> LunaSamplerConfig {
     LunaSamplerConfig {
         workspace_routing: codex_model_provider::WorkspaceRoutingContext::new(
             "https://chatgpt.com/backend-api".into(),
@@ -262,7 +262,7 @@ fn assert_classifier_instructions(request: &serde_json::Value) {
     );
 }
 
-pub(super) fn sample_request(parent_turn_id: &str) -> LunaSamplingRequest {
+pub(in crate::async_scorer) fn sample_request(parent_turn_id: &str) -> LunaSamplingRequest {
     LunaSamplingRequest {
         parent_response_id: None,
         instructions: classifier_instructions(),

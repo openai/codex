@@ -115,6 +115,9 @@ pub enum LunaSamplerError {
     /// The complete classifier input exceeded the model allowance.
     #[error("Luna input exceeds the complete request budget")]
     InputTooLarge,
+    /// The retained conversation already owns its maximum outstanding work.
+    #[error("Guardian conversation queue is full")]
+    QueueFull,
 }
 
 struct ActiveRequest {
@@ -277,20 +280,11 @@ impl LunaSampler {
             .into_iter()
             .map(ResponseItemEnvelope::into_item)
             .collect();
-        if let Some(metrics) = self.config.metrics.as_deref() {
-            for (component, tokens) in [
-                ("existing_context", 0),
-                ("new_input", total_tokens),
-                ("total", total_tokens),
-            ] {
-                metrics.histogram_with_boundaries(
-                    codex_guardian_context::REQUEST_TOKENS_METRIC,
-                    i64::try_from(tokens).unwrap_or(i64::MAX),
-                    codex_guardian_context::REQUEST_TOKENS_BOUNDARIES,
-                    &[("target", "async"), ("component", component)],
-                );
-            }
-        }
+        super::metrics::record_request_tokens(
+            self.config.metrics.as_deref(),
+            /*existing*/ 0,
+            total_tokens,
+        );
         // Oversized classifications defer to sync with the existing failure score.
         if total_tokens > self.config.max_input_tokens.saturating_sub(/*rhs*/ 256) {
             return Err(LunaSamplerError::InputTooLarge);
@@ -322,8 +316,11 @@ impl LunaSampler {
             .await
     }
 
+    pub(super) fn max_input_tokens(&self) -> usize {
+        self.config.max_input_tokens
+    }
+
     /// Publishes the early score and returns only validated, completed history.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) async fn sample_retained(
         &self,
         prepared: PreparedRequest<'_>,

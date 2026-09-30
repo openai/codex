@@ -88,15 +88,7 @@ impl TranscriptConfig {
         &self,
         input: ContextInput<'_>,
     ) -> Result<RenderedContext, SectionError> {
-        let collected = self.collect_context(input)?;
-        let transcript = collected.profile.render_transcript(
-            collected.context.transcript_entries(),
-            /*entry_number_offset*/ 0,
-        );
-        let mut context = collected
-            .context
-            .compose(ContextPresentation::Async, transcript)?;
-        // Each snapshot deduplicates only against the evidence in its own request.
+        let (mut context, _) = self.collect_context(input)?.compose(/*cursor*/ None)?;
         context.deduplicate_transcript_instructions();
         Ok(context)
     }
@@ -186,7 +178,7 @@ impl CollectedTranscript {
     }
 
     pub(super) fn compose(
-        &self,
+        self,
         cursor: Option<TranscriptCursor>,
     ) -> Result<(ComposedContext, TranscriptCursor), SectionError> {
         let (selection, next) = self.select(cursor);
@@ -197,7 +189,7 @@ impl CollectedTranscript {
             }
         };
         let transcript = self.profile.render_transcript(entries, offset);
-        let context = self.context.clone().compose(presentation, transcript)?;
+        let context = self.context.compose(presentation, transcript)?;
         Ok((context, next))
     }
 }

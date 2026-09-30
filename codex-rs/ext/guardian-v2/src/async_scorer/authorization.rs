@@ -17,6 +17,10 @@ pub(super) struct ScoreAuthorization {
 }
 
 impl ScoreAuthorization {
+    pub(super) async fn is_current(&self, thread: &CodexThread) -> bool {
+        self == &Self::current(thread, &self.permissions).await
+    }
+
     pub(super) async fn current(
         thread: &CodexThread,
         permissions: &codex_guardian_context::PermissionContext,

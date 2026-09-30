@@ -26,6 +26,7 @@ use super::action::GuardianAction;
 use super::authorization::ScoreAuthorization;
 use super::classification::Classification;
 use super::config::GuardianV2Config;
+use super::conversation::ConversationBackend;
 use super::coverage::scores_tool;
 use super::extension::GuardianV2Extension;
 use super::metrics::record_classification;
@@ -121,7 +122,28 @@ impl GuardianV2Extension {
         let context_mode = GuardianContextMode::from_history(input.conversation_history.as_ref());
         let analytics = input.session_store.get::<AnalyticsEventsClient>();
         let sampled_at = SystemTime::now();
-        let tool_call_index = score_progress.observe(&input);
+        let (tool_call_index, reservation) = match input.thread_store.get::<ConversationBackend>() {
+            Some(conversation) => {
+                let (index, reservation) = conversation.reserve(|| score_progress.observe(&input));
+                (index, reservation.map(Some))
+            }
+            None => (score_progress.observe(&input), Ok(None)),
+        };
+        let reservation = match reservation {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                score_progress.invalidate(tool_call_index);
+                score_progress.fail_closed(sampled_at);
+                record_classification(
+                    metrics.as_deref(),
+                    context_mode,
+                    classification_started_at.elapsed(),
+                    "failure",
+                    Some(super::metrics::sampler_failure_reason(&error)),
+                );
+                return;
+            }
+        };
         let event_sink = Arc::clone(&self.event_sink);
         let thread_id = input.thread_store.level_id().to_owned();
         let turn_id = input.turn_id.to_owned();
@@ -328,6 +350,7 @@ impl GuardianV2Extension {
         };
         let score_authorization = ScoreAuthorization::current(&thread, &permissions).await;
         let classification = Classification {
+            reservation,
             classification_started_at,
             sampler,
             guardian_config,

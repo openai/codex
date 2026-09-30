@@ -2,8 +2,8 @@
 //! The host owns storage and lifecycle. Omitted records remain explicit; restrictions
 //! are never truncated into partial permissions, and retained source order is preserved.
 //! Section omissions do not change fast-approval eligibility.
-//! Sync delivery compares against admitted reviewer history, so forks and compaction
-//! need no separate retained-evidence cursor. Async deduplication is request-local.
+//! Retained delivery compares against admitted reviewer history, so forks and compaction
+//! need no separate retained-evidence cursor. Snapshot deduplication is request-local.
 
 use std::collections::HashSet;
 
@@ -175,7 +175,7 @@ impl ComposedContext {
         }
     }
 
-    /// Each async sample carries its own originals and ordering guidance.
+    /// Each independent async sample carries its own originals and ordering guidance.
     pub fn deduplicate_transcript_instructions(&mut self) {
         self.remove_delivered_instructions(&[]);
     }

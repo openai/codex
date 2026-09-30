@@ -35,7 +35,7 @@ impl LunaSamplingRequest {
         }) {
             return None;
         }
-        let (mut context, _) = evidence.compose(cursor).ok()?;
+        let (mut context, _) = evidence.clone().compose(cursor).ok()?;
         context.retain_new_instructions(
             conversation
                 .snapshot()
@@ -53,6 +53,7 @@ impl LunaSamplingRequest {
             });
         }
         let truncations = std::mem::take(&mut context.truncations);
+        let section_costs = context.section_costs().collect();
         let history = conversation.snapshot().map(ConversationCheckpoint::history);
         let existing_context_tokens = history.map_or(0, |history| {
             history
@@ -80,6 +81,7 @@ impl LunaSamplingRequest {
             input,
             cursor: next_cursor,
             truncations,
+            section_costs,
             existing_context_tokens,
             input_tokens,
         })
@@ -92,6 +94,7 @@ pub(super) struct PreparedRequest<'a> {
     pub(super) input: Vec<ResponseItemEnvelope>,
     pub(super) cursor: TranscriptCursor,
     pub(super) truncations: Vec<TruncationObservation>,
+    pub(super) section_costs: Vec<(&'static str, codex_guardian_context::SectionCost)>,
     pub(super) existing_context_tokens: usize,
     pub(super) input_tokens: usize,
 }

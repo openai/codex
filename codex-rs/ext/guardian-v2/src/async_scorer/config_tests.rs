@@ -213,6 +213,7 @@ fn model_runtime_settings_preserve_local_overrides() {
         classifier_instructions: Some(prompt.clone()),
         max_classifier_instruction_tokens: Some(256),
         max_tool_call_lag: Some(1),
+        async_classifier_conversation_token_limit: Some(80_000),
         reuse_parent_compaction: Some(false),
         transcript: Some(GuardianV2TranscriptModelConfig {
             include_images: Some(true),
@@ -228,15 +229,17 @@ fn model_runtime_settings_preserve_local_overrides() {
         (
             inherited.max_classifier_instruction_tokens,
             inherited.max_tool_call_lag,
+            inherited.async_classifier_conversation_token_limit,
             inherited.reuse_parent_compaction,
             inherited.transcript.include_images,
         ),
-        (Some(256), 1, false, true)
+        (Some(256), 1, 80_000, false, true)
     );
 
     let overridden = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
         max_classifier_instruction_tokens: Some(512),
         max_tool_call_lag: Some(4),
+        async_classifier_conversation_token_limit: Some(120_000),
         reuse_parent_compaction: Some(true),
         transcript: Some(GuardianV2TranscriptConfigToml {
             include_images: Some(false),
@@ -251,10 +254,11 @@ fn model_runtime_settings_preserve_local_overrides() {
         (
             overridden.max_classifier_instruction_tokens,
             overridden.max_tool_call_lag,
+            overridden.async_classifier_conversation_token_limit,
             overridden.reuse_parent_compaction,
             overridden.transcript.include_images,
         ),
-        (Some(512), 4, true, false)
+        (Some(512), 4, 120_000, true, false)
     );
 
     let uncapped_defaults = GuardianV2ModelConfig {
@@ -270,4 +274,32 @@ fn model_runtime_settings_preserve_local_overrides() {
             "{prompt}\n\n# Security Policy\nTenant policy.\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
         )
     );
+}
+
+#[test]
+fn classifier_mode_uses_local_override_then_model_default() {
+    use codex_protocol::openai_models::AsyncClassifierMode;
+    for local in [
+        None,
+        Some(AsyncClassifierMode::Snapshot),
+        Some(AsyncClassifierMode::Conversation),
+    ] {
+        let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+            async_classifier_mode: local,
+            ..Default::default()
+        })
+        .unwrap();
+        let defaults = GuardianV2ModelConfig {
+            async_classifier_mode: Some(AsyncClassifierMode::Conversation),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.classifier_mode(Some(&defaults)),
+            local.unwrap_or(AsyncClassifierMode::Conversation)
+        );
+        assert_eq!(
+            config.classifier_mode(/*model_defaults*/ None),
+            local.unwrap_or_default()
+        );
+    }
 }

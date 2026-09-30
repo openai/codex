@@ -336,6 +336,14 @@
         }
       ]
     },
+    "AsyncClassifierMode": {
+      "description": "Async classifier experiment, resolved once for each parent task.",
+      "enum": [
+        "snapshot",
+        "conversation"
+      ],
+      "type": "string"
+    },
     "AuthCredentialsStoreMode": {
       "description": "Determine where Codex should store CLI auth credentials.",
       "oneOf": [
@@ -1853,6 +1861,20 @@
       "additionalProperties": false,
       "description": "User-configurable prompt, approval, and context settings for Guardian v2.",
       "properties": {
+        "async_classifier_conversation_token_limit": {
+          "description": "Reset retained async history when the next request exceeds this token estimate. Defaults to 100,000. Fresh requests remain subject to the model's input limit.",
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "async_classifier_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AsyncClassifierMode"
+            }
+          ],
+          "description": "Classifier experiment override. Otherwise use the model default, then snapshots."
+        },
         "classifier_instructions": {
           "type": "string"
         },

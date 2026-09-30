@@ -161,6 +161,7 @@ impl SamplingExecution {
             | LunaSamplerError::Superseded
             | LunaSamplerError::IncompatibleCompaction
             | LunaSamplerError::InputTooLarge
+            | LunaSamplerError::QueueFull
             | LunaSamplerError::Api(
                 ApiError::Transport(
                     TransportError::Build(_)
