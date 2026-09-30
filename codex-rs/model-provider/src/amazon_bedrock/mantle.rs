@@ -23,6 +23,7 @@ const BEDROCK_MANTLE_SUPPORTED_REGIONS: [&str; 12] = [
     "eu-north-1",
     "sa-east-1",
 ];
+const BEDROCK_GOV_CLOUD_SUPPORTED_REGIONS: [&str; 2] = ["us-gov-east-1", "us-gov-west-1"];
 
 pub(super) fn aws_auth_config(aws: &ModelProviderAwsAuthInfo) -> AwsAuthConfig {
     AwsAuthConfig {
@@ -43,6 +44,7 @@ pub(super) fn region_from_config(aws: &ModelProviderAwsAuthInfo) -> Option<Strin
 /// Returns whether Amazon Bedrock Mantle is available in `region`.
 pub fn is_supported_amazon_bedrock_region(region: &str) -> bool {
     BEDROCK_MANTLE_SUPPORTED_REGIONS.contains(&region)
+        || BEDROCK_GOV_CLOUD_SUPPORTED_REGIONS.contains(&region)
 }
 
 pub(super) fn base_url(region: &str) -> Result<String> {
@@ -80,10 +82,22 @@ mod tests {
 
     #[test]
     fn base_url_uses_region_endpoint() {
-        assert_eq!(
-            base_url("ap-northeast-1").expect("supported region"),
-            "https://bedrock-mantle.ap-northeast-1.api.aws/openai/v1"
-        );
+        for (region, expected) in [
+            (
+                "ap-northeast-1",
+                "https://bedrock-mantle.ap-northeast-1.api.aws/openai/v1",
+            ),
+            (
+                "us-gov-east-1",
+                "https://bedrock-mantle.us-gov-east-1.api.aws/openai/v1",
+            ),
+            (
+                "us-gov-west-1",
+                "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1",
+            ),
+        ] {
+            assert_eq!(base_url(region).expect("supported region"), expected);
+        }
     }
 
     #[test]
