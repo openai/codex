@@ -25,8 +25,8 @@ jobs:
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 60
     env:
-      CARGO_DYLINT_VERSION: 5.0.0
-      DYLINT_LINK_VERSION: 5.0.0
+      CARGO_DYLINT_VERSION: 6.1.0
+      DYLINT_LINK_VERSION: 6.1.0
 
     strategy:
       fail-fast: false
@@ -35,25 +35,25 @@ jobs:
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             archive_name: argument-comment-lint-aarch64-apple-darwin.tar.gz
-            lib_name: libargument_comment_lint@nightly-2025-09-18-aarch64-apple-darwin.dylib
+            lib_name: libargument_comment_lint@nightly-2026-08-20-aarch64-apple-darwin.dylib
             runner_binary: argument-comment-lint
             cargo_dylint_binary: cargo-dylint
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             archive_name: argument-comment-lint-x86_64-unknown-linux-gnu.tar.gz
-            lib_name: libargument_comment_lint@nightly-2025-09-18-x86_64-unknown-linux-gnu.so
+            lib_name: libargument_comment_lint@nightly-2026-08-20-x86_64-unknown-linux-gnu.so
             runner_binary: argument-comment-lint
             cargo_dylint_binary: cargo-dylint
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             archive_name: argument-comment-lint-aarch64-unknown-linux-gnu.tar.gz
-            lib_name: libargument_comment_lint@nightly-2025-09-18-aarch64-unknown-linux-gnu.so
+            lib_name: libargument_comment_lint@nightly-2026-08-20-aarch64-unknown-linux-gnu.so
             runner_binary: argument-comment-lint
             cargo_dylint_binary: cargo-dylint
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             archive_name: argument-comment-lint-x86_64-pc-windows-msvc.zip
-            lib_name: argument_comment_lint@nightly-2025-09-18-x86_64-pc-windows-msvc.dll
+            lib_name: argument_comment_lint@nightly-2026-08-20-x86_64-pc-windows-msvc.dll
             runner_binary: argument-comment-lint.exe
             cargo_dylint_binary: cargo-dylint.exe
             runs_on:
@@ -67,7 +67,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
-          toolchain: nightly-2025-09-18
+          toolchain: nightly-2026-08-20
           targets: ${{ matrix.target }}
           components: llvm-tools-preview, rustc-dev, rust-src
 

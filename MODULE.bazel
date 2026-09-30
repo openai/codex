@@ -228,7 +228,7 @@ nightly_rust = use_extension(
 nightly_rust.toolchain(
     dev_components = True,
     edition = "2024",
-    versions = ["nightly/2025-09-18"],
+    versions = ["nightly/2026-08-20"],
 )
 
 # Keep the reexported extension's default Windows set constrained to MSVC so
@@ -249,7 +249,7 @@ nightly_rust.repository_set(
         "@llvm//constraints/windows/abi:msvc",
     ],
     target_triple = "x86_64-pc-windows-msvc",
-    versions = ["nightly/2025-09-18"],
+    versions = ["nightly/2026-08-20"],
 )
 
 # Also let that MSVC-exec set target gnullvm for existing cross lanes.
@@ -284,7 +284,7 @@ nightly_rust.repository_set(
         "@llvm//constraints/windows/crt:msvcrt",
     ],
     target_triple = "x86_64-pc-windows-gnullvm",
-    versions = ["nightly/2025-09-18"],
+    versions = ["nightly/2026-08-20"],
 )
 use_repo(nightly_rust, "rust_toolchains")
 

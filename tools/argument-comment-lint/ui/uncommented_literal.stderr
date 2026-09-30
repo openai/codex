@@ -22,5 +22,11 @@ warning: anonymous literal-like argument for parameter `enabled`
 LL |     client.set_flag(true);
    |                     ^^^^ help: prepend the parameter name comment: `/*enabled*/ true`
 
-warning: 3 warnings emitted
+warning: anonymous literal-like argument for parameter `base_url`
+  --> $DIR/uncommented_literal.rs:20:31
+   |
+LL |     let _ = create_openai_url(OptionalString::None, /*retry_count*/ 3);
+   |                               ^^^^^^^^^^^^^^^^^^^^ help: prepend the parameter name comment: `/*base_url*/ OptionalString::None`
+
+warning: 4 warnings emitted
 

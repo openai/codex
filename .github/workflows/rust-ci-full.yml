@@ -51,8 +51,8 @@ jobs:
     name: Argument comment lint package
     runs-on: ubuntu-24.04
     env:
-      CARGO_DYLINT_VERSION: 5.0.0
-      DYLINT_LINK_VERSION: 5.0.0
+      CARGO_DYLINT_VERSION: 6.1.0
+      DYLINT_LINK_VERSION: 6.1.0
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -60,7 +60,7 @@ jobs:
       - uses: ./.github/actions/setup-ci
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
-          toolchain: nightly-2025-09-18
+          toolchain: nightly-2026-08-20
           components: llvm-tools-preview, rustc-dev, rust-src
       - name: Cache cargo-dylint tooling
         id: cargo_dylint_cache

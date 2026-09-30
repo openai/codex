@@ -59,11 +59,12 @@ create_openai_url(None, 3);
 Install the required tooling once:
 
 ```bash
-cargo install --locked cargo-dylint dylint-link
-rustup toolchain install nightly-2025-09-18 \
+rustup toolchain install nightly-2026-08-20 \
   --component llvm-tools-preview \
   --component rustc-dev \
   --component rust-src
+rustup run nightly-2026-08-20 cargo install --locked \
+  cargo-dylint@6.1.0 dylint-link@6.1.0
 ```
 
 Run the lint crate tests:

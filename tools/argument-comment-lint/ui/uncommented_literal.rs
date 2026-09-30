@@ -15,4 +15,7 @@ fn main() {
     let client = Client;
     let _ = create_openai_url(None, 3);
     client.set_flag(true);
+
+    type OptionalString = Option<String>;
+    let _ = create_openai_url(OptionalString::None, /*retry_count*/ 3);
 }
