@@ -8,6 +8,9 @@ mod extension;
 mod metrics;
 mod observation;
 mod parent_compaction;
+// The treatment backend wires this builder into sampling in the next PR.
+#[allow(dead_code)]
+mod request;
 mod sampler;
 mod score;
 mod startup;

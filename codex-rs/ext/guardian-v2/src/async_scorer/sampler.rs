@@ -4,6 +4,7 @@
 mod connection_pool;
 mod execution;
 
+use super::request::PreparedRequest;
 use connection_pool::ConnectionPool;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -17,6 +18,7 @@ use codex_api::ReasoningContext;
 use codex_api::ResponsesApiRequest;
 use codex_context_fragments::RenderedFragment;
 use codex_extension_api::ExtensionMetrics;
+use codex_history::ResponseItemEnvelope;
 use codex_http_client::HttpClientFactory;
 use codex_login::AgentIdentityAuthPolicy;
 use codex_model_provider::SharedModelProvider;
@@ -152,10 +154,8 @@ impl LunaSampler {
         }
     }
 
-    /// Sends one tool-less classification request using an available transport.
-    pub async fn sample(&self, request: LunaSamplingRequest) -> Result<String, LunaSamplerError> {
-        let auth_owner_generation = self
-            .config
+    fn auth_owner_generation(&self) -> Option<u64> {
+        self.config
             .provider
             .auth_manager()
             .filter(|_| self.config.provider.info().auth.is_none())
@@ -164,31 +164,35 @@ impl LunaSampler {
                     .auth_change_state_receiver()
                     .borrow()
                     .owner_generation
-            });
-        if request.parent_compaction.is_some()
-            && !self.supports_parent_compaction(request.parent_compaction_hash.as_deref())
-        {
-            return Err(LunaSamplerError::IncompatibleCompaction);
-        }
-        // A classification is its own inference turn; retries keep that identity.
-        let turn_id = Uuid::now_v7().to_string();
-        let parent_response_id = request.parent_response_id;
-        let parent_turn_id = request.parent_turn_id;
-        let root_turn_id = request.root_turn_id;
-        let mut input = vec![
-            ResponseItem::AdditionalTools {
-                id: None,
-                role: "developer".to_owned(),
-                tools: Vec::new(),
-            },
-            ResponseItem::from(request.instructions),
-        ];
-        if let Some(parent_compaction) = request.parent_compaction {
-            input.push(parent_compaction);
-        }
-        let mut evidence = request.input;
+            })
+    }
+
+    // Normalize new evidence while preserving the retained prefix and its item IDs.
+    pub(super) fn prepare_input(
+        request: &LunaSamplingRequest,
+        history: Option<Vec<ResponseItemEnvelope>>,
+        mut evidence: Vec<ResponseItemEnvelope>,
+    ) -> (Vec<ResponseItemEnvelope>, usize) {
+        let mut input = history.unwrap_or_else(|| {
+            let mut input = vec![
+                ResponseItemEnvelope::new(ResponseItem::AdditionalTools {
+                    id: None,
+                    role: "developer".to_owned(),
+                    tools: Vec::new(),
+                }),
+                ResponseItemEnvelope::new(ResponseItem::from(request.instructions.clone())),
+            ];
+            input.extend(
+                request
+                    .parent_compaction
+                    .clone()
+                    .map(ResponseItemEnvelope::new),
+            );
+            input
+        });
+        // Normalize only new evidence; never rewrite the committed prefix.
         for item in &mut evidence {
-            if let ResponseItem::Message { content, .. } = item {
+            if let ResponseItem::Message { content, .. } = &mut item.item {
                 for content in content {
                     if let ContentItem::InputImage { detail, .. } = content {
                         *detail = None;
@@ -205,10 +209,74 @@ impl LunaSampler {
                 item.set_id(Some(ResponseItemId::new(prefix)));
             }
         }
-        let total_tokens = input
+        let tokens = input
             .iter()
-            .map(codex_guardian_context::estimate_input_tokens)
+            .map(|item| codex_guardian_context::estimate_input_tokens(&item.item))
             .fold(0usize, usize::saturating_add);
+        (input, tokens)
+    }
+
+    fn execution(
+        &self,
+        request: &LunaSamplingRequest,
+        input: Vec<ResponseItem>,
+        auth_owner_generation: Option<u64>,
+    ) -> execution::SamplingExecution {
+        let api_request = ResponsesApiRequest {
+            model: MODEL.to_owned(),
+            instructions: String::new(),
+            input,
+            tools: None,
+            tool_choice: "none".to_owned(),
+            parallel_tool_calls: false,
+            reasoning: Some(Reasoning {
+                effort: Some(request.reasoning_effort.clone()),
+                summary: None,
+                context: Some(ReasoningContext::AllTurns),
+            }),
+            store: false,
+            stream: true,
+            stream_options: None,
+            include: Vec::new(),
+            service_tier: None,
+            prompt_cache_key: Some(format!("guardian-v2:{}", self.config.thread_id)),
+            text: None,
+            client_metadata: None,
+            access_programs: None,
+        };
+        execution::SamplingExecution {
+            auth_owner_generation,
+            config: Arc::clone(&self.config),
+            connections: Arc::clone(&self.connections),
+            request: api_request,
+            // Retries keep the classification's inference turn identity.
+            turn_id: Uuid::now_v7().to_string(),
+            parent_response_id: request.parent_response_id.clone(),
+            parent_turn_id: request.parent_turn_id.clone(),
+            root_turn_id: request.root_turn_id.clone(),
+        }
+    }
+
+    /// Sends one tool-less classification request using an available transport.
+    pub async fn sample(
+        &self,
+        mut request: LunaSamplingRequest,
+    ) -> Result<String, LunaSamplerError> {
+        let auth_owner_generation = self.auth_owner_generation();
+        if request.parent_compaction.is_some()
+            && !self.supports_parent_compaction(request.parent_compaction_hash.as_deref())
+        {
+            return Err(LunaSamplerError::IncompatibleCompaction);
+        }
+        let evidence = std::mem::take(&mut request.input)
+            .into_iter()
+            .map(ResponseItemEnvelope::new)
+            .collect();
+        let (input, total_tokens) = Self::prepare_input(&request, /*history*/ None, evidence);
+        let input = input
+            .into_iter()
+            .map(ResponseItemEnvelope::into_item)
+            .collect();
         if let Some(metrics) = self.config.metrics.as_deref() {
             for (component, tokens) in [
                 ("existing_context", 0),
@@ -227,30 +295,8 @@ impl LunaSampler {
         if total_tokens > self.config.max_input_tokens.saturating_sub(/*rhs*/ 256) {
             return Err(LunaSamplerError::InputTooLarge);
         }
-        let request = ResponsesApiRequest {
-            model: MODEL.to_owned(),
-            instructions: String::new(),
-            input,
-            tools: None,
-            tool_choice: "none".to_owned(),
-            parallel_tool_calls: false,
-            reasoning: Some(Reasoning {
-                effort: Some(request.reasoning_effort),
-                summary: None,
-                context: Some(ReasoningContext::AllTurns),
-            }),
-            store: false,
-            stream: true,
-            stream_options: None,
-            include: Vec::new(),
-            service_tier: None,
-            prompt_cache_key: Some(format!("guardian-v2:{}", self.config.thread_id)),
-            text: None,
-            client_metadata: None,
-            access_programs: None,
-        };
         let (supersede, superseded) = oneshot::channel();
-        let scored = Arc::new(AtomicBool::new(false));
+        let scored = Arc::new(AtomicBool::new(/*v*/ false));
         {
             let mut active_requests = self
                 .active_requests
@@ -271,18 +317,50 @@ impl LunaSampler {
                 scored: Arc::clone(&scored),
             });
         }
-        execution::SamplingExecution {
-            auth_owner_generation,
-            config: Arc::clone(&self.config),
-            connections: Arc::clone(&self.connections),
-            request,
-            turn_id,
-            parent_response_id,
-            parent_turn_id,
-            root_turn_id,
-        }
-        .run(superseded, scored)
-        .await
+        self.execution(&request, input, auth_owner_generation)
+            .run(execution::SamplingMode::Snapshot { superseded, scored })
+            .await
+    }
+
+    /// Publishes the early score and returns only validated, completed history.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) async fn sample_retained(
+        &self,
+        prepared: PreparedRequest<'_>,
+        ready: oneshot::Sender<Result<String, LunaSamplerError>>,
+    ) -> Option<Vec<ResponseItemEnvelope>> {
+        let auth_owner_generation = self.auth_owner_generation();
+        let mut completion = execution::RetainedCompletion {
+            ready: Some(ready),
+            output: Some(Vec::new()),
+            early_score: None,
+            remaining_tokens: self
+                .config
+                .max_input_tokens
+                .saturating_sub(/*rhs*/ 256)
+                .saturating_sub(prepared.input_tokens),
+        };
+        // Transport sees model items; delivery proof follows the unchanged input prefix.
+        let (input, metadata): (Vec<_>, Vec<_>) = prepared
+            .input
+            .into_iter()
+            .map(|envelope| (envelope.item, envelope.metadata))
+            .unzip();
+        let mut execution = self.execution(prepared.sampling, input, auth_owner_generation);
+        execution.request.include = vec!["reasoning.encrypted_content".to_owned()];
+        let result = execution
+            .run(execution::SamplingMode::Retained(&mut completion))
+            .await;
+        execution.request.input.extend(completion.finish(result)?);
+        Some(
+            execution
+                .request
+                .input
+                .into_iter()
+                .zip(metadata.into_iter().chain(std::iter::repeat(None)))
+                .map(|(item, metadata)| ResponseItemEnvelope { item, metadata })
+                .collect(),
+        )
     }
 }
 

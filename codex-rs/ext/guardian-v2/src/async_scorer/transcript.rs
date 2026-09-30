@@ -1,6 +1,7 @@
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ResponseItem;
 pub(crate) use codex_features::GuardianV2TranscriptSource as TranscriptSource;
+use codex_guardian_context::CollectedContext;
 use codex_guardian_context::ComposedContext;
 use codex_guardian_context::ContextPresentation;
 use codex_guardian_context::ContextProfile;
@@ -15,9 +16,12 @@ use codex_guardian_context::PreviousReviews;
 use codex_guardian_context::SectionError;
 use codex_guardian_context::SectionHistory;
 use codex_guardian_context::SectionInput;
+use codex_guardian_context::TranscriptCursor;
 use codex_guardian_context::TranscriptEntryLimits;
 use codex_guardian_context::TranscriptImageInput;
+use codex_guardian_context::TranscriptMode;
 use codex_guardian_context::TranscriptRetentionConfig;
+use codex_guardian_context::TranscriptSelection;
 use codex_guardian_context::TrustedTool;
 use codex_guardian_context::default_registry;
 
@@ -84,6 +88,23 @@ impl TranscriptConfig {
         &self,
         input: ContextInput<'_>,
     ) -> Result<RenderedContext, SectionError> {
+        let collected = self.collect_context(input)?;
+        let transcript = collected.profile.render_transcript(
+            collected.context.transcript_entries(),
+            /*entry_number_offset*/ 0,
+        );
+        let mut context = collected
+            .context
+            .compose(ContextPresentation::Async, transcript)?;
+        // Each snapshot deduplicates only against the evidence in its own request.
+        context.deduplicate_transcript_instructions();
+        Ok(context)
+    }
+
+    pub(super) fn collect_context(
+        &self,
+        input: ContextInput<'_>,
+    ) -> Result<CollectedTranscript, SectionError> {
         let ContextInput {
             target,
             history,
@@ -96,6 +117,7 @@ impl TranscriptConfig {
             trusted_skill_paths,
             node_repl_images,
         } = input;
+        let history_version = history.review_history_version();
         let history = SnapshotHistory(history);
         let profile = ContextProfile {
             target: ContextTarget::Async,
@@ -136,13 +158,47 @@ impl TranscriptConfig {
             }),
             node_repl: None,
         })?;
-        let transcript =
-            profile.render_transcript(context.transcript_entries(), /*entry_number_offset*/ 0);
-        let mut context = context.compose(ContextPresentation::Async, transcript)?;
-        // Each sample is self-contained: only this request's protected transcript
-        // entries can replace retained originals, never a previous sample's history.
-        context.deduplicate_transcript_instructions();
-        Ok(context)
+        Ok(CollectedTranscript {
+            context,
+            profile,
+            history_version,
+        })
+    }
+}
+
+/// Captured evidence stays typed until the owning conversation selects its delta.
+#[derive(Clone)]
+pub(super) struct CollectedTranscript {
+    context: CollectedContext,
+    profile: ContextProfile,
+    history_version: u64,
+}
+
+impl CollectedTranscript {
+    pub(super) fn select(
+        &self,
+        cursor: Option<TranscriptCursor>,
+    ) -> (TranscriptSelection<'_>, TranscriptCursor) {
+        let mode = cursor.map_or(TranscriptMode::Full, |cursor| TranscriptMode::Delta {
+            cursor,
+        });
+        mode.select(self.context.transcript_entries(), self.history_version)
+    }
+
+    pub(super) fn compose(
+        &self,
+        cursor: Option<TranscriptCursor>,
+    ) -> Result<(ComposedContext, TranscriptCursor), SectionError> {
+        let (selection, next) = self.select(cursor);
+        let (entries, offset, presentation) = match selection {
+            TranscriptSelection::Full(entries) => (entries, 0, ContextPresentation::Async),
+            TranscriptSelection::Delta { entries, offset } => {
+                (entries, offset, ContextPresentation::AsyncDelta)
+            }
+        };
+        let transcript = self.profile.render_transcript(entries, offset);
+        let context = self.context.clone().compose(presentation, transcript)?;
+        Ok((context, next))
     }
 }
 

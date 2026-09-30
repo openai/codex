@@ -1,5 +1,6 @@
 //! Tracks reviewed transcript progress separately from committed conversation history.
 //! Hosts serialize reviews and checkpoint commits, and supply opaque completed history.
+//! An exclusive continuation can take the history without advancing reviewed progress.
 
 use codex_guardian_context::TranscriptCursor;
 
@@ -78,6 +79,12 @@ impl<H> ConversationState<H> {
 
     pub fn snapshot(&self) -> Option<&ConversationCheckpoint<H>> {
         self.checkpoint.as_ref()
+    }
+
+    /// Transfers committed history to its exclusive owner, leaving progress unchanged.
+    /// The host must commit a completed replacement before this state can be reused.
+    pub fn take_history(&mut self) -> Option<H> {
+        self.checkpoint.take().map(|checkpoint| checkpoint.history)
     }
 }
 

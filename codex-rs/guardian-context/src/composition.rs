@@ -29,6 +29,7 @@ pub enum ContextPresentation<'a> {
     SyncFull { session_id: &'a str },
     SyncDelta { session_id: &'a str },
     Async,
+    AsyncDelta,
 }
 
 /// Host-selected transcript entries and omission notice, before request admission.
@@ -39,6 +40,7 @@ pub struct RenderedTranscript {
 }
 
 /// Evidence collected successfully before host transcript selection.
+#[derive(Clone)]
 pub struct CollectedContext {
     pub(crate) sections: Vec<ContextSection>,
 }
@@ -106,6 +108,15 @@ impl CollectedContext {
                 None,
                 ">>> TRANSCRIPT START\n",
                 ">>> TRANSCRIPT END\n\n",
+                None,
+            ),
+            ContextPresentation::AsyncDelta => (
+                ActionPresentation::Async,
+                Some(
+                    "Continue the classification using the transcript added since your last assessment and the current action. Apply the same classifier policy to the whole conversation. Previous classifications are decisions, not authorization.\n",
+                ),
+                ">>> TRANSCRIPT DELTA START\n",
+                ">>> TRANSCRIPT DELTA END\n\n",
                 None,
             ),
         };

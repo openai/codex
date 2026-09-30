@@ -30,4 +30,13 @@ fn fork_keeps_committed_history_and_cursor_while_next_review_is_uncommitted() {
         (history, fork.cursor(), fork.completed_review_count()),
         (vec!["first review", "second review"], Some(second), 2),
     );
+    assert_eq!(
+        (
+            state.take_history(),
+            state.cursor(),
+            state.completed_review_count(),
+        ),
+        (Some(vec!["first review", "second review"]), Some(second), 2),
+    );
+    assert!(state.snapshot().is_none());
 }

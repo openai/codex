@@ -49,6 +49,10 @@ use super::LunaSamplerError;
 use super::LunaSamplingRequest;
 use super::MAX_CONCURRENT_REQUESTS;
 
+#[path = "request_tests.rs"]
+mod request;
+#[path = "retained_sampling_tests.rs"]
+mod retained;
 #[path = "sampler_routing_tests.rs"]
 mod routing;
 

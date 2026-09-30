@@ -1,5 +1,6 @@
 //! Executes one prepared classifier request with the existing retry and streaming rules.
-//! The first output returns immediately; a detached drain preserves reuse and token accounting.
+//! Snapshot output returns immediately with a detached drain. Retained requests publish
+//! the same early result but keep ownership until completion to capture reusable output.
 //! Requests and retries stop when the account owner that started the classification changes.
 
 use super::CLASSIFICATION_TOKEN_USAGE_METRIC;
@@ -39,6 +40,81 @@ pub(super) struct SamplingExecution {
     pub(super) parent_response_id: Option<String>,
     pub(super) parent_turn_id: String,
     pub(super) root_turn_id: Option<String>,
+}
+
+pub(super) struct RetainedCompletion {
+    pub(super) ready: Option<oneshot::Sender<Result<String, LunaSamplerError>>>,
+    pub(super) output: Option<Vec<ResponseItem>>,
+    pub(super) remaining_tokens: usize,
+    pub(super) early_score: Option<String>,
+}
+
+/// Snapshot admission owns supersession; retained admission owns the response through completion.
+pub(super) enum SamplingMode<'a> {
+    Snapshot {
+        superseded: oneshot::Receiver<()>,
+        scored: Arc<AtomicBool>,
+    },
+    Retained(&'a mut RetainedCompletion),
+}
+
+impl SamplingMode<'_> {
+    async fn superseded(&mut self) {
+        match self {
+            Self::Snapshot { superseded, .. } => {
+                let _ = superseded.await;
+            }
+            Self::Retained(_) => std::future::pending().await,
+        }
+    }
+
+    fn early_result_sent(&self) -> bool {
+        matches!(self, Self::Retained(completion) if completion.ready.is_none())
+    }
+}
+
+impl RetainedCompletion {
+    fn record(&mut self, item: ResponseItem) {
+        let Some(output) = self.output.as_mut() else {
+            return;
+        };
+        let tokens = codex_guardian_context::estimate_input_tokens(&item);
+        let valid_item = match &item {
+            ResponseItem::Message { role, content, .. } => {
+                role == "assistant"
+                    && content
+                        .iter()
+                        .all(|part| matches!(part, ContentItem::OutputText { .. }))
+            }
+            ResponseItem::Reasoning {
+                encrypted_content: Some(content),
+                ..
+            } => !content.is_empty(),
+            _ => false,
+        };
+        if tokens > self.remaining_tokens || tokens > 10_000 || !valid_item {
+            // Retention failure does not invalidate an already published score.
+            self.output = None;
+        } else {
+            self.remaining_tokens -= tokens;
+            output.push(item);
+        }
+    }
+
+    /// Publishes any remaining result and returns only history matching the completed score.
+    pub(super) fn finish(
+        mut self,
+        result: Result<String, LunaSamplerError>,
+    ) -> Option<Vec<ResponseItem>> {
+        let reusable = result.as_ref().is_ok_and(|score| {
+            matches!(score.as_str(), "high" | "low")
+                && self.early_score.as_ref().is_none_or(|early| early == score)
+        });
+        if let Some(ready) = self.ready.take() {
+            let _ = ready.send(result);
+        }
+        self.output.filter(|output| reusable && !output.is_empty())
+    }
 }
 
 impl SamplingExecution {
@@ -110,9 +186,8 @@ impl SamplingExecution {
     }
 
     pub(super) async fn run(
-        mut self,
-        mut superseded: oneshot::Receiver<()>,
-        scored: Arc<AtomicBool>,
+        &mut self,
+        mut mode: SamplingMode<'_>,
     ) -> Result<String, LunaSamplerError> {
         let auth_changes = self
             .config
@@ -154,12 +229,20 @@ impl SamplingExecution {
             .provider
             .auth_manager()
             .map(|manager| manager.unauthorized_recovery());
+        let retention_budget = match &mode {
+            SamplingMode::Snapshot { .. } => 0,
+            SamplingMode::Retained(completion) => completion.remaining_tokens,
+        };
         'retry: loop {
             ensure_account_owner()?;
+            if let SamplingMode::Retained(completion) = &mut mode {
+                completion.output = Some(Vec::new());
+                completion.remaining_tokens = retention_budget;
+            }
             let lease = match tokio::select! {
                 biased;
                 _ = &mut owner_changed => return Err(account_changed_error()),
-                _ = &mut superseded => return Err(LunaSamplerError::Superseded),
+                _ = mode.superseded() => return Err(LunaSamplerError::Superseded),
                 lease = self.connections.lease() => lease,
             } {
                 Ok(lease) => lease,
@@ -213,7 +296,7 @@ impl SamplingExecution {
             let mut stream = match tokio::select! {
                 biased;
                 _ = &mut owner_changed => return Err(account_changed_error()),
-                _ = &mut superseded => return Err(LunaSamplerError::Superseded),
+                _ = mode.superseded() => return Err(LunaSamplerError::Superseded),
                 stream = lease.stream_request(&self.request) => stream,
             } {
                 Ok(stream) => stream,
@@ -233,8 +316,9 @@ impl SamplingExecution {
             while let Some(event) = tokio::select! {
                 biased;
                 _ = &mut owner_changed => return Err(account_changed_error()),
-                _ = &mut superseded => {
-                    return if scored.load(Ordering::Relaxed) && !output.is_empty() {
+                _ = mode.superseded() => {
+                    let scored = matches!(&mode, SamplingMode::Snapshot { scored, .. } if scored.load(Ordering::Relaxed));
+                    return if scored && !output.is_empty() {
                         Ok(output)
                     } else {
                         Err(LunaSamplerError::Superseded)
@@ -247,6 +331,9 @@ impl SamplingExecution {
                     Ok(event) => event,
                     Err(error) => {
                         let error = LunaSamplerError::Api(error);
+                        if mode.early_result_sent() {
+                            return Err(error);
+                        }
                         if self
                             .retry_after_failure(&error, &mut auth_recovery, &mut retries)
                             .await
@@ -258,6 +345,9 @@ impl SamplingExecution {
                 };
                 match event {
                     ResponseEvent::OutputTextDelta(delta) => {
+                        if mode.early_result_sent() {
+                            continue;
+                        }
                         if delta.is_empty() {
                             continue;
                         }
@@ -267,6 +357,16 @@ impl SamplingExecution {
                         // The first output token is the complete classification.
                         // Later output cannot revise that decision; drain it only
                         // to preserve connection reuse and token accounting.
+                        let (mut superseded, scored) = match mode {
+                            SamplingMode::Snapshot { superseded, scored } => (superseded, scored),
+                            SamplingMode::Retained(ref mut retained) => {
+                                retained.early_score = Some(delta.clone());
+                                if let Some(ready) = retained.ready.take() {
+                                    let _ = ready.send(Ok(delta));
+                                }
+                                continue;
+                            }
+                        };
                         scored.store(true, Ordering::Relaxed);
                         let mut remaining_events = stream.rx_event;
                         let metrics = self.config.metrics.clone();
@@ -292,12 +392,17 @@ impl SamplingExecution {
                         });
                         return Ok(delta);
                     }
-                    ResponseEvent::OutputItemDone(ResponseItem::Message {
-                        role, content, ..
-                    }) if role == "assistant" => {
-                        for item in content {
-                            if let ContentItem::OutputText { text } = item {
-                                output.push_str(&text);
+                    ResponseEvent::OutputItemDone(item) => {
+                        if let SamplingMode::Retained(completion) = &mut mode {
+                            completion.record(item.clone());
+                        }
+                        if let ResponseItem::Message { role, content, .. } = item
+                            && role == "assistant"
+                        {
+                            for item in content {
+                                if let ContentItem::OutputText { text } = item {
+                                    output.push_str(&text);
+                                }
                             }
                         }
                     }
@@ -314,7 +419,9 @@ impl SamplingExecution {
                 if output.len() > MAX_OUTPUT_BYTES {
                     return Err(LunaSamplerError::OutputTooLarge);
                 }
-                if !output.is_empty() {
+                if !output.is_empty()
+                    && let SamplingMode::Snapshot { scored, .. } = &mode
+                {
                     scored.store(true, Ordering::Relaxed);
                 }
             }
