@@ -73,7 +73,7 @@ impl ThreadStore for GatedReviewerStore {
     }
 
     delegate_store_methods! {
-        fn resume_thread(params: ResumeThreadParams) -> ();
+        fn resume_thread(params: ResumeThreadParams) -> Arc<Vec<RolloutItem>>;
         fn append_items(params: AppendThreadItemsParams) -> ();
         fn discard_thread(thread_id: ThreadId) -> ();
         fn load_history(params: LoadThreadHistoryParams) -> StoredThreadHistory;

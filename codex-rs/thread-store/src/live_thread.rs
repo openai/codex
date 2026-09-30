@@ -179,14 +179,13 @@ impl LiveThread {
         Ok(live_thread)
     }
 
+    /// Reopens persistence and returns the replay history selected under writer ownership.
     pub async fn resume(
         thread_store: Arc<dyn ThreadStore>,
         history_mode: ThreadHistoryMode,
-        params: ResumeThreadParams,
-    ) -> ThreadStoreResult<Self> {
+        mut params: ResumeThreadParams,
+    ) -> ThreadStoreResult<(Self, Arc<Vec<RolloutItem>>)> {
         let thread_id = params.thread_id;
-        let should_load_history = params.history.is_none();
-        let include_archived = params.include_archived;
         let metadata = if history_mode == ThreadHistoryMode::Paginated
             && let Some(local_store) = thread_store.as_any().downcast_ref::<LocalThreadStore>()
             && let Some(state_db) = local_store.state_db().await
@@ -200,34 +199,19 @@ impl LiveThread {
         } else {
             None
         };
-        let mut metadata_sync = ThreadMetadataSync::for_resume(&params, metadata.as_ref());
-        thread_store.resume_thread(params).await?;
-        if should_load_history {
-            match thread_store
-                .load_history(LoadThreadHistoryParams {
-                    thread_id,
-                    include_archived,
-                })
-                .await
-            {
-                Ok(history) => metadata_sync.record_resume_history(&history.items),
-                Err(err) => {
-                    if let Err(discard_err) = thread_store.discard_thread(thread_id).await {
-                        warn!(
-                            "failed to discard thread persistence after resume history load failed: {discard_err}"
-                        );
-                    }
-                    return Err(err);
-                }
-            }
-        }
-        Ok(Self {
-            thread_id,
-            history_mode,
-            thread_store,
-            metadata_sync: Arc::new(Mutex::new(metadata_sync)),
-            persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
-        })
+        let history = thread_store.resume_thread(params.clone()).await?;
+        params.history = Some(Arc::clone(&history));
+        let metadata_sync = ThreadMetadataSync::for_resume(&params, metadata.as_ref());
+        Ok((
+            Self {
+                thread_id,
+                history_mode,
+                thread_store,
+                metadata_sync: Arc::new(Mutex::new(metadata_sync)),
+                persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
+            },
+            history,
+        ))
     }
 
     #[tracing::instrument(

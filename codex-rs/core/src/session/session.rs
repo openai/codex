@@ -1011,9 +1011,10 @@ impl Session {
         let mcp_auth = persistence_auth.clone();
         let thread_persistence_fut = async {
             if config.ephemeral {
-                Ok::<_, anyhow::Error>((None, LiveThreadInitGuard::new(/*live_thread*/ None)))
+                Ok::<_, anyhow::Error>((None, LiveThreadInitGuard::new(/*live_thread*/ None), None))
             } else {
                 let mut local_guard = LiveThreadInitGuard::default();
+                let mut resume_context = None;
                 let mut managed_guard = match &startup {
                     Some(startup) => Some(startup.persistence.lock().await),
                     None => None,
@@ -1096,16 +1097,23 @@ impl Session {
                                 },
                             },
                         };
-                        guard
-                            .acquire(LiveThread::resume(
-                                Arc::clone(&thread_store),
-                                session_configuration.history_mode,
-                                params,
-                            ))
-                            .await?
+                        let store = Arc::clone(&thread_store);
+                        let history_mode = session_configuration.history_mode;
+                        let (context_tx, context_rx) = tokio::sync::oneshot::channel();
+                        let live_thread = guard
+                            .acquire(async move {
+                                let (live_thread, history) =
+                                    LiveThread::resume(store, history_mode, params).await?;
+                                // Cancellation still leaves the writer with the acquisition guard.
+                                let _ = context_tx.send(history);
+                                Ok(live_thread)
+                            })
+                            .await?;
+                        resume_context = Some(context_rx.await?);
+                        live_thread
                     }
                 };
-                Ok((Some(live_thread), local_guard))
+                Ok((Some(live_thread), local_guard, resume_context))
             }
         }
         .instrument(info_span!(
@@ -1187,39 +1195,16 @@ impl Session {
         let (thread_persistence_result, state_db_ctx, (auth, mcp_projection)) =
             tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
 
-        let (live_thread, mut live_thread_init) = thread_persistence_result.map_err(|e| {
-            error!("failed to initialize thread persistence: {e:#}");
-            e
-        })?;
+        let (live_thread, mut live_thread_init, resume_context) = thread_persistence_result
+            .map_err(|e| {
+                error!("failed to initialize thread persistence: {e:#}");
+                e
+            })?;
         let session_result: anyhow::Result<Arc<Self>> = async {
             if let InitialHistory::Resumed(resumed) = &mut initial_history
-                // A header identifies a stored snapshot. Headerless histories are explicitly
-                // supplied by callers (for example, imports) and must not be replaced from disk.
-                && matches!(
-                    resumed.history.first(),
-                    Some(RolloutItem::SessionMeta(meta)) if meta.meta.id == resumed.conversation_id
-                )
-                && let Some(live_thread) = live_thread.as_ref()
-                && thread_store.as_any().is::<LocalThreadStore>()
+                && let Some(history) = resume_context
             {
-                // The initial snapshot predates writer ownership. A cold goal edit may have
-                // completed in between, including while V1 resume_agent was loading history.
-                // Reload under the live writer's ownership before publishing replayed context.
-                let items = match session_configuration.history_mode {
-                    ThreadHistoryMode::Legacy => {
-                        live_thread.load_history(/*include_archived*/ true).await?.items
-                    }
-                    ThreadHistoryMode::Paginated => {
-                        thread_store
-                            .load_latest_model_context(codex_thread_store::LoadThreadHistoryParams {
-                                thread_id,
-                                include_archived: true,
-                            })
-                            .await?
-                            .items
-                    }
-                };
-                resumed.history = Arc::new(items);
+                resumed.history = history;
             }
             let rollout_path = if let Some(live_thread) = live_thread.as_ref() {
                 live_thread.local_rollout_path().await?

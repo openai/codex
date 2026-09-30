@@ -125,7 +125,8 @@ pub struct ResumeThreadParams {
     pub thread_id: ThreadId,
     /// Known local rollout path when the caller resumed from a specific file.
     pub rollout_path: Option<PathBuf>,
-    /// Known replay history for the resumed thread, if already loaded by the caller.
+    /// Previously loaded replay history. A canonical session header identifies a stored snapshot
+    /// that may need refreshing under writer ownership; other histories are explicit overrides.
     pub history: Option<Arc<Vec<RolloutItem>>>,
     /// Whether archived threads may be reopened.
     pub include_archived: bool,

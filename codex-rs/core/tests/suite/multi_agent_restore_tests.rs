@@ -10,6 +10,7 @@ use super::request_has_model;
 use anyhow::Context;
 use anyhow::Result;
 use codex_features::Feature;
+use codex_history::RolloutItem;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::protocol::EventMsg;
@@ -76,7 +77,7 @@ impl ThreadStore for GatedChildMetadataStore {
 
     delegate_store_methods! {
         fn create_thread(params: CreateThreadParams) -> ();
-        fn resume_thread(params: ResumeThreadParams) -> ();
+        fn resume_thread(params: ResumeThreadParams) -> Arc<Vec<RolloutItem>>;
         fn append_items(params: AppendThreadItemsParams) -> ();
         fn flush_thread(thread_id: ThreadId) -> ();
         fn shutdown_thread(thread_id: ThreadId) -> ();

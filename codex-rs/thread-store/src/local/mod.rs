@@ -44,6 +44,7 @@ mod timestamp_metadata_tests;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_rollout::RolloutItem;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::StateDbHandle;
 use codex_rollout::WriterLockCoordinator;
@@ -526,7 +527,10 @@ impl ThreadStore for LocalThreadStore {
         })
     }
 
-    fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreFuture<'_, ()> {
+    fn resume_thread(
+        &self,
+        params: ResumeThreadParams,
+    ) -> ThreadStoreFuture<'_, Arc<Vec<RolloutItem>>> {
         Box::pin(async move { live_writer::resume_thread(self, params).await })
     }
 
@@ -804,6 +808,7 @@ mod tests {
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::models::BaseInstructions;
+    use codex_protocol::models::ContentItem;
     use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::MessagePhase;
     use codex_protocol::models::ResponseItem;
@@ -992,13 +997,14 @@ mod tests {
             .await
             .expect("update stale sqlite rollout path");
 
-        let resumed = LiveThread::resume(
+        let history = Arc::new(vec![user_message_item("bounded suffix")]);
+        let (resumed, supplied_history) = LiveThread::resume(
             store,
             ThreadHistoryMode::Paginated,
             ResumeThreadParams {
                 thread_id,
                 rollout_path: Some(rollout_path.clone()),
-                history: Some(Arc::new(vec![user_message_item("bounded suffix")])),
+                history: Some(Arc::clone(&history)),
                 include_archived: false,
                 metadata: ThreadPersistenceMetadata {
                     cwd: Some(home.path().to_path_buf()),
@@ -1009,6 +1015,7 @@ mod tests {
         )
         .await
         .expect("resume paginated thread from its requested rollout");
+        assert!(Arc::ptr_eq(&supplied_history, &history));
         assert_eq!(
             resumed.local_rollout_path().await.expect("live rollout"),
             Some(rollout_path)
@@ -1344,7 +1351,7 @@ mod tests {
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let rollout_path =
             write_session_file(home.path(), "2025-01-03T17-00-00", uuid).expect("session file");
-        let live_thread = LiveThread::resume(
+        let (live_thread, _history) = LiveThread::resume(
             store,
             ThreadHistoryMode::Legacy,
             ResumeThreadParams {
@@ -1399,7 +1406,7 @@ mod tests {
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
         let rollout_path = write_session_file(external_home.path(), "2025-01-03T17-30-00", uuid)
             .expect("external session file");
-        let live_thread = LiveThread::resume(
+        let (live_thread, _history) = LiveThread::resume(
             store,
             ThreadHistoryMode::Legacy,
             ResumeThreadParams {
@@ -1529,12 +1536,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resume_thread_reopens_live_writer_and_appends() {
+    async fn resume_thread_reopens_live_writer_and_appends_with_stale_sqlite_path() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
         let thread_id = ThreadId::default();
 
-        let first_store = LocalThreadStore::new(config.clone(), /*state_db*/ None);
+        let first_store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
         first_store
             .create_thread(create_thread_params(thread_id))
             .await
@@ -1563,7 +1576,21 @@ mod tests {
             .await
             .expect("shutdown initial writer");
 
-        let resumed_store = LocalThreadStore::new(config, /*state_db*/ None);
+        let mut builder = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            home.path().join("missing-rollout.jsonl"),
+            chrono::Utc::now(),
+            SessionSource::Exec,
+        );
+        builder.history_mode = ThreadHistoryMode::Legacy;
+        builder.cwd = home.path().to_path_buf();
+        let metadata = builder.build("test-provider");
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("store stale sqlite path");
+
+        let resumed_store = LocalThreadStore::new(config, Some(runtime));
         resumed_store
             .resume_thread(ResumeThreadParams {
                 thread_id,
@@ -1614,10 +1641,18 @@ mod tests {
                 .live_rollout_path(thread_id)
                 .await
                 .expect("load rollout path");
+            let mut expected = primary
+                .load_latest_model_context(LoadThreadHistoryParams {
+                    thread_id,
+                    include_archived: true,
+                })
+                .await
+                .expect("load initial snapshot")
+                .items;
             let resume_params = ResumeThreadParams {
                 thread_id,
                 rollout_path: Some(rollout_path),
-                history: None,
+                history: Some(Arc::new(expected.clone())),
                 include_archived: true,
                 metadata: thread_metadata(),
             };
@@ -1634,14 +1669,35 @@ mod tests {
                 .expect_err("competing resume should fail");
             assert!(matches!(error, ThreadStoreError::Conflict { .. }));
 
+            let late_edit = RolloutItem::ResponseItem(
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "edit after the initial snapshot".to_string(),
+                    }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                }
+                .into(),
+            );
+            primary
+                .append_items(AppendThreadItemsParams {
+                    thread_id,
+                    items: vec![late_edit.clone()],
+                })
+                .await
+                .expect("append before handing off writer ownership");
+            expected.push(late_edit);
             primary
                 .shutdown_thread(thread_id)
                 .await
                 .expect("shutdown should release writer ownership");
-            secondary
+            let resumed = secondary
                 .resume_thread(resume_params)
                 .await
                 .expect("resume after shutdown should acquire writer ownership");
+            assert_eq!(serde_json::json!(*resumed), serde_json::json!(expected));
         }
     }
 
