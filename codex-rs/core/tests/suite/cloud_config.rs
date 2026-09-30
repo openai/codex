@@ -1,13 +1,17 @@
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::CloudConfigBundleLoader;
+use codex_config::LoaderOverrides;
 use codex_config::test_support::CloudConfigBundleFixture;
+use codex_config::types::WindowsSandboxModeToml;
 use codex_core::CodexThreadSettingsOverrides;
+use codex_core::config::ConfigBuilder;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::sandbox::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_target_windows;
@@ -17,6 +21,52 @@ use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use std::sync::RwLock;
 use tempfile::TempDir;
+
+#[tokio::test]
+async fn managed_mxc_opt_out_blocks_preferred_and_explicit_selection() -> Result<()> {
+    for mode in [None, Some("elevated"), Some("mxc")] {
+        let home = TempDir::new()?;
+        let sandbox = mode
+            .map(|mode| format!("sandbox = {mode:?}\n"))
+            .unwrap_or_default();
+        std::fs::write(
+            home.path().join("config.toml"),
+            format!("[windows]\n{sandbox}[features]\nprefer_mxc = true\n"),
+        )?;
+        let result = ConfigBuilder::default()
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+            .codex_home(home.path().to_path_buf())
+            .fallback_cwd(Some(home.path().to_path_buf()))
+            .cloud_config_bundle(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                    "[windows]\nallow_mxc = false\n[features]\nelevated_windows_sandbox = true\n",
+                ),
+            )
+            .build()
+            .await;
+        if mode == Some("mxc") {
+            let error =
+                result.expect_err("explicit MXC should be rejected by managed requirements");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(error.to_string().contains("windows.allow_mxc = false"));
+        } else {
+            let config = result?;
+            assert_eq!(
+                (
+                    config.permissions.windows_sandbox_mode,
+                    config.prefer_mxc,
+                    config.effective_local_windows_sandbox_type()
+                ),
+                (
+                    mode.map(|_| WindowsSandboxModeToml::Elevated),
+                    false,
+                    SandboxType::WindowsRestrictedToken,
+                ),
+            );
+        }
+    }
+    Ok(())
+}
 
 #[tokio::test]
 async fn refreshed_cloud_bundle_updates_later_sessions() -> Result<()> {

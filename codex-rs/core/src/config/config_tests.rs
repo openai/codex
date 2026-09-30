@@ -11102,22 +11102,41 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
 #[tokio::test]
 async fn local_mxc_preference_preserves_configured_backend() -> anyhow::Result<()> {
     use codex_sandboxing::SandboxType::WindowsMxc;
-    use codex_sandboxing::SandboxType::WindowsRestrictedToken;
+    use codex_sandboxing::SandboxType::WindowsRestrictedToken as RestrictedToken;
 
     let codex_home = TempDir::new()?;
-    for (prefer, resolved_preference, binding, mode, expected) in [
-        (true, true, true, "unelevated", WindowsMxc),
-        (true, false, true, "unelevated", WindowsRestrictedToken),
-        (true, false, false, "unelevated", WindowsRestrictedToken),
-        (false, false, true, "unelevated", WindowsRestrictedToken),
-        (false, false, false, "mxc", WindowsMxc),
+    for (prefer, resolved_preference, binding, allow_mxc, mode, expected) in [
+        (true, true, true, true, "unelevated", WindowsMxc),
+        (true, false, true, true, "unelevated", RestrictedToken),
+        (true, false, true, false, "unelevated", RestrictedToken),
+        (true, false, false, true, "unelevated", RestrictedToken),
+        (false, false, true, true, "unelevated", RestrictedToken),
+        (false, false, false, true, "mxc", WindowsMxc),
     ] {
         let cfg: ConfigToml = toml::from_str(&format!(
             "[windows]\nsandbox = {mode:?}\n[features]\nprefer_mxc = {prefer}\n\
              [features.network_proxy]\nenabled = true\nallow_local_binding = {binding}\n"
         ))?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            toml::to_string(&cfg)?,
+        )?;
+        let mut config = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_config_bundle(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
+                    "[windows]\nallow_mxc = {allow_mxc}\n"
+                )),
+            )
+            .build()
+            .await?;
         assert_eq!(
-            network_config_allows_mxc(
+            config_allows_mxc(
+                &config
+                    .config_layer_stack
+                    .requirements()
+                    .windows_sandbox_mode,
                 &EffectivePermissionSelection {
                     profiles: None,
                     selected_profile_id: None,
@@ -11130,20 +11149,11 @@ async fn local_mxc_preference_preserves_configured_backend() -> anyhow::Result<(
                 cfg.features.as_ref(),
                 /*enable_network_proxy*/ true,
             )?,
-            binding,
+            binding && allow_mxc,
         );
-        let mut config = Config::load_from_base_config_with_overrides(
-            cfg,
-            ConfigOverrides {
-                cwd: Some(codex_home.path().to_path_buf()),
-                ..Default::default()
-            },
-            codex_home.abs(),
-        )
-        .await?;
         assert_eq!(
             config.prefer_mxc,
-            prefer && binding && codex_sandboxing::windows_mxc_available(),
+            prefer && binding && allow_mxc && codex_sandboxing::windows_mxc_available(),
         );
         // Exercise both resolved decisions independently of the host's native support.
         config.prefer_mxc = resolved_preference;
@@ -11156,7 +11166,7 @@ async fn local_mxc_preference_preserves_configured_backend() -> anyhow::Result<(
                 if mode == "mxc" {
                     WindowsMxc
                 } else {
-                    WindowsRestrictedToken
+                    RestrictedToken
                 },
                 expected
             ),

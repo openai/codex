@@ -58,6 +58,9 @@ pub fn prepare_windows_sandbox_config(
     constraint: &mut ConstrainedWithSource<Option<WindowsSandboxModeToml>>,
     warnings: &mut Vec<String>,
 ) -> std::io::Result<PreparedWindowsSandboxConfig> {
+    if configured_mode == Some(WindowsSandboxModeToml::Mxc) {
+        constraint.can_set(&configured_mode)?;
+    }
     let selected_mode = configured_mode.or(match feature_level {
         WindowsSandboxLevel::Elevated => Some(WindowsSandboxModeToml::Elevated),
         WindowsSandboxLevel::RestrictedToken => Some(WindowsSandboxModeToml::Unelevated),
@@ -93,7 +96,8 @@ pub fn prepare_windows_sandbox_config(
 
 /// Managed requirements take precedence; otherwise preserve explicit
 /// feature-level or active-profile binding denials during automatic selection.
-pub(super) fn network_config_allows_mxc(
+pub(super) fn config_allows_mxc(
+    windows_sandbox_mode: &ConstrainedWithSource<Option<WindowsSandboxModeToml>>,
     permission_selection: &EffectivePermissionSelection<'_>,
     profiles_are_active: bool,
     permission_profile: Option<&PermissionProfile>,
@@ -101,6 +105,12 @@ pub(super) fn network_config_allows_mxc(
     features: Option<&FeaturesToml>,
     enable_network_proxy: bool,
 ) -> std::io::Result<bool> {
+    if windows_sandbox_mode
+        .can_set(&Some(WindowsSandboxModeToml::Mxc))
+        .is_err()
+    {
+        return Ok(false);
+    }
     let profile_local_binding = if profiles_are_active
         && permission_profile.is_none_or(profile_allows_configured_network_proxy)
         && let Some(profile) = permission_selection.selected_profile_id

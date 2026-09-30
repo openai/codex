@@ -1218,6 +1218,7 @@ client_id = "mcp-client"
                     codex_config::WindowsSandboxImplementationToml::Elevated,
                     codex_config::WindowsSandboxImplementationToml::Unelevated,
                 ]),
+                allow_mxc: None,
             }),
             ..ConfigRequirementsToml::default()
         });
