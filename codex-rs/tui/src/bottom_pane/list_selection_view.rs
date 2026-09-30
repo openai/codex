@@ -304,7 +304,7 @@ pub(crate) struct ListSelectionView {
     state: ScrollState,
     completion: Option<ViewCompletion>,
     pub(super) dismiss_after_child_accept: bool,
-    app_event_tx: AppEventSender,
+    pub(super) app_event_tx: AppEventSender,
     is_searchable: bool,
     search_query: String,
     search_placeholder: Option<String>,
