@@ -997,6 +997,9 @@ mod tests {
         expected_payload["generate"] = json!(false);
         let request_text =
             serialize_websocket_request(&request).expect("serialize websocket request");
+        assert!(request_text.starts_with(
+            r#"{"type":"response.create","model":"gpt-test","stream":true,"service_tier":"priority","instructions":"Use the available tools.","previous_response_id":"resp-1","input":"#
+        ));
         let wire_payload =
             serde_json::from_str::<Value>(&request_text).expect("parse websocket request");
 
