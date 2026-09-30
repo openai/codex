@@ -128,6 +128,23 @@ fn inline_code_selection_copies_only_selected_content() {
         ("before ``a`b`` after", "a`"),
         ("- **`café界_*`**", "café界_*"),
         ("before `  leading and trailing  ` after", " leading"),
+        (r"before ``real\_literal\!`` after", r"real\_literal\!"),
+        ("before [`foo_bar!`](/repo/foo_bar!) after", "repo/foo_bar!"),
+        ("before [`foo_bar!`](/repo/foo_bar!) after", "bar!"),
+        (
+            "[foo_bar!](/foo_bar!)[baz_qux!](/baz_qux!)",
+            "foo_bar!baz_qux!",
+        ),
+        ("`foo_bar!`[baz_qux!](/baz_qux!)", "foo_bar!baz_qux!"),
+        ("before **[file](/repo/foo_bar!)** after", "foo_bar!"),
+        (
+            "| File |\n|---|\n| [`foo_bar!`](/repo/foo_bar!) |",
+            "foo_bar!",
+        ),
+        (
+            "before [file](</repo/%60%2A_%5B%5D%3C%3E~%23%7C%26!%3D-+.)>) after",
+            "repo/`*_[]<>~#|&!=-+.)",
+        ),
     ] {
         for width in [18, 80] {
             let layout = markdown_layout(source, width);
@@ -144,6 +161,25 @@ fn inline_code_selection_copies_only_selected_content() {
         }
     }
     insta::assert_snapshot!(copies.join("\n"));
+}
+
+#[test]
+fn mixed_file_targets_preserve_markdown_escaping() {
+    for (source, expected) in [
+        ("before [+](/+) after", "before + after"),
+        ("before [1.)](</1.)>) after", "before 1.) after"),
+        (
+            "| File |\n|---|\n| [`foo_bar!`](/repo/foo_bar!) |",
+            "| File |\n|---|\n| repo/foo\\_bar\\! |",
+        ),
+    ] {
+        let layout = markdown_layout(source, /*width*/ 80);
+        assert_eq!(
+            payload(&layout, 0..layout.text().len()),
+            (expected.into(), CopyFormat::Markdown),
+            "{source}"
+        );
+    }
 }
 
 #[test]

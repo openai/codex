@@ -26,6 +26,8 @@ pub(crate) enum Inline {
     Link(Arc<str>),
     Delimiter(&'static str),
     Code,
+    /// Copy a generated file target literally without changing mixed-selection Markdown.
+    Literal,
     /// Balance parser events for links whose visible text has no copied wrapper.
     Ignored,
 }
@@ -66,6 +68,7 @@ pub(crate) struct CopyLine {
     /// A visual separator inserted between sibling list items, never source content.
     pub(crate) omit: bool,
     runs: Vec<(Range<usize>, Vec<Inline>)>,
+    literal_ranges: Vec<Range<usize>>,
 }
 
 impl CopyLine {
@@ -73,9 +76,13 @@ impl CopyLine {
         if length == 0 {
             return;
         }
-        let mut inline = inline[..inline.len().min(MAX_COPY_DEPTH)]
+        let inline = &inline[..inline.len().min(MAX_COPY_DEPTH)];
+        let literal = inline
             .iter()
-            .filter(|mark| **mark != Inline::Ignored)
+            .any(|mark| matches!(mark, Inline::Code | Inline::Literal));
+        let mut inline = inline
+            .iter()
+            .filter(|mark| !matches!(mark, Inline::Ignored | Inline::Literal))
             .cloned()
             .collect::<Vec<_>>();
         inline.sort();
@@ -84,6 +91,16 @@ impl CopyLine {
             .runs
             .last()
             .map_or(/*default*/ 0, |(range, _)| range.end);
+        // Keep literal spans separate so they never split context-sensitive prose escaping.
+        if literal {
+            if let Some(range) = self.literal_ranges.last_mut()
+                && range.end == start
+            {
+                range.end += length;
+            } else {
+                self.literal_ranges.push(start..start + length);
+            }
+        }
         if let Some((range, previous)) = self.runs.last_mut()
             && previous == &inline
         {
@@ -93,11 +110,12 @@ impl CopyLine {
         }
     }
 
-    fn is_inline_code(&self, range: &Range<usize>) -> bool {
+    fn is_literal(&self, range: &Range<usize>) -> bool {
         !range.is_empty()
-            && self.runs.iter().any(|(run, inline)| {
-                run.start <= range.start && range.end <= run.end && inline.contains(&Inline::Code)
-            })
+            && self
+                .literal_ranges
+                .iter()
+                .any(|literal| literal.start <= range.start && range.end <= literal.end)
     }
 
     fn render(&self, text: &str, range: Range<usize>, depth: usize) -> String {
@@ -172,7 +190,7 @@ impl CopyLine {
                                 .replace('\r', "%0D");
                             append_inline(&mut out, &format!("[{trimmed}](<{destination}>)"));
                         }
-                        Inline::Code | Inline::Ignored => unreachable!(),
+                        Inline::Code | Inline::Literal | Inline::Ignored => unreachable!(),
                     }
                     out.push_str(&body[body.trim_end().len()..]);
                 }
@@ -267,7 +285,7 @@ pub(crate) fn selection(lines: &[SelectedLine], plain: &str) -> (String, CopyFor
             .source
             .copy
             .as_ref()
-            .is_some_and(|copy| copy.is_inline_code(&line.range))
+            .is_some_and(|copy| copy.is_literal(&line.range))
     {
         return (plain.to_owned(), CopyFormat::PlainText);
     }

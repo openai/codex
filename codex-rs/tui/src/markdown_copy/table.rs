@@ -167,7 +167,7 @@ pub(super) fn render(
         && source
             .copy
             .as_ref()
-            .is_some_and(|copy| copy.is_inline_code(&source.range))
+            .is_some_and(|copy| copy.is_literal(&source.range))
     {
         return (
             source.text[source.range.clone()].to_owned(),
