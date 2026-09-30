@@ -312,6 +312,9 @@ impl ChatWidget {
     }
 
     fn start_realtime_conversation(&mut self, thread_id: ThreadId) {
+        let Some(audio) = self.realtime_audio_settings() else {
+            return;
+        };
         self.realtime_conversation.recover_late_transcripts = false;
         self.realtime_conversation.attempt_id =
             NEXT_REALTIME_ATTEMPT_ID.fetch_add(1, Ordering::Relaxed);
@@ -322,9 +325,13 @@ impl ChatWidget {
         self.realtime_conversation.phase = RealtimeConversationPhase::Starting;
         self.update_realtime_footer();
         let app_event_tx = self.app_event_tx.clone();
+        let selection = codex_realtime_webrtc::AudioDeviceSelection {
+            microphone: audio.microphone,
+            speaker: audio.speaker,
+        };
         std::thread::spawn(move || {
-            let result =
-                RealtimeWebrtcSession::start(abort_registration).map_err(|error| error.to_string());
+            let result = RealtimeWebrtcSession::start(abort_registration, selection)
+                .map_err(|error| error.to_string());
             app_event_tx.send(AppEvent::RealtimeWebrtcOfferCreated {
                 thread_id,
                 attempt_id,

@@ -2,12 +2,13 @@
 source: tui/src/chatwidget/realtime_settings_tests.rs
 expression: "render_bottom_popup(&chat, 80)"
 ---
-  Select voice
+  Input device
   Applies to your next voice conversation.
 
 
-› 1. cove (current)
-  2. maple
-  3. Back
+  1. System default
+› 2. Audio interface (current)
+  3. Other device
+  4. Back
 
   enter select · esc back

@@ -423,3 +423,36 @@ fn stream_xruns_recover_without_clearing_device_failure() {
     handle_stream_error(&buffers, cpal::ErrorKind::Xrun.into());
     assert!(buffers.failed.load(Ordering::Acquire));
 }
+
+#[test]
+fn named_startup_skips_same_name_devices_omitted_from_discovery() {
+    let name = "USB interface";
+    let supported = |channels| {
+        cpal::SupportedStreamConfig::new(
+            channels,
+            /*sample_rate*/ 48_000,
+            cpal::SupportedBufferSize::Range { min: 1, max: 4_096 },
+            cpal::SampleFormat::F32,
+        )
+    };
+    // A missing default configuration and a configuration outside our bounds
+    // must not shadow the later selectable endpoint with the same name.
+    let descriptions = [None, Some(supported(64)), Some(supported(2))];
+    let candidates = || {
+        eligible_devices(0..descriptions.len(), |index| {
+            descriptions[*index].map(|config| (name.into(), config))
+        })
+    };
+    assert_eq!(
+        candidates().collect::<Vec<_>>(),
+        vec![(2, name.to_string(), 2)]
+    );
+    assert_eq!(
+        candidates().find(|(_, candidate, _)| candidate == name),
+        Some((2, name.to_string(), 2))
+    );
+    assert_eq!(
+        candidates().find(|(_, candidate, _)| candidate == "Unavailable"),
+        None
+    );
+}

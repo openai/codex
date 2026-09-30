@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/realtime_settings_tests.rs
+expression: "render_bottom_popup(&chat, 90)"
+---
+  Sound devices
+  Applies to your next voice conversation.
+
+
+› 1. Input device   Zen Go Synergy Core Playback
+  2. Output device  System default
+  3. Back
+
+  enter select · esc back

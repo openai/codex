@@ -7,6 +7,7 @@ use crate::app::tests::session_lifecycle_requests::start_recording_realtime_spee
 use crate::app::tests::session_lifecycle_requests::start_recording_remote_app_server;
 use crate::chatwidget::commit_realtime_history_events;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
+use crate::local_settings::LocalSettings;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::ServerNotification;
@@ -1832,7 +1833,7 @@ async fn embedded_voice_settings_follow_project_after_thread_switch() -> Result<
             ),
         );
         Box::pin(app.select_agent_thread(&mut tui, &mut server, thread_id)).await?;
-        app.open_realtime_settings(&server).await;
+        app.open_realtime_voices(&server).await;
         let popup = crate::chatwidget::tests::helpers::render_bottom_popup(
             &app.chat_widget,
             /*width*/ 80,
@@ -1872,7 +1873,7 @@ async fn remote_voice_picker_reads_server_preference() -> Result<()> {
     app.chat_widget
         .set_realtime_voice(Some(codex_protocol::protocol::RealtimeVoice::Maple));
     let (server, requests, proxy) = start_recording_remote_app_server(&app.config).await?;
-    app.open_realtime_settings(&server).await;
+    app.open_realtime_voices(&server).await;
     assert_eq!(
         recorded_params(&requests, "thread/realtime/listVoices").len(),
         1
@@ -1906,7 +1907,7 @@ async fn remote_voice_catalog_success_and_failure() -> Result<()> {
             )
             .await?;
         while events.try_recv().is_ok() {}
-        app.open_realtime_settings(&server).await;
+        app.open_realtime_voices(&server).await;
         let popup = crate::chatwidget::tests::helpers::render_bottom_popup(
             &app.chat_widget,
             /*width*/ 80,
@@ -2076,5 +2077,125 @@ async fn overridden_voice_save_keeps_effective_voice() -> Result<()> {
         }
         server.shutdown().await?;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn audio_devices_are_persisted() -> Result<()> {
+    use codex_realtime_webrtc::AudioDeviceKind;
+    let mut app = make_test_app().await;
+    app.persist_realtime_device(AudioDeviceKind::Output, Some("Headphones".into()))
+        .await;
+    app.persist_realtime_device(AudioDeviceKind::Input, Some("Interface".into()))
+        .await;
+    let expected = codex_config::config_toml::RealtimeAudioToml {
+        microphone: Some("Interface".into()),
+        speaker: Some("Headphones".into()),
+    };
+    assert_eq!(app.local_settings.audio.as_ref().unwrap(), &expected);
+    assert_eq!(LocalSettings::from(&app.config).audio, Ok(expected));
+    app.persist_realtime_device(AudioDeviceKind::Input, /*name*/ None)
+        .await;
+    app.persist_realtime_device(AudioDeviceKind::Output, /*name*/ None)
+        .await;
+    assert_eq!(app.local_settings.audio, Ok(Default::default()));
+    assert_eq!(
+        app.chat_widget.local_settings.audio,
+        app.local_settings.audio
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn audio_device_is_machine_local_across_project_and_remote_transitions() -> Result<()> {
+    let mut app = make_test_app().await;
+    let project = tempfile::tempdir()?;
+    let remote = tempfile::tempdir()?;
+    std::fs::create_dir_all(project.path().join(".codex"))?;
+    std::fs::write(
+        project.path().join(".codex/config.toml"),
+        "default_permissions = \"work\"\n[audio]\nmicrophone = \"Project mic\"\n[permissions.work]\nextends = \":workspace\"\n",
+    )?;
+    crate::legacy_core::config::set_project_trust_level(
+        &app.config.codex_home,
+        project.path(),
+        codex_protocol::config_types::TrustLevel::Trusted,
+    )
+    .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
+    app.cli_kv_overrides = vec![("default_permissions".into(), "work".into())];
+    app.config = app.rebuild_config_for_cwd(project.path().into()).await?;
+    app.app_server_target = AppServerTarget::Remote {
+        endpoint: crate::resolve_remote_addr("ws://127.0.0.1:9")?,
+    };
+    app.chat_widget
+        .handle_thread_session_quiet(test_thread_session(
+            ThreadId::new(),
+            remote.path().to_path_buf(),
+        ));
+    app.persist_realtime_device(
+        codex_realtime_webrtc::AudioDeviceKind::Input,
+        Some("Machine mic".into()),
+    )
+    .await;
+    app.cli_kv_overrides.clear();
+    assert_eq!(
+        LocalSettings::from(&app.config).audio,
+        app.local_settings.audio
+    );
+    for cwd in [project.path(), remote.path()] {
+        let config = app.rebuild_config_for_cwd(cwd.to_path_buf()).await?;
+        let reloaded = app.local_settings.reloaded(&config);
+        assert_eq!(reloaded.audio, app.chat_widget.local_settings.audio);
+        assert_eq!(
+            reloaded.audio.as_ref().unwrap().microphone.as_deref(),
+            Some("Machine mic")
+        );
+    }
+    // A project value must not hide invalid machine audio.
+    std::fs::write(
+        app.local_settings.user_config_path.as_path(),
+        std::fs::read_to_string(app.local_settings.user_config_path.as_path())?
+            .replace("microphone = \"Machine mic\"", "microphone = 0"),
+    )?;
+    let config = app
+        .rebuild_config_for_cwd(project.path().to_path_buf())
+        .await?;
+    app.chat_widget.local_settings = app.local_settings.reloaded(&config);
+    assert!(app.chat_widget.local_settings.audio.is_err());
+    app.chat_widget.open_realtime_sound_devices();
+    assert!(!app.chat_widget.has_active_view());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn microphone_discovery_ignores_another_threads_completion() -> Result<()> {
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    let (mut server, _requests, proxy) = start_recording_remote_app_server(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.active_thread_id = Some(ThreadId::new());
+    for origin in [Some(ThreadId::new()), app.active_thread_id] {
+        let result = Ok(vec![codex_realtime_webrtc::AudioDevice {
+            name: "Interface".into(),
+            channels: 16,
+            is_default: true,
+        }]);
+        Box::pin(app.handle_event(
+            &mut tui,
+            &mut server,
+            AppEvent::RealtimeDevicesListed {
+                origin,
+                kind: codex_realtime_webrtc::AudioDeviceKind::Input,
+                result,
+            },
+        ))
+        .await?;
+        assert_eq!(
+            app.chat_widget.has_active_view(),
+            origin == app.active_thread_id
+        );
+    }
+    server.shutdown().await?;
+    proxy.await??;
     Ok(())
 }

@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/realtime_settings_tests.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Input device
+  Applies to your next voice conversation.
+
+
+› 1. System default (current)
+     USB microphone (disabled)  Identical device names; use System default.
+     USB microphone (disabled)  Identical device names; use System default.
+  2. Back
+
+  enter select · esc back

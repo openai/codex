@@ -2451,8 +2451,20 @@ impl App {
                 }
                 self.chat_widget.on_plugin_mentions_loaded(plugins);
             }
-            AppEvent::OpenRealtimeSettings => {
-                self.open_realtime_settings(app_server).await;
+            AppEvent::OpenRealtimeSettings => self.chat_widget.open_realtime_settings(),
+            AppEvent::OpenRealtimeSoundDevices => self.chat_widget.open_realtime_sound_devices(),
+            AppEvent::OpenRealtimeVoices => self.open_realtime_voices(app_server).await,
+            AppEvent::OpenRealtimeDevicePicker { kind } => self.list_realtime_devices(kind),
+            AppEvent::RealtimeDevicesListed { origin, kind, result } => {
+                if origin == self.active_thread_id {
+                    match result {
+                        Ok(devices) => self.chat_widget.open_realtime_device_picker(kind, devices),
+                        Err(error) => self.chat_widget.add_error_message(error),
+                    }
+                }
+            }
+            AppEvent::PersistRealtimeDevice { kind, name } => {
+                self.persist_realtime_device(kind, name).await;
             }
             AppEvent::PersistRealtimeVoiceSelection { voice } => {
                 self.persist_realtime_voice(app_server, voice).await;

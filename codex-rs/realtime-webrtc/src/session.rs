@@ -16,6 +16,7 @@ use futures::future::Abortable;
 use tokio::sync::mpsc;
 
 use crate::AudioControls;
+use crate::AudioDeviceSelection;
 use crate::ConnectionError;
 use crate::SessionDescription;
 use crate::VoiceHost;
@@ -93,7 +94,10 @@ impl RealtimeWebrtcSession {
     }
 
     /// Called off the UI thread. Cancellation also owns startup before a handle is returned.
-    pub fn start(abort: AbortRegistration) -> Result<StartedRealtimeWebrtcSession> {
+    pub fn start(
+        abort: AbortRegistration,
+        selection: AudioDeviceSelection,
+    ) -> Result<StartedRealtimeWebrtcSession> {
         let package = codex_install_context::InstallContext::current()
             .package_layout
             .clone()
@@ -147,7 +151,7 @@ impl RealtimeWebrtcSession {
                     offer
                         .send(Ok(sdp.into_sdp()))
                         .map_err(|_| anyhow::anyhow!("voice startup cancelled"))?;
-                    run(host, receiver, &state, &controls).await
+                    run(host, receiver, &state, &controls, selection).await
                 };
                 let result = runtime.block_on(Abortable::new(Abortable::new(task, abort), stopped));
                 if let Ok(Ok(Err(error))) = result {
@@ -266,6 +270,7 @@ async fn run(
     mut commands: mpsc::Receiver<Command>,
     state: &State,
     controls: &Mutex<AudioControls>,
+    selection: AudioDeviceSelection,
 ) -> Result<()> {
     let mut connected = false;
     let mut poll = tokio::time::interval(Duration::from_millis(/*millis*/ 50));
@@ -277,7 +282,7 @@ async fn run(
                 Some(Command::Answer(sdp, complete)) if !connected => {
                     let startup = async {
                         let mut host = report_failure(ConnectionError::Transport, host.apply_answer(sdp).await)?;
-                        host = report_failure(ConnectionError::AudioDevices, host.open_devices().await)?;
+                        host = report_failure(ConnectionError::AudioDevices, host.open_devices(selection.clone()).await)?;
                         let applied = startup_controls(&mut commands, controls, |initial| {
                             host.begin_audio_controls(initial)
                         });

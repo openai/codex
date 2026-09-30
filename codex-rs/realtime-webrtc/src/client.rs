@@ -12,6 +12,9 @@ use codex_utils_pty::SpawnedProcess;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
+use crate::AudioDevice;
+use crate::AudioDeviceKind;
+use crate::AudioDeviceSelection;
 use crate::HelperExitStage;
 use crate::Message;
 use crate::encode_frame;
@@ -63,10 +66,25 @@ pub struct VoiceHost {
 
 impl VoiceHost {
     /// Open local devices only after answer negotiation. They initially remain muted/suppressed.
-    pub async fn open_devices(mut self) -> Result<Self> {
-        self.exchange(Message::OpenDevices {}, Message::DevicesOpened {}, DEADLINE)
-            .await?;
+    pub async fn open_devices(mut self, selection: AudioDeviceSelection) -> Result<Self> {
+        self.exchange(
+            Message::OpenDevices { selection },
+            Message::DevicesOpened {},
+            DEADLINE,
+        )
+        .await?;
         Ok(self)
+    }
+
+    /// Enumerate local devices without opening streams.
+    pub async fn list_devices(&mut self, kind: AudioDeviceKind) -> Result<Vec<AudioDevice>> {
+        match self
+            .request(Message::ListDevices { kind }, DEADLINE)
+            .await?
+        {
+            Message::DeviceList { devices } => Ok(devices),
+            _ => anyhow::bail!("unexpected voice helper response"),
+        }
     }
 
     /// Acknowledgement follows invalidation of the helper's previous capture/render generations.
