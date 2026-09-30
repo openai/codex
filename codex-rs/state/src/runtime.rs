@@ -43,6 +43,7 @@ mod backfill;
 mod external_agent_config_imports;
 mod goals;
 mod logs;
+mod logs_maintenance;
 mod memories;
 mod memory_versions;
 mod projects;
@@ -276,12 +277,7 @@ impl StateRuntime {
             runtime.close().await;
             return Err(err);
         }
-        if let Err(err) = runtime.run_logs_startup_maintenance().await {
-            warn!(
-                "failed to run startup maintenance for logs db at {}: {err}",
-                logs_path.display(),
-            );
-        }
+        runtime.start_periodic_logs_maintenance(std::time::Duration::from_secs(30 * 60));
         Ok(runtime)
     }
 
