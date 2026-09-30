@@ -11,4 +11,4 @@ expression: terminal.backend()
 
   Local Ollama server (Responses API, default port 11434)
 
-  ↑/↓ choose · enter select · esc LM Studio · ctrl+c exit
+  ↑/↓ choose · enter select · esc LM Studio · ⌃c exit

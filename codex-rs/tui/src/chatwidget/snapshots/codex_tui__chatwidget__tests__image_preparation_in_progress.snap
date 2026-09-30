@@ -4,7 +4,7 @@ expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 80))"
 ---
 • Queued follow-up inputs
   ↳ Preparing images: describe
-    shift+← edit last queued message
+    ⇧← edit last queued message
 
 › x
 

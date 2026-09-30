@@ -6,7 +6,7 @@ expression: normalized_backend_snapshot(terminal.backend())
 "• Agent answer arriving                                     "
 "                                                            "
 "                                                            "
-" voice ● listening              ctrl+x mute     /voice stop "
+" voice ● listening                  ⌃x mute     /voice stop "
 "                                                            "
 "› Ask Codex to do anything                                  "
 "                                                            "

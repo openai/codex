@@ -1,22 +1,23 @@
 ---
 source: tui/src/app/agent_center_tests.rs
+assertion_line: 328
 expression: "screen(&view, width, height)"
 ---
   Agent command center  Group: Project  g
-   All 3   Needs you 1   Working 0   Ready 1   Inactive 1                     tab/shift+tab filter
+   All 3   Needs you 1   Working 0   Ready 1   Inactive 1                          tab/⇧tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────────
   Task shortcuts
 
-  Navigate             Tasks                      View
-  ↑       Up           n          New             tab/shift+tab  Filter
-  ↓       Down         w          New worktree    f3             Search
-  enter   Open         o          Resume          g              Group
-  pgup    Page up      f          Fork
-  pgdn    Page down    r          Rename
-  ctrl+c  Quit         x          Stop
-                       a          Archive
-                       h          Hide
-                       backspace  Delete
+  Navigate            Tasks                      View
+  ↑      Up           n          New             tab/⇧tab  Filter
+  ↓      Down         w          New worktree    f3        Search
+  enter  Open         o          Resume          g         Group
+  pgup   Page up      f          Fork
+  pgdn   Page down    r          Rename
+  ⌃c     Quit         x          Stop
+                      a          Archive
+                      h          Hide
+                      backspace  Delete
 
 
 

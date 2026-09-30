@@ -6,19 +6,19 @@ shortcut help:
   Keyboard shortcuts
 
   Compose                       Session
-  /        Commands             tab     Send message
-  @        Mention files        ⌥,      Less reasoning
-  !        Shell command        ⌥.      More reasoning
-  ctrl+j   New line             f4      Inspect activity
-  ctrl+v   Paste image          ctrl+c  Quit
-  ctrl+g   External editor
-  ctrl+r   Search history       Transcript (open first)
-  esc esc  Edit last message    ctrl+t                Open transcript
-                                f3                    Find text
-                                pgup / pgdn           Scroll
-                                ctrl+space            Start selection
-                                ctrl+home / ctrl+end  Top / latest
-                                shift+⌥, / shift+⌥.   Top / latest
+  /        Commands             tab  Send message
+  @        Mention files        ⌥,   Less reasoning
+  !        Shell command        ⌥.   More reasoning
+  ⌃j       New line             f4   Inspect activity
+  ⌃v       Paste image          ⌃c   Quit
+  ⌃g       External editor
+  ⌃r       Search history       Transcript (open first)
+  esc esc  Edit last message    ⌃t            Open transcript
+                                f3            Find text
+                                pgup / pgdn   Scroll
+                                ⌃space        Start selection
+                                ⌃home / ⌃end  Top / latest
+                                ⇧⌥, / ⇧⌥.     Top / latest
 
   /keymap customize
 

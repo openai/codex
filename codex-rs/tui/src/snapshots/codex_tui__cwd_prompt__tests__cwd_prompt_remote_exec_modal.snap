@@ -11,4 +11,4 @@ expression: rendered
   2. Use current directory (/Users/example/current)
   3. Always use session directory
 
-  enter continue · esc use session · ctrl+c quit
+  enter continue · esc use session · ⌃c quit

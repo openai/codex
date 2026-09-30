@@ -16,26 +16,26 @@ expression: text
   /        Commands
   @        Mention files
   !        Shell command
-  ctrl+j   New line
-  ctrl+v   Paste image
-  ctrl+g   External editor
-  ctrl+r   Search history
+  ⌃j       New line
+  ⌃v       Paste image
+  ⌃g       External editor
+  ⌃r       Search history
   esc esc  Edit last message
 
   Session
-  tab     Send message
-  ⌥,      Less reasoning
-  ⌥.      More reasoning
-  f4      Inspect activity
-  ctrl+c  Quit
+  tab  Send message
+  ⌥,   Less reasoning
+  ⌥.   More reasoning
+  f4   Inspect activity
+  ⌃c   Quit
 
   Transcript (open first)
-  ctrl+t                Open transcript
-  f3                    Find text
-  pgup / pgdn           Scroll
-  ctrl+space            Start selection
-  ctrl+home / ctrl+end  Top / latest
-  shift+⌥, / shift+⌥.   Top / latest
+  ⌃t            Open transcript
+  f3            Find text
+  pgup / pgdn   Scroll
+  ⌃space        Start selection
+  ⌃home / ⌃end  Top / latest
+  ⇧⌥, / ⇧⌥.     Top / latest
 
   /keymap customize
 

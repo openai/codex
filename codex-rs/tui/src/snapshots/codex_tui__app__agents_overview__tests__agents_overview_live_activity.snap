@@ -3,7 +3,7 @@ source: tui/src/app/agents_overview_tests.rs
 expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{project}  1\"),\n&normalized_group).replace(&project, \"/tmp/project\")"
 ---
   Agent command center  Group: Project  g
-   All 1   Needs you 0   Working 1   Ready 0   Inactive 0                 tab/shift+tab filter
+   All 1   Needs you 0   Working 1   Ready 0   Inactive 0                      tab/⇧tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────
       Tasks                                           │ Task details
   /tmp/project  1                                     │

@@ -4,4 +4,4 @@ expression: "render_bottom_popup(&app.chat_widget, 80)"
 ---
 › kept draft
 
-  gpt-test default                              Plan mode (shift+tab to cycle)
+  gpt-test default                                   Plan mode (⇧tab to cycle)

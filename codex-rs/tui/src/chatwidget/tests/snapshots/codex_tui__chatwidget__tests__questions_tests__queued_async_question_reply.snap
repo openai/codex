@@ -11,4 +11,4 @@ expression: "render_bottom_popup(&chat, 80)"
 
   Type your answer
 
-  enter submit   ctrl+] skip   shift+→ main prompt   shift+← queued messages
+  enter submit   ⌃] skip   ⇧→ main prompt   ⇧← queued messages

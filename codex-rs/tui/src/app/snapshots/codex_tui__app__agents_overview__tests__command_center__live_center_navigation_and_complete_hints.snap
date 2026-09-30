@@ -8,12 +8,12 @@ expression: "screen(&view, width, height)"
   Task shortcuts
 
   Navigate
-  ↑       Up
-  ↓       Down
-  enter   Open
-  pgup    Page up
-  pgdn    Page down
-  ctrl+c  Quit
+  ↑      Up
+  ↓      Down
+  enter  Open
+  pgup   Page up
+  pgdn   Page down
+  ⌃c     Quit
 
   Tasks
   n          New

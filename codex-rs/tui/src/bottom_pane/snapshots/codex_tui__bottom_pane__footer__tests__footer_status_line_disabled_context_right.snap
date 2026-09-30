@@ -2,4 +2,4 @@
 source: tui/src/bottom_pane/footer.rs
 expression: terminal.backend()
 ---
-"  ? for shortcuts · Plan mode (shift+tab to cycle)                                                    50% context left  "
+"  ? for shortcuts · Plan mode (⇧tab to cycle)                                                         50% context left  "

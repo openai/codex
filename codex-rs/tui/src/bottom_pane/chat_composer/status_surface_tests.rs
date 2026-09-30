@@ -96,19 +96,19 @@ fn fullscreen_plan_indicator_keeps_the_cycle_hint_when_it_fits() {
     composer.set_collaboration_mode_indicator(Some(CollaborationModeIndicator::Plan));
     let (wide, _) = render(&composer, /*width*/ 100, /*footer*/ None);
     assert!(
-        wide.contains("Plan mode (shift+tab to cycle)"),
+        wide.contains("Plan mode (⇧tab to cycle)"),
         "idle fullscreen must explain how to leave Plan mode: {wide}"
     );
     insta::assert_snapshot!("fullscreen_plan_cycle_hint", wide);
 
     let (narrow, _) = render(&composer, /*width*/ 44, /*footer*/ None);
     assert!(narrow.contains("Plan mode"), "{narrow}");
-    assert!(!narrow.contains("shift+tab"), "{narrow}");
+    assert!(!narrow.contains("⇧tab"), "{narrow}");
 
     composer.set_task_running(/*running*/ true);
     let (running, _) = render(&composer, /*width*/ 100, /*footer*/ None);
     assert!(running.contains("Plan mode"), "{running}");
-    assert!(!running.contains("shift+tab"), "{running}");
+    assert!(!running.contains("⇧tab"), "{running}");
     composer.set_task_running(/*running*/ false);
 
     let footer = TranscriptFooter {
@@ -118,7 +118,7 @@ fn fullscreen_plan_indicator_keeps_the_cycle_hint_when_it_fits() {
     };
     let (search, _) = render(&composer, /*width*/ 100, Some(&footer));
     assert!(search.contains("Plan mode"), "{search}");
-    assert!(!search.contains("shift+tab"), "{search}");
+    assert!(!search.contains("⇧tab"), "{search}");
 
     // Configured items such as git-branch can have no value outside a repository.
     composer.set_status_line(/*status_line*/ None);
@@ -129,7 +129,7 @@ fn fullscreen_plan_indicator_keeps_the_cycle_hint_when_it_fits() {
     );
     let (empty_wide, _) = render(&composer, /*width*/ 100, /*footer*/ None);
     assert!(
-        empty_wide.contains("Plan mode (shift+tab to cycle)"),
+        empty_wide.contains("Plan mode (⇧tab to cycle)"),
         "{empty_wide}"
     );
 
@@ -271,10 +271,13 @@ fn shortcut_help_keeps_input_and_close_hint_visible_when_height_is_tiny() {
 fn shortcut_help_close_row_uses_runtime_binding_and_narrow_fallback() {
     let chord = Some(key_hint::ShortcutHint::Chord {
         prefix: key_hint::ctrl(KeyCode::Char('x')),
-        completion: key_hint::ctrl(KeyCode::Char('h')),
+        completion: key_hint::KeyBinding::new(
+            KeyCode::F(12),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT | KeyModifiers::ALT,
+        ),
     });
     for (width, binding, expected) in [
-        (80, chord, "ctrl+x ctrl+h / esc close"),
+        (80, chord, "⌃x ⌃⇧⌥f12 / esc close"),
         (22, chord, "esc close"),
         (80, None, "esc close"),
     ] {

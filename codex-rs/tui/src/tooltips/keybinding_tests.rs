@@ -89,7 +89,7 @@ fn reasoning_tip_requires_both_bindings() {
 fn subsequent_tips_reflect_remapped_bindings() {
     for (configured, label) in [
         (json!("f12"), Some("f12")),
-        (json!(["ctrl-x t", "f12"]), Some("ctrl+x t")),
+        (json!(["ctrl-x t", "f12"]), Some("⌃x t")),
         (json!([]), None),
     ] {
         let config =

@@ -54,7 +54,7 @@ fn clipped_exec_approval_opens_the_complete_command() {
                 })
                 .collect();
             let elision = rows.iter().find(|row| row.contains("[…")).unwrap();
-            assert_eq!(elision.contains("ctrl+g view all"), binding.is_some());
+            assert_eq!(elision.contains("⌃g view all"), binding.is_some());
             assert!(rows.last().unwrap().contains("cancel"));
             assert!(!rows.iter().any(|row| row.contains("destructive_suffix")));
             assert!(!rows.iter().any(|row| row.contains("reason_suffix")));

@@ -612,7 +612,14 @@ impl RequestUserInputOverlay {
             if self.has_options() && !self.focus_is_notes() {
                 tips.push(shortcut("←/→", "to navigate questions"));
             } else if !self.has_options() {
-                tips.push(shortcut("ctrl+p / ctrl+n", "change question"));
+                tips.push(shortcut(
+                    &format!(
+                        "{} / {}",
+                        crate::key_hint::ctrl(KeyCode::Char('p')).display_label(),
+                        crate::key_hint::ctrl(KeyCode::Char('n')).display_label()
+                    ),
+                    "change question",
+                ));
             }
         }
         if let Some(interrupt_key) = self.interrupt_turn_hint
@@ -2477,7 +2484,7 @@ mod tests {
             tip_texts,
             vec![
                 "enter to submit all",
-                "ctrl+p / ctrl+n change question",
+                "⌃p / ⌃n change question",
                 "esc to interrupt",
             ]
         );
@@ -2499,10 +2506,7 @@ mod tests {
 
         let tips = overlay.footer_tips();
         let tip_texts = tips.iter().map(ToString::to_string).collect::<Vec<_>>();
-        assert_eq!(
-            tip_texts,
-            vec!["ctrl+j to submit answer", "esc to interrupt"]
-        );
+        assert_eq!(tip_texts, vec!["⌃j to submit answer", "esc to interrupt"]);
     }
 
     #[test]
@@ -2510,21 +2514,21 @@ mod tests {
         for (specs, expected_tips) in [
             (
                 KeybindingsSpec::One(KeybindingSpec("ctrl-x enter".to_string())),
-                vec!["ctrl+x enter to submit answer", "esc to interrupt"],
+                vec!["⌃x enter to submit answer", "esc to interrupt"],
             ),
             (
                 KeybindingsSpec::Many(vec![
                     KeybindingSpec("ctrl-enter".to_string()),
                     KeybindingSpec("ctrl-x enter".to_string()),
                 ]),
-                vec!["ctrl+enter to submit answer", "esc to interrupt"],
+                vec!["⌃enter to submit answer", "esc to interrupt"],
             ),
             (
                 KeybindingsSpec::Many(vec![
                     KeybindingSpec("ctrl-x enter".to_string()),
                     KeybindingSpec("ctrl-enter".to_string()),
                 ]),
-                vec!["ctrl+x enter to submit answer", "esc to interrupt"],
+                vec!["⌃x enter to submit answer", "esc to interrupt"],
             ),
         ] {
             let (tx, _rx) = test_sender();
@@ -3747,16 +3751,16 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        insta::assert_snapshot!(snapshot, @r"
+        insta::assert_snapshot!(snapshot, @"
 
-          Question 1/1 (1 unanswered)
-          Share details.
+        Question 1/1 (1 unanswered)
+        Share details.
 
-          › Type your answer (optional)
+        › Type your answer (optional)
 
 
 
-          ctrl+x enter to submit answer | esc to interrupt
+        ⌃x enter to submit answer | esc to interrupt
         ");
     }
 

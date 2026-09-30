@@ -260,7 +260,7 @@ async fn browsing_details_use_the_remapped_chord_without_cancelling_preview() ->
                 .expect("footer")
                 .text
                 .to_string()
-                .contains("ctrl+x ctrl+t")
+                .contains("⌃x ⌃t")
         );
         for (keys, expected_details) in [
             (

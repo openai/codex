@@ -14,4 +14,4 @@ expression: terminal.backend()
   1234)
 
   ↑/↓ choose · enter select · esc LM
-  Studio · ctrl+c exit
+  Studio · ⌃c exit

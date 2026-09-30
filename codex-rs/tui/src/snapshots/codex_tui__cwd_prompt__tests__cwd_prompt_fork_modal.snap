@@ -12,4 +12,4 @@ expression: terminal.backend()
   3. Always use session directory
   4. Always use current directory
 
-  enter continue · esc use session · ctrl+c quit
+  enter continue · esc use session · ⌃c quit

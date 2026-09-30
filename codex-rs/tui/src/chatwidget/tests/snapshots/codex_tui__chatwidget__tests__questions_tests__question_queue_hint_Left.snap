@@ -11,4 +11,4 @@ expression: "render_bottom_popup(&chat, 100)"
 
   Type your answer
 
-  enter submit   ctrl+] skip   shift+→ main prompt   shift+← next question
+  enter submit   ⌃] skip   ⇧→ main prompt   ⇧← next question

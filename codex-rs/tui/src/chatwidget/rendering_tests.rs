@@ -305,7 +305,7 @@ async fn external_writer_notice_uses_current_transcript_shortcut() {
 
     assert!(contains_text(
         &render_frame(&widget, /*width*/ 80),
-        "ctrl+k transcript"
+        "⌃k transcript"
     ));
 }
 

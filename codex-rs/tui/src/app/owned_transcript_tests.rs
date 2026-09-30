@@ -998,7 +998,7 @@ async fn offline_find_closes_before_the_next_ctrl_c_quits() -> Result<()> {
         rendered.lines().nth(usize::from(cursor.y)).map(str::trim),
         Some("Find: needle")
     );
-    assert!(!rendered.contains("ctrl+c quit"));
+    assert!(!rendered.contains("⌃c quit"));
     let close = TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert!(matches!(
         app.handle_tui_event(&mut tui, &mut app_server, close)

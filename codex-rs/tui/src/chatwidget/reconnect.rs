@@ -31,7 +31,10 @@ impl ChatWidget {
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ false);
         self.set_status_header("Reconnecting to server…".to_string());
-        self.set_footer_hint_override(Some(vec![("ctrl+c".into(), "quit".into())]));
+        self.set_footer_hint_override(Some(vec![(
+            crate::key_hint::ctrl(KeyCode::Char('c')).display_label(),
+            "quit".into(),
+        )]));
     }
 
     /// Restore local input only after replay, which can otherwise move interrupted queues into the draft.

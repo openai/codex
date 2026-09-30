@@ -574,7 +574,7 @@ fn next_previous_highlight_and_cancel_share_the_transcript_position() {
             true, true, true, true, true, true, false, false, false, false
         ]
     );
-    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"enter next · ctrl+p previous · full transcript · esc close");
+    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"enter next · ⌃p previous · full transcript · esc close");
     view.handle_search_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), &cells);
     assert!(matches!(view.search.progress, Progress::Found));
     view.handle_search_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &cells);
@@ -618,7 +618,7 @@ fn legacy_search_shortcuts_navigate_in_both_directions_without_wrapping() {
             (2, true)
         ],
     );
-    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"No more matches · enter next · ctrl+p previous · full transcript · esc close");
+    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"No more matches · enter next · ⌃p previous · full transcript · esc close");
 }
 
 #[test]
@@ -751,7 +751,7 @@ fn failed_history_waits_for_explicit_retry_and_empty_query_cancels_loading() {
         view.search
             .status_line(/*width*/ 32, view.history)
             .to_string(),
-        "ctrl+p retry · esc close",
+        "⌃p retry · esc close",
     );
     view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
     assert_eq!(view.history, TranscriptHistoryState::Failed);

@@ -98,7 +98,11 @@ pub(super) fn lines(props: &FooterProps, width: u16) -> Vec<Line<'static>> {
         },
         Shortcut::new(key_hint::ctrl(KeyCode::Char(' ')), "Start selection"),
         Shortcut {
-            key: "ctrl+home / ctrl+end".into(),
+            key: format!(
+                "{} / {}",
+                key_hint::ctrl(KeyCode::Home).display_label(),
+                key_hint::ctrl(KeyCode::End).display_label()
+            ),
             action: "Top / latest",
         },
         // Keep both jump alternatives: the terminal may be on another OS over SSH.

@@ -22,12 +22,21 @@ use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::text::Span;
 
-#[cfg(test)]
-const ALT_LABEL: &str = "⌥";
-#[cfg(all(not(test), target_os = "macos"))]
-const ALT_LABEL: &str = "⌥";
-#[cfg(all(not(test), not(target_os = "macos")))]
-const ALT_LABEL: &str = "alt";
+#[cfg(any(test, target_os = "macos"))]
+const MODIFIER_LABELS: [(KeyModifiers, &str); 3] = [
+    (KeyModifiers::CONTROL, "⌃"),
+    (KeyModifiers::SHIFT, "⇧"),
+    (KeyModifiers::ALT, "⌥"),
+];
+#[cfg(not(any(test, target_os = "macos")))]
+const MODIFIER_LABELS: [(KeyModifiers, &str); 3] = [
+    #[cfg(target_os = "linux")]
+    (KeyModifiers::CONTROL, "^"),
+    #[cfg(not(target_os = "linux"))]
+    (KeyModifiers::CONTROL, "ctrl"),
+    (KeyModifiers::SHIFT, "shift"),
+    (KeyModifiers::ALT, "alt"),
+];
 
 /// One concrete key event that can trigger a TUI action.
 ///
@@ -82,14 +91,10 @@ impl From<KeyBinding> for ShortcutHint {
 impl KeyBinding {
     pub(crate) fn display_label(&self) -> String {
         let mut label = String::new();
-        for (modifier, name) in [
-            (KeyModifiers::CONTROL, "ctrl"),
-            (KeyModifiers::SHIFT, "shift"),
-            (KeyModifiers::ALT, ALT_LABEL),
-        ] {
+        for (modifier, name) in MODIFIER_LABELS {
             if self.modifiers.contains(modifier) {
                 label.push_str(name);
-                if !matches!(name, "⌥" | "⌘" | "^") {
+                if !matches!(name, "⌃" | "⇧" | "⌥" | "⌘" | "^") {
                     label.push('+');
                 }
             }

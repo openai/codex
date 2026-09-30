@@ -9,7 +9,7 @@ fn global_find_resolves_remaps_unbinding_and_dispatch_in_main_and_activity_conte
     for (configured, label) in [
         (json!("f12"), Some("f12")),
         (json!([]), None),
-        (json!(["ctrl-x f", "f12"]), Some("ctrl+x f")),
+        (json!(["ctrl-x f", "f12"]), Some("⌃x f")),
     ] {
         let config =
             serde_json::from_value(json!({"global":{"find_transcript":configured}})).unwrap();

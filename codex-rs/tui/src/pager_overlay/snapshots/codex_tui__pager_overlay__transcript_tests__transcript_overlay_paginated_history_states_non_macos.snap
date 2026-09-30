@@ -21,7 +21,7 @@ recent transcript
 
 
 
-Earlier messages available.  Ctrl+Space select
+Earlier messages available.  ⌃space select
  ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
  q close · f3 find · esc browse prompts
 
@@ -32,7 +32,7 @@ recent transcript
 
 
 
-Retry history: ⌥</ctrl+home.
+Retry history: ⌥</⌃home.
 
 
 
@@ -43,6 +43,6 @@ recent transcript
 
 
 
-Ctrl+Space select
+⌃space select
  ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
  q close · f3 find · esc browse prompts

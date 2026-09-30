@@ -127,7 +127,7 @@ fn explicit_activity_remapping_and_unbinding_replace_all_defaults() {
             Some("pgup"),
         ),
         (json!([]), Vec::new(), None),
-        (json!("ctrl-x t"), Vec::new(), Some("ctrl+x t")),
+        (json!("ctrl-x t"), Vec::new(), Some("⌃x t")),
     ] {
         let keymap: TuiKeymap =
             serde_json::from_value(json!({"global": {"focus_activity": configured}})).unwrap();

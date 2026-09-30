@@ -13,7 +13,7 @@ history:
   └ first
     second
     third
-    +2 lines (ctrl+t to view transcript)
+    +2 lines (⌃t to view transcript)
 
 transcript:
 • Called search.lookup({"title":"Search query"})

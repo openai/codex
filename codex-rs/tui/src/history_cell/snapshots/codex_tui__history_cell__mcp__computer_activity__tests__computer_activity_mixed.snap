@@ -5,4 +5,4 @@ expression: "render(&cell, 90)"
 • Used computer · 5 actions · 1 failed
   ├ Failed: Open browser — No browser is available
   ├ Captured screenshot · Capture the reproduced bug
-  └ 3 more · ctrl+t
+  └ 3 more · ⌃t

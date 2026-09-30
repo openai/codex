@@ -1278,16 +1278,18 @@ fn plugins_popup_hint_line(
     can_remove_marketplace: bool,
     can_upgrade_marketplace: bool,
 ) -> Line<'static> {
+    let upgrade = crate::key_hint::ctrl(KeyCode::Char('u')).display_label();
+    let remove = crate::key_hint::ctrl(KeyCode::Char('r')).display_label();
     match (can_remove_marketplace, can_upgrade_marketplace) {
-        (true, true) => Line::from(
-            "ctrl+u upgrade · ctrl+r remove · space toggle · ←/→ tabs · enter details · esc close",
-        ),
-        (true, false) => {
-            Line::from("ctrl+r remove · space toggle · ←/→ tabs · enter details · esc close")
-        }
-        (false, true) => {
-            Line::from("ctrl+u upgrade · space toggle · ←/→ tabs · enter details · esc close")
-        }
+        (true, true) => Line::from(format!(
+            "{upgrade} upgrade · {remove} remove · space toggle · ←/→ tabs · enter details · esc close",
+        )),
+        (true, false) => Line::from(format!(
+            "{remove} remove · space toggle · ←/→ tabs · enter details · esc close"
+        )),
+        (false, true) => Line::from(format!(
+            "{upgrade} upgrade · space toggle · ←/→ tabs · enter details · esc close"
+        )),
         (false, false) => Line::from("←/→ tabs · enter details · space toggle · esc close"),
     }
 }

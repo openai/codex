@@ -9,7 +9,7 @@ expression: "snapshots.join(\"\\n\\n\")"
   ↑ Loading earlier messages… · esc latest
 
 80 columns · Failed
-  Retry history: ⌥</ctrl+home.  esc latest
+  Retry history: ⌥</⌃home.  esc latest
 
 80 columns · Complete
   esc latest
@@ -21,7 +21,7 @@ expression: "snapshots.join(\"\\n\\n\")"
   ↑ Loading… · esc latest
 
 40 columns · Failed
-  Retry: ⌥</ctrl+home
+  Retry history: ⌥</⌃home.  esc latest
 
 40 columns · Complete
   esc latest
@@ -33,7 +33,7 @@ expression: "snapshots.join(\"\\n\\n\")"
   ↑ Loading… · esc latest
 
 28 columns · Failed
-  Retry: ⌥</ctrl+home
+  Retry: ⌥</⌃home
 
 28 columns · Complete
   esc latest

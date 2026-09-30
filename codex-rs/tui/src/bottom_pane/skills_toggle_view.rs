@@ -568,8 +568,8 @@ mod tests {
         let view = SkillsToggleView::new(Vec::new(), tx, keymap);
         let rendered = render_lines(&view, /*width*/ 72);
 
-        assert!(rendered.contains("ctrl+t"));
-        assert!(rendered.contains("ctrl+x"));
+        assert!(rendered.contains("⌃t"));
+        assert!(rendered.contains("⌃x"));
         assert!(!rendered.contains("enter"));
         assert!(!rendered.contains("esc"));
     }

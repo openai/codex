@@ -153,7 +153,7 @@ fn warnings_keep_current_and_next_without_dismissing_unvisited_pages() {
     assert!(!key(&mut view, KeyCode::Char('k')));
     let screen = draw(&view, /*width*/ 80, /*height*/ 12);
     assert!(screen.contains("2 of 3"));
-    assert!(screen.contains("ctrl+c dismiss & close"));
+    assert!(screen.contains("⌃c dismiss & close"));
     let repeat =
         KeyEvent::new_with_kind(KeyCode::Char('k'), KeyModifiers::NONE, KeyEventKind::Repeat);
     assert!(!view.handle_key(repeat));

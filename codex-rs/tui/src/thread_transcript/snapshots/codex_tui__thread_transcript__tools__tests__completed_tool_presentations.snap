@@ -7,7 +7,7 @@ Command: compact
   └ output line 1
     output line 2
     output line 3
-    +9 lines (ctrl+t to view transcript)
+    +9 lines (⌃t to view transcript)
 
 Command: detailed
 $ cargo check

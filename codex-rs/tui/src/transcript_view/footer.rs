@@ -50,7 +50,10 @@ impl TranscriptView {
                     first_fitting_line(
                         [
                             self.status_line_with_navigation(
-                                "ctrl+c copy · enter copy & follow · esc clear",
+                                &format!(
+                                    "{} copy · enter copy & follow · esc clear",
+                                    crate::key_hint::ctrl(KeyCode::Char('c')).display_label()
+                                ),
                                 motion,
                             ),
                             selection_hint(width),
@@ -192,7 +195,10 @@ impl TranscriptView {
 fn selection_hint(width: u16) -> Line<'static> {
     first_fitting_line(
         [
-            "ctrl+c copy · enter copy & follow · esc clear",
+            &format!(
+                "{} copy · enter copy & follow · esc clear",
+                crate::key_hint::ctrl(KeyCode::Char('c')).display_label()
+            ),
             "enter copy & follow · esc clear",
             "enter copy+↓ · esc",
             "esc clear",

@@ -13,14 +13,14 @@ expression: "snapshots.join(\"\\n---\\n\")"
 
   Keyboard shortcuts
 
-  Compose                       Session                     Transcript (open first)
-  /        Commands             tab     Send message        ctrl+t                Open transcript
-  @        Mention files        ⌥,      Less reasoning      f3                    Find text
-  !        Shell command        ⌥.      More reasoning      pgup / pgdn           Scroll
-  ctrl+j   New line             f4      Inspect activity    ctrl+space            Start selection
-  ctrl+v   Paste image          ctrl+c  Quit                ctrl+home / ctrl+end  Top / latest
-  ctrl+g   External editor                                  shift+⌥, / shift+⌥.   Top / latest
-  ctrl+r   Search history
+  Compose                       Session                  Transcript (open first)
+  /        Commands             tab  Send message        ⌃t            Open transcript
+  @        Mention files        ⌥,   Less reasoning      f3            Find text
+  !        Shell command        ⌥.   More reasoning      pgup / pgdn   Scroll
+  ⌃j       New line             f4   Inspect activity    ⌃space        Start selection
+  ⌃v       Paste image          ⌃c   Quit                ⌃home / ⌃end  Top / latest
+  ⌃g       External editor                               ⇧⌥, / ⇧⌥.     Top / latest
+  ⌃r       Search history
   esc esc  Edit last message
 
   /keymap customize
@@ -41,14 +41,14 @@ expression: "snapshots.join(\"\\n---\\n\")"
 
   Keyboard shortcuts
 
-  Compose                       Session                       Transcript (open first)
-  /        Commands             tab       Send message        ctrl+t                Open transcript
-  @        Mention files        ⌥,        Less reasoning      f3                    Find text
-  !        Shell command        ⌥.        More reasoning      pgup / pgdn           Scroll
-  ctrl+j   New line             ctrl+x t  Inspect activity    ctrl+space            Start selection
-  ctrl+v   Paste image          ctrl+c    Quit                ctrl+home / ctrl+end  Top / latest
-  ctrl+g   External editor                                    shift+⌥, / shift+⌥.   Top / latest
-  ctrl+r   Search history
+  Compose                       Session                   Transcript (open first)
+  /        Commands             tab   Send message        ⌃t            Open transcript
+  @        Mention files        ⌥,    Less reasoning      f3            Find text
+  !        Shell command        ⌥.    More reasoning      pgup / pgdn   Scroll
+  ⌃j       New line             ⌃x t  Inspect activity    ⌃space        Start selection
+  ⌃v       Paste image          ⌃c    Quit                ⌃home / ⌃end  Top / latest
+  ⌃g       External editor                                ⇧⌥, / ⇧⌥.     Top / latest
+  ⌃r       Search history
   esc esc  Edit last message
 
   /keymap customize
@@ -69,14 +69,14 @@ expression: "snapshots.join(\"\\n---\\n\")"
 
   Keyboard shortcuts
 
-  Compose                       Session                   Transcript (open first)
-  /        Commands             tab     Send message      ctrl+t                Open transcript
-  @        Mention files        ⌥,      Less reasoning    f3                    Find text
-  !        Shell command        ⌥.      More reasoning    pgup / pgdn           Scroll
-  ctrl+j   New line             ctrl+c  Quit              ctrl+space            Start selection
-  ctrl+v   Paste image                                    ctrl+home / ctrl+end  Top / latest
-  ctrl+g   External editor                                shift+⌥, / shift+⌥.   Top / latest
-  ctrl+r   Search history
+  Compose                       Session                Transcript (open first)
+  /        Commands             tab  Send message      ⌃t            Open transcript
+  @        Mention files        ⌥,   Less reasoning    f3            Find text
+  !        Shell command        ⌥.   More reasoning    pgup / pgdn   Scroll
+  ⌃j       New line             ⌃c   Quit              ⌃space        Start selection
+  ⌃v       Paste image                                 ⌃home / ⌃end  Top / latest
+  ⌃g       External editor                             ⇧⌥, / ⇧⌥.     Top / latest
+  ⌃r       Search history
   esc esc  Edit last message
 
   /keymap customize

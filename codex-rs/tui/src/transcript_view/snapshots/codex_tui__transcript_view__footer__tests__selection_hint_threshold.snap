@@ -6,7 +6,7 @@ searching=false · mouse down
 <composer hints>
 
 searching=false · one character
-ctrl+c copy · enter copy & follow · esc clear
+⌃c copy · enter copy & follow · esc clear
 
 searching=false · back to anchor
 <composer hints>
@@ -20,7 +20,7 @@ Searching… · full transcript · esc close
 
 searching=true · one character
 Find:
-ctrl+c copy · enter copy & follow · esc clear
+⌃c copy · enter copy & follow · esc clear
 
 searching=true · back to anchor
 Find:

@@ -11,4 +11,4 @@ expression: terminal.backend()
 
   Local LM Studio server (default port 1234)
 
-  ↑/↓ choose · enter select · esc LM Studio · ctrl+c exit
+  ↑/↓ choose · enter select · esc LM Studio · ⌃c exit

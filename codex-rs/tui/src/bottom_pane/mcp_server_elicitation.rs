@@ -989,7 +989,14 @@ impl McpServerElicitationOverlay {
             if self.current_field_is_select() {
                 tips.push(shortcut("←/→", "to navigate fields"));
             } else {
-                tips.push(shortcut("ctrl+p / ctrl+n", "change field"));
+                tips.push(shortcut(
+                    &format!(
+                        "{} / {}",
+                        crate::key_hint::ctrl(KeyCode::Char('p')).display_label(),
+                        crate::key_hint::ctrl(KeyCode::Char('n')).display_label()
+                    ),
+                    "change field",
+                ));
             }
         }
         tips.push(shortcut("esc", "to cancel"));

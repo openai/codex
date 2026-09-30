@@ -646,18 +646,22 @@ impl Search {
     }
 
     pub(super) fn status_line(&self, width: u16, history: TranscriptHistoryState) -> Line<'static> {
+        let previous = crate::key_hint::ctrl(crossterm::event::KeyCode::Char('p')).display_label();
+        let retry_hint = format!("{previous} retry");
+        let unavailable_hint = format!("History unavailable · {retry_hint}");
+        let next_hint = format!("enter next · {previous} previous");
+        let exhausted_hint = format!("No more matches · {next_hint}");
         let (status, compact) = match self.progress {
             Progress::Idle => ("Type to find", "Type to find"),
             Progress::Restart | Progress::Scanning(_) => ("Searching…", "Searching…"),
             Progress::AwaitingHistory if history == TranscriptHistoryState::Failed => {
-                ("History unavailable · ctrl+p retry", "ctrl+p retry")
+                (unavailable_hint.as_str(), retry_hint.as_str())
             }
             Progress::AwaitingHistory => ("Searching earlier history…", "Loading…"),
-            Progress::Found => ("enter next · ctrl+p previous", "enter next"),
-            Progress::Exhausted if self.current.is_some() => (
-                "No more matches · enter next · ctrl+p previous",
-                "enter next",
-            ),
+            Progress::Found => (next_hint.as_str(), "enter next"),
+            Progress::Exhausted if self.current.is_some() => {
+                (exhausted_hint.as_str(), "enter next")
+            }
             Progress::Exhausted => ("No matches", "No matches"),
         };
         let limit = if self.query_truncated {

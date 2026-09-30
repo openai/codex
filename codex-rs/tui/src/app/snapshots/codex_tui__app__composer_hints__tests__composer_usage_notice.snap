@@ -63,7 +63,7 @@ Conversation row 19
 
 • Queued follow-up inputs
   ↳ queued follow-up
-    shift+← edit last queued message
+    ⇧← edit last queued message
                                              ⚠ 5h limit: only 2% left · /status
 
 › draft stays
@@ -77,7 +77,7 @@ Conversation row 19
 
 • Queued follow-up inputs
   ↳ queued follow-up
-    shift+← edit last queued message
+    ⇧← edit last queued message
 
 › draft stays
   second line

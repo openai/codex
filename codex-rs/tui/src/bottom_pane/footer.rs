@@ -107,7 +107,6 @@ pub(crate) enum GoalStatusIndicator {
     Complete { usage: Option<String> },
 }
 
-const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
 const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -151,7 +150,10 @@ impl FooterKeyHints {
 impl CollaborationModeIndicator {
     fn label(self, show_cycle_hint: bool) -> String {
         let suffix = if show_cycle_hint {
-            format!(" ({MODE_CYCLE_HINT})")
+            format!(
+                " ({} to cycle)",
+                key_hint::shift(KeyCode::Tab).display_label()
+            )
         } else {
             String::new()
         };
@@ -1502,7 +1504,7 @@ mod tests {
 
         snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_narrow_overlap_hides",
-            /*width*/ 50,
+            /*width*/ 40,
             &props,
             Some(CollaborationModeIndicator::Plan),
         );
@@ -1739,7 +1741,7 @@ mod tests {
             "mode indicator should remain visible"
         );
         assert!(
-            !collapsed.contains("shift+tab to cycle"),
+            !collapsed.contains("⇧tab to cycle"),
             "compact mode indicator should be used when space is tight"
         );
         assert!(

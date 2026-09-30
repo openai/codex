@@ -5241,11 +5241,11 @@ async fn side_parent_status_prioritizes_input_over_approval() -> Result<()> {
     );
     assert_snapshot!(
         format!("{input_footer}\n{approval_footer}\n{cleared_footer}"),
-        @r"
-        Side from main thread · main needs input · ctrl+/ to switch · ctrl+c to close
-        Side from main thread · main needs approval · ctrl+/ to switch · ctrl+c to close
-        Side from main thread · ctrl+/ to switch · ctrl+c to close
-        "
+        @"
+    Side from main thread · main needs input · ⌃/ to switch · ⌃c to close
+    Side from main thread · main needs approval · ⌃/ to switch · ⌃c to close
+    Side from main thread · ⌃/ to switch · ⌃c to close
+    "
     );
 
     Ok(())
@@ -6710,7 +6710,7 @@ async fn capped_resize_reflow_renders_recent_suffix_only() {
             .map(rendered_line_text)
             .collect::<Vec<_>>(),
         vec![
-            "Earlier messages are available — press ctrl+t to view the full transcript".to_string(),
+            "Earlier messages are available — press ⌃t to view the full transcript".to_string(),
             String::new(),
             "cell 18".to_string(),
             String::new(),

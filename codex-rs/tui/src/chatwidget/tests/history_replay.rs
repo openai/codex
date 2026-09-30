@@ -1374,7 +1374,7 @@ async fn failed_repl_mcp_tool_call_preserves_status_and_result() {
               └ Script failed
                 {"exit_code": 0, "output": "ready", "chunk_id": "chunk-1"}
                 Script error:
-                +1 line (ctrl+t to view transcript)
+                +1 line (⌃t to view transcript)
             "#);
         }
         assert_eq!(

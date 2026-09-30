@@ -97,7 +97,10 @@ impl AnalyticsView {
 
     pub(super) fn help_lines(&self, width: usize) -> Vec<Line<'static>> {
         let mut controls = vec![
-            "Tab / Shift+Tab · next / previous report".to_owned(),
+            format!(
+                "Tab / {} · next / previous report",
+                crate::key_hint::shift(crossterm::event::KeyCode::Tab).display_label()
+            ),
             format!(
                 "1–{} · open a report directly",
                 self.visible_sections().len()
@@ -145,8 +148,9 @@ impl AnalyticsView {
                 self.hint(ListAction::Accept)
             ),
             format!(
-                "{} · back; q / ctrl+c · close usage",
-                self.hint(ListAction::Cancel)
+                "{} · back; q / {} · close usage",
+                self.hint(ListAction::Cancel),
+                crate::key_hint::ctrl(crossterm::event::KeyCode::Char('c')).display_label()
             ),
         ]);
         if self.help_shortcut_available() {

@@ -12,4 +12,4 @@ expression: rendered
   3. Always use session directory
   4. Always use current directory (/Users/example/launched)
 
-  enter continue · esc use session · ctrl+c quit
+  enter continue · esc use session · ⌃c quit

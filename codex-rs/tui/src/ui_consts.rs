@@ -1,4 +1,4 @@
-//! Shared UI constants for layout and alignment within the TUI.
+//! Shared layout constants and transcript navigation text for the TUI.
 
 /// Width (in terminal columns) reserved for the left gutter/prefix used by
 /// live cells and aligned widgets.
@@ -9,4 +9,9 @@
 /// - User history lines account for this many columns (e.g., "▌ ") when wrapping.
 pub(crate) const LIVE_PREFIX_COLS: u16 = 2;
 pub(crate) const FOOTER_INDENT_COLS: usize = LIVE_PREFIX_COLS as usize;
-pub(crate) const TRANSCRIPT_HINT: &str = "ctrl+t to view transcript";
+pub(crate) fn transcript_hint() -> String {
+    format!(
+        "{} to view transcript",
+        crate::key_hint::ctrl(crossterm::event::KeyCode::Char('t')).display_label()
+    )
+}

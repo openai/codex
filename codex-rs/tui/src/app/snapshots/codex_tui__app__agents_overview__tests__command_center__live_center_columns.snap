@@ -3,7 +3,7 @@ source: tui/src/app/agent_center_tests.rs
 expression: "screen(&view, 160, 22)"
 ---
   Agent command center  Group: Project  g
-   All 6   Needs you 2   Working 1   Ready 2   Inactive 1                                                                                 tab/shift+tab filter
+   All 6   Needs you 2   Working 1   Ready 2   Inactive 1                                                                                      tab/⇧tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
       Tasks                                                                                   Status         Updated  │ Task details
   /tmp/project  6                                                                                                     │

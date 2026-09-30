@@ -13,7 +13,7 @@ one hidden
   └ b
     c
     d
-    + 1 line (ctrl+t to expand)
+    + 1 line (⌃t to expand)
 
 clipped line
 • Ran echo
@@ -30,4 +30,4 @@ storage truncated
   └ x
     x
     x
-    + 97 lines (ctrl+t to expand)
+    + 97 lines (⌃t to expand)

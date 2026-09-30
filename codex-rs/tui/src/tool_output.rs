@@ -8,7 +8,7 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::LogicalLineSource;
 use crate::terminal_hyperlinks::TerminalHyperlink;
 use crate::terminal_hyperlinks::remap_source_wrapped_line;
-use crate::ui_consts::TRANSCRIPT_HINT;
+use crate::ui_consts::transcript_hint;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line_with_source;
 use ratatui::style::Stylize;
@@ -116,7 +116,7 @@ impl ToolOutputPreview {
             let unit = if omitted == 1 { "line" } else { "lines" };
             self.lines.push(
                 truncate_line_with_ellipsis_if_overflow(
-                    format!("+{omitted} {unit} ({TRANSCRIPT_HINT})")
+                    format!("+{omitted} {unit} ({})", transcript_hint())
                         .dim()
                         .into(),
                     self.width,

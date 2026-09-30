@@ -3,7 +3,7 @@ source: tui/src/app/tests/navigation_reconnect_tests.rs
 expression: "render_bottom_popup(&app.chat_widget, 100)"
 ---
   Agent command center  Group: Project  g
-   All 2   Needs you 0   Working 1   Ready 1   Inactive 0                     tab/shift+tab filter
+   All 2   Needs you 0   Working 1   Ready 1   Inactive 0                          tab/⇧tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────────
       Tasks                                               │ Task details
   /tmp/project  2                                         │

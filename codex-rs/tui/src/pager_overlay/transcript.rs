@@ -139,7 +139,13 @@ impl TranscriptOverlay {
                 Line::from(notice.as_str()).dim().render(status, buf);
             } else {
                 self.view
-                    .status_line_with_navigation("Ctrl+Space select", self.motion)
+                    .status_line_with_navigation(
+                        &format!(
+                            "{} select",
+                            crate::key_hint::ctrl(KeyCode::Char(' ')).display_label()
+                        ),
+                        self.motion,
+                    )
                     .render(status, buf);
             }
             self.render_hints(hints, buf);

@@ -16,5 +16,4 @@ expression: buffer_text(&buffer)
        long draft
 
 
-  enter submit   ctrl+] skip
-  shift+→ main prompt
+  enter submit   ⌃] skip   ⇧→ main prompt
