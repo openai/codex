@@ -3,18 +3,26 @@
 use super::BoardClock;
 use super::configure;
 use super::done;
-use super::tool;
 use anyhow::Context;
+use codex_core::TurnInputRequest;
 use codex_features::RemoteMessageBoardConfigToml;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::SnapshotEntry;
 use core_test_support::responses;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use tokio::sync::Notify;
 use wiremock::Mock;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_partial_json;
@@ -42,6 +50,9 @@ async fn remote_board_uses_the_existing_tools_and_session_identity() -> anyhow::
                 bearer_token_env_var: None,
             });
         })
+        .with_model_info_override("gpt-5.5", |model| {
+            model.multi_agent_version = Some(codex_protocol::protocol::MultiAgentVersion::V2);
+        })
         .with_external_time_provider(Arc::new(BoardClock::Available))
         .build_with_auto_env(&server)
         .await?;
@@ -67,28 +78,105 @@ async fn remote_board_uses_the_existing_tools_and_session_identity() -> anyhow::
         .expect(1)
         .mount(&board)
         .await;
+    let connection = AtomicUsize::default();
+    let interrupted_turn = OnceLock::new();
+    let connecting = Arc::new(Notify::new());
+    let connected = connecting.clone();
+    let (release_handshake, receive_release) = std::sync::mpsc::channel();
+    let receive_release = std::sync::Mutex::new(receive_release);
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/boards/{root_id}/notifications")))
+        .and(header("authorization", format!("Bearer {token}")))
+        .and(body_partial_json(json!({"caller": root_id})))
+        .respond_with(move |request: &wiremock::Request| {
+            let attempt = connection.fetch_add(/*val*/ 1, Ordering::Relaxed);
+            // Interrupt the first handshake. On the next turn, fail setup,
+            // disconnect, fail a reconnect, then deliver on the same receiver.
+            match attempt {
+                0 | 4 => {}
+                2 => {
+                    return ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_string("event: ready\ndata: {}\n\n");
+                }
+                _ => return ResponseTemplate::new(503),
+            }
+            let watch: Value = request.body_json().expect("notification watch");
+            let notice = json!({
+                "recipient": root_id, "turn_id": watch["turn_id"],
+                "post": {
+                    "message_id": "00000000-0000-4000-8000-000000000002",
+                    "thread_id": "00000000-0000-4000-8000-000000000002",
+                    "author": "/root/worker", "channel_name": "design",
+                    "created_at": "2026-09-18T12:00:00Z",
+                    "text_preview": "Worker's remote decision.", "n_chars": 25, "truncated": false
+                }
+            });
+            let mut stale = notice.clone();
+            stale["turn_id"] = interrupted_turn.get_or_init(|| watch["turn_id"].clone()).clone();
+            let response = ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(format!(
+                    "event: ready\ndata: {{}}\n\nevent: notification\ndata: invalid-json\n\nevent: notification\ndata: {stale}\n\nevent: notification\ndata: {notice}\n\n"
+                ));
+            if attempt == 0 {
+                connected.notify_one();
+                // Wiremock runs on its own thread; keep the handshake pending
+                // until the test confirms interruption, regardless of runner speed.
+                let _ = receive_release.lock().expect("handshake gate").recv();
+            }
+            response
+        })
+        .expect(5..)
+        .mount(&board)
+        .await;
     let model = responses::mount_sse_sequence(
         &server,
         vec![
-            tool(
-                "remote-post",
-                "post",
-                json!({"new_channel_name":"design", "text":"A remote decision."}),
-            ),
+            // Wait in the same model step so pending mail cannot be drained before the wait.
+            responses::sse(vec![
+                responses::ev_function_call_with_namespace(
+                    "remote-post",
+                    "collaboration",
+                    "post",
+                    &json!({"new_channel_name":"design", "text":"A remote decision."}).to_string(),
+                ),
+                responses::ev_function_call_with_namespace(
+                    "await-notification",
+                    "collaboration",
+                    "wait_agent",
+                    "{}",
+                ),
+                responses::ev_completed("remote-post"),
+            ]),
             done(),
         ],
     )
     .await;
+    root.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![super::super::text(
+            "This turn will be interrupted during notification setup.",
+        )]))
+        .await?;
+    connecting.notified().await;
+    root.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&root.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    release_handshake.send(())?;
     root.submit_turn("Post the remote decision.").await?;
     let requests = model.requests();
-    let output: Value = serde_json::from_str(
-        &requests
-            .last()
-            .context("model request")?
-            .function_call_output_text("remote-post")
-            .context("tool output")?,
-    )?;
-    assert_eq!(output, post);
+    let last_request = requests.last().context("model request")?;
+    let notices = last_request.inputs_of_type("agent_message");
+    let mut notification = responses::strip_metadata_from_json(
+        responses::strip_response_item_ids_from_json(json!(notices)),
+    );
+    notification.sort_all_objects();
+    insta::assert_snapshot!(
+        "remote_board_notification",
+        serde_json::to_string_pretty(&notification)?
+    );
     // Normalize tool JSON key order across Cargo and Bazel feature sets.
     let mut bodies = requests
         .iter()
@@ -107,19 +195,26 @@ async fn remote_board_uses_the_existing_tools_and_session_identity() -> anyhow::
     insta::assert_snapshot!(
         "remote_board_tools",
         context_snapshot::format_context_snapshot(
-            "Existing board tools use a provisioned remote board.",
+            "Remote board tools and active-turn notifications share the existing session identity.",
             &bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),
             &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
     );
-    root.codex.shutdown_and_wait().await?;
+    let request_count = board
+        .received_requests()
+        .await
+        .context("board requests")?
+        .len();
+    // A completed turn must stop the receiver, including its next scheduled retry.
+    tokio::time::sleep(Duration::from_millis(/*millis*/ 1_100)).await;
     assert_eq!(
         board
             .received_requests()
             .await
             .context("board requests")?
             .len(),
-        1
+        request_count
     );
+    root.codex.shutdown_and_wait().await?;
     Ok(())
 }

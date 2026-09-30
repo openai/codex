@@ -169,6 +169,11 @@ impl RemoteAgentMessageBoard {
         .map_err(transport_error)?
         .map_err(transport_error)?;
         if !response.status().is_success() {
+            tracing::warn!(
+                %caller, %turn_id,
+                http_status = response.status().as_u16(),
+                "Remote board notification request rejected"
+            );
             tokio::time::timeout_at(deadline, decode::<()>(response))
                 .await
                 .map_err(transport_error)??;
@@ -245,15 +250,7 @@ impl RemoteAgentMessageBoard {
                 "notification stream did not acknowledge readiness",
             ));
         }
-        let stream = events
-            .map(|event| {
-                let event = event.map_err(transport_error)?;
-                if event.event != "notification" {
-                    return Err(transport_error("invalid board notification"));
-                }
-                serde_json::from_str(&event.data).map_err(CodexErr::from)
-            })
-            .boxed();
+        let stream = events.map(|event| event.map_err(transport_error)).boxed();
         Ok(BoardNotifications {
             caller,
             turn_id,
@@ -347,25 +344,35 @@ impl AgentMessageBoard for RemoteAgentMessageBoard {
 pub struct BoardNotifications {
     caller: ThreadId,
     turn_id: String,
-    stream: BoxStream<'static, Result<BoardNotification>>,
+    stream: BoxStream<'static, Result<eventsource_stream::Event>>,
 }
 
 impl BoardNotifications {
+    /// Skips invalid individual notices. Transport and framing failures remain errors.
     pub async fn next(&mut self) -> Result<Option<BoardNotification>> {
-        let Some(notice) = self.stream.next().await.transpose()? else {
-            return Ok(None);
-        };
-        if notice.recipient != self.caller || notice.turn_id != self.turn_id {
-            return Err(transport_error(
-                "notification belongs to another agent or turn",
-            ));
+        while let Some(event) = self.stream.next().await.transpose()? {
+            let error_kind = if event.event != "notification" {
+                "unexpected_event"
+            } else {
+                match serde_json::from_str::<BoardNotification>(&event.data) {
+                    Ok(notice) => {
+                        if notice.recipient != self.caller || notice.turn_id != self.turn_id {
+                            "wrong_recipient_or_turn"
+                        } else if notice.post.text_preview.chars().count() > 150 {
+                            "oversized_preview"
+                        } else {
+                            return Ok(Some(notice));
+                        }
+                    }
+                    Err(_) => "invalid_json",
+                }
+            };
+            tracing::warn!(
+                caller = %self.caller, turn_id = %self.turn_id, error_kind,
+                "Skipping invalid remote board notification"
+            );
         }
-        if notice.post.text_preview.chars().count() > 150 {
-            return Err(transport_error(
-                "board notification preview exceeds 150 characters",
-            ));
-        }
-        Ok(Some(notice))
+        Ok(None)
     }
 }
 

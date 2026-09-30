@@ -15,6 +15,7 @@ workspace = true
 anyhow = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-agent-message-board-extension = { workspace = true }
+codex-extension-api = { workspace = true }
 codex-http-client = { workspace = true }
 codex-protocol = { workspace = true }
 eventsource-stream = { workspace = true }
@@ -22,7 +23,9 @@ futures = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["rt", "time"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]

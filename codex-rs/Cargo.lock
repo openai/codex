@@ -1945,6 +1945,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "codex-agent-message-board-extension",
+ "codex-extension-api",
  "codex-http-client",
  "codex-protocol",
  "eventsource-stream",
@@ -1954,6 +1955,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
+ "tracing",
  "url",
  "wiremock",
 ]

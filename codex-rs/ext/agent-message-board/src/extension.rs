@@ -25,7 +25,11 @@ use codex_tools::ToolExecutor;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 
-type BoardFactory<C> = dyn Fn(&C, SessionId, ThreadId) -> BoxFuture<'static, Result<Option<Arc<dyn AgentMessageBoard>>>>
+type BoardFactory<C> = dyn for<'a> Fn(
+        &'a ThreadStartInput<'_, C>,
+        SessionId,
+        ThreadId,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn AgentMessageBoard>>>>
     + Send
     + Sync;
 type NamespaceResolver<C> = dyn Fn(&C) -> Option<String> + Send + Sync;
@@ -55,7 +59,7 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BoardExtension<C> {
                     ThreadId::from_string(input.thread_store.level_id()).map_err(|_| {
                         CodexErr::InvalidRequest("invalid board caller identity".into())
                     })?;
-                if let Some(board) = (self.open)(input.config, tree, caller).await? {
+                if let Some(board) = (self.open)(&input, tree, caller).await? {
                     if board.identity() != tree {
                         return Err(CodexErr::InvalidRequest(
                             "message-board factory returned another tree".into(),
@@ -129,16 +133,17 @@ impl<C> BoardExtension<C> {
 /// a local or remote backend, or returns None when disabled. Configuration is
 /// read at runtime startup, including resume; no board is created by installation.
 /// The host supplies its shared namespace description and resolves the namespace
-/// name from the runtime's startup configuration.
+/// name from the runtime's startup configuration. The factory may retain its
+/// backend in the existing thread store for other extension contributions.
 pub fn install<C: Sync + 'static>(
     registry: &mut ExtensionRegistryBuilder<C>,
     namespace_description: &'static str,
     tool_namespace: impl Fn(&C) -> Option<String> + Send + Sync + 'static,
-    open: impl Fn(
-        &C,
+    open: impl for<'a> Fn(
+        &'a ThreadStartInput<'_, C>,
         SessionId,
         ThreadId,
-    ) -> BoxFuture<'static, Result<Option<Arc<dyn AgentMessageBoard>>>>
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn AgentMessageBoard>>>>
     + Send
     + Sync
     + 'static,

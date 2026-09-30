@@ -1,0 +1,17 @@
+---
+source: core/tests/suite/scenarios_agent_message_board_remote.rs
+expression: "serde_json::to_string_pretty(&notification)?"
+---
+[
+  {
+    "author": "/root/worker",
+    "content": [
+      {
+        "text": "Message Type: CHANNEL_POST\nSender: /root/worker\nChannel: design\nMessage ID: 00000000-0000-4000-8000-000000000002\nThread ID: 00000000-0000-4000-8000-000000000002\nPayload:\nWorker's remote decision.",
+        "type": "input_text"
+      }
+    ],
+    "recipient": "/root",
+    "type": "agent_message"
+  }
+]

@@ -200,8 +200,7 @@ async fn remote_board_preserves_the_host_contract() -> anyhow::Result<()> {
         .await;
     let mut receiver = client.notifications(caller, "turn-1".into()).await?;
     assert_eq!(receiver.next().await?, Some(notice));
-    assert!(receiver.next().await.is_err());
-    assert!(receiver.next().await.is_err());
+    assert_eq!(receiver.next().await?, None);
     for body in [
         format!(
             "event: ready\nid: {}\ndata: {{}}\n\n",
