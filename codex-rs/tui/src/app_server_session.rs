@@ -14,6 +14,7 @@ mod provider_selection_tests;
 mod realtime;
 mod rollout_history;
 mod thread_list;
+mod web_search;
 
 #[cfg(test)]
 #[path = "app_server_session/collaboration_catalog_tests.rs"]
@@ -1831,6 +1832,7 @@ pub(crate) fn personality_opt_out_only(personality: Option<Personality>) -> Opti
 
 fn config_request_overrides_from_config(
     config: &Config,
+    thread_params_mode: ThreadParamsMode,
 ) -> Option<HashMap<String, serde_json::Value>> {
     let mut session_config = toml::Value::Table(toml::Table::new());
     for layer in config.config_layer_stack.layers_low_to_high() {
@@ -1877,13 +1879,16 @@ fn config_request_overrides_from_config(
         "personality",
         personality_opt_out_only(config.personality).map(|personality| personality.to_string()),
     );
-    insert(
-        "web_search",
-        Some(config.web_search_mode.value().to_string()),
-    );
     // Only winning launch choices may replace server defaults or saved thread settings.
     let origins = config.config_layer_stack.origins();
     let effective = config.config_layer_stack.effective_config();
+    web_search::apply_launch_override(
+        config,
+        thread_params_mode,
+        &effective,
+        &origins,
+        &mut overrides,
+    );
     for key in ["model_reasoning_summary", "model_verbosity"] {
         if origins.get(key).is_some_and(|origin| {
             matches!(
@@ -1921,7 +1926,8 @@ fn remove_permission_config_overrides(config: &mut Option<HashMap<String, serde_
 }
 
 fn new_thread_reasoning_overrides(config: &Config) -> Option<HashMap<String, serde_json::Value>> {
-    let mut overrides = config_request_overrides_from_config(config).unwrap_or_default();
+    let mut overrides = config_request_overrides_from_config(config, ThreadParamsMode::Embedded)
+        .unwrap_or_default();
     let summary = config
         .model_reasoning_summary
         .unwrap_or(codex_protocol::config_types::ReasoningSummary::None);
@@ -2084,7 +2090,9 @@ pub(crate) fn thread_start_params_from_config(
         permissions,
         config: match thread_params_mode {
             ThreadParamsMode::Embedded => new_thread_reasoning_overrides(config),
-            ThreadParamsMode::Remote => config_request_overrides_from_config(config),
+            ThreadParamsMode::Remote => {
+                config_request_overrides_from_config(config, thread_params_mode)
+            }
         },
         ephemeral: Some(config.ephemeral),
         history_mode: (!config.ephemeral).then_some(ThreadHistoryMode::Paginated),
@@ -2121,7 +2129,7 @@ fn thread_resume_params_from_config(
             )
         })
         .flatten();
-    let mut config_overrides = config_request_overrides_from_config(&config);
+    let mut config_overrides = config_request_overrides_from_config(&config, thread_params_mode);
     if model_settings == ResumeModelSettings::RestoreFromThread
         && let Some(overrides) = config_overrides.as_mut()
     {
@@ -2200,7 +2208,7 @@ fn thread_fork_params_from_config(
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox,
         permissions,
-        config: config_request_overrides_from_config(&config),
+        config: config_request_overrides_from_config(&config, thread_params_mode),
         base_instructions: config.base_instructions.clone().filter(|_| {
             !matches!(
                 config.base_instructions_provenance,
@@ -3425,7 +3433,6 @@ mod tests {
         let string = |value: &str| serde_json::Value::String(value.to_string());
         let expected_config = HashMap::from([
             ("model_reasoning_effort".to_string(), string("high")),
-            ("web_search".to_string(), string("disabled")),
             ("bypass_hook_trust".to_string(), true.into()),
         ]);
         let mut expected_start_config = expected_config.clone();
@@ -3440,34 +3447,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn config_overrides_forward_explicit_summary_and_verbosity() -> Result<()> {
+    async fn config_overrides_forward_explicit_summary_verbosity_and_web_search() -> Result<()> {
         let home = tempfile::tempdir()?;
         let workspace = home.path().join("workspace");
         std::fs::create_dir_all(workspace.join(".codex"))?;
         std::fs::write(
             home.path().join("config.toml"),
             format!(
-                "model_reasoning_summary = \"concise\"\nmodel_verbosity = \"low\"\n[projects.{}]\ntrust_level = \"trusted\"\n",
+                "model_reasoning_summary = \"concise\"\nmodel_verbosity = \"low\"\nweb_search = \"disabled\"\n[projects.{}]\ntrust_level = \"trusted\"\n",
                 toml::Value::String(workspace.to_string_lossy().into_owned()),
             ),
         )?;
         let profile = AbsolutePathBuf::from_absolute_path(home.path().join("work.config.toml"))?;
         std::fs::write(
             &profile,
-            "model_reasoning_summary = \"detailed\"\nmodel_verbosity = \"high\"\n",
+            "model_reasoning_summary = \"detailed\"\nmodel_verbosity = \"high\"\nweb_search = \"cached\"\n",
         )?;
         for (selected_profile, project, cli, expected) in [
-            (false, false, false, [None, None]),
-            (true, false, false, [Some("detailed"), Some("high")]),
-            (false, false, true, [Some("auto"), Some("medium")]),
-            (true, false, true, [Some("auto"), Some("medium")]),
-            (true, true, false, [None, None]),
-            (true, true, true, [Some("auto"), Some("medium")]),
+            (false, false, false, [None, None, None]),
+            (
+                true,
+                false,
+                false,
+                [Some("detailed"), Some("high"), Some("cached")],
+            ),
+            (
+                false,
+                false,
+                true,
+                [Some("auto"), Some("medium"), Some("live")],
+            ),
+            (
+                true,
+                false,
+                true,
+                [Some("auto"), Some("medium"), Some("live")],
+            ),
+            (true, true, false, [None, None, None]),
+            (
+                true,
+                true,
+                true,
+                [Some("auto"), Some("medium"), Some("live")],
+            ),
         ] {
             std::fs::write(
                 workspace.join(".codex/config.toml"),
                 if project {
-                    "model_reasoning_summary = \"concise\"\nmodel_verbosity = \"low\"\n"
+                    "model_reasoning_summary = \"concise\"\nmodel_verbosity = \"low\"\nweb_search = \"disabled\"\n"
                 } else {
                     ""
                 },
@@ -3487,16 +3514,17 @@ mod tests {
                     vec![
                         ("model_reasoning_summary".to_string(), "auto".into()),
                         ("model_verbosity".to_string(), "medium".into()),
+                        ("web_search".to_string(), "live".into()),
                     ]
                 } else {
                     Vec::new()
                 })
                 .build()
                 .await?;
-            let overrides =
-                config_request_overrides_from_config(&config).expect("config overrides");
+            let overrides = config_request_overrides_from_config(&config, ThreadParamsMode::Remote)
+                .expect("config overrides");
             assert_eq!(
-                ["model_reasoning_summary", "model_verbosity"]
+                ["model_reasoning_summary", "model_verbosity", "web_search"]
                     .map(|key| overrides.get(key).and_then(serde_json::Value::as_str)),
                 expected,
             );
@@ -3525,13 +3553,7 @@ mod tests {
 
         assert_eq!(params.model, None);
         assert_eq!(params.model_provider, None);
-        assert_eq!(
-            params.config,
-            Some(HashMap::from([(
-                "web_search".to_string(),
-                serde_json::Value::String("cached".to_string()),
-            )]))
-        );
+        assert_eq!(params.config, None);
     }
 
     #[tokio::test]
@@ -3836,20 +3858,23 @@ mod tests {
         config.personality = None;
 
         let implicit_overrides =
-            config_request_overrides_from_config(&config).expect("config overrides");
+            config_request_overrides_from_config(&config, ThreadParamsMode::Remote)
+                .expect("config overrides");
 
         assert!(!implicit_overrides.contains_key("personality"));
 
         for personality in [Personality::Friendly, Personality::Pragmatic] {
             config.personality = Some(personality);
             let ordinary_overrides =
-                config_request_overrides_from_config(&config).expect("config overrides");
+                config_request_overrides_from_config(&config, ThreadParamsMode::Remote)
+                    .expect("config overrides");
             assert!(!ordinary_overrides.contains_key("personality"));
         }
 
         config.personality = Some(Personality::None);
         let explicit_overrides =
-            config_request_overrides_from_config(&config).expect("config overrides");
+            config_request_overrides_from_config(&config, ThreadParamsMode::Remote)
+                .expect("config overrides");
 
         assert_eq!(
             explicit_overrides.get("personality"),

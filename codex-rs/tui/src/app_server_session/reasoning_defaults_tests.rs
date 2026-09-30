@@ -3,8 +3,6 @@
 use super::*;
 use crate::legacy_core::config::ConfigBuilder;
 use codex_app_server_protocol::ServerNotification;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::Verbosity;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -44,7 +42,7 @@ async fn reasoning_defaults_reach_responses() -> Result<()> {
             ThreadParamsMode::Embedded,
         ),
         (
-            "model_reasoning_summary = 'detailed'\nmodel_verbosity = 'high'",
+            "model_reasoning_summary = 'detailed'\nmodel_verbosity = 'high'\nweb_search = 'live'",
             json!("detailed"),
             json!(null),
             ThreadParamsMode::Remote,
@@ -75,16 +73,25 @@ stream_max_retries = 0
             codex_protocol::config_types::TrustLevel::Trusted,
         )
         .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
-        let mut config = ConfigBuilder::default()
+        let server_config = ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
             .build()
             .await?;
-        let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
+        let client_home = tempfile::tempdir()?;
+        let config = if mode == ThreadParamsMode::Remote {
+            std::fs::write(
+                client_home.path().join("config.toml"),
+                "model_reasoning_summary = 'concise'\nmodel_verbosity = 'low'\nweb_search = 'disabled'",
+            )?;
+            ConfigBuilder::default()
+                .codex_home(client_home.path().to_path_buf())
+                .build()
+                .await?
+        } else {
+            server_config.clone()
+        };
+        let mut app_server = crate::start_embedded_app_server_for_picker(&server_config).await?;
         app_server.thread_params_mode = mode;
-        if mode == ThreadParamsMode::Remote {
-            config.model_reasoning_summary = Some(ReasoningSummary::Concise);
-            config.model_verbosity = Some(Verbosity::Low);
-        }
         let started = app_server.start_thread(&config).await?;
         for resume in [false, true] {
             if resume {
@@ -92,7 +99,7 @@ stream_max_retries = 0
                     break;
                 }
                 app_server.shutdown().await?;
-                app_server = crate::start_embedded_app_server_for_picker(&config).await?;
+                app_server = crate::start_embedded_app_server_for_picker(&server_config).await?;
                 app_server.thread_params_mode = mode;
                 app_server
                     .resume_thread(
@@ -156,6 +163,13 @@ stream_max_retries = 0
             );
             if mode == ThreadParamsMode::Remote {
                 assert_eq!(body["text"]["verbosity"], json!("high"));
+                let web_search = body["tools"]
+                    .as_array()
+                    .expect("tools")
+                    .iter()
+                    .find(|tool| tool["type"] == "web_search")
+                    .expect("server's web search tool");
+                assert_eq!(web_search["external_web_access"], json!(true));
             }
             let metadata: serde_json::Value = serde_json::from_str(
                 body["client_metadata"]["x-codex-turn-metadata"]

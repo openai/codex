@@ -1097,9 +1097,6 @@ async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths() 
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
-    app.config
-        .web_search_mode
-        .set(codex_protocol::config_types::WebSearchMode::Live)?;
     std::fs::write(
         codex_home.path().join("config.toml"),
         "web_search = \"disabled\"\n",
@@ -1169,7 +1166,7 @@ async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths() 
     assert_eq!(starts.len(), 2);
     for params in &starts {
         assert_eq!(params["dynamicTools"], serde_json::Value::Null);
-        assert_eq!(params["config"]["web_search"], "live");
+        assert_eq!(params["config"].get("web_search"), None);
         let server = &params["config"]["mcp_servers.codex_tui"];
         assert!(
             server["url"]
