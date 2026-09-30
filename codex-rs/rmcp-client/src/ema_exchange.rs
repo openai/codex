@@ -19,7 +19,6 @@ use crate::utils::build_default_headers;
 
 pub(crate) const TOKEN_EXCHANGE_GRANT_TYPE: &str =
     "urn:ietf:params:oauth:grant-type:token-exchange";
-#[cfg(test)]
 pub(crate) const JWT_BEARER_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:jwt-bearer";
 
 /// A resource-bound bearer and its server-reported lifetime, with redacted diagnostics.
@@ -41,7 +40,7 @@ impl std::fmt::Debug for EmaAccessToken {
 
 /// The caller supplies trusted authorization-server metadata and an IdP credential.
 /// This primitive does not perform resource discovery or interactive login.
-pub struct EmaIdJagExchangeRequest<'a> {
+pub(crate) struct EmaIdJagExchangeRequest<'a> {
     pub resource: &'a str,
     pub scopes: &'a [String],
     pub mcp_client_id: &'a str,
@@ -56,7 +55,9 @@ pub struct EmaIdJagExchangeRequest<'a> {
 }
 
 /// Exchanges an enterprise IdP credential for a resource-bound MCP bearer token.
-pub async fn exchange_id_jag(request: EmaIdJagExchangeRequest<'_>) -> Result<EmaAccessToken> {
+pub(crate) async fn exchange_id_jag(
+    request: EmaIdJagExchangeRequest<'_>,
+) -> Result<EmaAccessToken> {
     let idp_http = OAuthHttpClientAdapter::new_with_redirect_mode(
         request.idp_http_client,
         build_default_headers(/*http_headers*/ None, /*env_http_headers*/ None)?,

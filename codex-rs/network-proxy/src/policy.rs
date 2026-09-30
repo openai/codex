@@ -52,6 +52,7 @@ pub(crate) fn is_default_proxy_bypass_host(host: &str) -> bool {
     }
 }
 
+/// Classifies IP literals excluded from public network destinations; does not resolve DNS.
 pub fn is_non_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_non_public_ipv4(ip),

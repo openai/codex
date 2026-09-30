@@ -82,7 +82,7 @@ pub(crate) fn oidc_identity(
     Ok(claims)
 }
 
-pub fn validate_oidc_identity_assertion(
+pub(crate) fn validate_oidc_identity_assertion(
     assertion: &str,
     expected_issuer: &str,
     expected_audience: &str,

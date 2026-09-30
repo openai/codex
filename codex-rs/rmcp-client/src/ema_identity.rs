@@ -38,7 +38,6 @@ pub struct EmaIdpIdentityRequest<'a> {
 }
 
 /// An opaque IdP refresh token whose credential lock is held through token exchange.
-#[allow(dead_code)]
 pub struct EmaIdpIdentity {
     pub(crate) token_endpoint: String,
     pub(crate) refresh_token: String,

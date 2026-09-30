@@ -796,7 +796,7 @@ fn mcp_redirect_policy(
 // rmcp's automatic lifecycle does not yet recognize deployed legacy discovery
 // rejection shapes. Remove this compatibility shim once the SDK does:
 // https://github.com/modelcontextprotocol/rust-sdk/issues/1040
-fn legacy_discovery_fallback_response(
+pub(super) fn legacy_discovery_fallback_response(
     request: &ClientJsonRpcMessage,
     response: ServerJsonRpcMessage,
     allow_uncorrelated_http_rejection: bool,
