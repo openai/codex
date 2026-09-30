@@ -1056,6 +1056,9 @@ async fn guardian_v2_routes_scoped_tool_approvals(
             // Exceed the full-text storage cap; the bounded root excerpt must survive
             // after compaction removes the original from the live model window.
             format!("{USER_CONTEXT}\n{}", "Context detail. ".repeat(1_200))
+        } else if review_continuations {
+            // Exceed the retained-record rendering cap to exercise notice deduplication.
+            format!("{USER_CONTEXT}\n{}", "Context detail. ".repeat(/*n*/ 300))
         } else {
             USER_CONTEXT.to_owned()
         },
@@ -1474,6 +1477,16 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                 !third_sample.to_string().contains("guardian_review_ids"),
                 "review delivery metadata must stay out of the model request"
             );
+            for request in [&luna_request, &second_sample, &third_sample] {
+                assert_eq!(
+                    request
+                        .to_string()
+                        .matches("some retained user instructions are unavailable")
+                        .count(),
+                    1,
+                    "each effective classifier context must contain the omission notice exactly once"
+                );
+            }
             let previous_reviews = sync_review_fragments(&second_sample);
             let reviews = sync_review_fragments(&third_sample);
             let has_new_review = matches!(risk, GuardianRisk::High);
@@ -1532,6 +1545,23 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         responses_state.guardian_reviews.load(Ordering::SeqCst),
         expected_guardian_reviews
     );
+    if review_continuations {
+        for request in responses_state
+            .guardian_requests
+            .lock()
+            .expect("Guardian requests")
+            .iter()
+        {
+            assert_eq!(
+                request
+                    .to_string()
+                    .matches("some retained user instructions are unavailable")
+                    .count(),
+                1,
+                "reused synchronous reviews must not append the same omission notice again"
+            );
+        }
+    }
     if mixed_evidence {
         let reviews = responses_state
             .guardian_requests

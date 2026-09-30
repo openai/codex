@@ -1,4 +1,4 @@
-//! Model-invisible checkpoint of the host's bounded Guardian transcript.
+//! Model-invisible Guardian transcript checkpoints and retained-section delivery proof.
 //! Entries preserve rollback provenance; their flattened wire shape still reads as
 //! ResponseItem on older hosts, and old metadata-free checkpoints remain readable.
 
@@ -11,6 +11,13 @@ use serde::Serialize;
 
 use crate::CodexHarnessMetadata;
 use crate::ResponseItemEnvelope;
+
+/// Host omission notices delivered by a complete retained-instructions section.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct GuardianRetainedOmissions {
+    pub user_instructions: bool,
+    pub assistant_context: bool,
+}
 
 /// Original review evidence, separate from the compacted model conversation.
 /// Hosts enforce transcript retention limits both when saving and restoring it.

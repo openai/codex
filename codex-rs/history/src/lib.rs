@@ -73,6 +73,10 @@ pub struct CodexHarnessMetadata {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub guardian_source_order_guidance: bool,
 
+    /// Section-scoped omission delivery proof; None means unknown, not complete.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guardian_retained_omissions: Option<GuardianRetainedOmissions>,
+
     /// Original retained evidence represented by this exact history item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retained_source: Option<RetainedSource>,
@@ -151,6 +155,7 @@ impl CodexHarnessMetadata {
     pub fn mark_retained_sources_incomplete(&mut self) {
         self.guardian_review_ids.clear();
         self.guardian_source_order_guidance = false;
+        self.guardian_retained_omissions = None;
         if let Some(source) = &mut self.retained_source {
             source.complete = false;
         }
@@ -275,6 +280,7 @@ pub use retained_context::VerifiedQuestionAnswer;
 mod rollout_payload;
 
 pub use guardian_history::GuardianHistoryCheckpoint;
+pub use guardian_history::GuardianRetainedOmissions;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompactedItem {

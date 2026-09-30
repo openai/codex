@@ -441,9 +441,13 @@ impl ComposedContext {
 impl SectionOutput {
     fn extend_delivery_metadata(&self, metadata: &mut CodexHarnessMetadata) {
         if let SectionDelivery::UserContent(items) = &self.delivery {
-            metadata.guardian_source_order_guidance |= self.id == "retained_user_instructions"
+            if self.id == "retained_user_instructions"
                 && items.iter().any(|item| matches!(&item.content, ContentItem::InputText { text }
-                    if text.strip_suffix('\n').is_some_and(|text| text == crate::retained_instructions::START || text == crate::retained_instructions::LEGACY_START)));
+                    if text.strip_suffix('\n').is_some_and(|text| text == crate::retained_instructions::START || text == crate::retained_instructions::LEGACY_START)))
+            {
+                metadata.guardian_source_order_guidance = true;
+                metadata.guardian_retained_omissions = Some(crate::retained_instructions::omission_state(items));
+            }
             metadata.guardian_sources.extend(
                 items
                     .iter()

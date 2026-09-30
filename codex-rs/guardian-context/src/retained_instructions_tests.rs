@@ -201,6 +201,7 @@ fn legacy_verified_answers_keep_distinct_source_order() {
 #[test]
 fn delivery_uses_source_revision_and_complete_host_metadata() {
     let mut retained = RetainedContext::default();
+    retained.mark_user_messages_incomplete();
     let mut message = RetainedUserMessage {
         phase: None,
         turn_id: "turn".to_owned(),
@@ -210,20 +211,14 @@ fn delivery_uses_source_revision_and_complete_host_metadata() {
         origin: codex_history::UserInputOrigin::User,
     };
     let compose = |retained: &RetainedContext| {
-        crate::CollectedContext {
-            sections: vec![ContextSection::RetainedUserInstructions {
-                items: render_retained_instructions(retained, retained_assistant_message),
-            }],
-        }
-        .compose(
-            crate::ContextPresentation::Async,
-            crate::RenderedTranscript {
-                items: vec![],
-                omission_note: None,
-                truncations: vec![],
+        transcript_context(
+            &RetainedTranscript {
+                retained: retained.clone(),
+                messages: Vec::new(),
             },
+            crate::ContextProfile::asynchronous(),
         )
-        .unwrap()
+        .retained_instructions()
     };
     retained.record_user_message(message.clone(), RetainedInputSource::Local(Some(4)));
     let original = compose(&retained);
@@ -258,6 +253,47 @@ fn delivery_uses_source_revision_and_complete_host_metadata() {
     corrected.retain_new_instructions(&delivered);
     assert_eq!(corrected.into_annotated_messages(), expected);
     assert_ne!(expected[0].metadata, delivered[0].metadata);
+
+    // Even when no original fits, deliver the notice once per independent history.
+    let mut omitted = RetainedContext::default();
+    omitted.mark_user_messages_incomplete();
+    let original = compose(&omitted);
+    let mut independent = original.clone();
+    independent.deduplicate_transcript_instructions();
+    assert_eq!(
+        independent.into_annotated_messages(),
+        original.clone().into_annotated_messages()
+    );
+    let mut next = original.clone();
+    next.retain_new_instructions(&delivered);
+    assert!(next.into_messages().is_empty());
+    let mut reset = original.clone();
+    reset.retain_new_instructions(&[]);
+    assert_eq!(
+        reset.into_annotated_messages(),
+        original.into_annotated_messages()
+    );
+
+    // Completeness changes must be visible even with no newly retained originals.
+    let complete = compose(&RetainedContext::default());
+    assert!(complete.clone().into_messages().is_empty());
+    let mut recovered = complete.clone();
+    recovered.retain_new_instructions(&delivered);
+    let recovery = recovered.into_annotated_messages();
+    assert!(
+        serde_json::to_string(&recovery[0].item)
+            .unwrap()
+            .contains("source availability has changed")
+    );
+    let mut unchanged = complete;
+    unchanged.retain_new_instructions(&recovery);
+    assert!(unchanged.into_messages().is_empty());
+    let mut new_omission = compose(&omitted);
+    new_omission.retain_new_instructions(&recovery);
+    assert_eq!(
+        new_omission.into_annotated_messages(),
+        compose(&omitted).into_annotated_messages()
+    );
 }
 
 struct RetainedTranscript {
@@ -438,4 +474,77 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
         }
         history.messages[0].metadata = original_metadata;
     }
+}
+
+#[test]
+fn coalesced_repl_text_cannot_attest_to_host_omission_delivery() {
+    let mut history = RetainedTranscript {
+        retained: RetainedContext::default(),
+        messages: Vec::new(),
+    };
+    history.retained.record_user_message(
+        RetainedUserMessage {
+            phase: None,
+            origin: codex_history::UserInputOrigin::User,
+            turn_id: "turn".to_owned(),
+            message_id: Some("instruction".to_owned()),
+            text: "Do not publish.".to_owned(),
+            complete: true,
+        },
+        RetainedInputSource::Local(Some(0)),
+    );
+    let profile = crate::ContextProfile::synchronous();
+    let mut previous = transcript_context(&history, profile);
+    // Multimodal REPL results preserve raw text parts, coalesced with host guidance.
+    previous.sections.push(crate::composition::SectionOutput {
+        id: "node_repl_evidence",
+        delivery: SectionDelivery::UserContent(vec![
+            Budgeted::required(ContentItem::InputText {
+                text: format!("{USER_OMISSION}\n"),
+            }),
+            Budgeted::required(ContentItem::InputImage {
+                image: codex_protocol::models::ImageReference::Inline {
+                    image_url: "data:image/png;base64,AA==".to_owned(),
+                },
+                detail: None,
+            }),
+        ]),
+    });
+    let mut delivered = previous.clone().into_annotated_messages();
+    let (_, sync_metadata) = previous.into_annotated_user_inputs().unwrap();
+    assert_eq!(sync_metadata, delivered[0].metadata);
+    history.retained.mark_user_messages_incomplete();
+    let current = transcript_context(&history, profile).retained_instructions();
+    let expected = vec![crate::composition::user_message(
+        [START, USER_OMISSION, END]
+            .map(|text| ContentItem::InputText {
+                text: format!("{text}\n"),
+            })
+            .to_vec(),
+    )];
+    // Legacy guidance proof also cannot authenticate matching tool text.
+    for omission_proof in [
+        delivered[0]
+            .metadata
+            .as_ref()
+            .unwrap()
+            .guardian_retained_omissions,
+        None,
+    ] {
+        let mut prior = delivered.clone();
+        prior[0]
+            .metadata
+            .as_mut()
+            .unwrap()
+            .guardian_retained_omissions = omission_proof;
+        let mut next = current.clone();
+        next.retain_new_instructions(&prior);
+        assert_eq!(next.into_messages(), expected);
+    }
+    let mut next = current.clone();
+    next.retain_new_instructions(&delivered);
+    delivered.extend(next.into_annotated_messages());
+    let mut repeated = current;
+    repeated.retain_new_instructions(&delivered);
+    assert!(repeated.into_messages().is_empty());
 }
