@@ -7,6 +7,7 @@ use codex_tools::UnifiedExecShellMode;
 use codex_tools::ZshForkConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
@@ -91,6 +92,182 @@ fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
         .any(|arg| arg.eq_ignore_ascii_case("-Command"))
     {
         assert!(command.contains(&"-NoProfile".to_string()));
+    }
+    Ok(())
+}
+
+/// Nested commands must find the first reported tool directory after login startup without duplicating existing entries.
+#[cfg(unix)]
+#[test]
+fn test_get_command_keeps_path_prepends_after_login_startup() -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = tempfile::tempdir()?;
+    let path_dir = temp_dir.path().join("codex '[*] path");
+    let extra_path_dir = temp_dir.path().join("extra tools");
+    for directory in [&path_dir, &extra_path_dir] {
+        std::fs::create_dir(directory)?;
+        let rg = directory.join("rg");
+        std::fs::write(&rg, "#!/bin/sh\n")?;
+        std::fs::set_permissions(&rg, std::fs::Permissions::from_mode(0o755))?;
+    }
+    let rg = path_dir.join("rg");
+    let startup = temp_dir.path().join("startup");
+    std::fs::write(
+        &startup,
+        "export PATH=\"$CODEX_TEST_LOGIN_PATH\" CODEX_TEST_LOGIN_PATH_RESET=1\n",
+    )?;
+    let path_dirs = [
+        PathUri::from_host_native_path(&path_dir)?,
+        PathUri::from_host_native_path(&extra_path_dir)?,
+    ];
+    let args: ExecCommandArgs = parse_arguments(
+        r#"{"cmd":"sh -c 'test \"$CODEX_TEST_LOGIN_PATH_RESET\" = 1 && printf \"%s\\n\" \"$PATH\" && command -v rg'"}"#,
+    )?;
+    let shell = Arc::new(get_shell(ShellType::Bash).expect("bash should be available"));
+    let resolved = get_command(
+        &args,
+        Arc::clone(&shell),
+        &UnifiedExecShellMode::Direct,
+        /*allow_login_shell*/ true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    assert_eq!(
+        resolved.command,
+        shell.derive_exec_args(&args.cmd, /*use_login_shell*/ true)
+    );
+
+    let execution_command = resolved
+        .shell
+        .derive_exec_args_with_path_prepends(&args.cmd, &path_dirs)
+        .expect("login shell should restore PATH");
+    let path_dir = path_dirs[0].inferred_native_path_string();
+    let extra_path_dir = path_dirs[1].inferred_native_path_string();
+    let already_present = format!(
+        "{}:{path_dir}:{extra_path_dir}:/usr/bin:/bin",
+        temp_dir.path().display()
+    );
+    for (login_path, expected_path) in [
+        (
+            "/usr/bin:/bin".to_string(),
+            format!("{path_dir}:{extra_path_dir}:/usr/bin:/bin"),
+        ),
+        (already_present.clone(), already_present),
+    ] {
+        let output = std::process::Command::new(&execution_command[0])
+            .args(&execution_command[1..])
+            .env("BASH_ENV", &startup)
+            .env("CODEX_TEST_LOGIN_PATH", login_path)
+            .env_remove("CODEX_TEST_LOGIN_PATH_RESET")
+            .env("PATH", &path_dir)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout)?,
+            format!("{expected_path}\n{}\n", rg.display())
+        );
+    }
+    Ok(())
+}
+
+/// The requested login shell and its command still run when startup forbids changing PATH.
+#[cfg(unix)]
+#[test]
+fn test_get_command_runs_login_shell_when_path_is_readonly() -> anyhow::Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let startup = temp_dir.path().join("startup");
+    // An explicit exit from a login Bash runs ~/.bash_logout; keep the runner's file out of the test.
+    std::fs::write(temp_dir.path().join(".bash_logout"), ":\n")?;
+    std::fs::write(
+        &startup,
+        "if shopt -q login_shell; then\n    export HOME=\"$CODEX_TEST_LOGIN_HOME\"\n    export PATH=/usr/bin:/bin\n    readonly PATH\n    set -e\nfi\n",
+    )?;
+    let path_dir = PathUri::from_host_native_path(temp_dir.path().join("codex-path"))?;
+    let args: ExecCommandArgs = parse_arguments(
+        r#"{"cmd":"shopt -q login_shell || exit 90; case $- in *e*) ;; *) exit 91 ;; esac; /bin/sh -c 'printf \"%s\\n\" \"$PATH\"'; exit 23","login":true}"#,
+    )?;
+    let shell = Arc::new(get_shell(ShellType::Bash).expect("bash should be available"));
+    let resolved = get_command(
+        &args,
+        shell,
+        &UnifiedExecShellMode::Direct,
+        /*allow_login_shell*/ true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let command = resolved
+        .shell
+        .derive_exec_args_with_path_prepends(&args.cmd, &[path_dir])
+        .expect("the reported directory can be put on PATH");
+    let output = std::process::Command::new(&command[0])
+        .args(&command[1..])
+        .env("BASH_ENV", startup)
+        .env("CODEX_TEST_LOGIN_HOME", temp_dir.path())
+        .env_remove("SHLVL")
+        .output()?;
+
+    assert_eq!(
+        (
+            output.status.code(),
+            String::from_utf8(output.stdout)?,
+            String::from_utf8(output.stderr)?
+        ),
+        (Some(23), "/usr/bin:/bin\n".to_string(), String::new())
+    );
+    Ok(())
+}
+
+/// The package path only affects Codex's own POSIX login shells when the executor reports a POSIX path.
+#[test]
+fn test_get_command_does_not_change_nested_login_or_powershell() -> anyhow::Result<()> {
+    for (shell_type, shell_path, arguments, use_login_shell, path) in [
+        (
+            ShellType::Bash,
+            "/bin/bash",
+            r#"{"cmd":"bash -lc 'command -v rg'","login":false}"#,
+            false,
+            "file:///executor/codex-path",
+        ),
+        (
+            ShellType::PowerShell,
+            "pwsh",
+            r#"{"cmd":"Get-Command rg"}"#,
+            true,
+            "file:///executor/codex-path",
+        ),
+        (
+            ShellType::Bash,
+            "/bin/bash",
+            r#"{"cmd":"command -v rg"}"#,
+            true,
+            "file:///C:/executor/codex-path",
+        ),
+    ] {
+        let args: ExecCommandArgs = parse_arguments(arguments)?;
+        let path_dir = PathUri::parse(path)?;
+        let shell = Arc::new(Shell {
+            shell_type,
+            shell_path: PathBuf::from(shell_path),
+        });
+        let resolved = get_command(
+            &args,
+            Arc::clone(&shell),
+            &UnifiedExecShellMode::Direct,
+            /*allow_login_shell*/ true,
+        )
+        .map_err(anyhow::Error::msg)?;
+        assert_eq!(
+            (
+                resolved.command,
+                resolved
+                    .shell
+                    .derive_exec_args_with_path_prepends(&args.cmd, &[path_dir])
+            ),
+            (shell.derive_exec_args(&args.cmd, use_login_shell), None)
+        );
     }
     Ok(())
 }

@@ -1,5 +1,7 @@
 use codex_exec_server::ShellInfo;
 use codex_shell_command::shell_detect::DetectedShell;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -90,6 +92,61 @@ impl ShellInvocation {
                 self.shell.shell_type,
                 ShellType::Bash | ShellType::Zsh | ShellType::Sh
             )
+    }
+
+    /// Builds launch arguments that try to restore the executor's directories to `PATH`
+    /// after login startup, so `command` and its children can find them.
+    ///
+    /// Call this for the POSIX login shell started by Codex when the executor reports
+    /// directories and the user has not explicitly configured `PATH`. The request's login
+    /// mode is unchanged, even if startup makes `PATH` read-only. Returns `None` if no
+    /// directories are reported or the shell or any path cannot use this setup; keep the
+    /// original arguments in that case.
+    pub(crate) fn derive_exec_args_with_path_prepends(
+        &self,
+        command: &str,
+        paths: &[PathUri],
+    ) -> Option<Vec<String>> {
+        if !self.is_posix_login() || paths.is_empty() {
+            return None;
+        }
+        let mut setup = Vec::with_capacity(paths.len());
+        // Prepend backwards so newly added directories retain the executor's order.
+        for path in paths.iter().rev() {
+            if path.infer_path_convention() != Some(PathConvention::Posix) {
+                return None;
+            }
+            let path = path.inferred_native_path_string();
+            // POSIX PATH has no way to escape a colon inside a single directory.
+            if path.contains(':') {
+                return None;
+            }
+            let path = shlex::try_quote(&path).ok()?;
+            // Padding `${PATH-}` with colons makes `case` match whole entries, even at the ends;
+            // `-` also handles an unset PATH. Re-export a match so child commands inherit it;
+            // otherwise probe in a subshell: assigning a read-only PATH can exit the login shell
+            // before the user's command runs. `${PATH:+...}` adds `:` only when PATH is nonempty,
+            // so we don't make the shell search the current directory.
+            setup.push(format!(
+                "case \":${{PATH-}}:\" in *:{path}:*) export PATH ;; \
+                 *) if (export PATH=) 2>/dev/null; then \
+                 export PATH={path}${{PATH:+:\"$PATH\"}}; fi ;; esac"
+            ));
+        }
+        let setup = setup.join("; ");
+        // Keep setup on the first input line so shell diagnostics and $LINENO still refer to
+        // the original script. If the quoted path contains literal newlines, decode only the
+        // setup with eval in the current shell; the trailing `esac` keeps command substitution
+        // from trimming any newlines in the path.
+        let setup = if setup.contains('\n') {
+            let escaped = setup.replace('\\', "\\\\").replace('\n', "\\n");
+            let escaped = shlex::try_quote(&escaped).ok()?;
+            format!("eval \"$(command -p printf '%b' {escaped})\"")
+        } else {
+            setup
+        };
+        let command = format!("{setup}; {command}");
+        Some(self.shell.derive_exec_args(&command, self.use_login_shell))
     }
 }
 
