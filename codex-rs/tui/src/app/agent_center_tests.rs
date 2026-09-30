@@ -137,7 +137,7 @@ async fn live_center_pages_visible_rows_without_wrapping() {
                 .lock()
                 .unwrap()
                 .connection_notice = Some("Reconnecting…");
-            view.handle_key_event(KeyCode::Char('f').into());
+            view.handle_key_event(KeyCode::Char('/').into());
             view.handle_paste("Paging".into());
         }
         screen(&view, /*width*/ 110, /*height*/ 18);
@@ -185,7 +185,7 @@ async fn live_center_metadata_clips_at_grapheme_boundaries() {
         /*selected_thread_id*/ None,
     );
     let input = format!("{}日本語 e\u{301} 👩\u{200d}💻", "界".repeat(/*n*/ 100_000));
-    for (key, label) in [('r', "Rename › "), ('f', "Search › ")] {
+    for (key, label) in [('r', "Rename › "), ('/', "Search › ")] {
         view.handle_key_event(KeyCode::Char(key).into());
         view.handle_paste(input.clone());
         let rendered = screen(&view, /*width*/ 40, /*height*/ 18);
@@ -340,7 +340,7 @@ async fn live_center_fixed_shortcuts_yield_to_configured_actions() {
     let mut app = make_test_app().await;
     let config: TuiKeymap = toml::from_str("[list]\ncancel = 'q'").unwrap();
     app.keymap = RuntimeKeymap::from_config(&config).unwrap();
-    for editor_key in ['f', 'r'] {
+    for editor_key in ['/', 'r'] {
         let mut view = app.agents_overview_view(
             vec![overview_thread(
                 ThreadId::from_u128(/*value*/ 42),
@@ -411,7 +411,7 @@ async fn live_center_fixed_shortcuts_yield_to_configured_actions() {
                 .lock()
                 .unwrap()
                 .server_version_notice = None;
-            view.handle_key_event(KeyCode::Char('f').into());
+            view.handle_key_event(KeyCode::Char('/').into());
             assert!(!screen(&view, /*width*/ 100, /*height*/ 24).contains("enter open"));
         }
         view.handle_key_event(key);
@@ -479,14 +479,16 @@ async fn live_center_search_row_appears_only_while_editing() {
         ["Tasks", "Status", "Updated"].map(|label| header[text.find(label).unwrap()].style());
     assert_eq!(styles, [styles[0]; 3]);
     let idle = screen(&view, area.width, area.height);
-    view.handle_key_event(KeyCode::Char('f').into());
-    view.handle_paste("find".into());
-    insta::assert_snapshot!(
-        "live_center_search_active",
-        screen(&view, area.width, area.height)
-    );
-    view.handle_key_event(KeyCode::Esc.into());
-    assert_eq!(screen(&view, area.width, area.height), idle);
+    for key in [KeyCode::Char('/'), KeyCode::F(3)] {
+        view.handle_key_event(key.into());
+        view.handle_paste("find".into());
+        insta::assert_snapshot!(
+            "live_center_search_active",
+            screen(&view, area.width, area.height)
+        );
+        view.handle_key_event(KeyCode::Esc.into());
+        assert_eq!(screen(&view, area.width, area.height), idle);
+    }
 }
 
 #[tokio::test]
@@ -503,7 +505,7 @@ async fn backspace_edits_search_and_rename_without_deleting_tasks() {
         )],
         /*selected_thread_id*/ None,
     );
-    for key in ['f', 'r'] {
+    for key in ['/', 'r'] {
         view.handle_key_event(KeyCode::Char(key).into());
         let initial = screen(&view, /*width*/ 88, /*height*/ 16);
         view.handle_paste("!".into());
@@ -583,7 +585,7 @@ async fn live_center_show_more_navigation_search_and_loading() {
         state.loading = false;
         state.refresh_failed = true;
     }
-    view.handle_key_event(KeyCode::Char('f').into());
+    view.handle_key_event(KeyCode::Char('/').into());
     view.handle_paste("Older task".into());
     insta::assert_snapshot!(
         "live_center_show_more_search_retry",

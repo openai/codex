@@ -19,6 +19,7 @@ expression: "screen(&view, width, height)"
   n          New
   w          New worktree
   o          Resume
+  f          Fork
   r          Rename
   x          Stop
   a          Archive
@@ -27,9 +28,8 @@ expression: "screen(&view, width, height)"
 
   View
   tab/shift+tab  Filter
-  f              Search
+  f3             Search
   g              Group
-
 
 
 

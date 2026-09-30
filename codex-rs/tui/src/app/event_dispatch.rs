@@ -31,6 +31,19 @@ impl App {
         app_server: &mut AppServerSession,
         event: AppEvent,
     ) -> Result<AppRunControl> {
+        let from_agents_overview = matches!(event, AppEvent::ForkAgentsOverviewThreadReady { .. });
+        let event = if let AppEvent::ForkAgentsOverviewThreadReady { thread_id } = event {
+            if self.current_displayed_thread_id() != Some(thread_id)
+                || (self.thread_unavailable(thread_id)
+                    && !self.chat_widget.is_external_writer_view())
+            {
+                self.chat_widget.fork_in_progress = false;
+                return Ok(AppRunControl::Continue);
+            }
+            AppEvent::ForkCurrentSession { name: None }
+        } else {
+            event
+        };
         // Release the shortcut's input guard even when a fork is rejected below.
         if matches!(event, AppEvent::ForkCurrentSession { .. }) {
             self.chat_widget.fork_in_progress = false;
@@ -496,7 +509,9 @@ impl App {
             }
             AppEvent::ForkCurrentSession { name } => {
                 let from_locked_thread = self.chat_widget.is_external_writer_view();
-                let source = if from_locked_thread {
+                let source = if from_agents_overview {
+                    "agents_overview_shortcut"
+                } else if from_locked_thread {
                     "locked_thread_shortcut"
                 } else {
                     "slash_command"
@@ -600,8 +615,8 @@ impl App {
                             ));
                         }
                     }
-                    if from_locked_thread {
-                        // Repeated locked-view shortcuts must not act on the resulting view.
+                    if from_locked_thread || from_agents_overview {
+                        // Repeated fork shortcuts must not act on the resulting view.
                         if let Err(err) = tui.discard_pending_input_before_interactive_screen() {
                             tracing::warn!(%err, "failed to discard input after forking");
                         }
@@ -615,7 +630,9 @@ impl App {
                 }
 
                 self.chat_widget.fork_in_progress = false;
-                self.chat_widget.maybe_send_next_queued_input();
+                if !from_agents_overview {
+                    self.chat_widget.maybe_send_next_queued_input();
+                }
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::RevertSessionForPromptEdit {
@@ -2709,6 +2726,34 @@ impl App {
                     AppRunControl::Exit(reason) => return Ok(AppRunControl::Exit(reason)),
                 }
             }
+            AppEvent::ForkAgentsOverviewThread { thread_id } => {
+                if self.reconnect.offline {
+                    return Ok(AppRunControl::Continue);
+                }
+                if !self.side_threads.is_empty()
+                    && self.current_displayed_thread_id() != Some(thread_id)
+                {
+                    self.add_agents_overview_error(
+                        "Close the side conversation before forking another task.".into(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                }
+                // Attachment replay must not submit queued input on the source task.
+                self.chat_widget.fork_in_progress = true;
+                let control = self.select_agents_overview_thread(tui, app_server, thread_id).await;
+                if matches!(&control, Ok(AppRunControl::Continue))
+                    && self.current_displayed_thread_id() == Some(thread_id)
+                {
+                    if let Some(input) = self.chat_widget.capture_thread_input_state() {
+                        self.agents_overview.input_states.insert(thread_id, input);
+                    }
+                    self.app_event_tx.send(AppEvent::ForkAgentsOverviewThreadReady { thread_id });
+                } else {
+                    self.chat_widget.fork_in_progress = false;
+                }
+                return control;
+            }
+            AppEvent::ForkAgentsOverviewThreadReady { .. } => unreachable!("normalized above"),
             AppEvent::NewAgentsOverviewWorktree { cwd } => {
                 Box::pin(self.new_agents_overview_worktree(tui, app_server, cwd)).await;
             }

@@ -9,12 +9,12 @@ expression: "screen(&view, 100, 24)"
 
   Navigate             Tasks                View
   k       Up           n          New       tab/shift+tab  Filter
-  j       Down         o          Resume    f              Search
-  enter   Open         z r        Rename    g              Group
-  pgdn    Page down    x          Stop
-  ctrl+c  Quit         h          Hide
+  j       Down         o          Resume    f3             Search
+  enter   Open         f          Fork      g              Group
+  pgdn    Page down    z r        Rename
+  ctrl+c  Quit         x          Stop
+                       h          Hide
                        backspace  Delete
-
 
 
 

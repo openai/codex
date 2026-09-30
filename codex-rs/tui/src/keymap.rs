@@ -425,6 +425,7 @@ pub(crate) struct AgentsKeymap {
     pub(crate) search: Vec<KeyBinding>,
     pub(crate) new_task: Vec<KeyBinding>,
     pub(crate) new_worktree: Vec<KeyBinding>,
+    pub(crate) fork: Vec<KeyBinding>,
     pub(crate) rename: Vec<KeyBinding>,
     pub(crate) stop: Vec<KeyBinding>,
     pub(crate) archive: Vec<KeyBinding>,
@@ -1353,6 +1354,7 @@ impl RuntimeKeymap {
             search: resolve_local!(keymap, defaults, agents, search),
             new_task: resolve_local!(keymap, defaults, agents, new_task),
             new_worktree: resolve_local!(keymap, defaults, agents, new_worktree),
+            fork: resolve_local!(keymap, defaults, agents, fork),
             rename: resolve_local!(keymap, defaults, agents, rename),
             stop: resolve_local!(keymap, defaults, agents, stop),
             archive: resolve_local!(keymap, defaults, agents, archive),
@@ -1363,40 +1365,35 @@ impl RuntimeKeymap {
         };
 
         // New defaults yield to explicit bindings, including existing list shortcuts.
-        for (configured, bindings, alias) in [
-            (keymap.agents.resume.as_ref(), &mut agents.resume, "o"),
-            (keymap.agents.search.as_ref(), &mut agents.search, "f"),
-            (keymap.agents.new_task.as_ref(), &mut agents.new_task, "n"),
+        for (configured, bindings) in [
+            (keymap.agents.resume.as_ref(), &mut agents.resume),
+            (keymap.agents.search.as_ref(), &mut agents.search),
+            (keymap.agents.new_task.as_ref(), &mut agents.new_task),
             (
                 keymap.agents.new_worktree.as_ref(),
                 &mut agents.new_worktree,
-                "w",
             ),
-            (keymap.agents.rename.as_ref(), &mut agents.rename, "r"),
-            (keymap.agents.stop.as_ref(), &mut agents.stop, "x"),
-            (keymap.agents.archive.as_ref(), &mut agents.archive, "a"),
-            (
-                keymap.agents.delete.as_ref(),
-                &mut agents.delete,
-                "backspace",
-            ),
-            (keymap.agents.hide.as_ref(), &mut agents.hide, "h"),
+            (keymap.agents.fork.as_ref(), &mut agents.fork),
+            (keymap.agents.rename.as_ref(), &mut agents.rename),
+            (keymap.agents.stop.as_ref(), &mut agents.stop),
+            (keymap.agents.archive.as_ref(), &mut agents.archive),
+            (keymap.agents.delete.as_ref(), &mut agents.delete),
+            (keymap.agents.hide.as_ref(), &mut agents.hide),
             (
                 keymap.agents.toggle_grouping.as_ref(),
                 &mut agents.toggle_grouping,
-                "g",
             ),
         ] {
-            if configured.is_none()
-                && (configured_context_alias_is_used(&keymap.agents, alias)
-                    || configured_context_alias_is_used(&keymap.list, alias)
-                    || configured_context_alias_is_used(&keymap.global, alias)
-                    || chords.bindings.iter().any(|chord| {
-                        chord.action.context.overlaps(KeymapContext::Agents)
-                            && bindings.contains(&chord.chord.prefix)
-                    }))
-            {
-                bindings.clear();
+            if configured.is_none() {
+                bindings.retain(|binding| {
+                    !configured_context_binding_is_used(&keymap.agents, *binding)
+                        && !configured_context_binding_is_used(&keymap.list, *binding)
+                        && !configured_context_binding_is_used(&keymap.global, *binding)
+                        && !chords.bindings.iter().any(|chord| {
+                            chord.action.context.overlaps(KeymapContext::Agents)
+                                && chord.chord.prefix == *binding
+                        })
+                });
             }
         }
 
@@ -1542,6 +1539,7 @@ impl RuntimeKeymap {
                 keymap.agents.new_worktree.as_ref(),
                 &mut agents.new_worktree,
             ),
+            (keymap.agents.fork.as_ref(), &mut agents.fork),
             (keymap.agents.rename.as_ref(), &mut agents.rename),
             (keymap.agents.stop.as_ref(), &mut agents.stop),
             (keymap.agents.archive.as_ref(), &mut agents.archive),
@@ -1912,9 +1910,10 @@ impl RuntimeKeymap {
             },
             agents: AgentsKeymap {
                 resume: default_bindings![plain(KeyCode::Char('o'))],
-                search: default_bindings![plain(KeyCode::Char('f'))],
+                search: default_bindings![plain(KeyCode::F(3)), plain(KeyCode::Char('/'))],
                 new_task: default_bindings![plain(KeyCode::Char('n'))],
                 new_worktree: default_bindings![plain(KeyCode::Char('w'))],
+                fork: default_bindings![plain(KeyCode::Char('f'))],
                 rename: default_bindings![plain(KeyCode::Char('r'))],
                 stop: default_bindings![plain(KeyCode::Char('x'))],
                 archive: default_bindings![plain(KeyCode::Char('a'))],
@@ -2312,7 +2311,11 @@ impl RuntimeKeymap {
             "agents",
             context_bindings(KeymapContext::Agents),
             MAIN_RESERVED_BINDINGS,
-            [],
+            [(
+                "search",
+                "fixed.slash_command",
+                key_hint::plain(KeyCode::Char('/')),
+            )],
         )?;
         for (action, bindings) in context_bindings(KeymapContext::Agents) {
             #[cfg(unix)]

@@ -422,6 +422,7 @@ define_runtime_action_bindings! {
         search,
         new_task,
         new_worktree,
+        fork,
         rename,
         stop,
         archive,

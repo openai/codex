@@ -600,6 +600,14 @@ impl BottomPaneView for AgentsOverviewView {
             }
             return;
         }
+        if self.agents_keymap.fork.is_pressed(key) {
+            if let Some(row) = self.selected_row() {
+                self.app_event_tx.send(AppEvent::ForkAgentsOverviewThread {
+                    thread_id: row.thread_id,
+                });
+            }
+            return;
+        }
         if self.agents_keymap.rename.is_pressed(key) {
             if let Some(row) = self.selected_row() {
                 let mut state = self.state();

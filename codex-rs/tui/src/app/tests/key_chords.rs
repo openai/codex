@@ -713,7 +713,7 @@ async fn command_center_chords_do_not_capture_search_text() -> Result<()> {
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     app.chat_widget.show_bottom_pane_view(Box::new(view));
-    app.chat_widget.handle_key_event(KeyCode::Char('f').into());
+    app.chat_widget.handle_key_event(KeyCode::Char('/').into());
     for key in "new".chars() {
         let event = KeyCode::Char(key).into();
         assert_eq!(app.route_key_chord_event(&mut tui, event), Some(event));

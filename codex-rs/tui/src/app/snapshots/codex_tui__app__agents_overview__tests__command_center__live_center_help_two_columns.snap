@@ -11,17 +11,17 @@ expression: "screen(&view, width, height)"
   ↑       Up           n          New
   ↓       Down         w          New worktree
   enter   Open         o          Resume
-  pgup    Page up      r          Rename
-  pgdn    Page down    x          Stop
-  ctrl+c  Quit         a          Archive
+  pgup    Page up      f          Fork
+  pgdn    Page down    r          Rename
+  ctrl+c  Quit         x          Stop
+                       a          Archive
                        h          Hide
                        backspace  Delete
 
                        View
                        tab/shift+tab  Filter
-                       f              Search
+                       f3             Search
                        g              Group
-
 
 
 

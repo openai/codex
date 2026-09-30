@@ -306,6 +306,14 @@ pub(crate) enum AppEvent {
         cwd: Option<AbsolutePathBuf>,
     },
     AgentsOverviewWorktreeCreated(Result<crate::app::PendingWorktree, String>),
+    /// Fork the selected dashboard conversation and open the new session.
+    ForkAgentsOverviewThread {
+        thread_id: ThreadId,
+    },
+    /// Run the existing fork action after selection events have been processed.
+    ForkAgentsOverviewThreadReady {
+        thread_id: ThreadId,
+    },
     /// Rename a task directly from the shared dashboard.
     RenameAgentsOverviewThread {
         thread_id: ThreadId,

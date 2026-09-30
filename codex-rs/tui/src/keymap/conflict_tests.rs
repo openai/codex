@@ -45,9 +45,11 @@ fn new_agents_defaults_preserve_existing_custom_bindings() {
         ("delete", "backspace"),
         ("hide", "h"),
         ("new_worktree", "w"),
+        ("fork", "f"),
     ] {
         for (context, existing, suffix) in [
             ("agents", "stop", ""),
+            ("agents", "search", ""),
             ("list", "move_down", ""),
             ("global", "copy", ""),
             ("agents", "stop", " f12"),
@@ -74,6 +76,7 @@ fn new_agents_defaults_preserve_existing_custom_bindings() {
                 "delete" => &runtime.agents.delete,
                 "hide" => &runtime.agents.hide,
                 "new_worktree" => &runtime.agents.new_worktree,
+                "fork" => &runtime.agents.fork,
                 _ => unreachable!(),
             };
             assert!(
@@ -148,5 +151,18 @@ fn warnings_defaults_preserve_custom_keys_and_chord_prefixes() {
         .unwrap();
         let runtime = RuntimeKeymap::from_config(&keymap).expect("existing binding remains valid");
         assert!(runtime.app.open_warnings.is_empty());
+    }
+}
+
+#[test]
+fn agents_search_keeps_unshadowed_fallbacks() {
+    use crate::key_hint;
+    use crossterm::event::KeyCode;
+
+    for (configured, remaining) in [("/", KeyCode::F(3)), ("f3", KeyCode::Char('/'))] {
+        let keymap: TuiKeymap =
+            serde_json::from_value(json!({"list": {"move_up": configured}})).unwrap();
+        let runtime = RuntimeKeymap::from_config(&keymap).unwrap();
+        assert_eq!(runtime.agents.search, vec![key_hint::plain(remaining)]);
     }
 }

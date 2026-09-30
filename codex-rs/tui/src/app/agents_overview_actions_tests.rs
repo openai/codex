@@ -60,6 +60,7 @@ async fn lifecycle_shortcuts_target_filtered_task_in_any_state() {
     keymap.agents.archive = Some(KeybindingsSpec::One(KeybindingSpec("f5".into())));
     keymap.agents.delete = Some(KeybindingsSpec::One(KeybindingSpec("f6".into())));
     keymap.agents.hide = Some(KeybindingsSpec::One(KeybindingSpec("f7".into())));
+    keymap.agents.fork = Some(KeybindingsSpec::One(KeybindingSpec("f8".into())));
     app.keymap = RuntimeKeymap::from_config(&keymap).unwrap();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.app_event_tx = AppEventSender::new(tx);
@@ -84,7 +85,7 @@ async fn lifecycle_shortcuts_target_filtered_task_in_any_state() {
             Some(target),
         );
         view.handle_key_event(KeyCode::Esc.into());
-        view.handle_key_event(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
         for character in "Target".chars() {
             view.handle_key_event(KeyCode::Char(character).into());
         }
@@ -99,6 +100,10 @@ async fn lifecycle_shortcuts_target_filtered_task_in_any_state() {
                 "unexpected event: {event:?}"
             );
         }
+        view.handle_key_event(KeyCode::F(8).into());
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::ForkAgentsOverviewThread { thread_id }) if thread_id == target)
+        );
         view.handle_key_event(KeyCode::F(7).into());
         assert!(
             matches!(rx.try_recv(), Ok(AppEvent::HideAgentsOverviewThread { thread_id }) if thread_id == target)
@@ -163,7 +168,7 @@ async fn hiding_tasks_keeps_selection_adjacent_in_display_order() -> Result<()> 
             // Clear retained search without dismissing the command center.
             view.on_ctrl_c();
             if filtered {
-                view.handle_key_event(KeyCode::Char('f').into());
+                view.handle_key_event(KeyCode::Char('/').into());
                 view.handle_paste("Task".into());
                 // Search selects the first match; move back to Task 3.
                 view.handle_key_event(KeyCode::Down.into());
@@ -752,4 +757,29 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
         server.shutdown().await;
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn fork_shortcut_respects_metadata_editing() {
+    let (app, mut rx, _) = crate::app::tests::make_test_app_with_channels().await;
+    let target = ThreadId::new();
+    let mut view = app.agents_overview_view(
+        vec![overview_thread(
+            target,
+            /*parent_thread_id*/ None,
+            "Target",
+            ThreadStatus::Idle,
+        )],
+        Some(target),
+    );
+    for editor in ['r', '/'] {
+        view.handle_key_event(KeyCode::Char(editor).into());
+        view.handle_key_event(KeyCode::Char('f').into());
+        assert!(rx.try_recv().is_err());
+        view.handle_key_event(KeyCode::Esc.into());
+    }
+    view.handle_key_event(KeyCode::Char('f').into());
+    assert!(
+        matches!(rx.try_recv(), Ok(AppEvent::ForkAgentsOverviewThread { thread_id }) if thread_id == target)
+    );
 }

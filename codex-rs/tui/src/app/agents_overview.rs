@@ -862,7 +862,7 @@ impl App {
                 self.chat_widget.maybe_send_next_queued_input();
             }
         }
-        if !read_only && !is_new_session {
+        if !read_only && !is_new_session && !self.chat_widget.fork_in_progress {
             self.maybe_prompt_resume_paused_goal_after_resume(app_server, root_thread_id)
                 .await;
         }

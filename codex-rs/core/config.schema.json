@@ -4435,6 +4435,7 @@
             "agents": {
               "archive": null,
               "delete": null,
+              "fork": null,
               "hide": null,
               "new_task": null,
               "new_worktree": null,
@@ -4788,6 +4789,14 @@
             }
           ],
           "description": "Permanently delete the selected task and its child agents after confirmation."
+        },
+        "fork": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Fork the selected conversation and open the new session."
         },
         "hide": {
           "allOf": [
@@ -5373,6 +5382,7 @@
           "default": {
             "archive": null,
             "delete": null,
+            "fork": null,
             "hide": null,
             "new_task": null,
             "new_worktree": null,

@@ -449,6 +449,8 @@ pub struct TuiAgentsKeymap {
     pub new_task: Option<KeybindingsSpec>,
     /// Open a new session in a worktree from the project default branch.
     pub new_worktree: Option<KeybindingsSpec>,
+    /// Fork the selected conversation and open the new session.
+    pub fork: Option<KeybindingsSpec>,
     /// Rename the selected task.
     pub rename: Option<KeybindingsSpec>,
     /// Stop the selected running task.

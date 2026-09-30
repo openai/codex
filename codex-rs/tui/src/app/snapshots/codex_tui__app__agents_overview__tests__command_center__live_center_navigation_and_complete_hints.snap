@@ -19,10 +19,10 @@ expression: "screen(&view, width, height)"
   n          New
   w          New worktree
   o          Resume
+  f          Fork
   r          Rename
   x          Stop
   a          Archive
   h          Hide
-  backspace  Delete
   … resize to see all
   esc back
