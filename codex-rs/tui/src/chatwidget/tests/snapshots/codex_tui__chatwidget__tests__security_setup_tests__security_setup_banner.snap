@@ -1,0 +1,17 @@
+---
+source: tui/src/chatwidget/tests/security_setup_tests.rs
+assertion_line: 19
+expression: rendered
+---
+  Keep using Daybreak mode
+  Set up Advanced Account Security with a hardware security key by
+  October 1. Already Persona-verified? Add your key before October
+  15 to skip re-verification.
+
+› 1. Set up security
+
+  Press a number to choose · esc to dismiss · type to continue
+
+› Ask Codex to do anything
+
+  test-model-a default · /tmp/project
