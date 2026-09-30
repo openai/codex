@@ -15,6 +15,7 @@ pub const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
 const MULTI_AGENT_V1_NAMESPACE_DESCRIPTION: &str = "Tools for spawning and managing sub-agents.";
 
 const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE: &str = "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed.";
+const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE_V2: &str = "Spawned agents inherit your current model by default. Do not set the `model` field unless the user explicitly asks for a different model.";
 const SPAWN_AGENT_MODEL_CATALOG_GUIDANCE: &str =
     "Pick model overrides from the latest <model_catalog> listing.";
 const SPAWN_AGENT_TYPE_OVERRIDE_DESCRIPTION_V1: &str = "Agent type override for the new agent. Omit to inherit the parent agent type with a full-history fork; otherwise, `default` is used.";
@@ -113,9 +114,14 @@ pub fn create_spawn_agent_tool_v2(
         .then(|| {
             spawn_agent_models_description(&options.available_models, options.multi_agent_version)
         });
-    let inherited_model_guidance = (options.expose_spawn_agent_model_overrides
-        && !options.hide_agent_type_model_reasoning)
-        .then_some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE);
+    let inherited_model_guidance = if options.model_catalog_in_context {
+        options
+            .expose_spawn_agent_model_overrides
+            .then_some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE_V2)
+    } else {
+        (options.expose_spawn_agent_model_overrides && !options.hide_agent_type_model_reasoning)
+            .then_some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE)
+    };
     let mut properties = spawn_agent_common_properties_v2(&options.agent_type_description);
     if !options.expose_agent_type {
         properties.remove("agent_type");
