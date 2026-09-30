@@ -90,6 +90,7 @@ fn lock_sandbox_dir_blocks_inherited_write_for_runner_files() {
             allow_local_binding: false,
             otel: None,
             real_user,
+            user_profile: None,
             mode: setup_mode,
             runtime: SetupRuntime::Legacy,
             refresh_only: false,

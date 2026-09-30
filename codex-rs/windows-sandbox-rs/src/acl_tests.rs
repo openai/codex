@@ -1,21 +1,30 @@
 use super::acl_api_result;
 use super::deny_ace_already_present;
+use super::ensure_allow_mask_aces_with_inheritance;
 use super::ensure_handle_is_not_filesystem_root;
+use super::fetch_dacl_handle;
 use crate::token::LocalSid;
+use crate::winutil::to_wide;
 use pretty_assertions::assert_eq;
+use std::ffi::c_void;
 use std::fs::OpenOptions;
 use std::os::windows::fs::OpenOptionsExt;
+use std::path::Path;
 use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Security::ACL_SIZE_INFORMATION;
+use windows_sys::Win32::Security::AclSizeInformation;
 use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows_sys::Win32::Security::Authorization::SDDL_REVISION_1;
 use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+use windows_sys::Win32::Security::GetAclInformation;
 use windows_sys::Win32::Security::GetSecurityDescriptorControl;
 use windows_sys::Win32::Security::SE_DACL_PROTECTED;
 use windows_sys::Win32::Security::SetFileSecurityW;
 use windows_sys::Win32::Security::UNPROTECTED_DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
 
 #[test]
@@ -109,4 +118,80 @@ fn revoking_absent_sid_preserves_child_null_dacl() {
             );
         }
     }
+}
+
+fn acl_snapshot(path: &Path) -> (u16, Vec<u8>) {
+    unsafe {
+        let (acl, descriptor) = fetch_dacl_handle(path).expect("read directory ACL");
+        let mut control = 0;
+        let mut revision = 0;
+        assert_ne!(
+            GetSecurityDescriptorControl(descriptor, &mut control, &mut revision),
+            0
+        );
+        let mut info: ACL_SIZE_INFORMATION = std::mem::zeroed();
+        assert_ne!(
+            GetAclInformation(
+                acl,
+                &mut info as *mut _ as *mut c_void,
+                std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+                AclSizeInformation,
+            ),
+            0
+        );
+        let dacl =
+            std::slice::from_raw_parts(acl.cast::<u8>(), info.AclBytesInUse as usize).to_vec();
+        LocalFree(descriptor as HLOCAL);
+        (control, dacl)
+    }
+}
+
+#[test]
+fn noninheriting_read_attributes_preserve_unprotected_child_dacl() {
+    let parent = tempfile::tempdir().expect("create parent");
+    let child = parent.path().join("child");
+    let marker = LocalSid::from_string("S-1-5-21-915763429-1123581321-271828182-4243").unwrap();
+    let target = LocalSid::from_string("S-1-5-21-915763429-1123581321-271828182-4244").unwrap();
+    std::fs::create_dir(&child).unwrap();
+    let original = acl_snapshot(&child).1;
+
+    // Restore the original child DACL after adding an inheritable parent ACE.
+    // An ordinary parent update would re-propagate this missing permission.
+    unsafe {
+        let (_, descriptor) = fetch_dacl_handle(&child).unwrap();
+        ensure_allow_mask_aces_with_inheritance(
+            parent.path(),
+            &[marker.as_ptr()],
+            FILE_READ_ATTRIBUTES,
+            super::CONTAINER_INHERIT_ACE | super::OBJECT_INHERIT_ACE,
+        )
+        .unwrap();
+        assert_ne!(
+            acl_snapshot(&child).1,
+            original,
+            "child should inherit the ACE"
+        );
+        assert_ne!(
+            SetFileSecurityW(
+                to_wide(&child).as_ptr(),
+                DACL_SECURITY_INFORMATION,
+                descriptor
+            ),
+            0
+        );
+        LocalFree(descriptor as HLOCAL);
+    }
+    let before = acl_snapshot(&child);
+    assert_eq!(before.0 & SE_DACL_PROTECTED, 0);
+
+    assert!(unsafe {
+        ensure_allow_mask_aces_with_inheritance(
+            parent.path(),
+            &[target.as_ptr()],
+            FILE_READ_ATTRIBUTES,
+            /*inheritance*/ 0,
+        )
+        .unwrap()
+    });
+    assert_eq!(acl_snapshot(&child), before);
 }

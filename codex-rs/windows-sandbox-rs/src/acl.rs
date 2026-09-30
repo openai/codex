@@ -12,6 +12,7 @@ use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Foundation::LocalFree;
@@ -63,6 +64,7 @@ use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
 use windows_sys::Win32::Storage::FileSystem::VOLUME_NAME_NONE;
 use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
 use windows_sys::Win32::Storage::FileSystem::WRITE_OWNER;
+use windows_sys::Win32::System::SystemServices::MAXIMUM_ALLOWED;
 const SE_KERNEL_OBJECT: u32 = 6;
 const OBJECT_INHERIT_ACE_FLAG: u8 = 0x01;
 const INHERIT_ONLY_ACE: u8 = 0x08;
@@ -469,6 +471,12 @@ unsafe fn dacl_has_deny_mask(p_dacl: *mut ACL, scope: DenyAceScope, deny_mask: u
     if ok == 0 {
         return false;
     }
+    let mapping = GENERIC_MAPPING {
+        GenericRead: FILE_GENERIC_READ,
+        GenericWrite: FILE_GENERIC_WRITE,
+        GenericExecute: FILE_GENERIC_EXECUTE,
+        GenericAll: FILE_ALL_ACCESS,
+    };
     for i in 0..info.AceCount {
         let mut p_ace: *mut c_void = std::ptr::null_mut();
         if GetAce(p_dacl as *const ACL, i, &mut p_ace) == 0 {
@@ -485,7 +493,9 @@ unsafe fn dacl_has_deny_mask(p_dacl: *mut ACL, scope: DenyAceScope, deny_mask: u
         {
             continue;
         }
-        if (ace.Mask & deny_mask) != 0 {
+        let mut denied_mask = ace.Mask;
+        MapGenericMask(&mut denied_mask, &mapping);
+        if ((ace.Mask | denied_mask) & deny_mask) != 0 {
             return true;
         }
     }
@@ -536,7 +546,52 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
     access_mode: ACCESS_MODE,
     inheritance: u32,
 ) -> Result<bool> {
-    let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
+    let directory = if inheritance == 0 {
+        Some(
+            OpenOptions::new()
+                .access_mode(MAXIMUM_ALLOWED)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)
+                .context("open ACL target for root-only update")?,
+        )
+    } else {
+        None
+    };
+    // A root-only grant must preserve existing permissions and deny ACEs.
+    let access_mode = if directory.is_some() {
+        GRANT_ACCESS
+    } else {
+        access_mode
+    };
+
+    let (p_dacl, p_sd) = match directory.as_ref() {
+        Some(directory) => {
+            let mut security_descriptor: *mut c_void = std::ptr::null_mut();
+            let mut acl: *mut ACL = std::ptr::null_mut();
+            let code = GetSecurityInfo(
+                directory.as_raw_handle() as HANDLE,
+                /*objecttype*/ 1,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut acl,
+                std::ptr::null_mut(),
+                &mut security_descriptor,
+            );
+            if code != ERROR_SUCCESS {
+                if !security_descriptor.is_null() {
+                    LocalFree(security_descriptor as HLOCAL);
+                }
+                return Err(anyhow!(
+                    "read ACL for root-only update on {}: {code}",
+                    path.display()
+                ));
+            }
+            (acl, security_descriptor)
+        }
+        None => fetch_dacl_handle(path)?,
+    };
     let mut entries: Vec<EXPLICIT_ACCESS_W> = Vec::new();
     for sid in sids {
         // A new allow can outrank another trustee's inherited deny, including a
@@ -554,7 +609,9 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
         {
             continue;
         }
-        if !dacl_allow_mask_needs_refresh(p_dacl, *sid, allow_mask, disallow_mask) {
+        if !dacl_allow_mask_needs_refresh(p_dacl, *sid, allow_mask, disallow_mask)
+            || directory.is_some() && p_dacl.is_null()
+        {
             continue;
         }
         entries.push(EXPLICIT_ACCESS_W {
@@ -586,14 +643,18 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
         if code2 != ERROR_SUCCESS {
             return Err(anyhow!("SetEntriesInAclW failed: {code2}"));
         }
-        // Keep no-op checks read-only; request ACL-write access only when
-        // a grant actually needs updating. Use the same long-path support.
-        let handle = OpenOptions::new()
-            .access_mode(READ_CONTROL | WRITE_DAC)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-            .open(path)
-            .context("open ACL target for update")?;
+        // For inheriting grants, request ACL-write access only when an update
+        // is needed. Use the same long-path support as the read handle.
+        let handle = match directory {
+            // MAXIMUM_ALLOWED suppresses propagation of existing inheritable ACEs too.
+            Some(directory) => directory,
+            None => OpenOptions::new()
+                .access_mode(READ_CONTROL | WRITE_DAC)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)
+                .context("open ACL target for update")?,
+        };
         let code3 = SetSecurityInfo(
             handle.as_raw_handle() as _,
             1,
@@ -619,6 +680,7 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
 
 /// Ensure all provided SIDs have an allow ACE with the requested mask on the path.
 /// Returns true if any ACE was added.
+/// Zero inheritance preserves existing ACEs without propagating changes to descendants.
 ///
 /// # Safety
 /// Caller must pass valid SID pointers and an existing path; free the returned security descriptor with `LocalFree`.

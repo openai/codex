@@ -81,6 +81,7 @@ use windows_sys::Win32::Storage::FileSystem::DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
@@ -123,6 +124,8 @@ struct Payload {
     #[serde(default)]
     otel: Option<StatsigMetricsSettings>,
     real_user: String,
+    #[serde(default)]
+    user_profile: Option<PathBuf>,
     #[serde(default)]
     mode: SetupMode,
     #[serde(default, skip_serializing_if = "SetupRuntime::is_legacy")]
@@ -944,6 +947,50 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
             log,
             &format!("applied {} deny-read ACLs", applied_deny_read_paths.len()),
         )?;
+    }
+
+    if let Some(user_profile) = payload.user_profile.as_deref()
+        && user_profile.is_absolute()
+    {
+        let mut cwd_components = payload.command_cwd.components();
+        let cwd_is_under_profile = user_profile.components().all(|profile_component| {
+            cwd_components.next().is_some_and(|cwd_component| {
+                cwd_component
+                    .as_os_str()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&profile_component.as_os_str().to_string_lossy())
+            })
+        });
+        if cwd_is_under_profile {
+            match unsafe {
+                ensure_allow_mask_aces_with_inheritance(
+                    user_profile,
+                    &[sandbox_group_psid],
+                    FILE_READ_ATTRIBUTES,
+                    /*inheritance*/ 0,
+                )
+            } {
+                Ok(true) => {
+                    log_line(
+                        log,
+                        &format!(
+                            "granted non-inheriting read-attributes ACE on user profile {}",
+                            user_profile.display()
+                        ),
+                    )?;
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    log_line(
+                        log,
+                        &format!(
+                            "failed to grant non-inheriting read-attributes ACE on user profile {}: {err:#}; continuing setup",
+                            user_profile.display()
+                        ),
+                    )?;
+                }
+            }
+        }
     }
 
     if payload.read_roots.is_empty() {

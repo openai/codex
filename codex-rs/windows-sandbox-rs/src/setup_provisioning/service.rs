@@ -34,6 +34,7 @@ pub fn provision_sandbox_in_process(
         allow_local_binding: settings.allow_local_binding,
         otel: codex_otel::global_statsig_metrics_settings(),
         real_user: real_user.to_string(),
+        user_profile: None,
         mode: SetupMode::ProvisionOnly,
         runtime,
         refresh_only: false,

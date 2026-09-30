@@ -360,6 +360,9 @@ fn run_setup_refresh_inner(
         allow_local_binding: offline_proxy_settings.allow_local_binding,
         otel: None,
         real_user: crate::runtime_ownership::current_setup_user()?,
+        user_profile: std::env::var_os("USERPROFILE")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from),
         mode: SetupMode::Full,
         runtime,
         refresh_only: true,
@@ -715,6 +718,8 @@ struct ElevationPayload {
     allow_local_binding: bool,
     otel: Option<codex_otel::StatsigMetricsSettings>,
     real_user: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_profile: Option<PathBuf>,
     mode: SetupMode,
     #[serde(default, skip_serializing_if = "SetupRuntime::is_legacy")]
     runtime: SetupRuntime,
@@ -1163,6 +1168,7 @@ fn elevated_provisioning_payload(
         allow_local_binding: offline_proxy_settings.allow_local_binding,
         real_user,
         otel: codex_otel::global_statsig_metrics_settings(),
+        user_profile: None,
         mode: SetupMode::InteractiveProvision,
         runtime: SetupRuntime::Legacy,
         refresh_only: false,
@@ -1243,6 +1249,9 @@ pub fn run_elevated_provisioning_setup_with_retained_handles(
         allow_local_binding: settings.allow_local_binding,
         otel: codex_otel::global_statsig_metrics_settings(),
         real_user: real_user.to_string(),
+        user_profile: std::env::var_os("USERPROFILE")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from),
         mode: SetupMode::ProvisionOnly,
         runtime,
         refresh_only: false,
