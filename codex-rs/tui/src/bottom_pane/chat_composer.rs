@@ -99,6 +99,9 @@
 //! The append flushes buffered input, dismisses unused sparkle eligibility, and adds a newline
 //! after existing text. The separator and recovered answer form one Vim edit; large answers
 //! use atomic paste placeholders backed by their original text.
+//! Recovery escapes a shell or slash command prefix before appending answers, keeping the
+//! combined draft editable and its later submission literal. Shell mode's separate `!` becomes
+//! text in the composer; slash-prefixed paths remain unchanged because they submit as prompts.
 //!
 //! # Startup Draft Handoff
 //!

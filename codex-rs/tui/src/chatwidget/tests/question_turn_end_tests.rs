@@ -1,6 +1,7 @@
 //! Live terminal turns recover open and collapsed question drafts into the composer.
 
 use super::*;
+use crate::bottom_pane::QueuedInputAction;
 use codex_protocol::items::AsyncUserInputQuestion;
 use pretty_assertions::assert_eq;
 
@@ -12,6 +13,68 @@ fn questions(chat: &mut ChatWidget, message_id: &str) {
             options: None,
         }],
     );
+}
+
+#[tokio::test]
+async fn question_turn_end_escapes_command_drafts_before_submission() {
+    for (draft, escaped, queued_action) in [
+        ("!echo partial", "\\!echo partial", QueuedInputAction::Plain),
+        (
+            "  !echo partial",
+            "  \\!echo partial",
+            QueuedInputAction::Plain,
+        ),
+        ("/", "\\/", QueuedInputAction::Plain),
+        ("/diff", "\\/diff", QueuedInputAction::Plain),
+        ("\t/diff", "\t\\/diff", QueuedInputAction::Plain),
+        (" /diff", " /diff", QueuedInputAction::Plain),
+        ("/tmp/file", "/tmp/file", QueuedInputAction::ParseSlash),
+        ("\\/diff", "\\/diff", QueuedInputAction::Plain),
+    ] {
+        for queued in [false, true] {
+            let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+            chat.thread_id = Some(ThreadId::new());
+            chat.show_welcome_banner = false;
+            handle_turn_started(&mut chat, "turn");
+            questions(&mut chat, "question");
+            chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+            chat.bottom_pane.handle_paste("answer".into());
+            chat.bottom_pane
+                .set_composer_text(draft.into(), Vec::new(), Vec::new());
+
+            handle_turn_completed(&mut chat, "turn", /*duration_ms*/ None);
+            let expected = format!("{escaped}\nanswer");
+            let submitted_text = expected.trim().to_string();
+            assert_eq!(chat.bottom_pane.composer_text(), expected);
+            if draft == "!echo partial" && !queued {
+                insta::assert_snapshot!(
+                    "question_turn_end_escaped_shell_command",
+                    normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 80))
+                );
+            }
+
+            if queued {
+                chat.on_task_started();
+                chat.handle_key_event(KeyEvent::from(KeyCode::Tab));
+                let queued_message = chat.input_queue.queued_user_messages.front().unwrap();
+                assert_eq!(queued_message.text, submitted_text);
+                assert_eq!(queued_message.action, queued_action);
+                assert!(ops.try_recv().is_err());
+            } else {
+                chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+                let Op::UserTurn { items, .. } = ops.try_recv().unwrap() else {
+                    panic!("expected user turn");
+                };
+                assert_eq!(
+                    items,
+                    vec![UserInput::Text {
+                        text: submitted_text,
+                        text_elements: Vec::new(),
+                    }]
+                );
+            }
+        }
+    }
 }
 
 #[tokio::test]

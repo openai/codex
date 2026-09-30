@@ -159,6 +159,21 @@ fn recovered_answers_undo_as_one_vim_edit() {
         ctrl_r(&mut composer);
         assert_eq!(composer.draft_snapshot(), after);
     }
+    for command in ["!echo", "/diff"] {
+        let mut composer = vim_composer(command);
+        let before = composer.draft_snapshot();
+        composer.append_recovered_drafts("answer");
+        assert_eq!(composer.current_text(), format!("\\{command}\nanswer"));
+        keys(&mut composer, "u");
+        assert_eq!(composer.draft_snapshot(), before);
+    }
+    let mut composer = vim_composer("echo");
+    composer.draft.is_bash_mode = true;
+    let before = composer.draft_snapshot();
+    composer.append_recovered_drafts("answer");
+    assert_eq!(composer.current_text(), "\\!echo\nanswer");
+    keys(&mut composer, "u");
+    assert_eq!(composer.draft_snapshot(), before);
     snapshot_composer_state_with_width(
         "recovered_answer_cancels_vim_search",
         /*width*/ 40,
