@@ -1,4 +1,0 @@
-interface:
-  display_name: "Update V8 Version"
-  short_description: "Guide V8 bumps and release validation"
-  default_prompt: "Use $update-v8-version to update Codex to a new v8 release and validate the release-candidate path."
