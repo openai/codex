@@ -21,6 +21,93 @@ use crate::UpdateThreadMetadataParams;
 use crate::local::test_support::test_config;
 
 #[tokio::test]
+async fn naming_empty_paginated_thread_materializes_rollout() {
+    let (_home, store, runtime) = store_with_runtime().await;
+    let thread_id = ThreadId::new();
+    let mut params = create_thread_params(thread_id);
+    params.history_mode = ThreadHistoryMode::Paginated;
+    let live_thread = LiveThread::create(store.clone(), params)
+        .await
+        .expect("create live thread");
+    let rollout_path = store
+        .live_rollout_path(thread_id)
+        .await
+        .expect("live rollout path");
+    assert!(!rollout_path.exists());
+
+    let named = live_thread
+        .update_metadata(
+            ThreadMetadataPatch {
+                name: Some(Some("Scheduled task".to_string())),
+                memory_mode: Some(ThreadMemoryMode::Disabled),
+                ..Default::default()
+            },
+            /*include_archived*/ false,
+        )
+        .await
+        .expect("name empty thread");
+
+    assert!(rollout_path.exists());
+    assert_eq!(named.name.as_deref(), Some("Scheduled task"));
+    assert_eq!(named.history_mode, ThreadHistoryMode::Paginated);
+    assert_eq!(
+        runtime
+            .get_thread_memory_mode(thread_id)
+            .await
+            .expect("read memory mode")
+            .as_deref(),
+        Some("disabled")
+    );
+    live_thread.shutdown().await.expect("shutdown named thread");
+    let stored = store
+        .read_thread(ReadThreadParams {
+            thread_id,
+            include_archived: false,
+            include_history: false,
+        })
+        .await
+        .expect("read durable empty thread");
+    assert_eq!(stored.thread_id, thread_id);
+    assert_eq!(stored.name, named.name);
+    assert_eq!(stored.history_mode, ThreadHistoryMode::Paginated);
+}
+
+#[tokio::test]
+async fn naming_empty_paginated_thread_propagates_rollout_persistence_failure() {
+    let (_home, store, runtime) = store_with_runtime().await;
+    let thread_id = ThreadId::new();
+    let mut params = create_thread_params(thread_id);
+    params.history_mode = ThreadHistoryMode::Paginated;
+    let live_thread = LiveThread::create(store.clone(), params)
+        .await
+        .expect("create live thread");
+    let rollout_path = store
+        .live_rollout_path(thread_id)
+        .await
+        .expect("live rollout path");
+    std::fs::create_dir_all(&rollout_path).expect("block rollout file creation");
+
+    live_thread
+        .update_metadata(
+            ThreadMetadataPatch {
+                name: Some(Some("Unpersistable task".to_string())),
+                ..Default::default()
+            },
+            /*include_archived*/ false,
+        )
+        .await
+        .expect_err("naming must fail when the thread cannot be persisted");
+    assert_eq!(
+        runtime
+            .get_thread(thread_id)
+            .await
+            .expect("read thread metadata")
+            .and_then(|metadata| metadata.name),
+        None
+    );
+}
+
+#[tokio::test]
 async fn pending_thread_metadata_is_consumed_by_first_metadata_update() {
     let (_home, store, runtime) = store_with_runtime().await;
     let thread_id = ThreadId::new();
