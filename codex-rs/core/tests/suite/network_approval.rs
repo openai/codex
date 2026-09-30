@@ -299,54 +299,81 @@ async fn strict_auto_review_routes_network_approval_to_guardian_when_user_review
         }),
         ..Default::default()
     };
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-strict-network-permissions"),
-                ev_function_call(
+    // Guardian and parent requests can arrive in either order after the command yields.
+    // Only Guardian requests may consume these decisions.
+    let mut guardian_responses = Vec::new();
+    for response_id in ["strict-command-guardian", "strict-network-guardian"] {
+        guardian_responses.push(
+            mount_sse_once_match(
+                &server,
+                is_guardian_request,
+                sse(vec![
+                    ev_response_created(response_id),
+                    ev_assistant_message(
+                        response_id,
+                        r#"{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"The strict-review request is safe."}"#,
+                    ),
+                    ev_completed(response_id),
+                ]),
+            )
+            .await,
+        );
+    }
+    let _parent = wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/responses"))
+        .and(|request: &wiremock::Request| !is_guardian_request(request))
+        .respond_with(move |request: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(
+                &decoded_request_body(request).expect("decode parent request"),
+            )
+            .expect("parse parent request");
+            let input = body["input"].as_array().expect("parent input");
+            let output = input
+                .iter()
+                .rev()
+                .find(|item| item["type"] == "function_call_output");
+            let response_id = format!("strict-parent-{}", input.len());
+            let event = match output {
+                None => ev_function_call(
                     permission_call_id,
                     "request_permissions",
-                    &serde_json::to_string(&json!({
+                    &json!({
                         "reason": "Require automatic review for the rest of this turn",
                         "permissions": requested_permissions,
-                    }))?,
+                    })
+                    .to_string(),
                 ),
-                ev_completed("resp-strict-network-permissions"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-strict-network-command"),
-                ev_function_call(
+                Some(output) if output["call_id"] == permission_call_id => ev_function_call(
                     network_call_id,
                     "exec_command",
-                    &serde_json::to_string(&network_fetch_args(LOCAL_ENVIRONMENT_ID))?,
+                    &network_fetch_args(LOCAL_ENVIRONMENT_ID).to_string(),
                 ),
-                ev_completed("resp-strict-network-command"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-strict-command-guardian"),
-                ev_assistant_message(
-                    "msg-strict-command-guardian",
-                    r#"{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"The strict-review command is safe."}"#,
-                ),
-                ev_completed("resp-strict-command-guardian"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-strict-network-guardian"),
-                ev_assistant_message(
-                    "msg-strict-network-guardian",
-                    r#"{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"The strict-review network request is safe."}"#,
-                ),
-                ev_completed("resp-strict-network-guardian"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-strict-network-complete"),
-                ev_assistant_message("msg-strict-network-complete", "reviewed"),
-                ev_completed("resp-strict-network-complete"),
-            ]),
-        ],
-    )
-    .await;
+                Some(output) => {
+                    let output = output["output"].as_str().expect("process output");
+                    if let Some(session_id) = output
+                        .lines()
+                        .find_map(|line| line.strip_prefix("Process running with session ID "))
+                    {
+                        ev_function_call(
+                            &response_id,
+                            "write_stdin",
+                            &json!({
+                                "session_id": session_id.parse::<i32>().expect("session id"),
+                                "chars": "",
+                                "yield_time_ms": 1_000,
+                            })
+                            .to_string(),
+                        )
+                    } else {
+                        assert!(output.contains("Process exited with code"), "{output}");
+                        ev_assistant_message("strict-parent-complete", "reviewed")
+                    }
+                }
+            };
+            sse_response(sse(vec![event, ev_completed(&response_id)]))
+        })
+        .mount_as_scoped(&server)
+        .await;
 
     submit_managed_network_turn(
         &test,
@@ -376,7 +403,24 @@ async fn strict_auto_review_routes_network_approval_to_guardian_when_user_review
         .await?;
     wait_for_completion_without_network_prompt(&test).await;
 
-    let actions = guardian_network_actions(&responses)?;
+    assert_eq!(
+        guardian_responses
+            .iter()
+            .flat_map(ResponseMock::requests)
+            .filter(|request| {
+                request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian"
+            })
+            .count(),
+        2,
+        "the command and network request must each receive Guardian review",
+    );
+    let actions = guardian_responses
+        .iter()
+        .map(guardian_network_actions)
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
     assert_eq!(actions.len(), 1);
     assert_eq!(
         actions[0]
