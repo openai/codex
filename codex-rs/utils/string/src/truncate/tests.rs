@@ -110,6 +110,20 @@ fn truncate_middle_tokens_handles_utf8_content() {
 }
 
 #[test]
+fn truncate_middle_tokens_keeps_partial_characters_out_of_both_ends() {
+    for (input, expected) in [
+        ("a😀b😀c", "a…2 tokens truncated…c"),
+        ("é中😀é", "é…2 tokens truncated…é"),
+        ("😀😀😀", "…2 tokens truncated…"),
+    ] {
+        assert_eq!(
+            truncate_middle_with_token_budget(input, /*max_tokens*/ 1),
+            (expected.to_string(), Some(3)),
+        );
+    }
+}
+
+#[test]
 fn truncate_middle_bytes_handles_utf8_content() {
     let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
     let out = truncate_middle_chars(s, /*max_bytes*/ 20);

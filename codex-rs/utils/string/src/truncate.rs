@@ -40,9 +40,8 @@ fn truncate_with_byte_estimate(s: &str, max_bytes: usize, use_tokens: bool) -> S
         return String::new();
     }
 
-    let total_chars = s.chars().count();
-
     if max_bytes == 0 {
+        let total_chars = if use_tokens { 0 } else { s.chars().count() };
         return format_truncation_marker(
             use_tokens,
             removed_units(use_tokens, s.len(), total_chars),
@@ -55,7 +54,14 @@ fn truncate_with_byte_estimate(s: &str, max_bytes: usize, use_tokens: bool) -> S
 
     let total_bytes = s.len();
     let (left_budget, right_budget) = split_budget(max_bytes);
-    let (removed_chars, left, right) = split_string(s, left_budget, right_budget);
+    let (removed_chars, left, right) = if use_tokens {
+        // Token markers depend only on byte counts; avoid scanning the discarded middle.
+        let prefix_end = s.floor_char_boundary(left_budget);
+        let suffix_start = s.ceil_char_boundary(total_bytes - right_budget);
+        (0, &s[..prefix_end], &s[suffix_start..])
+    } else {
+        split_string(s, left_budget, right_budget)
+    };
     let marker = format_truncation_marker(
         use_tokens,
         removed_units(
