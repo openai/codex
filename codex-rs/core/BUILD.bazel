@@ -29,15 +29,6 @@ codex_rust_crate(
     test_data_extra = [
         "config.schema.json",
     ] + glob(["src/**/snapshots/**"]) + [
-        # This is a bit of a hack, but empirically, some of our integration tests
-        # are relying on the presence of this file as a repo root marker. When
-        # running tests locally, this "just works," but in remote execution,
-        # the working directory is different and so the file is not found unless it
-        # is explicitly added as test data.
-        #
-        # TODO(aibrahim): Update the tests so that `just bazel-remote-test`
-        # succeeds without this workaround.
-        "//:AGENTS.md",
     ],
     test_shard_counts = {
         "core-all-test": 16,
