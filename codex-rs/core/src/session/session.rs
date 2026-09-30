@@ -1083,6 +1083,7 @@ impl Session {
                     }
                     InitialHistory::Resumed(resumed_history) => {
                         let params = ResumeThreadParams {
+                            history_revision: resumed_history.history_revision.clone(),
                             thread_id: resumed_history.conversation_id,
                             rollout_path: resumed_history.rollout_path.clone(),
                             history: Some(resumed_history.history.clone()),
@@ -1205,6 +1206,7 @@ impl Session {
                 && let Some(history) = resume_context
             {
                 resumed.history = history;
+                resumed.history_revision = None;
             }
             let rollout_path = if let Some(live_thread) = live_thread.as_ref() {
                 live_thread.local_rollout_path().await?

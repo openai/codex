@@ -1686,6 +1686,7 @@ async fn run_guardian_subagent_review(
                 .resume_thread_with_history(
                     test.config.clone(),
                     InitialHistory::Resumed(ResumedHistory {
+                        history_revision: None,
                         conversation_id: root_thread_id,
                         history: Arc::new(saved.items),
                         rollout_path: None,

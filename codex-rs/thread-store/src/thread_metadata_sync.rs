@@ -872,6 +872,7 @@ mod tests {
 
     fn resume_params(thread_id: ThreadId, history: Vec<RolloutItem>) -> ResumeThreadParams {
         ResumeThreadParams {
+            history_revision: None,
             thread_id,
             rollout_path: None,
             history: Some(Arc::new(history)),

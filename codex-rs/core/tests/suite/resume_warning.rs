@@ -58,6 +58,7 @@ fn resume_history(
     };
 
     InitialHistory::Resumed(ResumedHistory {
+        history_revision: None,
         conversation_id: ThreadId::default(),
         history: Arc::new(vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {

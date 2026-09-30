@@ -279,6 +279,7 @@ pub(super) async fn persisted_resume_history(
     Ok((
         thread_id,
         InitialHistory::Resumed(ResumedHistory {
+            history_revision: None,
             conversation_id: thread_id,
             history: Arc::new(
                 store
@@ -1588,6 +1589,7 @@ async fn fork_preserves_thread_instructions(
                 })
                 .await?;
             let history = InitialHistory::Resumed(ResumedHistory {
+                history_revision: None,
                 conversation_id: parent_id,
                 history: Arc::new(stored.items),
                 rollout_path: None,

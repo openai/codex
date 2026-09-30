@@ -160,7 +160,7 @@ async fn load_agent_model_context(
     state: &ThreadManagerState,
     thread_id: ThreadId,
     history_mode: ThreadHistoryMode,
-) -> CodexResult<Option<Vec<RolloutItem>>> {
+) -> CodexResult<Option<codex_thread_store::StoredModelContext>> {
     match history_mode {
         ThreadHistoryMode::Legacy => Ok(state
             .read_stored_thread(ReadThreadParams {
@@ -170,15 +170,18 @@ async fn load_agent_model_context(
             })
             .await?
             .history
-            .map(|history| history.items)),
+            .map(|history| codex_thread_store::StoredModelContext {
+                thread_id,
+                revision: history.revision,
+                items: history.items,
+            })),
         ThreadHistoryMode::Paginated => Ok(Some(
             state
                 .load_latest_model_context(LoadThreadHistoryParams {
                     thread_id,
                     include_archived: true,
                 })
-                .await?
-                .items,
+                .await?,
         )),
     }
 }
@@ -365,8 +368,9 @@ impl LocalAgentControl {
             .await?
             .ok_or(CodexErr::ThreadNotFound(thread_id))?;
         let initial_history = InitialHistory::Resumed(ResumedHistory {
+            history_revision: history.revision,
             conversation_id: thread_id,
-            history: Arc::new(history),
+            history: Arc::new(history.items),
             rollout_path: stored_thread.rollout_path,
         });
         if initial_history.get_multi_agent_version() != Some(MultiAgentVersion::V2) {
@@ -992,7 +996,8 @@ impl LocalAgentControl {
                     CodexErr::Fatal(format!(
                         "parent thread history unavailable for fork: {parent_thread_id}"
                     ))
-                })?;
+                })?
+                .items;
 
         let selected_capability_roots = forked_rollout_items
             .iter()
@@ -1351,8 +1356,9 @@ impl LocalAgentControl {
             .await?
             .ok_or(CodexErr::ThreadNotFound(thread_id))?;
         let initial_history = InitialHistory::Resumed(ResumedHistory {
+            history_revision: history.revision,
             conversation_id: thread_id,
-            history: Arc::new(history),
+            history: Arc::new(history.items),
             rollout_path: stored_thread.rollout_path,
         });
         let parent_thread_id = stored_thread.parent_thread_id;

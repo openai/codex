@@ -1287,6 +1287,7 @@ mod tests {
         let path = write_session_file(home.path(), "2025-01-03T12-00-00", uuid)?;
         store
             .resume_thread(ResumeThreadParams {
+                history_revision: None,
                 thread_id,
                 rollout_path: Some(path.clone()),
                 history: None,
@@ -1506,6 +1507,7 @@ mod tests {
 
         store
             .resume_thread(ResumeThreadParams {
+                history_revision: None,
                 thread_id,
                 rollout_path: Some(path.clone()),
                 history: None,
@@ -2393,6 +2395,7 @@ mod tests {
         .await;
         store
             .resume_thread(ResumeThreadParams {
+                history_revision: None,
                 thread_id,
                 rollout_path: Some(archived_path.clone()),
                 history: None,

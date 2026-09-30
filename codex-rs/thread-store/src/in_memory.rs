@@ -335,6 +335,7 @@ mod tests {
             .expect("create paginated thread");
         store
             .resume_thread(ResumeThreadParams {
+                history_revision: None,
                 thread_id,
                 rollout_path: Some(rollout_path.clone()),
                 history: None,
@@ -397,6 +398,7 @@ mod tests {
         );
         store
             .resume_thread(ResumeThreadParams {
+                history_revision: None,
                 thread_id,
                 rollout_path: None,
                 history: None,
@@ -680,6 +682,7 @@ impl InMemoryThreadStore {
         let history_mode = history_mode_from_state(&state, params.thread_id);
         reject_paginated_history_mode(history_mode)?;
         Ok(StoredThreadHistory {
+            revision: None,
             thread_id: params.thread_id,
             items: items.clone(),
         })
@@ -699,6 +702,7 @@ impl InMemoryThreadStore {
                     thread_id: params.thread_id,
                 })?;
         Ok(StoredModelContext {
+            revision: None,
             thread_id: params.thread_id,
             items: items.clone(),
         })
@@ -1082,6 +1086,7 @@ fn stored_thread_from_state(
         .ok_or(ThreadStoreError::ThreadNotFound { thread_id })?;
     let history_items = state.histories.get(&thread_id).cloned().unwrap_or_default();
     let history = include_history.then(|| StoredThreadHistory {
+        revision: None,
         thread_id,
         items: history_items.clone(),
     });

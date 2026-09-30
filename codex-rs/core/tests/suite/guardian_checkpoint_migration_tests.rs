@@ -75,6 +75,7 @@ pub(super) async fn resume(
         .start_thread(StartThreadOptions {
             environments: Some(environments),
             initial_history: InitialHistory::Resumed(ResumedHistory {
+                history_revision: None,
                 conversation_id: thread_id,
                 history: Arc::new(history),
                 rollout_path: None,

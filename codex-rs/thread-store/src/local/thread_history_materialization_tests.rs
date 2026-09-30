@@ -195,6 +195,7 @@ async fn split_homes_support_backfill_listing_and_paginated_history() {
 
     store
         .resume_thread(ResumeThreadParams {
+            history_revision: None,
             thread_id,
             rollout_path: Some(rollout_path),
             history: None,
@@ -1091,6 +1092,7 @@ async fn paginated_fork_reads_compressed_shared_lineage_without_materializing() 
     fs::rename(&source_compressed_path, &external_path).expect("move shared source outside home");
     store
         .resume_thread(ResumeThreadParams {
+            history_revision: None,
             thread_id: source_thread_id,
             rollout_path: Some(external_path),
             history: None,

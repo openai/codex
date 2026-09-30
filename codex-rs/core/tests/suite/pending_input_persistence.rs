@@ -509,6 +509,7 @@ async fn local_preparation_is_durable_before_first_input_and_survives_restart(
         .resume_thread_with_history(
             initial.config.clone(),
             InitialHistory::Resumed(ResumedHistory {
+                history_revision: None,
                 conversation_id: context.thread_id,
                 history: Arc::new(context.items),
                 rollout_path: Some(rollout_path),

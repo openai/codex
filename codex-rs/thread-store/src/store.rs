@@ -145,7 +145,8 @@ pub trait ThreadStore: Any + Send + Sync {
     /// Stored snapshots supplied by callers may predate writer acquisition. Implementations must
     /// include writes committed before acquisition in the returned context. Explicitly supplied
     /// histories without a canonical session header retain their import/override semantics.
-    /// Returned histories can share the caller's allocation when no refresh is needed.
+    /// A supplied revision may enable reuse of the shared snapshot after validation; missing or
+    /// unrecognized revisions must not be treated as proof that stored history is unchanged.
     /// On failure, implementations must release any writer acquired by this operation.
     fn resume_thread(
         &self,

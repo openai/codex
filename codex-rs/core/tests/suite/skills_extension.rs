@@ -3089,6 +3089,7 @@ async fn production_turn_keeps_rebalanced_catalogs_stable_after_compaction_and_r
         .thread_manager
         .start_thread(StartThreadOptions {
             initial_history: InitialHistory::Resumed(ResumedHistory {
+                history_revision: history.revision,
                 conversation_id: history.thread_id,
                 history: Arc::new(history.items),
                 rollout_path: cloud_thread.session_configured.rollout_path.clone(),

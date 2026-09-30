@@ -71,6 +71,7 @@ pub async fn append_existing_session(
     }
     if thread_store
         .resume_thread(ResumeThreadParams {
+            history_revision: None,
             thread_id,
             rollout_path: Some(rollout_path),
             history: None,

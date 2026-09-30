@@ -15,6 +15,7 @@ use test_case::test_case;
 
 #[test_case(InitialHistory::Forked(Vec::new()); "fork")]
 #[test_case(InitialHistory::Resumed(ResumedHistory {
+history_revision: None,
     conversation_id: ThreadId::default(),
     history: Arc::new(Vec::new()),
     rollout_path: None,

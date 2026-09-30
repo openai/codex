@@ -61,6 +61,7 @@ async fn local_thread_history_mode_survives_restart(
         .resume_thread_with_history(
             initial.config.clone(),
             InitialHistory::Resumed(ResumedHistory {
+                history_revision: None,
                 conversation_id: history.thread_id,
                 history: Arc::new(history.items),
                 rollout_path: initial.session_configured.rollout_path.clone(),

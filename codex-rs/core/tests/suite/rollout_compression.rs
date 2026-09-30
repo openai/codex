@@ -169,6 +169,7 @@ async fn compressed_shared_fork_resume_preserves_checkpoint_and_frozen_history()
         .resume_thread_with_history(
             config,
             InitialHistory::Resumed(ResumedHistory {
+                history_revision: None,
                 conversation_id: context.thread_id,
                 history: Arc::new(context.items),
                 rollout_path: Some(child_path),

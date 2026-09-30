@@ -15,7 +15,6 @@ use super::LocalThreadStore;
 use super::create_thread;
 use crate::AppendThreadItemsParams;
 use crate::CreateThreadParams;
-use crate::LoadThreadHistoryParams;
 use crate::ResumeThreadParams;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
@@ -45,16 +44,6 @@ pub(super) async fn resume_thread(
     let _live_writer_guard = store.live_writer_locks.lock(params.thread_id).await;
     store.ensure_live_recorder_absent(params.thread_id).await?;
     let writer_lock = store.acquire_writer_lock(params.thread_id)?;
-    let supplied_history = params
-        .history
-        .as_ref()
-        .filter(|history| {
-            !matches!(
-                history.first(),
-                Some(RolloutItem::SessionMeta(meta)) if meta.meta.id == params.thread_id
-            )
-        })
-        .cloned();
     let rollout_path = match params.rollout_path {
         Some(rollout_path) => rollout_path,
         None => {
@@ -74,18 +63,38 @@ pub(super) async fn resume_thread(
                 .path
         }
     };
-    let history_mode = if let Some(history) = params.history.as_deref() {
-        canonical_history_mode_from_rollout_items(history)
-    } else {
-        super::read_thread::read_thread_by_rollout_path(
-            store,
-            rollout_path.clone(),
-            params.include_archived,
-            /*include_history*/ false,
-        )
-        .await?
-        .history_mode
+    let rollout_path =
+        super::read_thread::resolve_requested_rollout_path(store, rollout_path).await?;
+    if !params.include_archived
+        && super::helpers::rollout_path_is_archived(&store.config.codex_home, &rollout_path)
+    {
+        return Err(ThreadStoreError::InvalidRequest {
+            message: format!("thread {} is archived", params.thread_id),
+        });
+    }
+    let history = match params.history {
+        Some(history)
+            if !matches!(
+                history.first(),
+                Some(RolloutItem::SessionMeta(meta)) if meta.meta.id == params.thread_id
+            ) =>
+        {
+            history
+        }
+        Some(history)
+            if params.history_revision.is_some()
+                && params.history_revision
+                    == super::history_revision::read(&rollout_path).await =>
+        {
+            history
+        }
+        _ => Arc::new(
+            super::model_context::load_from_rollout_path(store, params.thread_id, &rollout_path)
+                .await?
+                .items,
+        ),
     };
+    let history_mode = canonical_history_mode_from_rollout_items(&history);
     let cwd = params
         .metadata
         .cwd
@@ -123,28 +132,7 @@ pub(super) async fn resume_thread(
             writer_lock,
         )
         .await?;
-    if let Some(history) = supplied_history {
-        return Ok(history);
-    }
-    // Resolve through the installed writer so explicit paths and materialized compressed rollouts
-    // take precedence over SQLite. Both ownership guards remain held throughout this read.
-    let history = super::model_context::load_latest_model_context(
-        store,
-        LoadThreadHistoryParams {
-            thread_id: params.thread_id,
-            include_archived: params.include_archived,
-        },
-    )
-    .await;
-    if history.is_err() {
-        let entry = store.live_recorders.lock().await.remove(&params.thread_id);
-        if let Some(entry) = entry
-            && let Err(err) = entry.recorder.discard().await
-        {
-            warn!("failed to discard writer after resume history load failed: {err}");
-        }
-    }
-    history.map(|history| Arc::new(history.items))
+    Ok(history)
 }
 
 #[tracing::instrument(

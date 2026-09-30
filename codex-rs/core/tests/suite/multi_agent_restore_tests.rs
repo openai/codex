@@ -1,4 +1,4 @@
-//! Exercises read overlap and ordered identity registration when a V2 root resumes cold.
+//! Exercises read overlap, ordered identities, and revision-aware history on cold V2 resumes.
 
 use super::ROLE_MODEL;
 use super::ROLE_NAME;
@@ -13,6 +13,7 @@ use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::AppendThreadItemsParams;
@@ -50,10 +51,13 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
+const LATE_EDIT: &str = "Durable edit after the child history snapshot";
+
 struct GatedChildMetadataStore {
     inner: Arc<dyn ThreadStore>,
     gates: Mutex<HashMap<ThreadId, oneshot::Receiver<()>>>,
     failed_child: ThreadId,
+    edited_child: ThreadId,
     started: mpsc::UnboundedSender<ThreadId>,
     completed: mpsc::UnboundedSender<ThreadId>,
 }
@@ -77,7 +81,6 @@ impl ThreadStore for GatedChildMetadataStore {
 
     delegate_store_methods! {
         fn create_thread(params: CreateThreadParams) -> ();
-        fn resume_thread(params: ResumeThreadParams) -> Arc<Vec<RolloutItem>>;
         fn append_items(params: AppendThreadItemsParams) -> ();
         fn flush_thread(thread_id: ThreadId) -> ();
         fn shutdown_thread(thread_id: ThreadId) -> ();
@@ -90,6 +93,41 @@ impl ThreadStore for GatedChildMetadataStore {
         fn archive_thread(params: ArchiveThreadParams) -> ();
         fn unarchive_thread(params: ArchiveThreadParams) -> StoredThread;
         fn delete_thread(params: DeleteThreadParams) -> ();
+    }
+
+    fn resume_thread(
+        &self,
+        params: ResumeThreadParams,
+    ) -> ThreadStoreFuture<'_, Arc<Vec<RolloutItem>>> {
+        Box::pin(async move {
+            assert!(
+                params.history_revision.is_some(),
+                "core must forward the revision"
+            );
+            let supplied = params.history.as_ref().expect("preloaded history");
+            let unchanged = self.inner.resume_thread(params.clone()).await?;
+            assert!(Arc::ptr_eq(supplied, &unchanged));
+            if params.thread_id != self.edited_child {
+                return Ok(unchanged);
+            }
+
+            // Commit an edit after core preloads history, before its writer acquisition finishes.
+            let edit: ResponseItem = serde_json::from_value(json!({
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": LATE_EDIT}],
+            }))
+            .expect("late user message");
+            self.inner
+                .append_items(AppendThreadItemsParams {
+                    thread_id: params.thread_id,
+                    items: vec![RolloutItem::ResponseItem(edit.into())],
+                })
+                .await?;
+            self.inner.shutdown_thread(params.thread_id).await?;
+            let refreshed = self.inner.resume_thread(params).await?;
+            assert!(!Arc::ptr_eq(&unchanged, &refreshed));
+            Ok(refreshed)
+        })
     }
 
     fn persist_thread(
@@ -215,6 +253,7 @@ async fn cold_root_resume_overlaps_child_reads_and_applies_identities_in_graph_o
             (last, last_gate),
         ])),
         failed_child: failed,
+        edited_child: first,
         started: started_tx,
         completed: completed_tx,
     });
@@ -266,5 +305,27 @@ async fn cold_root_resume_overlaps_child_reads_and_applies_identities_in_graph_o
     assert!(resumed.thread_manager.get_thread(first).await.is_ok());
     assert!(resumed.thread_manager.get_thread(last).await.is_err());
     assert!(resumed.thread_manager.get_thread(failed).await.is_err());
+
+    mount_root_collaboration_call(
+        &server,
+        "continue restored child",
+        "resume-child",
+        "followup_task",
+        &json!({ "target": first.to_string(), "message": "continue after resume" }).to_string(),
+    )
+    .await;
+    let followup = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| request_has_model(request, ROLE_MODEL),
+        sse(vec![ev_completed("restored-child-followup")]),
+    )
+    .await;
+    resumed.submit_turn("continue restored child").await?;
+    let child = resumed.thread_manager.get_thread(first).await?;
+    wait_for_event(child.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert!(followup.single_request().body_contains_text(LATE_EDIT));
     Ok(())
 }

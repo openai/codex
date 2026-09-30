@@ -1347,6 +1347,7 @@ async fn cold_resume_with_thread_instructions_preserves_lazy_v2_child_inheritanc
         .await
         .expect("read parent history");
     let initial_history = InitialHistory::Resumed(ResumedHistory {
+        history_revision: None,
         conversation_id: parent_thread_id,
         history: Arc::new(stored_parent.history.expect("parent history").items),
         rollout_path: stored_parent.rollout_path,

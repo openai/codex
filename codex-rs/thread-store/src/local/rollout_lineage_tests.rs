@@ -74,7 +74,7 @@ async fn resolves_nested_lineage_with_empty_intermediate_segments() {
     );
 
     let lineage = store
-        .resolve_rollout_lineage(child)
+        .resolve_rollout_lineage(child, /*initial_path*/ None)
         .await
         .expect("resolve nested lineage");
 
@@ -127,7 +127,7 @@ async fn resolves_archived_ancestors() {
     );
 
     let lineage = store
-        .resolve_rollout_lineage(child)
+        .resolve_rollout_lineage(child, /*initial_path*/ None)
         .await
         .expect("resolve archived ancestor");
 
@@ -155,7 +155,7 @@ async fn resolves_lineage_at_explicit_history_position() {
     );
 
     let lineage = store
-        .resolve_rollout_lineage(child)
+        .resolve_rollout_lineage(child, /*initial_path*/ None)
         .await
         .expect("resolve child lineage")
         .truncate_at(end)
@@ -246,7 +246,7 @@ async fn rejects_missing_cycles_and_out_of_bounds_offsets() {
 
 async fn assert_invalid_lineage(store: &LocalThreadStore, thread_id: ThreadId, detail: &str) {
     let err = store
-        .resolve_rollout_lineage(thread_id)
+        .resolve_rollout_lineage(thread_id, /*initial_path*/ None)
         .await
         .expect_err("lineage should be invalid");
     assert!(err.to_string().contains(detail), "{err}");

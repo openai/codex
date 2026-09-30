@@ -109,6 +109,7 @@ async fn live_fork_keeps_instructions_when_source_is_unloaded_during_setup() {
         .await
         .expect("start source");
     let history = InitialHistory::Resumed(ResumedHistory {
+        history_revision: None,
         conversation_id: source.thread_id,
         history: Arc::new(Vec::new()),
         rollout_path: None,
@@ -323,6 +324,7 @@ async fn reserved_thread_id_is_used_without_changing_normal_id_generation() {
         .expect("start reserved thread");
     let mut resumed_options = StartThreadOptions::new(config.clone());
     resumed_options.initial_history = InitialHistory::Resumed(ResumedHistory {
+        history_revision: None,
         conversation_id: reserved.thread_id,
         history: Arc::new(Vec::new()),
         rollout_path: None,
@@ -2459,6 +2461,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         .resume_thread_with_history(
             config.clone(),
             InitialHistory::Resumed(ResumedHistory {
+                history_revision: None,
                 conversation_id: source.thread_id,
                 history: Arc::new(vec![RolloutItem::ResponseItem(user_msg("hello").into())]),
                 rollout_path: Some(rollout_path.clone()),
