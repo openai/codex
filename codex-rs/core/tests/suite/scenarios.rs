@@ -44,6 +44,8 @@ use codex_protocol::openai_models::ToolMessage;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
+#[cfg(not(target_os = "windows"))]
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
@@ -1669,5 +1671,21 @@ async fn app_tool_exposure_request_history() -> Result<()> {
                 .include_request_settings(),
         )
     );
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_catalog_refresh_preserves_tools_and_history() -> Result<()> {
+    let requests = super::spawn_agent_description::model_catalog_refresh_requests(
+        MultiAgentVersion::V1,
+        /*model_catalog_in_context*/ true,
+    )
+    .await?;
+    insta::assert_snapshot!(context_snapshot::format_request_history_snapshot(
+        "Catalog refreshes append the updated listing once while preserving tools and prior input.",
+        &requests,
+        &ContextSnapshotOptions::default().include_request_settings(),
+    ));
     Ok(())
 }

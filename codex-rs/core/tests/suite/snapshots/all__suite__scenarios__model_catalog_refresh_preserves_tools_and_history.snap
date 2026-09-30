@@ -1,0 +1,50 @@
+---
+source: core/tests/suite/scenarios.rs
+expression: "context_snapshot::format_request_history_snapshot(\"Catalog refreshes append the updated listing once while preserving tools and prior input.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
+---
+Scenario: Catalog refreshes append the updated listing once while preserving tools and prior input.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  instructions: Test model instructions.
+  model: "visible-model"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"effort":"medium","summary":"auto"}
+  store: false
+  stream: true
+  tool_choice: "auto"
+  tools (6; hash=1ea0fa9abde186d4):
+    - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
+    - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
+    - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[path]; hash=1908de9c0be7118a
+    - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=94c598b3c6ca141b
+      - function/close_agent
+      - function/resume_agent
+      - function/send_input
+      - function/spawn_agent
+      - function/wait_agent
+    - web_search; hash=8586237e354ee5ed
+-- request 1 (turn) --
+00:message/developer[2]:
+    [01] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
+        Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
+        </permissions instructions>
+    [02] <model_catalog>
+        - `visible-model`: Fast and capable Reasoning efforts: low, medium (default), high. Service tiers: priority.
+        </model_catalog>
+01:message/user:
+    hello
+-- request 2 (turn) --
+02:message/developer:
+    <model_catalog>
+    - `visible-model`: Updated picker copy Reasoning efforts: low, medium (default), high. Service tiers: priority.
+    </model_catalog>
+03:message/user:
+    after catalog refresh
+-- request 3 (turn) --
+04:message/user:
+    without another catalog change

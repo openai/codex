@@ -12,6 +12,7 @@ use crate::context::world_state::ContextWindowGuidanceState;
 use crate::context::world_state::EnvironmentsInstructionsState;
 use crate::context::world_state::EnvironmentsState;
 use crate::context::world_state::ManagedDeveloperInstructionsState;
+use crate::context::world_state::ModelCatalogState;
 use crate::context::world_state::ModelInstructionsState;
 use crate::context::world_state::MultiAgentModeState;
 use crate::context::world_state::MultiAgentUsageHintState;
@@ -21,6 +22,7 @@ use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::RealtimeState;
 use crate::context::world_state::ToolsState;
 use crate::context::world_state::WorldState;
+use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_extension_api::WorldStateContributionInput;
 use codex_features::Feature;
@@ -31,6 +33,7 @@ use codex_prompts::render_model_instructions;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_tools::ToolName;
 
 const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
 const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
@@ -324,6 +327,45 @@ impl Session {
             world_state.add_section(usage_hint);
         }
         world_state.add_section(multi_agent_mode);
+        let spawn_tool = match turn_context.multi_agent_version {
+            MultiAgentVersion::Disabled => None,
+            MultiAgentVersion::V1 => Some(ToolName::new(
+                Some(MULTI_AGENT_V1_NAMESPACE.to_string()),
+                "spawn_agent",
+            )),
+            MultiAgentVersion::V2 => turn_context
+                .config
+                .multi_agent_v2
+                .expose_spawn_agent_model_overrides
+                .then(|| {
+                    ToolName::new(
+                        turn_context
+                            .provider
+                            .capabilities()
+                            .namespace_tools
+                            .then(|| turn_context.config.multi_agent_v2.tool_namespace.clone())
+                            .flatten(),
+                        "spawn_agent",
+                    )
+                }),
+        };
+        let model_overrides_available =
+            spawn_tool.is_some_and(|name| step_context.tool_router.exposes_tool(&name));
+        world_state.add_section(
+            if model_overrides_available
+                && turn_context
+                    .config
+                    .features
+                    .enabled(Feature::ModelCatalogInContext)
+            {
+                ModelCatalogState::new(
+                    &turn_context.available_models,
+                    turn_context.multi_agent_version,
+                )
+            } else {
+                ModelCatalogState::default()
+            },
+        );
         if !crate::guardian::is_basic_session_source(&turn_context.session_source) {
             world_state.add_section(ManagedDeveloperInstructionsState::new(
                 turn_context

@@ -20,6 +20,7 @@ use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
+use codex_protocol::protocol::MultiAgentVersion;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -30,6 +31,7 @@ use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::time::Duration;
 use std::time::Instant;
@@ -40,8 +42,8 @@ const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 
-fn spawn_agent_description(body: &Value) -> Option<String> {
-    namespace_child_tool(body, MULTI_AGENT_V1_NAMESPACE, SPAWN_AGENT_TOOL_NAME)
+fn spawn_agent_description(body: &Value, namespace: &str) -> Option<String> {
+    namespace_child_tool(body, namespace, SPAWN_AGENT_TOOL_NAME)
         .and_then(|tool| tool.get("description"))
         .and_then(Value::as_str)
         .map(str::to_string)
@@ -148,8 +150,23 @@ async fn wait_for_model_available(manager: &SharedModelsManager, slug: &str) {
     }
 }
 
+#[test_case(MultiAgentVersion::V1, false; "v1_default")]
+#[test_case(MultiAgentVersion::V2, false; "v2_default")]
+#[test_case(MultiAgentVersion::V2, true; "v2_context")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() -> Result<()> {
+async fn model_catalog_flag_controls_refresh(
+    multi_agent_version: MultiAgentVersion,
+    model_catalog_in_context: bool,
+) -> Result<()> {
+    // The V1 opt-in case also snapshots the full request history in scenarios.rs.
+    model_catalog_refresh_requests(multi_agent_version, model_catalog_in_context).await?;
+    Ok(())
+}
+
+pub(super) async fn model_catalog_refresh_requests(
+    multi_agent_version: MultiAgentVersion,
+    model_catalog_in_context: bool,
+) -> Result<Vec<ResponsesRequest>> {
     let server = start_mock_server().await;
     mount_models_once(
         &server,
@@ -206,30 +223,64 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model("visible-model")
-        .with_config(|config| {
+        .with_config(move |config| {
             config
                 .features
                 .enable(Feature::Collab)
                 .expect("test config should allow feature update");
+            config
+                .features
+                .set_enabled(
+                    Feature::MultiAgentV2,
+                    multi_agent_version == MultiAgentVersion::V2,
+                )
+                .expect("set multi-agent version");
+            if model_catalog_in_context {
+                config
+                    .features
+                    .enable(Feature::ModelCatalogInContext)
+                    .expect("enable context catalogs");
+            }
             config.multi_agent_v2.hide_spawn_agent_metadata = false;
+            config.base_instructions = Some("Test model instructions.".to_string());
+            config.include_environment_context = false;
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     wait_for_model_available(&test.thread_manager.get_models_manager(), "visible-model").await;
 
     test.submit_turn("hello").await?;
 
-    let body = resp_mock.single_request().body_json();
-    let description =
-        spawn_agent_description(&body).expect("spawn_agent description should be present");
+    let request = resp_mock.single_request();
+    let body = request.body_json();
+    let namespace = match multi_agent_version {
+        MultiAgentVersion::V1 => MULTI_AGENT_V1_NAMESPACE,
+        MultiAgentVersion::V2 => MULTI_AGENT_V2_NAMESPACE,
+        MultiAgentVersion::Disabled => unreachable!("this scenario requires spawning"),
+    };
+    let description = spawn_agent_description(&body, namespace)
+        .expect("spawn_agent description should be present");
+    let catalog = request.message_input_texts("developer").join("\n");
+    let listing = if model_catalog_in_context {
+        &catalog
+    } else {
+        &description
+    };
 
     assert!(
-        description.contains("- `visible-model`: Fast and capable"),
-        "expected visible model summary in spawn_agent description: {description:?}"
+        listing.contains("- `visible-model`: Fast and capable"),
+        "expected visible model summary in model catalog: {catalog:?}"
     );
-    assert!(
-        description
-            .contains("Available model overrides (optional; inherited parent model is preferred):"),
-        "expected model choices to be framed as overrides in spawn_agent description: {description:?}"
+    assert_eq!(
+        description.contains("Pick model overrides from the latest <model_catalog> listing."),
+        model_catalog_in_context
+    );
+    assert_eq!(
+        catalog.contains("<model_catalog>"),
+        model_catalog_in_context
+    );
+    assert_eq!(
+        description.contains("- `visible-model`: Fast and capable"),
+        !model_catalog_in_context
     );
     assert!(
         description.contains(
@@ -237,48 +288,106 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
         ),
         "expected inherited-model guidance in spawn_agent description: {description:?}"
     );
-    assert!(
+    if multi_agent_version == MultiAgentVersion::V1 {
+        assert!(
         description.contains(
             "Do not set the `model` field unless the user explicitly asks for a different model."
         ),
         "expected model override usage guidance in spawn_agent description: {description:?}"
     );
+    }
     assert!(
-        description.contains("Reasoning efforts: low, medium (default), high."),
-        "expected default reasoning effort in spawn_agent description: {description:?}"
+        listing.contains("Reasoning efforts: low, medium (default), high."),
+        "expected default reasoning effort in model catalog: {catalog:?}"
     );
     assert!(
-        description.contains("Service tiers: priority."),
-        "expected service tier guidance in spawn_agent description: {description:?}"
+        listing.contains("Service tiers: priority."),
+        "expected service tier guidance in model catalog: {catalog:?}"
     );
     assert!(
-        !description.contains("hidden-model"),
-        "hidden picker model should be omitted from spawn_agent description: {description:?}"
+        !listing.contains("hidden-model"),
+        "hidden picker model should be omitted from model catalog: {catalog:?}"
     );
-    assert!(
+    if multi_agent_version == MultiAgentVersion::V1 {
+        assert!(
         description.contains(
             "Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work."
         ),
         "expected explicit authorization rule in spawn_agent description: {description:?}"
     );
-    assert!(
+        assert!(
         description.contains(
             "Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn."
         ) && description.contains("### When to delegate vs. do the subtask yourself"),
         "expected delegation decision guidance in spawn_agent description: {description:?}"
     );
-    assert!(
-        description.contains(
-            "Agent-role guidance below only helps choose which agent to use after spawning is already authorized; it never authorizes spawning by itself."
-        ),
-        "expected agent-role clarification in spawn_agent description: {description:?}"
-    );
-    assert!(
-        !description.contains("A mini model can solve many tasks faster than the main model."),
-        "spawn_agent description should not encourage choosing a smaller model by default: {description:?}"
-    );
+        assert!(
+            !description.contains("A mini model can solve many tasks faster than the main model."),
+            "spawn_agent description should not encourage choosing a smaller model by default: {description:?}"
+        );
+    }
 
-    Ok(())
+    // Only the opt-in path keeps the tool schema stable across a catalog refresh.
+    let manager = test.thread_manager.get_models_manager();
+    let mut refreshed = manager
+        .raw_model_catalog(RefreshStrategy::Offline, test.config.http_client_factory())
+        .await;
+    refreshed
+        .models
+        .iter_mut()
+        .find(|model| model.slug == "visible-model")
+        .expect("visible model")
+        .description = Some("Updated picker copy".to_string());
+    mount_models_once(&server, refreshed.clone()).await;
+    assert_eq!(
+        manager
+            .raw_model_catalog(RefreshStrategy::Online, test.config.http_client_factory())
+            .await
+            .models,
+        refreshed.models
+    );
+    let expected_catalogs = request
+        .message_input_texts("developer")
+        .into_iter()
+        .filter(|text| text.starts_with("<model_catalog>"))
+        .flat_map(|catalog| {
+            [
+                catalog.clone(),
+                catalog.replace("Fast and capable", "Updated picker copy"),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let mut requests = vec![request];
+    for turn in ["after catalog refresh", "without another catalog change"] {
+        let response = mount_sse_once(&server, sse(vec![ev_completed(turn)])).await;
+        test.submit_turn(turn).await?;
+        let current = response.single_request();
+        if model_catalog_in_context {
+            assert_eq!(current.body_json()["tools"], body["tools"]);
+        } else {
+            let expected_tools = serde_json::to_string(&body["tools"])?
+                .replace("Fast and capable", "Updated picker copy");
+            assert_eq!(
+                current.body_json()["tools"],
+                serde_json::from_str::<Value>(&expected_tools)?
+            );
+        }
+        assert!(
+            current
+                .input()
+                .starts_with(&requests.last().unwrap().input())
+        );
+        assert_eq!(
+            current
+                .message_input_texts("developer")
+                .into_iter()
+                .filter(|text| text.starts_with("<model_catalog>"))
+                .collect::<Vec<_>>(),
+            expected_catalogs,
+        );
+        requests.push(current);
+    }
+    Ok(requests)
 }
 
 #[test_case(false, false, MULTI_AGENT_V1_NAMESPACE; "v1 hides agent type without roles")]

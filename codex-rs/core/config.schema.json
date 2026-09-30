@@ -975,6 +975,9 @@
             "mentions_v2": {
               "type": "boolean"
             },
+            "model_catalog_in_context": {
+              "type": "boolean"
+            },
             "multi_agent": {
               "type": "boolean"
             },
@@ -7013,6 +7016,9 @@
           "type": "boolean"
         },
         "mentions_v2": {
+          "type": "boolean"
+        },
+        "model_catalog_in_context": {
           "type": "boolean"
         },
         "multi_agent": {
