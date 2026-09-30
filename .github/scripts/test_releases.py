@@ -1,5 +1,13 @@
+import io
+import json
+from pathlib import Path
+import subprocess
+import tarfile
+import tempfile
 import unittest
+from unittest.mock import patch
 
+from npm_alpha_tag import npm_alpha_tag
 from releases import is_valid_release_version, should_update_version
 
 
@@ -50,6 +58,93 @@ class VersionComparisonTest(unittest.TestCase):
 
     def test_invalid_release_version(self) -> None:
         self.assertRaises(ValueError, should_update_version, "0.123", "")
+
+
+class NpmAlphaTagTest(unittest.TestCase):
+    def test_published_tags_across_packages_and_platforms(self) -> None:
+        # Each package/tag reads its own registry value, even after a partially
+        # published release. Also exercise a missing pointer and dotted hotfix.
+        cases = [
+            (
+                "@openai/codex",
+                "alpha",
+                "0.158.0-alpha.10",
+                "0.157.0-alpha.11.1",
+                "release-0.157.0-alpha.11.1-alpha",
+            ),
+            (
+                "@openai/codex",
+                "alpha-linux-x64",
+                "0.158.0-alpha.10-linux-x64",
+                "0.157.0-alpha.11.1",
+                "release-0.157.0-alpha.11.1-alpha-linux-x64",
+            ),
+            (
+                "@openai/codex",
+                "alpha-win32-arm64",
+                "0.158.0-alpha.9-win32-arm64",
+                "0.158.0-alpha.10",
+                "alpha-win32-arm64",
+            ),
+            (
+                "@openai/codex-sdk",
+                "alpha",
+                "0.158.0-alpha.10",
+                "0.158.0-alpha.10.1",
+                "alpha",
+            ),
+            (
+                "@openai/codex-responses-api-proxy",
+                "alpha",
+                "0.159.0-alpha.1",
+                "0.158.0-alpha.10.1",
+                "release-0.158.0-alpha.10.1-alpha",
+            ),
+            ("@openai/codex-sdk", "alpha", None, "0.158.0-alpha.10", "alpha"),
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tarball = Path(tmpdir) / "package.tgz"
+            for package, tag, current, version, expected in cases:
+                with self.subTest(package=package, tag=tag, version=version):
+                    content = json.dumps({"name": package}).encode()
+                    with tarfile.open(tarball, "w:gz") as archive:
+                        info = tarfile.TarInfo("package/package.json")
+                        info.size = len(content)
+                        archive.addfile(info, io.BytesIO(content))
+                    tags = {tag: current} if current is not None else {}
+                    result = subprocess.CompletedProcess([], 0, json.dumps(tags))
+                    with patch(
+                        "npm_alpha_tag.subprocess.run", return_value=result
+                    ) as run:
+                        self.assertEqual(npm_alpha_tag(tarball, version, tag), expected)
+                    run.assert_called_once_with(
+                        [
+                            "npm",
+                            "view",
+                            package,
+                            "dist-tags",
+                            "--json",
+                            "--prefer-online",
+                        ],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+
+    def test_registry_failure_prevents_publish(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tarball = Path(tmpdir) / "package.tgz"
+            content = b'{"name": "@openai/codex"}'
+            with tarfile.open(tarball, "w:gz") as archive:
+                info = tarfile.TarInfo("package/package.json")
+                info.size = len(content)
+                archive.addfile(info, io.BytesIO(content))
+            with patch(
+                "npm_alpha_tag.subprocess.run",
+                side_effect=subprocess.CalledProcessError(1, "npm"),
+            ):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    npm_alpha_tag(tarball, "0.158.0-alpha.10", "alpha")
 
 
 if __name__ == "__main__":
