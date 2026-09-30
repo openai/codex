@@ -4432,6 +4432,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-path",
  "codex-utils-process",
+ "memchr",
  "pretty_assertions",
  "regex",
  "serde",

@@ -95,7 +95,7 @@ where
             }
 
             let chunk = &self.chunk[..self.chunk_position];
-            if let Some(newline_position) = chunk.iter().rposition(|byte| *byte == b'\n') {
+            if let Some(newline_position) = memchr::memrchr(b'\n', chunk) {
                 let fragment = &chunk[newline_position + 1..];
                 if !self.discarding_oversized_record {
                     if self.max_record_bytes.is_some_and(|max_record_bytes| {
