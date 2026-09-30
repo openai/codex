@@ -362,8 +362,7 @@ where
                         .get::<SkillsThreadState>()
                         .and_then(|state| state.shadow_selection_turn(input.turn_id))
                     {
-                        self.shadow_selection
-                            .record_invocation(&state, input.skill_resource);
+                        state.record_invocation(input.skill_resource);
                     }
                 }
                 SkillInvocationKind::Explicit => {}
@@ -425,11 +424,11 @@ where
                 }
                 let shadow_selected_entries =
                     collect_explicit_skill_mentions(&input.user_input, &shadow_catalog);
-                Some(self.shadow_selection.run(
+                Some(self.shadow_selection.start(
                     &input,
-                    &shadow_catalog,
+                    shadow_catalog,
                     &shadow_selected_entries,
-                    host_snapshot.as_deref(),
+                    host_snapshot.clone(),
                     Arc::clone(&thread_state.recent_skill_invocations),
                     Arc::clone(&thread_state.shadow_task_context),
                 ))
@@ -591,7 +590,6 @@ impl<C> SkillsExtension<C> {
             executor_query,
             selected_plugins,
             sandbox_contexts,
-            Arc::clone(&self.shadow_selection),
         )
     }
 

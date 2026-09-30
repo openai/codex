@@ -221,9 +221,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                             .thread_state
                             .shadow_selection_turn(&call.turn_id)
                     {
-                        self.context
-                            .shadow_selection
-                            .record_invocation(&state, main_prompt.as_str());
+                        state.record_invocation(main_prompt.as_str());
                     }
                     let start = parse_pagination_cursor(
                         args.cursor.as_deref(),

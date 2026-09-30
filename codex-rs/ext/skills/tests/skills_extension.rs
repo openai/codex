@@ -893,19 +893,24 @@ async fn shadow_selection_uses_host_catalog_when_instructions_are_disabled() -> 
             .is_none()
     );
     assert!(fragments.is_empty());
-    let snapshot = metrics.snapshot()?;
-    let catalog_entry_counts = snapshot
-        .scope_metrics()
+    let snapshots = shadow_task_context_tests::collect_shadow_observations(
+        &metrics,
+        "codex.skills.shadow_selection.catalog_entries",
+        /*expected*/ 12,
+    )
+    .await?;
+    let catalog_entry_counts = snapshots
+        .iter()
+        .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
         .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-        .find(|metric| metric.name() == "codex.skills.shadow_selection.catalog_entries")
-        .map(|metric| match metric.data() {
+        .filter(|metric| metric.name() == "codex.skills.shadow_selection.catalog_entries")
+        .flat_map(|metric| match metric.data() {
             AggregatedMetrics::F64(MetricData::Histogram(histogram)) => histogram
                 .data_points()
-                .map(opentelemetry_sdk::metrics::data::HistogramDataPoint::sum)
-                .collect::<Vec<_>>(),
+                .map(opentelemetry_sdk::metrics::data::HistogramDataPoint::sum),
             data => panic!("unexpected shadow catalog metric data: {data:?}"),
         })
-        .ok_or("shadow catalog metric should be recorded")?;
+        .collect::<Vec<_>>();
 
     assert!(
         catalog_entry_counts.iter().all(|count| *count == 1.0),
@@ -997,42 +1002,54 @@ async fn shadow_lru_selector_recovers_a_skill_invoked_on_an_earlier_turn() -> Te
             .await;
     }
 
-    let snapshot = metrics.snapshot()?;
-    let metric = snapshot
-        .scope_metrics()
+    let snapshots = shadow_task_context_tests::collect_shadow_observations(
+        &metrics,
+        "codex.skills.shadow_selection.invocation",
+        /*expected*/ 24,
+    )
+    .await?;
+    let selector_hits = snapshots
+        .iter()
+        .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
         .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-        .find(|metric| metric.name() == "codex.skills.shadow_selection.invocation")
-        .ok_or("shadow invocation metric should be recorded")?;
-    let mut selector_hits = match metric.data() {
-        AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
-            .data_points()
-            .filter_map(|point| {
-                let method = point
-                    .attributes()
-                    .find(|attribute| attribute.key.as_str() == "method")?
-                    .value
-                    .as_str();
-                if !matches!(
-                    method.as_ref(),
-                    "lru_v1"
-                        | "lru_plus_lexical_v1"
-                        | "lru_plus_character_routing_v1"
-                        | "lru_plus_lexical_character_routing_v1"
-                ) {
-                    return None;
-                }
-                let hit = point
-                    .attributes()
-                    .find(|attribute| attribute.key.as_str() == "hit")?
-                    .value
-                    .as_str()
-                    .to_string();
-                Some((method.to_string(), hit, point.value()))
-            })
-            .collect::<Vec<_>>(),
-        data => panic!("unexpected shadow invocation metric data: {data:?}"),
-    };
-    selector_hits.sort();
+        .filter(|metric| metric.name() == "codex.skills.shadow_selection.invocation")
+        .flat_map(|metric| match metric.data() {
+            AggregatedMetrics::U64(MetricData::Sum(sum)) => sum.data_points(),
+            data => panic!("unexpected shadow invocation metric data: {data:?}"),
+        })
+        .filter_map(|point| {
+            let method = point
+                .attributes()
+                .find(|attribute| attribute.key.as_str() == "method")?
+                .value
+                .as_str();
+            if !matches!(
+                method.as_ref(),
+                "lru_v1"
+                    | "lru_plus_lexical_v1"
+                    | "lru_plus_character_routing_v1"
+                    | "lru_plus_lexical_character_routing_v1"
+            ) {
+                return None;
+            }
+            let hit = point
+                .attributes()
+                .find(|attribute| attribute.key.as_str() == "hit")?
+                .value
+                .as_str()
+                .to_string();
+            Some((method.to_string(), hit, point.value()))
+        })
+        .fold(
+            std::collections::BTreeMap::new(),
+            |mut totals, (method, hit, count)| {
+                *totals.entry((method, hit)).or_insert(0) += count;
+                totals
+            },
+        )
+        .into_iter()
+        .map(|((method, hit), count)| (method, hit, count))
+        .collect::<Vec<_>>();
 
     assert_eq!(
         vec![

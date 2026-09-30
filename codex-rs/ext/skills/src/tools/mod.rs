@@ -44,7 +44,6 @@ use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillSourceKind;
 use crate::provider::SkillListQuery;
 use crate::provider::attribute_executor_plugins;
-use crate::shadow_selection_experiment::ShadowSelectionExperiment;
 use crate::sources::SkillProviders;
 use crate::state::SkillsSessionState;
 use crate::state::SkillsThreadState;
@@ -66,7 +65,6 @@ pub(crate) fn skill_tools(
     executor_query: Option<SkillListQuery>,
     selected_plugins: Option<Arc<SelectedPluginSnapshot>>,
     sandbox_contexts: Option<Arc<HashMap<String, FileSystemSandboxContext>>>,
-    shadow_selection: Arc<ShadowSelectionExperiment>,
 ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
     let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {
         return Vec::new();
@@ -89,7 +87,6 @@ pub(crate) fn skill_tools(
         selected_plugins,
         sandbox_contexts,
         executor_catalog: Arc::new(OnceCell::new()),
-        shadow_selection,
     };
     vec![
         Arc::new(list::ListTool {
@@ -225,7 +222,6 @@ struct SkillToolContext {
     selected_plugins: Option<Arc<SelectedPluginSnapshot>>,
     sandbox_contexts: Option<Arc<HashMap<String, FileSystemSandboxContext>>>,
     executor_catalog: Arc<OnceCell<SkillCatalog>>,
-    shadow_selection: Arc<ShadowSelectionExperiment>,
 }
 
 impl SkillToolContext {

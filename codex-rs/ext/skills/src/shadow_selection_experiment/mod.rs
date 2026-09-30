@@ -1,6 +1,9 @@
-// This shadow-selection experiment is temporary and should be removed after evaluation.
+//! Shadow-only skill ranking. Capture turn inputs before recording new relevance signals,
+//! then evaluate on a blocking worker without delaying model input construction.
+//! This experiment is temporary and should be removed after evaluation.
 
 mod task_context;
+use task_context::TaskContextSnapshot;
 
 pub(crate) use task_context::ShadowTaskContext;
 
@@ -17,6 +20,7 @@ use crate::HostSkillsSnapshot;
 use codex_extension_api::TurnInputContext;
 use codex_otel::MetricsClient;
 use codex_protocol::user_input::UserInput;
+use tokio::sync::Semaphore;
 
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
@@ -39,13 +43,16 @@ use crate::dynamic_skill_selector::WeightedLexicalSkillSelector;
 const MAX_SHADOW_QUERY_BYTES: usize = 16 * 1024;
 const MAX_SHADOW_RESULTS: usize = 50;
 
+// Share the CPU budget across threads and extension registries. Admission happens
+// only in the background; turn preparation never waits for a ranking slot.
+static RANKING_SLOTS: Semaphore = Semaphore::const_new(2);
+
 const RUN_METRIC: &str = "codex.skills.shadow_selection";
 const DURATION_METRIC: &str = "codex.skills.shadow_selection.duration_ms";
 const CATALOG_ENTRY_COUNT_METRIC: &str = "codex.skills.shadow_selection.catalog_entries";
 const SELECTED_ENTRY_COUNT_METRIC: &str = "codex.skills.shadow_selection.selected_entries";
 const QUERY_TERM_COUNT_METRIC: &str = "codex.skills.shadow_selection.query_terms";
 const REDUCTION_BPS_METRIC: &str = "codex.skills.shadow_selection.reduction_bps";
-const INVOCATION_METRIC: &str = "codex.skills.shadow_selection.invocation";
 
 pub(crate) struct ShadowSelectionExperiment {
     selectors: Vec<Box<dyn CheapSkillSelector>>,
@@ -67,37 +74,156 @@ impl ShadowSelectionExperiment {
         }
     }
 
-    pub(crate) fn run(
-        &self,
+    /// Freeze prediction inputs before this turn can contribute new invocation history.
+    /// The returned state observes invocations even while its rankings are still pending.
+    pub(crate) fn start(
+        self: &Arc<Self>,
         input: &TurnInputContext<'_>,
-        catalog: &SkillCatalog,
+        catalog: SkillCatalog,
         explicitly_selected: &[SkillCatalogEntry],
-        host_snapshot: Option<&HostSkillsSnapshot>,
+        host_snapshot: Option<Arc<HostSkillsSnapshot>>,
         recent_skill_invocations: Arc<RecentSkillInvocations>,
         task_context: Arc<ShadowTaskContext>,
     ) -> ShadowSelectionTurnState {
         let query = build_shadow_query(&input.user_input);
-        let query_script = query_script_tag(&query.text);
         let task_snapshot = task_context.begin_turn(&input.turn_id, &query, &input.user_input);
+        let recent_skill_resources = recent_skill_invocations.snapshot();
         let explicitly_selected_skill_resources = explicitly_selected
             .iter()
             .map(|entry| normalize_skill_resource(entry.main_prompt.as_str()))
             .collect::<HashSet<_>>();
+        let mut eligible_ids = HashSet::new();
+        let mut eligible_skill_resources = HashSet::new();
+        for (id, entry) in catalog.entries.iter().enumerate() {
+            // Invocation observation exists only for host shell use and cloud reads.
+            if !entry.is_model_visible()
+                || !matches!(
+                    &entry.authority.kind,
+                    SkillSourceKind::Host | SkillSourceKind::Cloud
+                )
+            {
+                continue;
+            }
+            let resource = normalize_skill_resource(entry.main_prompt.as_str());
+            if !explicitly_selected_skill_resources.contains(&resource) {
+                eligible_ids.insert(id);
+                eligible_skill_resources.insert(resource);
+            }
+        }
+        let (invocations, pending_invocations) = tokio::sync::mpsc::unbounded_channel();
+        let state = ShadowSelectionTurnState {
+            turn_id: input.turn_id.clone(),
+            eligible_skill_resources,
+            seen_skill_resources: Mutex::new(HashSet::new()),
+            recent_skill_invocations,
+            task_context: Arc::clone(&task_context),
+            invocations,
+        };
+
+        // Explicit intent is a relevance signal even if the subsequent prompt read fails.
+        // It can update future turns now that this turn's prediction inputs are frozen.
+        for entry in explicitly_selected.iter().filter(|entry| {
+            entry.is_model_visible()
+                && matches!(
+                    &entry.authority.kind,
+                    SkillSourceKind::Host | SkillSourceKind::Cloud
+                )
+        }) {
+            task_context.record(
+                &input.turn_id,
+                normalize_skill_resource(entry.main_prompt.as_str()),
+            );
+        }
+
+        let selection_input = ShadowSelectionInput {
+            catalog,
+            host_snapshot,
+            query,
+            eligible_ids,
+            recent_skill_resources,
+            task_snapshot,
+        };
+        tokio::spawn(Arc::clone(self).evaluate(
+            selection_input,
+            pending_invocations,
+            tracing::Span::current(),
+        ));
+        state
+    }
+
+    /// Own the rankings and drain observations for this turn, including those queued
+    /// during ranking. Dropping the turn's observer closes the channel after its last read.
+    async fn evaluate(
+        self: Arc<Self>,
+        input: ShadowSelectionInput,
+        mut invocations: tokio::sync::mpsc::UnboundedReceiver<String>,
+        parent: tracing::Span,
+    ) {
+        let query_script = query_script_tag(&input.query.text);
+        let experiment = Arc::clone(&self);
+        let Ok(permit) = RANKING_SLOTS.acquire().await else {
+            return;
+        };
+        let ranked_selections = match tokio::task::spawn_blocking(move || {
+            // A cancelled async task must not release capacity while its blocking
+            // worker is still running. Release it before waiting for invocations.
+            let _permit = permit;
+            experiment.rank(input, parent)
+        })
+        .await
+        {
+            Ok(rankings) => rankings,
+            Err(error) => {
+                tracing::warn!(%error, "shadow skill selection failed");
+                return;
+            }
+        };
+        let Some(metrics_client) = self.metrics_client.as_ref() else {
+            return;
+        };
+        while let Some(skill_resource) = invocations.recv().await {
+            for selection in &ranked_selections {
+                let rank = selection
+                    .skill_resources
+                    .iter()
+                    .position(|candidate| candidate == &skill_resource)
+                    .map(|index| index + 1);
+                let tags = [
+                    ("method", selection.method),
+                    ("hit", bool_tag(rank.is_some())),
+                    ("rank", rank_bucket(rank)),
+                    ("query_script", query_script),
+                ];
+                let _ = metrics_client.counter(
+                    "codex.skills.shadow_selection.invocation",
+                    /*inc*/ 1,
+                    &tags,
+                );
+            }
+        }
+    }
+
+    #[tracing::instrument(
+        name = "skills.shadow_selection.rank",
+        level = "info",
+        parent = &parent,
+        skip_all,
+        fields(catalog_entries = input.eligible_ids.len())
+    )]
+    fn rank(&self, input: ShadowSelectionInput, parent: tracing::Span) -> Vec<RankedSelection> {
+        let ShadowSelectionInput {
+            catalog,
+            host_snapshot,
+            query,
+            eligible_ids,
+            recent_skill_resources,
+            task_snapshot,
+        } = input;
         let documents = catalog
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, entry)| {
-                entry.is_model_visible()
-                    // Invocation observation currently exists only for host shell use and
-                    // cloud reads. Keep the candidate set aligned with that universe.
-                    && matches!(
-                        &entry.authority.kind,
-                        SkillSourceKind::Host | SkillSourceKind::Cloud
-                    )
-                    && !explicitly_selected_skill_resources
-                        .contains(&normalize_skill_resource(entry.main_prompt.as_str()))
-            })
+            .filter(|(id, _)| eligible_ids.contains(id))
             .map(|(id, entry)| SkillSelectionDocument {
                 id,
                 name: entry.name.as_str(),
@@ -106,10 +232,6 @@ impl ShadowSelectionExperiment {
                 dependencies: entry.dependencies.as_ref(),
             })
             .collect::<Vec<_>>();
-        let eligible_ids = documents
-            .iter()
-            .map(|document| document.id)
-            .collect::<HashSet<_>>();
         let eligible_skill_ids_by_resource = documents
             .iter()
             .map(|document| {
@@ -119,16 +241,12 @@ impl ShadowSelectionExperiment {
                 )
             })
             .collect::<HashMap<_, _>>();
-        let eligible_skill_resources = eligible_skill_ids_by_resource
-            .keys()
-            .cloned()
-            .collect::<HashSet<_>>();
-        let recent_skill_ids = recent_skill_invocations
-            .snapshot()
+        let recent_skill_ids = recent_skill_resources
             .iter()
             .filter_map(|resource| eligible_skill_ids_by_resource.get(resource).copied())
             .collect();
-        let routing_selector = CharacterRoutingCardSkillSelector::new(catalog, host_snapshot);
+        let routing_selector =
+            CharacterRoutingCardSkillSelector::new(&catalog, host_snapshot.as_deref());
         let lru_selector = LruSkillSelector::new(recent_skill_ids);
         let lru_plus_lexical_selector = LruPlusLexicalSkillSelector::new(lru_selector.clone());
         let lru_plus_character_selector = LruPlusCharacterRoutingSkillSelector::new(
@@ -203,68 +321,7 @@ impl ShadowSelectionExperiment {
             );
         }
 
-        // Explicit intent is a relevance signal even if the subsequent prompt read fails.
-        // Keep it out of the implicit-only controls and freeze predictions before recording it.
-        for entry in explicitly_selected.iter().filter(|entry| {
-            entry.is_model_visible()
-                && matches!(
-                    &entry.authority.kind,
-                    SkillSourceKind::Host | SkillSourceKind::Cloud
-                )
-        }) {
-            task_context.record(
-                &input.turn_id,
-                normalize_skill_resource(entry.main_prompt.as_str()),
-            );
-        }
-
-        ShadowSelectionTurnState {
-            ranked_selections,
-            turn_id: input.turn_id.clone(),
-            query_script,
-            eligible_skill_resources,
-            seen_skill_resources: Mutex::new(HashSet::new()),
-            recent_skill_invocations,
-            task_context,
-        }
-    }
-
-    pub(crate) fn record_invocation(&self, state: &ShadowSelectionTurnState, skill_resource: &str) {
-        let skill_resource = normalize_skill_resource(skill_resource);
-        if !state.eligible_skill_resources.contains(&skill_resource) {
-            return;
-        }
-        if !state
-            .seen_skill_resources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(skill_resource.clone())
-        {
-            return;
-        }
-        state
-            .recent_skill_invocations
-            .record(skill_resource.clone());
-        state
-            .task_context
-            .record(&state.turn_id, skill_resource.clone());
-        let Some(metrics_client) = self.metrics_client.as_ref() else {
-            return;
-        };
-        for selection in &state.ranked_selections {
-            let rank = selection
-                .skill_resources
-                .iter()
-                .position(|candidate| candidate == &skill_resource)
-                .map(|index| index + 1);
-            let tags = [
-                ("method", selection.method),
-                ("hit", bool_tag(rank.is_some())),
-                ("rank", rank_bucket(rank)),
-                ("query_script", state.query_script),
-            ];
-            let _ = metrics_client.counter(INVOCATION_METRIC, /*inc*/ 1, &tags);
-        }
+        ranked_selections
     }
 
     fn record_metrics(&self, observation: ShadowSelectionObservation<'_>) {
@@ -317,13 +374,42 @@ impl ShadowSelectionExperiment {
 }
 
 pub(crate) struct ShadowSelectionTurnState {
-    ranked_selections: Vec<RankedSelection>,
     turn_id: String,
-    query_script: &'static str,
     eligible_skill_resources: HashSet<String>,
     seen_skill_resources: Mutex<HashSet<String>>,
     recent_skill_invocations: Arc<RecentSkillInvocations>,
     task_context: Arc<ShadowTaskContext>,
+    invocations: tokio::sync::mpsc::UnboundedSender<String>,
+}
+
+impl ShadowSelectionTurnState {
+    /// Advance relevance history immediately; scoring can wait for the frozen rankings.
+    pub(crate) fn record_invocation(&self, skill_resource: &str) {
+        let skill_resource = normalize_skill_resource(skill_resource);
+        if !self.eligible_skill_resources.contains(&skill_resource)
+            || !self
+                .seen_skill_resources
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(skill_resource.clone())
+        {
+            return;
+        }
+        self.recent_skill_invocations.record(skill_resource.clone());
+        self.task_context
+            .record(&self.turn_id, skill_resource.clone());
+        let _ = self.invocations.send(skill_resource);
+    }
+}
+
+/// Owned turn-start inputs; workers never read the evolving relevance histories.
+struct ShadowSelectionInput {
+    catalog: SkillCatalog,
+    host_snapshot: Option<Arc<HostSkillsSnapshot>>,
+    query: ShadowQuery,
+    eligible_ids: HashSet<usize>,
+    recent_skill_resources: Vec<String>,
+    task_snapshot: TaskContextSnapshot,
 }
 
 #[derive(Default)]

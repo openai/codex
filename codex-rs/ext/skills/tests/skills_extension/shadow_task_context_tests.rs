@@ -1,8 +1,52 @@
 use std::collections::BTreeMap;
 
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
+
 use pretty_assertions::assert_eq;
 
 use super::*;
+
+// The runtime reader emits deltas. Retain every snapshot while waiting for the
+// background evaluations so assertions include observations from earlier polls.
+pub(super) async fn collect_shadow_observations(
+    metrics: &MetricsClient,
+    name: &str,
+    expected: u64,
+) -> Result<Vec<ResourceMetrics>, Box<dyn std::error::Error>> {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let mut snapshots = Vec::new();
+        let mut total = 0;
+        loop {
+            let snapshot = metrics.snapshot()?;
+            total += snapshot
+                .scope_metrics()
+                .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+                .find(|metric| metric.name() == name)
+                .map(|metric| match metric.data() {
+                    AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
+                        .data_points()
+                        .map(opentelemetry_sdk::metrics::data::SumDataPoint::value)
+                        .sum::<u64>(),
+                    AggregatedMetrics::F64(MetricData::Histogram(histogram)) => histogram
+                        .data_points()
+                        .map(opentelemetry_sdk::metrics::data::HistogramDataPoint::count)
+                        .sum::<u64>(),
+                    data => panic!("unexpected shadow metric data: {data:?}"),
+                })
+                .unwrap_or(0);
+            snapshots.push(snapshot);
+            if total >= expected {
+                assert_eq!(
+                    expected, total,
+                    "shadow observations must not be duplicated"
+                );
+                return Ok(snapshots);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?
+}
 
 struct FailedReads(StaticSkillProvider);
 
@@ -154,17 +198,21 @@ async fn task_context_recovers_prior_requests_and_explicit_intent_without_changi
         "lru_plus_character_routing_v1",
         "lru_plus_lexical_character_routing_v1",
     ];
-    let snapshot = metrics.snapshot()?;
-    let metric = snapshot
-        .scope_metrics()
+    let snapshots = collect_shadow_observations(
+        &metrics,
+        "codex.skills.shadow_selection.invocation",
+        /*expected*/ 48,
+    )
+    .await?;
+    let actual = snapshots
+        .iter()
+        .flat_map(ResourceMetrics::scope_metrics)
         .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-        .find(|metric| metric.name() == "codex.skills.shadow_selection.invocation")
-        .ok_or("shadow invocation metric should exist")?;
-    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
-        panic!("unexpected shadow metric: {:?}", metric.data());
-    };
-    let actual = sum
-        .data_points()
+        .filter(|metric| metric.name() == "codex.skills.shadow_selection.invocation")
+        .flat_map(|metric| match metric.data() {
+            AggregatedMetrics::U64(MetricData::Sum(sum)) => sum.data_points(),
+            data => panic!("unexpected shadow metric: {data:?}"),
+        })
         .filter_map(|point| {
             let attribute = |key| {
                 point
