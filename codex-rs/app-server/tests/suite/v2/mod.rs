@@ -125,6 +125,7 @@ mod server_diagnostics;
 mod session_end;
 mod skills_list;
 mod sleep;
+mod sqlite_recovery;
 mod thread_archive;
 mod thread_attachments;
 mod thread_delete;

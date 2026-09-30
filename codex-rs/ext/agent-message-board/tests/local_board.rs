@@ -88,6 +88,67 @@ impl MessageBoardHost for Host {
 }
 
 #[tokio::test]
+async fn opening_board_preserves_posts_when_corruption_has_no_startup_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
+    let root = ThreadId::new();
+    let host = Arc::new(Host {
+        clock: AtomicI64::default(),
+        agent_path_calls: AtomicUsize::default(),
+        members: [(root, AgentPath::root())].into(),
+        fail_notifications: AtomicBool::new(false),
+        active: AtomicBool::new(true),
+        notifications: Mutex::default(),
+    });
+    let path = dir.path().join("agent_message_board_1.sqlite");
+    // Keep the validated fixture alive and copy it to a new file identity so the
+    // board's first open still checks the corruption.
+    let fixture = path.with_extension("fixture");
+    let pool = sqlite.open_read_write_pool(&fixture).await.unwrap();
+    sqlx::raw_sql(
+        "CREATE TABLE unrelated(value INTEGER);
+         INSERT INTO unrelated VALUES (NULL);
+         PRAGMA writable_schema=ON;
+         UPDATE sqlite_schema SET sql='CREATE TABLE unrelated(value INTEGER NOT NULL)' WHERE name='unrelated';
+         PRAGMA writable_schema=OFF;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+    tokio::fs::copy(&fixture, &path).await.unwrap();
+    let pool = sqlite
+        .open_read_only_pool(&path, /*busy_timeout*/ None)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("PRAGMA quick_check(1)")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        "NULL value in unrelated.value"
+    );
+    pool.close().await;
+
+    let tree = SessionId::from(root);
+    let board = LocalAgentMessageBoard::open(&sqlite, tree, host.clone())
+        .await
+        .unwrap();
+    let request = PostRequest {
+        request_id: "preserved-post".into(),
+        destination: PostDestination::NewChannel("proofs".into()),
+        text: "Preserve this post.".into(),
+        agents_to_notify: Vec::new(),
+    };
+    let metadata = board.post(root, request.clone()).await.unwrap();
+    drop(board);
+    let resumed = LocalAgentMessageBoard::open(&sqlite, tree, host)
+        .await
+        .unwrap();
+    assert_eq!(resumed.post(root, request).await.unwrap(), metadata);
+}
+
+#[tokio::test]
 async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
     let dir = tempfile::tempdir().unwrap();
     let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());

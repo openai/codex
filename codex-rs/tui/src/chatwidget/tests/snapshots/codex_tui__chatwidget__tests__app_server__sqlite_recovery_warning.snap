@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+expression: "cells.iter().map(|lines| lines_to_single_string(lines)).collect::<String>()"
+---
+⚠ Codex rebuilt its local database: Damaged local databases were rebuilt. Saved
+  conversations remain in rollout files and can restore the thread list and
+  history. Some database-only metadata may be unavailable. The original database
+  files were preserved at the backup locations below.
+  Database path: /codex/state_5.sqlite
+  Backup folder: /codex/db-backups/recovery

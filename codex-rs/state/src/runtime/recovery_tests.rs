@@ -19,7 +19,11 @@ async fn backup_moves_only_requested_runtime_db_files_to_backup_folder() -> std:
     let failed_db_path = sqlite.logs_db_path();
     let failed_paths = sqlite_paths(failed_db_path.as_path());
 
-    let backups = backup_runtime_db_for_fresh_start(failed_db_path.as_path()).await?;
+    let (result, report) =
+        collect_runtime_db_backups(backup_runtime_db_for_fresh_start(failed_db_path.as_path()))
+            .await;
+    let backups = result?;
+    assert_eq!(report, backups);
 
     assert_eq!(backups.len(), failed_paths.len());
     for path in &failed_paths {

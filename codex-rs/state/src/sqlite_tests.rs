@@ -108,7 +108,8 @@ async fn open_read_write_pool_preserves_wal_conversion_lock_error() -> anyhow::R
     let error = result.expect_err("WAL conversion requires the writer lock");
     assert_eq!(
         error
-            .as_database_error()
+            .downcast_ref::<sqlx::Error>()
+            .and_then(sqlx::Error::as_database_error)
             .and_then(sqlx::error::DatabaseError::code),
         Some("5".into())
     );

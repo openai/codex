@@ -38,7 +38,6 @@ impl LocalAgentMessageBoard {
         let pool = match sqlite.open_read_write_pool(&path).await {
             Ok(pool) => pool,
             Err(error) => {
-                let error = error.into();
                 if !codex_state::is_sqlite_corruption_error(&error) {
                     return Err(storage_error(error));
                 }

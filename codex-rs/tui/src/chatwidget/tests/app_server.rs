@@ -1121,6 +1121,28 @@ async fn config_warning_during_turn_retains_transcript_details() {
 }
 
 #[tokio::test]
+async fn sqlite_recovery_warning_shows_backup_and_metadata_limitations() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.handle_server_notification(
+        ServerNotification::ConfigWarning(ConfigWarningNotification {
+            summary: "Codex rebuilt its local database".into(),
+            details: Some("Damaged local databases were rebuilt. Saved conversations remain in rollout files and can restore the thread list and history. Some database-only metadata may be unavailable. The original database files were preserved at the backup locations below.\n\nDatabase path: /codex/state_5.sqlite\nBackup folder: /codex/db-backups/recovery".into()),
+            path: None,
+            range: None,
+        }),
+        /*replay_kind*/ None,
+    );
+    let cells = drain_insert_history_transcript(&mut rx);
+    insta::assert_snapshot!(
+        "sqlite_recovery_warning",
+        cells
+            .iter()
+            .map(|lines| lines_to_single_string(lines))
+            .collect::<String>()
+    );
+}
+
+#[tokio::test]
 async fn startup_config_warning_is_not_repeated_by_thread() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let message = "Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.";

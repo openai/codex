@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use crate::DB_CORRUPTION_METRIC;
 use crate::DB_FALLBACK_METRIC;
 use crate::DB_INIT_DURATION_METRIC;
 use crate::DB_INIT_METRIC;
@@ -17,7 +18,7 @@ use crate::runtime::reclamation::ReclamationPass;
 
 use tracing::debug;
 
-/// Low-cardinality sink for SQLite startup, fallback, log-write, and reclamation telemetry.
+/// Low-cardinality sink for SQLite startup, corruption, fallback, log-write, and reclamation telemetry.
 ///
 /// Implementations should absorb delivery failures locally. Database behavior
 /// must not depend on whether telemetry export succeeds.
@@ -66,6 +67,14 @@ impl DbKind {
             Self::ThreadHistory => "thread_history",
         }
     }
+}
+
+pub(crate) fn record_corruption(telemetry: Option<&dyn DbTelemetry>, db: Option<DbKind>) {
+    record_counter(
+        telemetry,
+        DB_CORRUPTION_METRIC,
+        &[("db", db.map_or("other", DbKind::as_str))],
+    );
 }
 
 pub(crate) fn record_init_result<T>(
@@ -222,7 +231,11 @@ pub(crate) fn classify_error(err: &anyhow::Error) -> &'static str {
             return "io";
         }
     }
-    "unknown"
+    if crate::is_sqlite_corruption_error(err) {
+        "corrupt"
+    } else {
+        "unknown"
+    }
 }
 
 fn classify_sqlx_error(err: &sqlx::Error) -> &'static str {
