@@ -187,17 +187,18 @@ pub async fn first_rollout_content_match_snippet(
     path: &Path,
     search_term: &str,
 ) -> io::Result<Option<String>> {
-    let mut lines = compression::open_rollout_line_reader(path).await?;
+    let lines = compression::open_rollout_line_reader(path).await?;
     let json_search_term = case_insensitive_literal_regex(json_escaped_search_term(search_term)?)?;
     let search_term = case_insensitive_literal_regex(search_term)?;
-    while let Some(line) = lines.next_line().await? {
-        if json_search_term.is_match(line.as_str())
-            && let Some(snippet) = content_match_snippet(line.as_str(), &search_term)
-        {
-            return Ok(Some(snippet));
-        }
-    }
-    Ok(None)
+    lines
+        .find_map(move |line| {
+            if json_search_term.is_match(line) {
+                content_match_snippet(line, &search_term)
+            } else {
+                None
+            }
+        })
+        .await
 }
 
 async fn scan_compressed_rollout_matches(

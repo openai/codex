@@ -16,6 +16,7 @@ use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+mod blocking_reader;
 mod error_metrics;
 mod read_metrics;
 
@@ -297,6 +298,30 @@ impl RolloutLineReader {
             Err(err) => self.metrics.failed("read", failure_source, err),
         }
         result
+    }
+
+    /// Keeps a compressed scan on one worker while retaining this reader's format and I/O metrics.
+    pub(crate) async fn find_map<T: Send + 'static>(
+        mut self,
+        mut find: impl FnMut(&str) -> Option<T> + Send + 'static,
+    ) -> io::Result<Option<T>> {
+        let RolloutLineReaderInner::Blocking(Some(reader)) = self.inner else {
+            while let Some(line) = self.next_line().await? {
+                if let Some(found) = find(&line) {
+                    return Ok(Some(found));
+                }
+            }
+            return Ok(None);
+        };
+        blocking_reader::scan_lines(reader, self.metrics, move |lines| {
+            for line in lines {
+                if let Some(found) = find(&line?) {
+                    return Ok(Some(found));
+                }
+            }
+            Ok(None)
+        })
+        .await
     }
 }
 

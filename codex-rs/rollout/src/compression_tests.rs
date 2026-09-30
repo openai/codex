@@ -26,6 +26,7 @@ use crate::RolloutLine;
 use crate::RolloutRecorder;
 use crate::RolloutRecorderParams;
 use crate::append_rollout_item_to_path;
+use crate::first_rollout_content_match_snippet;
 use crate::read_session_meta_line;
 use crate::search_rollout_matches;
 
@@ -260,6 +261,117 @@ async fn search_rollout_matches_uses_logical_path_for_compressed_rollout() -> an
         matches.get(rollout_path.as_path()),
         Some(&Some("targeted search term".to_string()))
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn compressed_search_preserves_first_visible_snippet_and_no_match() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(22);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&path, thread_id, "an unrelated first message")?;
+    let mut contents = fs::read(&path)?;
+    contents.extend_from_slice(b"{malformed needle raw-only}\n");
+    fs::write(&path, contents)?;
+    for message in [
+        "the first Needle [x] is visible",
+        "the second needle is visible",
+    ] {
+        append_rollout_item_to_path(
+            &path,
+            &RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: message.to_string(),
+                ..Default::default()
+            })),
+        )
+        .await?;
+    }
+
+    for compressed in [false, true] {
+        if compressed {
+            compress_now(&path)?;
+        }
+        for (query, expected) in [
+            ("NEEDLE", Some("the first Needle [x] is visible")),
+            ("[x]", Some("the first Needle [x] is visible")),
+            ("raw-only", None),
+            ("absent", None),
+        ] {
+            assert_eq!(
+                first_rollout_content_match_snippet(&path, query).await?,
+                expected.map(str::to_string),
+                "compressed={compressed}, query={query}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn compressed_search_only_reports_stream_errors_before_a_match() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(23);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&path, thread_id, "needle before unreadable tail")?;
+    let mut contents = fs::read(&path)?;
+    contents.extend_from_slice(b"\xff\n");
+    fs::write(&path, contents)?;
+    compress_now(&path)?;
+    assert_eq!(
+        first_rollout_content_match_snippet(&path, "needle").await?,
+        Some("needle before unreadable tail".to_owned())
+    );
+    assert_eq!(
+        first_rollout_content_match_snippet(&path, "absent")
+            .await
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn compressed_search_stops_between_lines_when_cancelled() -> anyhow::Result<()> {
+    struct NotifyOnDrop(Option<tokio::sync::oneshot::Sender<()>>);
+    impl Drop for NotifyOnDrop {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(24);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&path, thread_id, "multiple lines are available")?;
+    compress_now(&path)?;
+    let reader = open_rollout_line_reader(&path).await?;
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = calls.clone();
+    let (entered, waiting) = tokio::sync::oneshot::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let (finished, done) = tokio::sync::oneshot::channel();
+    let guard = NotifyOnDrop(Some(finished));
+    let mut entered = Some(entered);
+    let handle = tokio::spawn(reader.find_map(move |_| {
+        let _guard = &guard;
+        seen.fetch_add(1, Ordering::SeqCst);
+        if let Some(entered) = entered.take() {
+            let _ = entered.send(());
+            let _ = blocked.recv();
+        }
+        None::<()>
+    }));
+    waiting.await?;
+    handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
+    release.send(())?;
+    tokio::time::timeout(Duration::from_secs(5), done).await??;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
     Ok(())
 }
 
