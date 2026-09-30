@@ -14,6 +14,7 @@ use crate::sse::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
 use codex_http_client::HttpClientFactory;
+use codex_http_client::RetryAfter;
 use codex_websocket_client::WebSocketConnection;
 use codex_websocket_client::WebSocketConnector;
 use futures::FutureExt;
@@ -570,6 +571,7 @@ fn map_ws_error(err: WsError, url: &Url) -> ApiError {
         WsError::Http(response) => {
             let status = response.status();
             let headers = response.headers().clone();
+            let retry_after = RetryAfter::from_headers(&headers);
             let body = response
                 .body()
                 .as_ref()
@@ -579,7 +581,7 @@ fn map_ws_error(err: WsError, url: &Url) -> ApiError {
                 url: Some(url.to_string()),
                 headers: Some(headers),
                 body,
-                retry_after: None,
+                retry_after,
             })
         }
         WsError::ConnectionClosed | WsError::AlreadyClosed => {

@@ -403,18 +403,19 @@ impl CodexErr {
             | CodexErrorDetails::UnsupportedOperation(_)
             | CodexErrorDetails::Sandbox(_)
             | CodexErrorDetails::LandlockSandboxExecutableNotProvided
-            | CodexErrorDetails::RetryLimit(_)
             | CodexErrorDetails::ContextWindowExceeded
             | CodexErrorDetails::ThreadNotFound(_)
             | CodexErrorDetails::AgentLimitReached { .. }
             | CodexErrorDetails::Spawn
             | CodexErrorDetails::SessionConfiguredNotFirstEvent
             | CodexErrorDetails::UsageLimitReached(_)
-            | CodexErrorDetails::ServerOverloaded
             | CodexErrorDetails::FlexUnavailable
             | CodexErrorDetails::CyberPolicy { .. }
             | CodexErrorDetails::BioPolicy { .. }
             | CodexErrorDetails::MisalignmentPolicyViolation { .. } => None,
+            CodexErrorDetails::ServerOverloaded | CodexErrorDetails::RetryLimit(_) => {
+                self.server_retry_delay()
+            }
             CodexErrorDetails::Stream(..)
             | CodexErrorDetails::ContentFilter
             | CodexErrorDetails::RateLimitExceeded(_)
