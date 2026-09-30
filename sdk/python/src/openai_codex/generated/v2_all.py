@@ -538,7 +538,7 @@ class ClientInfo(BaseModel):
     version: str
 
 
-class CodexErrorInfoValue(Enum):
+class CodexErrorInfoValue(str, Enum):
     context_window_exceeded = "contextWindowExceeded"
     session_budget_exceeded = "sessionBudgetExceeded"
     usage_limit_exceeded = "usageLimitExceeded"
@@ -554,6 +554,15 @@ class CodexErrorInfoValue(Enum):
     thread_rollback_failed = "threadRollbackFailed"
     sandbox_error = "sandboxError"
     other = "other"
+
+    @classmethod
+    def _missing_(cls, value: object) -> CodexErrorInfoValue | None:
+        if not isinstance(value, str):
+            return None
+        member = str.__new__(cls, value)
+        member._name_ = value
+        member._value_ = value
+        return member
 
 
 class HttpConnectionFailed(BaseModel):
@@ -7669,6 +7678,7 @@ class CodexErrorInfo(
         | ResponseStreamDisconnectedCodexErrorInfo
         | ResponseTooManyFailedAttemptsCodexErrorInfo
         | ActiveTurnNotSteerableCodexErrorInfo
+        | dict[str, Any]
     ]
 ):
     model_config = ConfigDict(
@@ -7680,7 +7690,8 @@ class CodexErrorInfo(
         | ResponseStreamConnectionFailedCodexErrorInfo
         | ResponseStreamDisconnectedCodexErrorInfo
         | ResponseTooManyFailedAttemptsCodexErrorInfo
-        | ActiveTurnNotSteerableCodexErrorInfo,
+        | ActiveTurnNotSteerableCodexErrorInfo
+        | dict[str, Any],
         Field(
             description="This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant."
         ),
