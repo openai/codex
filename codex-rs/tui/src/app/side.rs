@@ -722,8 +722,14 @@ impl App {
             .await;
 
         let fork_config = self.side_fork_config();
+        let selected_profile = self.selected_server_profile(parent_thread_id);
         match app_server
-            .fork_side_thread(&self.local_settings, fork_config, parent_thread_id)
+            .fork_side_thread(
+                &self.local_settings,
+                fork_config,
+                parent_thread_id,
+                selected_profile.as_ref(),
+            )
             .await
         {
             Ok(forked) => {
@@ -779,6 +785,9 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 if self.active_thread_id == Some(child_thread_id) {
+                    if selected_profile.is_some() {
+                        self.adopt_inherited_server_selection();
+                    }
                     if let Some(user_message) = user_message.take() {
                         let _ = self
                             .chat_widget

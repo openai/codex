@@ -533,7 +533,7 @@ impl App {
                     fork_config.model = Some(self.chat_widget.current_model().to_string());
                     fork_config.model_reasoning_effort =
                         self.chat_widget.current_reasoning_effort();
-                    let selected_profile = self.confirmed_server_profile(thread_id);
+                    let selected_profile = self.selected_server_profile(thread_id);
                     match app_server.fork_thread_at(
                         &self.local_settings,
                         fork_config,
@@ -574,6 +574,9 @@ impl App {
                                 .await
                             {
                                 Ok(()) => {
+                                    if selected_profile.is_some() {
+                                        self.adopt_inherited_server_selection();
+                                    }
                                     // Keep local input without replacing the fork's running state.
                                     self.chat_widget.restore_reconnected_input(retained_input, &[]);
                                     if let Some(err) = name_error {

@@ -206,7 +206,7 @@ async fn reconnect_restores_history_permissions_and_resumes_unsent_input() -> Re
         let mut tui = crate::tui::test_support::make_test_tui()?;
         if pending_profile {
             app.runtime_approvals_reviewer_override = Some(ApprovalsReviewer::User);
-            app.pending_server_profiles.insert(
+            app.agents_overview.requested_permission_profiles.insert(
                 id,
                 PermissionProfileSelection {
                     profile_id: "server-only".into(),
@@ -303,6 +303,7 @@ async fn reconnect_restores_history_permissions_and_resumes_unsent_input() -> Re
             );
         }
         assert!(app.pending_server_profiles.is_empty());
+        assert!(app.agents_overview.requested_permission_profiles.is_empty());
         if pending_profile {
             assert_eq!(
                 app.resume_permission_overrides(&app.config),

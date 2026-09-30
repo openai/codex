@@ -130,13 +130,7 @@ async fn remote_resume_restores_saved_server_profile_without_permission_override
             ),
         );
     }
-    // A locally remembered profile may have been removed since selection.
-    let stale_selection = crate::app_event::PermissionProfileSelection {
-        profile_id: "removed-profile".into(),
-        approval_policy: None,
-        approvals_reviewer: None,
-        display_label: "removed-profile".into(),
-    };
+    // With no new selection, remote forks retain the saved profile.
     let forked = server
         .fork_thread_at(
             &local_settings,
@@ -145,7 +139,7 @@ async fn remote_resume_restores_saved_server_profile_without_permission_override
             /*last_turn_id*/ None,
             /*before_turn_id*/ None,
             ForkGoalContinuation::StartIfIdle,
-            Some(&stale_selection),
+            /*selected_profile*/ None,
         )
         .await?;
     assert_eq!(
@@ -165,7 +159,12 @@ async fn remote_resume_restores_saved_server_profile_without_permission_override
         codex_protocol::config_types::ApprovalsReviewer::AutoReview
     );
     let side = server
-        .fork_side_thread(&local_settings, client_config, thread_id)
+        .fork_side_thread(
+            &local_settings,
+            client_config,
+            thread_id,
+            /*selected_profile*/ None,
+        )
         .await?;
     assert_eq!(
         side.session.active_permission_profile.unwrap().id,

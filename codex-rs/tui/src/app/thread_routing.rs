@@ -827,7 +827,12 @@ impl App {
                 }
                 if should_start_turn {
                     let config = self.chat_widget.config_ref();
-                    let selected_profile = self.pending_server_profiles.get(&thread_id);
+                    let selected_profile =
+                        self.pending_server_profiles.get(&thread_id).or_else(|| {
+                            self.agents_overview
+                                .requested_permission_profiles
+                                .get(&thread_id)
+                        });
                     let selected_active = selected_profile
                         .map(|profile| ActivePermissionProfile::new(profile.profile_id.clone()));
                     let (turn_approval_policy, turn_approvals_reviewer) =
@@ -1196,6 +1201,11 @@ impl App {
             if self
                 .pending_server_profiles
                 .get(&thread_id)
+                .or_else(|| {
+                    self.agents_overview
+                        .requested_permission_profiles
+                        .get(&thread_id)
+                })
                 .is_some_and(|selected| {
                     notification
                         .thread_settings
@@ -1210,7 +1220,11 @@ impl App {
                         })
                 })
             {
-                confirmed_profile = self.pending_server_profiles.remove(&thread_id);
+                confirmed_profile = self.pending_server_profiles.remove(&thread_id).or_else(|| {
+                    self.agents_overview
+                        .requested_permission_profiles
+                        .remove(&thread_id)
+                });
             }
         }
         let inferred_session = if let ServerNotification::ThreadStarted(started) = &notification
@@ -1298,41 +1312,9 @@ impl App {
                 .on_thread_settings_updated(settings.clone());
             notification = None;
         }
-        if let Some(selected) = confirmed_profile {
+        if confirmed_profile.is_some() {
             if self.chat_widget.thread_id() == Some(thread_id) {
-                if selected.approvals_reviewer.is_some() {
-                    self.runtime_approvals_reviewer_override = None;
-                }
-                self.runtime_permission_profile_override = None;
-            }
-            if self.chat_widget.thread_id() == Some(thread_id)
-                && let Some(profile) = self
-                    .chat_widget
-                    .config_ref()
-                    .permissions
-                    .active_permission_profile()
-                && profile.id.starts_with(':')
-            {
-                let config = self.chat_widget.config_ref();
-                let network = config
-                    .network_proxy_spec_for_active_permission_profile(
-                        &profile,
-                        config.permissions.permission_profile(),
-                    )
-                    .unwrap_or_else(|err| {
-                        tracing::warn!(%err, "failed to refresh local permission network settings");
-                        None
-                    });
-                self.chat_widget.set_permission_network(network);
-                self.config.permissions = self.chat_widget.config_ref().permissions.clone();
-                self.config.approvals_reviewer = self.chat_widget.config_ref().approvals_reviewer;
-                self.runtime_approval_policy_override =
-                    Some(RuntimeApprovalPolicyOverride::Explicit(
-                        self.config.permissions.approval_policy.value().into(),
-                    ));
-                self.runtime_approvals_reviewer_override = Some(self.config.approvals_reviewer);
-                self.runtime_permission_profile_override =
-                    Some(RuntimePermissionProfileOverride::from_config(&self.config));
+                self.adopt_server_permissions();
             }
             self.app_event_tx.send(AppEvent::SettingsSelectionSettled);
         }
@@ -1574,6 +1556,9 @@ impl App {
 
         let thread_id = session.thread_id;
         self.pending_server_profiles.remove(&thread_id);
+        self.agents_overview
+            .requested_permission_profiles
+            .remove(&thread_id);
         if self.primary_thread_id != Some(thread_id) {
             self.recap.reset_for_new_thread(Instant::now());
         }

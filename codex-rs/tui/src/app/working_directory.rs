@@ -22,6 +22,7 @@ pub(super) struct ManagedWorktreeAttach {
     keymap: RuntimeKeymap,
     cwd: AbsolutePathBuf,
     name_error: Option<String>,
+    selected_profile: Option<PermissionProfileSelection>,
 }
 
 /// A /cd request awaiting a fresh event-loop iteration.
@@ -177,6 +178,19 @@ impl App {
                 "Changing directories with a named profile is not supported.",
             );
         }
+        let selected_profile = self
+            .agents_overview
+            .requested_permission_profiles
+            .get(&thread_id)
+            .cloned();
+        if selected_profile
+            .as_ref()
+            .is_some_and(|profile| !profile.profile_id.starts_with(':'))
+        {
+            return self.working_directory_error(
+                "Changing directories with an unconfirmed named profile is not supported.",
+            );
+        }
         let cells = &self.transcript_cells;
         if cells.iter().any(|cell| cell.as_any().is::<LoadingCell>()) {
             return self.working_directory_error("MCP inventory is still loading.");
@@ -330,6 +344,7 @@ impl App {
         let profile = self
             .runtime_permission_profile_override
             .as_ref()
+            .filter(|_| selected_profile.is_none())
             .filter(|profile| {
                 scope == RuntimePolicyOverrideScope::All
                     || profile.turn_override == RuntimePermissionProfileTurnOverride::LegacySandbox
@@ -356,12 +371,15 @@ impl App {
         {
             return self.working_directory_error("Permission profile cannot be preserved by /cd.");
         }
-        if let Err(error) = self.apply_runtime_policy_overrides(&mut config, scope) {
+        if selected_profile.is_none()
+            && let Err(error) = self.apply_runtime_policy_overrides(&mut config, scope)
+        {
             return self.working_directory_error(format!("{error:#}"));
         }
         let actual = config.permissions.approval_policy.value();
         let approval = self
             .runtime_approval_policy_override
+            .filter(|_| selected_profile.is_none())
             .filter(|value| {
                 scope == RuntimePolicyOverrideScope::All
                     || matches!(value, RuntimeApprovalPolicyOverride::Explicit(_))
@@ -436,7 +454,7 @@ impl App {
                     /*last_turn_id*/ None,
                     /*before_turn_id*/ None,
                     DeferUntilNextTurn,
-                    /*selected_profile*/ None,
+                    selected_profile.as_ref(),
                 )
                 .await
         } else {
@@ -446,7 +464,7 @@ impl App {
                     &config,
                     /*session_start_source*/ None,
                     /*remote_cwd_override*/ None,
-                    /*selected_profile*/ None,
+                    selected_profile.as_ref(),
                 )
                 .await
         };
@@ -455,12 +473,27 @@ impl App {
             Err(e) => return self.working_directory_error(format!("Failed to change: {e}")),
         };
         let session = &transitioned.session;
+        let permissions_match = if let Some(selected) = &selected_profile {
+            session
+                .active_permission_profile
+                .as_ref()
+                .is_some_and(|active| active.id == selected.profile_id)
+                && selected
+                    .approval_policy
+                    .is_none_or(|policy| session.approval_policy == policy)
+                && selected
+                    .approvals_reviewer
+                    .is_none_or(|reviewer| session.approvals_reviewer == reviewer)
+        } else {
+            session.approval_policy.to_core() == config.permissions.approval_policy.value()
+                && session.approvals_reviewer == config.approvals_reviewer
+                && session.active_permission_profile
+                    == config.permissions.active_permission_profile()
+        };
         if session.thread_id == thread_id
             || crate::session_resume::cwds_differ(session.cwd.as_path(), cwd.as_path())
             || session.runtime_workspace_roots != config.workspace_roots
-            || session.approval_policy.to_core() != config.permissions.approval_policy.value()
-            || session.approvals_reviewer != config.approvals_reviewer
-            || session.active_permission_profile != config.permissions.active_permission_profile()
+            || !permissions_match
         {
             if session.thread_id != thread_id {
                 let _ = app_server.thread_unsubscribe(session.thread_id).await;
@@ -520,6 +553,7 @@ impl App {
             keymap,
             cwd,
             name_error,
+            selected_profile,
         };
         if managed_worktree.is_some() {
             // Let the large synchronous ChatWidget constructor run on a fresh event-loop stack.
@@ -544,6 +578,7 @@ impl App {
             keymap,
             cwd,
             name_error,
+            selected_profile,
         } = attach;
         self.local_settings = local_settings;
         self.refresh_server_version_overview_notice(CODEX_CLI_VERSION);
@@ -559,6 +594,9 @@ impl App {
         let (lineage, message) = (ThreadAttachPresentation::SessionLineage, None);
         if let Err(error) = attach_widget(self, tui, started, lineage, message).await {
             return self.working_directory_error(format!("Could not restore session: {error}"));
+        }
+        if selected_profile.is_some() {
+            self.adopt_inherited_server_selection();
         }
         if matches!(
             self.runtime_approval_policy_override,

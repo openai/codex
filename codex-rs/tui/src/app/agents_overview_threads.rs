@@ -120,6 +120,9 @@ impl App {
             }
             ServerNotification::ThreadArchived(_) | ServerNotification::ThreadDeleted(_) => {
                 self.agents_overview
+                    .requested_permission_profiles
+                    .remove(&thread_id);
+                self.agents_overview
                     .selected_permission_profiles
                     .remove(&thread_id);
                 self.agents_overview.activity.remove(&thread_id);
@@ -132,6 +135,9 @@ impl App {
                 self.agents_overview.removed_threads.remove(&thread_id);
             }
             ServerNotification::ThreadClosed(_) => {
+                self.agents_overview
+                    .requested_permission_profiles
+                    .remove(&thread_id);
                 self.agents_overview.activity.remove(&thread_id);
                 if let Some(usage) = self.agents_overview.usage.get_mut(&thread_id) {
                     usage.tokens = None;
@@ -160,6 +166,10 @@ impl App {
             }
             ServerNotification::ThreadSettingsUpdated(settings) => {
                 if !self.pending_server_profiles.contains_key(&thread_id)
+                    && !self
+                        .agents_overview
+                        .requested_permission_profiles
+                        .contains_key(&thread_id)
                     && self
                         .agents_overview
                         .selected_permission_profiles

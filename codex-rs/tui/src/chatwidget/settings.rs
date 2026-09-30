@@ -31,6 +31,7 @@ impl ChatWidget {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn set_permission_profile_with_active_profile(
         &mut self,
         profile: PermissionProfile,
@@ -449,7 +450,16 @@ impl ChatWidget {
         self.apply_thread_settings_cwd(settings.cwd.clone());
         self.config.model_provider_id = settings.model_provider.clone();
         self.set_service_tier(settings.service_tier.clone());
-        self.set_approval_policy(settings.approval_policy);
+        if let Err(err) = self
+            .config
+            .permissions
+            .approval_policy
+            .set(settings.approval_policy.to_core())
+        {
+            tracing::warn!(%err, "failed to sync approval_policy from ThreadSettingsUpdated");
+            self.config.permissions.approval_policy =
+                Constrained::allow_only(settings.approval_policy.to_core());
+        }
         self.set_approvals_reviewer(settings.approvals_reviewer.to_core());
         self.config.personality = settings.personality;
 

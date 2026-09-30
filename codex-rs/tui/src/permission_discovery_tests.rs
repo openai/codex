@@ -76,14 +76,7 @@ async fn discovery_preserves_config_scope_and_bounds_server_requests() {
                 json!({"result": {"data": [data[1]], "nextCursor": null}}),
             ],
         });
-        if mode == ThreadParamsMode::Remote {
-            replies.insert(
-                /*index*/ 0,
-                json!({"result": {"config": {
-                "default_permissions": (case != "legacy").then_some(":workspace")
-            }, "origins": {}}}),
-            );
-        } else if case == "timeout" {
+        if case == "timeout" {
             replies = vec![Value::Null];
         }
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -151,15 +144,7 @@ async fn discovery_preserves_config_scope_and_bounds_server_requests() {
                 continue;
             }
             let discovery = result.unwrap();
-            assert_eq!(discovery.explicit_profile_mode, case != "legacy");
-            if case == "session-only" {
-                assert!(
-                    discovery
-                        .profiles
-                        .iter()
-                        .any(|profile| profile.id == "session-only" && profile.allowed)
-                );
-            } else if matches!(case, "empty" | "legacy") {
+            if case == "empty" {
                 assert!(discovery.profiles.is_empty());
             } else {
                 assert_eq!(serde_json::to_value(&discovery.profiles).unwrap(), data);
@@ -172,9 +157,8 @@ async fn discovery_preserves_config_scope_and_bounds_server_requests() {
         session.shutdown().await.unwrap();
         let requests = server.await.unwrap();
         match case {
-            "session-only" => assert!(requests.is_empty()),
-            "timeout" | "legacy" => assert_eq!(requests.len(), 1),
-            "local" | "remote" | "remote-default" | "thread" => {
+            "timeout" => assert_eq!(requests.len(), 1),
+            "local" | "session-only" | "remote" | "remote-default" | "thread" | "legacy" => {
                 let pages: Vec<_> = requests
                     .iter()
                     .filter(|request| request["method"] == "permissionProfile/list")
@@ -187,9 +171,6 @@ async fn discovery_preserves_config_scope_and_bounds_server_requests() {
                         json!({"cwd": cwd, "limit": 100, "cursor": "second"})
                     ]
                 );
-                if mode == ThreadParamsMode::Remote {
-                    assert_eq!(requests[0]["params"]["cwd"], json!(cwd));
-                }
             }
             _ => {}
         }

@@ -23,7 +23,12 @@ async fn confirm_permission_selection(
             ServerNotification::ThreadSettingsUpdated(settings),
         )
         .await?;
-        if !app.pending_server_profiles.contains_key(&thread_id) {
+        if !app.pending_server_profiles.contains_key(&thread_id)
+            && !app
+                .agents_overview
+                .requested_permission_profiles
+                .contains_key(&thread_id)
+        {
             return Ok(());
         }
     }
@@ -659,7 +664,7 @@ async fn command_center_new_preserves_only_selected_server_profiles() -> Result<
     let home = tempdir()?;
     std::fs::write(
         home.path().join("config.toml"),
-        "default_permissions = \":workspace\"\n[permissions.server-only]\nextends = \":read-only\"\n",
+        "approval_policy = \"never\"\napprovals_reviewer = \"auto_review\"\ndefault_permissions = \":workspace\"\n[permissions.server-only]\nextends = \":read-only\"\n",
     )?;
     let server_config = ConfigBuilder::default()
         .codex_home(home.path().into())
@@ -729,16 +734,53 @@ async fn command_center_new_preserves_only_selected_server_profiles() -> Result<
             "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "saved history"}]
         }))?]).await?;
     }
-    app.select_permission_profile(&mut server, selection.clone())
-        .await;
+    // Omitted custom-profile fields must preserve the preceding accepted choice,
+    // even before either settings notification reaches the TUI.
+    app.select_permission_profile(
+        &mut server,
+        PermissionProfileSelection {
+            profile_id: ":read-only".into(),
+            ..selection.clone()
+        },
+    )
+    .await;
+    // Drain without applying it: confirmation is still pending in the TUI, but
+    // the server cannot coalesce both updates into one latest snapshot.
+    let _ = next_thread_settings_updated(&mut server, thread_id).await;
+    app.select_permission_profile(
+        &mut server,
+        PermissionProfileSelection {
+            approval_policy: None,
+            approvals_reviewer: None,
+            ..selection.clone()
+        },
+    )
+    .await;
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     app.chat_widget.show_bottom_pane_view(Box::new(view));
     app.new_agents_overview_session(&mut tui, &mut server, /*cwd*/ None)
         .await?;
-    assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
-    insta::assert_snapshot!(
-        "command_center_pending_server_permissions",
-        crate::chatwidget::tests::helpers::render_bottom_popup(&app.chat_widget, /*width*/ 80)
+    assert_ne!(app.chat_widget.thread_id(), Some(thread_id));
+    assert_eq!(
+        app.chat_widget
+            .config_ref()
+            .permissions
+            .active_permission_profile(),
+        Some(ActivePermissionProfile {
+            id: "server-only".into(),
+            extends: Some(":read-only".into())
+        }),
+    );
+    assert_eq!(
+        (
+            app.chat_widget
+                .config_ref()
+                .permissions
+                .approval_policy
+                .value(),
+            app.chat_widget.config_ref().approvals_reviewer,
+        ),
+        (AskForApproval::OnRequest.to_core(), ApprovalsReviewer::User)
     );
     let settings = next_thread_settings_updated(&mut server, thread_id).await;
     app.enqueue_thread_notification(
@@ -786,6 +828,7 @@ async fn command_center_new_preserves_only_selected_server_profiles() -> Result<
                 .remove(&app.chat_widget.thread_id().unwrap());
             app.select_permission_profile(&mut server, selection.clone())
                 .await;
+            assert!(!app.reject_pending_permission_change());
         }
     }
     server.shutdown().await?;
@@ -1133,6 +1176,17 @@ async fn command_center_new_checkout_and_worktree_preserve_source_and_default_br
         app.chat_widget
             .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
         Box::pin(app.handle_event(&mut tui, &mut server, AppEvent::OpenPermissionsPopup)).await?;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while let Some(event) = events.recv().await {
+                let loaded = matches!(&event, AppEvent::PermissionProfilesLoaded { .. });
+                Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+                if loaded {
+                    return Ok::<_, color_eyre::Report>(());
+                }
+            }
+            color_eyre::eyre::bail!("permissions menu event stream closed")
+        })
+        .await??;
         app.chat_widget.handle_key_event(KeyCode::Up.into());
         app.chat_widget.handle_key_event(KeyCode::Enter.into());
         while let Ok(event) = events.try_recv() {

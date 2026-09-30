@@ -56,9 +56,6 @@ impl ChatWidget {
             return;
         }
         match result {
-            Ok(discovery) if !discovery.explicit_profile_mode => {
-                self.open_legacy_permissions_popup()
-            }
             Ok(discovery) => {
                 self.permission_profiles_menu_opened = true;
                 self.open_permission_profiles_popup(discovery);

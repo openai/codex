@@ -215,8 +215,17 @@ impl ChatWidget {
         SelectionItem {
             name: label.to_string(),
             description: Some(description),
-            is_current: active_profile_id.as_deref() == Some(id)
-                && current_approval == approval_policy
+            is_current: active_profile_id.as_deref().map_or_else(
+                || {
+                    Self::preset_matches_current(
+                        current_approval,
+                        self.config.permissions.permission_profile(),
+                        self.config.cwd.as_path(),
+                        preset,
+                    )
+                },
+                |active| active == id,
+            ) && current_approval == approval_policy
                 && current_reviewer == approvals_reviewer,
             actions: self.permission_mode_actions(
                 preset,
@@ -226,9 +235,11 @@ impl ChatWidget {
                 /*return_to_permissions*/ true,
             ),
             dismiss_on_select: true,
-            disabled_reason: discovery
-                .disabled_reason(id, Some(approval_policy), Some(approvals_reviewer.into()))
-                .or_else(|| self.permission_mode_disabled_reason(preset, approval_policy)),
+            disabled_reason: discovery.disabled_reason(
+                id,
+                Some(approval_policy),
+                Some(approvals_reviewer.into()),
+            ),
             ..Default::default()
         }
     }

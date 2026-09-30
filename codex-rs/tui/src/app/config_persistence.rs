@@ -113,6 +113,7 @@ impl App {
         .await
     }
 
+    #[cfg(test)]
     pub(super) async fn rebuild_config_for_permission_profile(
         &self,
         profile_id: &str,
@@ -136,6 +137,8 @@ impl App {
         .await
     }
 
+    // Local setup for startup fixtures; connected selections always use the server below.
+    #[cfg(test)]
     pub(super) async fn apply_permission_profile_selection(
         &mut self,
         selection: PermissionProfileSelection,
@@ -266,23 +269,9 @@ impl App {
     pub(super) async fn select_permission_profile(
         &mut self,
         app_server: &mut AppServerSession,
-        selection: PermissionProfileSelection,
+        mut selection: PermissionProfileSelection,
     ) {
         if self.reject_pending_permission_change() {
-            return;
-        }
-        if (self.chat_widget.thread_id().is_none() && selection.profile_id.starts_with(':'))
-            || (app_server.thread_params_mode()
-                == crate::app_server_session::ThreadParamsMode::Embedded
-                && self
-                    .config
-                    .custom_permission_profiles
-                    .iter()
-                    .any(|profile| profile.id == selection.profile_id))
-        {
-            if self.apply_permission_profile_selection(selection).await {
-                self.chat_widget.submit_initial_user_message_if_pending();
-            }
             return;
         }
         let Some(thread_id) = self.chat_widget.thread_id() else {
@@ -293,21 +282,16 @@ impl App {
             );
             return;
         };
-        if !selection.profile_id.starts_with(':')
-            && self.chat_widget.is_user_turn_pending_or_running()
-        {
-            self.chat_widget
-                .retain_input_after_failed_permission_selection();
-            self.chat_widget.add_error_message(
-                "Wait for the current turn to finish before changing permissions.".into(),
-            );
-            return;
-        }
         let config = self.chat_widget.config_ref();
-        if config
-            .permissions
-            .active_permission_profile()
-            .is_some_and(|profile| profile.id == selection.profile_id)
+        if !self
+            .agents_overview
+            .requested_permission_profiles
+            .contains_key(&thread_id)
+            && selection.profile_id.starts_with(':')
+            && config
+                .permissions
+                .active_permission_profile()
+                .is_some_and(|profile| profile.id == selection.profile_id)
             && selection
                 .approval_policy
                 .is_none_or(|policy| config.permissions.approval_policy.value() == policy.to_core())
@@ -330,10 +314,25 @@ impl App {
         };
         match app_server.thread_settings_update(params).await {
             Ok(true) => {
+                // Omission preserves the active value on update, but uses defaults on start.
+                // Retain effective intent across consecutive requests before confirmation.
+                let previous = self
+                    .agents_overview
+                    .requested_permission_profiles
+                    .get(&thread_id);
+                selection.approval_policy = selection
+                    .approval_policy
+                    .or_else(|| previous.and_then(|profile| profile.approval_policy))
+                    .or(Some(config.permissions.approval_policy.value().into()));
+                selection.approvals_reviewer = selection
+                    .approvals_reviewer
+                    .or_else(|| previous.and_then(|profile| profile.approvals_reviewer))
+                    .or(Some(config.approvals_reviewer));
                 self.agents_overview
                     .selected_permission_profiles
                     .insert(thread_id, selection.profile_id.clone());
-                self.pending_server_profiles
+                self.agents_overview
+                    .requested_permission_profiles
                     .insert(thread_id, selection.clone());
                 self.chat_widget.add_info_message(
                     format!(
@@ -386,18 +385,35 @@ impl App {
         true
     }
 
-    pub(super) fn confirmed_server_profile(
+    pub(super) fn selected_server_profile(
         &self,
         thread_id: ThreadId,
     ) -> Option<PermissionProfileSelection> {
         if self.chat_widget.thread_id() != Some(thread_id) {
             return None;
         }
+        if let Some(selection) = self
+            .agents_overview
+            .requested_permission_profiles
+            .get(&thread_id)
+        {
+            return Some(selection.clone());
+        }
+        if self.app_server_target.thread_params_mode()
+            == crate::app_server_session::ThreadParamsMode::Remote
+        {
+            return None;
+        }
         let config = self.chat_widget.config_ref();
         let active = config.permissions.active_permission_profile()?;
         if active.id.starts_with(':')
-            || (self.app_server_target.thread_params_mode()
-                == crate::app_server_session::ThreadParamsMode::Embedded
+            || (self
+                .agents_overview
+                .selected_permission_profiles
+                .get(&thread_id)
+                != Some(&active.id)
+                && self.app_server_target.thread_params_mode()
+                    == crate::app_server_session::ThreadParamsMode::Embedded
                 && self
                     .config
                     .custom_permission_profiles
@@ -412,6 +428,44 @@ impl App {
             approvals_reviewer: Some(config.approvals_reviewer),
             display_label: active.id,
         })
+    }
+
+    /// Adopt authoritative widget settings before deriving overrides for subsequent turns.
+    pub(super) fn adopt_server_permissions(&mut self) {
+        self.chat_widget.set_permission_network(/*network*/ None);
+        self.config.permissions = self.chat_widget.config_ref().permissions.clone();
+        self.config.approvals_reviewer = self.chat_widget.config_ref().approvals_reviewer;
+        self.runtime_approval_policy_override = Some(RuntimeApprovalPolicyOverride::Explicit(
+            self.config.permissions.approval_policy.value().into(),
+        ));
+        self.runtime_approvals_reviewer_override = if self
+            .config
+            .permissions
+            .active_permission_profile()
+            .is_some_and(|profile| profile.id.starts_with(':'))
+        {
+            Some(self.config.approvals_reviewer)
+        } else {
+            self.runtime_approvals_reviewer_override
+                .filter(|reviewer| *reviewer == self.config.approvals_reviewer)
+        };
+        self.runtime_permission_profile_override =
+            Some(RuntimePermissionProfileOverride::from_config(&self.config));
+    }
+
+    pub(super) fn adopt_inherited_server_selection(&mut self) {
+        if let Some(thread_id) = self.chat_widget.thread_id()
+            && let Some(active) = self
+                .chat_widget
+                .config_ref()
+                .permissions
+                .active_permission_profile()
+        {
+            self.agents_overview
+                .selected_permission_profiles
+                .insert(thread_id, active.id);
+        }
+        self.adopt_server_permissions();
     }
 
     pub(super) async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {

@@ -218,19 +218,29 @@ impl App {
         if !thread_settings_update_has_changes(&params) {
             return false;
         }
-        if ThreadId::from_string(&params.thread_id)
-            .ok()
-            .is_some_and(|thread_id| self.pending_server_profiles.contains_key(&thread_id))
-            && (params.cwd.is_some()
-                || params.approval_policy.is_some()
-                || params.approvals_reviewer.is_some()
-                || params.sandbox_policy.is_some()
-                || params.permissions.is_some())
+        let thread_id = ThreadId::from_string(&params.thread_id).ok();
+        let changes_permissions = params.cwd.is_some()
+            || params.approval_policy.is_some()
+            || params.approvals_reviewer.is_some()
+            || params.sandbox_policy.is_some()
+            || params.permissions.is_some();
+        if changes_permissions
+            && thread_id.is_some_and(|id| self.pending_server_profiles.contains_key(&id))
         {
             return false;
         }
         match app_server.thread_settings_update(params).await {
-            Ok(settings_updated) => settings_updated,
+            Ok(settings_updated) => {
+                if settings_updated
+                    && changes_permissions
+                    && let Some(thread_id) = thread_id
+                {
+                    self.agents_overview
+                        .requested_permission_profiles
+                        .remove(&thread_id);
+                }
+                settings_updated
+            }
             Err(err) => {
                 tracing::warn!("failed to update app-server thread settings from TUI: {err}");
                 self.chat_widget
