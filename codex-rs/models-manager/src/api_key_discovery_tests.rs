@@ -1,4 +1,4 @@
-//! API-key discovery rollout must gate network requests and cached catalog authority.
+//! API-key discovery opt-outs must gate network requests and cached catalog authority.
 
 use super::*;
 use pretty_assertions::assert_eq;
@@ -34,7 +34,7 @@ async fn api_key_discovery_disabled_preserves_command_auth_discovery_and_merging
 }
 
 #[tokio::test]
-async fn api_key_discovery_startup_flag_controls_fetches_and_cached_catalogs() {
+async fn api_key_discovery_flag_controls_fetches_and_cached_catalogs() {
     let home = tempdir().unwrap();
     let models = vec![remote_model("dynamic", "Dynamic", /*priority*/ 0)];
     let endpoint = TestModelsEndpoint::without_refresh(vec![models.clone()]);
@@ -68,6 +68,18 @@ async fn api_key_discovery_startup_flag_controls_fetches_and_cached_catalogs() {
             .models,
         models
     );
+    assert_eq!(endpoint.fetch_count(), 1);
+
+    // A runtime rollback must also suppress the already-loaded catalog.
+    manager.set_api_key_model_discovery_enabled(/*enabled*/ false);
+    assert_eq!(
+        manager
+            .raw_model_catalog(RefreshStrategy::Online, DEFAULT_HTTP_CLIENT_FACTORY)
+            .await
+            .models,
+        bundled
+    );
+    assert_eq!(manager.try_get_remote_models().unwrap(), bundled);
     assert_eq!(endpoint.fetch_count(), 1);
 
     // A new session must honor its startup flag even when a matching disk cache exists.

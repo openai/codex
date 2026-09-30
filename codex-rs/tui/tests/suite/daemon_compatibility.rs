@@ -48,9 +48,9 @@ async fn incompatible_daemon_falls_back_for_default_and_explicit_features() -> R
                 } else {
                     assert_eq!(request.method, "experimentalFeature/list");
                     json!({"id": request.id, "result": {"data": [{
-                        "name": "api_key_model_discovery", "stage": "underDevelopment",
+                        "name": "api_key_model_discovery", "stage": "stable",
                         "displayName": null, "description": null, "announcement": null,
-                        "enabled": scenario == "default", "defaultEnabled": false,
+                        "enabled": scenario == "explicit", "defaultEnabled": true,
                     }], "nextCursor": null}})
                 };
                 socket
@@ -60,7 +60,7 @@ async fn incompatible_daemon_falls_back_for_default_and_explicit_features() -> R
             Ok::<_, anyhow::Error>(())
         });
         let args = if scenario == "explicit" {
-            vec!["-c", "features.api_key_model_discovery=true"]
+            vec!["-c", "features.api_key_model_discovery=false"]
         } else {
             vec![]
         };
@@ -71,11 +71,11 @@ async fn incompatible_daemon_falls_back_for_default_and_explicit_features() -> R
         let (snapshot, warning_end) = match scenario {
             "default" => (
                 "daemon_feature_mismatch",
-                "api_key_model_discovery to be disabled.",
+                "api_key_model_discovery to be enabled.",
             ),
             "explicit" => (
                 "daemon_override_mismatch",
-                "api_key_model_discovery to be enabled.",
+                "api_key_model_discovery to be disabled.",
             ),
             "host policy" => ("daemon_host_policy_mismatch", "requires embedded mode."),
             _ => unreachable!(),

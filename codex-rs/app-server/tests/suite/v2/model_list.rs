@@ -39,15 +39,16 @@ use wiremock::matchers::path;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
-#[test_case(None, false, true; "default off")]
-#[test_case(None, true, true; "app rollout")]
-#[test_case(Some(false), true, true; "user opt out")]
-#[test_case(Some(true), false, true; "user opt in")]
-#[test_case(Some(true), false, false; "base URL without catalog opt in")]
+#[test_case(None, None, true; "default on")]
+#[test_case(None, Some(false), true; "app rollback")]
+#[test_case(None, Some(true), true; "app rollout")]
+#[test_case(Some(false), Some(true), true; "user opt out")]
+#[test_case(Some(true), Some(false), true; "user opt in")]
+#[test_case(Some(true), Some(false), false; "base URL without catalog opt in")]
 #[tokio::test]
 async fn api_key_model_discovery_startup_enablement_respects_user_config(
     user_enablement: Option<bool>,
-    app_enablement: bool,
+    app_enablement: Option<bool>,
     catalog_opt_in: bool,
 ) -> Result<()> {
     let server = MockServer::start().await;
@@ -115,7 +116,10 @@ requires_openai_auth = true
             |request_id| ClientRequest::ExperimentalFeatureEnablementSet {
                 request_id,
                 params: ExperimentalFeatureEnablementSetParams {
-                    enablement: [("api_key_model_discovery".to_string(), app_enablement)].into(),
+                    enablement: app_enablement
+                        .into_iter()
+                        .map(|enabled| ("api_key_model_discovery".to_string(), enabled))
+                        .collect(),
                 },
             },
         )
@@ -130,7 +134,7 @@ requires_openai_auth = true
             },
         })
         .await?;
-    let enabled = user_enablement.unwrap_or(app_enablement) && catalog_opt_in;
+    let enabled = user_enablement.or(app_enablement).unwrap_or(true) && catalog_opt_in;
     let expected: &[ModelPreset] = if enabled {
         &remote
     } else if catalog_opt_in {
@@ -154,7 +158,8 @@ requires_openai_auth = true
             next_cursor: None,
         }
     );
-    if !enabled {
+    // Only startup opt-outs prevent fetches before the app sends its enablement.
+    if user_enablement == Some(false) || !catalog_opt_in {
         assert!(
             server
                 .received_requests()

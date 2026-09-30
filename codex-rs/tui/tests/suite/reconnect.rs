@@ -87,7 +87,7 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
                     "initialize" => json!({"userAgent": "reconnect-pty"}),
                     // An older daemon can omit the client's default-disabled features.
                     "experimentalFeature/list" => {
-                        json!({"data": (["code_mode_host", "auth_elicitation"].map(|name| json!({
+                        json!({"data": (["api_key_model_discovery", "code_mode_host", "auth_elicitation"].map(|name| json!({
                         "name": name, "stage": "stable", "displayName": null,
                         "description": null, "announcement": null,
                         "enabled": true, "defaultEnabled": true,

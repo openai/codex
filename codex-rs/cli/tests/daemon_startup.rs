@@ -210,12 +210,10 @@ async fn daemon_startup(command: &str) -> Result<()> {
             steps.push_back(("GPT-5.6-Terra", b"\x14"));
             "Runningwithoutthesharedbackgroundserver:thisWindowslauncher"
         } else if mismatch {
-            args.extend(if persisted {
-                ["--disable".into(), "api_key_model_discovery".into()]
-            } else if disabling {
+            args.extend(if disabling && !persisted {
                 ["--disable".into(), "auth_elicitation".into()]
             } else {
-                ["--enable".into(), "api_key_model_discovery".into()]
+                ["--disable".into(), "api_key_model_discovery".into()]
             });
             let input: &[u8] = match command {
                 "mismatch-cancel" => b"\x03",
@@ -325,7 +323,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
                         let previous_pid = existing_daemon.as_ref().context("missing original daemon PID")?;
                         ensure!((fs::read(&pid_file)? != *previous_pid) == restart);
                         if command == "mismatch-cancel" {
-                            ensure!(text.contains("Cannotusethesharedbackgroundserver:Thissessionrequiresapi_key_model_discoverytobeenabled."));
+                            ensure!(text.contains("Cannotusethesharedbackgroundserver:Thissessionrequiresapi_key_model_discoverytobedisabled."));
                         } else {
                             ensure!(text.contains("Server:Localbackgroundserver") == restart);
                         }

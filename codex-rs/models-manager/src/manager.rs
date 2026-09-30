@@ -429,7 +429,10 @@ impl ModelsManager for OpenAiModelsManager {
     fn get_remote_models(&self) -> ModelsManagerFuture<'_, Vec<ModelInfo>> {
         Box::pin(async move {
             let entry = self.remote_models.read().await;
-            if entry.identity.is_some() && entry.identity == self.endpoint_client.identity() {
+            if !self.api_key_discovery_disabled()
+                && entry.identity.is_some()
+                && entry.identity == self.endpoint_client.identity()
+            {
                 entry.models.clone()
             } else {
                 self.catalog_source.fallback_models().unwrap_or_default()
@@ -440,7 +443,10 @@ impl ModelsManager for OpenAiModelsManager {
     fn try_get_remote_models(&self) -> Result<Vec<ModelInfo>, TryLockError> {
         let entry = self.remote_models.try_read()?;
         Ok(
-            if entry.identity.is_some() && entry.identity == self.endpoint_client.identity() {
+            if !self.api_key_discovery_disabled()
+                && entry.identity.is_some()
+                && entry.identity == self.endpoint_client.identity()
+            {
                 entry.models.clone()
             } else {
                 self.catalog_source.fallback_models().unwrap_or_default()
@@ -545,11 +551,7 @@ impl OpenAiModelsManager {
         // API-key discovery must be enabled and supported before reusing a remote catalog.
         // Otherwise even a matching cache from an earlier run would bypass bundled-only behavior.
         // Command-auth providers retain their existing discovery behavior.
-        if self.uses_api_key_auth()
-            && !self.endpoint_client.has_command_auth()
-            && (!self.endpoint_client.supports_api_key_models()
-                || !self.api_key_model_discovery_enabled.load(Ordering::SeqCst))
-        {
+        if self.api_key_discovery_disabled() {
             return Ok(());
         }
         if !self.should_refresh_models().await {
@@ -652,6 +654,14 @@ impl OpenAiModelsManager {
         self.endpoint_client.supports_api_key_models()
             && !self.endpoint_client.has_command_auth()
             && self.uses_api_key_auth()
+    }
+
+    // A runtime opt-out must hide catalogs fetched before the flag was disabled, too.
+    fn api_key_discovery_disabled(&self) -> bool {
+        self.uses_api_key_auth()
+            && !self.endpoint_client.has_command_auth()
+            && (!self.endpoint_client.supports_api_key_models()
+                || !self.api_key_model_discovery_enabled.load(Ordering::SeqCst))
     }
 
     fn uses_api_key_auth(&self) -> bool {
