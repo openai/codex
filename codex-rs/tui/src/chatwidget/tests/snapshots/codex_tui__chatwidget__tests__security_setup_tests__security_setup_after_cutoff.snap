@@ -1,0 +1,20 @@
+---
+source: tui/src/chatwidget/tests/security_setup_tests.rs
+assertion_line: 43
+expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 48))"
+---
+  Set up security for Daybreak mode
+  Set up Advanced Account Security with a
+  hardware security key. Already Persona-
+  verified? Add your key before October 15 to
+  skip re-verification. You can keep using
+  Codex while you finish setup.
+
+› 1. Set up security
+
+  Press a number to choose · esc to dismiss ·
+  type to continue
+
+› Ask Codex to do anything
+
+  test-model-a default · /tmp/project
