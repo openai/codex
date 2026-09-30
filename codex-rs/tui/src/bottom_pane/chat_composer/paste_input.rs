@@ -91,6 +91,7 @@ impl ChatComposer {
     ///
     /// - UI ticks via [`ChatComposer::flush_paste_burst_if_due`], so held first-chars can render.
     /// - Input handling via [`ChatComposer::handle_input_basic`], so a due burst does not lag.
+    /// - Submission, before deciding whether Enter belongs to an active paste burst.
     pub(super) fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
         match self.draft.paste_burst.flush_if_due(now) {
             FlushResult::Paste(pasted) => {
