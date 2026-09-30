@@ -36,6 +36,7 @@ pub static CODEX_ALIASES_TEMP_DIR: Option<TestBinaryDispatchGuard> = {
     })
 };
 
+mod abort_lifecycle;
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
 mod additional_context;

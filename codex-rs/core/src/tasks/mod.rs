@@ -537,11 +537,9 @@ impl Session {
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
         let mut aborted_turn = false;
         let mut active_turn_to_clear = None;
-        let mut turn_context = None;
         if let Some(mut active_turn) = self.take_active_turn(&reason).await {
             let task = active_turn.task.take();
             aborted_turn = task.is_some();
-            turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
             if let Some(task) = task {
                 self.handle_task_abort(
                     task,
@@ -556,10 +554,6 @@ impl Session {
             }
         }
 
-        if let Some(turn_context) = turn_context.as_deref() {
-            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
-                .await;
-        }
         if let Some(active_turn) = active_turn_to_clear {
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
@@ -609,13 +603,8 @@ impl Session {
         error: Option<ErrorEvent>,
     ) {
         let task = active_turn.task.take();
-        let turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
         if let Some(task) = task {
             self.handle_task_abort(task, reason.clone(), &active_turn.turn_state, error)
-                .await;
-        }
-        if let Some(turn_context) = turn_context.as_deref() {
-            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
                 .await;
         }
         // Let interrupted tasks observe cancellation before dropping pending approvals, or an
@@ -928,6 +917,8 @@ impl Session {
     ) {
         let sub_id = task.turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
+            self.emit_turn_abort_lifecycle(reason, task.turn_context.extension_data.as_ref())
+                .await;
             return;
         }
 
@@ -1005,6 +996,8 @@ impl Session {
                 turn_id: task.turn_context.sub_id.clone(),
                 profile,
             });
+        self.emit_turn_abort_lifecycle(reason.clone(), task.turn_context.extension_data.as_ref())
+            .await;
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some(task.turn_context.sub_id.clone()),
             reason,
