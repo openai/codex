@@ -102,7 +102,7 @@ fn open_entry_sync(path: &Path) -> io::Result<std::fs::File> {
     Ok(std::fs::File::from(file))
 }
 
-fn open_file_sync(path: &Path) -> io::Result<std::fs::File> {
+pub(super) fn open_file_sync(path: &Path) -> io::Result<std::fs::File> {
     let file = open_entry_sync(path)?;
     if !file.metadata()?.is_file() {
         return Err(io::Error::new(
@@ -111,12 +111,6 @@ fn open_file_sync(path: &Path) -> io::Result<std::fs::File> {
         ));
     }
     Ok(file)
-}
-
-pub(super) async fn open_file(path: PathBuf) -> io::Result<tokio::fs::File> {
-    tokio::task::spawn_blocking(move || open_file_sync(&path).map(tokio::fs::File::from_std))
-        .await
-        .map_err(|error| io::Error::other(format!("filesystem task failed: {error}")))?
 }
 
 pub(super) async fn write_file(path: PathBuf, contents: Vec<u8>) -> io::Result<()> {

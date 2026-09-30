@@ -21,6 +21,7 @@ mod fs_helper;
 mod fs_helper_main;
 mod fs_sandbox;
 mod local_file_system;
+mod local_file_system_read;
 mod local_process;
 mod network_policy_decisions;
 mod no_follow;

@@ -1,5 +1,7 @@
 mod common;
 
+#[cfg(unix)]
+use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecServerClient;
@@ -77,12 +79,14 @@ async fn completed_streams_release_handle_capacity() -> Result<()> {
 }
 
 #[cfg(unix)]
+#[test_case::test_case(true ; "follow")]
+#[test_case::test_case(false ; "no_follow")]
 #[tokio::test]
-async fn file_reads_reject_fifo_without_waiting_for_a_writer() -> Result<()> {
+async fn file_reads_reject_fifo_without_waiting_for_a_writer(follow_symlinks: bool) -> Result<()> {
     let server = exec_server().await?;
     let file_system = connect_file_system(server.websocket_url())?;
     let tmp = TempDir::new()?;
-    let path = tmp.path().join("named-pipe");
+    let path = tmp.path().canonicalize()?.join("named-pipe");
     let output = std::process::Command::new("mkfifo").arg(&path).output()?;
     if !output.status.success() {
         anyhow::bail!(
@@ -93,26 +97,37 @@ async fn file_reads_reject_fifo_without_waiting_for_a_writer() -> Result<()> {
     }
 
     let path_uri = PathUri::from_host_native_path(&path)?;
-    let read_error = timeout(
+    let read_result = timeout(
         Duration::from_secs(1),
-        file_system.read_file(&path_uri, ReadFileOptions::default(), /*sandbox*/ None),
+        file_system.read_file(
+            &path_uri,
+            ReadFileOptions { follow_symlinks },
+            /*sandbox*/ None,
+        ),
     )
     .await
-    .expect("reading a FIFO should not wait for a writer")
-    .expect_err("reading a FIFO should be rejected");
+    .context("reading a FIFO should not wait for a writer")?;
+    let Err(read_error) = read_result else {
+        panic!("reading a FIFO should be rejected");
+    };
     let stream_result = timeout(
         Duration::from_secs(1),
         file_system.read_file_stream(&path_uri, /*sandbox*/ None),
     )
     .await
-    .expect("streaming a FIFO should not wait for a writer");
+    .context("streaming a FIFO should not wait for a writer")?;
     let Err(stream_error) = stream_result else {
         panic!("streaming a FIFO should be rejected");
     };
     let expected = format!("path `{}` is not a file", path.display());
+    let expected_read = if follow_symlinks {
+        expected.clone()
+    } else {
+        "path is not a regular file".to_string()
+    };
     assert_eq!(
         (read_error.to_string(), stream_error.to_string()),
-        (expected.clone(), expected)
+        (expected_read, expected)
     );
     Ok(())
 }

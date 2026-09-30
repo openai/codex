@@ -16,8 +16,8 @@ use unix as imp;
 #[cfg(windows)]
 use windows as imp;
 
-pub(crate) async fn open_file(path: &Path) -> io::Result<tokio::fs::File> {
-    imp::open_file(path.to_path_buf()).await
+pub(crate) fn open_file(path: &Path) -> io::Result<std::fs::File> {
+    imp::open_file_sync(path)
 }
 
 pub(crate) async fn write_file(path: &Path, contents: Vec<u8>) -> io::Result<()> {
