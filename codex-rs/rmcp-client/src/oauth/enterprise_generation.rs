@@ -1,5 +1,6 @@
-//! Persistent, non-secret generations for staged enterprise logins and logout.
-//! All reads and writes require the credential lock; missing state never admits an old attempt.
+//! Persistent, non-secret fences for login attempts and cached enterprise credentials.
+//! Separate generations preserve pending-login semantics when a stored grant changes.
+//! All reads and writes require the credential lock; missing state never admits old authority.
 
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -16,8 +17,13 @@ use sha2::Sha256;
 
 use super::RefreshCredentialLock;
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct EnterpriseOAuthGeneration([u8; 32]);
+
+pub(crate) enum EnterpriseOAuthGenerationKind {
+    LoginAttempt,
+    Credential,
+}
 
 pub(crate) struct EnterpriseOAuthGenerationFile {
     file: File,
@@ -27,10 +33,15 @@ impl EnterpriseOAuthGenerationFile {
     pub(crate) fn open(
         credential_name: &str,
         issuer: &str,
+        kind: EnterpriseOAuthGenerationKind,
         _lock: &RefreshCredentialLock,
     ) -> Result<Self> {
         let key = super::compute_store_key(credential_name, issuer)?;
-        let name = format!("{:x}.enterprise-generation", Sha256::digest(key.as_bytes()));
+        let suffix = match kind {
+            EnterpriseOAuthGenerationKind::LoginAttempt => "enterprise-generation",
+            EnterpriseOAuthGenerationKind::Credential => "enterprise-credential-version",
+        };
+        let name = format!("{:x}.{suffix}", Sha256::digest(key.as_bytes()));
         let path = find_codex_home()?.join("mcp-oauth-locks").join(name);
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
@@ -82,4 +93,22 @@ impl EnterpriseOAuthGenerationFile {
         file.sync_all()?;
         Ok(generation)
     }
+}
+
+/// Invalidate cached grants before mutation, including when the following store write fails.
+pub(crate) fn invalidate_enterprise_credential_version(
+    credential_name: &str,
+    issuer: &str,
+    lock: &RefreshCredentialLock,
+) -> Result<()> {
+    if credential_name.starts_with("ema-idp:") {
+        EnterpriseOAuthGenerationFile::open(
+            credential_name,
+            issuer,
+            EnterpriseOAuthGenerationKind::Credential,
+            lock,
+        )?
+        .replace()?;
+    }
+    Ok(())
 }

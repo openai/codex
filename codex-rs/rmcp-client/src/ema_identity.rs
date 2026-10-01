@@ -14,7 +14,9 @@ use oauth2::TokenResponse;
 use rmcp::transport::AuthorizationManager;
 use rmcp::transport::auth::AuthorizationMetadata;
 use rmcp::transport::auth::OAuthHttpClient;
+use tracing::instrument::WithSubscriber;
 
+use crate::EmaCredentialLease;
 use crate::ema_auth_policy::advertised_capability;
 use crate::ema_auth_policy::ema_reauthentication_required;
 use crate::ema_auth_policy::validate_ema_oauth_endpoint;
@@ -23,7 +25,6 @@ use crate::ema_claims::ID_JAG_TOKEN_TYPE;
 use crate::ema_exchange::TOKEN_EXCHANGE_GRANT_TYPE;
 use crate::http_client_adapter::StreamableHttpRedirectMode;
 use crate::oauth::RefreshCredentialLock;
-use crate::oauth::StoredOAuthCredentialSnapshot;
 use crate::oauth::StoredOAuthTokens;
 use crate::oauth::stored_oidc_identity;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
@@ -32,16 +33,16 @@ use crate::utils::build_default_headers;
 pub struct EmaIdpIdentityRequest<'a> {
     pub issuer: &'a str,
     pub client_id: &'a str,
-    pub credentials: &'a StoredOAuthCredentialSnapshot,
+    pub credentials: EmaCredentialLease,
     pub http_client: Arc<dyn HttpClient>,
     pub redirect_mode: StreamableHttpRedirectMode,
 }
 
-/// An opaque IdP refresh token whose credential lock is held through token exchange.
+/// An opaque IdP refresh token paired with the credentials admitted for its exchange.
 pub struct EmaIdpIdentity {
     pub(crate) token_endpoint: String,
     pub(crate) refresh_token: String,
-    pub(crate) credential_lock: RefreshCredentialLock,
+    pub(crate) credentials: EmaCredentialLease,
 }
 
 /// Returns whether stored credentials contain a refresh token bound to the configured login.
@@ -101,7 +102,7 @@ async fn resolve_ema_idp_identity_in<K: KeyringStore + Clone + 'static>(
     if request.issuer.trim().is_empty() || request.client_id.trim().is_empty() {
         bail!("ema_auth requires a non-empty enterprise IdP issuer and client ID");
     }
-    let credentials = request.credentials.credentials();
+    let credentials = request.credentials.credentials.credentials();
     if credentials.url != request.issuer
         || credentials.bound_issuer() != Some(request.issuer)
         || credentials.client_id != request.client_id
@@ -133,14 +134,21 @@ async fn resolve_ema_idp_identity_in<K: KeyringStore + Clone + 'static>(
             );
         }
     }
-    let credential_lock =
-        RefreshCredentialLock::acquire_for_server(&credentials.server_name, &credentials.url)
-            .await?;
-    let snapshot = request.credentials.clone();
+    let credentials = request.credentials;
+    let credential_lock = RefreshCredentialLock::acquire_for_server(
+        &credentials.credentials.credentials().server_name,
+        request.issuer,
+    )
+    .with_subscriber(tracing::subscriber::NoSubscriber::default())
+    .await
+    .map_err(|_| anyhow!("failed to lock enterprise credentials"))?;
     let keyring_store = keyring_store.clone();
-    // The worker retains the guard even if its caller stops waiting for the reread.
+    // The worker retains the short read lock if its caller stops waiting for the reread.
     tokio::task::spawn_blocking(move || {
-        let latest = snapshot.load_ema_credentials(&keyring_store)?;
+        let _credential_lock = credential_lock;
+        let latest = credentials
+            .credentials
+            .load_ema_credentials(&keyring_store)?;
         let refresh_token = latest
             .token_response
             .0
@@ -154,7 +162,7 @@ async fn resolve_ema_idp_identity_in<K: KeyringStore + Clone + 'static>(
         Ok(EmaIdpIdentity {
             token_endpoint: metadata.token_endpoint,
             refresh_token: refresh_token.secret().to_string(),
-            credential_lock,
+            credentials,
         })
     })
     .await

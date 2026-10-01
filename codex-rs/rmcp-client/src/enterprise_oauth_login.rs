@@ -31,6 +31,7 @@ use crate::ema_identity::resolve_ema_idp_authorization_manager;
 use crate::http_client_adapter::StreamableHttpRedirectMode;
 use crate::oauth::EnterpriseOAuthGeneration;
 use crate::oauth::EnterpriseOAuthGenerationFile;
+use crate::oauth::EnterpriseOAuthGenerationKind;
 use crate::oauth::RefreshCredentialLock;
 use crate::oauth::delete_oauth_tokens_with_lock_held;
 use crate::oauth::save_oauth_tokens_with_lock_held;
@@ -61,8 +62,13 @@ impl EnterpriseOAuthCredentialGuard {
             .with_subscriber(tracing::subscriber::NoSubscriber::default())
             .await
             .map_err(|_| anyhow!("failed to lock enterprise credentials"))?;
-        let generation_file = EnterpriseOAuthGenerationFile::open(credential_name, issuer, &lock)
-            .map_err(|_| anyhow!("failed to open enterprise login generation"))?;
+        let generation_file = EnterpriseOAuthGenerationFile::open(
+            credential_name,
+            issuer,
+            EnterpriseOAuthGenerationKind::LoginAttempt,
+            &lock,
+        )
+        .map_err(|_| anyhow!("failed to open enterprise login generation"))?;
         Ok(Self {
             credential_name: credential_name.to_owned(),
             issuer: issuer.to_owned(),

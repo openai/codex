@@ -148,11 +148,13 @@ async fn public_client_round_trip_preserves_signed_narrowing() -> Result<()> {
             );
             continue;
         }
+        let token = result?;
         assert_eq!(
-            result?,
+            token,
             EmaAccessToken {
                 access_token: "resource-token".to_string(),
                 expires_in: Some(Duration::from_secs(300)),
+                received_at: token.received_at,
             }
         );
         let requests = server.received_requests().await.expect("requests");

@@ -80,9 +80,13 @@ use tokio::sync::Mutex;
 use codex_utils_home_dir::find_codex_home;
 
 pub(crate) use self::credential_store::OAuthCredentialStore;
+pub use self::ema_identity::EmaCredentialLease;
+pub use self::ema_identity::EmaCredentialSnapshot;
 pub(crate) use self::ema_identity::stored_oidc_identity;
 pub(crate) use self::enterprise_generation::EnterpriseOAuthGeneration;
 pub(crate) use self::enterprise_generation::EnterpriseOAuthGenerationFile;
+pub(crate) use self::enterprise_generation::EnterpriseOAuthGenerationKind;
+use self::enterprise_generation::invalidate_enterprise_credential_version;
 pub(crate) use self::issuer_binding::validate_authorization_server_endpoints;
 pub(crate) use self::issuer_binding::validate_refresh_token_issuer;
 pub(crate) use self::refresh_lock::RefreshCredentialLock;
@@ -467,12 +471,13 @@ pub async fn save_oauth_tokens(
 
 /// Save while retaining the matching credential lock acquired by the caller.
 pub(crate) fn save_oauth_tokens_with_lock_held(
-    _lock: &RefreshCredentialLock,
+    lock: &RefreshCredentialLock,
     server_name: &str,
     tokens: &StoredOAuthTokens,
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Result<()> {
+    invalidate_enterprise_credential_version(server_name, &tokens.url, lock)?;
     let keyring_store = DefaultKeyringStore;
     let mut observation = telemetry::policy(store_mode, keyring_backend_kind, Operation::Save);
     match store_mode {
@@ -642,12 +647,13 @@ pub async fn delete_oauth_tokens(
 
 /// Delete while retaining the matching credential lock acquired by the caller.
 pub(crate) fn delete_oauth_tokens_with_lock_held(
-    _lock: &RefreshCredentialLock,
+    lock: &RefreshCredentialLock,
     server_name: &str,
     url: &str,
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Result<bool> {
+    invalidate_enterprise_credential_version(server_name, url, lock)?;
     let keyring_store = DefaultKeyringStore;
     delete_oauth_tokens_from_keyring_and_file(
         &keyring_store,

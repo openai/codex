@@ -4,7 +4,9 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -342,6 +344,67 @@ async fn enterprise_public_api_storage_and_privacy() -> Result<()> {
                 .map(|token| token.secret().as_str()),
             Some(SECRET)
         );
+        // Exercise the production lease and keyring snapshot without installing another
+        // test backend. Use a non-sensitive name so routine keyring-read traces are safe.
+        let mut lease_tokens = stored.clone();
+        lease_tokens.server_name = "ema-idp:lease-snapshot".to_string();
+        crate::save_oauth_tokens(
+            &lease_tokens.server_name,
+            &lease_tokens,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )
+        .await?;
+        let snapshot = crate::stored_oauth_credential_snapshot(
+            &lease_tokens.server_name,
+            &issuer,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?
+        .expect("keyring-backed snapshot");
+        let pinned = snapshot.clone().pin_ema_credentials().await?;
+        let accesses = keyring.accesses.load(Ordering::SeqCst);
+        keyring.fail.store(true, Ordering::SeqCst);
+        let leases = futures::future::try_join_all(
+            (0..32).map(|_| pinned.acquire_current_ema_credentials()),
+        )
+        .await?;
+        assert_eq!(keyring.accesses.load(Ordering::SeqCst), accesses);
+        drop(leases);
+        keyring.fail.store(false, Ordering::SeqCst);
+
+        // Even an identical replacement, or a failed write, revokes the old version.
+        for fail in [false, true] {
+            let pinned = snapshot.clone().pin_ema_credentials().await?;
+            keyring.fail.store(fail, Ordering::SeqCst);
+            let saved = crate::save_oauth_tokens(
+                &lease_tokens.server_name,
+                &lease_tokens,
+                OAuthCredentialsStoreMode::Keyring,
+                AuthKeyringBackendKind::Direct,
+            )
+            .await;
+            keyring.fail.store(false, Ordering::SeqCst);
+            assert_eq!(saved.is_err(), fail);
+            assert!(pinned.acquire_current_ema_credentials().await.is_err());
+        }
+        let pinned = snapshot.pin_ema_credentials().await?;
+        let first = pinned.acquire_current_ema_credentials().await?;
+        let second = pinned.acquire_current_ema_credentials().await?;
+        assert!(
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                delete_enterprise_oauth_tokens(
+                    &lease_tokens.server_name,
+                    &issuer,
+                    AuthKeyringBackendKind::Direct,
+                ),
+            )
+            .await??
+        );
+        drop(first);
+        drop(second);
+        assert!(pinned.acquire_current_ema_credentials().await.is_err());
         assert!(
             delete_enterprise_oauth_tokens(
                 CREDENTIAL_NAME,
@@ -436,6 +499,7 @@ async fn enterprise_public_api_storage_and_privacy() -> Result<()> {
 struct TestKeyring {
     values: Arc<Mutex<HashMap<String, Arc<MockCredential>>>>,
     fail: Arc<AtomicBool>,
+    accesses: Arc<AtomicUsize>,
 }
 
 struct TestCredential(Arc<MockCredential>);
@@ -462,6 +526,7 @@ impl CredentialBuilderApi for TestKeyring {
         _service: &str,
         user: &str,
     ) -> keyring::Result<Box<Credential>> {
+        self.accesses.fetch_add(1, Ordering::SeqCst);
         if self.fail.load(Ordering::SeqCst) {
             return Err(keyring::Error::Invalid("account".into(), user.into()));
         }

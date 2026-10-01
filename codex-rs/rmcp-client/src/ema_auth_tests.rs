@@ -3,6 +3,9 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use codex_config::types::AuthKeyringBackendKind;
 use codex_exec_server::RouteAwareHttpClient;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
@@ -15,6 +18,13 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::*;
+use crate::ema_auth_policy::EmaAuthFailure;
+use crate::ema_auth_policy::EmaInvalidGrantSource;
+use crate::oauth::RefreshCredentialLock;
+use crate::oauth::ResolvedOAuthCredentialStore;
+use crate::oauth::StoredOAuthCredentialSnapshot;
+use crate::oauth::StoredOAuthTokens;
+use crate::oauth::test_support::TempCodexHome;
 
 fn request<'a>(resource: &'a str, issuer: Option<&'a str>) -> EmaAuthTokenExchangeRequest<'a> {
     let client: Arc<dyn HttpClient> = Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
@@ -373,5 +383,90 @@ fn discovery_rejects_private_or_ambiguous_issuer_destinations() -> Result<()> {
         &Url::parse("http://127.0.0.1/mcp")?,
         &Url::parse("http://[::1]:1234")?,
     )?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejected_grants_preserve_their_source_and_release_the_credential_lease() -> Result<()> {
+    let _home = TempCodexHome::new();
+    for failure_source in [
+        EmaInvalidGrantSource::EnterpriseIdentity,
+        EmaInvalidGrantSource::ResourceAuthorization,
+    ] {
+        let server = MockServer::start().await;
+        let resource = format!("{}/mcp", server.uri());
+        let issuer = format!("{}/as", server.uri());
+        let idp = format!("{}/idp", server.uri());
+        let assertion = format!(
+            "{}.{}.{}",
+            URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256","typ":"oauth-id-jag+jwt"}"#),
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({"iss": idp, "aud": issuer,
+                "client_id": "resource-client", "sub": "user", "jti": "one", "iat": 0,
+                "exp": u64::MAX, "resource": resource}))?),
+            URL_SAFE_NO_PAD.encode(b"signature")
+        );
+        for (endpoint, status, response) in [
+            (
+                "/mcp",
+                200,
+                json!({"resource": resource, "authorization_servers": [issuer]}),
+            ),
+            (
+                "/.well-known/oauth-authorization-server/as",
+                200,
+                json!({"issuer": issuer, "token_endpoint": format!("{issuer}/token"),
+                    "grant_types_supported": [JWT_BEARER_GRANT_TYPE], "token_endpoint_auth_methods_supported": ["none"]}),
+            ),
+            (
+                "/idp/token",
+                if failure_source == EmaInvalidGrantSource::EnterpriseIdentity {
+                    400
+                } else {
+                    200
+                },
+                if failure_source == EmaInvalidGrantSource::EnterpriseIdentity {
+                    json!({"error": "invalid_grant"})
+                } else {
+                    json!({"access_token": assertion, "token_type": "N_A", "issued_token_type": "urn:ietf:params:oauth:token-type:id-jag"})
+                },
+            ),
+            ("/as/token", 400, json!({"error": "invalid_grant"})),
+        ] {
+            Mock::given(path(endpoint))
+                .respond_with(ResponseTemplate::new(status).set_body_json(response))
+                .mount(&server)
+                .await;
+        }
+        let store = ResolvedOAuthCredentialStore::keyring(AuthKeyringBackendKind::Direct);
+        let tokens: StoredOAuthTokens = serde_json::from_value(json!({
+            "server_name": "ema-idp:revoked-test", "url": idp, "issuer": idp, "client_id": "enterprise-client",
+            "token_response": {"access_token": "unused", "token_type": "Bearer", "refresh_token": "old-grant"},
+        }))?;
+        let credentials = StoredOAuthCredentialSnapshot::new(tokens.clone(), store);
+        let mut exchange = request(&resource, Some(&issuer));
+        exchange.idp_issuer = &idp;
+        exchange.idp_identity = Box::pin(async {
+            Ok(EmaIdpIdentity {
+                token_endpoint: format!("{idp}/token"),
+                refresh_token: "old-grant".to_string(),
+                credentials: crate::EmaCredentialLease { credentials },
+            })
+        });
+        let error = exchange_ema_auth_token(exchange)
+            .await
+            .expect_err("invalid grant");
+        assert_eq!(
+            error.downcast_ref::<EmaAuthFailure>(),
+            Some(&EmaAuthFailure::InvalidGrant {
+                grant_source: failure_source
+            })
+        );
+        let _exclusive = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            RefreshCredentialLock::acquire_for_server(&tokens.server_name, &idp),
+        )
+        .await
+        .expect("failed exchange must not retain the credential lock")?;
+    }
     Ok(())
 }

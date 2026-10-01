@@ -1,10 +1,13 @@
 use anyhow::Error;
+use codex_exec_server::ExecServerError;
 use rmcp::service::ClientInitializeError;
 use rmcp::service::ServiceError;
 use rmcp::transport::DynamicTransportError;
 use rmcp::transport::auth::AuthError;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 
+use crate::ema_auth_policy::EmaAuthFailure;
+use crate::ema_auth_policy::EmaInvalidGrantSource;
 use crate::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::rmcp_client::ClientOperationError;
 
@@ -18,6 +21,22 @@ pub fn is_authentication_required_error(error: &Error) -> bool {
         source
             .downcast_ref::<AuthError>()
             .is_some_and(auth_error_requires_authentication)
+            || source
+                .downcast_ref::<EmaAuthFailure>()
+                .is_some_and(|error| match error {
+                    EmaAuthFailure::InvalidGrant {
+                        grant_source: EmaInvalidGrantSource::EnterpriseIdentity,
+                    }
+                    | EmaAuthFailure::InsufficientUserAuthentication
+                    | EmaAuthFailure::ReauthenticationRequired => true,
+                    // Rejecting an ID-JAG does not invalidate the enterprise login itself.
+                    EmaAuthFailure::InvalidGrant {
+                        grant_source: EmaInvalidGrantSource::ResourceAuthorization,
+                    } => false,
+                })
+            || source
+                .downcast_ref::<ExecServerError>()
+                .is_some_and(exec_server_error_requires_authentication)
             || source
                 .downcast_ref::<ClientInitializeError>()
                 .is_some_and(|mut error| {
@@ -49,8 +68,15 @@ fn transport_error_requires_authentication(error: &DynamicTransportError) -> boo
         .is_some_and(|error| match error {
             StreamableHttpError::AuthRequired(_) => true,
             StreamableHttpError::Auth(auth_error) => auth_error_requires_authentication(auth_error),
+            StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(error)) => {
+                exec_server_error_requires_authentication(error)
+            }
             _ => false,
         })
+}
+
+fn exec_server_error_requires_authentication(error: &ExecServerError) -> bool {
+    matches!(error, ExecServerError::AuthenticationRequired(_))
 }
 
 fn auth_error_requires_authentication(error: &AuthError) -> bool {

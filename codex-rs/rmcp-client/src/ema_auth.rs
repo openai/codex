@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
+use crate::EmaCredentialLease;
 use crate::ema_auth_policy::advertised_capability;
 use crate::ema_auth_policy::validate_ema_auth_resource;
 use crate::ema_auth_policy::validate_ema_oauth_endpoint;
@@ -67,7 +68,7 @@ impl<'a> From<&EmaAuthTokenExchangeRequest<'a>> for EmaDiscoveryRequest<'a> {
 /// Discover the resource's authorization server, then perform the ID-JAG flow.
 pub async fn exchange_ema_auth_token(
     request: EmaAuthTokenExchangeRequest<'_>,
-) -> Result<EmaAccessToken> {
+) -> Result<(EmaAccessToken, EmaCredentialLease)> {
     validate_ema_auth_resource(request.server_url, request.resource)?;
     let client_id = request
         .mcp_client_id
@@ -86,9 +87,9 @@ pub async fn exchange_ema_auth_token(
     let EmaIdpIdentity {
         token_endpoint,
         refresh_token,
-        credential_lock,
+        credentials,
     } = request.idp_identity.await?;
-    let result = exchange_id_jag(EmaIdJagExchangeRequest {
+    let token = exchange_id_jag(EmaIdJagExchangeRequest {
         resource: &resource,
         scopes: request.scopes,
         mcp_client_id: client_id,
@@ -101,9 +102,8 @@ pub async fn exchange_ema_auth_token(
         idp_http_client: request.idp_http_client,
         resource_http_client: request.resource_http_client,
     })
-    .await;
-    drop(credential_lock);
-    result
+    .await?;
+    Ok((token, credentials))
 }
 
 async fn discover_ema_authorization_metadata(

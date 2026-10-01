@@ -43,6 +43,7 @@ impl ExecServerError {
             | Self::Json(_)
             | Self::HttpRequest(_)
             | Self::Protocol(_)
+            | Self::AuthenticationRequired(_)
             | Self::ProvisioningModeConflict { .. }
             | Self::Server { .. }
             | Self::EnvironmentRegistryHttp { .. }

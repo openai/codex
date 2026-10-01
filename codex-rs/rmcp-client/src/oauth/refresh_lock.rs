@@ -3,6 +3,7 @@
 //! The guard is intentionally acquired before the authoritative credential reread and retained
 //! through provider refresh and persistence. This prevents two processes from replaying the same
 //! rotating refresh token or observing a partially persisted transaction.
+//! EMA uses the same lock only for short credential reads and generation checks.
 
 use anyhow::Context;
 use anyhow::Result;

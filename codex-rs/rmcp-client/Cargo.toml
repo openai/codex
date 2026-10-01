@@ -49,6 +49,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 sse-stream = "0.2.5"
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tiny_http = { workspace = true }
 tokio = { workspace = true, features = [
@@ -74,7 +75,6 @@ codex-http-client = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
-tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true, features = ["no-env-filter"] }
 wiremock = { workspace = true }

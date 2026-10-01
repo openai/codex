@@ -10,6 +10,7 @@ use rmcp::transport::auth::enterprise::EmaAuthorizationServer;
 use rmcp::transport::auth::enterprise::EmaError;
 use rmcp::transport::auth::enterprise::EmaExchangeRequest;
 use rmcp::transport::auth::enterprise::EmaExchangeStage;
+use tokio::time::Instant;
 
 use crate::ema_auth_policy::EmaAuthFailure;
 use crate::ema_auth_policy::EmaInvalidGrantSource;
@@ -26,6 +27,8 @@ pub(crate) const JWT_BEARER_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type
 pub struct EmaAccessToken {
     pub access_token: String,
     pub expires_in: Option<Duration>,
+    /// Exchange completion time, before any asynchronous credential validation.
+    pub received_at: Instant,
 }
 
 impl std::fmt::Debug for EmaAccessToken {
@@ -118,6 +121,7 @@ pub(crate) async fn exchange_id_jag(
     Ok(EmaAccessToken {
         access_token: token.access_token.secret().to_owned(),
         expires_in: token.expires_in,
+        received_at: Instant::now(),
     })
 }
 

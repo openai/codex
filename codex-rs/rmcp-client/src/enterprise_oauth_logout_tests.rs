@@ -1,4 +1,4 @@
-//! Cross-process logout exercises staged login and the production keyring adapter.
+//! Cross-process credential changes invalidate staged logins and cached EMA leases.
 
 use std::fs;
 use std::path::PathBuf;
@@ -16,9 +16,80 @@ use tokio::sync::Notify;
 
 use super::*;
 
+#[tokio::test]
+async fn failed_persistence_fences_old_snapshots_but_allows_fresh_pins() -> Result<()> {
+    if isolated_process("enterprise_oauth_login::tests::logout::failed_persistence_fences_old_snapshots_but_allows_fresh_pins").await? {
+        return Ok(());
+    }
+    let keyring = TestKeyring::default();
+    keyring::set_default_credential_builder(Box::new(keyring.clone()));
+    let issuer = "https://idp.example";
+    let assertion = format!(
+        "{}.{}.signature",
+        URL_SAFE_NO_PAD.encode(r#"{"alg":"ES256"}"#),
+        URL_SAFE_NO_PAD.encode(
+            json!({"iss":issuer,"sub":"user","aud":"enterprise-client","exp":4102444800_u64})
+                .to_string()
+        )
+    );
+    let tokens: StoredOAuthTokens = serde_json::from_value(json!({
+        "server_name": CREDENTIAL_NAME, "url": issuer, "issuer": issuer,
+        "client_id": "enterprise-client", "token_response": {
+            "access_token": SECRET, "refresh_token": SECRET, "id_token": assertion, "token_type": "Bearer"
+        }
+    }))?;
+    let mode = OAuthCredentialsStoreMode::Keyring;
+    let backend = AuthKeyringBackendKind::Direct;
+    crate::save_oauth_tokens(CREDENTIAL_NAME, &tokens, mode, backend).await?;
+    for operation in ["save", "delete"] {
+        let snapshot =
+            crate::stored_oauth_credential_snapshot(CREDENTIAL_NAME, issuer, mode, backend)?
+                .expect("stored grant")
+                .pin_ema_credentials()
+                .await?;
+        drop(snapshot.acquire_current_ema_credentials().await?);
+        // Fail the actual keyring mutation, after the public API advances the generation.
+        keyring
+            .values
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .expect("credential")
+            .set_error(keyring::Error::PlatformFailure(Box::new(
+                std::io::Error::other("injected persistence failure"),
+            )));
+        let result = match operation {
+            "save" => crate::save_oauth_tokens(CREDENTIAL_NAME, &tokens, mode, backend).await,
+            "delete" => crate::delete_oauth_tokens(CREDENTIAL_NAME, issuer, mode, backend)
+                .await
+                .map(|_| ()),
+            _ => unreachable!(),
+        };
+        assert!(
+            result.is_err(),
+            "{operation} must report the storage failure"
+        );
+        assert!(
+            snapshot.acquire_current_ema_credentials().await.is_err(),
+            "{operation} must fence the old snapshot"
+        );
+        assert_eq!(stored(issuer)?, Some(tokens.clone()));
+        // A generation is not a deletion tombstone: a fresh connection may use the surviving grant.
+        let fresh =
+            crate::stored_oauth_credential_snapshot(CREDENTIAL_NAME, issuer, mode, backend)?
+                .expect("surviving grant")
+                .pin_ema_credentials()
+                .await?;
+        drop(fresh.acquire_current_ema_credentials().await?);
+    }
+    Ok(())
+}
+
 const TEST: &str =
     "enterprise_oauth_login::tests::logout::logout_invalidates_pending_login_across_processes";
 const LOGOUT_ISSUER: &str = "CODEX_ENTERPRISE_LOGOUT_TEST_ISSUER";
+const REPLACE_CREDENTIAL: &str = "CODEX_ENTERPRISE_LOGOUT_TEST_REPLACE";
 
 #[tokio::test]
 async fn logout_invalidates_pending_login_across_processes() -> Result<()> {
@@ -30,8 +101,22 @@ async fn logout_invalidates_pending_login_across_processes() -> Result<()> {
     fs::create_dir_all(&keyring.0)?;
     keyring::set_default_credential_builder(Box::new(keyring));
     if let Ok(issuer) = std::env::var(LOGOUT_ISSUER) {
-        delete_enterprise_oauth_tokens(CREDENTIAL_NAME, &issuer, AuthKeyringBackendKind::Direct)
+        if std::env::var_os(REPLACE_CREDENTIAL).is_some() {
+            crate::save_oauth_tokens(
+                CREDENTIAL_NAME,
+                &stored(&issuer)?.expect("stored grant"),
+                OAuthCredentialsStoreMode::Keyring,
+                AuthKeyringBackendKind::Direct,
+            )
             .await?;
+        } else {
+            delete_enterprise_oauth_tokens(
+                CREDENTIAL_NAME,
+                &issuer,
+                AuthKeyringBackendKind::Direct,
+            )
+            .await?;
+        }
         return Ok(());
     }
     let server = MockServer::start().await;
@@ -139,6 +224,42 @@ async fn logout_invalidates_pending_login_across_processes() -> Result<()> {
         assert_eq!(stored(&issuer)?, Some(fresh));
     }
 
+    // Even a byte-identical replacement in another process retires the cached
+    // version. Its next lease must fail after that process exits, as must logout.
+    for operation in ["replace", "delete"] {
+        let before = stored(&issuer)?;
+        let cached = crate::stored_oauth_credential_snapshot(
+            CREDENTIAL_NAME,
+            &issuer,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?
+        .expect("keyring-backed snapshot")
+        .pin_ema_credentials()
+        .await?;
+        drop(cached.acquire_current_ema_credentials().await?);
+
+        let mut child = tokio::process::Command::new(std::env::current_exe()?);
+        child
+            .args(["--exact", TEST, "--nocapture"])
+            .env(LOGOUT_ISSUER, &issuer);
+        if operation == "replace" {
+            child.env(REPLACE_CREDENTIAL, "1");
+        }
+        let output = child.output().await?;
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(cached.acquire_current_ema_credentials().await.is_err());
+        assert_eq!(
+            stored(&issuer)?,
+            if operation == "replace" { before } else { None }
+        );
+    }
+
     let stale = complete_login(&issuer).await?;
     let generation_path = fs::read_dir(home.join("mcp-oauth-locks"))?
         .filter_map(std::result::Result::ok)
@@ -164,6 +285,23 @@ async fn logout_invalidates_pending_login_across_processes() -> Result<()> {
 
     // Metadata failures are logout errors and must leave the stored grant intact.
     let before = stored(&issuer)?;
+    let version_path = generation_path.with_extension("enterprise-credential-version");
+    let version = fs::read(&version_path)?;
+    fs::remove_file(&version_path)?;
+    fs::create_dir(&version_path)?;
+    let mode = OAuthCredentialsStoreMode::Keyring;
+    let backend = AuthKeyringBackendKind::Direct;
+    let mut replacement = before.clone().expect("stored grant");
+    replacement.client_id.push_str("-replacement");
+    let saved = crate::save_oauth_tokens(CREDENTIAL_NAME, &replacement, mode, backend).await;
+    assert!(saved.is_err());
+    assert_eq!(stored(&issuer)?, before);
+    let deleted = crate::delete_oauth_tokens(CREDENTIAL_NAME, &issuer, mode, backend).await;
+    assert!(deleted.is_err());
+    assert_eq!(stored(&issuer)?, before);
+    fs::remove_dir(&version_path)?;
+    fs::write(&version_path, version)?;
+
     fs::remove_file(&generation_path)?;
     fs::create_dir(&generation_path)?;
     assert!(
