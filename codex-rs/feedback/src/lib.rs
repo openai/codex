@@ -419,12 +419,24 @@ impl FeedbackAttachmentPath {
             let Some(buffer) =
                 codex_rollout::read_rollout_prefix(&self.path, max_bytes.saturating_add(1))?
             else {
+                tracing::error!(
+                    "feedback attachment skipped: rollout is missing or not a regular file"
+                );
                 return Ok(None);
             };
             buffer
         } else {
             let metadata = fs::metadata(&self.path)?;
-            if !metadata.is_file() || metadata.len() > max_bytes as u64 {
+            if !metadata.is_file() {
+                tracing::error!("feedback attachment skipped: not a regular file");
+                return Ok(None);
+            }
+            if metadata.len() > max_bytes as u64 {
+                tracing::error!(
+                    bytes = metadata.len(),
+                    max_bytes,
+                    "feedback attachment skipped: size limit exceeded"
+                );
                 return Ok(None);
             }
             let mut buffer = Vec::new();
@@ -435,6 +447,11 @@ impl FeedbackAttachmentPath {
             buffer
         };
         if buffer.len() > max_bytes {
+            tracing::error!(
+                bytes_read = buffer.len(),
+                max_bytes,
+                "feedback attachment skipped: decoded size limit exceeded"
+            );
             return Ok(None);
         }
         let filename = self
@@ -671,6 +688,14 @@ impl FeedbackSnapshot {
         while attachments.size_hint().1 != Some(0) {
             if rate_limited || Instant::now() >= deadline {
                 attachments_failed = true;
+                tracing::error!(
+                    reason = if rate_limited {
+                        "rate limit"
+                    } else {
+                        "upload deadline"
+                    },
+                    "remaining feedback attachments skipped"
+                );
                 break;
             }
             let Some(attachment) = attachments.next() else {
@@ -678,6 +703,9 @@ impl FeedbackSnapshot {
             };
             if Instant::now() >= deadline {
                 attachments_failed = true;
+                tracing::error!(
+                    "remaining feedback attachments skipped: upload deadline reached while reading attachment"
+                );
                 break;
             }
             let mut status = None;
@@ -691,18 +719,30 @@ impl FeedbackSnapshot {
                     deadline,
                     &mut rate_limited,
                 )
-                .await?;
+                .await
+                .map_err(|error| {
+                    // Transport error strings can contain credential-bearing URLs.
+                    if let Some(cause) = error.downcast_ref::<codex_http_client::RouteAwareRequestError>() {
+                        anyhow!(
+                            "feedback transport failed: class={:?}, timeout={}, connect={}, request={}, body={}",
+                            cause.failure_class(), cause.is_timeout(), cause.is_connect(), cause.is_request(), cause.is_body()
+                        )
+                    } else {
+                        error
+                    }
+                })?;
+
                 status = Some(response_status.as_u16());
                 anyhow::ensure!(response_status.is_success(), "Sentry rejected attachment");
                 Ok(())
             }
             .await;
-            if result.is_ok() {
-                uploaded_attachments += 1;
-            } else {
+            if let Err(error) = result {
                 attachments_failed = true;
                 // Keep trying other diagnostics before reporting the partial failure.
-                tracing::warn!(status, "feedback attachment upload failed; continuing");
+                tracing::error!(status, error = %format!("{error:#}"), "feedback attachment upload failed; continuing");
+            } else {
+                uploaded_attachments += 1;
             }
         }
         tracing::info!(
