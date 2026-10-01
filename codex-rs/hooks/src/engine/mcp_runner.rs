@@ -1,3 +1,4 @@
+use std::sync::LazyLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -121,7 +122,9 @@ fn resolve_value(value: &Value, hook_event: &Value) -> Result<Value> {
 }
 
 fn resolve_string(text: &str, hook_event: &Value) -> Result<Value> {
-    let pattern = Regex::new(r"\$\{([^{}]+)\}")?;
+    static PLACEHOLDER_PATTERN: LazyLock<Result<Regex, regex::Error>> =
+        LazyLock::new(|| Regex::new(r"\$\{([^{}]+)\}"));
+    let pattern = PLACEHOLDER_PATTERN.as_ref().map_err(Clone::clone)?;
     let captures = pattern.captures_iter(text).collect::<Vec<_>>();
     if captures.is_empty() {
         return Ok(Value::String(text.to_string()));
