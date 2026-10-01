@@ -160,12 +160,12 @@ impl TranscriptView {
         if self.snapshot().is_some() {
             return;
         }
-        self.restart_search();
         if let Position::Reading(anchor) = self.position
             && (anchor.key == tail_key || anchor.key == EntryKey::Live)
         {
             self.held_reading = Some(self.capture_snapshot(cells));
         }
+        self.restart_search();
     }
 
     /// Extend the frozen history only with the explicitly inserted older page.

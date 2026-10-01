@@ -1,4 +1,4 @@
-//! Incremental literal search over the current transcript presentation.
+//! Incremental literal search over full transcript content, independent of collapsed display.
 //!
 //! Search retains one match and one entry being scanned. Each frame examines a bounded text
 //! chunk; reaching the oldest loaded entry asks the app's existing history pager to continue.
@@ -17,6 +17,8 @@ use super::*;
 
 #[path = "search_footer.rs"]
 mod footer;
+#[path = "search_presentation.rs"]
+mod presentation;
 
 const QUERY_BYTES: usize = 4096;
 const SCAN_BYTES: usize = 16 * 1024;
@@ -70,6 +72,8 @@ pub(super) struct Search {
     scanning_layout: Option<(EntryKey, Arc<TextLayout>)>,
     page_start: Option<EntryKey>,
     query_truncated: bool,
+    pub(super) live: Option<Arc<TextLayout>>,
+    live_key: Option<(u16, ActiveCellTranscriptKey)>,
 }
 
 impl Default for Search {
@@ -86,6 +90,8 @@ impl Default for Search {
             scanning_layout: None,
             page_start: None,
             query_truncated: false,
+            live: None,
+            live_key: None,
         }
     }
 }
@@ -113,7 +119,6 @@ impl TranscriptView {
         let saved_detailed = self.detailed;
         self.search.mode = SearchMode::Editing;
         self.disclosure.focused = None;
-        self.set_presentation(/*detailed*/ true, self.mode);
         self.search.saved_position = saved_position;
         self.search.saved_snapshot = saved_snapshot;
         self.search.saved_detailed = saved_detailed;
@@ -161,11 +166,10 @@ impl TranscriptView {
                 self.cancel_search();
             }
             (KeyCode::Enter, _) if self.search.is_reading() => return false,
-            // Ctrl+N/P stay distinct when a legacy terminal encodes Shift+Enter as Enter.
-            (KeyCode::Enter, KeyModifiers::NONE) | (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
+            (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
                 self.next_search_match(cells, Direction::Newer);
             }
-            (KeyCode::Enter, KeyModifiers::SHIFT) | (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+            (KeyCode::Enter, KeyModifiers::NONE) | (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
                 self.next_search_match(cells, Direction::Older);
             }
             (KeyCode::PageUp | KeyCode::PageDown, KeyModifiers::NONE) => return false,
@@ -241,6 +245,8 @@ impl TranscriptView {
         self.search.editor.set_text_clearing_elements("");
         self.search.query_changed();
         self.search.progress = Progress::Idle;
+        self.search.live = None;
+        self.search.live_key = None;
         self.position = position;
         self.held_reading = snapshot;
         self.rewrap_snapshot(self.area.width);
@@ -374,33 +380,7 @@ impl TranscriptView {
                     offset: window.start + range.start,
                     ..cursor.anchor
                 };
-                self.position = Position::Reading(anchor);
-                self.hold_live_reading(current_cells, Arc::clone(&layout));
-                let end = window.start + range.end;
-                let row = layout.row_for_offset(anchor.offset);
-                let match_rows = layout.row_for_offset(end - 1) - row + 1;
-                let context_rows = usize::from(self.area.height / 3)
-                    .min(usize::from(self.area.height).saturating_sub(match_rows));
-                // Keep the hit's retained revision while placing its lead-in above it, even
-                // in the preceding entry, without clipping a match that fits in the viewport.
-                let (index, row) =
-                    self.move_rows(cells, anchor.index, row, -(context_rows as isize));
-                if let Some(context) = self.layout(cells, index) {
-                    let offset = context.position_at(row, /*column*/ 0);
-                    self.position = Position::Reading(Anchor {
-                        key: self.entry_key(cells, index),
-                        index,
-                        offset,
-                        row_bias: context.row_for_offset(offset) as isize - row as isize,
-                    });
-                }
-                self.search.current = Some(Match {
-                    anchor,
-                    end,
-                    layout: Arc::clone(&layout),
-                });
-                self.search.progress = Progress::Found;
-                self.search.scanning_layout = None;
+                self.install_search_match(current_cells, anchor, window.start + range.end, layout);
                 return false;
             }
             scanned_bytes += window.len();
@@ -500,6 +480,7 @@ impl TranscriptView {
             };
             if direction == Direction::Newer
                 && let Some(snapshot) = self.held_reading.take()
+                && let Some(previous) = self.search.current.take()
             {
                 // Continue through newly committed output, or rejoin a surviving cell.
                 let index = if anchor.key == EntryKey::Live {
@@ -521,13 +502,20 @@ impl TranscriptView {
                     self.visible.clear();
                     return;
                 };
-                let prefix = snapshot
-                    .pinned
-                    .get(&anchor.key)
-                    .and_then(|layout| layout.text().get(..offset));
-                let layout = self.current_layout(cells, index);
+                let layout = self.search_layout(
+                    cells,
+                    Anchor {
+                        key: cells.get(index).map_or(EntryKey::Live, EntryKey::cell),
+                        index,
+                        ..anchor
+                    },
+                );
                 let same_prefix = layout.as_ref().is_some_and(|layout| {
-                    prefix.is_some_and(|prefix| layout.text().starts_with(prefix))
+                    previous
+                        .layout
+                        .text()
+                        .get(..offset)
+                        .is_some_and(|prefix| layout.text().starts_with(prefix))
                 });
                 anchor = Anchor {
                     key: cells.get(index).map_or(EntryKey::Live, EntryKey::cell),
@@ -562,7 +550,7 @@ impl TranscriptView {
 
     fn start_search_scan(&mut self, cells: &[Arc<dyn HistoryCell>], direction: Direction) {
         self.search.page_start = None;
-        let count = cells.len() + usize::from(self.live.is_some());
+        let count = cells.len() + usize::from(self.live.is_some() || self.search.live.is_some());
         let index = if self.search.is_reading() {
             // Without a retained match, resume from the visible entry, not a transcript end.
             self.start(cells).0
@@ -585,21 +573,6 @@ impl TranscriptView {
             },
             direction,
         });
-    }
-
-    fn search_layout(
-        &mut self,
-        cells: &[Arc<dyn HistoryCell>],
-        anchor: Anchor,
-    ) -> Option<Arc<TextLayout>> {
-        if let Some((key, layout)) = &self.search.scanning_layout
-            && *key == anchor.key
-        {
-            return Some(Arc::clone(layout));
-        }
-        let layout = self.layout(cells, anchor.index)?;
-        self.search.scanning_layout = Some((anchor.key, Arc::clone(&layout)));
-        Some(layout)
     }
 
     fn advance_search_cursor(
@@ -632,7 +605,7 @@ impl TranscriptView {
             Direction::Older if self.search.page_start == Some(cursor.anchor.key) => None,
             Direction::Older => cursor.anchor.index.checked_sub(/*rhs*/ 1),
             Direction::Newer => (cursor.anchor.index + 1
-                < cells.len() + usize::from(self.live.is_some()))
+                < cells.len() + usize::from(self.live.is_some() || self.search.live.is_some()))
             .then_some(cursor.anchor.index + 1),
         };
         self.search.progress = match next {
@@ -671,6 +644,10 @@ impl Search {
             .as_ref()
             .filter(|found| found.anchor.key == key)
             .map(|found| Arc::clone(&found.layout))
+    }
+
+    pub(super) fn match_anchor(&self) -> Option<Anchor> {
+        self.current.as_ref().map(|found| found.anchor)
     }
 
     pub(super) fn is_active(&self) -> bool {

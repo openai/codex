@@ -397,6 +397,15 @@ impl TranscriptOverlay {
         self.view.sync_live_tail(width, key, compute_lines)
     }
 
+    pub(crate) fn sync_search_live_tail(
+        &mut self,
+        width: u16,
+        key: Option<ActiveCellTranscriptKey>,
+        compute_lines: impl FnOnce(u16) -> Option<Vec<HyperlinkLine>>,
+    ) {
+        self.view.sync_search_live_tail(width, key, compute_lines);
+    }
+
     pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
         self.highlight_cell = cell.filter(|index| *index < self.cells.len());
         self.pending_highlight = self.highlight_cell;

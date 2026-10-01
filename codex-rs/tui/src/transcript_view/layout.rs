@@ -87,6 +87,7 @@ pub(super) struct CellPresentation {
     turn_tip_space: bool,
     expanded: bool,
     disclosure: bool,
+    detailed: bool,
 }
 
 impl TranscriptView {
@@ -104,6 +105,17 @@ impl TranscriptView {
         if let Some(layout) = self.search.match_layout(key) {
             return Some(layout);
         }
+        self.base_layout(cells, index)
+    }
+
+    /// Resolve manual disclosure and retained revisions, without Find's temporary expansion.
+    /// Call with the snapshot's cells, if present.
+    pub(super) fn base_layout(
+        &mut self,
+        cells: &[Arc<dyn HistoryCell>],
+        index: usize,
+    ) -> Option<Arc<TextLayout>> {
+        let key = self.entry_key(cells, index);
         if let Some(layout) = self
             .snapshot()
             .and_then(|snapshot| snapshot.pinned.get(&key))
@@ -121,6 +133,15 @@ impl TranscriptView {
         &mut self,
         cells: &[Arc<dyn HistoryCell>],
         index: usize,
+    ) -> Option<Arc<TextLayout>> {
+        self.entry_layout(cells, index, self.detailed)
+    }
+
+    pub(super) fn entry_layout(
+        &mut self,
+        cells: &[Arc<dyn HistoryCell>],
+        index: usize,
+        full_content: bool,
     ) -> Option<Arc<TextLayout>> {
         let Some(cell) = cells.get(index) else {
             if index != cells.len() {
@@ -143,12 +164,12 @@ impl TranscriptView {
         {
             return Some(Arc::new(TextLayout::new(Vec::new(), width)));
         }
-        let detailed = self.detailed;
         let mode = self.mode;
         let ids = cell.activity_ids();
-        let disclosure = !detailed && mode == HistoryRenderMode::Rich && !ids.is_empty();
-        let expanded = disclosure && self.disclosure.is_expanded(&ids);
-        if expanded {
+        let disclosure = !self.detailed && mode == HistoryRenderMode::Rich && !ids.is_empty();
+        let manually_expanded = self.disclosure.is_expanded(&ids);
+        let expanded = disclosure && (full_content || manually_expanded);
+        if manually_expanded {
             self.disclosure.expanded.extend(ids);
         }
         let separated = index > 0 && !cell.is_stream_continuation();
@@ -157,6 +178,7 @@ impl TranscriptView {
             turn_tip_space: self.turn_tip_key == Some(EntryKey::cell(cell)),
             expanded,
             disclosure,
+            detailed: full_content,
         };
         let shortcut = self
             .disclosure
@@ -183,7 +205,7 @@ impl TranscriptView {
                     crate::history_cell::fullscreen_session_lines(
                         cell.as_ref(),
                         width,
-                        detailed,
+                        full_content,
                         mode,
                     ),
                     width,

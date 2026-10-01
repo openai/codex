@@ -65,7 +65,7 @@ fn find_keeps_context_and_allows_reading_without_losing_the_query() {
     view.handle_key(KeyCode::Esc.into(), &cells);
     insta::assert_snapshot!(
         view.footer(/*width*/ 80, crate::motion::MotionMode::Reduced).unwrap().text.to_string(),
-        @"ctrl+n next · ctrl+p previous · esc latest"
+        @"ctrl+p older · ctrl+n newer · esc latest"
     );
     assert_eq!(
         (
@@ -723,8 +723,11 @@ fn enter_preserves_the_initial_scan_and_each_older_page_until_the_first_match() 
             .expect("scanning layout")
             .1,
     );
-    for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
-        view.handle_search_key(KeyEvent::new(KeyCode::Enter, modifiers), &cells);
+    for key in [
+        KeyCode::Enter.into(),
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+    ] {
+        view.handle_search_key(key, &cells);
     }
     let Progress::Scanning(after) = view.search.progress else {
         panic!("confirmation must retain the scan cursor");
@@ -838,13 +841,16 @@ fn next_previous_highlight_and_cancel_share_the_transcript_position() {
         view.search.current.as_ref().map(|found| found.anchor.index),
         Some(1)
     );
-    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT), &cells);
+    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
     finish_scan(&mut view, &cells);
     assert_eq!(
         view.search.current.as_ref().map(|found| found.anchor.index),
         Some(0)
     );
-    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
+    view.handle_search_key(
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        &cells,
+    );
     finish_scan(&mut view, &cells);
     let mut buffer = Buffer::empty(area);
     view.render(area, &mut buffer, &cells);
@@ -856,7 +862,7 @@ fn next_previous_highlight_and_cancel_share_the_transcript_position() {
             true, true, true, true, true, true, false, false, false, false
         ]
     );
-    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"enter next · ⌃p previous · full transcript · esc close");
+    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"enter/⌃p older · ⌃n newer · full transcript · esc close");
     view.handle_search_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), &cells);
     assert!(matches!(view.search.progress, Progress::Found));
     view.handle_search_key(
@@ -903,7 +909,274 @@ fn legacy_search_shortcuts_navigate_in_both_directions_without_wrapping() {
             (2, true)
         ],
     );
-    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"No more matches · enter next · ⌃p previous · full transcript · esc close");
+    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"No more matches · enter/⌃p older · ⌃n newer · full transcript · esc close");
+}
+
+#[test]
+fn find_expands_only_the_match_and_preserves_manual_disclosures() {
+    let cells: Vec<Arc<dyn HistoryCell>> = ["unrelated", "older needle", "newer needle", "manual"]
+        .into_iter()
+        .map(|name| {
+            Arc::new(crate::exec_cell::ExecCell::new(
+                crate::exec_cell::ExecCall {
+                    call_id: name.into(),
+                    command: vec![format!("echo visible\necho hidden {name}")],
+                    parsed: Vec::new(),
+                    output: Some(crate::exec_cell::CommandOutput::new(
+                        /*exit_code*/ 0,
+                        String::new(),
+                    )),
+                    source: codex_app_server_protocol::CommandExecutionSource::Agent,
+                    start_time: None,
+                    duration: None,
+                    interaction_input: None,
+                },
+                /*animations_enabled*/ false,
+            )) as Arc<dyn HistoryCell>
+        })
+        .collect();
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 24,
+    );
+    let mut view = TranscriptView::default();
+    view.render(area, &mut Buffer::empty(area), &cells);
+    view.handle_key(KeyCode::F(4).into(), &cells);
+    view.handle_key(KeyCode::Enter.into(), &cells);
+    view.begin_search();
+    view.paste_search("needle");
+    finish_scan(&mut view, &cells);
+    for (key, expected) in [
+        (None, [false, false, true, true]),
+        (Some(KeyCode::Enter.into()), [false, true, false, true]),
+        (
+            Some(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL)),
+            [false, false, true, true],
+        ),
+    ] {
+        if let Some(key) = key {
+            view.handle_key(key, &cells);
+            finish_scan(&mut view, &cells);
+        }
+        assert_eq!(
+            (0..cells.len())
+                .map(|index| view
+                    .layout(&cells, index)
+                    .unwrap()
+                    .text()
+                    .contains("hidden"))
+                .collect::<Vec<_>>(),
+            expected,
+        );
+    }
+    view.jump_to_entry(&cells, /*index*/ 0);
+    let mut buffer = Buffer::empty(area);
+    view.render(area, &mut buffer, &cells);
+    insta::assert_snapshot!(
+        "find_selective_expansion",
+        crate::transcript_view::tests::text(&buffer)
+    );
+    view.handle_key(KeyCode::Esc.into(), &cells);
+    // Reading keeps the result and lets the normal activity controls open another block.
+    view.handle_key(KeyCode::F(4).into(), &cells);
+    view.handle_key(KeyCode::Home.into(), &cells);
+    let mut hints = Vec::new();
+    for history in [
+        TranscriptHistoryState::LoadingOlder,
+        TranscriptHistoryState::Failed,
+        TranscriptHistoryState::Complete,
+    ] {
+        view.history = history;
+        hints.push(
+            view.footer(/*width*/ 80, crate::motion::MotionMode::Reduced)
+                .unwrap()
+                .text
+                .to_string(),
+        );
+    }
+    insta::assert_snapshot!(hints.join("\n"), @"
+    ↑ Loading earlier messages… · esc latest
+    Retry history: ⌥</⌃home.  esc latest
+    ↑ previous · ↓ next · enter details · esc back
+    ");
+    view.handle_key(KeyCode::Enter.into(), &cells);
+    view.handle_key(KeyCode::Esc.into(), &cells);
+    assert!(
+        view.layout(&cells, /*index*/ 0)
+            .unwrap()
+            .text()
+            .contains("hidden unrelated")
+    );
+    assert_eq!(view.search.current.as_ref().unwrap().anchor.index, 2);
+    view.handle_key(KeyCode::F(4).into(), &cells);
+    view.handle_key(KeyCode::End.into(), &cells);
+    view.handle_key(KeyCode::Up.into(), &cells);
+    for (key, expanded) in [
+        (KeyCode::Right, true),
+        (KeyCode::Left, false),
+        (KeyCode::Right, true),
+        (KeyCode::Left, false),
+    ] {
+        view.handle_key(key.into(), &cells);
+        assert_eq!(
+            view.layout(&cells, /*index*/ 2)
+                .unwrap()
+                .text()
+                .contains("hidden newer needle"),
+            expanded,
+        );
+    }
+    view.cancel_search();
+    assert_eq!(
+        (0..cells.len())
+            .map(|index| view
+                .layout(&cells, index)
+                .unwrap()
+                .text()
+                .contains("hidden"))
+            .collect::<Vec<_>>(),
+        [true, false, false, true],
+    );
+}
+
+#[test]
+fn find_searches_hidden_live_content_and_collapses_it_when_leaving_the_match() {
+    let cells = vec![cell("older needle")];
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 30, /*height*/ 4,
+    );
+    for compact in [None, Some("compact live")] {
+        let mut view = TranscriptView {
+            area,
+            ..TranscriptView::default()
+        };
+        view.sync_live_tail(
+            /*width*/ 30,
+            /*key*/ None,
+            |_| compact.map(|text| vec![text.into()]),
+        );
+        view.begin_search();
+        view.sync_search_live_tail(
+            /*width*/ 30,
+            /*key*/ None,
+            |_| Some(vec!["hidden live needle".into()]),
+        );
+        view.paste_search("needle");
+        finish_scan(&mut view, &cells);
+        assert_eq!(
+            view.layout(&cells, /*index*/ 1).unwrap().text(),
+            "hidden live needle"
+        );
+        view.handle_key(KeyCode::Esc.into(), &cells);
+        view.prepare_width(/*width*/ 20);
+        assert_eq!(
+            view.layout(&cells, /*index*/ 1).unwrap().text(),
+            "hidden live needle"
+        );
+        view.sync_search_live_tail(
+            /*width*/ 20,
+            /*key*/ None,
+            |_| Some(vec!["updated live needle".into()]),
+        );
+        assert_eq!(
+            view.layout(&cells, /*index*/ 1).unwrap().text(),
+            "hidden live needle"
+        );
+        view.handle_key(
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+            &cells,
+        );
+        finish_scan(&mut view, &cells);
+        assert_eq!(
+            view.layout(&cells, /*index*/ 1)
+                .map(|layout| layout.text().to_owned())
+                .as_deref(),
+            compact
+        );
+        view.handle_key(
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+            &cells,
+        );
+        finish_scan(&mut view, &cells);
+        assert_eq!(
+            view.layout(&cells, /*index*/ 1).unwrap().text(),
+            "updated live needle"
+        );
+    }
+}
+
+#[test]
+fn selected_hidden_live_match_keeps_its_revision_without_persisting_expansion() {
+    let cells = vec![cell("older needle")];
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 32, /*height*/ 6,
+    );
+    let mut view = TranscriptView {
+        area,
+        ..TranscriptView::default()
+    };
+    view.sync_live_tail(
+        /*width*/ 32,
+        /*key*/ None,
+        |_| Some(vec!["compact live".into()]),
+    );
+    view.begin_search();
+    view.sync_search_live_tail(
+        /*width*/ 32,
+        /*key*/ None,
+        |_| Some(vec!["hidden live needle".into()]),
+    );
+    view.paste_search("needle");
+    finish_scan(&mut view, &cells);
+    let mut found = Buffer::empty(area);
+    view.render(area, &mut found, &cells);
+    let row = crate::transcript_view::tests::text(&found)
+        .lines()
+        .position(|line| line.contains("hidden live needle"))
+        .expect("the hidden match is visible") as u16;
+    view.begin_selection(&cells, /*column*/ 2, row, /*clicks*/ 3);
+    assert_eq!(
+        view.selected_text(&cells).as_deref(),
+        Some("hidden live needle")
+    );
+
+    view.sync_live_tail(
+        /*width*/ 32,
+        /*key*/ None,
+        |_| Some(vec!["updated compact live".into()]),
+    );
+    view.sync_search_live_tail(
+        /*width*/ 32,
+        /*key*/ None,
+        |_| Some(vec!["updated live needle".into()]),
+    );
+    view.prepare_width(/*width*/ 14);
+    assert_eq!(
+        view.selected_text(&cells).as_deref(),
+        Some("hidden live needle")
+    );
+    view.end_selection(&cells);
+    assert_eq!(
+        view.layout(&cells, /*index*/ 1).unwrap().text(),
+        "hidden live needle"
+    );
+    view.handle_key(
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        &cells,
+    );
+    finish_scan(&mut view, &cells);
+    assert_eq!(
+        view.layout(&cells, /*index*/ 1).unwrap().text(),
+        "updated compact live"
+    );
+    view.handle_key(
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        &cells,
+    );
+    finish_scan(&mut view, &cells);
+    assert_eq!(
+        view.layout(&cells, /*index*/ 1).unwrap().text(),
+        "updated live needle"
+    );
 }
 
 #[test]
@@ -945,12 +1218,12 @@ fn find_reveals_hidden_command_output_and_restores_compact_presentation() {
     view.paste_search("hidden needle");
     finish_scan(&mut view, &cells);
     assert!(view.search.current.is_some());
-    assert!(view.is_detailed());
+    assert!(!view.is_detailed());
     view.handle_search_key(
         KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
         &cells,
     );
-    assert!(view.is_detailed());
+    assert!(!view.is_detailed());
     let mut found = Buffer::empty(view.area);
     view.render(view.area, &mut found, &cells);
     view.handle_search_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &cells);
@@ -958,7 +1231,7 @@ fn find_reveals_hidden_command_output_and_restores_compact_presentation() {
     view.render(view.area, &mut reading, &cells);
     assert_eq!(reading, found);
     assert!(!view.is_search_editing());
-    assert!(view.is_detailed());
+    assert!(!view.is_detailed());
     view.handle_search_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &cells);
     assert_eq!(
         (view.is_detailed(), view.position),
@@ -1049,7 +1322,10 @@ fn failed_history_waits_for_explicit_retry_and_empty_query_cancels_loading() {
             .to_string(),
         "⌃p retry · esc close",
     );
-    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
+    view.handle_search_key(
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        &cells,
+    );
     assert_eq!(view.history, TranscriptHistoryState::Failed);
     view.handle_search_key(
         KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
@@ -1121,7 +1397,10 @@ fn live_match_stays_displayed_after_commit_and_a_fresh_query_searches_current_co
     let mut buffer = Buffer::empty(area);
     view.render(area, &mut buffer, &cells);
     assert_eq!(view.visible[0].layout.text(), "live needle");
-    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
+    view.handle_search_key(
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        &cells,
+    );
     finish_scan(&mut view, &cells);
     let found = view.search.current.as_ref().expect("new live match");
     assert_eq!(
@@ -1136,21 +1415,27 @@ fn live_match_stays_displayed_after_commit_and_a_fresh_query_searches_current_co
     view.render(area, &mut buffer, &cells);
     assert!(view.held_reading.is_some());
     assert_eq!(view.visible[0].layout.text(), "live needle again needle");
-    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
+    view.handle_search_key(
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        &cells,
+    );
     finish_scan(&mut view, &cells);
     let found = view.search.current.as_ref().expect("new committed match");
     assert_eq!(
         (found.anchor.key, found.anchor.offset..found.end),
         (EntryKey::cell(&cells[1]), 35..41)
     );
-    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
+    view.handle_search_key(
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        &cells,
+    );
     finish_scan(&mut view, &cells);
     let found = view.search.current.as_ref().expect("current live match");
     assert_eq!(
         (found.anchor.key, found.anchor.offset..found.end),
         (EntryKey::Live, 8..14)
     );
-    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT), &cells);
+    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
     finish_scan(&mut view, &cells);
     assert!(view.held_reading.is_none());
     assert_eq!(
@@ -1173,7 +1458,10 @@ fn live_match_stays_displayed_after_commit_and_a_fresh_query_searches_current_co
         (found.anchor.key, found.anchor.offset..found.end),
         (EntryKey::Live, 0..7)
     );
-    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
+    view.handle_search_key(
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        &cells,
+    );
     finish_scan(&mut view, &cells);
     let found = view
         .search
@@ -1190,7 +1478,10 @@ fn live_match_stays_displayed_after_commit_and_a_fresh_query_searches_current_co
         /*key*/ None,
         |_| Some(vec![HyperlinkLine::from("other")]),
     );
-    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
+    view.handle_search_key(
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        &cells,
+    );
     finish_scan(&mut view, &cells);
     let found = view
         .search
@@ -1237,10 +1528,16 @@ fn leaving_a_regrouped_search_match_restarts_from_current_history() {
     );
     assert!(view.held_reading.is_some());
 
-    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
+    view.handle_search_key(
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        &cells,
+    );
     assert!(view.held_reading.is_none());
     assert!(view.search.current.is_none());
-    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
+    view.handle_search_key(
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        &cells,
+    );
     finish_scan(&mut view, &cells);
     let found = view.search.current.as_ref().expect("current group match");
     assert_eq!(

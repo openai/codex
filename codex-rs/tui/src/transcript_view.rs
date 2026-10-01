@@ -336,7 +336,7 @@ impl TranscriptView {
         self.cache.clear();
         self.suppressed_prompt_header = None;
         self.live_key = None;
-        // Search temporarily expands content without changing either presentation's position.
+        // Keep search's origin independent of either presentation's saved position.
         if self.detailed != detailed && !self.search.is_active() {
             let previous = self.position;
             self.position = self.saved_position.take().unwrap_or(previous);

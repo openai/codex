@@ -53,7 +53,10 @@ impl App {
         let active_ids = chat_widget.active_activity_ids();
         let expanded = view.sync_live_activity(&self.transcript_cells, active_ids)
             && chat_widget.history_render_mode() == HistoryRenderMode::Rich;
-        if detailed {
+        let search_changed = view.sync_search_live_tail(transcript_width, active_key, |width| {
+            chat_widget.active_cell_transcript_hyperlink_lines(width)
+        });
+        let changed = if detailed {
             view.sync_live_tail(transcript_width, active_key, |width| {
                 chat_widget.active_cell_transcript_hyperlink_lines(width)
             })
@@ -61,7 +64,8 @@ impl App {
             view.sync_live_activity_tail(transcript_width, active_key, expanded, |width| {
                 chat_widget.active_cell_owned_transcript_lines(width, expanded)
             })
-        }
+        };
+        changed || search_changed
     }
 
     pub(super) fn render_owned_transcript(

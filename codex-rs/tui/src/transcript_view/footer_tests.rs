@@ -305,7 +305,7 @@ fn reading_a_find_result_shows_history_loading_and_failure() {
     insta::assert_snapshot!(hints.join("\n"), @"
     ↑ Loading earlier messages… · esc latest
     Retry history: ⌥</⌃home.  esc latest
-    ctrl+n next · ctrl+p previous · esc latest
+    ctrl+p older · ctrl+n newer · esc latest
     ");
 }
 

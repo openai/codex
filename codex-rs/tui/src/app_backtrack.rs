@@ -371,6 +371,9 @@ impl App {
             let chat_widget = &self.chat_widget;
             let detailed = t.is_detailed();
             let size = tui.prepare_draw_size()?;
+            t.sync_search_live_tail(size.width.max(/*other*/ 1), active_key, |width| {
+                chat_widget.active_cell_transcript_hyperlink_lines(width)
+            });
             t.sync_live_tail(size.width.max(/*other*/ 1), active_key, |width| {
                 if detailed {
                     chat_widget.active_cell_transcript_hyperlink_lines(width)

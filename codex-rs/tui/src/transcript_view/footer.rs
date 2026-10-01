@@ -66,14 +66,14 @@ impl TranscriptView {
                 is_interactive: true,
             });
         }
-        if self.search.is_reading() && !pending {
+        if self.search.is_reading() && !pending && !self.is_activity_focused() {
             return Some(TranscriptFooter {
                 text: self.search.status_line(width, self.history).into(),
                 cursor_column: None,
                 is_interactive: false,
             });
         }
-        if self.is_activity_focused() {
+        if self.is_activity_focused() && !pending {
             return self.disclosure_footer(width);
         }
         // Selection can pause following without hiding the current final row.
@@ -230,6 +230,8 @@ pub(super) fn navigation_line(navigation: &str) -> Line<'static> {
             " clear selection",
             " copy+↓",
             " previous",
+            " older",
+            " newer",
             " latest",
             " retry",
             " select",

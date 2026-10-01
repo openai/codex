@@ -49,13 +49,14 @@ impl Search {
         history: TranscriptHistoryState,
     ) -> Line<'static> {
         let previous = crate::key_hint::ctrl(crossterm::event::KeyCode::Char('p')).display_label();
+        let next = crate::key_hint::ctrl(crossterm::event::KeyCode::Char('n')).display_label();
         let retry_hint = format!("{previous} retry");
         let unavailable_hint = format!("History unavailable · {retry_hint}");
-        let next_hint = format!("enter next · {previous} previous");
+        let next_hint = format!("enter/{previous} older · {next} newer");
         let exhausted_hint = format!("No more matches · {next_hint}");
         let (status, compact) = match self.progress {
             Progress::Idle | Progress::Found if self.is_reading() => {
-                ("ctrl+n next · ctrl+p previous", "ctrl+n next")
+                ("ctrl+p older · ctrl+n newer", "ctrl+p older")
             }
             Progress::Idle => ("Type to find", "Type to find"),
             Progress::Restart | Progress::Scanning(_) => ("Searching…", "Searching…"),
@@ -63,13 +64,13 @@ impl Search {
                 (unavailable_hint.as_str(), retry_hint.as_str())
             }
             Progress::AwaitingHistory => ("Searching earlier history…", "Loading…"),
-            Progress::Found => (next_hint.as_str(), "enter next"),
+            Progress::Found => (next_hint.as_str(), "enter older"),
             Progress::Exhausted if self.is_reading() && self.current.is_some() => (
-                "No more matches · ctrl+n next · ctrl+p previous",
-                "ctrl+n next",
+                "No more matches · ctrl+p older · ctrl+n newer",
+                "ctrl+p older",
             ),
             Progress::Exhausted if self.current.is_some() => {
-                (exhausted_hint.as_str(), "enter next")
+                (exhausted_hint.as_str(), "enter older")
             }
             Progress::Exhausted => ("No matches", "No matches"),
         };

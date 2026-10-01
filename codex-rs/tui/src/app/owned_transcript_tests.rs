@@ -843,7 +843,7 @@ async fn inline_transcript_search_draws_and_escape_precedes_backtrack() -> Resul
         &tui.terminal,
     ));
     assert!(
-        rendered.contains("enter next"),
+        rendered.contains("enter/⌃p older"),
         "search advances on the inline overlay draw path"
     );
     app.handle_backtrack_overlay_event(
@@ -919,7 +919,7 @@ async fn find_owns_editor_chords_without_changing_the_composer_draft() -> Result
                     crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
                 );
                 assert!(
-                    rendered.contains("enter next"),
+                    rendered.contains("enter/⌃p older"),
                     "Find must resume after pasting over selection"
                 );
             }
@@ -1327,8 +1327,26 @@ async fn find_refreshes_live_details_before_searching_the_first_query() -> Resul
     let rendered = buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(
         &tui.terminal,
     ));
-    assert!(rendered.contains("enter next"), "{rendered}");
+    assert!(rendered.contains("enter/⌃p older"), "{rendered}");
     tui.set_owned_screen(/*owned*/ false)?;
+    app.open_transcript_overlay(&mut tui);
+    let Some(Overlay::Transcript(overlay)) = &mut app.overlay else {
+        panic!("expected transcript overlay");
+    };
+    overlay.set_presentation(/*detailed*/ false, HistoryRenderMode::Rich);
+    for event in [
+        TuiEvent::Key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE)),
+        TuiEvent::Paste("needle".into()),
+        TuiEvent::Draw,
+    ] {
+        app.handle_tui_event(&mut tui, &mut app_server, event)
+            .await?;
+    }
+    let rendered = buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(
+        &tui.terminal,
+    ));
+    assert!(rendered.contains("printf needle"), "{rendered}");
+    insta::assert_snapshot!("compact_overlay_finds_hidden_live_text", rendered);
     app_server.shutdown().await?;
     Ok(())
 }

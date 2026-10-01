@@ -831,7 +831,10 @@ fn mutable_history_formats_once_per_frame_and_refreshes_the_next_frame() {
         )),
         matched
     );
-    view.handle_key(KeyCode::Enter.into(), &cells);
+    view.handle_key(
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        &cells,
+    );
     assert!(!view.advance_search(&cells));
     assert!(
         text(&render(

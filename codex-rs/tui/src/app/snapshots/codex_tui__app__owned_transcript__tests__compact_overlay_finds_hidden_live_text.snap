@@ -1,0 +1,26 @@
+---
+source: tui/src/app/owned_transcript_tests.rs
+expression: rendered
+---
+/ T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / /
+$ 'printf visible
+    printf needle'
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Find: needle
+enter/⌃p older · ⌃n newer · full transcript · esc close

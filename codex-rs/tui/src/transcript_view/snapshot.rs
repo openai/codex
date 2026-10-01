@@ -1,4 +1,5 @@
 //! Retain displayed revisions while selecting or reading a live tail or a replaced tool group.
+//! Pinned layouts respect manual disclosures; Find's expansion is applied only at display time.
 
 use std::collections::HashMap;
 
@@ -9,6 +10,8 @@ pub(super) struct ViewSnapshot {
     pub(super) cells: Arc<[Arc<dyn HistoryCell>]>,
     pub(super) pinned: HashMap<EntryKey, Arc<TextLayout>>,
     pub(super) activities: HashMap<EntryKey, Arc<[String]>>,
+    // Hidden live text cannot be reconstructed from the pinned compact display.
+    pub(super) search_live: Option<Arc<TextLayout>>,
 }
 
 impl TranscriptView {
@@ -51,17 +54,30 @@ impl TranscriptView {
                 .iter()
                 .map(|visible| (visible.key, Arc::clone(&visible.activity_ids))),
         );
-        if let Some(live) = self.layout(&cells, cells.len()) {
+        if let Some(live) = self.base_layout(&cells, cells.len()) {
             pinned.insert(EntryKey::Live, live);
             activities.insert(
                 EntryKey::Live,
                 self.displayed_activity_ids(&cells, cells.len()),
             );
         }
+        // visible may contain the expanded match. Pin its underlying revision even when
+        // the hit has moved offscreen, so selection never retains a temporary expansion.
+        if let Some(anchor) = self.search.match_anchor() {
+            let index = self.resolve(&cells, anchor);
+            let base = self
+                .base_layout(&cells, index)
+                .unwrap_or_else(|| Arc::new(TextLayout::new(Vec::new(), self.area.width)));
+            pinned.insert(anchor.key, base);
+        }
         ViewSnapshot {
             cells,
             pinned,
             activities,
+            search_live: self
+                .snapshot()
+                .and_then(|snapshot| snapshot.search_live.clone())
+                .or_else(|| self.search.live.clone()),
         }
     }
 
@@ -92,7 +108,9 @@ impl TranscriptView {
             {
                 self.held_reading = None;
                 let mut snapshot = self.capture_snapshot(cells);
-                snapshot.pinned.insert(anchor.key, layout);
+                if !self.is_search_expanded(anchor.key) {
+                    snapshot.pinned.insert(anchor.key, layout);
+                }
                 self.held_reading = Some(snapshot);
             }
         } else if self.held_reading.is_some()
@@ -115,6 +133,9 @@ impl TranscriptView {
     pub(super) fn rewrap_snapshot(&mut self, width: u16) {
         if let Some(snapshot) = self.snapshot_mut() {
             for layout in snapshot.pinned.values_mut() {
+                *layout = Arc::new(layout.rewrap(width));
+            }
+            if let Some(layout) = &mut snapshot.search_live {
                 *layout = Arc::new(layout.rewrap(width));
             }
         }
