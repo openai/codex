@@ -37,6 +37,7 @@ pub enum AudioDeviceKind {
 pub struct AudioDeviceSelection {
     pub microphone: Option<String>,
     pub speaker: Option<String>,
+    pub channel: Option<Vec<std::num::NonZeroU16>>,
 }
 
 /// Local device metadata; enumeration never opens streams.

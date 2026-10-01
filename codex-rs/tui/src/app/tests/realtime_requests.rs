@@ -2081,9 +2081,74 @@ async fn overridden_voice_save_keeps_effective_voice() -> Result<()> {
 }
 
 #[tokio::test]
-async fn audio_devices_are_persisted() -> Result<()> {
-    use codex_realtime_webrtc::AudioDeviceKind;
+async fn microphone_channel_is_persisted_locally_and_reloaded() -> Result<()> {
     let mut app = make_test_app().await;
+    use codex_config::config_toml::MicrophoneChannels;
+    for (saved, overridden, expected) in [
+        (Some("1"), None, Some("1")),
+        (Some("[1, 2]"), None, Some("[1, 2]")),
+        (Some("[1, 2]"), Some("3"), Some("3")),
+        (Some("1"), Some("[2, 3]"), Some("[2, 3]")),
+        (None, None, None),
+    ] {
+        let parse = |value: &str| -> MicrophoneChannels {
+            toml::from_str::<codex_config::config_toml::RealtimeAudioToml>(&format!(
+                "microphone_channel = {value}"
+            ))
+            .unwrap()
+            .microphone_channel
+            .unwrap()
+        };
+        app.cli_kv_overrides = overridden
+            .into_iter()
+            .map(|value| {
+                (
+                    "audio.microphone_channel".to_string(),
+                    toml::Value::try_from(parse(value)).unwrap(),
+                )
+            })
+            .collect();
+        let mut expected_settings = app.local_settings.clone();
+        app.persist_realtime_input_channel(saved.map(parse)).await;
+        expected_settings.audio = app.local_settings.audio.clone();
+        assert_eq!(app.local_settings, expected_settings);
+        let actual = [&app.local_settings, &app.chat_widget.local_settings]
+            .map(|settings| settings.audio.as_ref().unwrap().microphone_channel.clone());
+        assert_eq!(
+            actual,
+            std::array::from_fn::<_, 2, _>(|_| expected.map(parse))
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn audio_devices_are_persisted_and_input_changes_clear_channels() -> Result<()> {
+    use codex_realtime_webrtc::AudioDeviceKind;
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    app.cli_kv_overrides = vec![("audio.microphone_channel".into(), 3.into())];
+    app.persist_realtime_device(AudioDeviceKind::Input, Some("Mono mic".into()))
+        .await;
+    let messages = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => Some(
+                cell.display_lines(/*width*/ 120)
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<String>(),
+            ),
+            _ => None,
+        })
+        .collect::<String>();
+    assert!(messages.contains("input channel is overridden"));
+    app.cli_kv_overrides.clear();
+    app.persist_realtime_input_channel(Some(
+        codex_config::config_toml::MicrophoneChannels::Multiple(vec![
+            std::num::NonZeroU16::new(/*n*/ 1).unwrap(),
+            std::num::NonZeroU16::new(/*n*/ 3).unwrap(),
+        ]),
+    ))
+    .await;
     app.persist_realtime_device(AudioDeviceKind::Output, Some("Headphones".into()))
         .await;
     app.persist_realtime_device(AudioDeviceKind::Input, Some("Interface".into()))
@@ -2091,11 +2156,29 @@ async fn audio_devices_are_persisted() -> Result<()> {
     let expected = codex_config::config_toml::RealtimeAudioToml {
         microphone: Some("Interface".into()),
         speaker: Some("Headphones".into()),
+        microphone_channel: None,
     };
     assert_eq!(app.local_settings.audio.as_ref().unwrap(), &expected);
     assert_eq!(LocalSettings::from(&app.config).audio, Ok(expected));
     app.persist_realtime_device(AudioDeviceKind::Input, /*name*/ None)
         .await;
+    app.persist_realtime_input_channel(Some(
+        codex_config::config_toml::MicrophoneChannels::Multiple(vec![
+            std::num::NonZeroU16::new(/*n*/ 1).unwrap(),
+            std::num::NonZeroU16::new(/*n*/ 3).unwrap(),
+        ]),
+    ))
+    .await;
+    app.persist_realtime_device(AudioDeviceKind::Input, /*name*/ None)
+        .await;
+    assert_eq!(
+        app.local_settings
+            .audio
+            .as_ref()
+            .unwrap()
+            .microphone_channel,
+        None
+    );
     app.persist_realtime_device(AudioDeviceKind::Output, /*name*/ None)
         .await;
     assert_eq!(app.local_settings.audio, Ok(Default::default()));
@@ -2107,14 +2190,14 @@ async fn audio_devices_are_persisted() -> Result<()> {
 }
 
 #[tokio::test]
-async fn audio_device_is_machine_local_across_project_and_remote_transitions() -> Result<()> {
+async fn microphone_channel_is_machine_local_across_project_and_remote_transitions() -> Result<()> {
     let mut app = make_test_app().await;
     let project = tempfile::tempdir()?;
     let remote = tempfile::tempdir()?;
     std::fs::create_dir_all(project.path().join(".codex"))?;
     std::fs::write(
         project.path().join(".codex/config.toml"),
-        "default_permissions = \"work\"\n[audio]\nmicrophone = \"Project mic\"\n[permissions.work]\nextends = \":workspace\"\n",
+        "default_permissions = \"work\"\n[audio]\nmicrophone_channel = 2\n[permissions.work]\nextends = \":workspace\"\n",
     )?;
     crate::legacy_core::config::set_project_trust_level(
         &app.config.codex_home,
@@ -2132,9 +2215,9 @@ async fn audio_device_is_machine_local_across_project_and_remote_transitions() -
             ThreadId::new(),
             remote.path().to_path_buf(),
         ));
-    app.persist_realtime_device(
-        codex_realtime_webrtc::AudioDeviceKind::Input,
-        Some("Machine mic".into()),
+    app.persist_realtime_input_channel(
+        std::num::NonZeroU16::new(/*n*/ 1)
+            .map(codex_config::config_toml::MicrophoneChannels::Single),
     )
     .await;
     app.cli_kv_overrides.clear();
@@ -2147,15 +2230,16 @@ async fn audio_device_is_machine_local_across_project_and_remote_transitions() -
         let reloaded = app.local_settings.reloaded(&config);
         assert_eq!(reloaded.audio, app.chat_widget.local_settings.audio);
         assert_eq!(
-            reloaded.audio.as_ref().unwrap().microphone.as_deref(),
-            Some("Machine mic")
+            reloaded.audio.as_ref().unwrap().microphone_channel,
+            std::num::NonZeroU16::new(/*n*/ 1)
+                .map(codex_config::config_toml::MicrophoneChannels::Single)
         );
     }
-    // A project value must not hide invalid machine audio.
+    // A project value must not hide invalid machine audio and silently enable mixed capture.
     std::fs::write(
         app.local_settings.user_config_path.as_path(),
         std::fs::read_to_string(app.local_settings.user_config_path.as_path())?
-            .replace("microphone = \"Machine mic\"", "microphone = 0"),
+            .replace("microphone_channel = 1", "microphone_channel = 0"),
     )?;
     let config = app
         .rebuild_config_for_cwd(project.path().to_path_buf())

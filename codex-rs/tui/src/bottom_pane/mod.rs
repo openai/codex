@@ -77,6 +77,8 @@ mod empty_state_policy;
 mod hook_status;
 mod mcp_server_elicitation;
 mod multi_select_picker;
+pub(crate) use multi_select_picker::MultiSelectItem;
+pub(crate) use multi_select_picker::MultiSelectPicker;
 #[cfg(test)]
 #[path = "questions_tests.rs"]
 mod question_tests;

@@ -3,6 +3,9 @@
 //! Capture and actual rendered output carry device timing.
 //! References start with worker service; unmute rejects earlier device capture buffers.
 
+#[path = "input_channel.rs"]
+mod input_channel;
+
 #[path = "audio_sink.rs"]
 mod audio_sink;
 #[path = "device_buffers.rs"]
@@ -163,6 +166,7 @@ impl Devices {
             .default_output_config()
             .map_err(|_| io::Error::other("speaker configuration unavailable"))?;
         let input_stream_config = bounded_stream_config(&input_config)?;
+        let source = input_channel::InputChannel::new(selection.channel, input_config.channels())?;
         let output_stream_config = bounded_stream_config(&output_config)?;
         let buffers = Arc::new(Buffers::new(
             input_config.sample_rate(),
@@ -186,6 +190,7 @@ impl Devices {
             build_input,
             &input,
             &input_stream_config,
+            source,
             buffers.clone()
         )
         .map_err(|_| io::Error::other("failed to open microphone"))?;
@@ -367,6 +372,7 @@ fn handle_stream_error(buffers: &Buffers, error: cpal::Error) {
 fn build_input<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
+    source: input_channel::InputChannel,
     buffers: Arc<Buffers>,
 ) -> Result<cpal::Stream, cpal::Error>
 where
@@ -417,11 +423,7 @@ where
                     generation,
                 };
                 for (output, input) in frame.samples.iter_mut().zip(chunk.chunks_exact(channels)) {
-                    *output = input
-                        .iter()
-                        .map(|sample| f32::from_sample(*sample))
-                        .sum::<f32>()
-                        / channels as f32;
+                    *output = source.sample(input);
                     if !output.is_finite() {
                         buffers.failed.store(true, Ordering::Release);
                         return;

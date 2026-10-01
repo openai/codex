@@ -8,6 +8,7 @@ expression: "render_bottom_popup(&chat, 80)"
 
   1. System default
 › 2. Audio interface (current)
+     a. Input channels          All channels (mixed)
   3. Other device
   4. Back
 

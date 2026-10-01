@@ -1238,6 +1238,9 @@ pub(crate) enum AppEvent {
     OpenRealtimeDevicePicker {
         kind: codex_realtime_webrtc::AudioDeviceKind,
     },
+    OpenRealtimeInputChannels {
+        device: codex_realtime_webrtc::AudioDevice,
+    },
     RealtimeDevicesListed {
         origin: Option<ThreadId>,
         kind: codex_realtime_webrtc::AudioDeviceKind,
@@ -1246,6 +1249,9 @@ pub(crate) enum AppEvent {
     PersistRealtimeDevice {
         kind: codex_realtime_webrtc::AudioDeviceKind,
         name: Option<String>,
+    },
+    PersistRealtimeInputChannel {
+        channel: Option<codex_config::config_toml::MicrophoneChannels>,
     },
 
     /// Save the voice for subsequent conversations through the app server.

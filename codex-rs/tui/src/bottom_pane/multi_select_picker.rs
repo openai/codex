@@ -5,6 +5,7 @@
 //!
 //! - **Fuzzy search**: Type to filter items by name
 //! - **Toggle selection**: Space to toggle items on/off
+//! - **Required selection**: Optional nonempty confirmation; cancellation always remains available
 //! - **Reordering**: Optional left/right arrow support to reorder items
 //! - **Live preview**: Optional callback to show a preview of current selections
 //! - **Callbacks**: Hooks for change, confirm, and cancel events
@@ -191,6 +192,7 @@ pub(crate) struct MultiSelectPicker {
 
     /// Whether left/right arrow reordering is enabled.
     ordering_enabled: bool,
+    require_selection: bool,
 
     /// Shared list keybindings for navigation and completion.
     keymap: ListKeymap,
@@ -417,7 +419,8 @@ impl MultiSelectPicker {
     /// Collects the IDs of all enabled items and passes them to the
     /// `on_confirm` callback. Does nothing if already complete.
     fn confirm_selection(&mut self) {
-        if self.complete {
+        if self.complete || (self.require_selection && !self.items.iter().any(|item| item.enabled))
+        {
             return;
         }
         self.complete = true;
@@ -707,6 +710,7 @@ pub(crate) struct MultiSelectPickerBuilder {
     instructions: Vec<Span<'static>>,
     items: Vec<MultiSelectItem>,
     ordering_enabled: bool,
+    require_selection: bool,
     app_event_tx: AppEventSender,
     keymap: ListKeymap,
     preview_builder: Option<PreviewCallback>,
@@ -724,6 +728,7 @@ impl MultiSelectPickerBuilder {
             instructions: Vec::new(),
             items: Vec::new(),
             ordering_enabled: false,
+            require_selection: false,
             app_event_tx,
             keymap: RuntimeKeymap::defaults().list,
             preview_builder: None,
@@ -774,6 +779,12 @@ impl MultiSelectPickerBuilder {
         F: Fn(&[MultiSelectItem], &AppEventSender) + Send + Sync + 'static,
     {
         self.on_change = Some(Box::new(callback));
+        self
+    }
+
+    /// Requires a nonempty selection to confirm without restricting cancellation.
+    pub fn require_selection(mut self) -> Self {
+        self.require_selection = true;
         self
     }
 
@@ -844,6 +855,7 @@ impl MultiSelectPickerBuilder {
             header: Box::new(header),
             footer_hint: Line::from(instructions),
             ordering_enabled: self.ordering_enabled,
+            require_selection: self.require_selection,
             keymap: self.keymap,
             search_query: String::new(),
             filtered_indices: Vec::new(),

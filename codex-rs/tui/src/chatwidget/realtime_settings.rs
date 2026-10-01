@@ -1,6 +1,9 @@
 //! Voice settings hierarchy with parent navigation; selections apply to subsequent conversations.
 
 use super::*;
+use crate::bottom_pane::MultiSelectItem;
+use crate::bottom_pane::MultiSelectPicker;
+use codex_config::config_toml::MicrophoneChannels;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_realtime_webrtc::AudioDevice;
@@ -122,6 +125,14 @@ impl ChatWidget {
             AudioDeviceKind::Input => ("Input device", audio.microphone),
             AudioDeviceKind::Output => ("Output device", audio.speaker),
         };
+        let selected = devices
+            .iter()
+            .find(|device| {
+                current
+                    .as_ref()
+                    .map_or(device.is_default, |name| *name == device.name)
+            })
+            .cloned();
         let ambiguous: std::collections::HashSet<_> = devices
             .iter()
             .filter(|device| {
@@ -157,6 +168,39 @@ impl ChatWidget {
                 }
             })
             .collect();
+        if kind == AudioDeviceKind::Input
+            && let Some(device) = selected.filter(|device| device.channels >= 3)
+        {
+            let parent = items.iter().position(|item| item.is_current).unwrap_or(0);
+            items.insert(
+                parent + 1,
+                SelectionItem {
+                    name: "Input channels".into(),
+                    child_label: Some('a'),
+                    description: Some(audio.microphone_channel.as_ref().map_or_else(
+                        || "All channels (mixed)".into(),
+                        |channels| {
+                            format!(
+                                "Inputs {}",
+                                channels
+                                    .as_slice()
+                                    .iter()
+                                    .map(ToString::to_string)
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        },
+                    )),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenRealtimeInputChannels {
+                            device: device.clone(),
+                        })
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            );
+        }
         items.push(back_item(|| AppEvent::OpenRealtimeSoundDevices));
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some(title.into()),
@@ -166,6 +210,63 @@ impl ChatWidget {
             on_cancel: Some(Box::new(|tx| tx.send(AppEvent::OpenRealtimeSoundDevices))),
             ..SelectionViewParams::picker()
         });
+    }
+
+    pub(crate) fn open_realtime_input_channels(&mut self, microphone: AudioDevice) {
+        let Some(audio) = self.realtime_audio_settings() else {
+            return;
+        };
+        let current = audio.microphone_channel;
+        let count = microphone.channels;
+        let picker = MultiSelectPicker::builder(
+            format!("Microphone: {}", microphone.name),
+            Some("Select the input channels to mix. Select at least one.".into()),
+            self.app_event_tx.clone(),
+        )
+        .list_keymap(self.bottom_pane.list_keymap())
+        .items(
+            (1..=count)
+                .map(|number| MultiSelectItem {
+                    id: number.to_string(),
+                    name: format!("Input {number}"),
+                    enabled: current.as_ref().is_none_or(|channels| {
+                        channels
+                            .as_slice()
+                            .iter()
+                            .any(|channel| channel.get() == number)
+                    }),
+                    ..Default::default()
+                })
+                .collect(),
+        )
+        .require_selection()
+        .on_preview(|items| {
+            items
+                .iter()
+                .all(|item| !item.enabled)
+                .then(|| "Select at least one input channel.".red().into())
+        })
+        .on_confirm(move |ids, tx| {
+            let selected: Vec<_> = (1..=count)
+                .filter(|number| ids.contains(&number.to_string()))
+                .filter_map(std::num::NonZeroU16::new)
+                .collect();
+            let channel = if selected.len() == usize::from(count) {
+                None
+            } else if selected.len() == 1 {
+                selected.first().copied().map(MicrophoneChannels::Single)
+            } else {
+                Some(MicrophoneChannels::Multiple(selected))
+            };
+            tx.send(AppEvent::PersistRealtimeInputChannel { channel });
+        })
+        .on_cancel(|tx| {
+            tx.send(AppEvent::OpenRealtimeDevicePicker {
+                kind: AudioDeviceKind::Input,
+            })
+        })
+        .build();
+        self.bottom_pane.show_view(Box::new(picker));
     }
 
     pub(crate) fn set_realtime_voice(&mut self, voice: Option<RealtimeVoice>) {

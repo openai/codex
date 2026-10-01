@@ -6,6 +6,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadRealtimeListVoicesParams;
 use codex_app_server_protocol::ThreadRealtimeListVoicesResponse;
+use codex_config::config_toml::MicrophoneChannels;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_realtime_webrtc::AudioDeviceKind;
@@ -31,6 +32,25 @@ fn configured_voice(
 }
 
 impl App {
+    pub(super) async fn persist_realtime_input_channel(
+        &mut self,
+        channel: Option<MicrophoneChannels>,
+    ) {
+        self.persist_realtime_audio(
+            "microphone_channel",
+            channel.map(|channel| match channel {
+                MicrophoneChannels::Single(channel) => i64::from(channel.get()).into(),
+                MicrophoneChannels::Multiple(channels) => toml::Value::Array(
+                    channels
+                        .into_iter()
+                        .map(|channel| i64::from(channel.get()).into())
+                        .collect(),
+                ),
+            }),
+        )
+        .await;
+    }
+
     pub(super) async fn persist_realtime_device(
         &mut self,
         kind: AudioDeviceKind,
@@ -47,14 +67,34 @@ impl App {
     async fn persist_realtime_audio(&mut self, key: &str, value: Option<toml::Value>) {
         // Audio runs on the TUI's machine, even when the app server is remote.
         let segments = vec!["audio".to_string(), key.to_string()];
-        let edits = vec![match &value {
+        let mut edits = vec![match &value {
             Some(toml::Value::String(value)) => ConfigEdit::SetPath {
                 segments,
                 value: value.clone().into(),
             },
-            Some(_) => unreachable!("audio device settings are names"),
+            Some(toml::Value::Integer(value)) => ConfigEdit::SetPath {
+                segments,
+                value: (*value).into(),
+            },
+            Some(toml::Value::Array(channels)) => ConfigEdit::SetPath {
+                segments,
+                value: channels
+                    .iter()
+                    .map(|channel| match channel {
+                        toml::Value::Integer(channel) => *channel,
+                        _ => unreachable!("audio channel arrays contain only integers"),
+                    })
+                    .collect::<toml_edit::Array>()
+                    .into(),
+            },
+            Some(_) => unreachable!("audio settings are device names or channel numbers"),
             None => ConfigEdit::ClearPath { segments },
         }];
+        if key == "microphone" {
+            edits.push(ConfigEdit::ClearPath {
+                segments: vec!["audio".into(), "microphone_channel".into()],
+            });
+        }
         if let Err(error) =
             ConfigEditsBuilder::for_config_path(self.local_settings.user_config_path.as_path())
                 .with_edits(edits)
@@ -86,9 +126,12 @@ impl App {
                 let effective = toml::Value::try_from(&audio)
                     .ok()
                     .and_then(|audio| audio.get(key).cloned());
+                let channel_overridden = key == "microphone" && audio.microphone_channel.is_some();
                 self.local_settings.audio = Ok(audio);
                 self.chat_widget.local_settings.audio = self.local_settings.audio.clone();
-                if effective == value {
+                if channel_overridden {
+                    self.chat_widget.add_error_message("Input device saved, but the input channel is overridden by another configuration layer. Update that override before starting voice.".into());
+                } else if effective == value {
                     self.chat_widget.add_info_message(
                         "Audio setting saved. Applies to your next voice conversation.".to_string(),
                         /*hint*/ None,

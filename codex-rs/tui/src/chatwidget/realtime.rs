@@ -328,6 +328,9 @@ impl ChatWidget {
         let selection = codex_realtime_webrtc::AudioDeviceSelection {
             microphone: audio.microphone,
             speaker: audio.speaker,
+            channel: audio
+                .microphone_channel
+                .map(|channels| channels.as_slice().to_vec()),
         };
         std::thread::spawn(move || {
             let result = RealtimeWebrtcSession::start(abort_registration, selection)

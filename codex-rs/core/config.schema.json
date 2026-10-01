@@ -2586,6 +2586,24 @@
       ],
       "type": "string"
     },
+    "MicrophoneChannels": {
+      "anyOf": [
+        {
+          "format": "uint16",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        {
+          "items": {
+            "format": "uint16",
+            "minimum": 1.0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "Selected microphone inputs. Scalars preserve existing single-channel configuration."
+    },
     "ModelAvailabilityNuxConfig": {
       "additionalProperties": {
         "format": "uint32",
@@ -3791,6 +3809,14 @@
       "properties": {
         "microphone": {
           "type": "string"
+        },
+        "microphone_channel": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MicrophoneChannels"
+            }
+          ],
+          "description": "One-based microphone channels to mix; unset mixes all input channels."
         },
         "speaker": {
           "type": "string"

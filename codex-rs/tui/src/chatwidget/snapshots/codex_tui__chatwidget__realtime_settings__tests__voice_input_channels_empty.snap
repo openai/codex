@@ -1,0 +1,16 @@
+---
+source: tui/src/chatwidget/realtime_settings_tests.rs
+expression: "render_bottom_popup(&chat, 90)"
+---
+  Microphone: Mic
+  Select the input channels to mix. Select at least one.
+
+  Type to search
+
+› [ ] Input 1
+  [ ] Input 2
+  [ ] Input 3
+  [ ] Input 4
+
+  Select at least one input channel.
+  space toggle · enter save · esc cancel

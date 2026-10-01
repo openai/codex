@@ -2490,6 +2490,7 @@ impl App {
             AppEvent::OpenRealtimeSoundDevices => self.chat_widget.open_realtime_sound_devices(),
             AppEvent::OpenRealtimeVoices => self.open_realtime_voices(app_server).await,
             AppEvent::OpenRealtimeDevicePicker { kind } => self.list_realtime_devices(kind),
+            AppEvent::OpenRealtimeInputChannels { device } => self.chat_widget.open_realtime_input_channels(device),
             AppEvent::RealtimeDevicesListed { origin, kind, result } => {
                 if origin == self.active_thread_id {
                     match result {
@@ -2500,6 +2501,9 @@ impl App {
             }
             AppEvent::PersistRealtimeDevice { kind, name } => {
                 self.persist_realtime_device(kind, name).await;
+            }
+            AppEvent::PersistRealtimeInputChannel { channel } => {
+                self.persist_realtime_input_channel(channel).await;
             }
             AppEvent::PersistRealtimeVoiceSelection { voice } => {
                 self.persist_realtime_voice(app_server, voice).await;

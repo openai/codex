@@ -31,6 +31,10 @@ fn startup_controls_meters_and_helper_loss() -> Result<()> {
         AudioDeviceSelection {
             microphone: Some("Zen Go Synergy Core Playback".into()),
             speaker: Some("Headphones".into()),
+            channel: Some(vec![
+                std::num::NonZeroU16::new(/*n*/ 1).unwrap(),
+                std::num::NonZeroU16::new(/*n*/ 2).unwrap(),
+            ]),
         },
     )?;
     assert_eq!(started.offer_sdp, "synthetic-offer");
@@ -44,7 +48,7 @@ fn startup_controls_meters_and_helper_loss() -> Result<()> {
     answer.join().expect("answer thread")?;
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(root.join("input-selection"))?)?,
-        serde_json::json!({"microphone": "Zen Go Synergy Core Playback", "speaker": "Headphones"})
+        serde_json::json!({"microphone": "Zen Go Synergy Core Playback", "speaker": "Headphones", "channel": [1, 2]})
     );
     let initial: Vec<AudioControls> = serde_json::from_slice(&fs::read(root.join("controls"))?)?;
     assert_eq!(

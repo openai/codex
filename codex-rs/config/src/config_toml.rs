@@ -614,8 +614,27 @@ impl ProjectConfig {
     }
 }
 
+/// Selected microphone inputs. Scalars preserve existing single-channel configuration.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(untagged)]
+pub enum MicrophoneChannels {
+    Single(std::num::NonZeroU16),
+    Multiple(Vec<std::num::NonZeroU16>),
+}
+
+impl MicrophoneChannels {
+    pub fn as_slice(&self) -> &[std::num::NonZeroU16] {
+        match self {
+            Self::Single(channel) => std::slice::from_ref(channel),
+            Self::Multiple(channels) => channels,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RealtimeAudioConfig {
+    /// One-based microphone channels to mix; unset mixes all input channels.
+    pub microphone_channel: Option<MicrophoneChannels>,
     pub microphone: Option<String>,
     pub speaker: Option<String>,
 }
@@ -663,6 +682,8 @@ pub struct RealtimeToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeAudioToml {
+    /// One-based microphone channels to mix; unset mixes all input channels.
+    pub microphone_channel: Option<MicrophoneChannels>,
     pub microphone: Option<String>,
     pub speaker: Option<String>,
 }
