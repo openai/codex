@@ -26,6 +26,8 @@ pub struct WorldStateContributionInput<'a> {
     pub session_store: &'a ExtensionData,
     pub thread_store: &'a ExtensionData,
     pub turn_store: &'a ExtensionData,
+    /// The same captured extension inputs that were used to build this step's tools.
+    pub step_store: &'a ExtensionData,
     /// Persisted comparison state from the last recorded step. Its rendered text may have
     /// left model history; use a retained-fragment matcher before referring back to it.
     /// After compaction, sections may contain only retained extension metadata.

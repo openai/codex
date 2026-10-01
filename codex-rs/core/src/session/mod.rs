@@ -3785,18 +3785,25 @@ impl Session {
                 )),
                 turn::prepare_tool_recommendations(self.as_ref(), turn_context.as_ref()),
             );
-            let mut selected_plugins = self
+            // A step keeps the plugins from the environments it captured, even if shared MCP
+            // moves on to another environment. Its skill tools and the model use this same copy.
+            let selected_plugins = self
                 .services
-                .thread_extension_data
-                .get::<codex_extension_api::SelectedPluginSnapshot>()
-                .map(|snapshot| snapshot.as_ref().clone())
-                .unwrap_or_default();
-            selected_plugins.plugins.retain(|plugin| {
-                ready_selected_capability_roots
-                    .iter()
-                    .any(|root| plugin.selected_root_id.as_ref() == Some(&root.id))
-            });
-            extension_data.insert(selected_plugins.clone());
+                .mcp_manager
+                .selected_plugins_for_step(
+                    codex_extension_api::McpServerContributionContext::for_step(
+                        turn_context.config.as_ref(),
+                        &self.services.mcp_thread_init,
+                        &self.services.thread_extension_data,
+                        &turn_context.originator,
+                        &ready_selected_capability_roots,
+                        executor_capability_discovery.as_deref(),
+                    )
+                    .with_session_source(&turn_context.session_source),
+                    &turn_context.disabled_plugin_ids,
+                )
+                .await;
+            extension_data.insert(selected_plugins);
             let tool_router = turn::built_tools(
                 self.as_ref(),
                 turn_context.as_ref(),
@@ -3812,7 +3819,7 @@ impl Session {
                 executor_capability_discovery,
                 mcp,
                 tool_router,
-                selected_plugins,
+                extension_data,
             ))
         });
         // Returned warnings must finish delivery even if tools fail or preparation is cancelled.
@@ -3827,9 +3834,8 @@ impl Session {
             executor_capability_discovery,
             mcp,
             tool_router,
-            selected_plugins,
+            extension_data,
         ) = prepared_tools??;
-        turn_context.extension_data.insert(selected_plugins);
         Ok(Arc::new(StepContext {
             preempt: turn_context
                 .config
@@ -3844,6 +3850,7 @@ impl Session {
             environments,
             selected_capability_roots,
             executor_capability_discovery,
+            extension_data,
             mcp,
             tool_router,
             loaded_agents_md,

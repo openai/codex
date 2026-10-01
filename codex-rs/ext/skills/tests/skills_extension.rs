@@ -144,6 +144,7 @@ async fn skill_world_state_fragments(
             session_store,
             thread_store,
             turn_store: &turn_store,
+            step_store: &turn_store,
         })
         .await;
 
@@ -331,6 +332,7 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &turn_store,
         })
         .await;
 
@@ -357,6 +359,7 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &turn_store,
         })
         .await;
     assert!(
@@ -396,6 +399,7 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &turn_store,
         })
         .await;
     assert!(
@@ -469,6 +473,7 @@ async fn persisted_host_snapshot_deduplicates_warning_after_reinitialization() -
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &turn_store,
         })
         .await;
     let host_section = world_state_section(&sections, "host_skills");
@@ -509,6 +514,7 @@ async fn persisted_host_snapshot_deduplicates_warning_after_reinitialization() -
             session_store: &session_store,
             thread_store: &resumed_thread_store,
             turn_store: &resumed_turn_store,
+            step_store: &resumed_turn_store,
         })
         .await;
     assert!(
@@ -601,6 +607,7 @@ async fn executor_cloud_and_host_share_catalog_world_state_flow() -> TestResult 
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &turn_store,
         })
         .await;
 
@@ -711,6 +718,7 @@ async fn nonempty_executor_empty_host_records_catalog_metrics() -> TestResult {
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &turn_store,
         })
         .await;
 
@@ -792,6 +800,7 @@ async fn host_world_state_uses_provider_catalog_with_core_compatible_rendering()
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &turn_store,
         })
         .await;
     let host_fragment = world_state_section(&sections, "host_skills")
@@ -874,6 +883,7 @@ async fn shadow_selection_uses_host_catalog_when_instructions_are_disabled() -> 
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &turn_store,
         })
         .await;
     let fragments = registry.turn_input_contributors()[0]
@@ -1166,6 +1176,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &turn_store,
         })
         .await;
     assert_eq!(1, available_sections.len());
@@ -1230,6 +1241,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &unavailable_turn_store,
+            step_store: &unavailable_turn_store,
         })
         .await;
     let (unavailable_snapshot, unavailable_fragment) =
@@ -1268,6 +1280,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &restored_turn_store,
+            step_store: &restored_turn_store,
         })
         .await;
     let (restored_snapshot, restored_fragment) =
@@ -1326,6 +1339,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
                 session_store: &session_store,
                 thread_store: &thread_store,
                 turn_store: &ExtensionData::new(turn_id),
+                step_store: &ExtensionData::new(turn_id),
             })
             .await;
         assert_eq!(expected_list_calls, list_calls.load(Ordering::Relaxed));
@@ -1353,6 +1367,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &listing_disabled_turn_store,
+            step_store: &listing_disabled_turn_store,
         })
         .await;
     let (listing_disabled_snapshot, listing_disabled_fragment) = listing_disabled_sections[0]
@@ -1377,6 +1392,133 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             .is_none()
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn overlapping_executor_catalogs_render_their_own_roots() -> TestResult {
+    use tracing::Subscriber;
+    use tracing::instrument::WithSubscriber;
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::layer::Context;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::registry::LookupSpan;
+
+    // Pause after A's refresh returns, before World State can read the catalog. Pausing the
+    // provider would be too early: A would still publish its result after B finishes.
+    struct PauseAfterRefresh {
+        entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        resume: Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for PauseAfterRefresh {
+        fn on_close(&self, id: tracing::span::Id, context: Context<'_, S>) {
+            if context
+                .span(&id)
+                .is_some_and(|span| span.name() == "skills.executor.refresh_executor_catalog")
+                && let Some(entered) = self.entered.lock().unwrap().take()
+            {
+                entered.send(()).unwrap();
+                self.resume
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(std::time::Duration::from_secs(/*secs*/ 10))
+                    .expect("B should finish before A reads its catalog");
+            }
+        }
+    }
+
+    let temp = tempfile::tempdir()?;
+    let root = |name: &str| -> Result<SelectedCapabilityRoot, Box<dyn std::error::Error>> {
+        let path = temp.path().join(name);
+        std::fs::create_dir_all(path.join(name))?;
+        std::fs::write(
+            path.join(name).join("SKILL.md"),
+            DEMO_SKILL_CONTENTS.replace("demo", name),
+        )?;
+        Ok(SelectedCapabilityRoot {
+            id: name.to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                path: PathUri::from_host_native_path(path)?,
+            },
+        })
+    };
+    let root_a = root("skill-a")?;
+    let root_b = root("skill-b")?;
+    let mut builder = ExtensionRegistryBuilder::new();
+    let provider = codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        /*restriction_product*/ None,
+    );
+    install_with_providers(
+        &mut builder,
+        SkillProviders::new().with_executor_provider(Arc::new(provider)),
+        skills_extension_config,
+    );
+    let registry = Arc::new(builder.build());
+    let session_store = Arc::new(ExtensionData::new("session"));
+    let thread_store = Arc::new(ExtensionData::new("thread"));
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &default_config(),
+            session_source: &SessionSource::Cli,
+            persistent_thread_state_available: true,
+            environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+    let thread_id = codex_protocol::ThreadId::new();
+    let render = |root: SelectedCapabilityRoot| {
+        let registry = Arc::clone(&registry);
+        let session_store = Arc::clone(&session_store);
+        let thread_store = Arc::clone(&thread_store);
+        async move {
+            let step_store = ExtensionData::new(&root.id);
+            let sections = registry.context_contributors()[0]
+                .contribute_world_state(WorldStateContributionInput {
+                    model_info: &catalog_model_info(),
+                    thread_id,
+                    turn_id: "turn",
+                    environments: &[],
+                    ready_selected_capability_roots: &[root],
+                    executor_capability_discovery: None,
+                    extension_metrics: None,
+                    session_store: &session_store,
+                    thread_store: &thread_store,
+                    turn_store: &step_store,
+                    step_store: &step_store,
+                    previous_world_state: None,
+                })
+                .await;
+            world_state_section(&sections, "skills")
+                .render_diff(PreviousWorldStateSection::Absent)
+                .1
+                .expect("executor skills should render")
+                .body()
+                .to_string()
+        }
+    };
+    let (entered, paused) = tokio::sync::oneshot::channel();
+    let (release, resume) = std::sync::mpsc::channel();
+    // Keep tracing aware of uninstrumented threads so a parallel test cannot register
+    // the refresh callsite as globally disabled before this subscriber reaches it.
+    let _interest_cache_guard =
+        tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    let subscriber = tracing_subscriber::registry().with(PauseAfterRefresh {
+        entered: Mutex::new(Some(entered)),
+        resume: Mutex::new(resume),
+    });
+    let a = tokio::spawn(render(root_a).with_subscriber(subscriber));
+    tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 10), paused).await??;
+    let b = render(root_b).await;
+    release.send(())?;
+    let a = a.await?;
+    assert!(a.contains("skill-a") && !a.contains("skill-b"), "{a}");
+    assert!(b.contains("skill-b") && !b.contains("skill-a"), "{b}");
     Ok(())
 }
 
@@ -1618,6 +1760,7 @@ async fn catalog_rebalances_only_to_avoid_omissions_and_retains_the_allocation()
                         session_store: &session_store,
                         thread_store: &thread_store,
                         turn_store: &turn_store,
+                        step_store: &turn_store,
                     })
                     .await;
                 let rendered = sections
@@ -2248,6 +2391,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &turn_store,
         })
         .await;
     let fragments = registry.turn_input_contributors()[0]
@@ -2378,6 +2522,7 @@ async fn model_context_window_scales_executor_and_cloud_catalogs() -> TestResult
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &turn_store,
         })
         .await;
     // Core rebuilds world state before each sampling step.
@@ -2394,6 +2539,7 @@ async fn model_context_window_scales_executor_and_cloud_catalogs() -> TestResult
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &turn_store,
         })
         .await;
     assert!(event_rx.try_recv().is_err());
@@ -2493,6 +2639,7 @@ async fn executor_catalog_emits_at_most_four_warnings() -> TestResult {
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
+            step_store: &turn_store,
         })
         .await;
     registry.turn_input_contributors()[0]

@@ -676,12 +676,42 @@ async fn astra_kickoff_with_skills_plugins_and_remote_compaction() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn astra_omits_disabled_executor_skills_from_model_context() -> Result<()> {
+async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context() -> Result<()> {
+    use codex_extension_api::ContextContributor;
+    use codex_extension_api::ExtensionFuture;
+    use codex_extension_api::SelectedPluginSnapshot;
+    use codex_extension_api::WorldStateContributionInput;
+    use codex_extension_api::WorldStateSectionContribution;
+
     skip_if_no_network!(Ok(()));
 
+    struct PauseFirstWorldState {
+        first: std::sync::Mutex<Option<oneshot::Sender<String>>>,
+        resume: tokio::sync::Notify,
+    }
+
+    impl ContextContributor for PauseFirstWorldState {
+        fn contribute_world_state<'a>(
+            &'a self,
+            input: WorldStateContributionInput<'a>,
+        ) -> ExtensionFuture<'a, Vec<WorldStateSectionContribution>> {
+            Box::pin(async move {
+                let first = self.first.lock().unwrap().take();
+                if let Some(first) = first {
+                    first.send(input.turn_id.to_string()).unwrap();
+                    self.resume.notified().await;
+                }
+                Vec::new()
+            })
+        }
+    }
+
     let server = start_mock_server().await;
-    let skill_files = TempDir::new()?;
-    let skill_root = fs::canonicalize(skill_files.path())?.join("skills");
+    let skill_files_dir = TempDir::new()?;
+    let skill_files = fs::canonicalize(skill_files_dir.path())?;
+    let skill_root = skill_files.join("skills");
+    let other_skill_root = skill_files.join("other-skills");
+    let plugin_root = skill_files.join("plugin");
     let disabled = write_skill(
         &skill_root.join("retired-helper"),
         "retired-helper",
@@ -694,8 +724,26 @@ async fn astra_omits_disabled_executor_skills_from_model_context() -> Result<()>
         "Use the current workflow",
         "Follow the current workflow.",
     )?;
+    write_skill(
+        &other_skill_root.join("next-helper"),
+        "next-helper",
+        "Use the next workflow",
+        "Follow the next workflow.",
+    )?;
+    fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"disabled"}"#,
+    )?;
+    write_skill(
+        &plugin_root.join("skills/disabled-plugin-helper"),
+        "disabled-plugin-helper",
+        "Use a disabled plugin workflow",
+        "Follow the disabled plugin workflow.",
+    )?;
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
     let provider = ExecutorSkillProvider::new_with_restriction_product(
-        Arc::new(EnvironmentManager::default_for_tests()),
+        Arc::clone(&environment_manager),
         /*restriction_product*/ None,
     )
     .with_disabled_skill_paths(HashMap::from([(
@@ -703,6 +751,13 @@ async fn astra_omits_disabled_executor_skills_from_model_context() -> Result<()>
         HashSet::from([PathUri::from_host_native_path(disabled)?]),
     )]));
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    codex_mcp_extension::install_plugins(&mut extensions, environment_manager);
+    let (started, captured) = oneshot::channel();
+    let pause = Arc::new(PauseFirstWorldState {
+        first: std::sync::Mutex::new(Some(started)),
+        resume: tokio::sync::Notify::new(),
+    });
+    extensions.prompt_contributor(pause.clone());
     install_with_providers(
         &mut extensions,
         SkillProviders::new().with_executor_provider(Arc::new(provider)),
@@ -716,10 +771,21 @@ async fn astra_omits_disabled_executor_skills_from_model_context() -> Result<()>
     );
     let mock = mount_sse_sequence(
         &server,
-        vec![sse(vec![
-            ev_assistant_message("skills", "The active-helper skill is available."),
-            ev_completed("skills-response"),
-        ])],
+        vec![
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "list-skills",
+                    "skills",
+                    "list",
+                    r#"{"authority":{"kind":"executor"}}"#,
+                ),
+                ev_completed("first-step"),
+            ]),
+            sse(vec![
+                ev_assistant_message("skills", "The next-helper skill is available."),
+                ev_completed("skills-response"),
+            ]),
+        ],
     )
     .await;
     let test = test_codex()
@@ -730,25 +796,38 @@ async fn astra_omits_disabled_executor_skills_from_model_context() -> Result<()>
         .build(&server)
         .await?;
     let skill_root = PathUri::from_host_native_path(skill_root)?;
-    let root_locator = format!(
-        "skill://workspace-skills/{}",
-        skill_root
-            .inferred_native_path_string()
-            .replace('\\', "/")
-            .trim_start_matches('/')
-    );
-    let mut thread_extension_init = ExtensionDataInit::new();
-    thread_extension_init.insert(vec![SelectedCapabilityRoot {
-        id: "workspace-skills".to_string(),
+    let other_skill_root = PathUri::from_host_native_path(other_skill_root)?;
+    let skill_files = PathUri::from_host_native_path(skill_files)?
+        .inferred_native_path_string()
+        .replace('\\', "/");
+    let skill_files = format!("{}/", skill_files.trim_start_matches('/'));
+    let selected_root = |id: &str, path| SelectedCapabilityRoot {
+        id: id.to_string(),
         location: CapabilityRootLocation::Environment {
             environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-            path: skill_root,
+            path,
         },
-    }]);
+    };
+    let mut thread_extension_init = ExtensionDataInit::new();
+    thread_extension_init.insert(vec![selected_root(
+        "plugin-skills",
+        PathUri::from_host_native_path(plugin_root)?,
+    )]);
+    let mut first_environment = test.executor_environment().selection().clone();
+    let mut environment_config = environment_config_for_selection(&test.config, &first_environment);
+    environment_config.selected_capability_roots =
+        vec![selected_root("workspace-skills", skill_root)];
+    first_environment.config = EnvironmentConfigState::Ready(environment_config.clone());
+    let mut next_environment = first_environment.clone();
+    environment_config.selected_capability_roots =
+        vec![selected_root("other-skills", other_skill_root)];
+    next_environment.config = EnvironmentConfigState::Ready(environment_config);
     let thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
+            environments: Some(vec![first_environment]),
             thread_extension_init,
+            disabled_plugin_ids: Some(vec!["plugin-skills".to_string()]),
             ..StartThreadOptions::new(test.config.clone())
         })
         .await?
@@ -758,23 +837,74 @@ async fn astra_omits_disabled_executor_skills_from_model_context() -> Result<()>
             "Which workflow skills are available?",
         )]))
         .await?;
+    let turn_id = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), captured).await??;
+    let (reply, outcome) = oneshot::channel();
+    thread
+        .submit(Op::TurnSettings {
+            turn_id,
+            update: TurnSettingsUpdate {
+                environments: Some(vec![next_environment]),
+                ..Default::default()
+            },
+            reply,
+        })
+        .await?;
+    assert_eq!(outcome.await?, TurnSettingsUpdateOutcome::Applied);
+    // Refresh shared MCP for the new roots (there is no Apps server in this test), then
+    // replace its plugin list before the next step captures it or needs another refresh.
+    let _ = thread.refresh_codex_apps_tools().await;
+    let shared = thread.thread_extension_data();
+    assert_eq!(
+        shared
+            .insert(SelectedPluginSnapshot::default())
+            .expect("MCP should have published the new plugin list")
+            .disabled_plugin_roots,
+        ["plugin-skills"],
+    );
+    pause.resume.notify_one();
     wait_for_event(&thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let requests = mock.requests();
-    assert_eq!(requests.len(), 1);
-    let mut body = requests[0].body_json();
-    let input = body["input"].to_string();
-    assert!(input.contains("active-helper"));
-    assert!(!input.contains("retired-helper"));
-    // Normalize opaque skill locators before snapshot truncation and hashing.
-    body["input"] = serde_json::from_str(
-        &input.replace(&root_locator, "skill://workspace-skills/<SKILLS_ROOT>"),
-    )?;
+    assert_eq!(requests.len(), 2);
+    let first_step_tool = requests[1]
+        .function_call_output_text("list-skills")
+        .expect("first step's skills.list output");
+    assert!(first_step_tool.contains("active-helper"));
+    assert!(!first_step_tool.contains("next-helper"));
+    let developer_texts = requests[1].message_input_texts("developer");
+    let latest_skills = developer_texts
+        .iter()
+        .rev()
+        .find(|text| text.contains("## Skills"))
+        .expect("second step's skills section");
+    assert!(latest_skills.contains("next-helper"));
+    assert!(!latest_skills.contains("active-helper"));
+    let mut bodies = requests
+        .iter()
+        .map(core_test_support::responses::ResponsesRequest::body_json)
+        .collect::<Vec<_>>();
+    for body in &mut bodies {
+        let input = body["input"].to_string();
+        assert!(!input.contains("retired-helper"));
+        assert!(!input.contains("disabled-plugin-helper"));
+        // Normalize opaque skill locators before snapshot truncation and hashing.
+        body["input"] = serde_json::from_str(&input.replace(&skill_files, "<SKILLS_ROOT>/"))?;
+        // Cargo and Bazel can serialize the JSON inside the tool output in different key orders.
+        for item in body["input"].as_array_mut().expect("request input") {
+            if item["type"] == "function_call_output" && item["call_id"] == "list-skills" {
+                let mut output: serde_json::Value =
+                    serde_json::from_str(item["output"].as_str().expect("skills.list output"))?;
+                output.sort_all_objects();
+                item["output"] = output.to_string().into();
+            }
+        }
+    }
+    let entries = bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>();
     insta::assert_snapshot!(
         "astra_disabled_executor_skills",
         context_snapshot::format_context_snapshot(
-            "Astra sees the active executor skill while the caller-disabled skill is omitted.",
-            &[SnapshotEntry::body(&body)],
+            "Astra keeps disabled skills hidden and uses each step's selected skills after the environment changes during preparation.",
+            &entries,
             &ContextSnapshotOptions::default().include_request_settings(),
         )
     );

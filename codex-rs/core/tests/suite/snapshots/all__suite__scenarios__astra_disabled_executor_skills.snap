@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/scenarios.rs
-expression: "context_snapshot::format_context_snapshot(\"Astra sees the active executor skill while the caller-disabled skill is omitted.\",\n&[SnapshotEntry::body(&body)],\n&ContextSnapshotOptions::default().include_request_settings(),)"
+expression: "context_snapshot::format_context_snapshot(\"Astra keeps disabled skills hidden and uses each step's selected skills after the environment changes during preparation.\",\n&entries, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
-Scenario: Astra sees the active executor skill while the caller-disabled skill is omitted.
+Scenario: Astra keeps disabled skills hidden and uses each step's selected skills after the environment changes during preparation.
 
 ## Window 1
 Settings:
@@ -87,7 +87,7 @@ Settings:
         ## Skills
         A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that ...locators can be expanded using the skill roots table. [hash=f00d6a4d3e192f06]
         ### Skill roots
-        - `e0` = `skill://workspace-skills/<SKILLS_ROOT>`
+        - `e0` = `skill://workspace-skills/<SKILLS_ROOT>/skills`
         Read a skill package directly with `skills.read({"package":"<package>"})` to read its `SKILL.md`; root a...ackage is not provided, use `skills.list` to find it. [hash=25bf84ea2123d647]
         ### Available skills
         - active-helper: Use the current workflow (executor package: e0/active-helper)
@@ -118,7 +118,20 @@ Settings:
       <shell><HOST_SHELL></shell>
       <current_date><CURRENT_DATE></current_date>
       <timezone><HOST_TIMEZONE></timezone>
-      <filesystem><workspace_roots><root><WORKSPACE_ROOT 1></root></workspace_roots><permission_profile type...ntry></file_system></permission_profile></filesystem> [hash=911722cc43b4c3b8]
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
     </environment_context>
 06:message/user:
     Which workflow skills are available?
+-- request 2 (request) --
+07:function_call/skills.list:{"authority":{"kind":"executor"}}
+08:function_call_output:{"next_cursor":null,"skills":[{"authority":{"id":"workspace-skills","kind":"executor"},"description":"Us.../<SKILLS_ROOT>/skills/active-helper"}],"warnings":[]} [hash=b72a3cc66e4d3c51]
+09:message/developer:
+    <skills_instructions>
+    ## Skills
+    A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that ...locators can be expanded using the skill roots table. [hash=f00d6a4d3e192f06]
+    ### Skill roots
+    - `e0` = `skill://other-skills/<SKILLS_ROOT>/other-skills`
+    Read a skill package directly with `skills.read({"package":"<package>"})` to read its `SKILL.md`; root a...ackage is not provided, use `skills.list` to find it. [hash=25bf84ea2123d647]
+    ### Available skills
+    - next-helper: Use the next workflow (executor package: e0/next-helper)
+    </skills_instructions>

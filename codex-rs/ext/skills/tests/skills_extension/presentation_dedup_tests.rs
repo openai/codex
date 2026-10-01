@@ -123,6 +123,7 @@ async fn cloud_preference_preserves_aliases_reads_and_executor_fallback() -> Tes
                     session_store: &session_store,
                     thread_store: &thread_store,
                     turn_store: &turn_store,
+                    step_store: &turn_store,
                 })
                 .await;
             let snapshots: serde_json::Map<String, serde_json::Value> = sections

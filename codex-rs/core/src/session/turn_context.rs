@@ -571,15 +571,18 @@ impl TurnContext {
         self.initial_settings.effective_collaboration_mode()
     }
 
-    /// Combines setup-time host identities with current ready selected packages.
+    /// Combines setup-time host identities with the first step's ready selected packages.
     /// Keeps the complete observation or marks it unknown; never truncates membership.
-    pub(super) fn active_plugin_ids_for_telemetry(&self) -> Option<Vec<String>> {
+    pub(super) fn active_plugin_ids_for_telemetry(
+        &self,
+        selected: Option<&SelectedPluginSnapshot>,
+    ) -> Option<Vec<String>> {
         const MAX_TELEMETRY_PLUGIN_IDS: usize = 512;
         const MAX_TELEMETRY_PLUGIN_ID_BYTES: usize = 128;
 
         let mut identities = self.active_host_plugin_identities.clone()?;
         // Selected roots provide a package key, not a remote identity for that object.
-        if let Some(selected) = self.extension_data.get::<SelectedPluginSnapshot>() {
+        if let Some(selected) = selected {
             identities.extend(selected.plugins.iter().map(|plugin| PluginIdentity {
                 plugin_id: plugin.plugin_id.clone(),
                 remote_plugin_id: None,

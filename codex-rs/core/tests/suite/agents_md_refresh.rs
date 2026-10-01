@@ -2,14 +2,8 @@
 
 use super::*;
 use codex_extension_api::ExtensionData;
-use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::SelectedPluginSnapshot;
 use codex_extension_api::ToolContributor;
-use codex_extension_api::TurnErrorInput;
-use codex_extension_api::TurnLifecycleContributor;
-use codex_extension_api::TurnStartInput;
-use codex_extension_api::TurnStopInput;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
@@ -25,16 +19,6 @@ struct StepPreparationObserver {
     instructions: RecordingThreadInstructionsProvider,
     tools_ready: Mutex<Option<oneshot::Sender<()>>>,
     waiting_for_tools: Mutex<Option<oneshot::Receiver<()>>>,
-    published_plugins: Mutex<Vec<(&'static str, bool)>>,
-}
-
-impl StepPreparationObserver {
-    fn record_plugins(&self, phase: &'static str, turn_store: &ExtensionData) {
-        self.published_plugins
-            .lock()
-            .expect("plugin observations")
-            .push((phase, turn_store.get::<SelectedPluginSnapshot>().is_some()));
-    }
 }
 
 impl ThreadInstructionsProvider for StepPreparationObserver {
@@ -68,20 +52,6 @@ impl ToolContributor for StepPreparationObserver {
     }
 }
 
-impl TurnLifecycleContributor for StepPreparationObserver {
-    fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
-        Box::pin(async move { self.record_plugins("start", input.turn_store) })
-    }
-
-    fn on_turn_error<'a>(&'a self, input: TurnErrorInput<'a>) -> ExtensionFuture<'a, ()> {
-        Box::pin(async move { self.record_plugins("error", input.turn_store) })
-    }
-
-    fn on_turn_stop<'a>(&'a self, input: TurnStopInput<'a>) -> ExtensionFuture<'a, ()> {
-        Box::pin(async move { self.record_plugins("stop", input.turn_store) })
-    }
-}
-
 #[derive(Clone, Copy)]
 enum PreparationOutcome {
     Success,
@@ -90,12 +60,12 @@ enum PreparationOutcome {
     BothErrors,
 }
 
-#[test_case::test_case(PreparationOutcome::Success; "publish after both branches succeed")]
+#[test_case::test_case(PreparationOutcome::Success; "send request after both branches succeed")]
 #[test_case::test_case(PreparationOutcome::ToolCollision; "warning survives tool failure")]
-#[test_case::test_case(PreparationOutcome::InstructionError; "instruction error prevents publication")]
+#[test_case::test_case(PreparationOutcome::InstructionError; "instruction error prevents request")]
 #[test_case::test_case(PreparationOutcome::BothErrors; "instruction error takes precedence")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn concurrent_preparation_preserves_warnings_errors_and_plugin_publication(
+async fn concurrent_preparation_preserves_warnings_and_errors(
     outcome: PreparationOutcome,
 ) -> Result<()> {
     let server = start_mock_server().await;
@@ -104,11 +74,9 @@ async fn concurrent_preparation_preserves_warnings_errors_and_plugin_publication
         instructions: RecordingThreadInstructionsProvider::with_text(TASK_USER_INSTRUCTIONS),
         tools_ready: Mutex::default(),
         waiting_for_tools: Mutex::default(),
-        published_plugins: Mutex::default(),
     });
     let mut extensions = ExtensionRegistryBuilder::new();
     extensions.tool_contributor(observer.clone());
-    extensions.turn_lifecycle_contributor(observer.clone());
     let mut builder = test_codex()
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
@@ -174,30 +142,19 @@ async fn concurrent_preparation_preserves_warnings_errors_and_plugin_publication
     })
     .await;
     let mut expected_notices = vec![("warning", PROVIDER_WARNING.to_string())];
-    let mut expected_publication = vec![("start", false)];
     match outcome {
         PreparationOutcome::Success => {}
         PreparationOutcome::ToolCollision => {
             expected_notices.push(("error", "duplicate tool: functions.update_plan".to_string()));
-            expected_publication.push(("error", false));
         }
         PreparationOutcome::InstructionError | PreparationOutcome::BothErrors => {
             expected_notices.push((
                 "error",
                 "thread instructions exceed the limit of 10000 estimated tokens (10001 estimated tokens provided)".to_string(),
             ));
-            expected_publication.push(("error", false));
         }
     }
-    expected_publication.push(("stop", succeeds));
     assert_eq!(notices, expected_notices);
-    assert_eq!(
-        *observer
-            .published_plugins
-            .lock()
-            .expect("plugin observations"),
-        expected_publication
-    );
     assert_eq!(request.requests().len(), usize::from(succeeds));
     Ok(())
 }

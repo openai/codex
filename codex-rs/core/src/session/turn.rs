@@ -404,7 +404,7 @@ pub(crate) async fn run_turn(
         .await;
     }
 
-    track_turn_resolved_config_analytics(&sess, &turn_context, &input).await;
+    track_turn_resolved_config_analytics(&sess, &first_step_context, &input).await;
 
     let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
@@ -1236,9 +1236,10 @@ async fn build_extension_turn_input_items(
 )]
 async fn track_turn_resolved_config_analytics(
     sess: &Session,
-    turn_context: &TurnContext,
+    first_step: &StepContext,
     input: &[TurnInput],
 ) {
+    let turn_context = &first_step.turn;
     let thread_config = sess.thread_config_snapshot().await;
     let is_first_turn = {
         let mut state = sess.state.lock().await;
@@ -1250,7 +1251,12 @@ async fn track_turn_resolved_config_analytics(
             turn_id: turn_context.sub_id.clone(),
             thread_id: sess.thread_id.to_string(),
             turn_metadata: turn_context.turn_metadata_state.clone(),
-            active_plugin_ids_at_turn_start: turn_context.active_plugin_ids_for_telemetry(),
+            active_plugin_ids_at_turn_start: turn_context.active_plugin_ids_for_telemetry(
+                first_step
+                    .extension_data
+                    .get::<codex_extension_api::SelectedPluginSnapshot>()
+                    .as_deref(),
+            ),
             num_input_images: input
                 .iter()
                 .filter_map(|item| match item {

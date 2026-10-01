@@ -184,11 +184,11 @@ impl<'a> CatalogContext<'a> {
     }
 
     async fn discover_executor_catalog(&self, query: SkillListQuery) -> CatalogContribution {
-        self.thread_state
+        let mut catalog = self
+            .thread_state
             .refresh_executor_catalog(self.providers, query)
             .await;
-        let mut catalog = self.thread_state.executor_catalog_snapshot();
-        if let Some(selected_plugins) = self.input.turn_store.get::<SelectedPluginSnapshot>() {
+        if let Some(selected_plugins) = self.input.step_store.get::<SelectedPluginSnapshot>() {
             attribute_executor_plugins(&mut catalog, &selected_plugins);
         }
         self.input

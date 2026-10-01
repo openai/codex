@@ -291,6 +291,7 @@ impl StepContext {
             environments,
             selected_capability_roots: Vec::new(),
             executor_capability_discovery: None,
+            extension_data: codex_extension_api::ExtensionData::new(turn.sub_id.clone()),
             mcp: Arc::new(codex_mcp::McpBinding::empty(mcp_config_for_test(
                 &turn.config,
             ))),
@@ -9426,12 +9427,6 @@ async fn cancelled_step_capture_finishes_warning_delivery() {
         ),
         (INITIAL_SUBMIT_ID.to_owned(), warnings[1].clone()),
     );
-    assert!(
-        turn.extension_data
-            .get::<codex_extension_api::SelectedPluginSnapshot>()
-            .is_none()
-    );
-
     session
         .capture_step_context(turn, &CancellationToken::new())
         .await
