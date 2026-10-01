@@ -43,8 +43,12 @@ pub(super) fn region_from_config(aws: &ModelProviderAwsAuthInfo) -> Option<Strin
 
 /// Returns whether Amazon Bedrock Mantle is available in `region`.
 pub fn is_supported_amazon_bedrock_region(region: &str) -> bool {
-    BEDROCK_MANTLE_SUPPORTED_REGIONS.contains(&region)
-        || BEDROCK_GOV_CLOUD_SUPPORTED_REGIONS.contains(&region)
+    BEDROCK_MANTLE_SUPPORTED_REGIONS.contains(&region) || is_amazon_bedrock_gov_cloud_region(region)
+}
+
+/// Returns whether `region` is a supported Amazon Bedrock GovCloud region.
+pub fn is_amazon_bedrock_gov_cloud_region(region: &str) -> bool {
+    BEDROCK_GOV_CLOUD_SUPPORTED_REGIONS.contains(&region)
 }
 
 pub(super) fn base_url(region: &str) -> Result<String> {

@@ -12,6 +12,8 @@ mod attestation;
 #[path = "auth_storage_originator_tests.rs"]
 mod auth_storage_originator;
 mod auto_env;
+#[path = "bedrock_gov_cloud_tests.rs"]
+mod bedrock_gov_cloud;
 mod bedrock_setup;
 mod client_metadata;
 mod code_mode_host;

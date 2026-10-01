@@ -1751,6 +1751,11 @@ impl MessageProcessor {
             ClientRequest::BedrockSetup { params, .. } => {
                 self.account_processor.bedrock_setup(params).await
             }
+            ClientRequest::BedrockCheckGovCloudRequirements { .. } => {
+                self.account_processor
+                    .bedrock_check_gov_cloud_requirements()
+                    .await
+            }
             ClientRequest::GatewayOAuthRead { .. } => {
                 Box::pin(self.account_processor.gateway_oauth_read())
                     .await

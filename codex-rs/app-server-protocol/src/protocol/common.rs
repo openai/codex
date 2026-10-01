@@ -1300,6 +1300,13 @@ client_request_definitions! {
         response: v2::BedrockSetupResponse,
     },
 
+    #[experimental("account/bedrock/checkGovCloudRequirements")]
+    BedrockCheckGovCloudRequirements => "account/bedrock/checkGovCloudRequirements" {
+        params: v2::BedrockCheckGovCloudRequirementsParams,
+        serialization: global("account-auth"),
+        response: v2::BedrockCheckGovCloudRequirementsResponse,
+    },
+
     CancelLoginAccount => "account/login/cancel" {
         params: v2::CancelLoginAccountParams,
         serialization: global("account-auth"),
