@@ -242,6 +242,7 @@ async fn new_config(
         startup_warnings: Vec::new(),
         bypass_hook_trust: false,
         model,
+        daybreak_enabled: false,
         service_tier: None,
         review_model: None,
         model_context_window: None,

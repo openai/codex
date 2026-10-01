@@ -6,6 +6,7 @@
 #![deny(clippy::print_stdout)]
 
 mod cli;
+mod daybreak;
 mod event_processor;
 mod event_processor_with_human_output;
 pub(crate) mod event_processor_with_jsonl_output;
@@ -218,6 +219,7 @@ struct ExecRunArgs {
     command: Option<ExecCommand>,
     config: Config,
     resume_approvals_reviewer_override: Option<codex_app_server_protocol::ApprovalsReviewer>,
+    daybreak_override: Option<bool>,
     dangerously_bypass_approvals_and_sandbox: bool,
     exec_span: tracing::Span,
     images: Vec<PathBuf>,
@@ -615,6 +617,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     )
     .await?;
     embedded_network_policy.activate(&mut config);
+    let daybreak_override = cli_kv_overrides
+        .iter()
+        .any(|(key, _)| key == "daybreak")
+        .then_some(config.daybreak_enabled);
     let resume_approvals_reviewer_override = cli_kv_overrides
         .iter()
         .any(|(key, _)| key == "approvals_reviewer")
@@ -737,6 +743,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         command,
         config,
         resume_approvals_reviewer_override,
+        daybreak_override,
         dangerously_bypass_approvals_and_sandbox,
         exec_span: exec_span.clone(),
         images,
@@ -837,6 +844,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         command,
         config,
         resume_approvals_reviewer_override,
+        daybreak_override,
         dangerously_bypass_approvals_and_sandbox,
         exec_span,
         images,
@@ -851,6 +859,16 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         stderr_with_ansi,
         thread_source,
     } = args;
+
+    if config.daybreak_enabled && !matches!(&command, Some(ExecCommand::Review(_))) {
+        anyhow::ensure!(
+            !oss || matches!(
+                &command,
+                Some(ExecCommand::Resume(_) | ExecCommand::Fork(_))
+            ),
+            "Daybreak requires the OpenAI model provider"
+        );
+    }
 
     let mut event_processor: Box<dyn EventProcessor> = match json_mode {
         true => Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone())),
@@ -989,6 +1007,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             anyhow::anyhow!("failed to initialize in-process app-server client: {err}")
         })?;
 
+    let mut daybreak_enabled = config.daybreak_enabled;
     // Resolve resume and fork through existing app-server thread lifecycle APIs.
     let (primary_thread_id, fallback_session_configured) = if let Some(ExecCommand::Resume(args)) =
         command.as_ref()
@@ -1013,6 +1032,9 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let session_configured =
                 session_configured_from_thread_resume_response(&response, &config)
                     .map_err(anyhow::Error::msg)?;
+            daybreak_enabled = daybreak_override
+                .or(response.thread.daybreak_enabled)
+                .unwrap_or(false);
             (session_configured.thread_id, session_configured)
         } else {
             let response = start_thread(&client, &mut request_ids, &config, &thread_source)
@@ -1035,6 +1057,24 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             resolve_resume_thread_id(&client, &config, state_db.as_ref(), &source_args)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("Session not found: {}", args.session_id))?;
+        let source_daybreak = if config.ephemeral && daybreak_override.is_none() {
+            let response: ThreadReadResponse = send_request_with_response(
+                &client,
+                ClientRequest::ThreadRead {
+                    request_id: request_ids.next(),
+                    params: ThreadReadParams {
+                        thread_id: source_thread_id.clone(),
+                        include_turns: false,
+                    },
+                },
+                "thread/read",
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+            response.thread.daybreak_enabled
+        } else {
+            None
+        };
         let permissions = permissions_selection_from_config(&config);
         let sandbox = permissions.is_none().then(|| {
             sandbox_mode_from_permission_profile(
@@ -1087,6 +1127,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             response.reasoning_effort,
         )
         .map_err(anyhow::Error::msg)?;
+        daybreak_enabled = daybreak_override
+            .or(response.thread.daybreak_enabled)
+            .or(source_daybreak)
+            .unwrap_or(false);
         (session_configured.thread_id, session_configured)
     } else {
         let response = start_thread(&client, &mut request_ids, &config, &thread_source)
@@ -1147,6 +1191,14 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             items,
             output_schema,
         } => {
+            let cyber_access_program = daybreak::program_for_turn(
+                &client,
+                &mut request_ids,
+                &session_configured.model,
+                &session_configured.model_provider_id,
+                daybreak_enabled,
+            )
+            .await?;
             let response: TurnStartResponse = send_request_with_response(
                 &client,
                 ClientRequest::TurnStart {
@@ -1176,7 +1228,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         output_schema,
                         collaboration_mode: None,
                         multi_agent_mode: None,
-                        cyber_access_program: None,
+                        cyber_access_program,
                     },
                 },
                 "turn/start",
@@ -1377,6 +1429,7 @@ fn thread_start_params_from_config(
         permissions,
         config: thread_config_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
+        daybreak_enabled: (config.daybreak_enabled && !config.ephemeral).then_some(true),
         history_mode: (!config.ephemeral).then_some(ThreadHistoryMode::Paginated),
         thread_source: Some(thread_source.clone()),
         ..ThreadStartParams::default()

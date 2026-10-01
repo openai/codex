@@ -6,6 +6,7 @@ mod approval_policy;
 mod auth_env;
 #[path = "completion_backfill_tests.rs"]
 mod completion_backfill;
+mod daybreak;
 mod ephemeral;
 mod hooks;
 mod mcp_required_exit;
