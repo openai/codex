@@ -1,0 +1,7 @@
+---
+source: tui/src/app/tests/session_lifecycle_requests.rs
+expression: "confirmations.join(\"\\n\\n\")"
+---
+• Daybreak on. Applies to new turns.
+
+• Daybreak off. Applies to new turns.

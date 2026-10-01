@@ -43,6 +43,153 @@ use tokio_tungstenite::tungstenite::Message;
 pub(super) type RecordedRequests = Arc<Mutex<Vec<JSONRPCRequest>>>;
 pub(super) type RecordingAppServer = (AppServerSession, RecordedRequests, JoinHandle<Result<()>>);
 
+#[tokio::test]
+async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {
+    use codex_protocol::openai_models::ModelAccessPrograms;
+    use codex_protocol::turn_input::CyberAccessProgram;
+
+    let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
+    let (mut server, requests, proxy) = start_recording_app_server(
+        &app.config,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    )
+    .await?;
+    let mut enabled_config = app.config.clone();
+    enabled_config.daybreak_enabled = true;
+    let startup = crate::app_server_session::start_thread_with_request_handle(
+        server.request_handle(),
+        &app.local_settings,
+        enabled_config.clone(),
+        crate::app_server_session::ThreadParamsMode::Embedded,
+        /*remote_cwd_override*/ None,
+        server.thread_tool_transport(),
+        /*model_provider_override*/ None,
+    )
+    .await?;
+    assert!(startup.session.daybreak_enabled);
+    enabled_config.ephemeral = true;
+    let ephemeral = server.start_thread(&enabled_config).await?;
+    assert!(ephemeral.session.daybreak_enabled);
+    let starts = recorded_params(&requests, "thread/start");
+    assert_eq!(starts[0]["daybreakEnabled"], true);
+    assert!(starts[1]["daybreakEnabled"].is_null());
+
+    let started = server.start_thread(&app.config).await?;
+    let thread_id = started.session.thread_id;
+    app.active_thread_id = Some(thread_id);
+    app.chat_widget.handle_thread_session_quiet(started.session);
+    app.chat_widget.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ true,
+    );
+    app.chat_widget.open_model_popup();
+    let request_id = std::iter::from_fn(|| events.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::FetchModels { request_id } => Some(request_id),
+            _ => None,
+        })
+        .expect("model catalog request");
+    let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
+    model.model = app.chat_widget.current_model().to_string();
+    model.available_access_programs = Some(ModelAccessPrograms {
+        cyber: vec![
+            CyberAccessProgram::Standard,
+            CyberAccessProgram::DaybreakBlue,
+        ],
+    });
+    let mut unsupported_model = model.clone();
+    unsupported_model.model = "standard-only".into();
+    unsupported_model.available_access_programs = Some(ModelAccessPrograms {
+        cyber: vec![CyberAccessProgram::Standard],
+    });
+    app.chat_widget
+        .on_models_loaded(request_id, Ok(vec![model, unsupported_model]));
+    app.chat_widget
+        .handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut confirmations = Vec::new();
+    for enabled in [true, false] {
+        app.chat_widget.insert_str("/daybreak");
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::Esc));
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::Enter));
+        let selection = std::iter::from_fn(|| events.try_recv().ok())
+            .find(|event| matches!(event, AppEvent::PersistDaybreakSelection { .. }))
+            .expect("Daybreak selection event");
+        app.handle_event(&mut tui, &mut server, selection).await?;
+        confirmations.push(next_history_message(&mut events));
+        assert_eq!(
+            server
+                .thread_read(thread_id, /*include_turns*/ false)
+                .await?
+                .daybreak_enabled,
+            Some(enabled)
+        );
+        assert_eq!(app.config.daybreak_enabled, enabled);
+        let writes = recorded_params(&requests, "config/batchWrite");
+        let edit = &writes.last().expect("config write")["edits"][0];
+        assert_eq!(edit["keyPath"], "daybreak");
+        assert_eq!(edit["value"], enabled);
+    }
+    insta::assert_snapshot!("daybreak_toggle_confirmations", confirmations.join("\n\n"));
+
+    app.chat_widget.set_daybreak_enabled(/*enabled*/ true);
+    app.chat_widget
+        .handle_key_event(KeyEvent::from(KeyCode::Esc));
+    app.chat_widget
+        .apply_external_edit("side prompt".to_string());
+    app.chat_widget
+        .handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let turn = next_user_turn_op(&mut ops);
+    let mut unsupported_turn = turn.clone();
+    let Op::UserTurn { model, .. } = &mut unsupported_turn else {
+        unreachable!("expected user turn");
+    };
+    *model = "standard-only".into();
+    while events.try_recv().is_ok() {}
+    app.submit_thread_op(&mut server, thread_id, unsupported_turn)
+        .await?;
+    assert!(recorded_params(&requests, "turn/start").is_empty());
+    assert!(next_history_message(&mut events).contains("Daybreak support for model standard-only"));
+
+    app.chat_widget
+        .set_side_conversation_active(/*active*/ true);
+    app.submit_thread_op(&mut server, thread_id, turn.clone())
+        .await?;
+    app.chat_widget
+        .set_side_conversation_active(/*active*/ false);
+    app.submit_thread_op(&mut server, thread_id, turn.clone())
+        .await?;
+    let background_thread_id = server.start_thread(&app.config).await?.session.thread_id;
+    app.side_threads.insert(
+        background_thread_id,
+        crate::app::side::SideThreadState::new(thread_id),
+    );
+    app.submit_thread_op(&mut server, background_thread_id, turn)
+        .await?;
+    let turns = recorded_params(&requests, "turn/start");
+    assert_eq!(turns.len(), 3);
+    assert_eq!(turns[0]["cyberAccessProgram"], "standard");
+    assert_eq!(turns[1]["cyberAccessProgram"], "daybreakBlue");
+    assert_eq!(turns[2]["cyberAccessProgram"], "standard");
+    app.chat_widget.set_daybreak_enabled(/*enabled*/ false);
+    while events.try_recv().is_ok() {}
+
+    let missing_thread_id = ThreadId::new();
+    app.active_thread_id = Some(missing_thread_id);
+    app.persist_daybreak_selection(&mut server, missing_thread_id, /*enabled*/ true)
+        .await;
+    assert!(next_history_message(&mut events).contains("Failed to read the thread"));
+    assert!(!app.chat_widget.daybreak_enabled);
+    assert!(!app.config.daybreak_enabled);
+    server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
 async fn complete_managed_worktree_creation(
     app: &mut App,
     tui: &mut crate::tui::Tui,

@@ -539,6 +539,7 @@ impl App {
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
                     let mut fork_config = self.config.clone();
+                    fork_config.daybreak_enabled = self.chat_widget.daybreak_enabled;
                     if app_server.uses_remote_workspace() {
                         fork_config.workspace_roots.clone_from(
                             &self.chat_widget.config_ref().workspace_roots,
@@ -2446,6 +2447,9 @@ impl App {
                             .add_error_message(format!("Failed to save default model: {error}"));
                     }
                 }
+            }
+            AppEvent::PersistDaybreakSelection { thread_id, enabled } => {
+                self.persist_daybreak_selection(app_server, thread_id, enabled).await;
             }
             AppEvent::SelectSessionModel { model, effort } => {
                 self.app_event_tx.send(AppEvent::FollowTranscript);

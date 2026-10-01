@@ -97,6 +97,7 @@ impl ChatWidget {
         );
         let mut widget = Self {
             empty_state_animation: std::cell::RefCell::new(empty_state_animation),
+            daybreak_enabled: false,
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_target,

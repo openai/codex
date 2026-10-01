@@ -826,6 +826,28 @@ impl App {
                     }
                 }
                 if should_start_turn {
+                    let eligible_account = self.chat_widget.has_chatgpt_account()
+                        && self.chat_widget.config_ref().model_provider_id == "openai";
+                    let enabled = self.chat_widget.daybreak_enabled
+                        && !self.chat_widget.side_conversation_active()
+                        && !self.side_threads.contains_key(&thread_id);
+                    let cyber_access_program = match crate::daybreak::program_for_turn(
+                        &self.chat_widget.model_catalog().models,
+                        model,
+                        eligible_account,
+                        enabled,
+                    ) {
+                        Ok(program) => program,
+                        Err(message) => {
+                            if !self
+                                .chat_widget
+                                .handle_turn_start_rejection(message.clone())
+                            {
+                                self.chat_widget.add_error_message(message);
+                            }
+                            return Ok(true);
+                        }
+                    };
                     let config = self.chat_widget.config_ref();
                     let selected_profile =
                         self.pending_server_profiles.get(&thread_id).or_else(|| {
@@ -892,6 +914,7 @@ impl App {
                             collaboration_mode.clone(),
                             *personality,
                             final_output_json_schema.clone(),
+                            cyber_access_program.map(Into::into),
                         )
                         .await?;
                     if self.active_thread_id == Some(thread_id)
@@ -1398,6 +1421,7 @@ impl App {
     ) -> Option<ThreadSessionState> {
         let mut session = self.primary_session_configured.clone()?;
         session.thread_id = thread_id;
+        session.daybreak_enabled = notification.thread.daybreak_enabled.unwrap_or(false);
         session.windows_sandbox_host = crate::windows_sandbox::host_from_environments(
             notification.thread.environments.as_deref(),
         );

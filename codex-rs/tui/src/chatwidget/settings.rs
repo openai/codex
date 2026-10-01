@@ -5,6 +5,25 @@ use crate::app_event::AppEvent;
 use crate::chatwidget::rate_limits::RATE_LIMIT_SWITCH_PROMPT_VIEW_ID;
 
 impl ChatWidget {
+    pub(crate) fn set_daybreak_enabled(&mut self, enabled: bool) {
+        self.daybreak_enabled = enabled;
+        self.bottom_pane
+            .set_daybreak_command_description(self.daybreak_command_description());
+    }
+
+    pub(super) fn daybreak_command_description(&self) -> Option<&'static str> {
+        if self.daybreak_enabled {
+            Some("Disable broader access for cybersecurity work")
+        } else if !self.has_chatgpt_account || self.config.model_provider_id != "openai" {
+            None
+        } else {
+            match crate::daybreak::availability(&self.model_catalog.models) {
+                Some(true) => Some("Enable broader access for cybersecurity work"),
+                Some(false) => Some("Learn about broader access for cybersecurity work"),
+                None => Some("Manage broader access for cybersecurity work"),
+            }
+        }
+    }
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
         if let Err(err) = self
@@ -232,6 +251,7 @@ impl ChatWidget {
         self.status_account_display = status_account_display;
         self.plan_type = plan_type;
         self.has_chatgpt_account = has_chatgpt_account;
+        self.set_daybreak_enabled(self.daybreak_enabled);
         self.has_codex_backend_auth = has_codex_backend_auth;
         self.bottom_pane
             .set_connectors_enabled(self.connectors_enabled());

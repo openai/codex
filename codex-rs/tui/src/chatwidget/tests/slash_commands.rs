@@ -2151,6 +2151,79 @@ async fn slash_copy_picker_remains_available_from_parent_owned_threads() {
 }
 
 #[tokio::test]
+async fn slash_daybreak_offers_an_application_when_unavailable() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.has_chatgpt_account = true;
+    chat.config.model_provider_id = "openai".into();
+    let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
+    model.available_access_programs = Some(codex_protocol::openai_models::ModelAccessPrograms {
+        cyber: vec![codex_protocol::turn_input::CyberAccessProgram::Standard],
+    });
+    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![model.clone()]));
+
+    chat.set_daybreak_enabled(/*enabled*/ false);
+    chat.bottom_pane
+        .set_composer_text("/daybreak".to_string(), Vec::new(), Vec::new());
+    assert_chatwidget_snapshot!(
+        "slash_daybreak_help_unavailable",
+        render_bottom_popup(&chat, /*width*/ 80)
+            .lines()
+            .next()
+            .unwrap()
+    );
+
+    chat.dispatch_command(SlashCommand::Daybreak);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_chatwidget_snapshot!(
+        "slash_daybreak_unavailable",
+        lines_to_single_string(&cells[0])
+    );
+
+    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(Vec::new()));
+    chat.dispatch_command(SlashCommand::Daybreak);
+    let cells = drain_insert_history(&mut rx);
+    assert_chatwidget_snapshot!(
+        "slash_daybreak_catalog_unknown",
+        lines_to_single_string(&cells[0])
+    );
+
+    chat.has_chatgpt_account = false;
+    chat.dispatch_command(SlashCommand::Daybreak);
+    let cells = drain_insert_history(&mut rx);
+    assert_chatwidget_snapshot!(
+        "slash_daybreak_signed_out",
+        lines_to_single_string(&cells[0])
+    );
+    chat.has_chatgpt_account = true;
+
+    model
+        .available_access_programs
+        .as_mut()
+        .unwrap()
+        .cyber
+        .push(codex_protocol::turn_input::CyberAccessProgram::DaybreakBlue);
+    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![model]));
+    for (enabled, name) in [
+        (false, "slash_daybreak_help_enable"),
+        (true, "slash_daybreak_help_disable"),
+    ] {
+        chat.set_daybreak_enabled(enabled);
+        chat.bottom_pane
+            .set_composer_text(String::new(), Vec::new(), Vec::new());
+        chat.bottom_pane
+            .set_composer_text("/daybreak".to_string(), Vec::new(), Vec::new());
+        assert_chatwidget_snapshot!(
+            name,
+            render_bottom_popup(&chat, /*width*/ 80)
+                .lines()
+                .next()
+                .unwrap()
+        );
+    }
+}
+
+#[tokio::test]
 async fn slash_copy_reports_when_no_agent_response_exists() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

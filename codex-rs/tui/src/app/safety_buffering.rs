@@ -85,6 +85,20 @@ impl App {
                 .add_error_message(format!("Failed to retry with a faster model: {err}"));
             return;
         }
+        let eligible_account = self.chat_widget.has_chatgpt_account()
+            && self.chat_widget.config_ref().model_provider_id == "openai";
+        let daybreak_enabled = self.chat_widget.daybreak_enabled
+            && !self.chat_widget.side_conversation_active()
+            && !self.side_threads.contains_key(&thread_id);
+        if let Err(message) = crate::daybreak::program_for_turn(
+            &self.chat_widget.model_catalog().models,
+            &model,
+            eligible_account,
+            daybreak_enabled,
+        ) {
+            self.chat_widget.add_error_message(message);
+            return;
+        }
         *turn_model = model.clone();
         *effort = Some(ReasoningEffortConfig::Low);
         *collaboration_mode = collaboration_mode.as_ref().map(|mode| {

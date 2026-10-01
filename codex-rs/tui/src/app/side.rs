@@ -631,6 +631,7 @@ impl App {
         fork_config.model_reasoning_effort = self.chat_widget.current_reasoning_effort();
         fork_config.service_tier = self.chat_widget.configured_service_tier();
         fork_config.ephemeral = true;
+        fork_config.daybreak_enabled = false;
         fork_config.developer_instructions = Some(Self::side_developer_instructions(
             fork_config.developer_instructions.as_deref(),
         ));

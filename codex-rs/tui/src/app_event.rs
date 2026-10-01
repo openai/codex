@@ -1264,6 +1264,12 @@ pub(crate) enum AppEvent {
         service_tier: Option<String>,
     },
 
+    /// Persist the current thread's Daybreak preference and the new-thread default.
+    PersistDaybreakSelection {
+        thread_id: ThreadId,
+        enabled: bool,
+    },
+
     /// Fetch the current catalog even when cached models produce no picker.
     FetchModels {
         request_id: uuid::Uuid,

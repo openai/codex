@@ -40,6 +40,13 @@ pub(super) fn overlay_new_session_defaults(
     if !has_launch_setting(config, cli_kv_overrides, "model_reasoning_effort") {
         config.model_reasoning_effort = defaults.model_reasoning_effort.clone();
     }
+    if !has_launch_setting(config, cli_kv_overrides, "daybreak") {
+        config.daybreak_enabled = defaults
+            .additional
+            .get("daybreak")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+    }
 }
 
 impl App {

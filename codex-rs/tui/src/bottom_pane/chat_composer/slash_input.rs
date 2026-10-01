@@ -176,6 +176,7 @@ impl<'a> SlashInput<'a> {
                 plugins_command_enabled: self.command_flags.plugins_command_enabled,
                 token_activity_command_enabled: self.command_flags.token_activity_command_enabled,
                 service_tier_commands_enabled: self.command_flags.service_tier_commands_enabled,
+                daybreak_command_description: self.command_flags.daybreak_command_description,
                 goal_command_enabled: self.command_flags.goal_command_enabled,
                 voice_command_enabled: self.command_flags.voice_command_enabled,
                 worktrees_enabled: self.command_flags.worktrees_enabled,
@@ -214,12 +215,17 @@ impl ChatComposer {
             plugins_command_enabled: self.plugins_command_enabled,
             token_activity_command_enabled: self.token_activity_command_enabled,
             service_tier_commands_enabled: self.service_tier_commands_enabled,
+            daybreak_command_description: self.popups.daybreak_command_description,
             goal_command_enabled: self.goal_command_enabled,
             voice_command_enabled: self.voice_command_enabled,
             worktrees_enabled: self.worktrees_enabled,
             allow_elevate_sandbox: self.windows_degraded_sandbox_active,
             side_conversation_active: self.side_conversation_active,
         }
+    }
+
+    pub fn set_daybreak_command_description(&mut self, description: Option<&'static str>) {
+        self.popups.daybreak_command_description = description;
     }
 
     pub fn set_worktrees_enabled(&mut self, enabled: bool) {

@@ -609,6 +609,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_daybreak_command_description(&mut self, description: Option<&'static str>) {
+        self.composer.set_daybreak_command_description(description);
+        self.request_redraw();
+    }
+
     pub fn set_service_tier_commands(&mut self, commands: Vec<ServiceTierCommand>) {
         self.composer.set_service_tier_commands(commands);
         self.request_redraw();

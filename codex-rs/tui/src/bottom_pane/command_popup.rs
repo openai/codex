@@ -36,6 +36,7 @@ pub(crate) struct CommandPopup {
     command_filter: String,
     commands: Vec<CommandItem>,
     state: ScrollState,
+    daybreak_command_description: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -45,6 +46,7 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) plugins_command_enabled: bool,
     pub(crate) token_activity_command_enabled: bool,
     pub(crate) service_tier_commands_enabled: bool,
+    pub(crate) daybreak_command_description: Option<&'static str>,
     pub(crate) goal_command_enabled: bool,
     pub(crate) voice_command_enabled: bool,
     pub(crate) worktrees_enabled: bool,
@@ -60,6 +62,7 @@ impl From<CommandPopupFlags> for BuiltinCommandFlags {
             plugins_command_enabled: value.plugins_command_enabled,
             token_activity_command_enabled: value.token_activity_command_enabled,
             service_tier_commands_enabled: value.service_tier_commands_enabled,
+            daybreak_command_description: value.daybreak_command_description,
             goal_command_enabled: value.goal_command_enabled,
             voice_command_enabled: value.voice_command_enabled,
             worktrees_enabled: value.worktrees_enabled,
@@ -88,6 +91,7 @@ impl CommandPopup {
             command_filter: String::new(),
             commands,
             state: ScrollState::new(),
+            daybreak_command_description: flags.daybreak_command_description,
         }
     }
 
@@ -207,7 +211,13 @@ impl CommandPopup {
             .enumerate()
             .map(|(index, (item, indices))| {
                 let name = format!("/{}", item.command());
-                let description = item.description().to_string();
+                let description = if matches!(item, CommandItem::Builtin(SlashCommand::Daybreak)) {
+                    self.daybreak_command_description
+                        .unwrap_or(item.description())
+                } else {
+                    item.description()
+                }
+                .to_string();
                 GenericDisplayRow {
                     category_tag: None,
                     name,
@@ -608,6 +618,7 @@ mod tests {
                 plugins_command_enabled: false,
                 token_activity_command_enabled: false,
                 service_tier_commands_enabled: false,
+                daybreak_command_description: None,
                 goal_command_enabled: false,
                 voice_command_enabled: false,
                 worktrees_enabled: true,

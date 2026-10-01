@@ -89,6 +89,7 @@ fn complete_token_occurrences_before(textarea: &TextArea, token: &str, before: u
 #[derive(Default)]
 pub(super) struct PopupState {
     pub(super) active: ActivePopup,
+    pub(super) daybreak_command_description: Option<&'static str>,
     pub(super) dismissed_command_token: Option<String>,
     pub(super) dismissed_file_token: Option<DismissedToken>,
     pub(super) current_file_query: Option<String>,

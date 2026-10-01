@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/history_replay.rs
+expression: "merged_lines[0]"
+---
+• Daybreak is on for new turns.
