@@ -42,9 +42,15 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
         .runtime
         .upgrade()
         .expect("thread manager should be live");
+    let membership = control.runtime.admit_start().expect("admit residency work");
 
     let first_slot = control
-        .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
+        .reserve_v2_residency_slot(
+            &state,
+            &config,
+            &membership,
+            /*protected_thread_id*/ None,
+        )
         .await
         .expect("first resident slot");
     let first =
@@ -53,7 +59,12 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
     mark_thread_completed(first.thread.as_ref()).await;
 
     let second_slot = control
-        .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
+        .reserve_v2_residency_slot(
+            &state,
+            &config,
+            &membership,
+            /*protected_thread_id*/ None,
+        )
         .await
         .expect("second resident slot should evict the first idle agent");
     match manager.get_thread(first.thread_id).await {
@@ -93,9 +104,15 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
         .runtime
         .upgrade()
         .expect("thread manager should be live");
+    let membership = control.runtime.admit_start().expect("admit residency work");
 
     let first_slot = control
-        .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
+        .reserve_v2_residency_slot(
+            &state,
+            &config,
+            &membership,
+            /*protected_thread_id*/ None,
+        )
         .await
         .expect("first resident slot");
     let first =
@@ -104,7 +121,12 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
     mark_thread_interrupted(first.thread.as_ref()).await;
 
     let second_slot = control
-        .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
+        .reserve_v2_residency_slot(
+            &state,
+            &config,
+            &membership,
+            /*protected_thread_id*/ None,
+        )
         .await
         .expect("second resident slot should evict the first interrupted idle agent");
     match manager.get_thread(first.thread_id).await {

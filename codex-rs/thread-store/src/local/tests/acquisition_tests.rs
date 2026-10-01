@@ -43,7 +43,7 @@ async fn cancelled_acquisition_waits_for_writer_handoff_before_discarding() {
         "cleanup must retain the unfinished acquisition"
     );
     release.send(()).expect("creation still owned");
-    cleanup.await;
+    cleanup.await.expect("discard acquired writer");
     assert!(matches!(
         store.flush_thread(thread_id).await,
         Err(ThreadStoreError::ThreadNotFound { .. })

@@ -1,5 +1,6 @@
 use super::LocalAgentControl;
 use super::LocalAgentRuntime;
+use super::runtime::AgentTreeMembership;
 use crate::agent::AgentStatus;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
@@ -51,13 +52,14 @@ impl LocalAgentControl {
         &self,
         state: &Arc<ThreadManagerState>,
         config: &Config,
+        membership: &AgentTreeMembership,
         protected_thread_id: Option<ThreadId>,
     ) -> CodexResult<V2ResidencySlot> {
         let capacity = config
             .effective_agent_max_threads(MultiAgentVersion::V2)
             .unwrap_or(usize::MAX);
         Arc::clone(&self.runtime.residency)
-            .reserve_slot(state, capacity, protected_thread_id)
+            .reserve_slot(state, capacity, membership, protected_thread_id)
             .await
     }
 
@@ -101,6 +103,7 @@ impl V2Residency {
         self: Arc<Self>,
         manager: &Arc<ThreadManagerState>,
         capacity: usize,
+        membership: &AgentTreeMembership,
         protected_thread_id: Option<ThreadId>,
     ) -> CodexResult<V2ResidencySlot> {
         loop {
@@ -111,7 +114,7 @@ impl V2Residency {
                 });
             }
             if !self
-                .try_unload_one_resident(manager, protected_thread_id)
+                .try_unload_one_resident(manager, membership, protected_thread_id)
                 .await
             {
                 return Err(CodexErr::new(CodexErrorDetails::AgentLimitReached {
@@ -136,6 +139,7 @@ impl V2Residency {
     async fn try_unload_one_resident(
         self: &Arc<Self>,
         manager: &Arc<ThreadManagerState>,
+        membership: &AgentTreeMembership,
         protected_thread_id: Option<ThreadId>,
     ) -> bool {
         // Keep shutting-down workers counted until removal. Each runtime's write guard
@@ -178,6 +182,7 @@ impl V2Residency {
             // must keep delivery excluded and capacity reserved through registry removal.
             let manager = Arc::clone(manager);
             let residency = Arc::clone(self);
+            let teardown = membership.clone().into_teardown_guard();
             let eviction = tokio::spawn(async move {
                 let _residency_guard = residency_guard;
                 candidate_thread.ensure_rollout_materialized().await;
@@ -185,6 +190,7 @@ impl V2Residency {
                     warn!(
                         "failed to shut down v2 resident thread before unloading {candidate_thread_id}: {err}"
                     );
+                    teardown.complete();
                     return false;
                 }
                 let environments = candidate_thread.environment_selections().await;
@@ -193,6 +199,7 @@ impl V2Residency {
                     .get(&candidate_thread_id)
                     .is_some_and(|registered| !Arc::ptr_eq(registered, &candidate_thread))
                 {
+                    teardown.complete();
                     return false;
                 }
                 candidate_thread
@@ -204,6 +211,7 @@ impl V2Residency {
                 // Keep publication excluded until both entries have been removed.
                 threads.remove(&candidate_thread_id);
                 residency.remove(candidate_thread_id);
+                teardown.complete();
                 true
             });
             match eviction.await {

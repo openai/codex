@@ -17,10 +17,12 @@ use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
 use codex_rollout::RolloutRecorder;
 use codex_thread_store::LocalThreadStore;
+use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
@@ -109,6 +111,57 @@ async fn cancelled_resume_releases_writer_while_mcp_startup_is_pending() -> Resu
     })
     .await
     .context("cancelled startup should release its writer")??;
+    assert_eq!(resumed.thread_id, thread_id);
+    resumed.thread.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_resume_releases_writer_before_returning() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| config.experimental_thread_store = ThreadStoreConfig::Local)
+        .build_with_auto_env(&server)
+        .await?;
+    let thread_id = test.session_configured.thread_id;
+    let environments = test.codex.environment_selections().await;
+    test.codex.ensure_rollout_materialized().await;
+    let rollout_path = test.codex.rollout_path().context("thread rollout")?;
+    test.codex.shutdown_and_wait().await?;
+    test.thread_manager.remove_thread(&thread_id).await;
+    let history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+
+    let mcp_server = start_mock_server().await;
+    let (http_server, control) = AppsTestServer::mount_with_startup_control(&mcp_server).await?;
+    control.fail_next_initialize_attempts(/*attempts*/ 1);
+    let mut config = test.config.clone();
+    let mut servers = config.mcp_servers.get().clone();
+    servers.insert(
+        "fails-once".to_owned(),
+        serde_json::from_value(json!({
+            "url": format!("{}/api/codex/ps/mcp", http_server.chatgpt_base_url),
+            "http_headers": { "Authorization": "Bearer synthetic-test-token" },
+            "required": true,
+        }))?,
+    );
+    config.mcp_servers.set(servers)?;
+    let resume_options = || StartThreadOptions {
+        initial_history: history.clone(),
+        environments: Some(environments.clone()),
+        ..StartThreadOptions::new(config.clone())
+    };
+
+    assert!(
+        test.thread_manager
+            .start_thread(resume_options())
+            .await
+            .is_err(),
+        "first resume should fail MCP initialization"
+    );
+    let resumed = test.thread_manager.start_thread(resume_options()).await?;
+
     assert_eq!(resumed.thread_id, thread_id);
     resumed.thread.shutdown_and_wait().await?;
     Ok(())

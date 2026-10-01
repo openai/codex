@@ -96,14 +96,12 @@ impl LiveThreadInitGuard {
         self.live_thread = None;
     }
 
-    pub async fn discard(&mut self) {
-        let _ = self.finish_acquisition().await;
+    pub async fn discard(&mut self) -> ThreadStoreResult<()> {
+        self.finish_acquisition().await?;
         let Some(live_thread) = self.live_thread.take() else {
-            return;
+            return Ok(());
         };
-        if let Err(err) = live_thread.discard().await {
-            warn!("failed to discard thread persistence for failed session init: {err}");
-        }
+        live_thread.discard().await
     }
 }
 

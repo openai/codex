@@ -1,3 +1,4 @@
+use anyhow::Context;
 use anyhow::Result;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::CreateDirectoryOptions;
@@ -10,6 +11,7 @@ use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelections;
+use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -18,9 +20,11 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_no_network;
 use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use futures::FutureExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::time::Duration;
@@ -618,3 +622,195 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
 
 #[path = "agent_eviction_tests.rs"]
 mod eviction_tests;
+
+/// Tree shutdown waits for all admitted members, even after registry removal, without crossing
+/// into another root's tree.
+#[tokio::test]
+async fn tree_shutdown_waits_for_children_without_affecting_other_roots() -> Result<()> {
+    use codex_core::StartThreadOptions;
+    use codex_protocol::error::CodexErrorDetails;
+    use codex_protocol::protocol::InternalSessionSource;
+    use codex_protocol::protocol::SessionSource;
+
+    let server = start_mock_server().await;
+    mount_root_collaboration_call(
+        &server,
+        FIRST_PROMPT,
+        "first-call",
+        "spawn_agent",
+        json!({"message": FIRST_TASK, "task_name": "first", "fork_turns": "none"}),
+    )
+    .await;
+    mount_completed_worker(&server, FIRST_TASK, "first-call").await;
+    let test = test_codex()
+        .with_model("gpt-5.6-sol")
+        .with_config(|config| {
+            config.features.enable(Feature::Collab).unwrap();
+            config.features.enable(Feature::MultiAgentV2).unwrap();
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn(FIRST_PROMPT).await?;
+    let root_id = test.session_configured.thread_id;
+    let worker_id = test
+        .thread_manager
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .find(|id| *id != root_id)
+        .expect("spawned worker");
+    let worker = test.thread_manager.get_thread(worker_id).await?;
+    wait_for_event(&worker, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    let internal = test
+        .thread_manager
+        .spawn_internal_session(
+            root_id,
+            StartThreadOptions {
+                session_source: Some(SessionSource::Internal(InternalSessionSource::Guardian)),
+                ..StartThreadOptions::new(test.config.clone())
+            },
+        )
+        .await?;
+    let other = test
+        .thread_manager
+        .start_thread(StartThreadOptions::new(test.config.clone()))
+        .await?;
+
+    assert!(test.codex.wait_until_terminated().now_or_never().is_none());
+    let shutdown = test
+        .thread_manager
+        .request_agent_tree_shutdown(worker_id)
+        .await?;
+    // A live child can leave the registry before its owner finishes teardown.
+    test.thread_manager.remove_thread(&worker_id).await;
+    let error = match test
+        .thread_manager
+        .spawn_internal_session(
+            root_id,
+            StartThreadOptions {
+                session_source: Some(SessionSource::Internal(InternalSessionSource::Guardian)),
+                ..StartThreadOptions::new(test.config.clone())
+            },
+        )
+        .await
+    {
+        Ok(_) => panic!("agent-tree shutdown should reject a new internal session"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error.details(),
+        CodexErrorDetails::InvalidRequest(_)
+    ));
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 10), shutdown.wait()).await??;
+    assert!(test.codex.wait_until_terminated().now_or_never().is_some());
+    assert!(worker.wait_until_terminated().now_or_never().is_some());
+    assert!(
+        internal
+            .thread
+            .wait_until_terminated()
+            .now_or_never()
+            .is_some()
+    );
+    assert!(
+        other
+            .thread
+            .wait_until_terminated()
+            .now_or_never()
+            .is_none()
+    );
+    // A root that has never used collaboration can also receive the signal.
+    let other_shutdown = test
+        .thread_manager
+        .request_agent_tree_shutdown(other.thread_id)
+        .await?;
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 10), other_shutdown.wait()).await??;
+    assert!(
+        other
+            .thread
+            .wait_until_terminated()
+            .now_or_never()
+            .is_some()
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tree_shutdown_cancels_admitted_session_startup() -> Result<()> {
+    use codex_core::StartThreadOptions;
+    use codex_protocol::error::CodexErrorDetails;
+    use codex_protocol::protocol::InternalSessionSource;
+    use codex_protocol::protocol::SessionSource;
+
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    let root_id = test.session_configured.thread_id;
+    let mcp_server = start_mock_server().await;
+    let (http_server, control) = AppsTestServer::mount_with_startup_control(&mcp_server).await?;
+    let release = control.hold_next_successful_initialize();
+    let mut config = test.config.clone();
+    let mut servers = config.mcp_servers.get().clone();
+    servers.insert(
+        "stalled".to_owned(),
+        serde_json::from_value(json!({
+            "url": format!("{}/api/codex/ps/mcp", http_server.chatgpt_base_url),
+            "http_headers": { "Authorization": "Bearer synthetic-test-token" },
+            "required": true,
+            "startup_timeout_sec": 120,
+        }))?,
+    );
+    config.mcp_servers.set(servers)?;
+    let mut start = Box::pin(test.thread_manager.spawn_internal_session(
+        root_id,
+        StartThreadOptions {
+            session_source: Some(SessionSource::Internal(InternalSessionSource::Guardian)),
+            ..StartThreadOptions::new(config)
+        },
+    ));
+
+    tokio::select! {
+        _ = &mut start => panic!("startup must wait for the required MCP server"),
+        result = tokio::time::timeout(Duration::from_secs(10), async {
+            while control.initialize_attempts() == 0 {
+                tokio::task::yield_now().await;
+            }
+        }) => result.context("required MCP initialization did not begin")?,
+    }
+    let shutdown = test
+        .thread_manager
+        .request_agent_tree_shutdown(root_id)
+        .await?;
+    let (start_result, shutdown_result) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(&mut start, shutdown.wait())
+    })
+    .await
+    .context("tree shutdown must cancel admitted startup")?;
+    shutdown_result?;
+    let error = match start_result {
+        Ok(_) => panic!("cancelled internal session startup must not succeed"),
+        Err(error) => error,
+    };
+    assert!(matches!(error.details(), CodexErrorDetails::TurnAborted));
+    drop(release);
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn tree_shutdown_reports_persistence_writer_failure() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    let root_id = test.session_configured.thread_id;
+
+    // Close the real local writer first so Core's shutdown observes a writer failure.
+    test.thread_store.shutdown_thread(root_id).await?;
+    let shutdown = test
+        .thread_manager
+        .request_agent_tree_shutdown(root_id)
+        .await?;
+    let result = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), shutdown.wait()).await?;
+
+    assert!(result.is_err());
+    Ok(())
+}
