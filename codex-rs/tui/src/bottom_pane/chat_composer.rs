@@ -314,7 +314,6 @@ use super::effort_status_line::EFFORT_STATUS_LINE_FRAME_TICK;
 use super::effort_status_line::EffortStatusLineTransition;
 use super::file_search_popup::FileSearchPopup;
 use super::footer::CollaborationModeIndicator;
-use super::footer::FooterKeyHints;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::GoalStatusIndicator;
@@ -1468,12 +1467,6 @@ impl ChatComposer {
             .collect();
     }
 
-    /// Override the footer hint items displayed beneath the composer. Passing
-    /// `None` restores the default shortcut footer.
-    pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
-        self.footer.hint_override = items;
-    }
-
     pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
         if !self.sparkle.history_preview && !urls.is_empty() {
             self.dismiss_sparkle();
@@ -1883,43 +1876,6 @@ impl ChatComposer {
             }
             _ => {}
         }
-    }
-
-    /// Show the transient "press again to quit" hint for `key`.
-    ///
-    /// The owner (`BottomPane`/`ChatWidget`) is responsible for scheduling a
-    /// redraw after [`super::QUIT_SHORTCUT_TIMEOUT`] so the hint can disappear
-    /// even when the UI is otherwise idle.
-    pub fn show_quit_shortcut_hint(&mut self, key: KeyBinding, has_focus: bool) {
-        self.footer.quit_shortcut_expires_at = Instant::now()
-            .checked_add(super::QUIT_SHORTCUT_TIMEOUT)
-            .or_else(|| Some(Instant::now()));
-        self.footer.quit_shortcut_key = key;
-        self.footer.mode = FooterMode::QuitShortcutReminder;
-        self.set_has_focus(has_focus);
-    }
-
-    /// Clear the "press again to quit" hint immediately.
-    ///
-    /// Key routing calls this before dispatching ordinary input, so unrelated footer modes
-    /// such as shortcut help must remain available to their own toggle handlers.
-    pub fn clear_quit_shortcut_hint(&mut self, has_focus: bool) {
-        self.footer.quit_shortcut_expires_at = None;
-        if self.footer.mode == FooterMode::QuitShortcutReminder {
-            self.footer.mode = reset_mode_after_activity(self.footer.mode);
-        }
-        self.set_has_focus(has_focus);
-    }
-
-    /// Whether the quit shortcut hint should currently be shown.
-    ///
-    /// This is time-based rather than event-based: it may become false without
-    /// any additional user input, so the UI schedules a redraw when the hint
-    /// expires.
-    pub(crate) fn quit_shortcut_hint_visible(&self) -> bool {
-        self.footer
-            .quit_shortcut_expires_at
-            .is_some_and(|expires_at| Instant::now() < expires_at)
     }
 
     fn next_large_paste_placeholder(&self, char_count: usize) -> String {
@@ -3835,97 +3791,6 @@ impl ChatComposer {
         } else {
             None
         }
-    }
-
-    fn footer_props(&self) -> FooterProps {
-        let mode = self.footer_mode();
-        let is_wsl = {
-            #[cfg(target_os = "linux")]
-            {
-                mode == FooterMode::ShortcutOverlay && crate::clipboard_paste::is_probably_wsl()
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                false
-            }
-        };
-
-        FooterProps {
-            mode,
-            esc_backtrack_hint: self.footer.esc_backtrack_hint,
-            is_task_running: self.is_task_running,
-            queue_submissions: self.queue_submissions,
-            quit_shortcut_key: self.footer.quit_shortcut_key,
-            collaboration_modes_enabled: self.collaboration_modes_enabled,
-            is_wsl,
-            status_line_value: self.footer.status_line_value.clone(),
-            status_line_enabled: self.footer.status_line_enabled,
-            key_hints: FooterKeyHints {
-                agents: self
-                    .agents_navigation_available()
-                    .then_some(key_hint::plain(KeyCode::Left).into()),
-                toggle_shortcuts: self.footer.toggle_shortcuts_key,
-                queue: self.footer.queue_key,
-                insert_newline: self.footer.insert_newline_key,
-                external_editor: self.footer.external_editor_key,
-                edit_previous: Some(key_hint::plain(KeyCode::Esc).into()),
-                show_transcript: self.footer.show_transcript_key,
-                find_transcript: self.footer.find_transcript_key,
-                focus_activity: self.footer.focus_activity_key,
-                history_search: self.footer.history_search_key,
-                reasoning_down: self.footer.reasoning_down_key,
-                reasoning_up: self.footer.reasoning_up_key,
-                toggle_voice: self
-                    .footer
-                    .toggle_voice_key
-                    .filter(|_| self.voice_command_enabled && !self.side_conversation_active),
-            },
-            active_agent_label: self.footer.active_agent_label.clone(),
-        }
-    }
-
-    /// Resolve the effective footer mode via a small priority waterfall.
-    ///
-    /// The base mode is derived solely from whether the composer is empty:
-    /// `ComposerEmpty` iff empty, otherwise `ComposerHasDraft`. Transient
-    /// modes (Esc hint, overlay, quit reminder) can override that base when
-    /// their conditions are active.
-    fn footer_mode(&self) -> FooterMode {
-        if self.history_search.is_some() || self.draft.textarea.vim_query().is_some() {
-            return FooterMode::HistorySearch;
-        }
-
-        let base_mode = if self.is_empty() {
-            FooterMode::ComposerEmpty
-        } else {
-            FooterMode::ComposerHasDraft
-        };
-
-        match self.footer.mode {
-            FooterMode::HistorySearch => FooterMode::HistorySearch,
-            FooterMode::EscHint => FooterMode::EscHint,
-            FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
-            FooterMode::QuitShortcutReminder if self.quit_shortcut_hint_visible() => {
-                FooterMode::QuitShortcutReminder
-            }
-            FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
-                if self.quit_shortcut_hint_visible() =>
-            {
-                FooterMode::QuitShortcutReminder
-            }
-            FooterMode::QuitShortcutReminder => base_mode,
-            FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft => base_mode,
-        }
-    }
-
-    fn custom_footer_height(&self) -> Option<u16> {
-        if self.draft.textarea.vim_query().is_some() || self.footer.flash_visible() {
-            return Some(1);
-        }
-        self.footer
-            .hint_override
-            .as_ref()
-            .map(|items| if items.is_empty() { 0 } else { 1 })
     }
 
     pub(crate) fn sync_popups(&mut self) {
