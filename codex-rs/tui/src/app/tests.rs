@@ -3,8 +3,6 @@
 #[path = "tests/mcp_login_tests.rs"]
 mod mcp_login_tests;
 
-#[path = "tests/daybreak_tests.rs"]
-mod daybreak_tests;
 #[path = "tests/math_interruption_tests.rs"]
 mod math_interruption_tests;
 #[path = "tests/security_setup_tests.rs"]

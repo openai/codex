@@ -123,9 +123,13 @@ async fn resumed_session_hides_unknown_token_usage_until_an_update_arrives() {
 #[tokio::test]
 async fn app_server_cyber_policy_error_renders_dedicated_notice() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(Some("gpt-5.6-sol")).await;
-    chat.cyber_policy_notice
-        .set(crate::daybreak::Notice::Apply)
-        .unwrap();
+    chat.has_chatgpt_account = true;
+    let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
+    model.model = "gpt-5.6-sol".into();
+    model.available_access_programs = Some(codex_protocol::openai_models::ModelAccessPrograms {
+        cyber: vec![codex_protocol::turn_input::CyberAccessProgram::Standard],
+    });
+    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![model]));
 
     handle_error(
         &mut chat,

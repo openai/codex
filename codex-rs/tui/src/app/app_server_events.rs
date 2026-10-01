@@ -325,7 +325,6 @@ impl App {
                 self.agents_overview.pending_usage = None;
                 self.agents_overview.usage_disabled = false;
                 self.repaint_agents_overview();
-                self.chat_widget.cyber_policy_notice = Default::default();
                 self.chat_widget.invalidate_security_setup();
                 if let Some(crate::pager_overlay::Overlay::Analytics(view)) = &mut self.overlay {
                     view.refresh();
@@ -366,11 +365,6 @@ impl App {
                         app_server_client,
                         self.app_event_tx.clone(),
                         self.chat_widget.security_setup_request_id,
-                    );
-                    crate::daybreak::prefetch_notice(
-                        &self.config,
-                        app_server_client,
-                        self.chat_widget.cyber_policy_notice.clone(),
                     );
                 }
                 return;

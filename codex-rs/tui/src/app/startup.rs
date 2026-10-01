@@ -1064,11 +1064,6 @@ See the Codex keymap documentation for supported actions and examples."
                 app.app_event_tx.clone(),
                 app.chat_widget.security_setup_request_id,
             );
-            crate::daybreak::prefetch_notice(
-                &app.config,
-                &app_server,
-                app.chat_widget.cyber_policy_notice.clone(),
-            );
             let reset_hint_request_id = app.chat_widget.start_rate_limit_reset_startup_check();
             app.refresh_rate_limits(
                 &app_server,
