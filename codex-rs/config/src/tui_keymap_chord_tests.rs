@@ -74,3 +74,20 @@ fn rejects_an_invalid_second_chord_stroke() {
 
     assert!(error.contains("unknown key"), "{error}");
 }
+
+#[test]
+fn preserves_keybinding_validation_errors_when_deserializing_toml() {
+    for invalid in ["backslash", "ctrl-x ctrl-unknown", "ctrl-x ctrl-s ctrl-t"] {
+        for bindings in [format!("'{invalid}'"), format!("['ctrl-j', '{invalid}']")] {
+            let error =
+                toml::from_str::<TuiKeymap>(&format!("[editor]\ninsert_newline = {bindings}\n"))
+                    .expect_err("invalid bindings should retain the validation error");
+
+            assert_eq!(
+                error.message(),
+                normalize_keybinding_spec(invalid).unwrap_err()
+            );
+            assert!(error.to_string().contains("insert_newline"), "{error}");
+        }
+    }
+}

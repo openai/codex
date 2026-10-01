@@ -21,7 +21,10 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::de::Error as SerdeError;
+use serde::de::SeqAccess;
+use serde::de::Visitor;
 use std::collections::BTreeMap;
+use std::fmt;
 
 /// Highest function key supported by portable TUI keymap configuration.
 pub const MAX_FUNCTION_KEY: u8 = 24;
@@ -67,11 +70,50 @@ impl<'de> Deserialize<'de> for KeybindingSpec {
 /// An empty list explicitly unbinds the action in that scope. Because an
 /// explicit empty list is still a configured value, runtime resolution must not
 /// fall through to global or built-in defaults for that action.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(untagged)]
 pub enum KeybindingsSpec {
     One(KeybindingSpec),
     Many(Vec<KeybindingSpec>),
+}
+
+impl<'de> Deserialize<'de> for KeybindingsSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Dispatch by value type so untagged enum matching cannot hide validation errors.
+        struct KeybindingsVisitor;
+
+        impl<'de> Visitor<'de> for KeybindingsVisitor {
+            type Value = KeybindingsSpec;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a keybinding string or a list of keybinding strings")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: SerdeError,
+            {
+                let normalized = normalize_keybinding_spec(value).map_err(E::custom)?;
+                Ok(KeybindingsSpec::One(KeybindingSpec(normalized)))
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut bindings = Vec::new();
+                while let Some(binding) = sequence.next_element::<KeybindingSpec>()? {
+                    bindings.push(binding);
+                }
+                Ok(KeybindingsSpec::Many(bindings))
+            }
+        }
+
+        deserializer.deserialize_any(KeybindingsVisitor)
+    }
 }
 
 impl KeybindingsSpec {

@@ -1,0 +1,10 @@
+---
+source: cli/tests/features.rs
+expression: output
+---
+Error: failed to load bootstrap configuration
+
+Caused by:
+    unknown key `backslash` in keybinding `backslash`. Use a printable character (for example `a`), function keys (`f1`-`f24`), or one of: enter, tab, backspace, esc, delete, arrows, home/end, page-up/page-down, space, minus.
+    See the Codex keymap documentation for supported actions and examples.
+    in `tui.keymap.editor.insert_newline`

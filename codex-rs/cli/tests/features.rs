@@ -39,6 +39,31 @@ fn strict_config_rejects_unknown_config_override() -> Result<()> {
 }
 
 #[test]
+fn mcp_list_reports_invalid_keybinding_reason() -> Result<()> {
+    for bindings in ["'backslash'", "['backslash']"] {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            format!("[tui.keymap.editor]\ninsert_newline = {bindings}\n"),
+        )?;
+
+        let output = codex_command(codex_home.path())?
+            .current_dir(codex_home.path())
+            .args(["mcp", "list"])
+            .assert()
+            .failure()
+            .get_output()
+            .stderr
+            .clone();
+        let output = String::from_utf8(output)?;
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(output);
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn interactive_validates_config_before_requiring_terminal() -> Result<()> {
     let cases: &[(&[&str], &str, &str, &str)] = &[
         (&[], "config.toml", "model = [", "Error loading config.toml"),
