@@ -25,6 +25,7 @@ pub(super) struct StartupPresentation {
     pub(super) bootstrap_config: ConfigTomlLoadResult,
     pub(super) config_cwd: Option<AbsolutePathBuf>,
     pub(super) screen: StartupScreen,
+    pub(super) local_settings: crate::local_settings::LocalSettings,
 }
 
 /// Load client presentation settings without session setup or remote app-server connections.
@@ -50,47 +51,35 @@ pub(super) async fn load(
         },
     )
     .await?;
-    let config_toml = &bootstrap_config.config_toml;
-    let alternate_screen = config_toml
-        .tui
-        .as_ref()
-        .map(|tui| tui.alternate_screen)
-        .unwrap_or_default();
+    let local_settings = crate::local_settings::LocalSettings::from_bootstrap(
+        &bootstrap_config,
+        AbsolutePathBuf::from_absolute_path(codex_home)?,
+    )
+    .map_err(io::Error::other)?;
+    let settings = &local_settings.tui;
     // Terminal probing happens after configuration loads; startup finalizes this before painting.
     let use_alt_screen = crate::determine_alt_screen_mode(
         cli.no_alt_screen,
-        alternate_screen,
+        settings.alternate_screen,
         /*terminal_app_over_ssh*/ false,
     );
     let transcript_mode = crate::transcript_mode::TranscriptMode::resolve(
-        config_toml
-            .tui
-            .as_ref()
-            .is_none_or(|tui| tui.fullscreen_transcript),
+        settings.fullscreen_transcript,
         use_alt_screen,
     );
-    let status_line_enabled = config_toml
-        .tui
+    let status_line_enabled = settings
+        .status_line
         .as_ref()
-        .and_then(|tui| tui.status_line.as_ref())
         .is_none_or(|items| !items.is_empty());
-    let default_tui_settings = codex_config::types::Tui::default();
-    let tui_settings = config_toml.tui.as_ref().unwrap_or(&default_tui_settings);
-    let keymap = RuntimeKeymap::from_config(&tui_settings.keymap).map_err(io::Error::other)?;
-    let disable_paste_burst = tui_settings
-        .disable_paste_burst
-        .or(config_toml.disable_paste_burst)
-        .unwrap_or(/*default*/ false);
+    let keymap = RuntimeKeymap::from_config(&settings.keymap).map_err(io::Error::other)?;
+    let disable_paste_burst = settings.disable_paste_burst.unwrap_or(false);
     let welcome_motion = crate::motion::MotionMode::from_animations_enabled(
-        config_toml
-            .tui
-            .as_ref()
-            .is_none_or(|tui| tui.animations && tui.effects.welcome)
-            && crate::system_motion::mode() == crate::motion::MotionMode::Animated,
+        settings.animations && settings.effects.welcome,
     );
     Ok(StartupPresentation {
         bootstrap_config,
         config_cwd,
+        local_settings,
         screen: StartupScreen {
             use_alt_screen,
             transcript_mode,

@@ -1396,7 +1396,10 @@ async fn run_ratatui_app(
     if app_server_target.uses_embedded_network_policy() {
         embedded_network_policy.bind_config(&mut config);
     }
-    startup_draft.apply_config(&config);
+    startup_draft.apply_settings(
+        &crate::local_settings::LocalSettings::from(&config),
+        config.cwd.as_path(),
+    );
     if !(cli.resume_picker || cli.fork_picker || cli.agents_overview)
         && let Err(err) = startup_draft.show(&mut tui)
     {
@@ -1748,7 +1751,10 @@ async fn run_ratatui_app(
     if app_server_target.uses_embedded_network_policy() {
         embedded_network_policy.bind_config(&mut config);
     }
-    startup_draft.apply_config(&config);
+    startup_draft.apply_settings(
+        &crate::local_settings::LocalSettings::from(&config),
+        config.cwd.as_path(),
+    );
 
     if config.model_provider_id != startup_model_provider {
         startup_account = None;
@@ -1908,7 +1914,10 @@ async fn run_ratatui_app(
     if app_server_target.uses_embedded_network_policy() {
         embedded_network_policy.bind_config(&mut config);
     }
-    startup_draft.apply_config(&config);
+    startup_draft.apply_settings(
+        &crate::local_settings::LocalSettings::from(&config),
+        config.cwd.as_path(),
+    );
 
     // Count launches that reach final config resolution, regardless of screen policy.
     if config.analytics_enabled != Some(false)

@@ -110,7 +110,10 @@ async fn owned_startup_preserves_loading_until_resume_replay_is_applied() -> Res
         tui.set_owned_screen(/*owned*/ true)?;
         let thread_id = ThreadId::new();
         let mut startup = quiet_startup_test_pump();
-        startup.apply_config(&app.config);
+        startup.apply_settings(
+            &crate::local_settings::LocalSettings::from(&app.config),
+            app.config.cwd.as_path(),
+        );
         startup.update_session_selection(
             &mut tui,
             &SessionSelection::Resume(crate::resume_picker::SessionTarget {

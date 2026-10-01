@@ -145,34 +145,31 @@ fast_default_opt_out = true
             .build()
             .await?;
         assert_eq!(config.startup_warnings, Vec::<String>::new());
-        let local = LocalSettings::from(&config);
-        let mut expected: Tui = toml::from_str("")?;
-        expected.disable_paste_burst = Some(true);
-        expected.right_click_paste = RightClickPaste::On;
-        expected.session_picker_view = Some(SessionPickerViewMode::Dense);
-        if !config_text.is_empty() {
-            expected.animations = false;
-            expected.effects.shimmer = false;
-            expected.rendering = codex_config::types::TuiRendering {
-                mermaid: false,
-                math: false,
-                tables: false,
-                lists: false,
-            };
-            expected.show_tooltips = false;
-            expected.show_server_version_notice = false;
-            expected.auto_recap = false;
-            expected.fullscreen_transcript = true;
-            expected.copy_on_select = CopyOnSelect::Never;
-            expected.vim_mode_default = true;
-            expected.terminal_resize_reflow_max_rows = Some(0);
-            expected.session_picker_view = Some(SessionPickerViewMode::Comfortable);
-        }
+        let bootstrap = crate::legacy_core::config::load_config_toml_with_layer_stack(
+            home.path(),
+            /*cwd*/ None,
+            vec![
+                ("tui.disable_paste_burst".into(), true.into()),
+                ("tui.right_click_paste".into(), "on".into()),
+                (
+                    "features.transcript_v2".into(),
+                    config_text.is_empty().into(),
+                ),
+            ],
+            codex_config::ConfigLoadOptions {
+                loader_overrides: LoaderOverrides {
+                    ignore_project_config: true,
+                    ..LoaderOverrides::without_managed_config_for_tests()
+                },
+                strict_config: true,
+                ..Default::default()
+            },
+        )
+        .await?;
         assert_eq!(
-            local.transcript_mode.is_owned(),
-            expected.fullscreen_transcript
+            LocalSettings::from_bootstrap(&bootstrap, config.codex_home.clone())?,
+            LocalSettings::from(&config),
         );
-        assert_eq!(local.tui, expected);
         assert_eq!(
             config
                 .features
@@ -180,14 +177,6 @@ fast_default_opt_out = true
                 .map(|usage| usage.alias.as_str())
                 .collect::<Vec<_>>(),
             vec!["features.transcript_v2"],
-        );
-        assert_eq!(
-            local.terminal_resize_reflow(),
-            config.terminal_resize_reflow
-        );
-        assert_eq!(
-            (&local.history, &local.notices),
-            (&config.history, &config.notices)
         );
     }
     Ok(())

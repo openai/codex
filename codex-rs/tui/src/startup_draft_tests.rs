@@ -30,7 +30,7 @@ where
     let (tx, rx) = unbounded_channel();
     let mut blossom = crate::empty_state_animation::EmptyStateAnimation::default();
     blossom.start_fresh();
-    let header = startup_session_header(/*config*/ None);
+    let header = startup_session_header(/*cwd*/ None);
     StartupDraftPump {
         header,
         blossom: std::cell::RefCell::new(blossom),
@@ -71,6 +71,7 @@ fn startup_draft_renders_full_empty_and_multiline_composer_frames() {
 
     for (label, width, text, session_action) in [
         ("empty", 48, "", StartupDraftSessionAction::New),
+        ("configured", 48, "", StartupDraftSessionAction::New),
         ("resuming", 48, "", StartupDraftSessionAction::Resume),
         (
             "forking",
@@ -93,6 +94,9 @@ fn startup_draft_renders_full_empty_and_multiline_composer_frames() {
     ] {
         let mut pump = startup_test_pump(std::iter::empty());
         pump.session_action = session_action;
+        if label == "configured" {
+            pump.header = startup_session_header(Some(std::path::Path::new("workspace")));
+        }
         pump.bottom_pane
             .set_composer_text(text.to_string(), Vec::new(), Vec::new());
         let renderable =
@@ -301,7 +305,10 @@ async fn startup_draft_hydrates_its_header_without_moving_the_composer() {
             .desired_height(width);
 
     assert_eq!(pump.header.raw_lines()[2].to_string(), "directory: loading");
-    pump.apply_config(&config);
+    pump.apply_settings(
+        &crate::local_settings::LocalSettings::from(&config),
+        config.cwd.as_path(),
+    );
     let expected_directory = crate::history_cell::SessionHeaderHistoryCell::format_directory_inner(
         config.cwd.as_path(),
         /*max_width*/ None,
@@ -630,11 +637,12 @@ fn startup_draft_preserves_windows_altgr_text_input() {
 #[tokio::test]
 async fn startup_draft_applies_paste_burst_preferences_without_losing_buffered_input() {
     let codex_home = tempfile::tempdir().expect("create temporary Codex home");
-    let mut config = ConfigBuilder::default()
+    let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .build()
         .await
         .expect("build startup configuration");
+    let mut settings = crate::local_settings::LocalSettings::from(&config);
     let mut pump = startup_test_pump(std::iter::empty());
 
     handle_startup_draft_key(
@@ -645,8 +653,8 @@ async fn startup_draft_applies_paste_burst_preferences_without_losing_buffered_i
     assert!(pump.bottom_pane.is_in_paste_burst());
     assert_eq!(pump.bottom_pane.composer_text(), "");
 
-    config.disable_paste_burst = true;
-    pump.apply_config(&config);
+    settings.tui.disable_paste_burst = Some(true);
+    pump.apply_settings(&settings, config.cwd.as_path());
     assert_eq!(pump.bottom_pane.composer_text(), "a");
     assert!(!pump.bottom_pane.is_in_paste_burst());
 
@@ -658,8 +666,8 @@ async fn startup_draft_applies_paste_burst_preferences_without_losing_buffered_i
     assert_eq!(pump.bottom_pane.composer_text(), "ab");
     assert!(!pump.bottom_pane.is_in_paste_burst());
 
-    config.disable_paste_burst = false;
-    pump.apply_config(&config);
+    settings.tui.disable_paste_burst = Some(false);
+    pump.apply_settings(&settings, config.cwd.as_path());
     handle_startup_draft_key(
         &mut pump.bottom_pane,
         KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
@@ -668,8 +676,8 @@ async fn startup_draft_applies_paste_burst_preferences_without_losing_buffered_i
     assert_eq!(pump.bottom_pane.composer_text(), "ab");
     assert!(pump.bottom_pane.is_in_paste_burst());
 
-    config.disable_paste_burst = true;
-    pump.apply_config(&config);
+    settings.tui.disable_paste_burst = Some(true);
+    pump.apply_settings(&settings, config.cwd.as_path());
     assert_eq!(pump.bottom_pane.composer_text(), "abc");
     assert!(!pump.bottom_pane.is_in_paste_burst());
     assert!(pump.app_event_rx.try_recv().is_err());
@@ -678,18 +686,19 @@ async fn startup_draft_applies_paste_burst_preferences_without_losing_buffered_i
 #[tokio::test]
 async fn startup_draft_applies_editor_keymap_without_enabling_vim() {
     let codex_home = tempfile::tempdir().expect("create temporary Codex home");
-    let mut config = ConfigBuilder::default()
+    let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .build()
         .await
         .expect("build startup configuration");
-    config.tui_vim_mode_default = true;
-    config.tui_keymap.editor.move_line_start = Some(codex_config::types::KeybindingsSpec::One(
+    let mut settings = crate::local_settings::LocalSettings::from(&config);
+    settings.tui.vim_mode_default = true;
+    settings.tui.keymap.editor.move_line_start = Some(codex_config::types::KeybindingsSpec::One(
         codex_config::types::KeybindingSpec("ctrl-z".to_string()),
     ));
     let mut pump = startup_test_pump(std::iter::empty());
     pump.bottom_pane.insert_str("draft");
-    pump.apply_config(&config);
+    pump.apply_settings(&settings, config.cwd.as_path());
     assert!(!pump.bottom_pane.composer_is_vim_enabled());
     handle_startup_draft_key(
         &mut pump.bottom_pane,
@@ -707,11 +716,11 @@ async fn startup_draft_applies_editor_keymap_without_enabling_vim() {
     let mut tui = crate::tui::test_support::make_test_tui().expect("create test terminal");
     pump.handle_event(&mut tui, TuiEvent::Key(KeyEvent::from(KeyCode::Enter)))
         .expect("confirm draft");
-    pump.apply_config(&config);
+    pump.apply_settings(&settings, config.cwd.as_path());
     assert!(pump.submission_pending);
-    config.tui_keymap.composer.submit =
+    settings.tui.keymap.composer.submit =
         Some(codex_config::types::KeybindingsSpec::Many(Vec::new()));
-    pump.apply_config(&config);
+    pump.apply_settings(&settings, config.cwd.as_path());
     assert!(!pump.submission_pending);
     assert_eq!(pump.bottom_pane.composer_text(), "draftx");
 }

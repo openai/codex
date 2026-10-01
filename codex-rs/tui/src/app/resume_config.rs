@@ -221,7 +221,10 @@ impl App {
                     config.cwd.to_path_buf(),
                 );
                 let hooks = if let Some(draft) = startup_draft {
-                    draft.apply_config(config);
+                    draft.apply_settings(
+                        &crate::local_settings::LocalSettings::from(&*config),
+                        config.cwd.as_path(),
+                    );
                     async {
                         let hooks = draft.run_until(tui, load_hooks).await?;
                         draft.flush_pending_events(tui).await?;

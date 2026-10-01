@@ -289,15 +289,11 @@ pub(super) async fn run_main_inner(
         bootstrap_config,
         config_cwd,
         mut screen,
+        local_settings,
     } = presentation;
     screen.use_alt_screen = determine_alt_screen_mode(
         cli.no_alt_screen,
-        bootstrap_config
-            .config_toml
-            .tui
-            .as_ref()
-            .map(|tui| tui.alternate_screen)
-            .unwrap_or_default(),
+        local_settings.tui.alternate_screen,
         initialized_terminal.terminal_app_over_ssh,
     );
     screen.transcript_mode = crate::transcript_mode::TranscriptMode::resolve(
@@ -464,7 +460,10 @@ pub(super) async fn run_main_inner(
     if app_server_target.uses_embedded_network_policy() {
         embedded_network_policy.activate(&mut config);
     }
-    startup_draft.apply_config(&config);
+    startup_draft.apply_settings(
+        &crate::local_settings::LocalSettings::from(&config),
+        config.cwd.as_path(),
+    );
 
     let mut cloud_config_bundle = if workload_identity_selected {
         cloud_config_bundle
@@ -499,7 +498,10 @@ pub(super) async fn run_main_inner(
         if app_server_target.uses_embedded_network_policy() {
             embedded_network_policy.activate(&mut config);
         }
-        startup_draft.apply_config(&config);
+        startup_draft.apply_settings(
+            &crate::local_settings::LocalSettings::from(&config),
+            config.cwd.as_path(),
+        );
         Some(worktree)
     } else {
         None

@@ -20,7 +20,10 @@ async fn selected_profile_controls_submit_before_the_first_frame() -> anyhow::Re
     ] {
         std::fs::write(
             &selected,
-            format!("disable_paste_burst = true\n[tui.keymap.composer]\nsubmit = {submit}\n"),
+            // Presentation must not compile the local execution profile.
+            format!(
+                "default_permissions = \"server-only\"\ndisable_paste_burst = true\n[permissions.server-only]\nextends = \"missing-local-parent\"\n[tui.keymap.composer]\nsubmit = {submit}\n"
+            ),
         )?;
         let presentation = load(
             &cli,

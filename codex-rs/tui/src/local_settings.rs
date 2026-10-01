@@ -1,16 +1,18 @@
 //! Client-owned preferences and persistence paths, independent of active server settings.
 //!
-//! The resolved core config is a temporary input at local load/reload boundaries. Server thread
-//! responses must never refresh these values; live preference changes belong here. The remaining
-//! Config-based lifecycle adapters also use this conversion until their interfaces are migrated.
+//! The first frame reads preferences from bootstrap TOML without executable core config.
+//! Server thread responses must never refresh these values; live preference changes belong here.
+//! Legacy Config-based lifecycle adapters remain until their interfaces are migrated.
 //! Audio preferences exclude project layers so thread cwd cannot route local capture.
 //! Effective animations also respect the TUI host's launch-time accessibility preference.
 //! The selected transcript ownership and alternate-screen restrictions survive local reloads.
 
 use crate::legacy_core::config::Config;
+use crate::legacy_core::config::ConfigTomlLoadResult;
 use crate::legacy_core::config::TerminalResizeReflowConfig;
 use crate::legacy_core::config::TerminalResizeReflowMaxRows;
 use crate::transcript_mode::TranscriptMode;
+use codex_config::ConfigLayerStack;
 use codex_config::types::CopyOnSelect;
 use codex_config::types::History;
 use codex_config::types::Notice;
@@ -46,37 +48,15 @@ impl LocalSettings {
         system_motion: crate::motion::MotionMode,
         screen_reader_default: crate::motion::MotionMode,
     ) -> Self {
-        let animations = if screen_reader_default == crate::motion::MotionMode::Reduced {
-            // Consult the current layers so preferences edited after startup still win.
-            config
-                .config_layer_stack
-                .effective_config()
-                .get("tui")
-                .and_then(|tui| tui.get("animations"))
-                .is_some()
-                && config.animations
-        } else {
-            config.animations
-        };
-        let mut audio = toml::Value::Table(Default::default());
-        for layer in config.config_layer_stack.layers_low_to_high() {
-            if !matches!(layer.name, codex_config::ConfigLayerSource::Project { .. })
-                && let Some(value) = layer.config.get("audio")
-            {
-                codex_config::merge_toml_values(&mut audio, value);
-            }
-        }
-        Self {
-            audio: audio.try_into().map_err(|error: toml::de::Error| {
-                format!("Invalid machine audio settings: {error}")
-            }),
+        let mut settings = Self {
+            audio: Ok(Default::default()),
             transcript_mode: TranscriptMode::resolve(
                 config.tui_fullscreen_transcript,
                 config.tui_alternate_screen != codex_config::types::AltScreenMode::Never,
             ),
             tui: Tui {
                 notification_settings: config.tui_notifications.clone(),
-                animations: animations && system_motion == crate::motion::MotionMode::Animated,
+                animations: config.animations,
                 screen_reader_detection_done: None,
                 effects: config.tui_effects,
                 rendering: config.tui_rendering,
@@ -115,7 +95,82 @@ impl LocalSettings {
                 .get_user_config_file()
                 .cloned()
                 .unwrap_or_else(|| config.codex_home.join("config.toml")),
+        };
+        settings.apply_host_preferences(
+            &config.config_layer_stack,
+            system_motion,
+            screen_reader_default,
+        );
+        settings
+    }
+
+    /// Read client preferences without resolving model providers or execution permissions.
+    pub(crate) fn from_bootstrap(
+        bootstrap: &ConfigTomlLoadResult,
+        codex_home: AbsolutePathBuf,
+    ) -> Result<Self, toml::de::Error> {
+        let config = &bootstrap.config_toml;
+        let mut tui = match &config.tui {
+            Some(tui) => tui.clone(),
+            None => toml::Value::Table(Default::default()).try_into()?,
+        };
+        tui.disable_paste_burst = Some(
+            tui.disable_paste_burst
+                .or(config.disable_paste_burst)
+                .unwrap_or(false),
+        );
+        tui.session_picker_view = Some(tui.session_picker_view.unwrap_or_default());
+        tui.screen_reader_detection_done = None;
+        let mut settings = Self {
+            audio: Ok(Default::default()),
+            transcript_mode: TranscriptMode::resolve(
+                tui.fullscreen_transcript,
+                tui.alternate_screen != codex_config::types::AltScreenMode::Never,
+            ),
+            tui,
+            history: config.history.clone().unwrap_or_default(),
+            notices: config.notice.clone().unwrap_or_default(),
+            user_config_path: bootstrap
+                .config_layer_stack
+                .get_user_config_file()
+                .cloned()
+                .unwrap_or_else(|| codex_home.join("config.toml")),
+            codex_home,
+        };
+        settings.apply_host_preferences(
+            &bootstrap.config_layer_stack,
+            crate::system_motion::mode(),
+            crate::screen_reader::animation_default(),
+        );
+        Ok(settings)
+    }
+
+    fn apply_host_preferences(
+        &mut self,
+        layers: &ConfigLayerStack,
+        system_motion: crate::motion::MotionMode,
+        screen_reader_default: crate::motion::MotionMode,
+    ) {
+        if screen_reader_default == crate::motion::MotionMode::Reduced {
+            // Consult the current layers so preferences edited after startup still win.
+            self.tui.animations &= layers
+                .effective_config()
+                .get("tui")
+                .and_then(|tui| tui.get("animations"))
+                .is_some();
         }
+        self.tui.animations &= system_motion == crate::motion::MotionMode::Animated;
+        let mut audio = toml::Value::Table(Default::default());
+        for layer in layers.layers_low_to_high() {
+            if !matches!(layer.name, codex_config::ConfigLayerSource::Project { .. })
+                && let Some(value) = layer.config.get("audio")
+            {
+                codex_config::merge_toml_values(&mut audio, value);
+            }
+        }
+        self.audio = audio
+            .try_into()
+            .map_err(|error: toml::de::Error| format!("Invalid machine audio settings: {error}"));
     }
 }
 

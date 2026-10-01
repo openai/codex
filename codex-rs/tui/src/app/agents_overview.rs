@@ -988,7 +988,10 @@ impl App {
         }
         .to_path_buf();
         if let Some(draft) = startup_draft.as_deref_mut() {
-            draft.apply_config(&config);
+            draft.apply_settings(
+                &crate::local_settings::LocalSettings::from(&config),
+                config.cwd.as_path(),
+            );
         }
         let mut server_model_cleared = false;
         match StartupDraftPump::run_with_optional_draft(

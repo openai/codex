@@ -1,11 +1,22 @@
 ---
 source: tui/src/startup_draft_tests.rs
+assertion_line: 144
 expression: "snapshots.join(\"\\n---\\n\")"
 ---
 empty (48 columns):
 
   >_ OpenAI Codex (v<VERSION>)
      loading
+
+
+› Ask Codex to do anything
+
+  ? for shortcuts
+---
+configured (48 columns):
+
+  >_ OpenAI Codex (v<VERSION>)
+     workspace
 
 
 › Ask Codex to do anything

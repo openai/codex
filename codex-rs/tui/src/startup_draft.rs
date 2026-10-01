@@ -1,8 +1,10 @@
 //! Keep the first composer editable and bottom-anchored while startup work continues.
 //! Submit keys confirm one draft locally; session dispatch waits for the protected handoff.
+//! Presentation accepts client preferences and cwd; effective permissions remain unknown here.
 
 use std::future::Future;
 use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::Poll;
@@ -28,7 +30,7 @@ use crate::bottom_pane::ComposerDraftSnapshot;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
 use crate::keymap::RuntimeKeymap;
-use crate::legacy_core::config::Config;
+use crate::local_settings::LocalSettings;
 use crate::render::Insets;
 use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
@@ -172,8 +174,8 @@ impl StartupDraft {
     }
 
     /// Apply the loaded editing preferences without enabling startup actions or submission.
-    pub(crate) fn apply_config(&mut self, config: &Config) {
-        self.pump.apply_config(config);
+    pub(crate) fn apply_settings(&mut self, settings: &LocalSettings, cwd: &Path) {
+        self.pump.apply_settings(settings, cwd);
     }
 
     /// Lend the original terminal to an existing interactive startup screen.
@@ -202,7 +204,7 @@ impl StartupDraftPump {
         ) {
             blossom.start_fresh();
         }
-        let header = startup_session_header(/*config*/ None);
+        let header = startup_session_header(/*cwd*/ None);
         Self {
             header,
             blossom: std::cell::RefCell::new(blossom),
@@ -247,20 +249,19 @@ impl StartupDraftPump {
     }
 
     /// Refresh the session header and safe editor shortcuts without enabling modal editing.
-    pub(crate) fn apply_config(&mut self, config: &Config) {
+    pub(crate) fn apply_settings(&mut self, local_settings: &LocalSettings, cwd: &Path) {
         if self
             .configured_cwd
             .as_deref()
-            .is_some_and(|cwd| cwd != config.cwd.as_path())
+            .is_some_and(|previous_cwd| previous_cwd != cwd)
         {
             self.cancel_submission();
         }
-        self.configured_cwd = Some(config.cwd.to_path_buf());
-        let local_settings = crate::local_settings::LocalSettings::from(config);
+        self.configured_cwd = Some(cwd.to_path_buf());
         self.motion = crate::motion::MotionMode::from_animations_enabled(
             local_settings.tui.animations && local_settings.tui.effects.welcome,
         );
-        self.header = startup_session_header(Some(config));
+        self.header = startup_session_header(Some(cwd));
         self.bottom_pane.set_status_line_enabled(
             local_settings
                 .tui
@@ -463,20 +464,14 @@ impl StartupDraftPump {
     }
 }
 
-fn startup_session_header(config: Option<&Config>) -> Box<dyn HistoryCell> {
-    let directory = config.map_or_else(
-        || PathBuf::from("loading"),
-        |config| config.cwd.to_path_buf(),
-    );
-    Box::new(
-        history_cell::SessionHeaderHistoryCell::new(
-            "loading".to_string(),
-            /*reasoning_effort*/ None,
-            directory,
-            CODEX_CLI_VERSION,
-        )
-        .with_yolo_mode(config.is_some_and(history_cell::is_yolo_mode)),
-    )
+fn startup_session_header(cwd: Option<&Path>) -> Box<dyn HistoryCell> {
+    // Execution permissions are unknown until the server initializes the thread.
+    Box::new(history_cell::SessionHeaderHistoryCell::new(
+        "loading".to_string(),
+        /*reasoning_effort*/ None,
+        cwd.map_or_else(|| PathBuf::from("loading"), Path::to_path_buf),
+        CODEX_CLI_VERSION,
+    ))
 }
 
 fn startup_draft_renderable<'a>(
