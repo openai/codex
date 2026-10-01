@@ -746,7 +746,6 @@ impl App {
                 service_tier,
                 final_output_json_schema,
                 collaboration_mode,
-                personality,
             } => {
                 let mut should_start_turn = true;
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
@@ -912,7 +911,6 @@ impl App {
                             *summary,
                             service_tier.clone(),
                             collaboration_mode.clone(),
-                            *personality,
                             final_output_json_schema.clone(),
                             cyber_access_program.map(Into::into),
                         )

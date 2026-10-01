@@ -787,7 +787,6 @@ async fn required_windows_sandbox_setup_defers_configured_initial_prompt() {
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
@@ -1000,7 +999,6 @@ async fn approvals_popup_navigation_skips_disabled() {
             ev,
             AppEvent::CodexOp(Op::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::OnRequest),
-                personality: None,
                 ..
             })
         )),
@@ -1011,7 +1009,6 @@ async fn approvals_popup_navigation_skips_disabled() {
             ev,
             AppEvent::CodexOp(Op::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::Never),
-                personality: None,
                 ..
             })
         )),
@@ -1232,7 +1229,6 @@ async fn permissions_selection_marks_auto_review_current_after_session_configure
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
@@ -1287,7 +1283,6 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
@@ -1405,7 +1400,6 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             summary: None,
             service_tier: None,
             collaboration_mode: None,
-            personality: None,
         }
     );
 

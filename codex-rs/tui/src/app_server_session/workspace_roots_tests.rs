@@ -94,7 +94,6 @@ stream_max_retries = 0
             /*summary*/ None,
             /*service_tier*/ None,
             /*collaboration_mode*/ None,
-            /*personality*/ None,
             /*output_schema*/ None,
             /*cyber_access_program*/ None,
         )

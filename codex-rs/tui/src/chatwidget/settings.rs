@@ -481,7 +481,6 @@ impl ChatWidget {
                 Constrained::allow_only(settings.approval_policy.to_core());
         }
         self.set_approvals_reviewer(settings.approvals_reviewer.to_core());
-        self.config.personality = settings.personality;
 
         let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
             &settings.sandbox_policy.to_core(),
@@ -735,7 +734,6 @@ impl ChatWidget {
                 /*summary*/ None,
                 /*service_tier*/ None,
                 Some(self.effective_collaboration_mode()),
-                /*personality*/ None,
             ),
         });
     }

@@ -255,7 +255,6 @@ impl App {
                 /*summary*/ None,
                 /*service_tier*/ None,
                 /*collaboration_mode*/ None,
-                /*personality*/ None,
             )));
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
             history_cell::new_info_event(
@@ -905,7 +904,6 @@ impl App {
                 /*summary*/ None,
                 /*service_tier*/ None,
                 /*collaboration_mode*/ None,
-                /*personality*/ None,
             );
             let replay_state_op =
                 ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
@@ -1308,7 +1306,6 @@ impl App {
             /*summary*/ None,
             /*service_tier*/ None,
             /*collaboration_mode*/ None,
-            /*personality*/ None,
         );
         let replay_state_op =
             ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
@@ -1913,7 +1910,6 @@ enabled = false
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: None,
                 collaboration_mode: None,
-                personality: None,
                 message_history: None,
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
