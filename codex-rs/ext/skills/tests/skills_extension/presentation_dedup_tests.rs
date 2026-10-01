@@ -2,6 +2,7 @@
 
 use super::*;
 use codex_exec_server::EnvironmentManager;
+use codex_extension_api::ToolEnvironment;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -24,6 +25,11 @@ async fn cloud_preference_preserves_aliases_reads_and_executor_fallback() -> Tes
                 );
                 entry.name = format!("{plugin}:s{index}");
                 entry.description = description.clone();
+                entry.main_prompt = SkillResourceId::environment(
+                    format!("{package}/SKILL.md"),
+                    "local",
+                    PathUri::parse(&format!("file:///skills/{plugin}/s{index}/SKILL.md"))?,
+                );
                 executor_entries.push(entry.with_alias_root(root));
             }
         }
@@ -90,6 +96,7 @@ async fn cloud_preference_preserves_aliases_reads_and_executor_fallback() -> Tes
             .resolve_selected_capability_roots(&roots, &Default::default())
             .await;
         assert_eq!(resolved_roots.len(), 1);
+        let access = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
         let mut previous = serde_json::Map::new();
         let mut initial_cloud_body = None;
         let model_info = ModelInfo {
@@ -217,7 +224,11 @@ async fn cloud_preference_preserves_aliases_reads_and_executor_fallback() -> Tes
                         source: ToolCallSource::Direct,
                         conversation_history: ConversationHistory::default(),
                         turn_item_emitter: Arc::new(NoopTurnItemEmitter),
-                        environments: Vec::new(),
+                        environments: vec![ToolEnvironment::new(
+                            "local".to_string(),
+                            PathUri::parse("file:///skills")?,
+                            &access,
+                        )],
                         payload: payload.clone(),
                     })
                     .await?;

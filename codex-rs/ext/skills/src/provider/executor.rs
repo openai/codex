@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use codex_exec_server::EnvironmentAccess;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::FileSystemEnvironmentAccessor;
-use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::SelectedPluginSnapshot;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::protocol::Product;
@@ -29,6 +29,7 @@ use crate::provider::MAX_SKILL_RESOURCE_CONTENT_BYTES;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillProvider;
 use crate::provider::SkillProviderFuture;
+use crate::provider::SkillReadContext;
 use crate::provider::SkillReadRequest;
 use crate::provider::SkillSearchRequest;
 
@@ -162,39 +163,23 @@ impl SkillProvider for ExecutorSkillProvider {
                     "executor skill resource does not match its package",
                 ));
             }
+            let SkillReadContext::Executor { fs } = request.context else {
+                return Err(SkillProviderError::new(
+                    "executor skill reads require filesystem access",
+                ));
+            };
             if let Some(contents) = request.resource.environment_contents() {
                 return Ok(SkillReadResult {
                     resource: request.resource.clone(),
                     contents: contents.to_string(),
                 });
             }
-            let Some((environment_id, resource_path)) = request.resource.environment_path() else {
+            let Some((_, resource_path)) = request.resource.environment_path() else {
                 return Err(SkillProviderError::new(
                     "executor skill resource is not bound to an environment",
                 ));
             };
-            let file_system = request
-                .resolved_executor_roots
-                .iter()
-                .find(|root| root.selected_root().id == request.authority.id)
-                .map(|root| root.environment().get_filesystem())
-                .or_else(|| {
-                    self.environment_manager
-                        .get_environment(environment_id)
-                        .map(|environment| environment.get_filesystem())
-                });
-            let Some(file_system) = file_system else {
-                return Err(SkillProviderError::new(format!(
-                    "executor skill resource references unavailable environment `{environment_id}`"
-                )));
-            };
-            let contents = read_bounded_text(
-                file_system.as_ref(),
-                resource_path,
-                request.resource.as_str(),
-                request.sandbox.as_ref(),
-            )
-            .await?;
+            let contents = read_bounded_text(fs, resource_path, request.resource.as_str()).await?;
 
             Ok(SkillReadResult {
                 resource: request.resource,
@@ -326,27 +311,17 @@ fn normalized_environment_path(path: &PathUri) -> String {
 }
 
 async fn read_bounded_text(
-    file_system: &dyn codex_exec_server::ExecutorFileSystem,
+    file_system: &dyn EnvironmentAccess,
     path: &PathUri,
     resource: &str,
-    sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<String, SkillProviderError> {
     let read_error = |err| {
         SkillProviderError::new(format!(
             "failed to read executor skill resource {resource}: {err}"
         ))
     };
-    if sandbox.is_some_and(FileSystemSandboxContext::should_read_from_sandbox)
-        && path.infer_path_convention() == Some(PathConvention::Windows)
-        && sandbox.is_some_and(|context| !context.windows_sandbox_is_requested())
-    {
-        return Err(SkillProviderError::new(
-            "executor skill resource requires an unavailable filesystem sandbox",
-        ));
-    }
-
     let mut stream = file_system
-        .read_file_stream(path, sandbox)
+        .read_file_stream(path)
         .await
         .map_err(&read_error)?;
     let mut contents = Vec::new();

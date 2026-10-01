@@ -3774,24 +3774,6 @@ impl Session {
             extension_data.insert(selected_capability_roots.clone());
             if let Some(discovery) = &executor_capability_discovery {
                 extension_data.insert(discovery.as_ref().clone());
-                if !discovery.sandbox_contexts().is_empty() {
-                    extension_data.insert(discovery.sandbox_contexts().clone());
-                }
-            } else if !turn_context
-                .permission_profile_for_environments(&environments)
-                .file_system_sandbox_policy()
-                .has_full_disk_read_access()
-            {
-                let sandbox_contexts = environments
-                    .turn_environments()
-                    .map(|environment| {
-                        (
-                            environment.selection.environment_id.clone(),
-                            environment.sandbox_context(/*additional_permissions*/ None),
-                        )
-                    })
-                    .collect::<HashMap<_, _>>();
-                extension_data.insert(sandbox_contexts);
             }
             let (mcp, prepared_recommendations) = tokio::join!(
                 // MCP refresh can be large; keep it off the sampling request's stack.

@@ -17,6 +17,8 @@ use codex_core_plugins::ResolvedPluginMetricsOperation;
 use codex_core_plugins::TrustedPluginRoots;
 use codex_exec_server::ExecutorFileSystem;
 use codex_extension_api::SelectedPluginSnapshot;
+use codex_file_system::EnvironmentAccess;
+use codex_file_system::FileSystemEnvironmentAccessor;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_protocol::SessionId;
@@ -213,6 +215,17 @@ impl TurnEnvironment {
 
     pub(crate) fn permission_profile(&self) -> &PermissionProfile {
         self.config().permission_profile.permission_profile()
+    }
+
+    /// Borrows this snapshot's filesystem using its permissions and any additional grants.
+    pub(crate) fn fs_accessor(
+        &self,
+        additional_permissions: Option<AdditionalPermissionProfile>,
+    ) -> impl EnvironmentAccess + '_ {
+        FileSystemEnvironmentAccessor::new(
+            self.environment.filesystem_ref(),
+            self.sandbox_context(additional_permissions),
+        )
     }
 
     /// Sandbox context for this environment, including any additional permission grants.

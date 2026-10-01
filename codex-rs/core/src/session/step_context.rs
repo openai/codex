@@ -8,9 +8,11 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::realtime_conversation::RealtimeConversationSnapshot;
 use crate::session::step_settings::ResolvedStepSettings;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
 use crate::tools::router::ToolRouter;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
+use codex_file_system::EnvironmentAccess;
 use codex_mcp::McpBinding;
 use codex_otel::SessionTelemetry;
 use codex_protocol::items::ModelInvocationContext;
@@ -44,6 +46,19 @@ pub(crate) struct StepContext {
 }
 
 impl StepContext {
+    /// Pairs the step's environments with access using current session and originating-turn grants.
+    pub(crate) fn environments(&self) -> Vec<(&TurnEnvironment, impl EnvironmentAccess + '_)> {
+        self.environments
+            .turn_environments()
+            .map(|environment| {
+                let grants = self
+                    .turn
+                    .granted_permissions(&environment.selection.environment_id);
+                (environment, environment.fs_accessor(grants))
+            })
+            .collect()
+    }
+
     /// Persist the context captured for this request, even after a live update.
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         let mut item = self.turn.to_turn_context_item();

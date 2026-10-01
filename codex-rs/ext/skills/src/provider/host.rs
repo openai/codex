@@ -15,6 +15,7 @@ use crate::catalog::SkillSourceKind;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillProvider;
 use crate::provider::SkillProviderFuture;
+use crate::provider::SkillReadContext;
 use crate::provider::SkillReadRequest;
 use crate::provider::SkillSearchRequest;
 
@@ -51,7 +52,10 @@ impl SkillProvider for HostSkillProvider {
         request: SkillReadRequest<'a>,
     ) -> SkillProviderFuture<'a, SkillReadResult> {
         Box::pin(async move {
-            let Some(host_snapshot) = request.host_snapshot else {
+            let SkillReadContext::Host {
+                host_snapshot: Some(host_snapshot),
+            } = request.context
+            else {
                 return Err(SkillProviderError::new(
                     "host skill provider requires a host skills snapshot",
                 ));

@@ -11,6 +11,7 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirementsToml;
 use codex_exec_server::CapabilityRootDiscovery;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
+use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_exec_server::LOCAL_FS;
 use codex_extension_api::ConversationHistory;
 use codex_extension_api::ExtensionData;
@@ -987,7 +988,15 @@ async fn shadow_lru_selector_recovers_a_skill_invoked_on_an_earlier_turn() -> Te
                         text: text.to_string(),
                         text_elements: Vec::new(),
                     }],
-                    environments: Vec::new(),
+                    environments: vec![codex_extension_api::TurnInputEnvironment {
+                        environment_id: "test".to_string(),
+                        cwd: PathUri::from_host_native_path(
+                            std::env::current_dir().expect("test cwd"),
+                        )
+                        .expect("absolute cwd"),
+                        is_primary: true,
+                        fs: &FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS),
+                    }],
                 },
                 /*extension_metrics*/ None,
                 &session_store,
@@ -1082,14 +1091,21 @@ async fn shadow_lru_selector_recovers_a_skill_invoked_on_an_earlier_turn() -> Te
 async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cache() -> TestResult {
     let read_requests = Arc::new(Mutex::new(Vec::new()));
     let list_calls = Arc::new(AtomicUsize::new(0));
+    let resource = SkillResourceId::environment(
+        "lint-fix/SKILL.md",
+        "env-1",
+        PathUri::parse("file:///skills/lint-fix/SKILL.md")?,
+    );
+    let mut entry = test_entry(
+        SkillSourceKind::Executor,
+        "env-1",
+        "executor/lint-fix",
+        "lint-fix/SKILL.md",
+    );
+    entry.main_prompt = resource.clone();
     let executor_provider = Arc::new(StaticSkillProvider {
         catalog: SkillCatalog {
-            entries: vec![test_entry(
-                SkillSourceKind::Executor,
-                "env-1",
-                "executor/lint-fix",
-                "lint-fix/SKILL.md",
-            )],
+            entries: vec![entry],
             warnings: Vec::new(),
         },
         read_requests: Arc::clone(&read_requests),
@@ -1132,7 +1148,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
 
     let turn_store = ExtensionData::new("turn-1");
     let turn_environment = TurnEnvironmentSelection {
-        environment_id: "turn-env".to_string(),
+        environment_id: "env-1".to_string(),
         cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
         workspace_roots: Vec::new(),
         config: EnvironmentConfigState::FromThread,
@@ -1172,7 +1188,12 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
                     text: "$lint-fix please".to_string(),
                     text_elements: Vec::new(),
                 }],
-                environments: Vec::new(),
+                environments: vec![codex_extension_api::TurnInputEnvironment {
+                    environment_id: turn_environment.environment_id.clone(),
+                    cwd: turn_environment.cwd.clone(),
+                    is_primary: true,
+                    fs: &FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS),
+                }],
             },
             /*extension_metrics*/ None,
             &session_store,
@@ -1189,7 +1210,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         vec![(
             SkillAuthority::new(SkillSourceKind::Executor, "env-1"),
             SkillPackageId("executor/lint-fix".to_string()),
-            SkillResourceId::new("lint-fix/SKILL.md"),
+            resource,
         )],
         read_request_keys(&read_requests)
     );
@@ -2155,6 +2176,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
     let read_requests = Arc::new(Mutex::new(Vec::new()));
     let root_a_locator = "skill://root-a/shared/lint-fix/SKILL.md";
     let root_b_locator = "skill://root-b/shared/lint-fix/SKILL.md";
+    let skill_path = PathUri::parse("file:///shared/lint-fix/SKILL.md")?;
     let executor_provider = Arc::new(StaticSkillProvider {
         catalog: SkillCatalog {
             entries: [("root-a", root_a_locator), ("root-b", root_b_locator)]
@@ -2165,7 +2187,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
                         SkillAuthority::new(SkillSourceKind::Executor, root_id),
                         "lint-fix",
                         "Fix lint errors.",
-                        SkillResourceId::new(locator),
+                        SkillResourceId::environment(locator, "env-1", skill_path.clone()),
                     )
                     .with_display_path(locator)
                 })
@@ -2236,7 +2258,12 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
                     name: "lint-fix".to_string(),
                     path: root_b_locator.to_string(),
                 }],
-                environments: Vec::new(),
+                environments: vec![codex_extension_api::TurnInputEnvironment {
+                    environment_id: "env-1".to_string(),
+                    cwd: PathUri::parse("file:///workspace")?,
+                    is_primary: true,
+                    fs: &FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS),
+                }],
             },
             /*extension_metrics*/ None,
             &session_store,
@@ -2251,7 +2278,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
         vec![(
             SkillAuthority::new(SkillSourceKind::Executor, "root-b"),
             SkillPackageId(root_b_locator.to_string()),
-            SkillResourceId::new(root_b_locator),
+            SkillResourceId::environment(root_b_locator, "env-1", skill_path),
         )],
         read_request_keys(&read_requests)
     );

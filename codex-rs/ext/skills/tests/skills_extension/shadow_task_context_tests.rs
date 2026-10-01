@@ -169,7 +169,15 @@ async fn task_context_recovers_prior_requests_and_explicit_intent_without_changi
                     TurnInputContext {
                         turn_id: turn_id.to_string(),
                         user_input,
-                        environments: Vec::new(),
+                        environments: vec![codex_extension_api::TurnInputEnvironment {
+                            environment_id: "test".to_string(),
+                            cwd: PathUri::from_host_native_path(
+                                std::env::current_dir().expect("test cwd"),
+                            )
+                            .expect("absolute cwd"),
+                            is_primary: true,
+                            fs: &FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS),
+                        }],
                     },
                     /*extension_metrics*/ None,
                     &session_store,

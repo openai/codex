@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -9,7 +8,6 @@ use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::SkillInvocationLocation;
 use codex_analytics::build_track_events_context;
-use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::FunctionCallError;
@@ -64,7 +62,6 @@ pub(crate) fn skill_tools(
     thread_store: &ExtensionData,
     executor_query: Option<SkillListQuery>,
     selected_plugins: Option<Arc<SelectedPluginSnapshot>>,
-    sandbox_contexts: Option<Arc<HashMap<String, FileSystemSandboxContext>>>,
 ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
     let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {
         return Vec::new();
@@ -85,7 +82,6 @@ pub(crate) fn skill_tools(
         cloud_available,
         executor_query,
         selected_plugins,
-        sandbox_contexts,
         executor_catalog: Arc::new(OnceCell::new()),
     };
     vec![
@@ -220,7 +216,6 @@ struct SkillToolContext {
     cloud_available: bool,
     executor_query: Option<SkillListQuery>,
     selected_plugins: Option<Arc<SelectedPluginSnapshot>>,
-    sandbox_contexts: Option<Arc<HashMap<String, FileSystemSandboxContext>>>,
     executor_catalog: Arc<OnceCell<SkillCatalog>>,
 }
 

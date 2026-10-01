@@ -9935,6 +9935,40 @@ async fn mcp_refresh_detects_shared_auth_manager_changes() {
     );
 }
 
+/// A ready registry entry alone must not expose roots outside the turn's environment selection.
+#[tokio::test]
+async fn capability_roots_require_turn_environment_selection() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let environment = turn_context
+        .initial_environments
+        .primary()
+        .expect("ready local environment");
+    let root = codex_protocol::capabilities::SelectedCapabilityRoot {
+        id: "selected-root".to_string(),
+        location: codex_protocol::capabilities::CapabilityRootLocation::Environment {
+            environment_id: environment.selection.environment_id.clone(),
+            path: environment.cwd().clone(),
+        },
+    };
+    session.services.selected_capability_roots = vec![root.clone()];
+
+    let unselected_roots = session
+        .resolve_selected_capability_roots_for_step(&TurnEnvironmentSnapshot::default())
+        .await;
+    assert!(unselected_roots.is_empty());
+
+    let selected_roots = session
+        .resolve_selected_capability_roots_for_step(&turn_context.initial_environments)
+        .await;
+    assert_eq!(
+        selected_roots
+            .iter()
+            .map(|root| root.selected_root().clone())
+            .collect::<Vec<_>>(),
+        vec![root]
+    );
+}
+
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn conflicting_ready_environment_root_ids_keep_first_location() {

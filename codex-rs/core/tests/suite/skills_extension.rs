@@ -13,9 +13,13 @@ use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_core::WaitForEnvironmentToolConfig;
 use codex_core::config::Config;
+use codex_core::config::Constrained;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecParams;
+use codex_exec_server::ExecProcessEvent;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_exec_server::ProcessId;
 use codex_exec_server::RemoveOptions;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionEventSink;
@@ -38,6 +42,7 @@ use codex_otel::OtelSettings;
 use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::TruncationPolicyConfig;
@@ -47,6 +52,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -55,6 +61,9 @@ use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
+use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionProfile;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_skills_extension::ExecutorSkillProvider;
 use codex_skills_extension::HostSkillProvider;
@@ -1359,15 +1368,17 @@ async fn executor_only_provider_preserves_structured_repo_skill_without_discover
 enum ExecutorReferenceRead {
     Allowed,
     Denied,
+    Granted,
     Continuation,
     EditedContinuation,
     DeniedContinuation,
 }
 
-/// Live references and continuation pages use current permissions, including after discovery
+/// Live references and continuation pages use the step's captured permissions after discovery
 /// materialized the main prompt. Continuations preserve the cached snapshot across file edits.
 #[test_case(ExecutorReferenceRead::Allowed; "full disk read")]
 #[test_case(ExecutorReferenceRead::Denied; "denied reference")]
+#[test_case(ExecutorReferenceRead::Granted; "grant captured by the next model step")]
 #[test_case(ExecutorReferenceRead::Continuation; "unchanged continuation")]
 #[test_case(ExecutorReferenceRead::EditedContinuation; "edited continuation")]
 #[test_case(ExecutorReferenceRead::DeniedContinuation; "denied continuation")]
@@ -1378,7 +1389,9 @@ async fn executor_skill_tool_reads_references_under_current_permissions(
     skip_if_no_network!(Ok(()));
     if matches!(
         read,
-        ExecutorReferenceRead::Denied | ExecutorReferenceRead::DeniedContinuation
+        ExecutorReferenceRead::Denied
+            | ExecutorReferenceRead::Granted
+            | ExecutorReferenceRead::DeniedContinuation
     ) {
         skip_if_target_windows!(
             Ok(()),
@@ -1388,16 +1401,17 @@ async fn executor_skill_tool_reads_references_under_current_permissions(
 
     const REFERENCE_CONTENTS: &str = "Live executor reference instructions.";
     let contents = match read {
-        ExecutorReferenceRead::Allowed | ExecutorReferenceRead::Denied => {
-            REFERENCE_CONTENTS.to_string()
-        }
+        ExecutorReferenceRead::Allowed
+        | ExecutorReferenceRead::Denied
+        | ExecutorReferenceRead::Granted => REFERENCE_CONTENTS.to_string(),
         ExecutorReferenceRead::Continuation
         | ExecutorReferenceRead::EditedContinuation
         | ExecutorReferenceRead::DeniedContinuation => "reference line\n".repeat(800),
     };
-    let reference_access = match read {
+    let restricted_path_access = match read {
         ExecutorReferenceRead::Denied => FileSystemAccessMode::Deny,
         ExecutorReferenceRead::Allowed
+        | ExecutorReferenceRead::Granted
         | ExecutorReferenceRead::Continuation
         | ExecutorReferenceRead::EditedContinuation
         | ExecutorReferenceRead::DeniedContinuation => FileSystemAccessMode::Read,
@@ -1458,14 +1472,61 @@ async fn executor_skill_tool_reads_references_under_current_permissions(
         ),
         ("reference.md", contents.as_str()),
     ] {
+        let directory = if name == "reference.md" && matches!(read, ExecutorReferenceRead::Granted)
+        {
+            &selection.cwd
+        } else {
+            &skill_dir
+        };
         file_system
             .write_file(
-                &skill_dir.join(name)?,
+                &directory.join(name)?,
                 contents.as_bytes().to_vec(),
                 Default::default(),
                 /*sandbox*/ None,
             )
             .await?;
+    }
+    if matches!(read, ExecutorReferenceRead::Granted) {
+        // The package directory must be listable for discovery. Put the reference outside it so
+        // it still requires a separate grant; create the link on the executor, including remotely.
+        let process = test
+            .executor_environment()
+            .environment()
+            .get_exec_backend()
+            .start(ExecParams {
+                process_id: ProcessId::from("link-grant-reference"),
+                metadata: None,
+                argv: ["/bin/ln", "-s", "../reference.md", "skill/reference.md"]
+                    .map(str::to_string)
+                    .to_vec(),
+                cwd: selection.cwd.clone(),
+                env_policy: None,
+                shell_snapshot: None,
+                env: Default::default(),
+                tty: false,
+                pipe_stdin: false,
+                arg0: None,
+                sandbox: None,
+                enforce_managed_network: false,
+                managed_network: None,
+                network_proxy: None,
+            })
+            .await?
+            .process;
+        let mut events = process.subscribe_events();
+        loop {
+            match events.recv().await? {
+                ExecProcessEvent::Exited { exit_code, .. } => {
+                    assert_eq!(exit_code, 0, "link the reference on the executor");
+                    break;
+                }
+                ExecProcessEvent::Output(_) => {}
+                event @ (ExecProcessEvent::Closed { .. } | ExecProcessEvent::Failed(_)) => {
+                    panic!("reference symlink process did not exit: {event:?}")
+                }
+            }
+        }
     }
     let package = format!(
         "skill://reference-root/{}",
@@ -1480,10 +1541,26 @@ async fn executor_skill_tool_reads_references_under_current_permissions(
         id: "reference-root".to_string(),
         location: CapabilityRootLocation::Environment {
             environment_id: selection.environment_id.clone(),
-            path: selection.cwd.clone(),
+            path: if matches!(read, ExecutorReferenceRead::Granted) {
+                skill_dir.clone()
+            } else {
+                selection.cwd.clone()
+            },
         },
     }]);
     let mut config = test.config.clone();
+    if matches!(read, ExecutorReferenceRead::Granted) {
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.features.enable(Feature::RequestPermissionsTool)?;
+    }
+    let (root_access, restricted_path) = if matches!(read, ExecutorReferenceRead::Granted) {
+        (FileSystemAccessMode::Deny, policy_skill_dir.clone())
+    } else {
+        (
+            FileSystemAccessMode::Read,
+            policy_skill_dir.join("reference.md")?,
+        )
+    };
     config
         .permissions
         .set_permission_profile(PermissionProfile::from_runtime_permissions(
@@ -1492,13 +1569,13 @@ async fn executor_skill_tool_reads_references_under_current_permissions(
                     FileSystemPath::Special {
                         value: FileSystemSpecialPath::Root,
                     },
-                    FileSystemAccessMode::Read,
+                    root_access,
                 ),
                 FileSystemSandboxEntry::new(
                     FileSystemPath::Path {
-                        path: policy_skill_dir.join("reference.md")?,
+                        path: restricted_path,
                     },
-                    reference_access,
+                    restricted_path_access,
                 ),
             ]),
             NetworkSandboxPolicy::Restricted,
@@ -1511,23 +1588,59 @@ async fn executor_skill_tool_reads_references_under_current_permissions(
             ..StartThreadOptions::new(config)
         })
         .await?;
-    let response = responses::mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                responses::ev_function_call_with_namespace(
-                    "read-reference",
-                    "skills",
-                    "read",
-                    &json!({ "package": package, "resource": resource }).to_string(),
-                ),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
-        ],
-    )
-    .await;
+    let requested_permissions = RequestPermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_path_uris(
+            Some(vec![if matches!(read, ExecutorReferenceRead::Granted) {
+                policy_skill_dir
+                    .parent()
+                    .expect("skill directory has a parent")
+                    .join("reference.md")?
+            } else {
+                policy_skill_dir.join("reference.md")?
+            }]),
+            /*write*/ None,
+        )),
+        ..Default::default()
+    };
+    let mut response_sequence = Vec::new();
+    if matches!(read, ExecutorReferenceRead::Granted) {
+        // Separate responses ensure the denied read finishes before approval can be requested.
+        response_sequence.push(sse(vec![
+            ev_response_created("resp-before-grant"),
+            responses::ev_function_call_with_namespace(
+                "read-before-grant",
+                "skills",
+                "read",
+                &json!({"package": package, "resource": resource}).to_string(),
+            ),
+            ev_completed("resp-before-grant"),
+        ]));
+        response_sequence.push(sse(vec![
+            ev_response_created("resp-grant"),
+            responses::ev_function_call(
+                "grant-reference",
+                "request_permissions",
+                &json!({"reason": "Read", "permissions": requested_permissions}).to_string(),
+            ),
+            ev_completed("resp-grant"),
+        ]));
+    }
+    // The next model step captures any newly approved permissions.
+    response_sequence.push(sse(vec![
+        ev_response_created("resp-read"),
+        responses::ev_function_call_with_namespace(
+            "read-reference",
+            "skills",
+            "read",
+            &json!({ "package": package, "resource": resource }).to_string(),
+        ),
+        ev_completed("resp-read"),
+    ]));
+    response_sequence.push(sse(vec![
+        ev_response_created("resp-2"),
+        ev_completed("resp-2"),
+    ]));
+    let response = responses::mount_sse_sequence(&server, response_sequence).await;
     thread
         .thread
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
@@ -1535,16 +1648,53 @@ async fn executor_skill_tool_reads_references_under_current_permissions(
             text_elements: Vec::new(),
         }]))
         .await?;
+    if matches!(read, ExecutorReferenceRead::Granted) {
+        let event = wait_for_event(&thread.thread, |event| {
+            matches!(
+                event,
+                EventMsg::RequestPermissions(_) | EventMsg::TurnComplete(_)
+            )
+        })
+        .await;
+        let EventMsg::RequestPermissions(request) = event else {
+            panic!("expected request_permissions before completion: {event:?}");
+        };
+        thread
+            .thread
+            .submit(Op::RequestPermissionsResponse {
+                id: request.call_id,
+                response: RequestPermissionsResponse {
+                    permissions: requested_permissions,
+                    scope: PermissionGrantScope::Turn,
+                    strict_auto_review: false,
+                },
+            })
+            .await?;
+    }
     wait_for_event(&thread.thread, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-    let output = response.requests()[1]
+    let output = response
+        .requests()
+        .last()
+        .expect("final model request includes the reference read")
         .function_call_output_text("read-reference")
         .expect("skills.read should return a tool result");
+    if matches!(read, ExecutorReferenceRead::Granted) {
+        assert_eq!(
+            response.requests()[1]
+                .function_call_output_text("read-before-grant")
+                .expect("the earlier skills.read should return a tool result"),
+            "failed to read skill resource",
+        );
+    }
     if matches!(read, ExecutorReferenceRead::Denied) {
         assert_eq!(output, "failed to read skill resource");
-    } else if matches!(read, ExecutorReferenceRead::Allowed) {
+    } else if matches!(
+        read,
+        ExecutorReferenceRead::Allowed | ExecutorReferenceRead::Granted
+    ) {
         assert_eq!(
             serde_json::from_str::<Value>(&output)?,
             json!({
@@ -1650,7 +1800,9 @@ async fn executor_skill_tool_reads_references_under_current_permissions(
             ExecutorReferenceRead::DeniedContinuation => {
                 assert_eq!(output, "failed to read skill resource")
             }
-            ExecutorReferenceRead::Allowed | ExecutorReferenceRead::Denied => {
+            ExecutorReferenceRead::Allowed
+            | ExecutorReferenceRead::Denied
+            | ExecutorReferenceRead::Granted => {
                 unreachable!("single-page cases handled above")
             }
         }

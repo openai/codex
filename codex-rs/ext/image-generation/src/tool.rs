@@ -328,6 +328,7 @@ async fn save_image_generation_result(
         None => {
             let environment = environment?;
             let cwd = environment.cwd.to_abs_path().ok()?;
+            let fs = environment.fs();
             let output_dir = cwd.join("generated_images");
             let save_result: io::Result<AbsolutePathBuf> = async {
                 let result = result.trim();
@@ -349,26 +350,19 @@ async fn save_image_generation_result(
 
                 let artifact_path = image_generation_artifact_path(&cwd, session_id, call_id);
                 let path = output_dir.join(artifact_path.as_path().file_name().unwrap_or_default());
-                let sandbox = Some(&environment.file_system_sandbox_context);
                 if let Some(parent) = path.parent() {
                     let parent_uri = PathUri::from_abs_path(&parent);
-                    environment
-                        .file_system
-                        .create_directory(
-                            &parent_uri,
-                            CreateDirectoryOptions {
-                                recursive: true,
-                                follow_symlinks: true,
-                            },
-                            sandbox,
-                        )
-                        .await?;
+                    fs.create_directory(
+                        &parent_uri,
+                        CreateDirectoryOptions {
+                            recursive: true,
+                            follow_symlinks: true,
+                        },
+                    )
+                    .await?;
 
                     // Full-access executor contexts do not prevent symlinked output directories.
-                    let metadata = environment
-                        .file_system
-                        .get_metadata(&parent_uri, Default::default(), sandbox)
-                        .await?;
+                    let metadata = fs.get_metadata(&parent_uri, Default::default()).await?;
                     if metadata.is_symlink || !metadata.is_directory {
                         return Err(io::Error::new(
                             io::ErrorKind::PermissionDenied,
@@ -379,11 +373,7 @@ async fn save_image_generation_result(
 
                 // Existing destination hardlinks could otherwise overwrite files outside the workspace.
                 let path_uri = PathUri::from_abs_path(&path);
-                match environment
-                    .file_system
-                    .get_metadata(&path_uri, Default::default(), sandbox)
-                    .await
-                {
+                match fs.get_metadata(&path_uri, Default::default()).await {
                     Ok(_) => {
                         return Err(io::Error::new(
                             io::ErrorKind::AlreadyExists,
@@ -394,10 +384,7 @@ async fn save_image_generation_result(
                     Err(error) => return Err(error),
                 }
 
-                environment
-                    .file_system
-                    .write_file(&path_uri, bytes, Default::default(), sandbox)
-                    .await?;
+                fs.write_file(&path_uri, bytes, Default::default()).await?;
                 Ok(path)
             }
             .await;
@@ -574,10 +561,9 @@ async fn image_url(
     environment: &ToolEnvironment<'_>,
 ) -> Result<ImageReference, FunctionCallError> {
     let path_uri = PathUri::from_abs_path(path);
-    let sandbox = environment.file_system_sandbox_context.clone();
     let bytes = environment
-        .file_system
-        .read_file(&path_uri, Default::default(), Some(&sandbox))
+        .fs()
+        .read_file(&path_uri, Default::default())
         .await
         .map_err(|error| {
             FunctionCallError::RespondToModel(format!(

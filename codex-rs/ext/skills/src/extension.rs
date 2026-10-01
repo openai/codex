@@ -1,12 +1,9 @@
-use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use crate::HostSkillsSnapshot;
 use crate::InjectedHostSkillPrompts;
 use codex_analytics::InvocationType;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
-use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_extension_api::ConfigContributor;
@@ -46,6 +43,7 @@ use crate::fragments::SkillInstructions;
 use crate::fragments::SkillResourceAccess;
 use crate::provider::HostSkillProvider;
 use crate::provider::SkillListQuery;
+use crate::provider::SkillReadContext;
 use crate::provider::SkillReadRequest;
 use crate::render::AvailableSkillsRender;
 use crate::render::MAX_SKILL_NAME_BYTES;
@@ -302,7 +300,6 @@ where
             thread_store,
             /*executor_query*/ None,
             /*selected_plugins*/ None,
-            /*sandbox_contexts*/ None,
         )
     }
 
@@ -337,7 +334,6 @@ where
             thread_store,
             executor_query,
             step_store.get::<SelectedPluginSnapshot>(),
-            step_store.get::<HashMap<String, FileSystemSandboxContext>>(),
         )
     }
 }
@@ -480,6 +476,7 @@ where
                         host_snapshot.clone(),
                         mcp_resources.clone(),
                         &thread_state,
+                        &input,
                     )
                     .await
                 {
@@ -581,7 +578,6 @@ impl<C> SkillsExtension<C> {
         thread_store: &ExtensionData,
         executor_query: Option<SkillListQuery>,
         selected_plugins: Option<Arc<SelectedPluginSnapshot>>,
-        sandbox_contexts: Option<Arc<HashMap<String, FileSystemSandboxContext>>>,
     ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
         skill_tools(
             self.providers.clone(),
@@ -589,7 +585,6 @@ impl<C> SkillsExtension<C> {
             thread_store,
             executor_query,
             selected_plugins,
-            sandbox_contexts,
         )
     }
 
@@ -617,19 +612,37 @@ impl<C> SkillsExtension<C> {
         host_snapshot: Option<Arc<HostSkillsSnapshot>>,
         mcp_resources: Option<Arc<McpResourceClient>>,
         thread_state: &SkillsThreadState,
+        input: &TurnInputContext<'_>,
     ) -> Result<SkillReadResult, String> {
+        let context = match entry.authority.kind {
+            SkillSourceKind::Cloud => SkillReadContext::Cloud { mcp_resources },
+            SkillSourceKind::Custom(_) => SkillReadContext::Custom { mcp_resources },
+            SkillSourceKind::Host => SkillReadContext::Host { host_snapshot },
+            SkillSourceKind::Executor => {
+                let fs = entry
+                    .main_prompt
+                    .environment_path()
+                    .and_then(|(id, _)| {
+                        input
+                            .environments
+                            .iter()
+                            .find(|env| env.environment_id == id)
+                            .map(|env| env.fs)
+                    })
+                    .ok_or_else(|| {
+                        "skill environment is not available for this callback".to_string()
+                    })?;
+                SkillReadContext::Executor { fs }
+            }
+        };
         thread_state
             .read_skill(
                 &self.providers,
                 SkillReadRequest {
-                    _lifetime: PhantomData,
                     authority: entry.authority.clone(),
                     package: entry.id.clone(),
                     resource: entry.main_prompt.clone(),
-                    resolved_executor_roots: Vec::new(),
-                    sandbox: None,
-                    host_snapshot,
-                    mcp_resources,
+                    context,
                 },
             )
             .await

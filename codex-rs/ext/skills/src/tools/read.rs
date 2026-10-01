@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use codex_analytics::InvocationType;
@@ -14,6 +13,7 @@ use serde::Serialize;
 
 use crate::catalog::SkillResourceId;
 use crate::provider::MAX_SKILL_RESOURCE_CONTENT_BYTES;
+use crate::provider::SkillReadContext;
 use crate::provider::SkillReadRequest;
 use crate::render::build_alias_plan;
 use crate::state::ExecutorReadSnapshot;
@@ -21,6 +21,7 @@ use crate::state::ExecutorReadSnapshot;
 use super::MAX_HANDLE_BYTES;
 use super::MAX_SKILL_RESPONSE_BYTES;
 use super::SkillToolAuthority;
+use super::SkillToolAuthoritySelector;
 use super::SkillToolContext;
 use super::pagination_cursor;
 use super::parse_args;
@@ -121,42 +122,35 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                     .bind_environment_package_resource(&package, resource.clone())
                     .unwrap_or_else(|| SkillResourceId::new(resource)),
             };
-            let resolved_executor_roots = self
-                .context
-                .executor_query
-                .as_ref()
-                .map(|query| query.resolved_executor_roots.clone())
-                .unwrap_or_default();
-            let executor_environment = resolved_executor_roots
-                .iter()
-                .find(|root| root.selected_root().id == authority.id)
-                .map(|root| Arc::downgrade(root.environment()));
-            let sandbox = requested_resource
-                .environment_path()
-                .and_then(|(environment_id, _)| {
-                    self.context.sandbox_contexts.as_ref().and_then(|contexts| {
-                        contexts.get(environment_id).map(|captured| {
+            let (context, access_key) = match output_authority {
+                SkillToolAuthoritySelector::Cloud => (
+                    SkillReadContext::Cloud {
+                        mcp_resources: self.context.mcp_resources.clone(),
+                    },
+                    None,
+                ),
+                SkillToolAuthoritySelector::Executor => {
+                    let fs = requested_resource
+                        .environment_path()
+                        .and_then(|(id, _)| {
                             call.environments
                                 .iter()
-                                .find(|environment| environment.environment_id == environment_id)
-                                .map(|environment| environment.file_system_sandbox_context.clone())
-                                .unwrap_or_else(|| captured.clone())
+                                .find(|env| env.environment_id == id)
                         })
-                    })
-                });
-            if self.context.sandbox_contexts.is_some()
-                && requested_resource.environment_path().is_some()
-                && sandbox.is_none()
-            {
-                return Err(FunctionCallError::RespondToModel(
-                    "failed to read skill resource".to_string(),
-                ));
-            }
+                        .map(codex_extension_api::ToolEnvironment::fs)
+                        .ok_or_else(|| {
+                            FunctionCallError::RespondToModel(
+                                "skill environment is not available for this callback".to_string(),
+                            )
+                        })?;
+                    (SkillReadContext::Executor { fs }, Some(fs.cache_key()))
+                }
+            };
             // Reuse the snapshot to avoid reading the whole file for each page. File edits
             // are not detected on cache hits, so a continuation can return old contents.
             // Snapshots have no expiry and are not cleared after the final page.
             let cached = args.cursor.as_deref().and_then(|cursor| {
-                let environment = executor_environment.as_ref()?;
+                let access = access_key.as_ref()?;
                 let snapshot = self
                     .context
                     .thread_state
@@ -167,8 +161,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                     snapshot.authority == authority
                         && snapshot.package == package
                         && snapshot.result.resource == requested_resource
-                        && snapshot.environment.ptr_eq(environment)
-                        && snapshot.sandbox == sandbox
+                        && snapshot.access == *access
                 })?;
                 let start = parse_pagination_cursor(
                     Some(cursor),
@@ -187,14 +180,10 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                         .read_skill(
                             &self.context.providers,
                             SkillReadRequest {
-                                _lifetime: PhantomData,
                                 authority: authority.clone(),
                                 package: package.clone(),
                                 resource: requested_resource.clone(),
-                                resolved_executor_roots,
-                                sandbox: sandbox.clone(),
-                                host_snapshot: None,
-                                mcp_resources: self.context.mcp_resources.clone(),
+                                context,
                             },
                         )
                         .await
@@ -255,7 +244,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
             if output_authority == super::SkillToolAuthoritySelector::Executor
                 && response.next_cursor.is_some()
                 && result.contents.len() <= MAX_SKILL_RESOURCE_CONTENT_BYTES
-                && let Some(environment) = executor_environment
+                && let Some(access) = access_key
             {
                 *self
                     .context
@@ -266,8 +255,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                     Some(ExecutorReadSnapshot {
                         authority,
                         package,
-                        environment,
-                        sandbox,
+                        access,
                         result,
                     });
             }

@@ -1,10 +1,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::Weak;
 
-use codex_exec_server::Environment;
-use codex_exec_server::FileSystemSandboxContext;
+use codex_exec_server::EnvironmentAccessKey;
 use codex_extension_api::ExtensionMetrics;
 use codex_mcp::McpResourceClient;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -20,6 +18,7 @@ use crate::catalog::SkillProviderResult;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillSourceKind;
 use crate::provider::SkillListQuery;
+use crate::provider::SkillReadContext;
 use crate::provider::SkillReadRequest;
 use crate::shadow_selection_experiment::RecentSkillInvocations;
 use crate::shadow_selection_experiment::ShadowSelectionTurnState;
@@ -370,7 +369,12 @@ impl SkillsThreadState {
             return providers.read(request).await;
         }
 
-        let cache = self.cloud_cache(request.mcp_resources.as_deref());
+        let SkillReadContext::Cloud { mcp_resources } = &request.context else {
+            return Err(SkillProviderError::new(
+                "cloud skill reads require a cloud context",
+            ));
+        };
+        let cache = self.cloud_cache(mcp_resources.as_deref());
         let cache_key = SkillReadCacheKey::from(&request);
         {
             let config = self
@@ -435,9 +439,8 @@ impl SkillsThreadState {
 pub(crate) struct ExecutorReadSnapshot {
     pub(crate) authority: SkillAuthority,
     pub(crate) package: SkillPackageId,
-    // Named environments can be replaced; do not reuse their old resource or keep them alive.
-    pub(crate) environment: Weak<Environment>,
-    pub(crate) sandbox: Option<FileSystemSandboxContext>,
+    // The key binds cached contents to their source filesystem and callback permissions.
+    pub(crate) access: EnvironmentAccessKey,
     pub(crate) result: Arc<SkillReadResult>,
 }
 

@@ -5,6 +5,7 @@ use crate::catalog::SkillResourceId;
 use crate::catalog::SkillSearchResult;
 use crate::provider::SkillProvider;
 use crate::provider::SkillProviderFuture;
+use crate::provider::SkillReadContext;
 use crate::provider::SkillSearchRequest;
 use codex_mcp::McpRuntime;
 use pretty_assertions::assert_eq;
@@ -93,14 +94,12 @@ fn query(client: Option<Arc<McpResourceClient>>) -> SkillListQuery {
 
 fn request(client: Option<Arc<McpResourceClient>>) -> SkillReadRequest<'static> {
     SkillReadRequest {
-        _lifetime: Default::default(),
         authority: SkillAuthority::new(SkillSourceKind::Cloud, "codex_apps"),
         package: SkillPackageId("skill://demo".into()),
         resource: SkillResourceId::new("skill://demo/SKILL.md"),
-        resolved_executor_roots: Vec::new(),
-        sandbox: None,
-        host_snapshot: None,
-        mcp_resources: client,
+        context: SkillReadContext::Cloud {
+            mcp_resources: client,
+        },
     }
 }
 

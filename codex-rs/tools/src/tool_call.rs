@@ -2,8 +2,7 @@ use crate::FunctionCallError;
 use crate::ToolName;
 use crate::ToolPayload;
 use codex_extension_items::ExtensionItem;
-use codex_file_system::ExecutorFileSystem;
-use codex_file_system::FileSystemSandboxContext;
+use codex_file_system::EnvironmentAccess;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -11,7 +10,6 @@ use codex_utils_output_truncation::with_serialization_allowance;
 use codex_utils_path_uri::PathUri;
 use std::fmt;
 use std::future::Future;
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -85,19 +83,36 @@ pub trait TurnItemEmitter: Send + Sync {
     fn emit_completed<'a>(&'a self, item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a>;
 }
 
-/// Host-owned turn environment summary visible to extension tools.
+/// Callback-scoped view of a turn environment for extension tools.
+///
+/// The host retains its runtime and configuration, and supplies access with this callback's
+/// grants already applied. Borrowing the accessor prevents retaining it for a later callback.
 #[derive(Clone)]
 pub struct ToolEnvironment<'call> {
     /// Stable host environment id used to route executor-scoped capabilities.
     pub environment_id: String,
     /// Effective working directory for this turn in the environment.
     pub cwd: PathUri,
-    /// Filesystem implementation for this environment.
-    pub file_system: Arc<dyn ExecutorFileSystem>,
-    /// Sandbox context to use for filesystem operations.
-    pub file_system_sandbox_context: FileSystemSandboxContext,
-    // TODO(anp): Replace the marker with callback-scoped environment access.
-    pub _lifetime: PhantomData<&'call ()>,
+    file_system: &'call dyn EnvironmentAccess,
+}
+
+impl<'call> ToolEnvironment<'call> {
+    pub fn new(
+        environment_id: String,
+        cwd: PathUri,
+        file_system: &'call dyn EnvironmentAccess,
+    ) -> Self {
+        Self {
+            environment_id,
+            cwd,
+            file_system,
+        }
+    }
+
+    /// Borrows filesystem access with the permissions captured for this callback.
+    pub fn fs(&self) -> &dyn EnvironmentAccess {
+        self.file_system
+    }
 }
 
 /// Turn-item emitter used when a caller does not expose visible item emission.

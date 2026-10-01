@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -1186,15 +1185,15 @@ async fn build_extension_turn_input_items(
         return Some(Vec::new());
     }
 
-    let environments = step_context
-        .environments
-        .turn_environments()
+    let environment_accessors = step_context.environments();
+    let environments = environment_accessors
+        .iter()
         .enumerate()
-        .map(|(index, environment)| TurnInputEnvironment {
-            _lifetime: PhantomData,
+        .map(|(index, (environment, fs))| TurnInputEnvironment {
             environment_id: environment.selection.environment_id.clone(),
             cwd: environment.cwd().clone(),
             is_primary: index == 0,
+            fs,
         })
         .collect::<Vec<_>>();
 

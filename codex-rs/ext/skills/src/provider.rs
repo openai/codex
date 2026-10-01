@@ -1,5 +1,4 @@
 use std::future::Future;
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -7,8 +6,8 @@ mod executor;
 mod host;
 
 use crate::HostSkillsSnapshot;
+use codex_exec_server::EnvironmentAccess;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
-use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_mcp::McpResourceClient;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -41,17 +40,30 @@ pub struct SkillListQuery {
     pub executor_capability_discovery: Option<ExecutorCapabilityDiscoverySnapshot>,
 }
 
-#[derive(Clone, Debug)]
+/// A skill read with the source access supplied by its callback.
+#[derive(Clone)]
 pub struct SkillReadRequest<'a> {
-    // TODO(anp): Replace the marker with callback-scoped environment access.
-    pub _lifetime: PhantomData<&'a ()>,
     pub authority: SkillAuthority,
     pub package: SkillPackageId,
     pub resource: SkillResourceId,
-    pub resolved_executor_roots: Vec<ResolvedSelectedCapabilityRoot>,
-    pub sandbox: Option<FileSystemSandboxContext>,
-    pub host_snapshot: Option<Arc<HostSkillsSnapshot>>,
-    pub mcp_resources: Option<Arc<McpResourceClient>>,
+    pub context: SkillReadContext<'a>,
+}
+
+/// Executor reads require callback access; other providers carry their own source context.
+#[derive(Clone)]
+pub enum SkillReadContext<'a> {
+    Host {
+        host_snapshot: Option<Arc<HostSkillsSnapshot>>,
+    },
+    Executor {
+        fs: &'a dyn EnvironmentAccess,
+    },
+    Cloud {
+        mcp_resources: Option<Arc<McpResourceClient>>,
+    },
+    Custom {
+        mcp_resources: Option<Arc<McpResourceClient>>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
