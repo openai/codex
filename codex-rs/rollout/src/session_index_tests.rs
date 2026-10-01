@@ -357,6 +357,43 @@ async fn reverse_lookup_accepts_valid_eof_json_and_skips_invalid() -> std::io::R
 }
 
 #[tokio::test]
+async fn append_and_remove_thread_names_preserves_other_entries() -> std::io::Result<()> {
+    let temp = TempDir::new()?;
+    let removed_id = ThreadId::new();
+    let retained = SessionIndexEntry {
+        id: ThreadId::new(),
+        thread_name: "retained".to_string(),
+        updated_at: "2024-01-01T00:00:00Z".to_string(),
+    };
+    for entry in [
+        SessionIndexEntry {
+            id: removed_id,
+            thread_name: "original".to_string(),
+            ..retained.clone()
+        },
+        retained.clone(),
+        SessionIndexEntry {
+            id: removed_id,
+            thread_name: "renamed".to_string(),
+            ..retained.clone()
+        },
+    ] {
+        append_session_index_entry(temp.path(), entry).await?;
+    }
+    assert_eq!(
+        find_thread_name_by_id(temp.path(), &removed_id).await?,
+        Some("renamed".to_string()),
+    );
+
+    remove_thread_name_entries(temp.path(), removed_id).await?;
+    assert_eq!(
+        std::fs::read_to_string(session_index_path(temp.path()))?,
+        format!("{}\n", serde_json::to_string(&retained)?),
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn find_thread_names_by_ids_prefers_latest_entry() -> std::io::Result<()> {
     let temp = TempDir::new()?;
     let path = session_index_path(temp.path());
