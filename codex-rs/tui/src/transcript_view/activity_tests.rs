@@ -74,9 +74,9 @@ fn escape_closes_selection_and_search_before_returning_to_latest() {
     let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
     view.handle_key(escape, &cells);
     assert!(view.selection.is_none());
-    assert!(view.is_search_active());
+    assert!(view.is_search_editing());
     view.handle_key(escape, &cells);
-    assert!(!view.is_search_active());
+    assert!(!view.is_search_editing());
     assert!(!view.is_following());
     assert!(matches!(
         view.handle_key(escape, &cells),

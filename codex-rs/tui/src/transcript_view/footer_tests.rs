@@ -267,10 +267,46 @@ fn loading_and_failure_preserve_search_query_and_caret() {
     }
     insta::assert_snapshot!(hints.join("\n"));
     view.history = TranscriptHistoryState::Complete;
-    view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &cells);
-    assert!(!view.is_search_active());
+    assert!(!view.advance_search(&cells));
+    view.handle_key(KeyCode::Esc.into(), &cells);
+    insta::assert_snapshot!(view.footer(/*width*/ 32, MotionMode::Reduced).unwrap().text.to_string(), @"No matches · esc latest");
+    view.handle_key(
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        &cells,
+    );
+    assert!(!view.is_search_editing());
     assert!(!view.is_detailed());
     assert!(view.footer(/*width*/ 32, MotionMode::Reduced).is_none());
+}
+
+#[test]
+fn reading_a_find_result_shows_history_loading_and_failure() {
+    let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(PlainHistoryCell::new(vec![
+        "visible needle".into(),
+    ]))];
+    let mut view = TranscriptView::default();
+    render(&mut view, &cells);
+    view.begin_search();
+    view.paste_search("needle");
+    assert!(!view.advance_search(&cells));
+    view.handle_key(KeyCode::Esc.into(), &cells);
+
+    let mut hints = Vec::new();
+    for history in [
+        TranscriptHistoryState::LoadingOlder,
+        TranscriptHistoryState::Failed,
+        TranscriptHistoryState::Complete,
+    ] {
+        view.history = history;
+        let footer = view.footer(/*width*/ 80, MotionMode::Reduced).unwrap();
+        assert_eq!((footer.cursor_column, footer.is_interactive), (None, false));
+        hints.push(footer.text.to_string());
+    }
+    insta::assert_snapshot!(hints.join("\n"), @"
+    ↑ Loading earlier messages… · esc latest
+    Retry history: ⌥</⌃home.  esc latest
+    ctrl+n next · ctrl+p previous · esc latest
+    ");
 }
 
 #[test]

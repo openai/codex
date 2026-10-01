@@ -158,17 +158,17 @@ fn copying_selection_at_bottom_does_not_show_back_to_bottom() {
 fn closing_find_at_bottom_does_not_show_back_to_bottom() {
     let cells = vec![cell("one\ntwo\nthree\nfour\nneedle")];
     let mut view = TranscriptView::default();
-    let before = paint(&mut view, &cells, /*width*/ 40);
+    paint(&mut view, &cells, /*width*/ 40);
     view.begin_selection(&cells, /*column*/ 0, /*row*/ 2, /*clicks*/ 2);
     view.end_drag();
     view.begin_search();
     view.paste_search("needle");
     assert!(!view.advance_search(&cells));
-    paint(&mut view, &cells, /*width*/ 40);
+    let before = paint(&mut view, &cells, /*width*/ 40);
 
     view.handle_key(KeyCode::Esc.into(), &cells);
     let after = paint(&mut view, &cells, /*width*/ 40);
-    assert!(!view.is_search_active());
+    assert!(!view.is_search_editing());
     assert!(!view.is_following());
     assert!(view.tail_visible);
     assert!(view.follow_control.area.is_none());

@@ -277,7 +277,7 @@ async fn opening_find_retains_the_selected_mutable_revision() -> Result<()> {
         &mut tui,
         TuiEvent::Key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE)),
     )?;
-    assert!(overlay.view.is_search_active());
+    assert!(overlay.view.is_search_editing());
     overlay.handle_event(
         &mut tui,
         TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),

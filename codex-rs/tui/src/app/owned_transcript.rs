@@ -471,7 +471,7 @@ impl App {
         }
         let action = match event {
             TuiEvent::Key(key)
-                if !self.transcript_view.is_search_active()
+                if !self.transcript_view.is_search_editing()
                     && self.keymap.app.find_transcript.is_pressed(*key) =>
             {
                 self.transcript_view.begin_search();

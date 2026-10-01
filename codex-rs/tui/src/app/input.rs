@@ -16,7 +16,7 @@ impl App {
         cfg!(unix)
             && !self.enhanced_keys_supported
             && self.overlay.is_none()
-            && !self.transcript_view.is_search_active()
+            && !self.transcript_view.is_search_editing()
             && self.chat_widget.no_modal_or_popup_active()
             && matches!(key_event.code, KeyCode::Char(_))
             && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
@@ -185,7 +185,7 @@ impl App {
         use crate::keymap::KeymapContextSet;
 
         if let Some(overlay) = &self.overlay {
-            let context = if matches!(overlay, Overlay::Transcript(view) if view.is_search_active())
+            let context = if matches!(overlay, Overlay::Transcript(view) if view.is_search_editing())
             {
                 KeymapContext::Editor
             } else {
@@ -198,7 +198,7 @@ impl App {
                 contexts
             };
         }
-        if self.transcript_view.is_search_active() && self.chat_widget.no_modal_or_popup_active() {
+        if self.transcript_view.is_search_editing() && self.chat_widget.no_modal_or_popup_active() {
             return KeymapContextSet::new(KeymapContext::Editor).with_voice_toggle(&self.keymap);
         }
         if self.transcript_view.is_activity_focused() && self.chat_widget.no_modal_or_popup_active()

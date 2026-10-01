@@ -105,7 +105,7 @@ async fn browsing_search_and_selection_consume_escape_before_mode_exit() -> Resu
         .await?;
     assert_eq!(
         (
-            app.transcript_view.is_search_active(),
+            app.transcript_view.is_search_editing(),
             app.backtrack.overlay_preview_active
         ),
         (false, true)
@@ -120,6 +120,9 @@ async fn browsing_search_and_selection_consume_escape_before_mode_exit() -> Resu
     }
     assert!(app.transcript_view.has_active_interaction());
     assert_eq!(app.backtrack.nth_user_message, 1);
+    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into()))
+        .await?;
+    assert!(app.transcript_view.has_active_interaction());
     app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into()))
         .await?;
     assert_eq!(

@@ -149,8 +149,11 @@ impl TranscriptView {
                 || (modifiers == KeyModifiers::NONE
                     && matches!(code, KeyCode::PageUp | KeyCode::PageDown));
         }
-        self.is_search_active()
-            && (matches!(code, KeyCode::Esc | KeyCode::Enter)
+        self.search.is_active()
+            && (code == KeyCode::Esc
+                || (code == KeyCode::Enter && self.is_search_editing())
+                || (modifiers == KeyModifiers::NONE
+                    && matches!(code, KeyCode::PageUp | KeyCode::PageDown))
                 || (modifiers == KeyModifiers::CONTROL
                     && matches!(code, KeyCode::Char('c' | 'n' | 'p'))))
     }

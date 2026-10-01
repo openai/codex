@@ -101,6 +101,9 @@ impl TranscriptView {
             return None;
         }
         let key = self.entry_key(cells, index);
+        if let Some(layout) = self.search.match_layout(key) {
+            return Some(layout);
+        }
         if let Some(layout) = self
             .snapshot()
             .and_then(|snapshot| snapshot.pinned.get(&key))

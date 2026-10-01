@@ -1,0 +1,20 @@
+---
+source: tui/src/transcript_view/search_tests.rs
+expression: "format!(\"{found:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 40, height: 6 },
+    content: [
+        "explanation before the result           ",
+        "                                        ",
+        "needle in the result                    ",
+        "                                        ",
+        "explanation after the result            ",
+        "                                        ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 6, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

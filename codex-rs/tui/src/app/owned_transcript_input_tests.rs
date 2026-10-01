@@ -415,7 +415,7 @@ async fn enter_preserves_search_backtrack_and_modal_ownership_while_scrolled() -
     let enter = TuiEvent::Key(KeyEvent::from(KeyCode::Enter));
     app.transcript_view.begin_search();
     assert!(app.handle_owned_transcript_event(&mut tui, &mut server, &enter)?);
-    assert!(app.transcript_view.is_search_active());
+    assert!(app.transcript_view.is_search_editing());
     assert!(!app.transcript_view.is_following());
     app.handle_owned_transcript_event(
         &mut tui,

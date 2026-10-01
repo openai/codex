@@ -66,6 +66,13 @@ impl TranscriptView {
                 is_interactive: true,
             });
         }
+        if self.search.is_reading() && !pending {
+            return Some(TranscriptFooter {
+                text: self.search.status_line(width, self.history).into(),
+                cursor_column: None,
+                is_interactive: false,
+            });
+        }
         if self.is_activity_focused() {
             return self.disclosure_footer(width);
         }

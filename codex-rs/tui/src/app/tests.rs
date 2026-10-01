@@ -8644,7 +8644,7 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
     );
     // Editing the first visible prompt also discards search state from the removed window.
     app.transcript_view.begin_search();
-    assert!(app.transcript_view.is_search_active());
+    assert!(app.transcript_view.is_search_editing());
     app.chat_widget.restore_thread_input_state(
         /*input_state*/ None,
         crate::chatwidget::ThreadInputStateRestoreMode {
@@ -8668,7 +8668,7 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
             Box::pin(app.handle_event(&mut tui, &mut app_server, event)).await?;
         }
     }
-    assert!(!app.transcript_view.is_search_active());
+    assert!(!app.transcript_view.is_search_editing());
     assert!(app.transcript_view.is_following());
     assert_eq!(app.chat_widget.thread_id(), Some(source_thread_id));
     assert_eq!(

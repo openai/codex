@@ -125,7 +125,7 @@ fn copy_shortcuts_clear_selection_only_after_confirmed_delivery() {
                 );
                 assert_eq!(copied, Ok(status));
                 assert_eq!(
-                    (view.selected_text(&cells), view.is_search_active()),
+                    (view.selected_text(&cells), view.is_search_editing()),
                     (
                         (status == CopyStatus::Unconfirmed).then(|| text.clone()),
                         searching

@@ -67,7 +67,7 @@ impl App {
         };
         if !tui.is_owned_screen()
             || self.overlay.is_some()
-            || self.transcript_view.is_search_active()
+            || self.transcript_view.is_search_editing()
             || !allowed
         {
             return None;

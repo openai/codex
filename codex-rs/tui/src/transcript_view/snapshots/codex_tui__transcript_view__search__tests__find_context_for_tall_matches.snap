@@ -1,0 +1,69 @@
+---
+source: tui/src/transcript_view/search_tests.rs
+expression: "frames.join(\"\\n\")"
+---
+height 6
+Buffer {
+    area: Rect { x: 0, y: 0, width: 6, height: 6 },
+    content: [
+        "      ",
+        "one   ",
+        "two   ",
+        "three ",
+        "four  ",
+        "five  ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 3, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 3, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 5, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 4, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 4, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+height 5
+Buffer {
+    area: Rect { x: 0, y: 0, width: 6, height: 5 },
+    content: [
+        "one   ",
+        "two   ",
+        "three ",
+        "four  ",
+        "five  ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 3, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 3, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 5, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 4, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 4, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+height 3
+Buffer {
+    area: Rect { x: 0, y: 0, width: 6, height: 3 },
+    content: [
+        "one   ",
+        "two   ",
+        "three ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 3, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 3, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 5, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

@@ -123,7 +123,7 @@ impl TranscriptOverlay {
                 .map(|column| (status.x + column, status.y));
             if let Some(notice) = &self.notice {
                 let notice = Line::from(notice.clone()).dim();
-                if self.view.is_search_active() {
+                if self.view.is_search_editing() {
                     footer.text.lines.truncate(/*len*/ 1);
                     footer.text.lines.push(notice);
                 } else {
@@ -214,7 +214,7 @@ impl TranscriptOverlay {
                 self.view.handle_mouse(mouse, &self.cells)
             }
             TuiEvent::Paste(text) => {
-                if self.view.is_search_active() {
+                if self.view.is_search_editing() {
                     self.view.end_selection(&self.cells);
                 }
                 self.view.paste_search(&text).then_some(ViewAction::Changed)
@@ -252,8 +252,8 @@ impl TranscriptOverlay {
         self.view.begin_search();
     }
 
-    pub(crate) fn is_search_active(&self) -> bool {
-        self.view.is_search_active()
+    pub(crate) fn is_search_editing(&self) -> bool {
+        self.view.is_search_editing()
     }
 
     pub(crate) fn owns_interaction_key(&self, key: KeyEvent) -> bool {
@@ -415,7 +415,7 @@ impl TranscriptOverlay {
         if key.kind == KeyEventKind::Release {
             return None;
         }
-        if !self.view.is_search_active()
+        if !self.view.is_search_editing()
             && (!self.view.has_active_interaction() || !self.view.owns_interaction_key(key))
             && self.keymap.find.is_pressed(key)
         {

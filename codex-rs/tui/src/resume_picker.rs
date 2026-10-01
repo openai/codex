@@ -1088,7 +1088,7 @@ impl PickerState {
             self.chord_matcher.cancel();
             return Some(key);
         }
-        let context = if matches!(&self.overlay, Some(Overlay::Transcript(overlay)) if overlay.is_search_active())
+        let context = if matches!(&self.overlay, Some(Overlay::Transcript(overlay)) if overlay.is_search_editing())
         {
             crate::keymap::KeymapContext::Editor
         } else if self.overlay.is_some() {

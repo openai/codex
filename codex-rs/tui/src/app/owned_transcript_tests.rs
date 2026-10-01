@@ -853,8 +853,15 @@ async fn inline_transcript_search_draws_and_escape_precedes_backtrack() -> Resul
     )
     .await?;
     assert!(
-        matches!(&app.overlay, Some(Overlay::Transcript(overlay)) if !overlay.has_active_interaction())
+        matches!(&app.overlay, Some(Overlay::Transcript(overlay)) if overlay.has_active_interaction() && !overlay.is_search_editing())
     );
+    assert!(!app.backtrack.overlay_preview_active);
+    app.handle_backtrack_overlay_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+    )
+    .await?;
     assert!(!app.backtrack.overlay_preview_active);
     app.handle_backtrack_overlay_event(
         &mut tui,
@@ -962,8 +969,8 @@ async fn find_owns_editor_chords_without_changing_the_composer_draft() -> Result
         )
         .await?;
         assert!(!match &app.overlay {
-            Some(Overlay::Transcript(overlay)) => overlay.is_search_active(),
-            _ => app.transcript_view.is_search_active(),
+            Some(Overlay::Transcript(overlay)) => overlay.is_search_editing(),
+            _ => app.transcript_view.is_search_editing(),
         });
         assert_eq!(
             app.chat_widget.composer_text_with_pending(),
@@ -1005,7 +1012,7 @@ async fn offline_find_closes_before_the_next_ctrl_c_quits() -> Result<()> {
             .await?,
         AppRunControl::Continue
     ));
-    assert!(!app.transcript_view.is_search_active());
+    assert!(!app.transcript_view.is_search_editing());
     assert_eq!(
         app.chat_widget.composer_text_with_pending(),
         "offline draft"
@@ -1089,9 +1096,9 @@ async fn offline_backtrack_keeps_the_preview_and_draft_without_reverting() -> Re
         )
         .await?;
         assert!(if owned {
-            app.transcript_view.is_search_active()
+            app.transcript_view.is_search_editing()
         } else {
-            matches!(&app.overlay, Some(Overlay::Transcript(overlay)) if overlay.is_search_active())
+            matches!(&app.overlay, Some(Overlay::Transcript(overlay)) if overlay.is_search_editing())
         });
         for (key, preview_active, draft) in [
             (KeyCode::Esc, true, "offline draft"),

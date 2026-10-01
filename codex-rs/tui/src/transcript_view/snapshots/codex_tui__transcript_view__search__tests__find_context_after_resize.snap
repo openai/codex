@@ -1,0 +1,17 @@
+---
+source: tui/src/transcript_view/search_tests.rs
+expression: "format!(\"{resized:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 20, height: 3 },
+    content: [
+        "                    ",
+        "newer explanation   ",
+        "with needle in a    ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 5, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 11, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

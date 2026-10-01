@@ -26,7 +26,7 @@ impl App {
             HistoryRenderMode::Rich => match (
                 self.overlay.as_ref(),
                 view.is_detailed(),
-                view.is_search_active(),
+                view.is_search_editing(),
                 view.is_activity_focused(),
                 view.has_selection_range(),
             ) {
