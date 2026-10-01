@@ -3,8 +3,9 @@
 mod registered;
 
 use std::os::windows::fs::MetadataExt;
-use std::os::windows::io::BorrowedHandle;
-use std::os::windows::io::IntoRawHandle;
+use std::os::windows::io::AsHandle;
+use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::OwnedHandle;
 use std::sync::atomic::AtomicBool;
 
 use anyhow::Context;
@@ -17,7 +18,6 @@ use windows_sys::Win32::Storage::FileSystem as filesystem;
 
 use crate::installation_record::InstallationRecord;
 use crate::ipc::ClientIdentity;
-use crate::ipc::OwnedHandle;
 use crate::ipc::ServiceRequest;
 
 // The lifecycle callback validates ownership and returns the canonical saved record.
@@ -29,8 +29,9 @@ fn register_owner(
         codex_windows_sandbox::SetupRuntime,
     ) -> Result<InstallationRecord>,
 ) -> Result<InstallationRecord> {
-    let token = unsafe { BorrowedHandle::borrow_raw(identity.token.0 as _) }
-        .try_clone_to_owned()
+    let token = identity
+        .token
+        .try_clone()
         .context("retain authenticated uninstall owner")?;
     on_authenticated_user(
         InstallationRecord {
@@ -40,7 +41,7 @@ fn register_owner(
             desktop_installation: identity.desktop_installation.clone(),
             runtime: None,
         },
-        OwnedHandle(token.into_raw_handle() as _),
+        token,
         identity.runtime,
     )
 }
@@ -49,7 +50,7 @@ fn setup_is_complete(
     identity: &ClientIdentity,
     settings: &codex_windows_sandbox::WindowsSandboxProvisioningSettings,
 ) -> Result<bool> {
-    crate::package_lifecycle::with_owner_impersonation(identity.token.0, || {
+    crate::package_lifecycle::with_owner_impersonation(identity.token.as_raw_handle(), || {
         Ok(
             codex_windows_sandbox::sandbox_setup_is_complete_with_settings(
                 &identity.codex_home,
@@ -116,7 +117,7 @@ pub(crate) fn run(
         .directory_handles
         .iter()
         // The identity owns these handles through the synchronous helper launch and wait.
-        .map(|handle| unsafe { BorrowedHandle::borrow_raw(handle.0 as _) })
+        .map(AsHandle::as_handle)
         .collect::<Vec<_>>();
     match run_elevated_provisioning_setup_with_retained_handles(
         &identity.codex_home,

@@ -222,7 +222,7 @@ fn current_account_name() -> Result<String> {
     // Bazel does not provide USERDOMAIN or USERNAME in the test environment.
     let mut account = [0; (DNLEN + UNLEN + 2) as usize];
     let mut length = account.len() as u32;
-    if unsafe { GetUserNameExW(NameSamCompatible, account.as_mut_ptr(), &mut length) } == 0 {
+    if !unsafe { GetUserNameExW(NameSamCompatible, account.as_mut_ptr(), &mut length) } {
         return Err(std::io::Error::last_os_error().into());
     }
     Ok(String::from_utf16(&account[..length as usize])?)

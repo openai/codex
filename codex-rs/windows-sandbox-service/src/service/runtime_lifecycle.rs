@@ -23,7 +23,7 @@ use crate::package_lifecycle::PackageLifecycle;
 #[cfg(debug_assertions)]
 pub(super) fn foreground_owner(
     mut record: crate::installation_record::InstallationRecord,
-    _token: crate::ipc::OwnedHandle,
+    _token: std::os::windows::io::OwnedHandle,
     runtime: codex_windows_sandbox::SetupRuntime,
 ) -> Result<crate::installation_record::InstallationRecord> {
     let _lock = codex_windows_sandbox::acquire_sandbox_setup_lock(/*timeout_ms*/ 5_000)?;

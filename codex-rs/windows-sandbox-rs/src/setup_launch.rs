@@ -34,7 +34,7 @@ pub(super) fn spawn_with_retained_handles(
         .spawn()?;
     let initialized = (|| {
         for handle in retained_handles {
-            let mut child_handle = 0;
+            let mut child_handle = std::ptr::null_mut();
             if unsafe {
                 DuplicateHandle(
                     GetCurrentProcess(),

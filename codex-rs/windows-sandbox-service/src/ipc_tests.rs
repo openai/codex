@@ -1,5 +1,4 @@
 use super::MAX_RESPONSE_MESSAGE_BYTES;
-use super::OwnedHandle;
 use super::PipeConnection;
 use super::ServiceRequest;
 use super::accept_pipe_connection;
@@ -26,6 +25,9 @@ use codex_windows_sandbox::read_provisioning_frame;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::write_provisioning_frame;
 use pretty_assertions::assert_eq;
+use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::FromRawHandle;
+use std::os::windows::io::OwnedHandle;
 use std::path::Path;
 use std::path::PathBuf;
 use std::ptr;
@@ -39,6 +41,12 @@ use windows_sys::Win32::Foundation as foundation;
 use windows_sys::Win32::Storage::FileSystem as filesystem;
 use windows_sys::Win32::Storage::Packaging::Appx;
 use windows_sys::Win32::System::Pipes as pipes;
+
+struct NonOwningPipeHandle(foundation::HANDLE);
+
+// SAFETY: Pipe handles are opaque process-wide tokens that may be passed between
+// threads. This wrapper does not own the handle or extend its lifetime.
+unsafe impl Send for NonOwningPipeHandle {}
 
 #[test]
 fn provisioning_error_response_preserves_causes_within_message_limits() {
@@ -560,7 +568,8 @@ fn unpackaged_pipe_clients_are_rejected_before_sending_a_request() {
         )
     };
     assert_ne!(server, foundation::INVALID_HANDLE_VALUE);
-    let server = OwnedHandle(server);
+    // SAFETY: CreateNamedPipeW returned a valid owned handle.
+    let server = unsafe { OwnedHandle::from_raw_handle(server) };
 
     let client = unsafe {
         filesystem::CreateFileW(
@@ -570,18 +579,19 @@ fn unpackaged_pipe_clients_are_rejected_before_sending_a_request() {
             ptr::null(),
             filesystem::OPEN_EXISTING,
             0,
-            0,
+            ptr::null_mut(),
         )
     };
     assert_ne!(client, foundation::INVALID_HANDLE_VALUE);
-    let _client = OwnedHandle(client);
+    // SAFETY: CreateFileW returned a valid owned handle.
+    let _client = unsafe { OwnedHandle::from_raw_handle(client) };
 
-    let connected = unsafe { pipes::ConnectNamedPipe(server.0, ptr::null_mut()) };
+    let connected = unsafe { pipes::ConnectNamedPipe(server.as_raw_handle(), ptr::null_mut()) };
     assert!(
         connected != 0 || unsafe { foundation::GetLastError() } == foundation::ERROR_PIPE_CONNECTED
     );
 
-    let error = match crate::package_identity::authorize_client_process(server.0) {
+    let error = match crate::package_identity::authorize_client_process(server.as_raw_handle()) {
         Ok(_) => panic!("an unpackaged client was authorized without sending a request"),
         Err(error) => error,
     };
@@ -616,7 +626,8 @@ fn disconnected_pipe_clients_do_not_prevent_subsequent_connections() {
         )
     };
     assert_ne!(server, foundation::INVALID_HANDLE_VALUE);
-    let server = OwnedHandle(server);
+    // SAFETY: CreateNamedPipeW returned a valid owned handle.
+    let server = unsafe { OwnedHandle::from_raw_handle(server) };
 
     let first_client = unsafe {
         filesystem::CreateFileW(
@@ -626,19 +637,24 @@ fn disconnected_pipe_clients_do_not_prevent_subsequent_connections() {
             ptr::null(),
             filesystem::OPEN_EXISTING,
             0,
-            0,
+            ptr::null_mut(),
         )
     };
     assert_ne!(first_client, foundation::INVALID_HANDLE_VALUE);
-    drop(OwnedHandle(first_client));
+    // SAFETY: CreateFileW returned a valid owned handle.
+    drop(unsafe { OwnedHandle::from_raw_handle(first_client) });
 
     assert_eq!(
-        accept_pipe_connection(server.0).unwrap(),
+        accept_pipe_connection(server.as_raw_handle()).unwrap(),
         PipeConnection::Disconnected
     );
 
-    let server_handle = server.0;
-    let listener = std::thread::spawn(move || accept_pipe_connection(server_handle));
+    let server_handle = NonOwningPipeHandle(server.as_raw_handle());
+    let listener = std::thread::spawn(move || {
+        // Capture the wrapper rather than its raw pointer field.
+        let server_handle = &server_handle;
+        accept_pipe_connection(server_handle.0)
+    });
     let available = unsafe { pipes::WaitNamedPipeW(name.as_ptr(), 5_000) };
     assert_ne!(
         available,
@@ -654,7 +670,7 @@ fn disconnected_pipe_clients_do_not_prevent_subsequent_connections() {
             ptr::null(),
             filesystem::OPEN_EXISTING,
             0,
-            0,
+            ptr::null_mut(),
         )
     };
     assert_ne!(
@@ -663,14 +679,18 @@ fn disconnected_pipe_clients_do_not_prevent_subsequent_connections() {
         "connect replacement named-pipe client: {}",
         std::io::Error::last_os_error()
     );
-    let next_client = OwnedHandle(next_client);
+    // SAFETY: CreateFileW returned a valid owned handle.
+    let next_client = unsafe { OwnedHandle::from_raw_handle(next_client) };
     assert_eq!(
         listener.join().expect("join named-pipe listener").unwrap(),
         PipeConnection::Connected
     );
 
     drop(next_client);
-    assert_ne!(unsafe { pipes::DisconnectNamedPipe(server.0) }, 0);
+    assert_ne!(
+        unsafe { pipes::DisconnectNamedPipe(server.as_raw_handle()) },
+        0
+    );
 
     let timeout = Duration::from_secs(5);
     let deadline = Instant::now() + timeout;
@@ -687,7 +707,7 @@ fn disconnected_pipe_clients_do_not_prevent_subsequent_connections() {
 
     let (accepted_tx, accepted_rx) = mpsc::channel();
     let listener = std::thread::spawn(move || {
-        let _ = accepted_tx.send(accept_pipe_connection(server.0));
+        let _ = accepted_tx.send(accept_pipe_connection(server.as_raw_handle()));
         drop(server);
     });
     let accepted = accepted_rx.recv_timeout(timeout);

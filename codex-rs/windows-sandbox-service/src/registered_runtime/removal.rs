@@ -207,7 +207,7 @@ pub(crate) fn prepare(
     // Do not relax process handle inheritance. Only these validated token handles
     // are duplicated into the exact child process, with inheritance disabled.
     for (target, token) in targets.iter_mut().zip(&tokens) {
-        let mut remote = 0;
+        let mut remote = std::ptr::null_mut();
         let duplicated = unsafe {
             DuplicateHandle(
                 threading::GetCurrentProcess(),

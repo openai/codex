@@ -1,6 +1,8 @@
 //! Admits registered Core only from the service's installed package version and
 //! prevents legacy setup from replacing accounts owned by a registered runtime.
 
+use std::os::windows::io::AsRawHandle;
+
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
@@ -31,8 +33,9 @@ pub(crate) fn authorize_setup_runtime(
 }
 
 fn authorize_runtime_client_process(process: &AuthorizedClientProcess) -> Result<()> {
-    let client_family = unsafe { codex_windows_sandbox::process_package_family(process.handle.0) }
-        .context("read runtime registration client package family")?;
+    let client_family =
+        unsafe { codex_windows_sandbox::process_package_family(process.handle.as_raw_handle()) }
+            .context("read runtime registration client package family")?;
     let service_family =
         unsafe { codex_windows_sandbox::process_package_family(Threading::GetCurrentProcess()) }
             .context("read runtime registration service package family")?;
@@ -40,7 +43,12 @@ fn authorize_runtime_client_process(process: &AuthorizedClientProcess) -> Result
     let mut image = [0u16; 32768];
     let mut length = image.len() as u32;
     if unsafe {
-        Threading::QueryFullProcessImageNameW(process.handle.0, 0, image.as_mut_ptr(), &mut length)
+        Threading::QueryFullProcessImageNameW(
+            process.handle.as_raw_handle(),
+            0,
+            image.as_mut_ptr(),
+            &mut length,
+        )
     } == 0
     {
         return Err(std::io::Error::last_os_error()).context("read provisioning client image");

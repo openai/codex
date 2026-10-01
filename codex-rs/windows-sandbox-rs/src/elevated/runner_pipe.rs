@@ -92,7 +92,7 @@ pub fn create_named_pipe(name: &str, access: u32, sandbox_username: &str) -> io:
     unsafe {
         LocalFree(sd as HLOCAL);
     }
-    if h == 0 || h == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+    if h.is_null() || h == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
         return Err(io::Error::from_raw_os_error(unsafe {
             GetLastError() as i32
         }));

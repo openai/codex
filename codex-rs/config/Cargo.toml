@@ -57,7 +57,7 @@ core-foundation = "0.9"
 [target.'cfg(target_os = "windows")'.dependencies]
 codex-windows-sandbox = { workspace = true }
 winapi-util = { workspace = true }
-windows-sys = { version = "0.52", features = [
+windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_System_Com",
     "Win32_UI_Shell",

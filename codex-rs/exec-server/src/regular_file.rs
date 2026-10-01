@@ -76,12 +76,11 @@ fn configure_open(_options: &mut std::fs::OpenOptions) {}
 
 #[cfg(windows)]
 pub(crate) fn is_disk_file(file: &impl std::os::windows::io::AsRawHandle) -> bool {
-    use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::Storage::FileSystem::FILE_TYPE_DISK;
     use windows_sys::Win32::Storage::FileSystem::GetFileType;
 
     // SAFETY: `file` owns this handle for the duration of the call.
-    unsafe { GetFileType(file.as_raw_handle() as HANDLE) == FILE_TYPE_DISK }
+    unsafe { GetFileType(file.as_raw_handle()) == FILE_TYPE_DISK }
 }
 
 #[cfg(not(windows))]

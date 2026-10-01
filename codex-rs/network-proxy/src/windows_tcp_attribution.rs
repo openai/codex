@@ -8,7 +8,6 @@ use std::net::SocketAddrV4;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
-use std::os::windows::io::RawHandle;
 
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::GetLastError;
@@ -16,7 +15,6 @@ use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::NO_ERROR;
-use windows_sys::Win32::Foundation::PSID;
 use windows_sys::Win32::NetworkManagement::IpHelper::GetExtendedTcpTable;
 use windows_sys::Win32::NetworkManagement::IpHelper::MIB_TCPROW_OWNER_PID;
 use windows_sys::Win32::NetworkManagement::IpHelper::MIB_TCPTABLE_OWNER_PID;
@@ -24,6 +22,7 @@ use windows_sys::Win32::NetworkManagement::IpHelper::TCP_TABLE_OWNER_PID_CONNECT
 use windows_sys::Win32::Networking::WinSock::AF_INET;
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::GetTokenInformation;
+use windows_sys::Win32::Security::PSID;
 use windows_sys::Win32::Security::SID_AND_ATTRIBUTES;
 use windows_sys::Win32::Security::TOKEN_GROUPS;
 use windows_sys::Win32::Security::TOKEN_QUERY;
@@ -180,14 +179,9 @@ fn restricting_sids_for_process(process_id: u32) -> io::Result<Vec<String>> {
     let process_handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
     let process = owned_handle(process_handle, "open proxy client process")?;
 
-    let mut token_handle: HANDLE = 0;
-    let opened = unsafe {
-        OpenProcessToken(
-            process.as_raw_handle() as HANDLE,
-            TOKEN_QUERY,
-            &mut token_handle,
-        )
-    };
+    let mut token_handle = std::ptr::null_mut();
+    let opened =
+        unsafe { OpenProcessToken(process.as_raw_handle(), TOKEN_QUERY, &mut token_handle) };
     if opened == 0 {
         return Err(last_error("open proxy client process token"));
     }
@@ -196,7 +190,7 @@ fn restricting_sids_for_process(process_id: u32) -> io::Result<Vec<String>> {
     let mut byte_len = 0_u32;
     let queried = unsafe {
         GetTokenInformation(
-            token.as_raw_handle() as HANDLE,
+            token.as_raw_handle(),
             TokenRestrictedSids,
             std::ptr::null_mut(),
             0,
@@ -210,7 +204,7 @@ fn restricting_sids_for_process(process_id: u32) -> io::Result<Vec<String>> {
     let mut buffer = aligned_buffer(byte_len as usize)?;
     let queried = unsafe {
         GetTokenInformation(
-            token.as_raw_handle() as HANDLE,
+            token.as_raw_handle(),
             TokenRestrictedSids,
             buffer.as_mut_ptr().cast::<c_void>(),
             byte_len,
@@ -294,10 +288,10 @@ fn aligned_buffer(byte_len: usize) -> io::Result<Vec<usize>> {
 }
 
 fn owned_handle(handle: HANDLE, operation: &str) -> io::Result<OwnedHandle> {
-    if handle == 0 {
+    if handle.is_null() {
         return Err(last_error(operation));
     }
-    Ok(unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) })
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
 fn win32_error(operation: &str, error_code: u32) -> io::Error {

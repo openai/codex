@@ -441,7 +441,7 @@ fn flush_terminal_input_buffer() {
     use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
 
     let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-    if handle == INVALID_HANDLE_VALUE || handle == 0 {
+    if handle == INVALID_HANDLE_VALUE || handle.is_null() {
         let err = unsafe { GetLastError() };
         tracing::warn!("failed to get stdin handle for flush: error {err}");
         return;
@@ -1529,7 +1529,7 @@ fn ensure_virtual_terminal_processing() -> Result<()> {
     use windows_sys::Win32::System::Console::SetConsoleMode;
 
     fn enable_for_handle(handle: HANDLE) -> Result<()> {
-        if handle == INVALID_HANDLE_VALUE || handle == 0 {
+        if handle == INVALID_HANDLE_VALUE || handle.is_null() {
             return Ok(());
         }
 

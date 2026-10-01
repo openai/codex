@@ -1722,6 +1722,7 @@ fn terminal_check(no_color_flag: bool) -> DoctorCheck {
 
 #[cfg(windows)]
 fn windows_console_details() -> Vec<String> {
+    use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
     use windows_sys::Win32::System::Console::GetConsoleCP;
@@ -1745,8 +1746,8 @@ fn windows_console_details() -> Vec<String> {
         GetStdHandle(STD_ERROR_HANDLE)
     }));
 
-    fn console_mode_detail(label: &str, handle: isize) -> String {
-        if handle == 0 || handle == INVALID_HANDLE_VALUE {
+    fn console_mode_detail(label: &str, handle: HANDLE) -> String {
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
             return format!("{label}: unavailable");
         }
         let mut mode = 0_u32;

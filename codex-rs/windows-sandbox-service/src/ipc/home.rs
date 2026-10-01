@@ -11,28 +11,17 @@ use codex_windows_sandbox::open_directory_no_reparse;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::validate_local_directory_path;
 use std::os::windows::fs::MetadataExt;
-use std::os::windows::io::BorrowedHandle;
-use std::os::windows::io::IntoRawHandle;
+use std::os::windows::io::AsHandle;
+use std::os::windows::io::OwnedHandle;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use windows_sys::Win32::Foundation as foundation;
-use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Storage::FileSystem as filesystem;
 
 use super::ServiceUnavailable;
 
 const DRIVE_FIXED: u32 = 3;
-
-pub(crate) struct OwnedHandle(pub(crate) HANDLE);
-
-impl Drop for OwnedHandle {
-    fn drop(&mut self) {
-        if self.0 != 0 && self.0 != foundation::INVALID_HANDLE_VALUE {
-            unsafe { foundation::CloseHandle(self.0) };
-        }
-    }
-}
 
 pub(super) fn prepare_codex_home(
     requested: &Path,
@@ -121,9 +110,7 @@ pub(super) fn prepare_codex_home(
             }
         })?;
         if index != 0 {
-            // The handle is owned here and remains live until the guard is installed.
-            let directory_handle = unsafe { BorrowedHandle::borrow_raw(handle.0 as _) };
-            let guard = create_directory_guard(directory_handle)?;
+            let guard = create_directory_guard(handle.as_handle())?;
             // Reject conversion before guard creation; after creation the retained
             // file prevents this directory from becoming empty and being converted.
             drop(pin_directory(
@@ -131,7 +118,7 @@ pub(super) fn prepare_codex_home(
                 filesystem::FILE_READ_ATTRIBUTES,
                 DirectoryOpenDisposition::OpenExisting,
             )?);
-            handles.push(OwnedHandle(guard.into_raw_handle() as HANDLE));
+            handles.push(guard);
         }
         handles.push(handle);
         if index == 0 {
@@ -179,5 +166,5 @@ pub(crate) fn pin_directory(
         disposition,
     )
     .with_context(|| format!("pin {}", path.display()))?;
-    Ok(OwnedHandle(handle.into_raw_handle() as HANDLE))
+    Ok(handle)
 }

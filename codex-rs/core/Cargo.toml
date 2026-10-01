@@ -175,6 +175,9 @@ walkdir = { workspace = true }
 wiremock = { workspace = true }
 zstd = { workspace = true }
 
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [package.metadata.cargo-shear]
 ignored = ["openssl-sys"]
 ignored-paths = ["tests/remote_env_windows/*.rs"]

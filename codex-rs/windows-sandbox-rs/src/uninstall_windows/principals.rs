@@ -125,7 +125,7 @@ impl SandboxUser {
         let profile_key = to_wide(format!(
             r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}"
         ));
-        let mut key = 0;
+        let mut key = std::ptr::null_mut();
         let status = unsafe {
             registry::RegOpenKeyExW(
                 registry::HKEY_LOCAL_MACHINE,

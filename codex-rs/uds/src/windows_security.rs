@@ -92,11 +92,11 @@ pub(super) fn prepare_private_directory(path: &Path) -> io::Result<()> {
 // Keep the pointer-aligned buffer alive while using its TOKEN_USER SID.
 pub(super) fn current_user() -> io::Result<Vec<usize>> {
     // Token information contains pointers, so allocate pointer-aligned storage.
-    let mut token = 0;
+    let mut token = ptr::null_mut();
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    let _token = unsafe { OwnedHandle::from_raw_handle(token as _) };
+    let _token = unsafe { OwnedHandle::from_raw_handle(token) };
     token_user(token)
 }
 

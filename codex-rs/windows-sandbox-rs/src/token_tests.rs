@@ -166,7 +166,7 @@ fn default_objects_deny_other_logons_even_with_the_same_owner() -> Result<()> {
             Sid: sid,
             Attributes: 0,
         });
-        let mut other = 0;
+        let mut other = std::ptr::null_mut();
         ensure!(
             CreateRestrictedToken(
                 base_raw,
@@ -184,7 +184,7 @@ fn default_objects_deny_other_logons_even_with_the_same_owner() -> Result<()> {
         );
         let other = OwnedHandle::from_raw_handle(other as _);
         for (token, same_logon) in [(&victim, true), (&other, false)] {
-            let mut impersonation = 0;
+            let mut impersonation = std::ptr::null_mut();
             ensure!(
                 DuplicateToken(
                     token.as_raw_handle() as _,

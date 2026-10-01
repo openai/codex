@@ -77,7 +77,7 @@ pub fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<()> {
             Information: 0,
         };
         unsafe {
-            (*info).Anonymous.ReplaceIfExists = 1;
+            (*info).Anonymous.ReplaceIfExists = true;
             (*info).RootDirectory = directory.as_raw_handle() as HANDLE;
             (*info).FileNameLength = u32::try_from(size_of_val(name.as_slice()))?;
             let filename = buffer
@@ -106,7 +106,7 @@ pub fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<()> {
     if result.is_err() {
         // Clean up only the file we created, not a pathname the caller could
         // have replaced. Preserve the original write/rename error.
-        let disposition = FILE_DISPOSITION_INFO { DeleteFile: 1 };
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
         unsafe {
             SetFileInformationByHandle(
                 file.as_raw_handle() as HANDLE,

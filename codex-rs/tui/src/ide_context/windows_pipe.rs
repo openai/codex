@@ -4,12 +4,13 @@ use std::io;
 use std::io::Read;
 use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::FromRawHandle;
+use std::os::windows::io::OwnedHandle;
 use std::path::PathBuf;
 use std::ptr;
 use std::time::Instant;
 
-use windows_sys::Win32::Foundation::BOOL;
-use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
 use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
 use windows_sys::Win32::Foundation::GENERIC_READ;
@@ -44,10 +45,10 @@ use windows_sys::Win32::System::Threading::OpenProcess;
 use windows_sys::Win32::System::Threading::OpenProcessToken;
 use windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
+use windows_sys::core::BOOL;
 
 const TRUE: BOOL = 1;
 const FALSE: BOOL = 0;
-const NULL_HANDLE: HANDLE = 0;
 
 pub(super) struct WindowsPipeStream {
     handle: OwnedHandle,
@@ -73,15 +74,16 @@ impl WindowsPipeStream {
                     | FILE_FLAG_OVERLAPPED
                     | SECURITY_SQOS_PRESENT
                     | SECURITY_IDENTIFICATION,
-                NULL_HANDLE,
+                ptr::null_mut(),
             )
         };
         if handle == INVALID_HANDLE_VALUE {
             return Err(io::Error::last_os_error());
         }
 
-        let handle = OwnedHandle(handle);
-        validate_pipe_server_owner(handle.raw())?;
+        // SAFETY: CreateFileW returned an owned pipe handle.
+        let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+        validate_pipe_server_owner(handle.as_raw_handle())?;
 
         Ok(Self { handle, deadline })
     }
@@ -101,7 +103,7 @@ impl Read for WindowsPipeStream {
         let mut operation = OverlappedOperation::new()?;
         let result = unsafe {
             ReadFile(
-                self.handle.raw(),
+                self.handle.as_raw_handle(),
                 buf.as_mut_ptr(),
                 bytes_to_read,
                 ptr::null_mut(),
@@ -109,7 +111,7 @@ impl Read for WindowsPipeStream {
             )
         };
 
-        operation.complete(self.handle.raw(), result, self.deadline)
+        operation.complete(self.handle.as_raw_handle(), result, self.deadline)
     }
 }
 
@@ -123,7 +125,7 @@ impl Write for WindowsPipeStream {
         let mut operation = OverlappedOperation::new()?;
         let result = unsafe {
             WriteFile(
-                self.handle.raw(),
+                self.handle.as_raw_handle(),
                 buf.as_ptr(),
                 bytes_to_write,
                 ptr::null_mut(),
@@ -131,7 +133,7 @@ impl Write for WindowsPipeStream {
             )
         };
 
-        operation.complete(self.handle.raw(), result, self.deadline)
+        operation.complete(self.handle.as_raw_handle(), result, self.deadline)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -147,14 +149,15 @@ struct OverlappedOperation {
 impl OverlappedOperation {
     fn new() -> io::Result<Self> {
         let event = unsafe { CreateEventW(ptr::null(), TRUE, FALSE, ptr::null()) };
-        if event == 0 {
+        if event.is_null() {
             return Err(io::Error::last_os_error());
         }
 
         let mut overlapped = unsafe { std::mem::zeroed::<OVERLAPPED>() };
         overlapped.hEvent = event;
         Ok(Self {
-            event: OwnedHandle(event),
+            // SAFETY: CreateEventW returned an owned event handle.
+            event: unsafe { OwnedHandle::from_raw_handle(event) },
             overlapped,
         })
     }
@@ -177,7 +180,9 @@ impl OverlappedOperation {
 
             // Use a zero wait after the deadline so pending overlapped I/O still flows through
             // cancel_and_timeout instead of returning while the OS operation owns this OVERLAPPED.
-            match unsafe { WaitForSingleObject(self.event.raw(), remaining_timeout_ms(deadline)) } {
+            match unsafe {
+                WaitForSingleObject(self.event.as_raw_handle(), remaining_timeout_ms(deadline))
+            } {
                 WAIT_OBJECT_0 => {}
                 WAIT_TIMEOUT => return Err(self.cancel_and_timeout(handle)),
                 WAIT_FAILED => return Err(io::Error::last_os_error()),
@@ -225,30 +230,12 @@ impl OverlappedOperation {
     }
 }
 
-struct OwnedHandle(HANDLE);
-
-impl OwnedHandle {
-    fn raw(&self) -> HANDLE {
-        self.0
-    }
-}
-
-impl Drop for OwnedHandle {
-    fn drop(&mut self) {
-        if self.0 != 0 && self.0 != INVALID_HANDLE_VALUE {
-            unsafe {
-                CloseHandle(self.0);
-            }
-        }
-    }
-}
-
 struct TokenUserBuffer {
     buffer: Vec<u8>,
 }
 
 impl TokenUserBuffer {
-    fn sid(&self) -> io::Result<windows_sys::Win32::Foundation::PSID> {
+    fn sid(&self) -> io::Result<windows_sys::Win32::Security::PSID> {
         if self.buffer.len() < std::mem::size_of::<TOKEN_USER>() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -274,14 +261,15 @@ fn validate_pipe_server_owner(pipe_handle: HANDLE) -> io::Result<()> {
 
     let server_process =
         unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, server_process_id) };
-    if server_process == 0 {
+    if server_process.is_null() {
         return Err(io::Error::last_os_error());
     }
-    let server_process = OwnedHandle(server_process);
-    let server_token = open_process_token(server_process.raw())?;
+    // SAFETY: OpenProcess returned an owned process handle.
+    let server_process = unsafe { OwnedHandle::from_raw_handle(server_process) };
+    let server_token = open_process_token(server_process.as_raw_handle())?;
     let current_token = open_process_token(unsafe { GetCurrentProcess() })?;
-    let server_user = token_user(server_token.raw())?;
-    let current_user = token_user(current_token.raw())?;
+    let server_user = token_user(server_token.as_raw_handle())?;
+    let current_user = token_user(current_token.as_raw_handle())?;
 
     if unsafe { EqualSid(server_user.sid()?, current_user.sid()?) } == 0 {
         return Err(io::Error::new(
@@ -294,13 +282,14 @@ fn validate_pipe_server_owner(pipe_handle: HANDLE) -> io::Result<()> {
 }
 
 fn open_process_token(process: HANDLE) -> io::Result<OwnedHandle> {
-    let mut token = 0;
+    let mut token = ptr::null_mut();
     let result = unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) };
     if result == 0 {
         return Err(io::Error::last_os_error());
     }
 
-    Ok(OwnedHandle(token))
+    // SAFETY: OpenProcessToken returned an owned token handle.
+    Ok(unsafe { OwnedHandle::from_raw_handle(token) })
 }
 
 fn token_user(token: HANDLE) -> io::Result<TokenUserBuffer> {

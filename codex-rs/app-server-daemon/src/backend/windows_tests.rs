@@ -32,8 +32,8 @@ async fn captured_stdio_closes_while_child_is_alive() {
         }
 
         let handles = [
-            std::io::stdout().as_raw_handle() as _,
-            std::io::stderr().as_raw_handle() as _,
+            std::io::stdout().as_raw_handle(),
+            std::io::stderr().as_raw_handle(),
         ];
         for handle in handles {
             assert_ne!(
@@ -137,16 +137,13 @@ fn detached_launch_preflight_rejects_restrictive_job() {
     let executable = std::env::current_exe().expect("test executable");
     if std::env::var_os(CHILD).is_some() {
         let job = unsafe { super::CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        assert_ne!(job, 0);
+        assert!(!job.is_null());
         let job = unsafe {
-            <std::os::windows::io::OwnedHandle as std::os::windows::io::FromRawHandle>::from_raw_handle(job as _)
+            <std::os::windows::io::OwnedHandle as std::os::windows::io::FromRawHandle>::from_raw_handle(job)
         };
         assert_ne!(
             unsafe {
-                super::AssignProcessToJobObject(
-                    job.as_raw_handle() as _,
-                    super::GetCurrentProcess(),
-                )
+                super::AssignProcessToJobObject(job.as_raw_handle(), super::GetCurrentProcess())
             },
             0
         );
@@ -189,8 +186,8 @@ fn detached_launch_preflight_allows_residual_job() {
         let mut jobs = Vec::new();
         for inner in [false, true] {
             let job = unsafe { super::CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-            assert_ne!(job, 0);
-            let job = unsafe { OwnedHandle::from_raw_handle(job as _) };
+            assert!(!job.is_null());
+            let job = unsafe { OwnedHandle::from_raw_handle(job) };
             if inner {
                 let mut limits: super::JOBOBJECT_EXTENDED_LIMIT_INFORMATION =
                     unsafe { std::mem::zeroed() };
@@ -198,7 +195,7 @@ fn detached_launch_preflight_allows_residual_job() {
                 assert_ne!(
                     unsafe {
                         super::SetInformationJobObject(
-                            job.as_raw_handle() as _,
+                            job.as_raw_handle(),
                             super::JobObjectExtendedLimitInformation,
                             (&limits as *const super::JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
                             std::mem::size_of_val(&limits) as u32,
@@ -209,10 +206,7 @@ fn detached_launch_preflight_allows_residual_job() {
             }
             assert_ne!(
                 unsafe {
-                    super::AssignProcessToJobObject(
-                        job.as_raw_handle() as _,
-                        super::GetCurrentProcess(),
-                    )
+                    super::AssignProcessToJobObject(job.as_raw_handle(), super::GetCurrentProcess())
                 },
                 0
             );
@@ -231,15 +225,15 @@ fn detached_launch_preflight_allows_residual_job() {
         let mut in_inner = 0;
         let outer_checked = unsafe {
             IsProcessInJob(
-                probe.as_raw_handle() as _,
-                jobs[0].as_raw_handle() as _,
+                probe.as_raw_handle(),
+                jobs[0].as_raw_handle(),
                 &mut in_outer,
             )
         };
         let inner_checked = unsafe {
             IsProcessInJob(
-                probe.as_raw_handle() as _,
-                jobs[1].as_raw_handle() as _,
+                probe.as_raw_handle(),
+                jobs[1].as_raw_handle(),
                 &mut in_inner,
             )
         };
@@ -285,15 +279,15 @@ fn detached_launch_preflight_allows_residual_job() {
         let ready = temp.path().join("ready").exists();
         let outer_checked = unsafe {
             IsProcessInJob(
-                process.0.as_raw_handle() as _,
-                jobs[0].as_raw_handle() as _,
+                process.0.as_raw_handle(),
+                jobs[0].as_raw_handle(),
                 &mut in_outer,
             )
         };
         let inner_checked = unsafe {
             IsProcessInJob(
-                process.0.as_raw_handle() as _,
-                jobs[1].as_raw_handle() as _,
+                process.0.as_raw_handle(),
+                jobs[1].as_raw_handle(),
                 &mut in_inner,
             )
         };
@@ -351,7 +345,7 @@ async fn identity_queries_do_not_require_termination_access() {
     // that could let the caller reopen the process with termination access.
     assert_eq!(
         unsafe {
-            TerminateProcess(process.0.as_raw_handle() as _, /*uexitcode*/ 1)
+            TerminateProcess(process.0.as_raw_handle(), /*uexitcode*/ 1)
         },
         0
     );

@@ -128,15 +128,15 @@ fn sandbox_processes(users: &DisabledSandboxUsers) -> Result<Vec<OwnedHandle>> {
                 process.ProcessId,
             )
         };
-        if handle == 0 {
+        if handle.is_null() {
             let error = io::Error::last_os_error();
             if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
                 continue;
             }
             return Err(error).context("open sandbox process for uninstall");
         }
-        let handle = unsafe { OwnedHandle::from_raw_handle(handle as *mut c_void) };
-        let mut token = 0;
+        let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+        let mut token = std::ptr::null_mut();
         if unsafe { OpenProcessToken(handle.as_raw_handle() as HANDLE, TOKEN_QUERY, &mut token) }
             == 0
         {
@@ -149,7 +149,7 @@ fn sandbox_processes(users: &DisabledSandboxUsers) -> Result<Vec<OwnedHandle>> {
             }
             return Err(error).context("identify sandbox process before uninstall");
         }
-        let token = unsafe { OwnedHandle::from_raw_handle(token as *mut c_void) };
+        let token = unsafe { OwnedHandle::from_raw_handle(token) };
         let sid = unsafe { get_user_sid_bytes(token.as_raw_handle() as HANDLE) }?;
         // A PID can be reused after enumeration. Check the opened process before terminating it.
         if users.sids().any(|user_sid| user_sid == sid.as_slice()) {

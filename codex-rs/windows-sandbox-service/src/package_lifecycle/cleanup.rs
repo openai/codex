@@ -2,6 +2,7 @@
 //! Owner impersonation, directory pins, and registration-aware cleanup order are preserved.
 
 use std::io;
+use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
@@ -33,7 +34,10 @@ pub(super) fn clean_up(
     // Remove exact grants from the locked cleanup record before native account deletion.
     if let Some(record) = runtime {
         log_cleanup("removing registered runtime metadata");
-        crate::registered_runtime::remove_metadata(installation.user_token.0, record)?;
+        crate::registered_runtime::remove_metadata(
+            installation.user_token.as_raw_handle(),
+            record,
+        )?;
     }
     log_cleanup("removing native sandbox resources");
     let mut prune_codex_home = false;
@@ -55,7 +59,7 @@ pub(super) fn clean_up(
             return Ok(());
         };
         // The marker is user-writable. It must never authorize deletion as LocalSystem.
-        with_owner_impersonation(installation.user_token.0, || {
+        with_owner_impersonation(installation.user_token.as_raw_handle(), || {
             let mut errors = Vec::new();
             let mut record_result = |operation: &str, result: io::Result<()>| match result {
                 Ok(()) => log_cleanup(&format!("{operation}: completed")),
@@ -133,13 +137,15 @@ pub(super) fn clean_up(
     if prune_codex_home && let Some(home) = &codex_home {
         // Keep the home pinned through native retries. Empty-root pruning is best effort
         // so a failure cannot restart native cleanup through an unpinned home.
-        if let Err(error) = with_owner_impersonation(installation.user_token.0, || {
-            if installation.directory_guard.take().is_some() {
-                installation.directory_handles.pop();
-            }
-            remove_empty_directory(home, "codex home");
-            Ok(())
-        }) {
+        if let Err(error) =
+            with_owner_impersonation(installation.user_token.as_raw_handle(), || {
+                if installation.directory_guard.take().is_some() {
+                    installation.directory_handles.pop();
+                }
+                remove_empty_directory(home, "codex home");
+                Ok(())
+            })
+        {
             log_error(
                 EVENT_CLEANUP_DETAIL,
                 &format!("remove empty codex home: failed, {error:#}"),

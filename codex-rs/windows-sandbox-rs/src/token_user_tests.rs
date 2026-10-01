@@ -68,11 +68,11 @@ fn rejects_truncated_user_and_malformed_sid() -> Result<()> {
 
 #[test]
 fn queries_current_user_and_rejects_invalid_token() -> Result<()> {
-    let mut raw = 0;
+    let mut raw = std::ptr::null_mut();
     ensure!(unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw) } != 0);
     let _token = unsafe { OwnedHandle::from_raw_handle(raw as _) };
     let user = unsafe { get_user_sid_bytes(raw) }?;
     assert!(unsafe { IsValidSid(user.as_ptr() as _) } != 0);
-    assert!(unsafe { get_user_sid_bytes(0) }.is_err());
+    assert!(unsafe { get_user_sid_bytes(std::ptr::null_mut()) }.is_err());
     Ok(())
 }

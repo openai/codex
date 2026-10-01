@@ -34,13 +34,13 @@ async fn detect() -> Option<MotionMode> {
     use windows_sys::Win32::UI::WindowsAndMessaging::SPI_GETCLIENTAREAANIMATION;
     use windows_sys::Win32::UI::WindowsAndMessaging::SystemParametersInfoW;
 
-    let mut enabled: windows_sys::Win32::Foundation::BOOL = 0;
+    let mut enabled: windows_sys::core::BOOL = 0;
     // SAFETY: SPI_GETCLIENTAREAANIMATION writes one BOOL to this valid, aligned pointer.
     let success = unsafe {
         SystemParametersInfoW(
             SPI_GETCLIENTAREAANIMATION,
             /*uiparam*/ 0,
-            (&mut enabled as *mut windows_sys::Win32::Foundation::BOOL).cast(),
+            (&mut enabled as *mut windows_sys::core::BOOL).cast(),
             /*fwinini*/ 0,
         )
     };

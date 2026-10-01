@@ -32,7 +32,7 @@ system-configuration = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 rustls-platform-verifier = "0.7.0"
-windows-sys = { version = "0.52", features = [
+windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Networking_WinHttp",
 ] }

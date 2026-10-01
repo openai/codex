@@ -17,7 +17,7 @@ const CHILD_ENV: &str = "CODEX_TUI_MOUSE_CAPTURE_TEST_CHILD";
 fn console_mode(input: &File) -> u32 {
     let mut mode = 0;
     // SAFETY: input is an open console handle and mode points to writable storage.
-    let result = unsafe { GetConsoleMode(input.as_raw_handle() as isize, &mut mode) };
+    let result = unsafe { GetConsoleMode(input.as_raw_handle(), &mut mode) };
     assert_ne!(result, 0, "{}", std::io::Error::last_os_error());
     mode
 }
@@ -51,7 +51,7 @@ fn mouse_capture_restores_console_mode_and_encoding() {
         .expect("open console input");
     let initial_mode = console_mode(&input) & !ENABLE_MOUSE_INPUT;
     // SAFETY: input is an open console handle and initial_mode is a valid console input mode.
-    let result = unsafe { SetConsoleMode(input.as_raw_handle() as isize, initial_mode) };
+    let result = unsafe { SetConsoleMode(input.as_raw_handle(), initial_mode) };
     assert_ne!(result, 0, "{}", std::io::Error::last_os_error());
     let original_mode = console_mode(&input);
     assert_eq!(original_mode & ENABLE_MOUSE_INPUT, 0);

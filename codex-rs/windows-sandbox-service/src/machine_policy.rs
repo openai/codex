@@ -17,6 +17,14 @@ use tokio::sync::Notify;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Security::ImpersonateLoggedOnUser;
 
+struct NonOwningImpersonationToken(HANDLE);
+
+// SAFETY: Windows access token handles are opaque process-wide values that may
+// be shared between threads. This wrapper does not own the token or extend its
+// lifetime.
+unsafe impl Send for NonOwningImpersonationToken {}
+unsafe impl Sync for NonOwningImpersonationToken {}
+
 pub(crate) fn validate_provisioning_settings(
     codex_home: &Path,
     settings: &WindowsSandboxProvisioningSettings,
@@ -25,10 +33,13 @@ pub(crate) fn validate_provisioning_settings(
 ) -> Result<()> {
     let impersonation_failure = Arc::new(Notify::new());
     let worker_impersonation_failure = Arc::clone(&impersonation_failure);
+    let impersonation_token = NonOwningImpersonationToken(impersonation_token);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .on_thread_start(move || {
-            if unsafe { ImpersonateLoggedOnUser(impersonation_token) } == 0 {
+            // Capture the wrapper rather than its raw pointer field.
+            let impersonation_token = &impersonation_token;
+            if unsafe { ImpersonateLoggedOnUser(impersonation_token.0) } == 0 {
                 let error = std::io::Error::last_os_error();
                 worker_impersonation_failure.notify_one();
                 panic!(

@@ -31,7 +31,7 @@ fn runtime_repair_preserves_other_trustees_inherited_file_denial() {
         let mut member = 0;
         assert_ne!(
             unsafe {
-                CheckTokenMembership(/*tokenhandle*/ 0, granted_sid.as_ptr(), &mut member)
+                CheckTokenMembership(std::ptr::null_mut(), granted_sid.as_ptr(), &mut member)
             },
             0,
         );

@@ -210,7 +210,7 @@ pub fn logon_existing_sandbox_account(
         "sandbox account record does not match the managed account"
     );
     let password = crate::to_wide(decode_password(&record)?);
-    let mut token = 0;
+    let mut token = std::ptr::null_mut();
     if unsafe {
         LogonUserW(
             crate::to_wide(account.username()).as_ptr(),

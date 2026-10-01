@@ -97,7 +97,7 @@ fn rejects_malformed_and_out_of_buffer_sids() {
 
 #[test]
 fn queries_current_token_with_a_caller_size_limit() -> Result<()> {
-    let mut raw = 0;
+    let mut raw = std::ptr::null_mut();
     ensure!(unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw) } != 0);
     let _token = unsafe { OwnedHandle::from_raw_handle(raw as _) };
     assert!(

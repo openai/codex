@@ -19,13 +19,16 @@ use codex_windows_sandbox::ProvisioningMessage;
 use codex_windows_sandbox::SandboxProvisioningResponse;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::write_provisioning_frame;
-pub(crate) use home::OwnedHandle;
 pub(crate) use home::pin_directory;
 pub(crate) use home::pin_existing_ancestors;
 pub(crate) use request::ProvisioningRequest;
 pub(crate) use request::ServiceRequest;
 use request::validate_request;
 use std::mem::size_of;
+use std::os::windows::io::AsHandle;
+use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::BorrowedHandle;
+use std::os::windows::io::OwnedHandle;
 use std::ptr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -82,7 +85,7 @@ pub(crate) fn run(
     while refresh_session(&shutdown, &on_session_change)
         .context("refresh the recorded sandbox owner")?
     {
-        let connection = accept_pipe_connection(listener.pipe.0)?;
+        let connection = accept_pipe_connection(listener.pipe.as_raw_handle())?;
         // A session refresh can finish cleanup. Never dispatch an already accepted
         // connection after it stops the listener, including a disconnected wakeup.
         if !refresh_session(&shutdown, &on_session_change)
@@ -94,16 +97,17 @@ pub(crate) fn run(
             continue;
         }
 
-        let authorized_process =
-            match crate::package_identity::authorize_client_process(listener.pipe.0) {
-                Ok(process) => process,
-                Err(_) => {
-                    unsafe { pipes::DisconnectNamedPipe(listener.pipe.0) };
-                    continue;
-                }
-            };
+        let authorized_process = match crate::package_identity::authorize_client_process(
+            listener.pipe.as_raw_handle(),
+        ) {
+            Ok(process) => process,
+            Err(_) => {
+                unsafe { pipes::DisconnectNamedPipe(listener.pipe.as_raw_handle()) };
+                continue;
+            }
+        };
         let result = handle_request(
-            listener.pipe.0,
+            listener.pipe.as_handle(),
             &authorized_process,
             &listener.sandbox_sid,
             &shutdown,
@@ -159,7 +163,7 @@ fn write_response(
     let mut written = 0;
     let sent = unsafe {
         filesystem::WriteFile(
-            pipe.0,
+            pipe.as_raw_handle(),
             frame.as_ptr(),
             frame.len() as u32,
             &mut written,
@@ -171,7 +175,7 @@ fn write_response(
         while !shutdown.load(Ordering::Acquire) && Instant::now() < deadline {
             if unsafe {
                 pipes::PeekNamedPipe(
-                    pipe.0,
+                    pipe.as_raw_handle(),
                     ptr::null_mut(),
                     0,
                     ptr::null_mut(),
@@ -237,7 +241,7 @@ pub(crate) fn wake(pipe_name: &str, is_stopped: impl Fn() -> bool) {
                 ptr::null(),
                 filesystem::OPEN_EXISTING,
                 /*dwflagsandattributes*/ 0,
-                /*htemplatefile*/ 0,
+                ptr::null_mut(),
             )
         };
         if handle != foundation::INVALID_HANDLE_VALUE {
@@ -254,7 +258,7 @@ fn pipe_security_descriptor(sandbox_sid: &str) -> String {
 }
 
 fn handle_request(
-    pipe: HANDLE,
+    pipe: BorrowedHandle<'_>,
     authorized_process: &crate::package_identity::AuthorizedClientProcess,
     sandbox_sid: &[u8],
     shutdown: &AtomicBool,
@@ -277,7 +281,7 @@ fn handle_request(
         let mut available = 0;
         if unsafe {
             pipes::PeekNamedPipe(
-                pipe,
+                pipe.as_raw_handle(),
                 ptr::null_mut(),
                 0,
                 ptr::null_mut(),
@@ -295,7 +299,7 @@ fn handle_request(
             let mut read = 0;
             if unsafe {
                 filesystem::ReadFile(
-                    pipe,
+                    pipe.as_raw_handle(),
                     request[request_length..].as_mut_ptr(),
                     available,
                     &mut read,

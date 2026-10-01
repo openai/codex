@@ -31,7 +31,7 @@ appcontainer_common = { workspace = true }
 learning_mode_windows = { workspace = true }
 # 1.2.4 imports OneCore_apiset, which the GNU Windows toolchain does not ship.
 tracelogging = "=1.2.3"
-windows-sys = { version = "0.61", features = [
+windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",

@@ -2231,7 +2231,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2596,7 +2596,7 @@ dependencies = [
  "url",
  "vt100",
  "which 8.0.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
  "wiremock",
  "zstd",
 ]
@@ -2837,7 +2837,7 @@ dependencies = [
  "tracing",
  "wildmatch",
  "winapi-util",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3032,6 +3032,7 @@ dependencies = [
  "walkdir",
  "which 8.0.0",
  "whoami 1.6.1",
+ "windows-sys 0.61.2",
  "wiremock",
  "zstd",
 ]
@@ -3252,7 +3253,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
  "wiremock",
 ]
 
@@ -3704,7 +3705,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
  "zstd",
 ]
 
@@ -4153,7 +4154,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4424,7 +4425,7 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "which 8.0.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
  "wiremock",
 ]
 
@@ -4884,7 +4885,7 @@ dependencies = [
  "vt100",
  "webbrowser",
  "which 8.0.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
  "winsplit",
  "wiremock",
  "zbus",
@@ -4901,7 +4902,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uds_windows",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5070,7 +5071,7 @@ dependencies = [
  "dunce",
  "pretty_assertions",
  "tempfile",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5318,7 +5319,7 @@ dependencies = [
  "tokio",
  "tracing-appender",
  "windows 0.58.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5335,7 +5336,7 @@ dependencies = [
  "tokio",
  "toml 0.9.11+spec-1.1.0",
  "windows 0.58.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

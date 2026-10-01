@@ -2,6 +2,7 @@ use std::ffi::c_void;
 use std::io;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::System::Console::HPCON;
 use windows_sys::Win32::System::Threading::DeleteProcThreadAttributeList;
 use windows_sys::Win32::System::Threading::InitializeProcThreadAttributeList;
 use windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST;
@@ -52,13 +53,13 @@ impl ProcThreadAttributeList {
         self.buffer.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST
     }
 
-    pub fn set_pseudoconsole(&mut self, hpc: isize) -> io::Result<()> {
+    pub fn set_pseudoconsole(&mut self, hpc: HPCON) -> io::Result<()> {
         // SAFETY: `hpc` is the Windows-defined value and size for this attribute.
         unsafe {
             self.update(
                 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
                 hpc as *mut c_void,
-                std::mem::size_of::<HANDLE>(),
+                std::mem::size_of::<HPCON>(),
             )
         }
     }

@@ -149,7 +149,7 @@ pub(crate) fn current_setup_user() -> Result<String> {
     use std::os::windows::io::OwnedHandle;
     use windows_sys::Win32::Security as security;
     use windows_sys::Win32::System::Threading as threading;
-    let mut token = 0;
+    let mut token = std::ptr::null_mut();
     if unsafe {
         threading::OpenProcessToken(
             threading::GetCurrentProcess(),
@@ -226,7 +226,7 @@ pub fn save_installation(record: &InstallationRecord) -> Result<()> {
 }
 
 fn flush_installation(path: &str) -> Result<()> {
-    let mut key = 0;
+    let mut key = std::ptr::null_mut();
     let status = unsafe {
         registry::RegOpenKeyExW(
             registry::HKEY_LOCAL_MACHINE,

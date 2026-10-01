@@ -1,5 +1,7 @@
 //! The registered-Core setup transaction: admit, provision, register, then publish readiness.
 
+use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::OwnedHandle;
 use std::sync::atomic::AtomicBool;
 
 use anyhow::Context;
@@ -20,7 +22,6 @@ use windows_sys::Win32::NetworkManagement::NetManagement::UF_PASSWORD_EXPIRED;
 use crate::installation_record::InstallationRecord;
 use crate::installation_record::RuntimeRegistration;
 use crate::ipc::ClientIdentity;
-use crate::ipc::OwnedHandle;
 
 #[cfg(test)]
 #[path = "registered_tests.rs"]
@@ -99,14 +100,17 @@ pub(super) fn run(
         if setup_complete && !request.refresh_only {
             setup_complete = !credentials_need_repair(
                 |account| {
-                    crate::package_lifecycle::with_owner_impersonation(identity.token.0, || {
-                        let mut pins = Vec::new();
-                        crate::ipc::pin_existing_ancestors(
-                            &sandbox_secrets_dir(&identity.codex_home),
-                            &mut pins,
-                        )?;
-                        logon_existing_sandbox_account(&identity.codex_home, account).map(drop)
-                    })
+                    crate::package_lifecycle::with_owner_impersonation(
+                        identity.token.as_raw_handle(),
+                        || {
+                            let mut pins = Vec::new();
+                            crate::ipc::pin_existing_ancestors(
+                                &sandbox_secrets_dir(&identity.codex_home),
+                                &mut pins,
+                            )?;
+                            logon_existing_sandbox_account(&identity.codex_home, account).map(drop)
+                        },
+                    )
                     .with_context(|| format!("check registered sandbox account {account:?}"))
                 },
                 || {

@@ -101,15 +101,15 @@ pub(super) fn application_running(application: &InstalledApp, candidate_pid: u32
 #[cfg(target_os = "windows")]
 fn process_package_family(pid: u32) -> Option<String> {
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if handle == 0 {
+    if handle.is_null() {
         return None;
     }
-    let process = unsafe { OwnedHandle::from_raw_handle(handle as _) };
+    let process = unsafe { OwnedHandle::from_raw_handle(handle) };
 
     let mut family_length = 0;
     let result = unsafe {
         GetPackageFamilyName(
-            process.as_raw_handle() as _,
+            process.as_raw_handle(),
             &mut family_length,
             std::ptr::null_mut(),
         )
@@ -121,7 +121,7 @@ fn process_package_family(pid: u32) -> Option<String> {
     let mut family = vec![0_u16; family_length as usize];
     let result = unsafe {
         GetPackageFamilyName(
-            process.as_raw_handle() as _,
+            process.as_raw_handle(),
             &mut family_length,
             family.as_mut_ptr(),
         )

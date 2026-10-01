@@ -23,6 +23,8 @@ use std::ptr;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Foundation::NTSTATUS;
+use windows_sys::Win32::Foundation::OBJ_CASE_INSENSITIVE;
+use windows_sys::Win32::Foundation::OBJ_DONT_REPARSE;
 use windows_sys::Win32::Foundation::RtlNtStatusToDosError;
 use windows_sys::Win32::Foundation::UNICODE_STRING;
 use windows_sys::Win32::Storage::FileSystem::DELETE;
@@ -33,8 +35,6 @@ use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::Storage::FileSystem::QueryDosDeviceW;
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK_0;
-use windows_sys::Win32::System::Kernel::OBJ_CASE_INSENSITIVE;
-use windows_sys::Win32::System::Kernel::OBJ_DONT_REPARSE;
 
 const FILE_OPEN: u32 = 1;
 const FILE_CREATE: u32 = 2;
@@ -123,7 +123,7 @@ pub fn open_directory_no_reparse(
 ) -> Result<OwnedHandle> {
     let mut nt_path = local_directory_nt_path(path)?;
     open_no_reparse(
-        /*root_directory*/ 0,
+        ptr::null_mut(),
         &mut nt_path,
         desired_access,
         share_access,
@@ -241,7 +241,7 @@ pub(crate) fn open_no_reparse(
         length: size_of::<ObjectAttributes>() as u32,
         root_directory,
         object_name: &object_name,
-        attributes: OBJ_CASE_INSENSITIVE as u32 | OBJ_DONT_REPARSE as u32,
+        attributes: OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE,
         security_descriptor: ptr::null(),
         security_quality_of_service: ptr::null(),
     };
@@ -249,7 +249,7 @@ pub(crate) fn open_no_reparse(
         Anonymous: IO_STATUS_BLOCK_0 { Status: 0 },
         Information: 0,
     };
-    let mut handle = 0;
+    let mut handle = std::ptr::null_mut();
     let status = unsafe {
         NtCreateFile(
             &mut handle,
@@ -273,10 +273,10 @@ pub(crate) fn open_no_reparse(
         return Err(std::io::Error::from_raw_os_error(error as i32)).context("NtCreateFile");
     }
     ensure!(
-        handle != 0 && handle != INVALID_HANDLE_VALUE,
+        !handle.is_null() && handle != INVALID_HANDLE_VALUE,
         "NtCreateFile returned an invalid handle"
     );
-    Ok(unsafe { OwnedHandle::from_raw_handle(handle as *mut c_void) })
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
 #[cfg(test)]

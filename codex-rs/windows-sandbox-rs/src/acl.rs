@@ -1097,9 +1097,9 @@ pub unsafe fn allow_null_device(psid: *mut c_void) {
         std::ptr::null_mut(),
         OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL,
-        0,
+        std::ptr::null_mut(),
     );
-    if h == 0 || h == INVALID_HANDLE_VALUE {
+    if h.is_null() || h == INVALID_HANDLE_VALUE {
         return;
     }
     let mut p_sd: *mut c_void = std::ptr::null_mut();

@@ -344,7 +344,7 @@ fn decode_color_ref(color_ref: u32) -> (u8, u8, u8) {
 
 fn std_handle(kind: u32) -> io::Result<HANDLE> {
     let handle = unsafe { GetStdHandle(kind) };
-    if handle == 0 || handle == INVALID_HANDLE_VALUE {
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error());
     }
     Ok(handle)

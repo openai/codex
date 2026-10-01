@@ -39,7 +39,7 @@ features = [
 ]
 
 [target.'cfg(windows)'.dependencies.windows-sys]
-version = "0.52"
+workspace = true
 features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_NetManagement",

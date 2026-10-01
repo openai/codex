@@ -18,7 +18,7 @@ fn runtime_worker_impersonation_failure_rejects_provisioning() {
         &std::env::temp_dir(),
         &WindowsSandboxProvisioningSettings::default(),
         &WindowsSandboxProxyListeners::default(),
-        /*impersonation_token*/ 0,
+        std::ptr::null_mut(),
     )
     .expect_err("runtime workers must not load configuration without impersonating the client");
 

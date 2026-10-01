@@ -8,6 +8,9 @@ use codex_windows_sandbox::ensure_sandbox_users_group;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
 use std::mem::size_of;
+use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::FromRawHandle;
+use std::os::windows::io::OwnedHandle;
 use std::ptr;
 use windows_sys::Win32::Foundation as foundation;
 use windows_sys::Win32::Security as security;
@@ -16,7 +19,6 @@ use windows_sys::Win32::Storage::FileSystem as filesystem;
 use windows_sys::Win32::System::Pipes as pipes;
 
 use super::MAX_REQUEST_BYTES;
-use super::OwnedHandle;
 use super::pipe_security_descriptor;
 
 pub(super) struct ProvisioningListener {
@@ -52,7 +54,7 @@ impl ProvisioningListener {
             codex_windows_sandbox::resolve_sid(codex_windows_sandbox::SANDBOX_USERS_GROUP)
         };
         if current_group.is_ok_and(|current| current == self.sandbox_sid) {
-            unsafe { pipes::DisconnectNamedPipe(self.pipe.0) };
+            unsafe { pipes::DisconnectNamedPipe(self.pipe.as_raw_handle()) };
             return Ok(self);
         }
         // A stale deny SID was refused before dispatch. Close this first-instance
@@ -114,5 +116,6 @@ fn create_provisioning_pipe(
     if pipe == foundation::INVALID_HANDLE_VALUE {
         return Err(std::io::Error::last_os_error()).context("create provisioning pipe");
     }
-    Ok((descriptor, OwnedHandle(pipe)))
+    // SAFETY: CreateNamedPipeW transferred this pipe handle on success.
+    Ok((descriptor, unsafe { OwnedHandle::from_raw_handle(pipe) }))
 }

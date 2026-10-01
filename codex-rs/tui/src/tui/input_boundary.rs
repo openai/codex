@@ -105,7 +105,7 @@ fn terminal_input_is_readable() -> Result<bool> {
     use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
 
     let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-    if handle == INVALID_HANDLE_VALUE || handle == 0 {
+    if handle == INVALID_HANDLE_VALUE || handle.is_null() {
         return Err(io::Error::other("terminal input handle is unavailable"));
     }
 

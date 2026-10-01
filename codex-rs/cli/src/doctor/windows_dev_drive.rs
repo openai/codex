@@ -133,7 +133,7 @@ fn volume_flags(path: &Path) -> io::Result<u32> {
     let mut bytes_returned = 0;
     if unsafe {
         DeviceIoControl(
-            handle.as_raw_handle() as isize,
+            handle.as_raw_handle(),
             QUERY_PERSISTENT_VOLUME_STATE,
             state_ptr.cast_const().cast(),
             state_size,

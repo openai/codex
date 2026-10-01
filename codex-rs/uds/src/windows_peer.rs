@@ -55,20 +55,20 @@ pub(super) fn ensure_non_elevated_peer(socket: RawSocket) -> io::Result<()> {
             pid,
         )
     };
-    if process == 0 {
+    if process.is_null() {
         return Err(io::Error::last_os_error());
     }
-    let _process = unsafe { OwnedHandle::from_raw_handle(process as _) };
-    let mut token = 0;
+    let _process = unsafe { OwnedHandle::from_raw_handle(process) };
+    let mut token = ptr::null_mut();
     if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    let _token = unsafe { OwnedHandle::from_raw_handle(token as _) };
-    let mut current_token = 0;
+    let _token = unsafe { OwnedHandle::from_raw_handle(token) };
+    let mut current_token = ptr::null_mut();
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut current_token) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    let _current_token = unsafe { OwnedHandle::from_raw_handle(current_token as _) };
+    let _current_token = unsafe { OwnedHandle::from_raw_handle(current_token) };
     let current_user = crate::windows_security::token_user(current_token)?;
     let peer_user = crate::windows_security::token_user(token)?;
     let same_user = unsafe {

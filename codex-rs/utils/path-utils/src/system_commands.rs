@@ -138,7 +138,7 @@ fn installation_roots() -> Vec<PathBuf> {
             SHGetKnownFolderPath(
                 id,
                 KF_FLAG_DEFAULT_PATH as u32,
-                /*htoken*/ 0,
+                std::ptr::null_mut(),
                 &mut path,
             )
         };

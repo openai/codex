@@ -58,6 +58,18 @@ const RUNNER_PIPE_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const RUNNER_ERROR_MODE_FLAGS: u32 = 0x0001 | 0x0002;
 const WAIT_OBJECT_0: u32 = 0;
 
+struct NonOwningHandle(HANDLE);
+
+// SAFETY: Pipe and thread handles are opaque process-wide tokens that may be
+// passed between threads. This wrapper does not own or extend their lifetime.
+unsafe impl Send for NonOwningHandle {}
+
+impl NonOwningHandle {
+    fn raw(&self) -> HANDLE {
+        self.0
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct RunnerLogonError {
     pub(crate) code: u32,
@@ -227,12 +239,13 @@ fn connect_pipe_with_timeout(
     let pipe_label_for_thread = pipe_label.clone();
     let (thread_handle_tx, thread_handle_rx) = mpsc::sync_channel(1);
     let (connect_result_tx, connect_result_rx) = mpsc::sync_channel(1);
+    let h_pipe = NonOwningHandle(h_pipe);
     let mut connect_thread = Some(
         thread::Builder::new()
             .name(format!("codex-runner-connect-{pipe_label}"))
             .spawn(move || {
                 let current_process = unsafe { GetCurrentProcess() };
-                let mut thread_handle = 0;
+                let mut thread_handle = std::ptr::null_mut();
                 let duplicate_ok = unsafe {
                     DuplicateHandle(
                         current_process,
@@ -254,9 +267,9 @@ fn connect_pipe_with_timeout(
 
                 // Publish the helper thread HANDLE before the blocking pipe connect so the
                 // parent can cancel this specific operation if it times out.
-                let _ = thread_handle_tx.send(Ok(thread_handle));
+                let _ = thread_handle_tx.send(Ok(NonOwningHandle(thread_handle)));
 
-                let result = connect_pipe(h_pipe, expected_runner_pid)
+                let result = connect_pipe(h_pipe.raw(), expected_runner_pid)
                     .map_err(anyhow::Error::from)
                     .context(format!("connect {pipe_label_for_thread}"));
                 let _ = connect_result_tx.send(result);
@@ -277,12 +290,12 @@ fn connect_pipe_with_timeout(
             if let Some(result) = try_take_completed_connect_result(
                 &mut connect_thread,
                 &connect_result_rx,
-                thread_handle,
+                thread_handle.raw(),
                 &pipe_label,
             )? {
                 result
             } else {
-                let cancel_ok = unsafe { CancelSynchronousIo(thread_handle) };
+                let cancel_ok = unsafe { CancelSynchronousIo(thread_handle.raw()) };
                 if cancel_ok == 0 {
                     let err = unsafe { GetLastError() };
                     if err != ERROR_NOT_FOUND {
@@ -292,7 +305,7 @@ fn connect_pipe_with_timeout(
                     } else if let Some(result) = try_take_completed_connect_result(
                         &mut connect_thread,
                         &connect_result_rx,
-                        thread_handle,
+                        thread_handle.raw(),
                         &pipe_label,
                     )? {
                         result
@@ -324,7 +337,7 @@ fn connect_pipe_with_timeout(
     };
 
     unsafe {
-        CloseHandle(thread_handle);
+        CloseHandle(thread_handle.raw());
     }
 
     result

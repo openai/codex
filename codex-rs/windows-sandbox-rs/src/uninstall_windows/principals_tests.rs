@@ -54,7 +54,7 @@ impl ProfileFixture {
             let sid = string_from_sid_bytes(&self.user.sid).map_err(anyhow::Error::msg)?;
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
-                let mut key = 0;
+                let mut key = std::ptr::null_mut();
                 let status = unsafe {
                     registry::RegOpenKeyExW(
                         registry::HKEY_USERS,
@@ -199,7 +199,7 @@ fn profile_cleanup_preserves_account_until_profile_can_be_deleted() -> Result<()
     fixture.user.remove()?;
     assert_eq!(local_user_flags(name)?, None);
     assert!(!path.exists());
-    let mut key = 0;
+    let mut key = std::ptr::null_mut();
     let status = unsafe {
         registry::RegOpenKeyExW(
             registry::HKEY_LOCAL_MACHINE,

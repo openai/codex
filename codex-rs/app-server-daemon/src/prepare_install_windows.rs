@@ -75,7 +75,7 @@ fn retarget_junction(current: &Path, release: &Path) -> Result<()> {
     let mut returned = 0;
     if unsafe {
         DeviceIoControl(
-            handle.as_raw_handle() as isize,
+            handle.as_raw_handle(),
             FSCTL_SET_REPARSE_POINT,
             data.as_ptr().cast(),
             data.len() as u32,

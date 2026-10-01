@@ -13,7 +13,7 @@ dunce = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = [
+windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_System_Com",
     "Win32_UI_Shell",

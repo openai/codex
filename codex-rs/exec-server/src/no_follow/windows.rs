@@ -8,7 +8,6 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
-use std::os::windows::io::RawHandle;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
@@ -17,6 +16,8 @@ use std::ptr;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Foundation::NTSTATUS;
+use windows_sys::Win32::Foundation::OBJ_CASE_INSENSITIVE;
+use windows_sys::Win32::Foundation::OBJ_DONT_REPARSE;
 use windows_sys::Win32::Foundation::RtlNtStatusToDosError;
 use windows_sys::Win32::Foundation::UNICODE_STRING;
 use windows_sys::Win32::Security::SECURITY_QUALITY_OF_SERVICE;
@@ -34,8 +35,6 @@ use windows_sys::Win32::Storage::FileSystem::FileDispositionInfo;
 use windows_sys::Win32::Storage::FileSystem::SetFileInformationByHandle;
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK_0;
-use windows_sys::Win32::System::Kernel::OBJ_CASE_INSENSITIVE;
-use windows_sys::Win32::System::Kernel::OBJ_DONT_REPARSE;
 
 const FILE_DIRECTORY_FILE: u32 = 0x0000_0001;
 const FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x0000_0020;
@@ -46,7 +45,6 @@ const FILE_OPEN_IF: u32 = 3;
 const SYNCHRONIZE_ACCESS: u32 = 0x0010_0000;
 const STATUS_REPARSE_POINT_ENCOUNTERED: NTSTATUS = 0xC000_050B_u32 as i32;
 const SECURITY_STATIC_TRACKING: u8 = 0;
-const BOOLEAN_TRUE: u8 = 1;
 
 #[repr(C)]
 struct ObjectAttributes {
@@ -141,13 +139,13 @@ fn open_handle(
         Length: size_of::<SECURITY_QUALITY_OF_SERVICE>() as u32,
         ImpersonationLevel: SecurityIdentification,
         ContextTrackingMode: SECURITY_STATIC_TRACKING,
-        EffectiveOnly: BOOLEAN_TRUE,
+        EffectiveOnly: true,
     };
     let object_attributes = ObjectAttributes {
         length: size_of::<ObjectAttributes>() as u32,
-        root_directory: 0,
+        root_directory: ptr::null_mut(),
         object_name: &object_name,
-        attributes: OBJ_CASE_INSENSITIVE as u32 | OBJ_DONT_REPARSE as u32,
+        attributes: OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE,
         security_descriptor: ptr::null(),
         security_quality_of_service: (&raw const security_quality_of_service).cast(),
     };
@@ -155,7 +153,7 @@ fn open_handle(
         Anonymous: IO_STATUS_BLOCK_0 { Status: 0 },
         Information: 0,
     };
-    let mut handle = 0;
+    let mut handle = ptr::null_mut();
     let status = unsafe {
         NtCreateFile(
             &mut handle,
@@ -181,13 +179,13 @@ fn open_handle(
         let code = unsafe { RtlNtStatusToDosError(status) };
         return Err(io::Error::from_raw_os_error(code as i32));
     }
-    if handle == 0 || handle == INVALID_HANDLE_VALUE {
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
         return Err(io::Error::other(
             "NtCreateFile returned an invalid filesystem handle",
         ));
     }
 
-    Ok(unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) })
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
 fn open_entry(path: &Path) -> io::Result<std::fs::File> {
@@ -298,12 +296,10 @@ fn remove_sync(path: &Path, recursive: bool, force: bool) -> io::Result<()> {
         FILE_NON_DIRECTORY_FILE
     };
     let handle = open_handle(path, DELETE, FILE_OPEN, create_options)?;
-    let disposition = FILE_DISPOSITION_INFO {
-        DeleteFile: BOOLEAN_TRUE,
-    };
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
     let result = unsafe {
         SetFileInformationByHandle(
-            handle.as_raw_handle() as HANDLE,
+            handle.as_raw_handle(),
             FileDispositionInfo,
             (&raw const disposition).cast(),
             size_of::<FILE_DISPOSITION_INFO>() as u32,

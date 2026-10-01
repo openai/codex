@@ -17,7 +17,7 @@ use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::Win32::System::Threading::OpenProcessToken;
 
 fn current_process_token() -> Result<OwnedHandle> {
-    let mut raw = 0;
+    let mut raw = std::ptr::null_mut();
     ensure!(
         unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw) } != 0,
         "open current-process token: {}",

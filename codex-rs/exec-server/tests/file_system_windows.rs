@@ -40,6 +40,7 @@ use test_case::test_case;
 use tokio::net::windows::named_pipe::ServerOptions;
 use tokio::time::timeout;
 use uuid::Uuid;
+use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 use crate::support::FileSystemImplementation;
@@ -653,7 +654,7 @@ fn process_private_desktops() -> Result<BTreeSet<String>> {
     // Native layout: https://github.com/winsiderss/phnt/blob/master/ntpsapi.h
     #[repr(C)]
     struct HandleEntry {
-        handle: isize,
+        handle: HANDLE,
         _handle_count: usize,
         _pointer_count: usize,
         _granted_access: u32,
@@ -664,7 +665,7 @@ fn process_private_desktops() -> Result<BTreeSet<String>> {
     #[link(name = "ntdll")]
     unsafe extern "system" {
         fn NtQueryInformationProcess(
-            process: isize,
+            process: HANDLE,
             class: u32,
             information: *mut c_void,
             length: u32,
@@ -674,7 +675,7 @@ fn process_private_desktops() -> Result<BTreeSet<String>> {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn GetUserObjectInformationW(
-            object: isize,
+            object: HANDLE,
             index: i32,
             information: *mut c_void,
             length: u32,

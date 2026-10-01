@@ -78,7 +78,6 @@ features = [
     "Win32_System_WindowsProgramming",
     "Win32_System_IO",
     "Win32_System_Memory",
-    "Win32_System_Kernel",
     "Win32_System_Console",
     "Win32_System_RemoteDesktop",
     "Win32_Storage_FileSystem",
@@ -99,7 +98,7 @@ features = [
     "Win32_System_Registry",
     "Win32_System_Services",
 ]
-version = "0.52"
+workspace = true
 
 [dev-dependencies]
 codex-utils-cargo-bin = { workspace = true }

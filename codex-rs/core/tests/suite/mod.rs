@@ -129,7 +129,6 @@ mod mcp_auth_refresh;
 mod mcp_ema_config;
 mod mcp_extension_protocol;
 mod mcp_optional_startup_grace;
-#[cfg(unix)]
 mod mcp_refresh_cleanup;
 mod mcp_startup_refresh_http_proxy;
 mod mcp_subagent_elicitation;

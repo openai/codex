@@ -405,18 +405,15 @@ fn run_restricted_child_blocking(
 ) -> anyhow::Result<()> {
     let route_sid = LocalSid::from_string(route_sid)?;
     let capability_sid = LocalSid::from_string("S-1-5-21-10-20-30-40")?;
-    let base_token = unsafe {
-        OwnedHandle::from_raw_handle(get_current_token_for_restriction()? as *mut std::ffi::c_void)
-    };
+    let base_token = unsafe { OwnedHandle::from_raw_handle(get_current_token_for_restriction()?) };
     let restricted_token = unsafe {
         create_readonly_token_with_caps_and_user_from(
-            base_token.as_raw_handle() as isize,
+            base_token.as_raw_handle(),
             &[capability_sid.as_ptr()],
             &[route_sid.as_ptr()],
         )?
     };
-    let restricted_token =
-        unsafe { OwnedHandle::from_raw_handle(restricted_token as *mut std::ffi::c_void) };
+    let restricted_token = unsafe { OwnedHandle::from_raw_handle(restricted_token) };
 
     let mut env = std::env::vars().collect::<HashMap<_, _>>();
     env.insert(HTTP_ADDR_ENV.to_string(), http_addr.to_string());
@@ -445,7 +442,7 @@ fn run_restricted_child_blocking(
     let cwd = std::env::current_dir()?;
     let spawned = unsafe {
         create_process_as_user(
-            restricted_token.as_raw_handle() as isize,
+            restricted_token.as_raw_handle(),
             &command,
             &cwd,
             &env,
@@ -455,27 +452,23 @@ fn run_restricted_child_blocking(
             LaunchDesktop::prepare(/*logs_base_dir*/ None)?,
         )?
     };
-    let process = unsafe {
-        OwnedHandle::from_raw_handle(spawned.process_info.hProcess as *mut std::ffi::c_void)
-    };
-    let _thread = unsafe {
-        OwnedHandle::from_raw_handle(spawned.process_info.hThread as *mut std::ffi::c_void)
-    };
+    let process = unsafe { OwnedHandle::from_raw_handle(spawned.process_info.hProcess) };
+    let _thread = unsafe { OwnedHandle::from_raw_handle(spawned.process_info.hThread) };
 
     let wait = unsafe {
         WaitForSingleObject(
-            process.as_raw_handle() as isize,
+            process.as_raw_handle(),
             /*dwMilliseconds*/ CHILD_TIMEOUT_MS,
         )
     };
     if wait != WAIT_OBJECT_0 {
         unsafe {
-            TerminateProcess(process.as_raw_handle() as isize, 1);
+            TerminateProcess(process.as_raw_handle(), 1);
         }
     }
     let mut exit_code = 1_u32;
     unsafe {
-        GetExitCodeProcess(process.as_raw_handle() as isize, &mut exit_code);
+        GetExitCodeProcess(process.as_raw_handle(), &mut exit_code);
     }
     anyhow::ensure!(
         wait == WAIT_OBJECT_0 && exit_code == 0,

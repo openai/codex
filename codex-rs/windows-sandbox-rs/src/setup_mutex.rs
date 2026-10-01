@@ -64,7 +64,7 @@ pub fn acquire_sandbox_setup_lock(timeout_ms: u32) -> Result<SandboxSetupLock> {
     let handle = unsafe {
         CreateMutexW(&attributes, /*binitialowner*/ 0, name.as_ptr())
     };
-    let result = if handle == 0 {
+    let result = if handle.is_null() {
         Err(io::Error::last_os_error())
     } else {
         Ok(unsafe { OwnedHandle::from_raw_handle(handle as _) })

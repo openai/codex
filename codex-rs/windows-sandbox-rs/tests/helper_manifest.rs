@@ -34,11 +34,11 @@ fn setup_helper_embeds_as_invoker_manifest() -> Result<()> {
     let module = unsafe {
         LoadLibraryExW(
             setup_path.as_ptr(),
-            /*hfile*/ 0,
+            std::ptr::null_mut(),
             LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE,
         )
     };
-    if module == 0 {
+    if module.is_null() {
         return Err(io::Error::last_os_error())
             .with_context(|| format!("load setup helper {}", setup_executable.display()));
     }
@@ -50,7 +50,7 @@ fn setup_helper_embeds_as_invoker_manifest() -> Result<()> {
             std::ptr::without_provenance(RT_MANIFEST as usize),
         )
     };
-    if resource == 0 {
+    if resource.is_null() {
         return Err(io::Error::last_os_error()).context("find numeric RT_MANIFEST resource ID 1");
     }
 

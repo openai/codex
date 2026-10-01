@@ -39,10 +39,10 @@ fn pipe_server_cannot_impersonate_client() {
         )
     };
     assert_ne!(pipe, INVALID_HANDLE_VALUE);
-    let pipe = OwnedHandle(pipe);
+    let pipe = unsafe { OwnedHandle::from_raw_handle(pipe) };
 
     let server = std::thread::spawn(move || {
-        if unsafe { ConnectNamedPipe(pipe.raw(), ptr::null_mut()) } == FALSE {
+        if unsafe { ConnectNamedPipe(pipe.as_raw_handle(), ptr::null_mut()) } == FALSE {
             assert_eq!(
                 io::Error::last_os_error().raw_os_error(),
                 Some(ERROR_PIPE_CONNECTED as i32)
@@ -54,7 +54,7 @@ fn pipe_server_cannot_impersonate_client() {
         assert_ne!(
             unsafe {
                 ReadFile(
-                    pipe.raw(),
+                    pipe.as_raw_handle(),
                     message.as_mut_ptr(),
                     message.len() as u32,
                     &mut bytes_read,
@@ -63,19 +63,22 @@ fn pipe_server_cannot_impersonate_client() {
             },
             FALSE
         );
-        assert_ne!(unsafe { ImpersonateNamedPipeClient(pipe.raw()) }, FALSE);
+        assert_ne!(
+            unsafe { ImpersonateNamedPipeClient(pipe.as_raw_handle()) },
+            FALSE
+        );
 
-        let mut token = NULL_HANDLE;
+        let mut token = ptr::null_mut();
         assert_ne!(
             unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &mut token) },
             FALSE
         );
-        let token = OwnedHandle(token);
+        let token = unsafe { OwnedHandle::from_raw_handle(token) };
         let mut impersonation_level = 0;
         let mut return_length = 0;
         let result = unsafe {
             GetTokenInformation(
-                token.raw(),
+                token.as_raw_handle(),
                 TokenImpersonationLevel,
                 (&raw mut impersonation_level).cast(),
                 std::mem::size_of_val(&impersonation_level) as u32,

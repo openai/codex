@@ -67,13 +67,13 @@ pub(super) fn validate_private_directory(directory: &Path) -> io::Result<(PathBu
             ptr::null(),
             OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-            /*htemplatefile*/ 0,
+            ptr::null_mut(),
         )
     };
     if handle == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error());
     }
-    let guard = unsafe { OwnedHandle::from_raw_handle(handle as _) };
+    let guard = unsafe { OwnedHandle::from_raw_handle(handle) };
     let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
     if unsafe { GetFileInformationByHandle(handle, &mut info) } == 0 {
         return Err(io::Error::last_os_error());

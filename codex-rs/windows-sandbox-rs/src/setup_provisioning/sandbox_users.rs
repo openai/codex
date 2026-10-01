@@ -449,7 +449,7 @@ pub(super) fn prepare_setup_marker(
             &security_attributes,
             CREATE_NEW,
             FILE_ATTRIBUTE_NORMAL,
-            /*htemplatefile*/ 0,
+            std::ptr::null_mut(),
         )
     };
     let create_error = unsafe { GetLastError() };
@@ -466,7 +466,7 @@ pub(super) fn prepare_setup_marker(
             ),
         )));
     }
-    let file = unsafe { File::from_raw_handle(marker_handle as *mut c_void) };
+    let file = unsafe { File::from_raw_handle(marker_handle) };
     match mode {
         SetupMode::ProvisionOnly => Ok(PreparedSetupMarker::Retained(file)),
         SetupMode::Full | SetupMode::InteractiveProvision | SetupMode::ReadAclsOnly => {

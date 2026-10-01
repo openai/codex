@@ -182,16 +182,16 @@ fn duplicate_file_handle(process_id: u32, file_handle: u64) -> io::Result<std::f
 
     // SAFETY: OpenProcess returns an owned handle or null on failure.
     let process = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, process_id) };
-    if process == 0 {
+    if process.is_null() {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: The successful OpenProcess result is owned by this scope.
-    let process = unsafe { OwnedHandle::from_raw_handle(process as _) };
-    let mut duplicated: HANDLE = 0;
+    let process = unsafe { OwnedHandle::from_raw_handle(process) };
+    let mut duplicated = std::ptr::null_mut();
     // SAFETY: Both process handles remain valid and duplicated receives an owned file handle.
     if unsafe {
         DuplicateHandle(
-            process.as_raw_handle() as HANDLE,
+            process.as_raw_handle(),
             file_handle as HANDLE,
             GetCurrentProcess(),
             &raw mut duplicated,
@@ -204,5 +204,5 @@ fn duplicate_file_handle(process_id: u32, file_handle: u64) -> io::Result<std::f
         return Err(io::Error::last_os_error());
     }
     // SAFETY: DuplicateHandle transferred ownership of the new file handle.
-    Ok(unsafe { std::fs::File::from_raw_handle(duplicated as _) })
+    Ok(unsafe { std::fs::File::from_raw_handle(duplicated) })
 }

@@ -28,6 +28,10 @@ use codex_utils_pty::SpawnedProcess;
 use codex_utils_pty::TerminalSize;
 use codex_utils_pty::WindowsTtyInputNormalizer;
 use std::collections::HashMap;
+use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::BorrowedHandle;
+use std::os::windows::io::FromRawHandle;
+use std::os::windows::io::OwnedHandle;
 use std::path::Path;
 use std::ptr;
 use std::sync::Arc;
@@ -38,9 +42,9 @@ use tokio::sync::oneshot;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
-use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Storage::FileSystem::WriteFile;
 use windows_sys::Win32::System::Console::COORD;
+use windows_sys::Win32::System::Console::HPCON;
 use windows_sys::Win32::System::Console::ResizePseudoConsole;
 use windows_sys::Win32::System::Threading::GetExitCodeProcess;
 use windows_sys::Win32::System::Threading::INFINITE;
@@ -50,12 +54,24 @@ use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
 
+struct NonOwningProcessHandle(HANDLE);
+
+// SAFETY: Process handles are opaque process-wide tokens that may be used from
+// any thread. This wrapper does not own the handle or extend its lifetime.
+unsafe impl Send for NonOwningProcessHandle {}
+
+impl NonOwningProcessHandle {
+    fn raw(&self) -> HANDLE {
+        self.0
+    }
+}
+
 struct LegacyProcessHandles {
     process: PROCESS_INFORMATION,
     job: Arc<JobObject>,
     output_join: std::thread::JoinHandle<()>,
     writer_handle: tokio::task::JoinHandle<()>,
-    hpc: Option<HANDLE>,
+    hpc: Option<HPCON>,
     conpty_owner: Option<ConptyInstance>,
     token_handle: HANDLE,
     desktop: Option<LaunchDesktop>,
@@ -78,6 +94,8 @@ fn spawn_legacy_process(
     logs_base_dir: Option<&Path>,
 ) -> Result<LegacyProcessHandles> {
     let h_token = security.h_token;
+    // SAFETY: The caller keeps security.h_token open throughout this synchronous spawn.
+    let token = unsafe { BorrowedHandle::borrow_raw(h_token) };
     let launch_desktop = match private_desktop_name {
         Some(name) => LaunchDesktop::open_private(name)?,
         None => LaunchDesktop::prepare_legacy(
@@ -91,7 +109,7 @@ fn spawn_legacy_process(
     };
     let (pi, job, output_join, writer_handle, hpc, conpty_owner, desktop) = if tty {
         let (pi, mut conpty) =
-            spawn_conpty_process_as_user(h_token, command, cwd, env_map, launch_desktop)?;
+            spawn_conpty_process_as_user(token, command, cwd, env_map, launch_desktop)?;
         let job = conpty
             .job()
             .ok_or_else(|| anyhow::anyhow!("spawned ConPTY is missing its process job"))?;
@@ -105,7 +123,7 @@ fn spawn_legacy_process(
         (pi, job, output_join, writer_handle, hpc, Some(conpty), None)
     } else {
         let pipe_handles = spawn_process_with_pipes(
-            h_token,
+            token,
             command,
             cwd,
             env_map,
@@ -162,6 +180,8 @@ fn spawn_output_reader(
     output_read: HANDLE,
     output_tx: broadcast::Sender<Vec<u8>>,
 ) -> std::thread::JoinHandle<()> {
+    // SAFETY: The spawn path transfers this pipe's read end to the reader.
+    let output_read = unsafe { OwnedHandle::from_raw_handle(output_read) };
     read_handle_loop(output_read, move |chunk| {
         let _ = output_tx.send(chunk.to_vec());
     })
@@ -172,10 +192,12 @@ fn spawn_input_writer(
     mut writer_rx: mpsc::Receiver<Vec<u8>>,
     normalize_newlines: bool,
 ) -> tokio::task::JoinHandle<()> {
+    // SAFETY: The spawn path transfers the pipe's write end to this writer.
+    let input_write = input_write.map(|handle| unsafe { OwnedHandle::from_raw_handle(handle) });
     tokio::task::spawn_blocking(move || {
         let mut windows_input = WindowsTtyInputNormalizer::default();
         while let Some(bytes) = writer_rx.blocking_recv() {
-            let Some(handle) = input_write else {
+            let Some(handle) = &input_write else {
                 continue;
             };
             let bytes = if normalize_newlines {
@@ -183,13 +205,8 @@ fn spawn_input_writer(
             } else {
                 bytes
             };
-            if write_all_handle(handle, &bytes).is_err() {
+            if write_all_handle(handle.as_raw_handle(), &bytes).is_err() {
                 break;
-            }
-        }
-        if let Some(handle) = input_write {
-            unsafe {
-                CloseHandle(handle);
             }
         }
     })
@@ -197,7 +214,7 @@ fn spawn_input_writer(
 
 fn terminate_job_or_process(
     job: &JobObject,
-    process_handle: &Arc<StdMutex<Option<HANDLE>>>,
+    process_handle: &Arc<StdMutex<Option<NonOwningProcessHandle>>>,
     logs_base_dir: Option<&Path>,
 ) {
     if let Err(job_err) = job.terminate() {
@@ -207,7 +224,7 @@ fn terminate_job_or_process(
         );
         if let Ok(guard) = process_handle.lock()
             && let Some(handle) = guard.as_ref()
-            && unsafe { TerminateProcess(*handle, 1) } == 0
+            && unsafe { TerminateProcess(handle.raw(), 1) } == 0
         {
             log_note(
                 &format!(
@@ -247,8 +264,8 @@ fn write_all_handle(handle: HANDLE, mut bytes: &[u8]) -> Result<()> {
 #[allow(clippy::too_many_arguments)]
 fn finalize_exit(
     exit_tx: oneshot::Sender<i32>,
-    process_handle: Arc<StdMutex<Option<HANDLE>>>,
-    thread_handle: HANDLE,
+    process_handle: Arc<StdMutex<Option<NonOwningProcessHandle>>>,
+    thread_handle: OwnedHandle,
     output_join: std::thread::JoinHandle<()>,
     logs_base_dir: Option<&Path>,
     command: Vec<String>,
@@ -259,8 +276,8 @@ fn finalize_exit(
             && let Some(handle) = guard.as_ref()
         {
             unsafe {
-                WaitForSingleObject(*handle, INFINITE);
-                GetExitCodeProcess(*handle, &mut raw_exit);
+                WaitForSingleObject(handle.raw(), INFINITE);
+                GetExitCodeProcess(handle.raw(), &mut raw_exit);
             }
         }
         raw_exit as i32
@@ -269,14 +286,12 @@ fn finalize_exit(
     let _ = output_join.join();
     let _ = exit_tx.send(exit_code);
 
-    unsafe {
-        if thread_handle != 0 && thread_handle != INVALID_HANDLE_VALUE {
-            CloseHandle(thread_handle);
-        }
-        if let Ok(mut guard) = process_handle.lock()
-            && let Some(handle) = guard.take()
-        {
-            CloseHandle(handle);
+    drop(thread_handle);
+    if let Ok(mut guard) = process_handle.lock()
+        && let Some(handle) = guard.take()
+    {
+        unsafe {
+            CloseHandle(handle.raw());
         }
     }
 
@@ -287,7 +302,7 @@ fn finalize_exit(
     }
 }
 
-fn resize_conpty_handle(hpc: &Arc<StdMutex<Option<HANDLE>>>, size: TerminalSize) -> Result<()> {
+fn resize_conpty_handle(hpc: &Arc<StdMutex<Option<HPCON>>>, size: TerminalSize) -> Result<()> {
     let guard = hpc
         .lock()
         .map_err(|_| anyhow::anyhow!("failed to lock ConPTY handle"))?;
@@ -423,8 +438,13 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     };
     let hpc_handle = hpc.map(|hpc| Arc::new(StdMutex::new(Some(hpc))));
 
-    let process_handle = Arc::new(StdMutex::new(Some(pi.hProcess)));
+    let process_handle = Arc::new(StdMutex::new(Some(NonOwningProcessHandle(pi.hProcess))));
     let wait_handle = Arc::clone(&process_handle);
+    let wait_process_handle = NonOwningProcessHandle(pi.hProcess);
+    // SAFETY: Successful process creation transfers this thread handle to the wait path.
+    let thread_handle = unsafe { OwnedHandle::from_raw_handle(pi.hThread) };
+    // SAFETY: spawn_legacy_process transfers the restricted token on success.
+    let token_handle = unsafe { OwnedHandle::from_raw_handle(token_handle) };
     let job_for_wait = Arc::clone(&job);
     let command_for_wait = command.clone();
     let hpc_for_wait = hpc_handle.clone();
@@ -432,7 +452,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     std::thread::spawn(move || {
         let _desktop = desktop;
         let timeout = timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
-        let wait_res = unsafe { WaitForSingleObject(pi.hProcess, timeout) };
+        let wait_res = unsafe { WaitForSingleObject(wait_process_handle.raw(), timeout) };
         if wait_res == WAIT_TIMEOUT {
             terminate_job_or_process(&job_for_wait, &wait_handle, wait_logs_base_dir.as_deref());
         } else if let Err(err) = job_for_wait.preserve_descendants() {
@@ -447,15 +467,11 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
             let _ = guard.take();
         }
         drop(conpty_owner.take());
-        unsafe {
-            if token_handle != 0 && token_handle != INVALID_HANDLE_VALUE {
-                CloseHandle(token_handle);
-            }
-        }
+        drop(token_handle);
         finalize_exit(
             exit_tx,
             wait_handle,
-            pi.hThread,
+            thread_handle,
             output_join,
             wait_logs_base_dir.as_deref(),
             command_for_wait,

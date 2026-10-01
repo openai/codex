@@ -29,12 +29,12 @@ use windows_sys::Win32::Foundation::ERROR_SEM_TIMEOUT;
 use windows_sys::Win32::Foundation::ERROR_SERVICE_DOES_NOT_EXIST;
 use windows_sys::Win32::Foundation::ERROR_SERVICE_MARKED_FOR_DELETE;
 use windows_sys::Win32::Foundation::HANDLE;
-use windows_sys::Win32::Security::SC_HANDLE;
 use windows_sys::Win32::Storage::FileSystem::SECURITY_IMPERSONATION;
 use windows_sys::Win32::Storage::FileSystem::SECURITY_SQOS_PRESENT;
 use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
 use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
 use windows_sys::Win32::System::Services;
+use windows_sys::Win32::System::Services::SC_HANDLE;
 
 const PROVISIONING_TIMEOUT: Duration = Duration::from_secs(120);
 const SERVICE_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -387,7 +387,7 @@ fn verify_server(pipe: HANDLE) -> anyhow::Result<u32> {
 fn query_service_status() -> anyhow::Result<Services::SERVICE_STATUS_PROCESS> {
     let manager =
         unsafe { Services::OpenSCManagerW(ptr::null(), ptr::null(), Services::SC_MANAGER_CONNECT) };
-    if manager == 0 {
+    if manager.is_null() {
         return Err(io::Error::last_os_error()).context("open service control manager");
     }
     let manager = ServiceHandle(manager);
@@ -400,7 +400,7 @@ fn query_service_status() -> anyhow::Result<Services::SERVICE_STATUS_PROCESS> {
             Services::SERVICE_QUERY_STATUS,
         )
     };
-    if service == 0 {
+    if service.is_null() {
         return Err(io::Error::last_os_error()).context("open sandbox provisioning service");
     }
     let service = ServiceHandle(service);
@@ -426,7 +426,7 @@ struct ServiceHandle(SC_HANDLE);
 
 impl Drop for ServiceHandle {
     fn drop(&mut self) {
-        if self.0 != 0 {
+        if !self.0.is_null() {
             unsafe { Services::CloseServiceHandle(self.0) };
         }
     }

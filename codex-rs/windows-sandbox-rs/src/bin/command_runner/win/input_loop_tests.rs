@@ -16,6 +16,7 @@ use windows_sys::Win32::System::Threading::OpenProcess;
 use windows_sys::Win32::System::Threading::PROCESS_SYNCHRONIZE;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
+use super::NonOwningProcessHandle;
 use super::spawn_input_loop;
 
 #[tokio::test]
@@ -50,16 +51,16 @@ async fn disconnected_control_pipe_terminates_elevated_helper_and_descendants() 
             descendant_pid,
         )
     };
-    anyhow::ensure!(descendant != 0, "failed to open sandbox descendant");
+    anyhow::ensure!(!descendant.is_null(), "failed to open sandbox descendant");
     let descendant = unsafe { OwnedHandle::from_raw_handle(descendant as _) };
-    let process = helper.raw_handle().context("helper process handle")? as _;
+    let process = helper.raw_handle().context("helper process handle")?;
 
     let input_loop = spawn_input_loop(
         tempfile::tempfile()?,
         /*stdin_handle*/ None,
         Arc::new(Mutex::new(None)),
         Arc::clone(&job),
-        process,
+        NonOwningProcessHandle(process),
         /*log_dir*/ None,
     );
     input_loop

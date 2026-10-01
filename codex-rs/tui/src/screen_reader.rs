@@ -122,13 +122,13 @@ async fn detect() -> bool {
             let detected = {
                 use windows_sys::Win32::UI::WindowsAndMessaging::SPI_GETSCREENREADER;
                 use windows_sys::Win32::UI::WindowsAndMessaging::SystemParametersInfoW;
-                let mut enabled: windows_sys::Win32::Foundation::BOOL = 0;
+                let mut enabled: windows_sys::core::BOOL = 0;
                 // SAFETY: SPI_GETSCREENREADER writes one BOOL to this valid, aligned pointer.
                 let success = unsafe {
                     SystemParametersInfoW(
                         SPI_GETSCREENREADER,
                         /*uiparam*/ 0,
-                        (&mut enabled as *mut windows_sys::Win32::Foundation::BOOL).cast(),
+                        (&mut enabled as *mut windows_sys::core::BOOL).cast(),
                         /*fwinini*/ 0,
                     )
                 };

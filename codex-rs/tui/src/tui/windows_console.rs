@@ -29,7 +29,7 @@ fn current_input_mode() -> Option<(windows_sys::Win32::Foundation::HANDLE, u32)>
     use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
 
     let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-    if handle == INVALID_HANDLE_VALUE || handle == 0 {
+    if handle == INVALID_HANDLE_VALUE || handle.is_null() {
         return None;
     }
 

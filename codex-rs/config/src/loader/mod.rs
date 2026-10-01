@@ -842,7 +842,12 @@ fn windows_program_data_dir_from_known_folder() -> io::Result<PathBuf> {
     // SAFETY: SHGetKnownFolderPath initializes path_ptr with a CoTaskMem-allocated,
     // null-terminated UTF-16 string on success.
     let hr = unsafe {
-        SHGetKnownFolderPath(&FOLDERID_ProgramData, known_folder_flags, 0, &mut path_ptr)
+        SHGetKnownFolderPath(
+            &FOLDERID_ProgramData,
+            known_folder_flags,
+            std::ptr::null_mut(),
+            &mut path_ptr,
+        )
     };
     if hr != 0 {
         return Err(io::Error::other(format!(

@@ -150,7 +150,7 @@ zbus = "4.4.0"
 
 [target.'cfg(windows)'.dependencies]
 which = { workspace = true }
-windows-sys = { version = "0.52", features = [
+windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Globalization",
     "Win32_Security",

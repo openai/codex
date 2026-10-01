@@ -29,7 +29,7 @@ fn native_open_rejects_named_pipes_before_connecting() {
         )
     };
     assert_ne!(pipe, INVALID_HANDLE_VALUE);
-    let _pipe = unsafe { OwnedHandle::from_raw_handle(pipe as RawHandle) };
+    let _pipe = unsafe { OwnedHandle::from_raw_handle(pipe) };
 
     let error = open_handle(
         &client_path,
