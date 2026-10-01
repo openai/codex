@@ -49,6 +49,144 @@ async fn installer_fetch_rejects_non_success_status() {
     assert_eq!(http.requested_urls(), vec![INSTALL_URL.to_string()]);
 }
 
+#[cfg(unix)]
+#[test]
+fn updater_reexec_preserves_paths_and_recovers_deleted_working_directory() {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    for (delete_cwd, home_name) in [
+        (false, "home"),
+        (true, "home"),
+        (false, "alias"),
+        (true, "alias"),
+        // macOS filesystems reject non-Unicode names.
+        #[cfg(target_os = "linux")]
+        (false, "link/../home"),
+    ] {
+        let home = TempDir::new().expect("home");
+        let project = home.path().join("project");
+        let state = home.path().join("state");
+        let codex_home = home.path().join("home");
+        std::fs::create_dir(&project).expect("project");
+        std::fs::create_dir(&state).expect("state");
+        std::fs::create_dir(&codex_home).expect("codex home");
+        std::os::unix::fs::symlink(&codex_home, home.path().join("alias")).expect("home alias");
+        if home_name == "link/../home" {
+            let non_unicode = home.path().join(std::ffi::OsStr::from_bytes(b"home-\xff"));
+            std::fs::create_dir_all(non_unicode.join("child")).expect("non-Unicode parent");
+            std::fs::create_dir(non_unicode.join("home")).expect("non-Unicode home");
+            std::os::unix::fs::symlink(non_unicode.join("child"), home.path().join("link"))
+                .expect("Unicode alias");
+        }
+        let executable = home.path().join("updater");
+        std::fs::write(
+        &executable,
+        b"#!/bin/sh\ntest -d \"$CODEX_HOME\" || exit 1\n{ pwd -P; printf '%s\\n' \"$CODEX_HOME\" \"$CODEX_SQLITE_HOME\" \"$AWS_CONFIG_FILE\" \"$SSL_CERT_DIR\" \"$NPM_CONFIG_CAFILE\"; } > \"$CODEX_TEST_UPDATER_OUTPUT\"\n",
+    )
+    .expect("updater shim");
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+            .expect("executable");
+        let output = state.join("output");
+        let project_path = project.canonicalize().expect("project path");
+        let ca_file = if delete_cwd {
+            project_path.join("ca.pem").into_os_string()
+        } else {
+            " ca.pem ".into()
+        };
+        let cert_dir = if delete_cwd {
+            project_path.join("certs")
+        } else {
+            std::path::PathBuf::from("certs")
+        };
+        let result = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args(["--exact", "update_loop::tests::updater_reexec_child"])
+            .current_dir(&project)
+            .env("CODEX_TEST_UPDATER_EXECUTABLE", &executable)
+            .env("CODEX_TEST_UPDATER_STATE", &state)
+            .env("CODEX_TEST_UPDATER_OUTPUT", &output)
+            .env("CODEX_TEST_UPDATER_DELETE_CWD", delete_cwd.to_string())
+            .env("CODEX_HOME", format!("../{home_name}"))
+            .env("CODEX_SQLITE_HOME", " sqlite ")
+            .env("AWS_CONFIG_FILE", "~/config")
+            .env("NPM_CONFIG_CAFILE", ca_file)
+            .env(
+                "SSL_CERT_DIR",
+                std::env::join_paths([&cert_dir, &state]).unwrap(),
+            )
+            .output()
+            .expect("spawn updater test");
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let state = state.canonicalize().expect("state path");
+        let expected = [
+            if delete_cwd { &state } else { &project_path }
+                .display()
+                .to_string(),
+            if home_name == "link/../home" {
+                project_path.join(format!("../{home_name}"))
+            } else {
+                home.path()
+                    .canonicalize()
+                    .expect("parent path")
+                    .join(home_name)
+            }
+            .display()
+            .to_string(),
+            " sqlite ".to_string(),
+            "~/config".to_string(),
+            std::env::join_paths([project_path.join("certs"), home.path().join("state")])
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            project_path.join("ca.pem").display().to_string(),
+        ]
+        .join("\n")
+            + "\n";
+        assert_eq!(
+            std::fs::read_to_string(output).expect("updater output"),
+            expected
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn updater_reexec_child() {
+    use std::os::unix::process::CommandExt;
+
+    let Some(executable) = std::env::var_os("CODEX_TEST_UPDATER_EXECUTABLE") else {
+        return;
+    };
+    let state = std::env::var_os("CODEX_TEST_UPDATER_STATE").expect("state path");
+    if std::env::var("CODEX_TEST_UPDATER_DELETE_CWD").as_deref() == Ok("true") {
+        // Model the initial background launch while the relative home is resolvable.
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
+            .args(["--exact", "update_loop::tests::updater_reexec_child"])
+            .env("CODEX_TEST_UPDATER_DELETE_CWD", "prepared");
+        crate::background_command::set_working_directory(
+            &mut command,
+            std::path::Path::new(&state),
+        )
+        .expect("prepare background launch");
+        panic!("failed to launch prepared updater: {}", command.exec());
+    }
+    if std::env::var("CODEX_TEST_UPDATER_DELETE_CWD").as_deref() == Ok("prepared") {
+        std::fs::remove_dir(std::env::current_dir().expect("project cwd"))
+            .expect("delete updater cwd");
+    }
+    super::reexec_managed_updater(
+        std::path::Path::new(&executable),
+        std::path::Path::new(&state),
+    )
+    .expect("reexec updater");
+    panic!("successful exec does not return");
+}
+
 struct FakeInstallerHttp {
     response: InstallerResponse,
     requested_urls: Mutex<Vec<String>>,

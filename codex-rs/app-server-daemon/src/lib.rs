@@ -1,6 +1,7 @@
 //! Managed app-server lifecycle, serialized across CLI invocations and the updater.
 
 mod backend;
+mod background_command;
 #[cfg(windows)]
 pub use backend::windows::DetachedLaunchRestricted;
 #[cfg(windows)]

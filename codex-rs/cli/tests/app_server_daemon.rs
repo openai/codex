@@ -114,6 +114,63 @@ impl Drop for TestDaemon {
     }
 }
 
+#[test]
+fn managed_daemon_restarts_from_deleted_working_directory() -> Result<()> {
+    let daemon = TestDaemon::new()?;
+    let project = daemon.home.path().join("project");
+    std::fs::create_dir(&project)?;
+    let started = daemon
+        .command()
+        .current_dir(&project)
+        .args(["app-server", "daemon", "start"])
+        .output()?;
+    ensure!(
+        started.status.success(),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    let old_pid = daemon.pid("app-server.pid")?;
+    let old_updater_pid = daemon.pid("app-server-updater.pid")?;
+    signal(old_updater_pid, libc::SIGTERM)?;
+    wait_for_exit(old_updater_pid)?;
+
+    // Delete the restart caller's cwd without changing the test process's cwd.
+    let restarted = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "rmdir \"$1\" && exec \"$2\" app-server daemon restart",
+            "restart",
+        ])
+        .arg(&project)
+        .arg(&daemon.codex)
+        .current_dir(&project)
+        .env("CODEX_HOME", daemon.home.path())
+        .output()?;
+    ensure!(
+        restarted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restarted.stderr)
+    );
+    let restarted: Value = serde_json::from_slice(&restarted.stdout)?;
+    assert_eq!(restarted["status"], "restarted");
+    assert_ne!(daemon.pid("app-server.pid")?, old_pid);
+    assert_ne!(daemon.pid("app-server-updater.pid")?, old_updater_pid);
+    assert_eq!(daemon.lifecycle("version")?["status"], "running");
+    let updater_socket = daemon
+        .home
+        .path()
+        .join("app-server-daemon/app-server-updater.sock");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while std::os::unix::net::UnixStream::connect(&updater_socket).is_err() {
+        ensure!(
+            Instant::now() < deadline,
+            "replacement updater did not become ready"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
 fn signal(pid: u32, signal: libc::c_int) -> Result<()> {
     let raw_pid = libc::pid_t::try_from(pid).context("pid out of range")?;
     ensure!(

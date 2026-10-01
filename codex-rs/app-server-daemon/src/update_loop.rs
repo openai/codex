@@ -226,7 +226,8 @@ async fn run_with_http(
                         next_check = Instant::now();
                         continue;
                     }
-                    Ok((UpdateLoopControl::Continue, None)) | Err(_) => {}
+                    Ok((UpdateLoopControl::Continue, None)) => {}
+                    Err(err) => eprintln!("warning: scheduled daemon update failed: {err:#}"),
                     Ok((UpdateLoopControl::Stop, _)) => return Ok(()),
                 }
                 let Some(delay) = next_update_delay(daemon).await else {
@@ -261,7 +262,14 @@ async fn adopt_managed_updater(
     #[cfg(unix)]
     {
         let _ = listener;
-        reexec_managed_updater(&managed_bin).map(|_| UpdateLoopControl::Stop)
+        reexec_managed_updater(
+            &managed_bin,
+            daemon
+                .update_pid_file
+                .parent()
+                .context("updater pid path has no parent")?,
+        )
+        .map(|_| UpdateLoopControl::Stop)
     }
     #[cfg(windows)]
     {
@@ -511,10 +519,11 @@ async fn current_updater_identity() -> Result<ExecutableIdentity> {
 }
 
 #[cfg(unix)]
-pub(crate) fn reexec_managed_updater(managed_codex_bin: &std::path::Path) -> Result<()> {
-    let err = StdCommand::new(managed_codex_bin)
-        .args(["app-server", "daemon", "pid-update-loop"])
-        .exec();
+pub(crate) fn reexec_managed_updater(managed_codex_bin: &Path, state_dir: &Path) -> Result<()> {
+    let mut command = StdCommand::new(managed_codex_bin);
+    command.args(["app-server", "daemon", "pid-update-loop"]);
+    crate::background_command::set_working_directory(&mut command, state_dir)?;
+    let err = command.exec();
     Err(err).with_context(|| {
         format!(
             "failed to replace updater with managed Codex binary {}",

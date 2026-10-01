@@ -1,5 +1,6 @@
 //! Detached process launch and PID publication. Hold the reservation lock until
 //! the record is published, and on Windows until an updater acknowledges startup.
+//! Recover a deleted Unix cwd without changing workspace defaults for usable directories.
 
 use super::PidBackend;
 #[cfg(windows)]
@@ -133,6 +134,13 @@ impl PidBackend {
             command.env(key, value);
         }
 
+        crate::background_command::set_working_directory(
+            command.as_std_mut(),
+            self.pid_file
+                .parent()
+                .context("daemon pid path has no parent")?,
+        )?;
+
         #[cfg(unix)]
         {
             unsafe {
@@ -149,61 +157,6 @@ impl PidBackend {
         {
             use windows_sys::Win32::System::Threading::CREATE_BREAKAWAY_FROM_JOB;
             use windows_sys::Win32::System::Threading::DETACHED_PROCESS;
-            // Preserve process-scoped paths before changing cwd; CA names match CUSTOM_CA_ENV_KEYS.
-            for name in [
-                "CODEX_HOME",
-                "CODEX_SQLITE_HOME",
-                "CODEX_CA_CERTIFICATE",
-                "SSL_CERT_FILE",
-                "REQUESTS_CA_BUNDLE",
-                "CURL_CA_BUNDLE",
-                "NODE_EXTRA_CA_CERTS",
-                "GIT_SSL_CAINFO",
-                "CARGO_HTTP_CAINFO",
-                "PIP_CERT",
-                "BUNDLE_SSL_CA_CERT",
-                "npm_config_cafile",
-                "AWS_CONFIG_FILE",
-                "AWS_SHARED_CREDENTIALS_FILE",
-                "AWS_WEB_IDENTITY_TOKEN_FILE",
-                "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
-            ] {
-                let Some(mut value) = std::env::var_os(name) else {
-                    continue;
-                };
-                if matches!(name, "CODEX_SQLITE_HOME" | "npm_config_cafile") {
-                    value = value.to_str().unwrap_or_default().trim().into();
-                }
-                // These consumers expand `~` independently of the working directory.
-                let expands_home = if name == "npm_config_cafile" {
-                    value
-                        .to_str()
-                        .is_some_and(|path| path.starts_with("~/") || path.starts_with("~\\"))
-                } else {
-                    matches!(
-                        name,
-                        "CODEX_SQLITE_HOME" | "AWS_CONFIG_FILE" | "AWS_SHARED_CREDENTIALS_FILE"
-                    ) && std::path::Path::new(&value).starts_with("~")
-                };
-                if value.is_empty() || expands_home {
-                    continue;
-                }
-                command.env(name, std::path::absolute(value)?);
-            }
-            if let Some(value) = std::env::var_os("SSL_CERT_DIR") {
-                let paths = std::env::split_paths(&value)
-                    .filter(|path| !path.as_os_str().is_empty())
-                    .map(std::path::absolute)
-                    .collect::<std::io::Result<Vec<_>>>()?;
-                command.env("SSL_CERT_DIR", std::env::join_paths(paths)?);
-            }
-            // A Windows process pins its working directory for its lifetime.
-            // Keep both managed children out of the launching project's directory.
-            command.current_dir(
-                self.pid_file
-                    .parent()
-                    .context("daemon pid path has no parent")?,
-            );
             // Never retry inside the parent's Job Object: that would report a
             // successful launch that dies when the terminal/SSH session closes.
             command.creation_flags(DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB);
