@@ -660,6 +660,10 @@ trust_level = "trusted"
                 ("update_interval_setting", "default"),
                 ("shutdown_grace_setting", "default"),
             ]);
+            #[cfg(windows)]
+            if codex_app_server_daemon::is_elevated()? {
+                expected_tags.insert("daemon_selection_reason", "elevated_windows");
+            }
             if backend == "daemon" {
                 expected_tags.extend([
                     ("auto_update", "disabled"),

@@ -1,7 +1,8 @@
 //! Local daemon launch policy. Explicit embedded launches never discover or start a daemon;
 //! optional attachment may fall back to embedded mode, while automatic launches
 //! require a compatible shared server and a successful connection, except when
-//! the Windows launcher forbids detaching a missing server.
+//! the Windows launcher forbids detaching a missing server. Elevated local
+//! Windows sessions use explicit embedded behavior before discovery or startup.
 
 use super::*;
 use std::collections::BTreeMap;
@@ -14,6 +15,9 @@ const SERVER_FEATURES: [Feature; 4] = [
 ];
 
 pub(super) const FAILURE_HINT: &str = "To work without the background server, rerun the same command with --no-daemon (including resume or fork and its arguments).";
+
+#[cfg(any(windows, test))]
+pub(super) const ELEVATED_LAUNCH_WARNING: &str = "Running as administrator: shared background server disabled. To enable it, restart Codex in a terminal without administrator permissions.";
 
 #[derive(Debug, thiserror::Error)]
 #[error("Cannot use the shared background server: {reason}.\n{FAILURE_HINT}")]

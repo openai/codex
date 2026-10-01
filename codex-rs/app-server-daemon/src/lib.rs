@@ -5,6 +5,8 @@ mod background_command;
 #[cfg(windows)]
 pub use backend::windows::DetachedLaunchRestricted;
 #[cfg(windows)]
+pub use backend::windows::is_elevated;
+#[cfg(windows)]
 use backend::windows::try_lock_file;
 mod client;
 mod diagnostics;

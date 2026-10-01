@@ -88,7 +88,9 @@ pub(super) fn spawn_without_inheriting_stdio(
     Ok(command.spawn()?)
 }
 
-pub(crate) fn ensure_not_elevated() -> Result<()> {
+/// Reports whether this process has administrator privileges, rather than
+/// merely belonging to an administrator account.
+pub fn is_elevated() -> Result<bool> {
     let mut token = 0;
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
         return Err(io::Error::last_os_error()).context("failed to query daemon launcher token");
@@ -109,8 +111,12 @@ pub(crate) fn ensure_not_elevated() -> Result<()> {
         return Err(io::Error::last_os_error())
             .context("failed to query daemon launcher elevation");
     }
+    Ok(elevation.TokenIsElevated != 0)
+}
+
+pub(crate) fn ensure_not_elevated() -> Result<()> {
     anyhow::ensure!(
-        elevation.TokenIsElevated == 0,
+        !is_elevated()?,
         "start the Windows daemon from a non-elevated terminal; shared clients must not inherit administrator privileges"
     );
     Ok(())

@@ -96,3 +96,22 @@ async fn warning_notice_keeps_details_in_transcript_and_preserves_draft() -> Res
     tui.set_owned_screen(/*owned*/ false)?;
     Ok(())
 }
+
+#[tokio::test]
+async fn elevated_launch_warning_appears_in_warning_center() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let size = Size::new(/*width*/ 80, /*height*/ 24);
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(history_cell::StartupWarningsCell::new(vec![
+            crate::daemon_startup::ELEVATED_LAUNCH_WARNING.into(),
+        ])),
+    );
+    app.chat_widget.open_warnings(&app.transcript_cells);
+    app.render_owned_transcript(&mut tui, size)?;
+    insta::assert_snapshot!("elevated_launch_warning_center", screen(&tui));
+    tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}

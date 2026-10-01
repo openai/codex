@@ -61,6 +61,37 @@ async fn daemon_auto_start_preserves_bedrock_onboarding() -> Result<()> {
 
 #[tokio::test]
 #[cfg(windows)]
+async fn elevated_local_tui_uses_embedded_without_starting_daemon() -> Result<()> {
+    if !codex_app_server_daemon::is_elevated()? {
+        eprintln!("requires an elevated Windows runner");
+        return Ok(());
+    }
+    for command in ["elevated", "elevated-resume", "elevated-fork"] {
+        daemon_startup(command).await?;
+    }
+    let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
+    let home = tempfile::tempdir()?;
+    for operation in ["start", "restart"] {
+        let output = Command::new(&codex)
+            .env("CODEX_HOME", home.path())
+            .args(["app-server", "daemon", operation])
+            .output()?;
+        ensure!(
+            !output.status.success(),
+            "{operation} must reject elevation"
+        );
+        ensure!(
+            String::from_utf8_lossy(&output.stderr).contains("non-elevated terminal"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    ensure!(!home.path().join("app-server-daemon").exists());
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(windows)]
 async fn restrictive_launcher_uses_embedded_if_daemon_cannot_start() -> Result<()> {
     const CHILD: &str = "CODEX_TEST_RESTRICTIVE_DAEMON_START";
     if std::env::var_os(CHILD).is_some() {
@@ -97,6 +128,11 @@ async fn bedrock_onboarding_leaves_a_running_daemon_untouched() -> Result<()> {
 }
 
 async fn daemon_startup(command: &str) -> Result<()> {
+    #[cfg(windows)]
+    let elevated = codex_app_server_daemon::is_elevated()?;
+    #[cfg(not(windows))]
+    let elevated = false;
+    let elevated_launch = command.starts_with("elevated");
     let codex = codex_utils_cargo_bin::cargo_bin("codex")?.canonicalize()?;
     let workspace = tempfile::tempdir()?;
     let workspace_path = workspace.path().canonicalize()?;
@@ -206,6 +242,13 @@ async fn daemon_startup(command: &str) -> Result<()> {
             // The draft header is visible before the session's command composer is ready.
             steps.push_back(("GPT-5.6-Terra", b"/status\r"));
             "Server:Localbackgroundserver"
+        } else if elevated_launch || command == "restrictive-job" && elevated {
+            if let Some(action) = command.strip_prefix("elevated-") {
+                args.push(action.into());
+                steps.push_back(("Nosessionsyet", b"\x1b"));
+            }
+            steps.push_back(("GPT-5.6-Terra", b"\x14"));
+            "Runningasadministrator:sharedbackgroundserverdisabled."
         } else if command == "restrictive-job" {
             steps.push_back(("GPT-5.6-Terra", b"\x14"));
             "Runningwithoutthesharedbackgroundserver:thisWindowslauncher"
@@ -234,7 +277,11 @@ async fn daemon_startup(command: &str) -> Result<()> {
             args.extend([command.into(), "--strict-config".into()]);
             steps.push_back(("Nosessionsyet", b"\x1b"));
             steps.push_back(("GPT-5.6-Terra", b"\x14"));
-            "Runningwithoutthesharedbackgroundserver:--strict-config"
+            if elevated {
+                "Runningasadministrator:sharedbackgroundserverdisabled."
+            } else {
+                "Runningwithoutthesharedbackgroundserver:--strict-config"
+            }
         };
         let program = if cfg!(windows) && command == "restrictive-job" {
             env.insert("CODEX_TEST_RESTRICTIVE_DAEMON_START".into(), "1".into());
@@ -260,7 +307,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
             codex_utils_pty::ChildFds::Inherited(&[]),
         )
         .await?;
-        let mut exit = spawned.exit_rx;
+        let exit = spawned.exit_rx;
         let session = spawned.session;
         let writer = session.writer_sender();
         let mut stdout = spawned.stdout_rx;
@@ -293,16 +340,6 @@ async fn daemon_startup(command: &str) -> Result<()> {
                     .chars()
                     .filter(|c| !c.is_whitespace())
                     .collect();
-                if command == "restrictive-job"
-                    && text.contains("starttheWindowsdaemonfromanon-elevatedterminal")
-                {
-                    // Elevated runners must still reject startup before the job probe.
-                    ensure!(!pid_file.exists());
-                    let status = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), &mut exit)
-                        .await??;
-                    ensure!(status != 0, "elevated daemon launch must fail");
-                    return Ok::<_, anyhow::Error>(());
-                }
                 if let Some((ready, input)) = steps.front()
                     && text.contains(ready)
                 {
@@ -332,9 +369,12 @@ async fn daemon_startup(command: &str) -> Result<()> {
                         ensure!(home.path().join("app-server-daemon/daemon.pid").exists());
                     } else if let Some(existing_daemon) = &existing_daemon {
                         ensure!(fs::read(&pid_file)? == *existing_daemon);
+                    } else if elevated_launch {
+                        ensure!(!home.path().join("app-server-daemon").exists());
+                        ensure!(!home.path().join("packages/app-server-daemon").exists());
                     } else if bedrock_onboarding || command == "restrictive-job" {
                         ensure!(!pid_file.exists());
-                        if command == "restrictive-job" {
+                        if command == "restrictive-job" && !elevated {
                             let contents = screen.screen().contents();
                             let warning = contents.lines()
                                 .find(|line| line.contains("Running without the shared background server:"))
