@@ -2656,7 +2656,7 @@ mod tests {
             assert_eq!(
                 selected,
                 if action == "view_usage" {
-                    "https://chatgpt.com/codex/settings/usage"
+                    "https://chatgpt.com/settings/usage"
                 } else {
                     "Credits"
                 }

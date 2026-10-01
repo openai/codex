@@ -4,7 +4,7 @@ expression: "whole_status.replace(&directory,\n\"[[workspace]]\").replace(crate:
 ---
 >_ OpenAI Codex (vVERSION)
 
-  Visit https://chatgpt.com/codex/settings/usage for up-to-date
+  Visit https://chatgpt.com/settings/usage for up-to-date
   information on rate limits and credits
 
   Model:               GPT-5.5 (reasoning medium, summaries auto)

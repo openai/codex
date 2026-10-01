@@ -35,11 +35,11 @@ async fn luna_reserve_selector_supports_arrows_enter_shortcuts_and_escape_withou
         ),
         (
             vec![KeyCode::Down, KeyCode::Up, KeyCode::Enter],
-            Some("https://chatgpt.com/codex/settings/usage?credits_modal=true"),
+            Some("https://chatgpt.com/settings/usage?credits_modal=true"),
         ),
         (
             vec![KeyCode::Char('1')],
-            Some("https://chatgpt.com/codex/settings/usage?credits_modal=true"),
+            Some("https://chatgpt.com/settings/usage?credits_modal=true"),
         ),
         (
             vec![KeyCode::Char('2')],

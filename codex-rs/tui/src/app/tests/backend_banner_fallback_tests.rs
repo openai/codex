@@ -118,7 +118,7 @@ async fn backend_banner_fallback_updates_task_settings_and_keeps_notice() -> Res
         app.chat_widget
             .handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
         let queued = std::iter::from_fn(|| events.try_recv().ok()).collect::<Vec<_>>();
-        assert!(queued.iter().any(|event| matches!(event, AppEvent::OpenUrlInBrowser { url } if url == "https://chatgpt.com/codex/settings/usage")));
+        assert!(queued.iter().any(|event| matches!(event, AppEvent::OpenUrlInBrowser { url } if url == "https://chatgpt.com/settings/usage")));
         let notices = queued
             .iter()
             .filter_map(|event| match event {
