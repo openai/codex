@@ -762,7 +762,17 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                             trace: None,
                         });
                 }
-                JSONRPCMessage::Error(_) => {}
+                JSONRPCMessage::Error(error) => {
+                    request_sink
+                        .lock()
+                        .expect("request recorder lock")
+                        .push(JSONRPCRequest {
+                            id: error.id,
+                            method: "server/request/error".to_string(),
+                            params: Some(serde_json::to_value(error.error)?),
+                            trace: None,
+                        });
+                }
             }
         }
         embedded.shutdown().await?;
