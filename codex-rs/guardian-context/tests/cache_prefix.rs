@@ -18,6 +18,7 @@ use codex_history::RetainedInputSource;
 use codex_history::RetainedUserMessage;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 
 struct History {
@@ -49,7 +50,7 @@ fn user_message(texts: Vec<String>) -> ResponseItem {
 }
 
 #[test]
-fn changing_attestations_preserves_history_before_the_current_action() {
+fn changing_retained_context_and_attestations_preserves_history_before_the_current_action() {
     let instruction = "Inspect staging only. Do not publish.";
     let mut retained = RetainedContext::default();
     retained.record_user_message(
@@ -64,15 +65,29 @@ fn changing_attestations_preserves_history_before_the_current_action() {
         RetainedInputSource::Local(None),
     );
     // Legacy review history and Felix's retained, thread-owned history use the
-    // same composer. Neither may put changing attestations before that history.
+    // same composer. Retained assistant growth and eviction must also preserve its prefix.
     for retained in [None, Some(retained)] {
-        let history = History {
+        let mut history = History {
             items: vec![user_message(vec![instruction.to_owned()])],
             retained,
         };
         let profile = ContextProfile::asynchronous();
         let mut previous_prefix = None;
-        for generation in 0..2 {
+        for generation in 0..10 {
+            let assistant_text = format!("Assistant progress {generation}.");
+            if let Some(retained) = history.retained.as_mut() {
+                retained.record_assistant_message(
+                    RetainedUserMessage {
+                        phase: None,
+                        origin: codex_history::UserInputOrigin::User,
+                        turn_id: "turn-1".to_owned(),
+                        message_id: Some(format!("assistant-{generation}")),
+                        text: assistant_text.clone(),
+                        complete: true,
+                    },
+                    RetainedInputSource::Local(Some(generation + 1)),
+                );
+            }
             let reviews =
                 PreviousReviews::try_from_fragments(vec![codex_guardian_context::PreviousReview {
                     id: codex_protocol::ResponseItemId::new("review"),
@@ -113,10 +128,34 @@ fn changing_attestations_preserves_history_before_the_current_action() {
                 collected.transcript_entries(),
                 /*entry_number_offset*/ 0,
             );
-            let messages = collected
+            let context = collected
                 .compose(ContextPresentation::Async, transcript)
+                .unwrap();
+            let retained_text = context
+                .retained_instructions()
+                .into_user_inputs()
                 .unwrap()
-                .into_messages();
+                .into_iter()
+                .map(|input| match input {
+                    UserInput::Text { text, .. } => text,
+                    _ => panic!("retained context must be text"),
+                })
+                .collect::<Vec<_>>();
+            if history.retained.is_some() {
+                assert!(
+                    retained_text
+                        .iter()
+                        .any(|text| text.contains(&assistant_text))
+                );
+                if generation == 9 {
+                    assert!(
+                        !retained_text
+                            .iter()
+                            .any(|text| text.contains("Assistant progress 0."))
+                    );
+                }
+            }
+            let messages = context.into_messages();
             let (prefix, suffix) = messages.split_first().expect("history prefix");
             let ResponseItem::Message { role, content, .. } = prefix else {
                 panic!("history remains untrusted user evidence");
@@ -135,7 +174,12 @@ fn changing_attestations_preserves_history_before_the_current_action() {
                     reviews.into_annotated_message().into_item(),
                     ContextualUserFragment::into(tool),
                     ContextualUserFragment::into(skills),
-                    user_message(action.render(ActionPresentation::Async)),
+                    user_message(
+                        retained_text
+                            .into_iter()
+                            .chain(action.render(ActionPresentation::Async))
+                            .collect(),
+                    ),
                 ]
             );
         }

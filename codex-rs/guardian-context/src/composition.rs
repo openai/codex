@@ -5,6 +5,8 @@
 //! Long text splits losslessly only after admission, preserving whole-entry selection.
 //! Action-specific attestations follow the transcript so they do not invalidate
 //! the reusable history prefix when previous decisions or tool evidence change.
+//! Async retained context also follows the transcript so its rolling window cannot
+//! invalidate that prefix. Sync retains its existing section order.
 
 use codex_context_fragments::ContextualUserFragment;
 use codex_history::CodexHarnessMetadata;
@@ -162,7 +164,7 @@ impl CollectedContext {
                     (1, "sender_user_messages", text_content(items))
                 }
                 ContextSection::RetainedUserInstructions { items } => (
-                    2,
+                    if session_id.is_some() { 2 } else { 9 },
                     "retained_user_instructions",
                     SectionDelivery::UserContent(
                         items
