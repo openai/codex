@@ -4,6 +4,7 @@
 
 use crate::key_hint::ShortcutHint;
 use crate::motion::MotionMode;
+use crate::motion::loading_glyph;
 use crate::render::renderable::Renderable;
 use crate::tui::FrameRequester;
 use ratatui::buffer::Buffer;
@@ -15,7 +16,6 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
-use std::time::Duration;
 use std::time::Instant;
 use unicode_width::UnicodeWidthStr;
 
@@ -61,16 +61,6 @@ impl VoiceStrip {
     }
 }
 
-pub(super) fn loading_glyph(started_at: Instant, mode: MotionMode) -> &'static str {
-    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    if mode == MotionMode::Reduced {
-        "◌"
-    } else {
-        let frame = started_at.elapsed().as_millis() / 100;
-        FRAMES[usize::try_from(frame).unwrap_or_default() % FRAMES.len()]
-    }
-}
-
 impl Renderable for VoiceStrip {
     fn desired_height(&self, width: u16) -> u16 {
         if width == 0 {
@@ -92,14 +82,13 @@ impl Renderable for VoiceStrip {
         let connecting = self.state.phase == VoiceStripPhase::Connecting;
         let mode =
             MotionMode::from_animations_enabled(self.state.animations && self.state.progress);
-        if connecting && mode == MotionMode::Animated {
-            self.frame_requester
-                .schedule_frame_in(Duration::from_millis(100));
-        }
-        let marker = if connecting && self.state.microphone_live && !self.state.microphone_muted {
-            loading_glyph(self.started_at, mode).red().bold()
-        } else if connecting {
-            loading_glyph(self.started_at, mode).cyan()
+        let marker = if connecting {
+            let glyph = loading_glyph(self.started_at, mode, &self.frame_requester);
+            if self.state.microphone_live && !self.state.microphone_muted {
+                glyph.red().bold()
+            } else {
+                glyph.cyan()
+            }
         } else if self.state.microphone_live && !self.state.microphone_muted {
             "●".red().bold()
         } else {

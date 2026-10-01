@@ -3,8 +3,10 @@
 //! Callers choose an explicit reduced-motion fallback here instead of reaching
 //! directly for time-varying spinner or shimmer helpers.
 
+use std::time::Duration;
 use std::time::Instant;
 
+use crate::tui::FrameRequester;
 use ratatui::style::Stylize;
 use ratatui::text::Span;
 
@@ -33,6 +35,38 @@ impl MotionMode {
 pub(crate) enum ReducedMotionIndicator {
     Hidden,
     StaticBullet,
+}
+
+/// Show the current loading glyph immediately and schedule the next frame.
+pub(crate) fn loading_glyph(
+    started_at: Instant,
+    mode: MotionMode,
+    requester: &FrameRequester,
+) -> &'static str {
+    loading_glyph_with_delay(started_at, Duration::ZERO, mode, requester)
+}
+
+/// Show nothing during the animation delay, or a static glyph in reduced motion.
+/// Schedule the frame that makes the spinner visible and each animation frame.
+pub(crate) fn loading_glyph_with_delay(
+    started_at: Instant,
+    delay: Duration,
+    mode: MotionMode,
+    requester: &FrameRequester,
+) -> &'static str {
+    const FRAME_DURATION: Duration = Duration::from_millis(100);
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    if mode == MotionMode::Reduced {
+        return "◌";
+    }
+    let elapsed = started_at.elapsed();
+    if elapsed < delay {
+        requester.schedule_frame_in(delay - elapsed);
+        return "";
+    }
+    requester.schedule_frame_in(FRAME_DURATION);
+    let frame = elapsed.as_millis() / FRAME_DURATION.as_millis();
+    FRAMES[usize::try_from(frame).unwrap_or_default() % FRAMES.len()]
 }
 
 pub(crate) fn activity_indicator(
