@@ -109,6 +109,7 @@ pub(crate) struct LocalAgentRuntime {
         Arc<OnceLock<Arc<dyn ThreadInstructionsProvider>>>,
     pub(super) registry: Arc<AgentRegistry>,
     pub(super) residency: Arc<V2Residency>,
+    pub(super) mailboxes: Arc<super::mailbox::Mailboxes>,
     /// Shared by every session in this tree, including private delegates.
     pub(crate) shutdown: CancellationToken,
     shutdown_state: Arc<AgentTreeShutdownState>,
@@ -125,6 +126,7 @@ impl LocalAgentRuntime {
             thread_id_generator,
             registry: Arc::default(),
             residency: Arc::default(),
+            mailboxes: Arc::default(),
             shutdown: CancellationToken::new(),
             shutdown_state: Arc::default(),
             agent_execution_limiter: Arc::default(),
@@ -204,6 +206,7 @@ impl LocalAgentRuntime {
     pub(crate) fn request_shutdown(&self) -> Arc<AgentTreeShutdownState> {
         self.shutdown_state.members.close();
         self.shutdown.cancel();
+        self.mailboxes.close();
         Arc::clone(&self.shutdown_state)
     }
 

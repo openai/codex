@@ -72,6 +72,7 @@ mod execution;
 mod inspection;
 mod interrupt;
 mod legacy;
+mod mailbox;
 mod residency;
 mod resume;
 mod root_handoff;
@@ -260,6 +261,30 @@ impl LocalAgentControl {
     ) -> CodexResult<String> {
         let communication_for_log =
             crate::agent_communication::logging_enabled().then(|| communication.clone());
+        {
+            // Keep unloaded delivery atomic with publication of a reloaded session.
+            let threads = state.threads.read().await;
+            if !communication.trigger_turn && !threads.contains_key(&agent_id) {
+                let _membership = self.runtime.admit_start()?;
+                self.runtime.ensure_agent_known(agent_id)?;
+                let submission_id = uuid::Uuid::now_v7().to_string();
+                self.runtime.mailboxes.enqueue(
+                    agent_id,
+                    Some(submission_id.clone()),
+                    vec![communication],
+                )?;
+                if let Some(communication) = communication_for_log {
+                    crate::agent_communication::emit_agent_communication_send(
+                        &submission_id,
+                        &context,
+                        &communication,
+                        agent_id,
+                    );
+                }
+                return Ok(submission_id);
+            }
+        }
+        // Loaded recipients retain submission ordering with follow-ups and interrupts.
         let (parent_turn_id, root_turn_id) = if communication.trigger_turn {
             (
                 start_options.parent_turn_id.clone(),

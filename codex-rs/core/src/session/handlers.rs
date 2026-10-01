@@ -427,6 +427,10 @@ pub(super) async fn submission_loop(
 ) {
     // Session shutdown and tree shutdown both use the existing teardown handler.
     let mut shutdown_received = false;
+    let mut mailbox = sess.input_queue.mailbox_updates();
+    if let Some(updates) = &mut mailbox {
+        updates.mark_changed();
+    }
     loop {
         let sub = tokio::select! {
             biased;
@@ -438,6 +442,24 @@ pub(super) async fn submission_loop(
                 Ok(sub) => sub,
                 Err(_) => break,
             },
+            update = async {
+                match &mut mailbox {
+                    Some(updates) => updates.changed().await.map(|()| *updates.borrow_and_update()),
+                    None => std::future::pending().await,
+                }
+            } => {
+                match update {
+                    Ok(true) => {
+                        sess.input_queue.notify_mailbox();
+                        if sess.has_outstanding_durable_sleep() {
+                            sess.maybe_start_turn_for_pending_work().await;
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(_) => mailbox = None,
+                }
+                continue;
+            }
         };
         if matches!(sub.op, Op::ResolveElicitation { .. }) {
             debug!(submission_id = %sub.id, operation = sub.op.kind(), "Submission");

@@ -49,6 +49,8 @@ use wiremock::MockServer;
 struct TestAgentControl {
     thread_id: ThreadId,
     service_tier: Mutex<Option<String>>,
+    mail: Mutex<Vec<codex_protocol::protocol::InterAgentCommunication>>,
+    mailbox_state: tokio::sync::watch::Sender<bool>,
     agents: Mutex<HashMap<String, ThreadId>>,
 }
 
@@ -57,6 +59,8 @@ impl TestAgentControl {
         Self {
             thread_id,
             service_tier: Mutex::default(),
+            mail: Mutex::default(),
+            mailbox_state: tokio::sync::watch::channel(/*init*/ false).0,
             agents: Mutex::new(HashMap::from([("/root".into(), thread_id)])),
         }
     }
@@ -94,6 +98,19 @@ impl AgentControl for TestAgentControl {
     fn send(&self, request: SendRequest) -> BoxFuture<'_, CodexResult<DeliveryReceipt>> {
         assert_eq!(request.caller, self.thread_id);
         Box::pin(async { Err(CodexErr::InvalidRequest("host send rejection".to_string())) })
+    }
+
+    fn take_mailbox(
+        &self,
+        _agent: ThreadId,
+    ) -> Vec<codex_protocol::protocol::InterAgentCommunication> {
+        let messages = std::mem::take(&mut *self.mail.lock().expect("mail lock"));
+        self.mailbox_state.send_if_modified(std::mem::take);
+        messages
+    }
+
+    fn watch_mailbox(&self, _agent: ThreadId) -> tokio::sync::watch::Receiver<bool> {
+        self.mailbox_state.subscribe()
     }
 
     fn ensure_child_loaded(
@@ -498,3 +515,75 @@ async fn collaboration_tools_dispatch_to_the_host_controller() -> anyhow::Result
 }
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InternalSessionSource;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_mailbox_notifies_waiting_agent_and_delivers_once() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let (test, controller) = test_with_host_control(&server).await?;
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("waiting"),
+            responses::ev_function_call_with_namespace(
+                "wait-mail",
+                "collaboration",
+                "wait_agent",
+                r#"{"timeout_ms":10000}"#,
+            ),
+            responses::ev_completed("waiting"),
+        ]),
+    )
+    .await;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Wait for a colleague.".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&test.codex, |event| matches!(event,
+        EventMsg::ItemStarted(event) if matches!(&event.item,
+            codex_protocol::items::TurnItem::CollabAgentToolCall(call) if call.id == "wait-mail")
+    )).await;
+    let next = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("done"),
+            responses::ev_assistant_message("done", "Received the note."),
+            responses::ev_completed("done"),
+        ]),
+    )
+    .await;
+    controller.mail.lock().expect("mail lock").push(
+        codex_protocol::protocol::InterAgentCommunication::new(
+            AgentPath::root().join("worker").expect("valid worker path"),
+            AgentPath::root(),
+            Vec::new(),
+            "Note from the host mailbox".into(),
+            /*trigger_turn*/ false,
+        ),
+    );
+    controller.mailbox_state.send_replace(true);
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let request = next.single_request();
+    let wait_output = request
+        .function_call_output_text("wait-mail")
+        .expect("wait_agent output");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&wait_output)?,
+        serde_json::json!({"message": "Wait completed.", "timed_out": false})
+    );
+    assert_eq!(
+        request
+            .inputs_of_type("agent_message")
+            .iter()
+            .filter(|item| item.to_string().contains("Note from the host mailbox"))
+            .count(),
+        1
+    );
+    assert!(controller.mail.lock().expect("mail lock").is_empty());
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}

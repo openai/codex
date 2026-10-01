@@ -193,6 +193,23 @@ impl V2Residency {
                     teardown.complete();
                     return false;
                 }
+                // The submission loop has stopped and the residency guard excludes senders.
+                // Preserve unread queue-only mail before dropping the session that held it.
+                let mail = candidate_thread
+                    .session
+                    .input_queue
+                    .drain_mailbox()
+                    .await
+                    .into_iter()
+                    .map(|mail| mail.communication)
+                    .collect();
+                // A concurrent tree shutdown deliberately discards its unread mail.
+                let _ = candidate_thread
+                    .session
+                    .services
+                    .local_agent_runtime
+                    .mailboxes
+                    .enqueue(candidate_thread_id, /*id*/ None, mail);
                 let environments = candidate_thread.environment_selections().await;
                 let mut threads = manager.threads.write().await;
                 if threads
@@ -276,7 +293,12 @@ async fn is_unloadable(thread: &CodexThread) -> bool {
         thread.agent_status().await,
         AgentStatus::Completed(_) | AgentStatus::Errored(_) | AgentStatus::Interrupted
     ) && thread.session.active_turn.lock().await.is_none()
-        && !thread.session.input_queue.has_pending_mailbox_items().await
+        && !thread.session.has_outstanding_durable_sleep()
+        && !thread
+            .session
+            .input_queue
+            .has_trigger_turn_mailbox_items()
+            .await
 }
 
 #[cfg(test)]

@@ -1842,7 +1842,7 @@ impl Session {
                 .then(|| Mutex::new(Default::default())),
                 active_turn: Mutex::new(None),
                 async_hook_results,
-                input_queue: InputQueue::new(),
+                input_queue: InputQueue::with_controller(thread_id, Arc::clone(&services.agent_control)),
                 services,
                 git_enrichment_policy,
                 fork_persistence,

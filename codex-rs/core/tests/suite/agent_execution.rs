@@ -814,3 +814,6 @@ async fn tree_shutdown_reports_persistence_writer_failure() -> Result<()> {
     assert!(result.is_err());
     Ok(())
 }
+
+#[path = "agent_mailbox.rs"]
+mod agent_mailbox;
