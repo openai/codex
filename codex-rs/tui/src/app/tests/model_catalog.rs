@@ -439,6 +439,7 @@ async fn accepted_model_migration_persists_target_default_reasoning_effort() -> 
         let app_event_tx = AppEventSender::new(tx_raw);
         apply_accepted_model_migration(
             &mut config,
+            &mut crate::app_server_session::StartupLaunchChoices::default(),
             &app_event_tx,
             current_model,
             upgrade.id,

@@ -217,6 +217,7 @@ pub(super) fn target_preset_for_upgrade<'a>(
 
 pub(super) fn apply_accepted_model_migration(
     config: &mut Config,
+    launch_choices: &mut crate::app_server_session::StartupLaunchChoices,
     app_event_tx: &AppEventSender,
     from_model: String,
     target_model: String,
@@ -227,6 +228,8 @@ pub(super) fn apply_accepted_model_migration(
         to_model: target_model.clone(),
     });
 
+    launch_choices.model = Some(target_model.clone());
+    launch_choices.effort = Some(serde_json::json!(target_default_effort));
     config.model = Some(target_model.clone());
     config.model_reasoning_effort = Some(target_default_effort.clone());
     app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
@@ -310,6 +313,7 @@ pub(super) async fn handle_model_migration_prompt_if_needed(
     tui: &mut tui::Tui,
     config: &mut Config,
     local_settings: &crate::local_settings::LocalSettings,
+    launch_choices: &mut crate::app_server_session::StartupLaunchChoices,
     model: &str,
     app_event_tx: &AppEventSender,
     available_models: &[ModelPreset],
@@ -367,6 +371,7 @@ pub(super) async fn handle_model_migration_prompt_if_needed(
             ModelMigrationOutcome::Accepted => {
                 apply_accepted_model_migration(
                     config,
+                    launch_choices,
                     app_event_tx,
                     model.to_string(),
                     target_model.clone(),

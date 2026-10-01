@@ -13,6 +13,7 @@ pub(crate) mod provider_selection;
 mod provider_selection_tests;
 mod realtime;
 mod rollout_history;
+mod startup_launch;
 mod thread_list;
 mod web_search;
 
@@ -25,6 +26,7 @@ pub(crate) use history::HISTORY_ITEM_SCAN_LIMIT;
 pub(crate) use history::HistoryHydrationScope;
 pub(crate) use history::INITIAL_HISTORY_TURN_LIMIT;
 pub(crate) use history::thread_items_page_params;
+pub(crate) use startup_launch::StartupLaunchChoices;
 
 use crate::app_event::PermissionProfileSelection;
 use crate::app_event_sender::AppEventSender;
@@ -1729,7 +1731,7 @@ pub(crate) async fn start_thread_with_request_handle(
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<PathBuf>,
     thread_tool_transport: ThreadToolTransport,
-    model_provider_override: Option<String>,
+    launch_choices: StartupLaunchChoices,
 ) -> Result<AppServerStartedThread> {
     let request_id = RequestId::String(format!("startup-thread-start-{}", Uuid::new_v4()));
     let mut params = thread_start_params_from_config(
@@ -1738,7 +1740,7 @@ pub(crate) async fn start_thread_with_request_handle(
         remote_cwd_override.as_deref(),
         /*session_start_source*/ None,
     );
-    params.model_provider = model_provider_override.or(params.model_provider);
+    launch_choices.configure(&mut params);
     params.daybreak_enabled = (config.daybreak_enabled && !config.ephemeral).then_some(true);
     thread_tool_transport.configure(&mut params);
     let (response, _history_support, task_tools_available) =

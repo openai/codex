@@ -367,7 +367,7 @@ async fn lost_initial_thread_reply_keeps_startup_draft_offline() -> Result<()> {
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
             session.thread_tool_transport(),
-            /*model_provider_override*/ None,
+            crate::app_server_session::StartupLaunchChoices::default(),
         )
         .await;
         let mut tui = crate::tui::test_support::make_test_tui()?;

@@ -70,7 +70,7 @@ async fn lifecycle_metadata_uses_local_prompt_history() -> Result<()> {
             mode,
             /*remote_cwd_override*/ None,
             app_server.thread_tool_transport(),
-            /*model_provider_override*/ None,
+            crate::app_server_session::StartupLaunchChoices::default(),
         )
         .await?;
         assert_eq!(startup.session.message_history, expected);
