@@ -60,6 +60,7 @@ zip = { workspace = true }
 
 [dev-dependencies]
 codex-exec-server-test-support = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 libc = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

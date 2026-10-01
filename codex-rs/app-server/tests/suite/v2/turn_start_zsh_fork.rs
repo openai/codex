@@ -779,11 +779,11 @@ fn create_test_package_app_server(codex_home: &Path, zsh_path: &Path) -> Result<
     std::fs::write(package_dir.join("codex-package.json"), "{}")?;
 
     let app_server = bin_dir.join("codex-app-server");
-    copy_with_permissions(
+    codex_utils_cargo_bin::copy_executable(
         &codex_utils_cargo_bin::cargo_bin("codex-app-server")?,
         &app_server,
     )?;
-    copy_with_permissions(zsh_path, &package_zsh_path)?;
+    codex_utils_cargo_bin::copy_executable(zsh_path, &package_zsh_path)?;
     Ok(app_server)
 }
 
@@ -799,11 +799,6 @@ fn packaged_zsh_path(codex_home: &Path) -> PathBuf {
 fn command_packaged_zsh_path(codex_home: &Path) -> PathBuf {
     let path = packaged_zsh_path(codex_home);
     std::fs::canonicalize(&path).unwrap_or(path)
-}
-
-fn copy_with_permissions(source: &Path, destination: &Path) -> std::io::Result<()> {
-    std::fs::copy(source, destination)?;
-    std::fs::set_permissions(destination, std::fs::metadata(source)?.permissions())
 }
 
 fn create_config_toml(

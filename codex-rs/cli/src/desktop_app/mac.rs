@@ -422,7 +422,8 @@ mod tests {
         let executable_path = contents_path.join("MacOS/Codex");
         fs::create_dir_all(executable_path.parent().expect("executable parent"))
             .expect("create executable directory");
-        fs::copy("/usr/bin/true", &executable_path).expect("copy executable into app bundle");
+        codex_utils_cargo_bin::copy_executable(Path::new("/usr/bin/true"), &executable_path)
+            .expect("copy executable into app bundle");
         fs::write(
             contents_path.join("Info.plist"),
             r#"<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.openai.codex</string><key>CFBundleExecutable</key><string>Codex</string></dict></plist>"#,

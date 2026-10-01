@@ -2081,7 +2081,8 @@ async fn local_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() ->
                 .parent()
                 .expect("relative test server path should include a parent");
             fs::create_dir_all(target_dir).expect("create relative MCP bin directory");
-            fs::copy(&rmcp_test_server_bin, &target_bin).expect("copy test stdio server");
+            codex_utils_cargo_bin::copy_executable(&rmcp_test_server_bin, &target_bin)
+                .expect("copy test stdio server");
 
             insert_mcp_server(
                 config,

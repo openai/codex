@@ -6,8 +6,6 @@ mod shell_snapshot;
 mod windows_sandbox;
 
 use std::collections::HashMap;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -236,11 +234,10 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
     let runtime_path_entry = home.path().join("runtime-bin");
     std::fs::create_dir(&profile_path_entry)?;
     let wc = profile_path_entry.join("wc");
-    std::fs::write(
+    codex_utils_cargo_bin::write_executable(
         &wc,
         "#!/bin/sh\nprintf x >> \"$HOME/tool-captures\"\nexec /usr/bin/wc \"$@\"\n",
     )?;
-    std::fs::set_permissions(&wc, std::fs::Permissions::from_mode(0o755))?;
     let posix_shell = matches!(shell_name, "sh" | "bash-sh");
     let padding = if !use_remote && !tty && shell_name == "bash" {
         format!(
@@ -815,10 +812,7 @@ async fn remote_tty_process_uses_configured_sandbox_helper_with_hostile_path() -
     let file = workspace.path().join("allowed.txt");
     std::fs::write(&file, b"allowed")?;
     let hostile_helper = workspace.path().join("codex-linux-sandbox");
-    std::fs::write(&hostile_helper, b"#!/bin/sh\nprintf hostile")?;
-    let mut permissions = std::fs::metadata(&hostile_helper)?.permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&hostile_helper, permissions)?;
+    codex_utils_cargo_bin::write_executable(&hostile_helper, "#!/bin/sh\nprintf hostile")?;
     let path = std::env::var_os("PATH").context("PATH is not set")?;
     let hostile_path = std::env::join_paths(
         std::iter::once(workspace.path().to_path_buf()).chain(std::env::split_paths(&path)),

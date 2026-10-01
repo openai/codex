@@ -1390,19 +1390,14 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn managed_local_backend_counts_as_bootstrapped_without_updater() {
-        use std::os::unix::fs::PermissionsExt;
-
         let home = TempDir::new().expect("home");
         let standalone = home.path().join("packages/standalone");
         let local_bin = standalone.join("local-main/bin/codex");
         tokio::fs::create_dir_all(local_bin.parent().expect("bin parent"))
             .await
             .expect("local bin directory");
-        tokio::fs::write(&local_bin, b"#!/bin/sh\nexec sleep 30\n")
-            .await
+        codex_utils_cargo_bin::write_executable(&local_bin, "#!/bin/sh\nexec sleep 30\n")
             .expect("local bin");
-        std::fs::set_permissions(&local_bin, std::fs::Permissions::from_mode(0o755))
-            .expect("executable local bin");
         std::os::unix::fs::symlink("local-main", standalone.join("current"))
             .expect("current local build");
         let state = home.path().join("app-server-daemon");

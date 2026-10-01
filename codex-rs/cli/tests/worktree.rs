@@ -281,7 +281,8 @@ trust_level = "trusted"
         #[cfg(unix)]
         std::os::unix::fs::symlink(program.canonicalize()?, &managed)?;
         #[cfg(not(unix))]
-        fs::hard_link(&program, &managed).or_else(|_| fs::copy(&program, &managed).map(|_| ()))?;
+        fs::hard_link(&program, &managed)
+            .or_else(|_| codex_utils_cargo_bin::copy_executable(&program, &managed))?;
         fs::create_dir(home.join("app-server-daemon"))?;
         fs::write(
             home.join("app-server-daemon/settings.json"),

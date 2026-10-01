@@ -114,14 +114,10 @@ fn updater_only_runs_for_stable_installer_owned_releases() {
 #[cfg(unix)]
 #[tokio::test]
 async fn older_managed_binary_does_not_claim_updater_support() {
-    use std::os::unix::fs::PermissionsExt;
-
     let temp = tempfile::TempDir::new().expect("home");
     let binary = temp.path().join("codex");
-    std::fs::write(&binary, b"#!/bin/sh\nexit 2\n").expect("older binary");
-    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
-        .expect("executable binary");
+    codex_utils_cargo_bin::write_executable(&binary, "#!/bin/sh\nexit 2\n").expect("older binary");
     assert!(!super::supports_daemon_update_loop(&binary).await);
-    std::fs::write(&binary, b"#!/bin/sh\nexit 0\n").expect("newer binary");
+    codex_utils_cargo_bin::write_executable(&binary, "#!/bin/sh\nexit 0\n").expect("newer binary");
     assert!(super::supports_daemon_update_loop(&binary).await);
 }

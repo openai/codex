@@ -45,6 +45,7 @@ urlencoding = { workspace = true }
 webbrowser = { workspace = true }
 
 [dev-dependencies]
+codex-utils-cargo-bin = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 core_test_support = { workspace = true }
 jsonwebtoken = { workspace = true }

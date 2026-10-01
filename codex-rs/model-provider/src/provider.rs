@@ -914,7 +914,7 @@ mod tests {
             let executable = std::env::current_exe().expect("test executable should be available");
             let aws = counter.join(format!("aws{}", std::env::consts::EXE_SUFFIX));
             std::fs::hard_link(&executable, &aws)
-                .or_else(|_| std::fs::copy(&executable, &aws).map(|_| ()))
+                .or_else(|_| codex_utils_cargo_bin::copy_executable(&executable, &aws))
                 .expect("test executable should be installed as aws");
             let existing_path = std::env::var_os("PATH").unwrap_or_default();
             let path = std::env::join_paths(

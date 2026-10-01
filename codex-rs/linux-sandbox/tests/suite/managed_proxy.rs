@@ -27,7 +27,6 @@ use std::net::Shutdown;
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::os::unix::fs::MetadataExt;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Output;
 use std::process::Stdio;
@@ -322,7 +321,7 @@ async fn proc_mount_denial_preserves_legacy_fallback_and_explicit_pid_inheritanc
     };
     let tempdir = tempfile::tempdir().expect("create PID namespace fixture");
     let wrapper = tempdir.path().join("bwrap");
-    std::fs::write(
+    codex_utils_cargo_bin::write_executable(
         &wrapper,
         r#"#!/bin/sh
 for arg in "$@"; do
@@ -336,8 +335,6 @@ exec "$CODEX_TEST_REAL_BWRAP" "$@"
 "#,
     )
     .expect("write proc-denying bubblewrap wrapper");
-    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
-        .expect("make bubblewrap wrapper executable");
     let protected_file = tempdir.path().join("protected");
     std::fs::write(&protected_file, "original").expect("write protected file");
     let pid_namespace = std::fs::read_link("/proc/self/ns/pid").expect("read caller PID namespace");
@@ -473,7 +470,8 @@ async fn unsupported_system_bwrap_falls_back_to_bundled_bwrap() {
     let sandbox_executable = tempdir.path().join("codex-linux-sandbox");
     let original_executable = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     if std::fs::hard_link(original_executable, &sandbox_executable).is_err() {
-        std::fs::copy(original_executable, &sandbox_executable).expect("copy sandbox executable");
+        codex_utils_cargo_bin::copy_executable(Path::new(original_executable), &sandbox_executable)
+            .expect("copy sandbox executable");
     }
 
     let resources_dir = tempdir.path().join("codex-resources");
@@ -484,13 +482,11 @@ async fn unsupported_system_bwrap_falls_back_to_bundled_bwrap() {
     let system_dir = tempdir.path().join("system");
     std::fs::create_dir(&system_dir).expect("create fake system binary directory");
     let unsupported_bwrap = system_dir.join("bwrap");
-    std::fs::write(
+    codex_utils_cargo_bin::write_executable(
         &unsupported_bwrap,
         "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then printf '%s\\n' '--perms'; exit 0; fi\nexit 91\n",
     )
     .expect("write unsupported system bubblewrap");
-    std::fs::set_permissions(&unsupported_bwrap, std::fs::Permissions::from_mode(0o755))
-        .expect("make unsupported system bubblewrap executable");
 
     let mut env = create_env_from_core_vars();
     strip_proxy_env(&mut env);

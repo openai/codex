@@ -1415,7 +1415,10 @@ async fn agent_plugin_root_mcp_stdio_tool_round_trip_expands_reserved_paths_and_
         }
     };
     let stdio_server_name = format!("test_stdio_server{}", std::env::consts::EXE_SUFFIX);
-    std::fs::copy(stdio_server, plugin_root.join(&stdio_server_name))?;
+    codex_utils_cargo_bin::copy_executable(
+        std::path::Path::new(&stdio_server),
+        &plugin_root.join(&stdio_server_name),
+    )?;
     let mcp_config = serde_json::json!({
         "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
         "mcpServers": {

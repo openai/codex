@@ -26,7 +26,7 @@ async fn exec_server_accepts_initialize(version: Option<&str>) -> anyhow::Result
     let bin_dir = package.path().join("bin");
     std::fs::create_dir(&bin_dir)?;
     let executable = bin_dir.join(format!("codex{}", std::env::consts::EXE_SUFFIX));
-    std::fs::copy(std::env::current_exe()?, &executable)?;
+    codex_utils_cargo_bin::copy_executable(&std::env::current_exe()?, &executable)?;
     let manifest = package.path().join("codex-package.json");
     if let Some(version) = version {
         std::fs::write(

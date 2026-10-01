@@ -267,8 +267,6 @@ mod tests {
     #[cfg(unix)]
     use std::fs;
     use std::future::Future;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::pin::Pin;
     #[cfg(unix)]
@@ -823,13 +821,11 @@ mod tests {
 
     #[cfg(unix)]
     fn write_marker_helper(path: &Path) {
-        fs::write(path, "#!/bin/sh\nprintf ran >> \"$0.ran\"\nexit 1\n")
-            .expect("write helper script");
-        let mut permissions = fs::metadata(path)
-            .expect("read helper metadata")
-            .permissions();
-        permissions.set_mode(/*mode*/ 0o755);
-        fs::set_permissions(path, permissions).expect("make helper executable");
+        codex_utils_cargo_bin::write_executable(
+            path,
+            "#!/bin/sh\nprintf ran >> \"$0.ran\"\nexit 1\n",
+        )
+        .expect("write helper script");
     }
 
     fn assert_command_metadata(commands: &[WorkspaceCommand], cwd: &Path) {

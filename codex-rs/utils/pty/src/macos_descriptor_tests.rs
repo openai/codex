@@ -7,7 +7,6 @@ use std::io::Seek;
 use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -85,8 +84,7 @@ async fn socket_stdin_preserves_bidirectional_io_and_custom_argv0() -> anyhow::R
 async fn native_launch_can_reject_executable_text_without_shell_fallback() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     let script = directory.path().join("no-shebang");
-    fs::write(&script, "printf unexpected-fallback\n")?;
-    fs::set_permissions(&script, fs::Permissions::from_mode(/*mode*/ 0o755))?;
+    codex_utils_cargo_bin::write_executable(&script, "printf unexpected-fallback\n")?;
     let mut command = Command::new(script);
     command.fallback(SpawnFallback::ReturnError);
     let error = command.spawn().err().expect("executable text must fail");
@@ -114,8 +112,7 @@ async fn inherited_descriptors_survive_native_and_executable_text_spawns() -> an
             command
         } else {
             let script = directory.path().join("executable-text");
-            fs::write(&script, format!("/bin/cat {descriptor}\n"))?;
-            fs::set_permissions(&script, fs::Permissions::from_mode(/*mode*/ 0o755))?;
+            codex_utils_cargo_bin::write_executable(&script, &format!("/bin/cat {descriptor}\n"))?;
             Command::new(script)
         };
         command

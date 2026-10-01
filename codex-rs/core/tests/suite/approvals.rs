@@ -2832,9 +2832,9 @@ async fn shell_startup_credentials_are_brokered(
         };
         let zsh_path = zsh.derive_exec_args("", /*use_login_shell*/ false)[0].clone();
         let path = startup_dir.join("zsh");
-        fs::write(
+        codex_utils_cargo_bin::write_executable(
             &path,
-            format!(
+            &format!(
                 "#!/bin/sh\nexport GH_ENTERPRISE_TOKEN='{REAL_GITHUB_TOKEN}'\nexport CUSTOM_API_KEY='{REAL_CUSTOM_TOKEN}'\nexport AUTH_HEADER=\"Bearer $GH_ENTERPRISE_TOKEN\"\nexec {} \"$@\"\n",
                 shlex::try_quote(&zsh_path)?
             ),
@@ -3476,15 +3476,12 @@ async fn env_zsh_script_spawned_by_python_can_request_escalation_under_zsh_fork(
     .await?;
 
     let script_path = test.cwd.path().join("runs-under-env-zsh");
-    fs::write(
+    codex_utils_cargo_bin::write_executable(
         &script_path,
-        format!(
+        &format!(
             "#!/usr/bin/env zsh\ntouch {outside_path_arg}\nprint -r -- nested-env-zsh-complete\n"
         ),
     )?;
-    let mut script_permissions = fs::metadata(&script_path)?.permissions();
-    script_permissions.set_mode(0o755);
-    fs::set_permissions(&script_path, script_permissions)?;
 
     let script_literal = serde_json::to_string(script_path.to_string_lossy().as_ref())?;
     let python_script = format!(
@@ -3920,9 +3917,9 @@ async fn zsh_fork_inner_allowed_script_inherits_active_permission_profile() -> R
     let remote_bash_path = script_dir.path().join("remote_bash.py");
     let outside_path = script_dir.path().join("remote-bash-unsandboxed-marker");
     let outside_path_literal = serde_json::to_string(&outside_path.to_string_lossy())?;
-    fs::write(
+    codex_utils_cargo_bin::write_executable(
         &remote_bash_path,
-        format!(
+        &format!(
             r#"#!/usr/bin/env python3
 import argparse
 import os
@@ -3987,19 +3984,14 @@ if __name__ == "__main__":
         ),
     )?;
     let remote_bash_exec = shlex::try_join([remote_bash_path.to_string_lossy().as_ref()])?;
-    fs::write(
+    codex_utils_cargo_bin::write_executable(
         &wrapper_path,
-        format!(
+        &format!(
             r#"#!/usr/bin/env zsh
 exec {remote_bash_exec} "$@"
 "#
         ),
     )?;
-    for path in [&wrapper_path, &remote_bash_path] {
-        let mut permissions = fs::metadata(path)?.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions)?;
-    }
 
     let remote_bash_pattern = serde_json::to_string(&remote_bash_path.to_string_lossy())?;
     let rules = format!(r#"prefix_rule(pattern=[{remote_bash_pattern}], decision="allow")"#);

@@ -225,20 +225,14 @@ async fn stale_record_cleanup_preserves_replacement_record() {
 #[cfg(unix)]
 #[tokio::test]
 async fn pid_record_captures_the_resolved_launch_binary() {
-    use std::os::unix::fs::PermissionsExt;
-
     let temp = TempDir::new().expect("temp dir");
     let original = temp.path().join("original-codex");
     let replacement = temp.path().join("replacement-codex");
     for (path, bytes) in [
-        (&original, b"#!/bin/sh\nexec sleep 30\n".as_slice()),
-        (
-            &replacement,
-            b"#!/bin/sh\n# replacement\nexec sleep 30\n".as_slice(),
-        ),
+        (&original, "#!/bin/sh\nexec sleep 30\n"),
+        (&replacement, "#!/bin/sh\n# replacement\nexec sleep 30\n"),
     ] {
-        std::fs::write(path, bytes).expect("binary");
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("executable");
+        codex_utils_cargo_bin::write_executable(path, bytes).expect("binary");
     }
     let selected = temp.path().join("current-codex");
     std::os::unix::fs::symlink(&original, &selected).expect("selected binary");

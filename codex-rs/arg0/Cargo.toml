@@ -33,4 +33,5 @@ codex-windows-sandbox = { workspace = true }
 pathdiff = { workspace = true }
 
 [dev-dependencies]
+codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }

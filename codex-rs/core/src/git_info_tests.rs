@@ -35,8 +35,6 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;
 use std::io;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -589,19 +587,14 @@ async fn test_get_has_changes_ignores_configured_hooks_path() {
     let marker_path = repo_path.join("hook-ran");
 
     fs::create_dir_all(&hooks_dir).expect("create hook dir");
-    fs::write(
+    codex_utils_cargo_bin::write_executable(
         &hook_path,
-        format!(
+        &format!(
             "#!/bin/sh\nprintf ran > \"{}\"\n",
             marker_path.to_string_lossy()
         ),
     )
     .expect("write post-index-change hook");
-    let mut permissions = fs::metadata(&hook_path)
-        .expect("read hook metadata")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&hook_path, permissions).expect("mark hook executable");
 
     Command::new("git")
         .args([

@@ -156,14 +156,11 @@ fn checkout_does_not_execute_configured_hooks_fsmonitor_or_filters() -> Result<(
 
 #[cfg(unix)]
 fn write_marker_script(path: &Path, marker: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
     let marker = marker.to_str().context("marker path is not valid UTF-8")?;
-    fs::write(
+    codex_utils_cargo_bin::write_executable(
         path,
-        format!("#!/bin/sh\nprintf executed > '{marker}'\ncat\n"),
+        &format!("#!/bin/sh\nprintf executed > '{marker}'\ncat\n"),
     )?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
     Ok(())
 }
 

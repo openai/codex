@@ -242,7 +242,6 @@ fn exec_system_bwrap(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::os::unix::fs::PermissionsExt;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -308,13 +307,11 @@ mod tests {
     fn detects_fd_backed_read_only_mount_support_in_system_bwrap_help() {
         let temp_dir = tempfile::tempdir().expect("temp directory");
         let fake_bwrap_path = temp_dir.path().join("bwrap");
-        std::fs::write(
+        codex_utils_cargo_bin::write_executable(
             &fake_bwrap_path,
             "#!/bin/sh\nprintf '%s\\n' '--as-pid-1' '--perms' '--argv0' '--ro-bind-fd'\n",
         )
         .expect("write fake bubblewrap");
-        std::fs::set_permissions(&fake_bwrap_path, std::fs::Permissions::from_mode(0o755))
-            .expect("make fake bubblewrap executable");
 
         assert_eq!(
             system_bwrap_capabilities(&fake_bwrap_path),

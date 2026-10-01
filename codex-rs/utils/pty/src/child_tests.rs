@@ -215,12 +215,10 @@ async fn preserved_descriptor_can_use_the_last_slot_below_the_limit() -> anyhow:
 #[tokio::test]
 async fn process_mode_is_preserved_by_both_backends() -> anyhow::Result<()> {
     use crate::ProcessMode;
-    use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir()?;
     std::os::unix::fs::symlink("/bin/cat", root.path().join("server"))?;
     let script = root.path().join("executable-text");
-    std::fs::write(&script, "exec /bin/cat\n")?;
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(/*mode*/ 0o755))?;
+    codex_utils_cargo_bin::write_executable(&script, "exec /bin/cat\n")?;
     for program in ["./server", "/bin/cat", "./executable-text"] {
         for mode in [
             ProcessMode::Inherit,
@@ -368,8 +366,6 @@ async fn detached_spawn_preserves_child_path_cwd_environment_and_arg0() -> anyho
 
 #[tokio::test]
 async fn detached_spawn_preserves_exec_errors_and_executable_text_handling() -> anyhow::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
     let root = tempfile::tempdir()?;
     let program = root.path().join("script");
     let mut missing = Command::new(&program);
@@ -377,8 +373,7 @@ async fn detached_spawn_preserves_exec_errors_and_executable_text_handling() -> 
     let error = missing.spawn().err().expect("missing executable must fail");
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
 
-    std::fs::write(&program, "printf '%s' \"$1\"")?;
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))?;
+    codex_utils_cargo_bin::write_executable(&program, "printf '%s' \"$1\"")?;
     // Match the existing libc behavior: glibc/macOS retry executable text through
     // a shell, whereas musl returns ENOEXEC.
     let mut baseline = tokio::process::Command::new(&program);

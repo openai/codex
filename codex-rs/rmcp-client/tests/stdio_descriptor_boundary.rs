@@ -8,7 +8,6 @@ use std::fs;
 use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::fs::symlink;
 use std::process::Command;
 use std::sync::Arc;
@@ -93,8 +92,7 @@ for line in sys.stdin:
     let wrapper = temporary.path().join("executable-text");
     // No shebang: exercise Command's shell fallback after native macOS spawn
     // returns ENOEXEC, including the fallback descriptor cleanup.
-    fs::write(&wrapper, "exec \"$@\"\n")?;
-    fs::set_permissions(&wrapper, fs::Permissions::from_mode(/*mode*/ 0o755))?;
+    codex_utils_cargo_bin::write_executable(&wrapper, "exec \"$@\"\n")?;
     for (launch, program, mut args) in [
         ("absolute", python.clone().into_os_string(), Vec::new()),
         ("relative", OsString::from("./python-fixture"), Vec::new()),
@@ -170,8 +168,7 @@ async fn local_stdio_preserves_exec_failure_reporting() -> Result<()> {
     let temporary = tempfile::tempdir()?;
     let script = temporary.path().join("missing-interpreter");
     let interpreter = temporary.path().join("does-not-exist");
-    fs::write(&script, format!("#!{}\n", interpreter.display()))?;
-    fs::set_permissions(&script, fs::Permissions::from_mode(/*mode*/ 0o755))?;
+    codex_utils_cargo_bin::write_executable(&script, &format!("#!{}\n", interpreter.display()))?;
 
     // Program resolution succeeds, but exec fails. Descriptor cleanup must
     // preserve the internal error pipe so launch reports the failure directly.

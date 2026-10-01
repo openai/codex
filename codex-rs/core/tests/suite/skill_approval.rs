@@ -83,8 +83,6 @@ fn write_skill_with_shell_script_contents(
     script_name: &str,
     script_contents: &str,
 ) -> Result<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-
     let skill_dir = home.join("skills").join(name);
     let scripts_dir = skill_dir.join("scripts");
     fs::create_dir_all(&scripts_dir)?;
@@ -100,10 +98,7 @@ description: {name} skill
     )?;
 
     let script_path = scripts_dir.join(script_name);
-    fs::write(&script_path, script_contents)?;
-    let mut permissions = fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script_path, permissions)?;
+    codex_utils_cargo_bin::write_executable(&script_path, script_contents)?;
     Ok(script_path)
 }
 

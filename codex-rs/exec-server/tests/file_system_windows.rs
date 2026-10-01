@@ -473,7 +473,7 @@ async fn file_system_elevated_relative_read_denial_uses_policy_cwd(
     for name in ["codex-windows-sandbox-setup", "codex-command-runner"] {
         let source = codex_utils_cargo_bin::cargo_bin(name)?;
         let destination = resources.join(Path::new(name).with_extension("exe"));
-        if let Err(error) = std::fs::copy(&source, &destination)
+        if let Err(error) = codex_utils_cargo_bin::copy_executable(&source, &destination)
             && !(error.kind() == std::io::ErrorKind::PermissionDenied && destination.is_file())
         {
             return Err(error).with_context(|| format!("stage Windows sandbox helper {name}"));

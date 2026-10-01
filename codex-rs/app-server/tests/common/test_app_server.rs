@@ -2121,7 +2121,7 @@ impl TestAppServerBuilder {
                 (&code_mode_host_program, &staged_host),
             ] {
                 std::fs::hard_link(source, destination)
-                    .or_else(|_| std::fs::copy(source, destination).map(|_| ()))
+                    .or_else(|_| codex_utils_cargo_bin::copy_executable(source, destination))
                     .with_context(|| format!("stage executable {}", source.display()))?;
             }
             program = staged_program;

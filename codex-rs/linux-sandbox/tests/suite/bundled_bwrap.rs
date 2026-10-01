@@ -66,7 +66,11 @@ fn bazel_build_rejects_tampered_bundled_bwrap() {
     std::fs::remove_file(&bundled_bwrap).expect("read-only bundled bwrap should be replaceable");
     let mut tampered_bwrap_bytes = original_bwrap_bytes;
     tampered_bwrap_bytes.push(0);
-    std::fs::write(&bundled_bwrap, &tampered_bwrap_bytes)
+    // Write data to a separate inode, then publish it through the descriptor-safe helper.
+    let tampered_data = package.path().join("tampered-bwrap-data");
+    std::fs::write(&tampered_data, &tampered_bwrap_bytes)
+        .expect("modified bwrap data should be written");
+    copy_executable(&tampered_data, &bundled_bwrap)
         .expect("modified bwrap should be copied into the package");
     let bwrap_permissions = std::fs::metadata(&bwrap_binary)
         .expect("built bwrap metadata should be readable")

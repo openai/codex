@@ -77,8 +77,11 @@ pub fn package(test: &str) -> Result<Option<PathBuf>> {
     fs::create_dir_all(root.join("bin"))?;
     fs::create_dir_all(root.join("codex-resources/voice/bin"))?;
     fs::write(root.join("codex-package.json"), "{}")?;
-    fs::copy(&source, root.join("bin").join(APP))?;
-    fs::copy(&source, root.join("codex-resources/voice/bin").join(HELPER))?;
+    codex_utils_cargo_bin::copy_executable(&source, &root.join("bin").join(APP))?;
+    codex_utils_cargo_bin::copy_executable(
+        &source,
+        &root.join("codex-resources/voice/bin").join(HELPER),
+    )?;
     let mut child = Command::new(root.join("bin").join(APP))
         .args(["--exact", test, "--nocapture"])
         .current_dir(root)

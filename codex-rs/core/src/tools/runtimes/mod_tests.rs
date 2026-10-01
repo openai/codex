@@ -1299,7 +1299,7 @@ async fn snapshot_wrapper_replays_dummy_and_preserves_unbrokered_credentials() -
         let system_startup_dir = dir.path().join("system-startup");
         std::fs::create_dir(&system_startup_dir)?;
         let system_startup_zsh = system_startup_dir.join("zsh");
-        std::fs::write(
+        codex_utils_cargo_bin::write_executable(
             &system_startup_zsh,
             "#!/bin/sh\nexport OPENAI_API_KEY='sk-system-startup-secret'\nexport AUTH_HEADER='Bearer sk-system-startup-secret'\nexec /bin/zsh -ax \"$@\"\n",
         )?;

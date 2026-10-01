@@ -207,7 +207,8 @@ async fn daemon_startup(command: &str) -> Result<()> {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&codex, &managed)?;
         #[cfg(not(unix))]
-        fs::hard_link(&codex, &managed).or_else(|_| fs::copy(&codex, &managed).map(|_| ()))?;
+        fs::hard_link(&codex, &managed)
+            .or_else(|_| codex_utils_cargo_bin::copy_executable(&codex, &managed))?;
         if command != "restrictive-job" {
             fs::create_dir(home.path().join("app-server-daemon"))?;
             fs::write(

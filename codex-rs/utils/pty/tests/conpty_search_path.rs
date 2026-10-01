@@ -42,8 +42,8 @@ fn conpty_ignores_dll_in_current_directory() -> anyhow::Result<()> {
     let candidate = temp_dir.join("conpty.dll");
     // A kernel32 copy exports the ConPTY functions, so the old bare-name probe
     // would successfully load and retain this repository-controlled file.
-    fs::copy(
-        PathBuf::from(system_root)
+    codex_utils_cargo_bin::copy_executable(
+        &PathBuf::from(system_root)
             .join("System32")
             .join("kernel32.dll"),
         &candidate,

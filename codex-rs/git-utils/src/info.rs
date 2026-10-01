@@ -836,8 +836,6 @@ pub async fn current_branch_name(cwd: &Path) -> Option<String> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
     use std::process::Stdio;
 
     #[tokio::test]
@@ -1071,7 +1069,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let git = temp_dir.path().join("git");
         let log = temp_dir.path().join("git.log");
-        std::fs::write(
+        codex_utils_cargo_bin::write_executable(
             &git,
             "#!/bin/sh\n\
              if [ \"$1\" = \"-c\" ] && [ \"$2\" = \"safe.bareRepository=explicit\" ]; then shift 2; fi\n\
@@ -1082,11 +1080,6 @@ mod tests {
              esac\n",
         )
         .expect("write fake Git");
-        let mut permissions = std::fs::metadata(&git)
-            .expect("read fake Git metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&git, permissions).expect("mark fake Git executable");
 
         // The config response mirrors:
         // git -c core.fsmonitor=/tmp/fsmonitor-helper \
@@ -1137,7 +1130,7 @@ mod tests {
         let git = temp_dir.path().join("git");
         let global_config = temp_dir.path().join("git.global");
         let log = temp_dir.path().join("git.log");
-        std::fs::write(
+        codex_utils_cargo_bin::write_executable(
             &git,
             "#!/bin/sh\n\
              if [ \"$1\" = \"-c\" ] && [ \"$2\" = \"safe.bareRepository=explicit\" ]; then shift 2; fi\n\
@@ -1151,11 +1144,6 @@ mod tests {
              esac\n",
         )
         .expect("write layered-config Git");
-        let mut permissions = std::fs::metadata(&git)
-            .expect("read layered-config Git metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&git, permissions).expect("mark layered-config Git executable");
 
         let global_status = std::process::Command::new("git")
             .args([

@@ -38,6 +38,7 @@ url = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 codex-utils-redacted-string = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

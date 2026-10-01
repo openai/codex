@@ -8,8 +8,6 @@ use std::io::Write;
 #[cfg(unix)]
 #[test]
 fn materialize_npm_plugin_source_uses_packed_package_root() {
-    use std::os::unix::fs::PermissionsExt;
-
     let codex_home = tempfile::tempdir().expect("create codex home");
     let fake_npm_dir = tempfile::tempdir().expect("create fake npm directory");
     let archive_bytes =
@@ -17,9 +15,9 @@ fn materialize_npm_plugin_source_uses_packed_package_root() {
     let archive_path = fake_npm_dir.path().join("fixture.tgz");
     fs::write(&archive_path, &archive_bytes).expect("write fixture archive");
     let fake_npm = fake_npm_dir.path().join("npm");
-    fs::write(
+    codex_utils_cargo_bin::write_executable(
         &fake_npm,
-        format!(
+        &format!(
             r#"#!/bin/sh
 destination=""
 previous=""
@@ -37,11 +35,6 @@ pwd > "$destination/pwd.txt"
         ),
     )
     .expect("write fake npm");
-    let mut permissions = fs::metadata(&fake_npm)
-        .expect("read fake npm metadata")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&fake_npm, permissions).expect("make fake npm executable");
 
     let (plugin_root, tempdir) = materialize_npm_plugin_source_with_command(
         codex_home.path(),

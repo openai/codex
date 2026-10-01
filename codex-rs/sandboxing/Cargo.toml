@@ -37,6 +37,7 @@ codex-utils-home-dir = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time"] }

@@ -898,9 +898,9 @@ async fn child_process_loss_cleans_up_and_rebuilds_the_shared_host() {
     let proxy_dir = tempfile::tempdir().expect("create host proxy directory");
     let proxy_program = proxy_dir.path().join("host-proxy.sh");
     let pid_path = proxy_dir.path().join("host.pid");
-    std::fs::write(
+    codex_utils_cargo_bin::write_executable(
         &proxy_program,
-        format!(
+        &format!(
             "#!/bin/sh\nprintf '%s\\n' \"$$\" > '{}'\nexec '{}'\n",
             pid_path.display(),
             host_program.display()

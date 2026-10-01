@@ -1,7 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 
 use codex_core::TurnInputRequest;
-use std::os::unix::fs::PermissionsExt;
 
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::UserInput;
@@ -35,7 +34,7 @@ async fn summarize_context_three_requests_and_instructions() -> anyhow::Result<(
     let notify_dir = TempDir::new()?;
     // write a script to the notify that touches a file next to it
     let notify_script = notify_dir.path().join("notify.sh");
-    std::fs::write(
+    codex_utils_cargo_bin::write_executable(
         &notify_script,
         r#"#!/bin/bash
 set -e
@@ -44,7 +43,6 @@ tmp_path="${payload_path}.tmp"
 echo -n "${@: -1}" > "${tmp_path}"
 mv "${tmp_path}" "${payload_path}""#,
     )?;
-    std::fs::set_permissions(&notify_script, std::fs::Permissions::from_mode(0o755))?;
 
     let notify_file = notify_dir.path().join("notify.txt");
     let notify_script_str = notify_script.to_str().unwrap().to_string();

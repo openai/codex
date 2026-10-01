@@ -100,16 +100,13 @@ fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
 #[cfg(unix)]
 #[test]
 fn test_get_command_keeps_path_prepends_after_login_startup() -> anyhow::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
     let temp_dir = tempfile::tempdir()?;
     let path_dir = temp_dir.path().join("codex '[*] path");
     let extra_path_dir = temp_dir.path().join("extra tools");
     for directory in [&path_dir, &extra_path_dir] {
         std::fs::create_dir(directory)?;
         let rg = directory.join("rg");
-        std::fs::write(&rg, "#!/bin/sh\n")?;
-        std::fs::set_permissions(&rg, std::fs::Permissions::from_mode(0o755))?;
+        codex_utils_cargo_bin::write_executable(&rg, "#!/bin/sh\n")?;
     }
     let rg = path_dir.join("rg");
     let startup = temp_dir.path().join("startup");

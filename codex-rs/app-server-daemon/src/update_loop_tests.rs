@@ -202,7 +202,11 @@ async fn explicit_update_migrates_running_and_stopped_installations() {
         if local {
             let package = root.join("releases/local-development");
             std::fs::create_dir(&package).unwrap();
-            std::fs::copy(&legacy.managed_codex_bin, package.join("codex")).unwrap();
+            codex_utils_cargo_bin::copy_executable(
+                &legacy.managed_codex_bin,
+                &package.join("codex"),
+            )
+            .unwrap();
             std::fs::remove_file(root.join("current")).unwrap();
             std::os::unix::fs::symlink(&package, root.join("current")).unwrap();
             std::fs::remove_file(root.join("auto-update-version")).unwrap();
@@ -413,8 +417,6 @@ async fn cancelling_installer_stops_children_and_releases_fallback_lock() {
 
 #[cfg(unix)]
 fn manual_update_daemon(home: &TempDir) -> (Daemon, String) {
-    use std::os::unix::fs::PermissionsExt;
-
     let target = if cfg!(target_os = "macos") {
         format!("{}-apple-darwin", std::env::consts::ARCH)
     } else {
@@ -424,13 +426,11 @@ fn manual_update_daemon(home: &TempDir) -> (Daemon, String) {
     let standalone = home.path().join("packages/standalone");
     let bin = standalone.join("releases").join(&release).join("codex");
     std::fs::create_dir_all(bin.parent().expect("binary parent")).expect("release directory");
-    std::fs::write(
+    codex_utils_cargo_bin::write_executable(
         &bin,
-        b"#!/bin/sh\nif [ \"$1\" = '--version' ]; then echo codex 1.0.0; else exec sleep 30; fi\n",
+        "#!/bin/sh\nif [ \"$1\" = '--version' ]; then echo codex 1.0.0; else exec sleep 30; fi\n",
     )
     .expect("managed binary");
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))
-        .expect("executable binary");
     std::os::unix::fs::symlink(format!("releases/{release}"), standalone.join("current"))
         .expect("current release");
     std::fs::write(standalone.join("auto-update-version"), &release).expect("latest marker");
@@ -698,7 +698,7 @@ async fn daemon_start_and_restart_preserve_launch_features() {
         r#"{"featureOverrides":{"auth_elicitation":true},"updater":{"autoUpdateEnabled":false}}"#,
     )
     .unwrap();
-        std::fs::write(&daemon.managed_codex_bin, format!(
+        codex_utils_cargo_bin::write_executable(&daemon.managed_codex_bin, &format!(
         "#!/bin/sh\nif [ \"$1\" = --version ]; then echo codex 1.0.0; exit; fi\nif [ \"$3\" = --help ]; then exit; fi\nprintf '%s\\n' \"$@\" > '{}'\nexec sleep 30\n",
         args_path.display(),
     )).unwrap();
@@ -974,17 +974,15 @@ async fn check_manual_update_restart(package_directory: &str) {
     let no_op = FakeInstallerHttp::new(InstallerResponse::Success(
         b"#!/bin/sh\n# CODEX_INSTALL_IF_LATEST CODEX_INSTALL_DAEMON_ONLY\nexit 0\n".to_vec(),
     ));
-    use std::io::Write;
-    std::fs::OpenOptions::new()
-        .append(true)
-        .open(
-            daemon
-                .current_managed_codex_bin()
-                .expect("current executable"),
-        )
-        .expect("managed executable")
-        .write_all(b"\n# same-version replacement\n")
-        .expect("replace binary bytes");
+    let bin = daemon
+        .current_managed_codex_bin()
+        .expect("current executable");
+    let contents = std::fs::read_to_string(&bin).expect("managed executable");
+    codex_utils_cargo_bin::write_executable(
+        &bin,
+        &format!("{contents}\n# same-version replacement\n"),
+    )
+    .expect("replace binary bytes");
     let output = manual_update_once(
         &no_op,
         &daemon,

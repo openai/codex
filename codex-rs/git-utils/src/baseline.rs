@@ -587,8 +587,6 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn write_index_ignores_configured_hooks_path() {
-        use std::os::unix::fs::PermissionsExt;
-
         let home = TempDir::new().expect("tempdir");
         let root = home.path().join("repo");
         let hooks_dir = root.join(".git/hooks-path-test");
@@ -599,19 +597,14 @@ mod tests {
         fs::write(root.join("MEMORY.md"), "baseline").expect("write memory");
         reset_git_repository(&root).await.expect("reset repo");
         fs::create_dir_all(&hooks_dir).expect("create hook dir");
-        fs::write(
+        codex_utils_cargo_bin::write_executable(
             &hook_path,
-            format!(
+            &format!(
                 "#!/bin/sh\nprintf ran > \"{}\"\n",
                 marker_path.to_string_lossy()
             ),
         )
         .expect("write post-index-change hook");
-        let mut permissions = fs::metadata(&hook_path)
-            .expect("read hook metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&hook_path, permissions).expect("mark hook executable");
         git_stdout(
             &root,
             &[

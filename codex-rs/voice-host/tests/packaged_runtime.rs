@@ -48,7 +48,7 @@ async fn relocated_runtime_initializes_closes_and_rejects_duplicate_initializati
     let helper_source = cargo_bin("codex-voice-host")?;
     let name = helper_source.file_name().context("helper filename")?;
     fs::create_dir_all(runtime.join("bin"))?;
-    fs::copy(&helper_source, runtime.join("bin").join(name))?;
+    codex_utils_cargo_bin::copy_executable(&helper_source, &runtime.join("bin").join(name))?;
     fs::create_dir(root.join("bin"))?;
     let app_name = if cfg!(windows) { "codex.exe" } else { "codex" };
     fs::write(root.join("bin").join(app_name), [])?;

@@ -294,14 +294,13 @@ mod tests {
     #[tokio::test]
     #[cfg(unix)]
     async fn run_editor_returns_updated_content() {
-        use std::os::unix::fs::PermissionsExt;
-
         let dir = tempdir().unwrap();
         let script_path = dir.path().join("edit.sh");
-        fs::write(&script_path, "#!/bin/sh\nprintf \"edited\" > \"$1\"\n").unwrap();
-        let mut perms = fs::metadata(&script_path).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&script_path, perms).unwrap();
+        codex_utils_cargo_bin::write_executable(
+            &script_path,
+            "#!/bin/sh\nprintf \"edited\" > \"$1\"\n",
+        )
+        .unwrap();
 
         let cmd = vec![script_path.to_string_lossy().to_string()];
         let policy = FileSystemSandboxPolicy::read_only();

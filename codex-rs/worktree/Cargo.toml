@@ -21,4 +21,5 @@ tempfile = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }

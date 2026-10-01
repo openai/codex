@@ -245,16 +245,10 @@ fn bedrock_credential_export_config(
     #[cfg(unix)]
     let (command, args) = {
         let script_path = credentials_path.with_extension("sh");
-        std::fs::write(
+        codex_utils_cargo_bin::write_executable(
             &script_path,
             "#!/bin/sh\nprintf 'invoked\\n' >> \"$1\"\ncat \"$2\"\n",
         )?;
-        let mut permissions = std::fs::metadata(&script_path)?.permissions();
-        {
-            use std::os::unix::fs::PermissionsExt;
-            permissions.set_mode(0o755);
-        }
-        std::fs::set_permissions(&script_path, permissions)?;
         (
             script_path.to_string_lossy().into_owned(),
             vec![
@@ -439,8 +433,9 @@ async fn amazon_bedrock_aws_auth_refresh_resigns() -> anyhow::Result<()> {
         let aws_executable = fixture
             .path()
             .join(format!("aws{}", std::env::consts::EXE_SUFFIX));
-        std::fs::hard_link(&test_executable, &aws_executable)
-            .or_else(|_| std::fs::copy(&test_executable, &aws_executable).map(|_| ()))?;
+        std::fs::hard_link(&test_executable, &aws_executable).or_else(|_| {
+            codex_utils_cargo_bin::copy_executable(&test_executable, &aws_executable)
+        })?;
         let inherited_path = std::env::var_os("PATH").unwrap_or_default();
         let mut paths = std::env::split_paths(&inherited_path).collect::<Vec<_>>();
         paths.insert(/*index*/ 0, fixture.path().to_path_buf());

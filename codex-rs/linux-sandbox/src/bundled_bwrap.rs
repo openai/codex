@@ -311,8 +311,6 @@ mod tests {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create parent dir");
         }
-        fs::write(path, b"").expect("write executable");
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
-            .expect("set executable permissions");
+        codex_utils_cargo_bin::write_executable(path, "").expect("write executable");
     }
 }

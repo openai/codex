@@ -86,15 +86,10 @@ wire_api = "responses"
         ] {
             #[cfg(unix)]
             {
-                use std::os::unix::fs::PermissionsExt;
                 let executable = bin.join(name);
-                std::fs::write(
+                codex_utils_cargo_bin::write_executable(
                     &executable,
                     "#!/bin/sh\nprintf 'helper ran\\n' >> \"$CODEX_TEST_HELPER_MARKER\"\nexit 0\n",
-                )?;
-                std::fs::set_permissions(
-                    executable,
-                    std::fs::Permissions::from_mode(/*mode*/ 0o755),
                 )?;
             }
             #[cfg(windows)]

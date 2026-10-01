@@ -11,7 +11,6 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
-use std::os::unix::fs::PermissionsExt;
 
 #[tokio::test]
 async fn pid_inheritance_is_startup_only_for_process_and_filesystem_helpers() -> Result<()> {
@@ -34,7 +33,7 @@ async fn pid_inheritance_is_startup_only_for_process_and_filesystem_helpers() ->
         let fixture = TempDir::new()?;
         let wrapper = fixture.path().join("bwrap");
         std::os::unix::fs::symlink(bwrap, fixture.path().join("real-bwrap"))?;
-        std::fs::write(&wrapper, r#"#!/bin/sh
+        codex_utils_cargo_bin::write_executable(&wrapper, r#"#!/bin/sh
 for arg in "$@"; do
     [ "$arg" = "--" ] && break
     if [ "$arg" = "--proc" ]; then
@@ -44,7 +43,6 @@ for arg in "$@"; do
 done
 exec "${0%/*}/real-bwrap" "$@"
 "#)?;
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))?;
         let path = format!("{}:{}", fixture.path().display(), std::env::var("PATH")?);
         // System bubblewrap discovery intentionally excludes executables under the command cwd.
         let workspace = TempDir::new()?;

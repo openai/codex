@@ -63,8 +63,6 @@ use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::fs;
@@ -763,7 +761,7 @@ async fn legacy_snapshot_omits_filtered_and_overridden_exports() -> Result<()> {
     let home = tempfile::tempdir()?;
     let shell_path = home.path().join("bash");
     // Seed the capture shell without changing the test process environment. Replay uses -c.
-    fs::write(
+    codex_utils_cargo_bin::write_executable(
         &shell_path,
         r#"#!/bin/sh
 if [ "$1" = -lc ]; then
@@ -777,9 +775,7 @@ second'
 fi
 exec /bin/bash --noprofile --norc "$@"
 "#,
-    )
-    .await?;
-    fs::set_permissions(&shell_path, std::fs::Permissions::from_mode(/*mode*/ 0o755)).await?;
+    )?;
     let builder = test_codex()
         .with_user_shell(
             codex_shell_command::shell_detect::DetectedShell {
@@ -1206,10 +1202,7 @@ async fn macos_unified_exec_resolves_command_from_tied_path_snapshot(
         .join("bin");
     fs::create_dir_all(&command_dir).await?;
     let command_path = command_dir.join("snapshot-only-command");
-    fs::write(&command_path, "#!/bin/sh\nprintf tied-path-command").await?;
-    let mut permissions = fs::metadata(&command_path).await?.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&command_path, permissions).await?;
+    codex_utils_cargo_bin::write_executable(&command_path, "#!/bin/sh\nprintf tied-path-command")?;
 
     run_tool_turn_on_harness(
         &harness,

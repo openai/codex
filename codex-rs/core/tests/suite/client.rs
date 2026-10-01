@@ -832,7 +832,7 @@ impl ProviderAuthCommandFixture {
         #[cfg(unix)]
         let (command, args) = {
             let script_path = tempdir.path().join("print-token.sh");
-            std::fs::write(
+            codex_utils_cargo_bin::write_executable(
                 &script_path,
                 r#"#!/bin/sh
 if [ -f fail-until-401 ]; then
@@ -844,12 +844,6 @@ tail -n +2 tokens.txt > tokens.next
 mv tokens.next tokens.txt
 "#,
             )?;
-            let mut permissions = std::fs::metadata(&script_path)?.permissions();
-            {
-                use std::os::unix::fs::PermissionsExt;
-                permissions.set_mode(0o755);
-            }
-            std::fs::set_permissions(&script_path, permissions)?;
             ("./print-token.sh".to_string(), Vec::new())
         };
 

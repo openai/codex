@@ -171,8 +171,6 @@ fn write_fake_bwrap(contents: &str) -> tempfile::TempPath {
 }
 
 fn write_fake_bwrap_in(dir: &Path, contents: &str) -> tempfile::TempPath {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use tempfile::NamedTempFile;
 
     // Bazel can mount the OS temp directory `noexec`, so prefer the current
@@ -181,21 +179,18 @@ fn write_fake_bwrap_in(dir: &Path, contents: &str) -> tempfile::TempPath {
     let temp_file = NamedTempFile::new_in(dir)
         .ok()
         .unwrap_or_else(|| NamedTempFile::new().expect("temp file"));
-    // Linux rejects exec-ing a file that is still open for writing.
     let path = temp_file.into_temp_path();
-    fs::write(&path, contents).expect("write fake bwrap");
-    let permissions = fs::Permissions::from_mode(0o755);
-    fs::set_permissions(&path, permissions).expect("chmod fake bwrap");
+    // A sibling spawn may retain the temporary file's writable descriptor.
+    // Remove that inode before the helper creates the executable in its child.
+    std::fs::remove_file(&path).expect("remove empty temporary file");
+    codex_utils_cargo_bin::write_executable(&path, contents).expect("write fake bwrap");
     path
 }
 
 fn write_named_fake_bwrap_in(dir: &Path) -> PathBuf {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
 
     let path = dir.join("bwrap");
-    fs::write(&path, "#!/bin/sh\n").expect("write fake bwrap");
-    let permissions = fs::Permissions::from_mode(0o755);
-    fs::set_permissions(&path, permissions).expect("chmod fake bwrap");
+    codex_utils_cargo_bin::write_executable(&path, "#!/bin/sh\n").expect("write fake bwrap");
     fs::canonicalize(path).expect("canonicalize fake bwrap")
 }

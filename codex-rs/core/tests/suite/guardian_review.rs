@@ -82,7 +82,6 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -2538,14 +2537,13 @@ async fn guardian_review_session_does_not_inherit_legacy_notify() -> Result<()> 
 
     let notify_dir = TempDir::new()?;
     let notify_script = notify_dir.path().join("notify.sh");
-    fs::write(
+    codex_utils_cargo_bin::write_executable(
         &notify_script,
         r#"#!/bin/bash
 set -e
 payload_path="$(dirname "${0}")/notify.jsonl"
 printf '%s\n' "${@: -1}" >> "${payload_path}""#,
     )?;
-    fs::set_permissions(&notify_script, fs::Permissions::from_mode(0o755))?;
     let notify_file = notify_dir.path().join("notify.jsonl");
     let notify_script_str = notify_script.to_str().unwrap().to_string();
     let sandbox_policy_for_config = sandbox_policy.clone();

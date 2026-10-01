@@ -1,4 +1,3 @@
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -111,16 +110,13 @@ impl CuratedMcpSyncFixture {
         )?;
 
         let malicious_git_helper = fixture_root.path().join("malicious-git-helper.sh");
-        std::fs::write(
+        codex_utils_cargo_bin::write_executable(
             &malicious_git_helper,
-            format!(
+            &format!(
                 "#!/bin/sh\nprintf ran > '{}'\nexit 73\n",
                 malicious_git_helper_marker.display()
             ),
         )?;
-        let mut helper_permissions = std::fs::metadata(&malicious_git_helper)?.permissions();
-        helper_permissions.set_mode(0o755);
-        std::fs::set_permissions(&malicious_git_helper, helper_permissions)?;
         run_git(&real_git, &codex_home, &["init", "-b", "main"])?;
         run_git(
             &real_git,
@@ -135,7 +131,7 @@ impl CuratedMcpSyncFixture {
             &["config", &malicious_rewrite_key, GITHUB_PLUGINS_GIT_URL],
         )?;
         let git_wrapper = git_wrapper_dir.join("git");
-        std::fs::write(
+        codex_utils_cargo_bin::write_executable(
             &git_wrapper,
             r#"#!/bin/sh
 if [ "$1" = "ls-remote" ]; then
@@ -146,9 +142,6 @@ fi
 exec "$REAL_GIT" "$@"
 "#,
         )?;
-        let mut wrapper_permissions = std::fs::metadata(&git_wrapper)?.permissions();
-        wrapper_permissions.set_mode(0o755);
-        std::fs::set_permissions(&git_wrapper, wrapper_permissions)?;
 
         MockResponsesConfig::new(&responses_server.uri())
             .enable_feature(Feature::Plugins)

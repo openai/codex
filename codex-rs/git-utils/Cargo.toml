@@ -35,6 +35,7 @@ ts-rs = { workspace = true, features = [
 walkdir = { workspace = true }
 
 [dev-dependencies]
+codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 
 [lib]

@@ -648,6 +648,7 @@ async fn loaded_session_refreshes_externally_updated_plugin_hooks() -> Result<()
     Ok(())
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn automatic_marketplace_upgrade_refreshes_hook_runtime_for_loaded_session() -> Result<()> {
     skip_if_host_windows!(Ok(()));
@@ -705,9 +706,9 @@ async fn automatic_marketplace_upgrade_refreshes_hook_runtime_for_loaded_session
         .find(|path| path.is_file())
         .ok_or_else(|| anyhow::anyhow!("git was not found on PATH"))?;
     let wrapper_path = git_wrapper.path().join("git");
-    std::fs::write(
+    codex_utils_cargo_bin::write_executable(
         &wrapper_path,
-        format!(
+        &format!(
             r#"#!/bin/sh
 if [ "$3" = "ls-remote" ] && [ "$4" = "{marketplace}" ]; then
     while [ ! -e "{upgrade_gate}" ]; do
@@ -721,14 +722,6 @@ exec "{real_git}" "$@"
             real_git = real_git.display(),
         ),
     )?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut permissions = std::fs::metadata(&wrapper_path)?.permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&wrapper_path, permissions)?;
-    }
     let path_with_wrapper = std::env::join_paths(
         std::iter::once(git_wrapper.path().to_path_buf())
             .chain(std::env::split_paths(&original_path)),
