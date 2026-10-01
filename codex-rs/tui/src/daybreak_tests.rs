@@ -48,7 +48,12 @@ fn refusal_guidance_uses_the_model_catalog() {
     ] {
         model.model = name.into();
         assert_eq!(
-            notice_for_model(std::slice::from_ref(&model), name),
+            notice_for_setting(
+                std::slice::from_ref(&model),
+                name,
+                /*enabled*/ false,
+                /*can_enable_daybreak*/ true,
+            ),
             expected
         );
     }
@@ -59,20 +64,53 @@ fn refusal_guidance_uses_the_model_catalog() {
         .cyber
         .push(CyberAccessProgram::DaybreakBlue);
     assert_eq!(
-        notice_for_model(std::slice::from_ref(&model), &model.model),
-        Notice::Limited
+        notice_for_setting(
+            std::slice::from_ref(&model),
+            &model.model,
+            /*enabled*/ false,
+            /*can_enable_daybreak*/ true,
+        ),
+        Notice::Disabled
     );
-
-    let mut other = model.clone();
+    assert_eq!(
+        notice_for_setting(
+            std::slice::from_ref(&model),
+            &model.model,
+            /*enabled*/ true,
+            /*can_enable_daybreak*/ true,
+        ),
+        Notice::Enabled
+    );
+    model.available_access_programs.as_mut().unwrap().cyber =
+        vec![CyberAccessProgram::DaybreakBlue];
+    assert_eq!(
+        notice_for_setting(
+            std::slice::from_ref(&model),
+            &model.model,
+            /*enabled*/ false,
+            /*can_enable_daybreak*/ true
+        ),
+        Notice::Disabled
+    );
+    let other = model.clone();
     model.model = "gpt-5.6-sol".into();
-    other.model = "another-model".into();
     model.available_access_programs.as_mut().unwrap().cyber = vec![CyberAccessProgram::Standard];
-    for programs in [None, other.available_access_programs.clone()] {
-        other.available_access_programs = programs;
-        assert_eq!(
-            notice_for_model(&[model.clone(), other.clone()], &model.model),
-            Notice::Apply
-        );
-    }
-    assert_eq!(notice_for_model(&[], "gpt-6-astra"), Notice::Apply);
+    assert_eq!(
+        notice_for_setting(
+            &[model.clone(), other],
+            &model.model,
+            /*enabled*/ false,
+            /*can_enable_daybreak*/ true
+        ),
+        Notice::Apply
+    );
+    assert_eq!(
+        notice_for_setting(
+            &[],
+            "gpt-6-astra",
+            /*enabled*/ false,
+            /*can_enable_daybreak*/ true
+        ),
+        Notice::Apply
+    );
 }

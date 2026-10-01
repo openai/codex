@@ -1746,8 +1746,37 @@ async fn embedded_server_rejects_unowned_dynamic_tool_calls() -> Result<()> {
 async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespace() -> Result<()> {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     let codex_home = tempdir()?;
+    let backend = wiremock::MockServer::start().await;
+    let backend_url = format!("{}/backend-api", backend.uri());
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
+    let mut catalog = codex_models_manager::bundled_models_response()?;
+    for model in &mut catalog.models {
+        model.available_access_programs =
+            Some(codex_protocol::openai_models::ModelAccessPrograms {
+                cyber: vec![codex_protocol::turn_input::CyberAccessProgram::DaybreakBlue],
+            });
+    }
+    let catalog_path = codex_home.path().join("models.json");
+    std::fs::write(&catalog_path, serde_json::to_vec(&catalog)?)?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            "daybreak = true\nmodel_catalog_json = {:?}\nchatgpt_base_url = {backend_url:?}\ncli_auth_credentials_store = \"file\"\n",
+            catalog_path.display().to_string()
+        ),
+    )?;
+    app.config.chatgpt_base_url = backend_url;
+    app.config.model_catalog = Some(catalog);
+    app.config.cli_auth_credentials_store_mode = codex_login::AuthCredentialsStoreMode::File;
+    app_test_support::write_chatgpt_auth(
+        codex_home.path(),
+        app_test_support::ChatGptAuthFixture::new("test-token")
+            .chatgpt_user_id("test-user")
+            .plan_type("plus"),
+        codex_login::AuthCredentialsStoreMode::File,
+    )
+    .expect("write fixture auth");
     app.config
         .permissions
         .set_permission_profile(PermissionProfile::workspace_write_with(
@@ -1941,7 +1970,7 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
             params: codex_app_server_protocol::ThreadMetadataUpdateParams {
                 thread_id: creation_source.to_string(),
                 project_id: Some(project.project.id.clone()),
-                daybreak_enabled: None,
+                daybreak_enabled: Some(false),
                 git_info: None,
             },
         })
@@ -2027,6 +2056,10 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
         project.project.id
     );
     assert_eq!(
+        recorded_params(&requests, "thread/start").last().unwrap()["daybreakEnabled"],
+        true
+    );
+    assert_eq!(
         recorded_params(&requests, "thread/start")
             .last()
             .expect("background task creation")["permissions"],
@@ -2039,6 +2072,7 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
     let turn = recorded_params(&requests, "turn/start")
         .pop()
         .expect("background task turn request");
+    assert_eq!(turn["cyberAccessProgram"], "daybreakBlue");
     assert_eq!(turn["input"], serde_json::json!([]));
     assert_eq!(
         turn["toolOutput"],
@@ -2066,6 +2100,13 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
         1
     );
 
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        config.replace("daybreak = true", "daybreak = false"),
+    )?;
+
     spawn_approved_task_tool_call(
         &app,
         &app_server,
@@ -2077,7 +2118,7 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
             namespace: Some("codex_tui".to_string()),
             tool: "send_message_to_thread".to_string(),
             arguments: serde_json::json!({
-                "threadId": creation_source,
+                "threadId": created_thread_id,
                 "prompt": "Follow <up> & report"
             }),
         },
@@ -2092,7 +2133,7 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
     else {
         panic!("expected follow-up task registration before its next turn")
     };
-    assert_eq!(ThreadId::from_string(&thread.id)?, creation_source);
+    assert_eq!(ThreadId::from_string(&thread.id)?, created_thread_id);
     assert_eq!(recorded_params(&requests, "turn/start").len(), 1);
     Box::pin(app.handle_event(
         &mut tui,
@@ -2113,6 +2154,7 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
     };
     assert!(response.success, "{response:?}");
     let turn = &recorded_params(&requests, "turn/start")[1];
+    assert_eq!(turn["cyberAccessProgram"], "daybreakBlue");
     assert_eq!(turn["input"], serde_json::json!([]));
     assert_eq!(
         turn["toolOutput"],

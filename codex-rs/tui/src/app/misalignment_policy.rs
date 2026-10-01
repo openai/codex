@@ -114,6 +114,23 @@ impl App {
         let Some(message) = review.continuation_message() else {
             return;
         };
+        let eligible_account = self.chat_widget.has_chatgpt_account()
+            && self.chat_widget.config_ref().model_provider_id == "openai";
+        let enabled = self.chat_widget.daybreak_enabled
+            && !self.chat_widget.side_conversation_active()
+            && !self.side_threads.contains_key(&review.thread_id);
+        let cyber_access_program = match crate::daybreak::program_for_turn(
+            &self.chat_widget.model_catalog().models,
+            self.chat_widget.current_model(),
+            eligible_account,
+            enabled,
+        ) {
+            Ok(program) => program,
+            Err(message) => {
+                self.chat_widget.add_error_message(message);
+                return;
+            }
+        };
         let config = self.chat_widget.config_ref();
         let explicit_profile =
             self.runtime_permission_profile_override
@@ -149,6 +166,7 @@ impl App {
                     approvals_reviewer: Some(config.approvals_reviewer.into()),
                     sandbox_policy,
                     permissions,
+                    cyber_access_program: cyber_access_program.map(Into::into),
                     input: vec![UserInput::Text {
                         text: message.to_string(),
                         text_elements: Vec::new(),

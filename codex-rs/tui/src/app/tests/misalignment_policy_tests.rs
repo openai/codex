@@ -3,6 +3,8 @@ use super::session_lifecycle_requests::start_recording_app_server;
 use super::*;
 use codex_app_server_protocol::MisalignmentErrorDetails;
 use codex_app_server_protocol::MisalignmentSteer;
+use codex_protocol::openai_models::ModelAccessPrograms;
+use codex_protocol::turn_input::CyberAccessProgram;
 use pretty_assertions::assert_eq;
 
 fn policy_error() -> AppServerTurnError {
@@ -37,7 +39,11 @@ fn error_notification(
 
 #[tokio::test]
 async fn misalignment_continuation_requires_current_review_and_submits_once() -> Result<()> {
-    for (reject, preserve) in [(false, false), (false, true), (true, false)] {
+    for (reject, preserve, daybreak) in [
+        (false, false, false),
+        (false, true, true),
+        (true, false, false),
+    ] {
         let (mut app, mut rx, _) = make_test_app_with_channels().await;
         let (mut server, requests, proxy) = start_recording_app_server(
             &app.config,
@@ -57,6 +63,32 @@ async fn misalignment_continuation_requires_current_review_and_submits_once() ->
         session.active_permission_profile = None;
         app.active_thread_id = Some(thread_id);
         app.chat_widget.handle_thread_session(session);
+        if !reject {
+            app.chat_widget.update_account_state(
+                /*status_account_display*/ None, /*plan_type*/ None,
+                /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ true,
+            );
+            app.chat_widget.open_model_popup();
+            let request_id = std::iter::from_fn(|| rx.try_recv().ok())
+                .find_map(|event| match event {
+                    AppEvent::FetchModels { request_id } => Some(request_id),
+                    _ => None,
+                })
+                .expect("model catalog request");
+            let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
+            model.model = app.chat_widget.current_model().to_string();
+            model.available_access_programs = Some(ModelAccessPrograms {
+                cyber: vec![
+                    CyberAccessProgram::Standard,
+                    CyberAccessProgram::DaybreakBlue,
+                ],
+            });
+            app.chat_widget
+                .on_models_loaded(request_id, Ok(vec![model]));
+            app.chat_widget
+                .handle_key_event(KeyEvent::from(KeyCode::Esc));
+            app.chat_widget.set_daybreak_enabled(daybreak);
+        }
         app.runtime_permission_profile_override = Some(if preserve {
             RuntimePermissionProfileOverride::from_restored_config(app.chat_widget.config_ref())
         } else {
@@ -194,6 +226,11 @@ async fn misalignment_continuation_requires_current_review_and_submits_once() ->
                 approval_policy: Some(AskForApproval::OnRequest),
                 approvals_reviewer: Some(config.approvals_reviewer.into()),
                 sandbox_policy: (!preserve).then(|| config.legacy_sandbox_policy().into()),
+                cyber_access_program: Some(if daybreak {
+                    CyberAccessProgram::DaybreakBlue.into()
+                } else {
+                    CyberAccessProgram::Standard.into()
+                }),
                 input: vec![codex_app_server_protocol::UserInput::Text {
                     text: "Continue **only** within the requested scope.\nDo not edit files."
                         .to_string(),

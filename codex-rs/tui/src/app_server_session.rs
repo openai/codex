@@ -475,12 +475,28 @@ impl AppServerSession {
                     })
             })
             .transpose()?;
-        let thread_start_params = thread_start_params_from_config(
+        let mut thread_start_params = thread_start_params_from_config(
             &config,
             self.thread_params_mode(),
             self.remote_cwd_override(),
             /*session_start_source*/ None,
         );
+        let daybreak_launch_override = config
+            .config_layer_stack
+            .layers_high_to_low()
+            .find(|layer| layer.config.get("daybreak").is_some())
+            .is_some_and(|layer| {
+                matches!(
+                    layer.name,
+                    codex_config::ConfigLayerSource::SessionFlags
+                        | codex_config::ConfigLayerSource::User {
+                            profile: Some(_),
+                            ..
+                        }
+                )
+            });
+        thread_start_params.daybreak_enabled =
+            daybreak_launch_override.then_some(config.daybreak_enabled);
         self.dynamic_tool_mcp = Some(Arc::new(
             DynamicToolMcpServer::start(
                 self.request_handle(),
@@ -1761,7 +1777,7 @@ pub(crate) fn status_account_display_from_auth_mode(
     }
 }
 
-fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
+pub(crate) fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
     let upgrade = model.upgrade.map(|upgrade_id| {
         let upgrade_info = model.upgrade_info.clone();
         ModelUpgrade {

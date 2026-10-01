@@ -392,14 +392,47 @@ impl ChatWidget {
     }
 
     pub(super) fn on_cyber_policy_error(&mut self) {
+        let can_enable_daybreak = self.has_chatgpt_account
+            && self.config.model_provider_id == "openai"
+            && !self.side_conversation_active();
+        let notice = crate::daybreak::notice_for_setting(
+            &self.model_catalog.models,
+            self.current_model(),
+            self.daybreak_enabled && can_enable_daybreak,
+            can_enable_daybreak,
+        );
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
-        let notice = if self.has_chatgpt_account && self.config.model_provider_id == "openai" {
-            crate::daybreak::notice_for_model(&self.model_catalog.models, self.current_model())
-        } else {
-            crate::daybreak::Notice::Apply
-        };
         self.add_to_history(history_cell::new_cyber_policy_error_event(notice));
+        if notice == crate::daybreak::Notice::Disabled
+            && !self.thread_usage.replaying_turn_completion
+            && !self.blocks_direct_input
+            && let Some(thread_id) = self.thread_id
+        {
+            self.bottom_pane.show_selection_view(SelectionViewParams {
+                title: Some("Turn on Daybreak for your next request?".into()),
+                items: vec![
+                    SelectionItem {
+                        name: "Enable Daybreak".into(),
+                        actions: vec![Box::new(move |tx| {
+                            tx.send(AppEvent::PersistDaybreakSelection {
+                                thread_id,
+                                enabled: true,
+                            })
+                        })],
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Not now".into(),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                ..SelectionViewParams::picker()
+            });
+            self.defer_input_until_settings_applied();
+        }
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.

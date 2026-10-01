@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 195
+expression: "format!(\"{}\\n{}\", lines_to_single_string(cells.last().unwrap()),\nrender_bottom_popup(&chat, 80))"
+---
+ⓘ This content can’t be shown
+  Daybreak is currently off. If you’re doing authorized security work, turn it
+  on and try your request again.
+  Learn more: https://help.openai.com/en/articles/20001326
+
+› Viewing sub-agent — direct input is disabled
+
+  GPT-6.1-Sol default · /tmp/project

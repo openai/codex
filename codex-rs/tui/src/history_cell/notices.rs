@@ -180,12 +180,16 @@ pub(crate) fn new_cyber_policy_error_event(
                 ),
             ],
         ),
+        Notice::Disabled => (
+            "Daybreak is currently off. If you’re doing authorized security work, turn it on and try your request again.",
+            &[("Learn more", SAFETY_ACCESS_BLOCK_LEARN_MORE_URL)],
+        ),
         Notice::Astra => (
             "Daybreak isn’t available for Astra. Some cybersecurity requests may still be limited.",
             &[("Learn more", SAFETY_ACCESS_BLOCK_LEARN_MORE_URL)],
         ),
-        Notice::Limited => (
-            "We take extra care with some cybersecurity requests.",
+        Notice::Enabled => (
+            "Some cybersecurity requests are still limited, even when Daybreak is on.",
             &[("Learn more", SAFETY_ACCESS_BLOCK_LEARN_MORE_URL)],
         ),
     };

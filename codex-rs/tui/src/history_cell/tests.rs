@@ -916,9 +916,17 @@ fn cyber_policy_error_event_astra_snapshot() {
 }
 
 #[test]
-fn cyber_policy_error_event_limited_snapshot() {
-    let cell = new_cyber_policy_error_event(crate::daybreak::Notice::Limited);
-    let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+fn cyber_policy_error_event_available_snapshot() {
+    let rendered = [
+        crate::daybreak::Notice::Disabled,
+        crate::daybreak::Notice::Enabled,
+    ]
+    .into_iter()
+    .map(|notice| {
+        render_lines(&new_cyber_policy_error_event(notice).display_lines(/*width*/ 80)).join("\n")
+    })
+    .collect::<Vec<_>>()
+    .join("\n\n");
     insta::assert_snapshot!(rendered);
 }
 

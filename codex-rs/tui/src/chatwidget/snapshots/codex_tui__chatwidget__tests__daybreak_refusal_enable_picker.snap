@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Turn on Daybreak for your next request?
+
+
+› 1. Enable Daybreak
+  2. Not now
+
+  enter select · esc back
