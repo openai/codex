@@ -1,5 +1,6 @@
 //! Detached process launch and PID publication. Hold the reservation lock until
 //! the record is published, and on Windows until an updater acknowledges startup.
+//! Windows children use a separate working directory to preserve the state directory ACL.
 //! Recover a deleted Unix cwd without changing workspace defaults for usable directories.
 
 use super::PidBackend;
@@ -25,6 +26,21 @@ impl PidBackend {
                 .await
                 .with_context(|| format!("failed to create pid directory {}", parent.display()))?;
         }
+        #[cfg(windows)]
+        let workdir = {
+            let workdir = self
+                .pid_file
+                .parent()
+                .context("daemon pid path has no parent")?
+                .join("workdir");
+            fs::create_dir_all(&workdir).await.with_context(|| {
+                format!(
+                    "failed to create daemon working directory {}",
+                    workdir.display()
+                )
+            })?;
+            workdir
+        };
         let reservation_lock = self.acquire_reservation_lock().await?;
         loop {
             match fs::OpenOptions::new()
@@ -157,6 +173,10 @@ impl PidBackend {
         {
             use windows_sys::Win32::System::Threading::CREATE_BREAKAWAY_FROM_JOB;
             use windows_sys::Win32::System::Threading::DETACHED_PROCESS;
+            // A Windows process pins its working directory for its lifetime.
+            // Keep both managed children out of the launching project's directory.
+            // Sandbox setup may broaden the cwd ACL, so do not use the private state directory.
+            command.current_dir(&workdir);
             // Never retry inside the parent's Job Object: that would report a
             // successful launch that dies when the terminal/SSH session closes.
             command.creation_flags(DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB);

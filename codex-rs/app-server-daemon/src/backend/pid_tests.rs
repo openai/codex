@@ -707,6 +707,61 @@ async fn stale_creation_time_never_stops_reused_pid() {
 
 #[cfg(windows)]
 #[tokio::test]
+async fn managed_children_launch_in_workdir_without_changing_private_state_directory() {
+    if is_elevated_test_process().expect("query administrator membership") {
+        return;
+    }
+    let temp = TempDir::new().expect("temp dir");
+    let state_dir = temp.path().join("state");
+    let codex_bin = temp.path().join("codex.cmd");
+    tokio::fs::write(
+        &codex_bin,
+        "@echo off\r\n\
+         if \"%3\"==\"--help\" exit /b 1\r\n\
+         echo ready > launched.cwd\r\n\
+         if defined CODEX_DAEMON_SHUTDOWN_FILE (for %%F in (\"%CODEX_DAEMON_SHUTDOWN_FILE%\") do type nul > \"%%~dpnF.ready\")\r\n\
+         for /l %%i in (1,1,10000000) do @rem\r\n",
+    )
+    .await
+    .expect("write daemon fixture");
+    let backends = [
+        PidBackend::new(
+            codex_bin.clone(),
+            state_dir.join("app-server.pid"),
+            /*remote_control_enabled*/ false,
+        ),
+        PidBackend::new_update_loop(
+            codex_bin,
+            state_dir.join("updater.pid"),
+            /*restore_release*/ None,
+        ),
+    ];
+    for backend in backends {
+        backend.start().await.expect("launch managed child");
+        let marker = state_dir.join("workdir/launched.cwd");
+        let launched_in_workdir = tokio::time::timeout(Duration::from_secs(5), async {
+            while !marker.exists() {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        backend
+            .stop_with_grace(/*grace_seconds*/ 0)
+            .await
+            .expect("stop managed child");
+        launched_in_workdir.expect("child did not write its relative marker in workdir");
+        codex_uds::prepare_private_socket_directory(&state_dir)
+            .await
+            .expect("state directory remains private");
+        assert!(!backend.pid_file.exists());
+        tokio::fs::remove_file(marker)
+            .await
+            .expect("remove marker before next child launch");
+    }
+}
+
+#[cfg(windows)]
+#[tokio::test]
 async fn failed_updater_handoff_preserves_predecessor_record() {
     let elevated = is_elevated_test_process().expect("query administrator membership");
     let temp = TempDir::new().expect("temp");
