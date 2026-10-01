@@ -58,7 +58,7 @@ impl HttpClient for RecordingHttpClient {
         let response = HttpRequestResponse {
             status: self.status,
             headers: Vec::new(),
-            body: ByteChunk(self.response.clone()),
+            body: ByteChunk::from(self.response.clone()),
         };
         async move {
             if let Some((requested, release)) = &self.response_gate {
@@ -78,7 +78,7 @@ impl HttpClient for RecordingHttpClient {
         let response = HttpRequestResponse {
             status: self.status,
             headers: Vec::new(),
-            body: ByteChunk(Vec::new()),
+            body: ByteChunk::from(Vec::new()),
         };
         let chunks = self
             .response_chunks

@@ -744,7 +744,12 @@ async fn executor_legacy_exec_uses_process_cwd_for_relative_denials() -> anyhow:
                 anyhow::bail!("expected legacy process output, got {response:?}");
             };
             let response: ReadResponse = serde_json::from_value(response.result)?;
-            output.extend(response.chunks.into_iter().flat_map(|chunk| chunk.chunk.0));
+            output.extend(
+                response
+                    .chunks
+                    .into_iter()
+                    .flat_map(|chunk| chunk.chunk.into_inner()),
+            );
             after_seq = response.next_seq.checked_sub(1).or(after_seq);
             if response.closed {
                 break (
@@ -873,7 +878,7 @@ async fn executor_legacy_filesystem_cwd_keeps_absolute_read_allow_and_deny_rules
                                 anyhow::bail!("expected to read the legacy stream, got {block:?}");
                             };
                             let block: FsReadBlockResponse = serde_json::from_value(block.result)?;
-                            assert_eq!(block.chunk.0, b"contents");
+                            assert_eq!(block.chunk.into_inner(), b"contents");
                         }
                     }
                     JSONRPCMessage::Error(error) if !permitted => {

@@ -440,7 +440,7 @@ async fn helper_refresh_preserves_oauth_challenges_and_retries_at_most_once() {
                     .http_request(params)
                     .await
                     .expect("original OAuth response");
-                let bytes = response.body.0.clone();
+                let bytes = response.body.clone().into_inner();
                 (response, bytes)
             };
 

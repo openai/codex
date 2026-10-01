@@ -405,20 +405,20 @@ impl ExecutorProcessTransport {
     }
 
     fn push_process_output(&mut self, chunk: ProcessOutputChunk) {
-        let bytes = chunk.chunk.into_inner();
+        let bytes = chunk.chunk.as_ref();
         match chunk.stream {
             // MCP stdio uses stdout as the protocol stream. PTY output is
             // accepted defensively because the executor process API has a
             // unified stream enum, but remote MCP starts with `tty=false`.
             ExecOutputStream::Stdout | ExecOutputStream::Pty => {
-                if let Err(error) = self.stdout.extend_from_slice(&bytes) {
+                if let Err(error) = self.stdout.extend_from_slice(bytes) {
                     self.close_for_oversized_line("stdout", error);
                 }
             }
             // Stderr is intentionally out-of-band. It should help debug server
             // startup failures without entering rmcp framing.
             ExecOutputStream::Stderr => {
-                if let Err(error) = self.push_stderr(&bytes) {
+                if let Err(error) = self.push_stderr(bytes) {
                     self.stdout.clear();
                     self.close_for_oversized_line("stderr", error);
                 }
