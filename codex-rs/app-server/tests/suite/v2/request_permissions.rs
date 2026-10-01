@@ -9,6 +9,8 @@ use codex_app_server_protocol::AdditionalPermissionProfile;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::FileChangeApprovalDecision;
+use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::PermissionGrantScope;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
@@ -25,6 +27,7 @@ use codex_exec_server::ReadFileOptions;
 use codex_features::Feature;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -235,6 +238,497 @@ text(await tools.exec_command({{cmd: "{command}"}}));"#,
                 format!("the approved same-cell command must write the file; output: {output}")
             })?;
         assert_eq!(String::from_utf8(contents)?.trim(), "same-cell-grant");
+    }
+    Ok(())
+}
+
+/// A step captures earlier RPC grants and keeps them after the active turn changes.
+/// The new turn inherits session grants but must request approval for turn-scoped grants.
+#[test_case(PermissionGrantScope::Turn; "turn")]
+#[test_case(PermissionGrantScope::Session; "session")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn steps_capture_permission_grants_and_preserve_their_scope(
+    scope: PermissionGrantScope,
+) -> Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "Wine does not emulate Windows restricted-token and ACL sandbox semantics"
+    );
+    let codex_home = tempfile::TempDir::new()?;
+    let server = responses::start_mock_server().await;
+    MockResponsesConfig::new(&server.uri())
+        .with_model("gpt-5.4")
+        .with_approval_policy("on-request")
+        .with_sandbox_mode("read-only")
+        .with_root_config(r#"approvals_reviewer = "user""#)
+        .enable_feature(Feature::RequestPermissionsTool)
+        .enable_feature(Feature::CodeModeOnly)
+        .write(codex_home.path())?;
+    let mut model = model_info_from_slug("gpt-5.4");
+    model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+    model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
+    write_models_cache_with_models(codex_home.path(), vec![model]).await?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let cwd = app.auto_env()?.selection().cwd.clone();
+    let fs = app.auto_env()?.environment().get_filesystem();
+    let ThreadStartResponse { thread, .. } = app.start_thread(ThreadStartParams::default()).await?;
+
+    // The old cell cannot resume until a tool is executing in the next turn.
+    let barrier = r#"await tools.test_sync_tool({barrier: {
+        id: "permission-grant-turns", participants: 2, timeout_ms: 60000
+    }});"#;
+    let mut first_cell_id = None;
+    for turn_index in 0..2 {
+        let events = match &first_cell_id {
+            None => vec![
+                // Request approval in an earlier step so the file-writing cell captures it.
+                responses::sse(vec![
+                    responses::ev_response_created("request-grant"),
+                    responses::ev_custom_tool_call(
+                        "request-grant-cell",
+                        "exec",
+                        r#"// @exec: {"yield_time_ms": 60000}
+await tools.request_permissions({permissions: {file_system: {write: ["."]}}});"#,
+                    ),
+                    responses::ev_completed("request-grant"),
+                ]),
+                responses::sse(vec![
+                    responses::ev_response_created("first-turn"),
+                    responses::ev_custom_tool_call(
+                        "first-cell",
+                        "exec",
+                        &format!(
+                            r#"// @exec: {{"yield_time_ms": 60000}}
+text(await tools.apply_patch("*** Begin Patch\n*** Add File: first.txt\n+first turn\n*** End Patch"));
+yield_control();
+{barrier}
+text(await tools.apply_patch("*** Begin Patch\n*** Add File: original.txt\n+original turn\n*** End Patch"));"#,
+                        ),
+                    ),
+                    responses::ev_completed("first-turn"),
+                ]),
+                create_final_assistant_message_sse_response("first turn done")?,
+            ],
+            Some(cell_id) => vec![
+                responses::sse(vec![
+                    responses::ev_response_created("next-turn"),
+                    responses::ev_custom_tool_call(
+                        "next-cell",
+                        "exec",
+                        &format!(
+                            r#"// @exec: {{"yield_time_ms": 60000}}
+{barrier}
+text(await tools.apply_patch("*** Begin Patch\n*** Add File: next.txt\n+next turn\n*** End Patch"));"#,
+                        ),
+                    ),
+                    responses::ev_completed("next-turn"),
+                ]),
+                responses::sse(vec![
+                    responses::ev_response_created("wait-original"),
+                    responses::ev_function_call(
+                        "wait-original",
+                        "wait",
+                        &json!({
+                            "cell_id": cell_id, "yield_time_ms": 60000,
+                        })
+                        .to_string(),
+                    ),
+                    responses::ev_completed("wait-original"),
+                ]),
+                create_final_assistant_message_sse_response("next turn done")?,
+            ],
+        };
+        let mock = responses::mount_sse_sequence(&server, events).await;
+        let TurnStartResponse { turn } = app
+            .request(|request_id| ClientRequest::TurnStart {
+                request_id,
+                params: TurnStartParams {
+                    thread_id: thread.id.clone(),
+                    input: vec![V2UserInput::Text {
+                        text: "write the file".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    ..Default::default()
+                },
+            })
+            .await?;
+        let mut saw_approval = false;
+        loop {
+            match timeout(DEFAULT_READ_TIMEOUT, app.read_next_message()).await?? {
+                JSONRPCMessage::Request(request) => {
+                    let request: ServerRequest =
+                        serde_json::from_value(serde_json::to_value(request)?)?;
+                    match request {
+                        ServerRequest::PermissionsRequestApproval { request_id, params } => {
+                            assert_eq!((turn_index, saw_approval), (0, false));
+                            assert_eq!(
+                                (&params.thread_id, &params.turn_id),
+                                (&thread.id, &turn.id)
+                            );
+                            app.send_response(
+                                request_id,
+                                json!({"permissions": params.permissions, "scope": scope}),
+                            )
+                            .await?;
+                        }
+                        ServerRequest::FileChangeRequestApproval { request_id, params } => {
+                            assert_eq!(
+                                (turn_index, scope, saw_approval),
+                                (1, PermissionGrantScope::Turn, false)
+                            );
+                            assert_eq!(
+                                (&params.thread_id, &params.turn_id),
+                                (&thread.id, &turn.id)
+                            );
+                            app.send_response(
+                                request_id,
+                                serde_json::to_value(FileChangeRequestApprovalResponse {
+                                    decision: FileChangeApprovalDecision::Decline,
+                                })?,
+                            )
+                            .await?;
+                        }
+                        request => anyhow::bail!("unexpected server request: {request:?}"),
+                    }
+                    saw_approval = true;
+                }
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == "turn/completed" =>
+                {
+                    let completed: TurnCompletedNotification = serde_json::from_value(
+                        notification.params.expect("turn/completed params"),
+                    )?;
+                    assert_eq!(
+                        (
+                            completed.thread_id,
+                            completed.turn.id,
+                            completed.turn.status
+                        ),
+                        (thread.id.clone(), turn.id, TurnStatus::Completed),
+                    );
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            saw_approval,
+            turn_index == 0 || scope == PermissionGrantScope::Turn
+        );
+        if turn_index == 0 {
+            assert_eq!(
+                fs.read_file(
+                    &cwd.join("first.txt")?,
+                    ReadFileOptions::default(),
+                    /*sandbox*/ None
+                )
+                .await?,
+                b"first turn\n",
+            );
+            let requests = mock.requests();
+            assert_eq!(requests.len(), 3);
+            let output = requests[2].custom_tool_call_output("first-cell");
+            let header = output["output"][0]["text"].as_str().expect("cell status");
+            first_cell_id = Some(
+                header
+                    .strip_prefix("Script running with cell ID ")
+                    .and_then(|rest| rest.lines().next())
+                    .expect("first cell must yield before the next turn")
+                    .to_string(),
+            );
+        } else {
+            let requests = mock.requests();
+            assert_eq!(requests.len(), 3);
+            let output = requests[2].function_call_output("wait-original");
+            assert!(
+                output["output"][0]["text"]
+                    .as_str()
+                    .expect("cell status")
+                    .starts_with("Script completed")
+            );
+        }
+    }
+
+    // The first cell writes with its own grant after the active turn has changed.
+    assert_eq!(
+        fs.read_file(
+            &cwd.join("original.txt")?,
+            ReadFileOptions::default(),
+            /*sandbox*/ None
+        )
+        .await?,
+        b"original turn\n"
+    );
+    match scope {
+        PermissionGrantScope::Session => {
+            assert_eq!(
+                fs.read_file(
+                    &cwd.join("next.txt")?,
+                    ReadFileOptions::default(),
+                    /*sandbox*/ None
+                )
+                .await?,
+                b"next turn\n"
+            );
+        }
+        PermissionGrantScope::Turn => {
+            assert_eq!(
+                fs.read_file(
+                    &cwd.join("next.txt")?,
+                    ReadFileOptions::default(),
+                    /*sandbox*/ None
+                )
+                .await
+                .expect_err("the declined write must not create a file")
+                .kind(),
+                std::io::ErrorKind::NotFound,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Permission requests from a background cell still belong to its original turn.
+/// Its next operation must observe both the approved access and any strict-review requirement.
+#[test_case(false; "turn_grant")]
+#[test_case(true; "strict_review")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn background_cell_uses_permissions_requested_after_next_turn_starts(
+    strict_auto_review: bool,
+) -> Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "Wine does not emulate Windows restricted-token and ACL sandbox semantics"
+    );
+    let codex_home = tempfile::TempDir::new()?;
+    let server = responses::start_mock_server().await;
+    MockResponsesConfig::new(&server.uri())
+        .with_model("gpt-5.4")
+        .with_approval_policy("on-request")
+        .with_sandbox_mode("read-only")
+        .with_root_config(r#"approvals_reviewer = "user""#)
+        .enable_feature(Feature::RequestPermissionsTool)
+        .enable_feature(Feature::CodeModeOnly)
+        .enable_feature(Feature::GuardianApproval)
+        .write(codex_home.path())?;
+    let mut model = model_info_from_slug("gpt-5.4");
+    model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+    model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
+    write_models_cache_with_models(codex_home.path(), vec![model]).await?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let cwd = app.auto_env()?.selection().cwd.clone();
+    let fs = app.auto_env()?.environment().get_filesystem();
+    let ThreadStartResponse { thread, .. } = app.start_thread(ThreadStartParams::default()).await?;
+    let operation = if strict_auto_review {
+        r#"text(await tools.exec_command({cmd: "echo background-cell-review"}));"#
+    } else {
+        r#"text(await tools.apply_patch("*** Begin Patch\n*** Add File: granted.txt\n+background-cell-grant\n*** End Patch"));"#
+    };
+    let started = r#"await tools.test_sync_tool({barrier: {
+        id: "next-turn-started", participants: 2, timeout_ms: 60000
+    }});"#;
+    let first_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("first-turn"),
+                responses::ev_custom_tool_call(
+                    "background-cell",
+                    "exec",
+                    &format!(
+                        r#"// @exec: {{"yield_time_ms": 60000}}
+yield_control();
+{started}
+await tools.request_permissions({{permissions: {{file_system: {{write: ["."]}}}}}});
+{operation}"#,
+                    ),
+                ),
+                responses::ev_completed("first-turn"),
+            ]),
+            create_final_assistant_message_sse_response("first turn done")?,
+        ],
+    )
+    .await;
+    let TurnStartResponse { turn: first_turn } = app
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                input: vec![V2UserInput::Text {
+                    text: "start a background cell".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        })
+        .await?;
+    let completed: TurnCompletedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_notification("turn/completed"),
+    )
+    .await??;
+    assert_eq!(completed.turn.id, first_turn.id);
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+    let requests = first_mock.requests();
+    let (output, _) = requests
+        .last()
+        .expect("first turn continuation")
+        .custom_tool_call_output_content_and_success("background-cell")
+        .context("background cell output")?;
+    let output = output.context("background cell status")?;
+    let cell_id = output
+        .strip_prefix("Script running with cell ID ")
+        .and_then(|rest| rest.lines().next())
+        .with_context(|| format!("background cell must yield: {output}"))?;
+
+    // Guardian and the parent may sample concurrently after the barrier releases.
+    let guardian_mock = responses::mount_sse_once_match(
+        &server,
+        wiremock::matchers::body_partial_json(json!({
+            "client_metadata": {"x-openai-subagent": "guardian"},
+        })),
+        responses::sse(vec![
+            responses::ev_response_created("guardian-review"),
+            responses::ev_assistant_message(
+                "guardian-review",
+                r#"{"outcome":"deny","rationale":"background command requires review"}"#,
+            ),
+            responses::ev_completed("guardian-review"),
+        ]),
+    )
+    .await;
+    let mut events = vec![responses::sse(vec![
+        responses::ev_response_created("next-turn"),
+        responses::ev_custom_tool_call(
+            "next-cell",
+            "exec",
+            &format!("// @exec: {{\"yield_time_ms\": 60000}}\n{started}"),
+        ),
+        responses::ev_completed("next-turn"),
+    ])];
+    events.push(responses::sse(vec![
+        responses::ev_response_created("wait-background"),
+        responses::ev_function_call(
+            "wait-background",
+            "wait",
+            &json!({"cell_id": cell_id, "yield_time_ms": 60000}).to_string(),
+        ),
+        responses::ev_completed("wait-background"),
+    ]));
+    events.push(create_final_assistant_message_sse_response(
+        "next turn done",
+    )?);
+    let mock = responses::mount_sse_sequence(&server, events).await;
+    let TurnStartResponse { turn } = app
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                input: vec![V2UserInput::Text {
+                    text: "resume the background cell".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        })
+        .await?;
+    let mut saw_permission_request = false;
+    let mut unexpected_approvals = Vec::new();
+    loop {
+        match timeout(DEFAULT_READ_TIMEOUT, app.read_next_message()).await?? {
+            JSONRPCMessage::Request(request) => match ServerRequest::try_from(request)? {
+                ServerRequest::PermissionsRequestApproval { request_id, params } => {
+                    assert!(!saw_permission_request);
+                    assert_eq!(
+                        (&params.thread_id, &params.turn_id),
+                        (&thread.id, &first_turn.id)
+                    );
+                    app.send_response(
+                        request_id,
+                        json!({
+                            "permissions": params.permissions,
+                            "scope": PermissionGrantScope::Turn,
+                            "strictAutoReview": strict_auto_review,
+                        }),
+                    )
+                    .await?;
+                    saw_permission_request = true;
+                }
+                ServerRequest::FileChangeRequestApproval { request_id, params } => {
+                    unexpected_approvals.push(params.turn_id);
+                    app.send_response(
+                        request_id,
+                        serde_json::to_value(FileChangeRequestApprovalResponse {
+                            decision: FileChangeApprovalDecision::Decline,
+                        })?,
+                    )
+                    .await?;
+                }
+                request => anyhow::bail!("unexpected server request: {request:?}"),
+            },
+            JSONRPCMessage::Notification(notification)
+                if notification.method == "turn/completed" =>
+            {
+                let completed: TurnCompletedNotification =
+                    serde_json::from_value(notification.params.expect("turn/completed params"))?;
+                assert_eq!(
+                    (
+                        completed.thread_id,
+                        completed.turn.id,
+                        completed.turn.status
+                    ),
+                    (thread.id.clone(), turn.id, TurnStatus::Completed)
+                );
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_permission_request);
+    assert_eq!(
+        unexpected_approvals,
+        Vec::<String>::new(),
+        "A's approved write must not need a second approval after B starts"
+    );
+    let requests = mock.requests();
+    if strict_auto_review {
+        assert_eq!(
+            guardian_mock
+                .requests()
+                .iter()
+                .filter(
+                    |request| request.body_json()["client_metadata"]["x-openai-subagent"]
+                        == "guardian"
+                )
+                .count(),
+            1,
+            "strict review must apply to A's next command after B starts"
+        );
+        let output = requests
+            .last()
+            .expect("next turn continuation")
+            .function_call_output("wait-background");
+        assert!(
+            output
+                .to_string()
+                .contains("background command requires review")
+        );
+    } else {
+        assert_eq!(
+            fs.read_file(
+                &cwd.join("granted.txt")?,
+                ReadFileOptions::default(),
+                /*sandbox*/ None
+            )
+            .await?,
+            b"background-cell-grant\n"
+        );
     }
     Ok(())
 }

@@ -1,7 +1,5 @@
 use super::step_settings::ResolvedStepSettings;
 use super::*;
-use arc_swap::ArcSwap;
-use std::sync::atomic::AtomicBool;
 
 /// Spawn a review thread using the given prompt.
 pub(super) async fn spawn_review_thread(
@@ -42,8 +40,6 @@ pub(super) async fn spawn_review_thread(
     );
 
     let review_prompt = resolved.prompt.clone();
-    let provider = parent_turn_context.provider.clone();
-    let auth_manager = parent_turn_context.auth_manager.clone();
     let model_info = review_model_info.clone();
     let mut selected = parent_turn_context.initial_settings.selected().clone();
     let mut reasoning_effort = selected.collaboration_mode.reasoning_effort();
@@ -77,8 +73,6 @@ pub(super) async fn spawn_review_thread(
         );
     }
 
-    let auth_manager_for_context = auth_manager.clone();
-    let provider_for_context = provider.clone();
     let session_source = parent_turn_context.session_source.clone();
     let (forked_from_thread_id, thread_source, service_tier) = {
         let state = sess.state.lock().await;
@@ -110,8 +104,6 @@ pub(super) async fn spawn_review_thread(
     per_turn_config.model = Some(model);
     per_turn_config.model_reasoning_effort = reasoning_effort;
     per_turn_config.service_tier = step_settings.service_tier.clone();
-    let session_telemetry_for_context =
-        step_settings.telemetry(&parent_turn_context.session_telemetry);
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
     #[allow(deprecated)]
@@ -145,53 +137,14 @@ pub(super) async fn spawn_review_thread(
         &model_info,
     ));
 
-    let extension_data = Arc::new(codex_extension_api::ExtensionData::new(
-        review_turn_id.clone(),
-    ));
-    extension_data.insert(parent_turn_context.skills_snapshot().as_ref().clone());
-
-    let review_turn_context = TurnContext {
-        sub_id: review_turn_id.clone(),
-        trace_id: current_span_trace_id(),
-        realtime_active: parent_turn_context.realtime_active,
-        code_mode_available: parent_turn_context.code_mode_available,
-        configured_token_budget: per_turn_config.token_budget.clone(),
-        use_model_token_budget_defaults: per_turn_config.features.enabled(Feature::TokenBudget)
-            && !super::token_budget::has_explicit_settings(&per_turn_config),
-        config: per_turn_config,
-        auth_manager: auth_manager_for_context,
-        initial_settings: Arc::clone(&step_settings),
-        disabled_plugin_ids: parent_turn_context.disabled_plugin_ids.clone(),
-        active_host_plugin_identities: None,
-        next_step_settings: ArcSwap::from(step_settings),
-        session_telemetry: session_telemetry_for_context,
-        provider: provider_for_context,
-        session_source,
-        history_mode: parent_turn_context.history_mode,
-        parent_thread_id: parent_turn_context.parent_thread_id,
-        originator: parent_turn_context.originator.clone(),
-        initial_environments: parent_turn_context.initial_environments.clone(),
+    let review_turn_context = parent_turn_context.for_review(
+        review_turn_id,
+        per_turn_config,
+        step_settings,
         available_models,
         unified_exec_shell_mode,
-        current_date: parent_turn_context.current_date.clone(),
-        timezone: parent_turn_context.timezone.clone(),
-        app_server_client_name: parent_turn_context.app_server_client_name.clone(),
-        developer_instructions: None,
-        multi_agent_version: MultiAgentVersion::Disabled,
-        network: parent_turn_context.network.clone(),
-        windows_sandbox_level: parent_turn_context.windows_sandbox_level,
-        #[allow(deprecated)]
-        cwd: parent_turn_context.cwd.clone(),
-        final_output_json_schema: None,
-        dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         turn_metadata_state,
-        extension_data,
-        turn_timing_state: Arc::new(TurnTimingState::default()),
-        terminal_error: Arc::new(Mutex::new(None)),
-        server_model_warning_emitted: AtomicBool::new(false),
-        model_verification_emitted: AtomicBool::new(false),
-        cyber_access_program: None,
-    };
+    );
 
     // Seed the child task with the review prompt as the initial user message.
     let input = vec![TurnInput::UserInput {

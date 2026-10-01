@@ -20,7 +20,6 @@ use codex_exec_server::GetMetadataOptions;
 use codex_login::CodexAuth;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
-use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -162,14 +161,8 @@ async fn build_uploaded_argument_value(
         .cwd()
         .join(file_path)
         .map_err(|error| contextualize_error(error.to_string()))?;
-    let additional_permissions = merge_permission_profiles(
-        sess.granted_session_permissions(&turn_environment.selection.environment_id)
-            .await
-            .as_ref(),
-        sess.granted_turn_permissions(&turn_environment.selection.environment_id)
-            .await
-            .as_ref(),
-    );
+    let additional_permissions =
+        turn_context.granted_permissions(&turn_environment.selection.environment_id);
     let file_system_policy = effective_file_system_sandbox_policy(
         &turn_environment
             .permission_profile()

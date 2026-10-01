@@ -1497,16 +1497,7 @@ async fn maybe_request_mcp_tool_approval(
     policy: McpToolApprovalPolicy,
 ) -> Option<ReviewDecision> {
     let turn_context = &step_context.turn;
-    let turn_state = sess
-        .active_turn
-        .lock()
-        .await
-        .as_ref()
-        .map(|active| Arc::clone(&active.turn_state));
-    let strict_auto_review = match turn_state {
-        Some(turn_state) => turn_state.lock().await.strict_auto_review_enabled(),
-        None => false,
-    };
+    let strict_auto_review = turn_context.strict_auto_review_enabled();
     let approvals_reviewer = connectors::mcp_approvals_reviewer_from_layers(
         &config.config_layer_stack,
         step_context

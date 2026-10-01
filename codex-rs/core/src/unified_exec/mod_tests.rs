@@ -949,20 +949,6 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
         entry.cwd = cwd.clone();
         Arc::clone(&entry.process)
     };
-    // A queued write must acquire the terminal lock before reading active strict
-    // mode: code-mode calls can enable it while another interaction is draining.
-    {
-        let interaction = original.interaction_lock().lock_owned().await;
-        let _active_turn = session.active_turn.lock().await;
-        let mut queued = Box::pin(write_stdin(
-            &session, &turn, process_id, "queued\n", /*yield_time_ms*/ 250,
-        ));
-        let mut task_context = std::task::Context::from_waker(futures::task::noop_waker_ref());
-        assert!(queued.as_mut().poll(&mut task_context).is_pending());
-        drop(interaction);
-        assert!(queued.as_mut().poll(&mut task_context).is_pending());
-        assert!(original.interaction_lock().try_lock_owned().is_err());
-    }
     // Empty polling must complete without an approval response.
     // The test deadline must allow the minimum empty-poll wait.
     tokio::time::timeout(
@@ -1057,6 +1043,76 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
         assert!(original.interaction_lock().try_lock_owned().is_ok());
     }
     original.terminate();
+    assert!(session.terminate_background_terminal(process_id).await);
+    Ok(())
+}
+
+/// A queued write observes strict review enabled on its captured step while waiting
+/// for another terminal interaction to finish.
+#[tokio::test]
+async fn stdin_approval_observes_strict_review_enabled_while_queued() -> anyhow::Result<()> {
+    use crate::session::step_context::StepContext;
+    use crate::session::tests::make_session_and_context_with_auth_and_config_and_rx;
+    use crate::tools::sandboxing::ToolError;
+    use codex_features::Feature;
+
+    skip_if_sandbox!(Ok(()));
+    let (session, turn, _events) = make_session_and_context_with_auth_and_config_and_rx(
+        codex_login::CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.features.enable(Feature::WriteStdinApproval).unwrap();
+        },
+    )
+    .await;
+    let manager = &session.services.unified_exec_manager;
+    let opened = exec_command(
+        &session, &turn, "cat", /*yield_time_ms*/ 250, /*workdir*/ None,
+    )
+    .await?;
+    let process_id = opened.process_id.expect("running terminal");
+    let process = Arc::clone(
+        &manager
+            .process_store
+            .lock()
+            .await
+            .processes
+            .get(&process_id)
+            .unwrap()
+            .process,
+    );
+    let context = UnifiedExecContext::new(
+        Arc::clone(&session),
+        StepContext::for_test(turn),
+        tokio_util::sync::CancellationToken::new(),
+        "write".to_string(),
+    );
+    let interaction = process.interaction_lock().lock_owned().await;
+    let mut queued = Box::pin(manager.write_stdin(
+        &context,
+        WriteStdinRequest {
+            process_id,
+            // NUL input must be rejected when strict review becomes required.
+            input: "\0",
+            yield_time_ms: 250,
+            max_output_tokens: None,
+            truncation_policy: TruncationPolicy::Tokens(10_000),
+            interaction_event: None,
+        },
+    ));
+    let mut task_context = std::task::Context::from_waker(futures::task::noop_waker_ref());
+    assert!(queued.as_mut().poll(&mut task_context).is_pending());
+    context.step_context.turn.record_granted_permissions(
+        codex_exec_server::LOCAL_ENVIRONMENT_ID,
+        Default::default(),
+        /*strict_auto_review*/ true,
+    );
+    drop(interaction);
+    assert!(matches!(
+        queued.await,
+        Err(UnifiedExecError::StdinApproval(ToolError::Rejected(reason)))
+            if reason.contains("NUL byte")
+    ));
     assert!(session.terminate_background_terminal(process_id).await);
     Ok(())
 }

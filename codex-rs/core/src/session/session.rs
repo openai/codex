@@ -1734,6 +1734,7 @@ impl Session {
                 models_manager: Arc::clone(&models_manager),
                 git_root_discovery,
                 tool_approvals: Mutex::new(ApprovalStore::default()),
+                granted_permissions_by_environment_id: Arc::default(),
                 runtime_handle: tokio::runtime::Handle::current(),
                 skills_service,
                 agents_md_manager,

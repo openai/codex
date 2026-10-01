@@ -53,7 +53,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::PatchApplyUpdatedEvent;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
-use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions_with_context;
 use codex_tools::ToolName;
@@ -520,18 +519,10 @@ async fn execute_verified_patch(
     };
     let environment_id = turn_environment.selection.environment_id.as_str();
     let file_paths = file_paths_for_action(&action);
-    let granted_permissions = merge_permission_profiles(
-        tool_ctx
-            .session
-            .granted_session_permissions(environment_id)
-            .await
-            .as_ref(),
-        tool_ctx
-            .session
-            .granted_turn_permissions(environment_id)
-            .await
-            .as_ref(),
-    );
+    let granted_permissions = tool_ctx
+        .step_context
+        .turn
+        .granted_permissions(environment_id);
     let base_file_system_sandbox_policy = turn_environment
         .permission_profile()
         .file_system_sandbox_policy();
@@ -551,13 +542,12 @@ async fn execute_verified_patch(
             FunctionCallError::RespondToModel(format!("failed to check patch permissions: {error}"))
         })?;
     let effective_additional_permissions = apply_granted_turn_permissions(
-        tool_ctx.session.as_ref(),
+        &tool_ctx.step_context,
         &turn_environment,
         &cwd,
         crate::sandboxing::SandboxPermissions::UseDefault,
         additional_permissions,
-    )
-    .await;
+    );
     let apply = apply_patch::prepare_apply_patch(
         &tool_ctx.step_context,
         &turn_environment,

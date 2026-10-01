@@ -50,7 +50,7 @@ use serde_json::Value;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
-use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnEnvironment;
 pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
@@ -267,8 +267,8 @@ pub(super) fn implicit_granted_permissions(
     }
 }
 
-pub(super) async fn apply_granted_turn_permissions(
-    session: &Session,
+pub(super) fn apply_granted_turn_permissions(
+    step_context: &StepContext,
     environment: &TurnEnvironment,
     cwd: &PathUri,
     sandbox_permissions: SandboxPermissions,
@@ -283,12 +283,7 @@ pub(super) async fn apply_granted_turn_permissions(
     }
 
     let environment_id = &environment.selection.environment_id;
-    let granted_session_permissions = session.granted_session_permissions(environment_id).await;
-    let granted_turn_permissions = session.granted_turn_permissions(environment_id).await;
-    let granted_permissions = merge_permission_profiles(
-        granted_session_permissions.as_ref(),
-        granted_turn_permissions.as_ref(),
-    );
+    let granted_permissions = step_context.turn.granted_permissions(environment_id);
     let effective_permissions = merge_permission_profiles(
         additional_permissions.as_ref(),
         granted_permissions.as_ref(),

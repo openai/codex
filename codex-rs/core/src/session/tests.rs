@@ -6907,6 +6907,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         models_manager: Arc::clone(&models_manager),
         git_root_discovery: Arc::default(),
         tool_approvals: Mutex::new(ApprovalStore::default()),
+        granted_permissions_by_environment_id: Arc::default(),
         runtime_handle: tokio::runtime::Handle::current(),
         skills_service,
         agents_md_manager: Arc::new(AgentsMdManager::new(SessionInstructions::default())),
@@ -7032,6 +7033,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let turn_context = Session::make_turn_context(
         thread_id,
         SessionId::from(thread_id),
+        Arc::clone(&session.services.granted_permissions_by_environment_id),
         Some(Arc::clone(&auth_manager)),
         &session_telemetry,
         session_configuration.provider.clone(),
@@ -7466,8 +7468,9 @@ async fn resumed_copied_fork_ignores_source_history_base() {
 
 #[tokio::test]
 async fn notify_request_permissions_response_ignores_unmatched_call_id() {
-    let (session, _turn_context) = make_session_and_context().await;
-    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    let (session, turn_context) = make_session_and_context().await;
+    let active_turn = ActiveTurn::default();
+    *session.active_turn.lock().await = Some(active_turn);
 
     session
         .notify_request_permissions_response(
@@ -7486,23 +7489,16 @@ async fn notify_request_permissions_response_ignores_unmatched_call_id() {
         .await;
 
     assert_eq!(
-        session
-            .granted_turn_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID)
-            .await,
+        turn_context.granted_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID),
         None
     );
 }
 
 #[tokio::test]
 async fn record_granted_request_permissions_for_turn_uses_originating_turn() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let originating_active_turn = ActiveTurn::default();
-    let originating_turn_state = Arc::clone(&originating_active_turn.turn_state);
-    *session.active_turn.lock().await = Some(originating_active_turn);
+    let (session, turn_context) = make_session_and_context().await;
 
-    let current_active_turn = ActiveTurn::default();
-    let current_turn_state = Arc::clone(&current_active_turn.turn_state);
-    *session.active_turn.lock().await = Some(current_active_turn);
+    let (_other_session, current_turn_context) = make_session_and_context().await;
 
     let requested_permissions = RequestPermissionProfile {
         network: Some(codex_protocol::models::NetworkPermissions {
@@ -7510,46 +7506,29 @@ async fn record_granted_request_permissions_for_turn_uses_originating_turn() {
         }),
         ..RequestPermissionProfile::default()
     };
-    session
-        .record_granted_request_permissions_for_turn(
-            &codex_protocol::request_permissions::RequestPermissionsResponse {
-                permissions: requested_permissions.clone(),
-                scope: PermissionGrantScope::Turn,
-                strict_auto_review: false,
-            },
-            codex_exec_server::LOCAL_ENVIRONMENT_ID,
-            Some(&originating_turn_state),
-        )
-        .await;
+    session.record_granted_request_permissions_for_turn(
+        &codex_protocol::request_permissions::RequestPermissionsResponse {
+            permissions: requested_permissions.clone(),
+            scope: PermissionGrantScope::Turn,
+            strict_auto_review: false,
+        },
+        codex_exec_server::LOCAL_ENVIRONMENT_ID,
+        &turn_context,
+    );
 
     assert_eq!(
-        originating_turn_state
-            .lock()
-            .await
-            .granted_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID),
+        turn_context.granted_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID),
         Some(requested_permissions.into())
     );
     assert_eq!(
-        current_turn_state
-            .lock()
-            .await
-            .granted_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID),
-        None
-    );
-    assert_eq!(
-        session
-            .granted_turn_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID)
-            .await,
+        current_turn_context.granted_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID),
         None
     );
 }
 
 #[tokio::test]
 async fn request_permission_grants_are_environment_keyed() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let originating_active_turn = ActiveTurn::default();
-    let originating_turn_state = Arc::clone(&originating_active_turn.turn_state);
-    *session.active_turn.lock().await = Some(originating_active_turn);
+    let (session, turn_context) = make_session_and_context().await;
 
     let requested_permissions = RequestPermissionProfile {
         network: Some(codex_protocol::models::NetworkPermissions {
@@ -7557,52 +7536,57 @@ async fn request_permission_grants_are_environment_keyed() {
         }),
         ..RequestPermissionProfile::default()
     };
-    session
-        .record_granted_request_permissions_for_turn(
-            &codex_protocol::request_permissions::RequestPermissionsResponse {
-                permissions: requested_permissions.clone(),
-                scope: PermissionGrantScope::Turn,
-                strict_auto_review: false,
-            },
-            "remote",
-            Some(&originating_turn_state),
-        )
-        .await;
-
-    {
-        let turn_state = originating_turn_state.lock().await;
-        assert_eq!(
-            turn_state.granted_permissions("remote"),
-            Some(requested_permissions.clone().into())
-        );
-        assert_eq!(turn_state.granted_permissions("local"), None);
-    }
-
-    session
-        .record_granted_request_permissions_for_turn(
-            &codex_protocol::request_permissions::RequestPermissionsResponse {
-                permissions: requested_permissions.clone(),
-                scope: PermissionGrantScope::Session,
-                strict_auto_review: false,
-            },
-            "remote",
-            /*originating_turn_state*/ None,
-        )
-        .await;
+    session.record_granted_request_permissions_for_turn(
+        &codex_protocol::request_permissions::RequestPermissionsResponse {
+            permissions: requested_permissions.clone(),
+            scope: PermissionGrantScope::Turn,
+            strict_auto_review: false,
+        },
+        "remote",
+        &turn_context,
+    );
 
     assert_eq!(
-        session.granted_session_permissions("remote").await,
+        turn_context.granted_permissions("remote"),
+        Some(requested_permissions.clone().into())
+    );
+    assert_eq!(turn_context.granted_permissions("local"), None);
+
+    session.record_granted_request_permissions_for_turn(
+        &codex_protocol::request_permissions::RequestPermissionsResponse {
+            permissions: requested_permissions.clone(),
+            scope: PermissionGrantScope::Session,
+            strict_auto_review: false,
+        },
+        "remote",
+        &turn_context,
+    );
+
+    assert_eq!(
+        session
+            .services
+            .granted_permissions_by_environment_id
+            .lock()
+            .expect("session permission grants lock poisoned")
+            .get("remote")
+            .cloned(),
         Some(requested_permissions.into())
     );
-    assert_eq!(session.granted_session_permissions("local").await, None);
+    assert_eq!(
+        session
+            .services
+            .granted_permissions_by_environment_id
+            .lock()
+            .expect("session permission grants lock poisoned")
+            .get("local")
+            .cloned(),
+        None
+    );
 }
 
 #[tokio::test]
 async fn enable_strict_auto_review_for_turn_uses_originating_turn() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let originating_active_turn = ActiveTurn::default();
-    let originating_turn_state = Arc::clone(&originating_active_turn.turn_state);
-    *session.active_turn.lock().await = Some(originating_active_turn);
+    let (session, turn_context) = make_session_and_context().await;
 
     let requested_permissions = RequestPermissionProfile {
         network: Some(codex_protocol::models::NetworkPermissions {
@@ -7610,24 +7594,17 @@ async fn enable_strict_auto_review_for_turn_uses_originating_turn() {
         }),
         ..RequestPermissionProfile::default()
     };
-    session
-        .record_granted_request_permissions_for_turn(
-            &codex_protocol::request_permissions::RequestPermissionsResponse {
-                permissions: requested_permissions.clone(),
-                scope: PermissionGrantScope::Turn,
-                strict_auto_review: true,
-            },
-            codex_exec_server::LOCAL_ENVIRONMENT_ID,
-            Some(&originating_turn_state),
-        )
-        .await;
-
-    assert!(
-        originating_turn_state
-            .lock()
-            .await
-            .strict_auto_review_enabled()
+    session.record_granted_request_permissions_for_turn(
+        &codex_protocol::request_permissions::RequestPermissionsResponse {
+            permissions: requested_permissions,
+            scope: PermissionGrantScope::Turn,
+            strict_auto_review: true,
+        },
+        codex_exec_server::LOCAL_ENVIRONMENT_ID,
+        &turn_context,
     );
+
+    assert!(turn_context.strict_auto_review_enabled());
 }
 
 #[test]
@@ -8034,8 +8011,12 @@ async fn request_permissions_response_materializes_session_cwd_grants_before_rec
     assert_eq!(response, Some(expected_response));
     assert_eq!(
         session
-            .granted_session_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID)
-            .await,
+            .services
+            .granted_permissions_by_environment_id
+            .lock()
+            .expect("session permission grants lock poisoned")
+            .get(codex_exec_server::LOCAL_ENVIRONMENT_ID)
+            .cloned(),
         Some(expected_permissions.into())
     );
 }
@@ -9192,6 +9173,7 @@ where
         models_manager: Arc::clone(&models_manager),
         git_root_discovery: Arc::default(),
         tool_approvals: Mutex::new(ApprovalStore::default()),
+        granted_permissions_by_environment_id: Arc::default(),
         runtime_handle: tokio::runtime::Handle::current(),
         skills_service,
         agents_md_manager: Arc::new(AgentsMdManager::new(SessionInstructions::default())),
@@ -9317,6 +9299,7 @@ where
     let turn_context = Arc::new(Session::make_turn_context(
         thread_id,
         SessionId::from(thread_id),
+        Arc::clone(&session.services.granted_permissions_by_environment_id),
         Some(Arc::clone(&auth_manager)),
         &session_telemetry,
         session_configuration.provider.clone(),

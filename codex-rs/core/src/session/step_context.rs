@@ -1,4 +1,4 @@
-//! Request-scoped settings and capabilities, including the durable context snapshot.
+//! Request-scoped settings and capabilities, with live grants bound to the originating turn.
 
 use std::sync::Arc;
 

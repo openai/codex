@@ -136,7 +136,7 @@ impl ToolOrchestrator {
         let otel = turn_ctx.session_telemetry.clone();
         let otel_tn = flat_tool_name(&tool_ctx.tool_name).into_owned();
         let otel_ci = &tool_ctx.call_id;
-        let strict_auto_review = tool_ctx.session.strict_auto_review_enabled().await;
+        let strict_auto_review = turn_ctx.strict_auto_review_enabled();
         // 1) Approval
         let mut already_approved = false;
 

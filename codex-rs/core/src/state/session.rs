@@ -1,12 +1,9 @@
 //! Session-wide mutable state.
 
-use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::BaseInstructionsProvenance;
 #[cfg(test)]
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_sandboxing::policy_transforms::merge_permission_profiles;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 
@@ -100,7 +97,6 @@ pub(crate) struct SessionState {
     pub(crate) current_time_reminder: CurrentTimeReminderState,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
-    granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
     next_turn_is_first: bool,
 }
 
@@ -141,7 +137,6 @@ impl SessionState {
             current_time_reminder: CurrentTimeReminderState::default(),
             active_connector_selection: HashSet::new(),
             pending_session_start_sources: VecDeque::new(),
-            granted_permissions_by_environment_id: HashMap::new(),
             next_turn_is_first: true,
         }
     }
@@ -411,31 +406,6 @@ impl SessionState {
         &mut self,
     ) -> Option<codex_hooks::SessionStartSource> {
         self.pending_session_start_sources.pop_front()
-    }
-
-    pub(crate) fn record_granted_permissions(
-        &mut self,
-        environment_id: &str,
-        permissions: AdditionalPermissionProfile,
-    ) {
-        let granted_permissions = merge_permission_profiles(
-            self.granted_permissions_by_environment_id
-                .get(environment_id),
-            Some(&permissions),
-        );
-        if let Some(granted_permissions) = granted_permissions {
-            self.granted_permissions_by_environment_id
-                .insert(environment_id.to_string(), granted_permissions);
-        }
-    }
-
-    pub(crate) fn granted_permissions(
-        &self,
-        environment_id: &str,
-    ) -> Option<AdditionalPermissionProfile> {
-        self.granted_permissions_by_environment_id
-            .get(environment_id)
-            .cloned()
     }
 }
 

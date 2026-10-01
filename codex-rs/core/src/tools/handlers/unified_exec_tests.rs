@@ -489,16 +489,6 @@ async fn exec_command_reuses_foreign_windows_grant() {
         )),
         ..Default::default()
     };
-    *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-    let turn_state = {
-        let active_turn = session.active_turn.lock().await;
-        Arc::clone(&active_turn.as_ref().expect("active turn").turn_state)
-    };
-    turn_state.lock().await.record_granted_permissions(
-        codex_exec_server::REMOTE_ENVIRONMENT_ID,
-        granted_permissions.clone(),
-    );
-
     {
         let turn = Arc::get_mut(&mut turn).expect("turn should be uniquely owned");
         let TurnEnvironmentState::Ready(environment) = turn
@@ -519,10 +509,16 @@ async fn exec_command_reuses_foreign_windows_grant() {
         );
     }
 
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    step_context.turn.record_granted_permissions(
+        codex_exec_server::REMOTE_ENVIRONMENT_ID,
+        granted_permissions.clone(),
+        /*strict_auto_review*/ false,
+    );
     let response = ExecCommandHandler::default()
         .handle(ToolInvocation {
             session: Arc::clone(&session),
-            step_context: StepContext::for_test(Arc::clone(&turn)),
+            step_context,
             turn,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),

@@ -187,13 +187,12 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall<'_>
     let mut environments = Vec::new();
     for environment in invocation.step_context.environments.turn_environments() {
         let additional_permissions = apply_granted_turn_permissions(
-            invocation.session.as_ref(),
+            &invocation.step_context,
             environment,
             environment.cwd(),
             SandboxPermissions::UseDefault,
             /*additional_permissions*/ None,
         )
-        .await
         .additional_permissions;
         let file_system_sandbox_context = environment.sandbox_context(additional_permissions);
         environments.push(ToolEnvironment {

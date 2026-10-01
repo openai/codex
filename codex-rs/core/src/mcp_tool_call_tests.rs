@@ -3126,13 +3126,6 @@ async fn strict_auto_review_forces_guardian_for_mcp_policy_skip() {
         turn_context.auth_manager.clone(),
     );
 
-    let active_turn = ActiveTurn::default();
-    active_turn
-        .turn_state
-        .lock()
-        .await
-        .enable_strict_auto_review();
-    *session.active_turn.lock().await = Some(active_turn);
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let invocation = McpInvocation {
@@ -3161,9 +3154,15 @@ async fn strict_auto_review_forces_guardian_for_mcp_policy_skip() {
         .set(AskForApproval::OnRequest)
         .expect("captured MCP policy should allow updating approval policy");
 
+    turn_context.record_granted_permissions(
+        codex_exec_server::LOCAL_ENVIRONMENT_ID,
+        Default::default(),
+        /*strict_auto_review*/ true,
+    );
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let decision = maybe_request_mcp_tool_approval(
         &session,
-        &StepContext::for_test(Arc::clone(&turn_context)),
+        &step_context,
         &CancellationToken::new(),
         "call-guardian-deny",
         &invocation,
