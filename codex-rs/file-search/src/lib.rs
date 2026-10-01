@@ -35,6 +35,11 @@ use nucleo::pattern::AtomKind;
 use nucleo::pattern::Pattern;
 
 mod cli;
+mod snapshot;
+
+#[cfg(test)]
+#[path = "matcher_tests.rs"]
+mod matcher_tests;
 
 pub use cli::Cli;
 
@@ -553,45 +558,15 @@ fn matcher_worker(
             recv(next_notify) -> _ => {
                 will_notify = false;
                 let status = nucleo.tick(TICK_TIMEOUT_MS);
-                if status.changed {
-                    let snapshot = nucleo.snapshot();
-                    let limit = inner.limit.min(snapshot.matched_item_count() as usize);
-                    let pattern = snapshot.pattern().column_pattern(0);
-                    let matches: Vec<_> = snapshot
-                        .matches()
-                        .iter()
-                        .take(limit)
-                        .filter_map(|match_| {
-                            let item = snapshot.get_item(match_.idx)?;
-                            let full_path = item.data.full_path.as_ref();
-                            let (root_idx, relative_path) = get_file_path(Path::new(full_path), &inner.search_directories)?;
-                            let indices = if let Some(indices_matcher) = indices_matcher.as_mut() {
-                                let mut idx_vec = Vec::<u32>::new();
-                                let haystack = item.matcher_columns[0].slice(..);
-                                let _ = pattern.indices(haystack, indices_matcher, &mut idx_vec);
-                                idx_vec.sort_unstable();
-                                idx_vec.dedup();
-                                Some(idx_vec)
-                            } else {
-                                None
-                            };
-                            Some(FileMatch {
-                                score: match_.score,
-                                path: PathBuf::from(relative_path),
-                                match_type: item.data.match_type,
-                                root: inner.search_directories[root_idx].clone(),
-                                indices,
-                            })
-                        })
-                        .collect();
-
-                    let snapshot = FileSearchSnapshot {
-                        query: last_query.clone(),
-                        matches,
-                        total_match_count: snapshot.matched_item_count() as usize,
-                        scanned_file_count: snapshot.item_count() as usize,
+                if status.changed
+                    && let Some(snapshot) = snapshot::for_query(
+                        &inner,
+                        &nucleo,
+                        &last_query,
+                        &mut indices_matcher,
                         walk_complete,
-                    };
+                    )
+                {
                     inner.reporter.on_update(&snapshot);
                 }
                 if !status.running && walk_complete {
@@ -710,7 +685,7 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct RecordingReporter {
+    pub(super) struct RecordingReporter {
         updates: Mutex<Vec<FileSearchSnapshot>>,
         complete_times: Mutex<Vec<Instant>>,
         complete_cv: Condvar,
