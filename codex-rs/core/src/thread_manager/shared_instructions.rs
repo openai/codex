@@ -1,4 +1,5 @@
 //! Keeps one replaceable instruction provider per root while its agent tree is alive.
+//! Reusing the shared wrapper must never make it delegate to itself.
 
 use codex_extension_api::Instructions;
 use codex_extension_api::LoadInstructionsFuture;
@@ -38,10 +39,15 @@ impl SharedThreadInstructionsProviders {
         }
         match (existing, provider) {
             (Some(existing), provider) => {
-                if provider.is_some() {
+                // An unloaded root can inherit this wrapper from its surviving children.
+                let shared: Arc<dyn ThreadInstructionsProvider> = existing.clone();
+                if provider
+                    .as_ref()
+                    .is_some_and(|provider| !Arc::ptr_eq(provider, &shared))
+                {
                     existing.replace(provider);
                 }
-                Some(existing)
+                Some(shared)
             }
             (None, Some(provider)) => {
                 let shared = Arc::new(SharedThreadInstructionsProvider(Mutex::new(
