@@ -5,8 +5,6 @@ mod classification;
 mod config;
 mod conversation;
 mod coverage;
-// Compile the transport in tests until the next stack stage wires its runtime caller.
-#[cfg(test)]
 mod decisions;
 mod extension;
 mod metrics;

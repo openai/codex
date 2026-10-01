@@ -76,7 +76,9 @@ async fn http_contract_and_untrusted_response_validation() {
     )
     .unwrap();
     let mut sampler = Arc::new(sampler);
-    assert_eq!(sampler.start(&request).finish().await.unwrap().0, Ok("low"));
+    let mut task = sampler.spawn(&request, /*max_input_tokens*/ 128_000);
+    assert_eq!((&mut task.handle).await.unwrap().0, Ok("low"));
+    drop(task);
     let mut invalid = response;
     invalid["answers"][0]["choice"] = json!("untrusted server text");
     assert_eq!(parse_answer(&invalid), Err(DecisionsError::InvalidResponse));
@@ -112,17 +114,17 @@ async fn decisions_admits_newest_request_by_cancelling_oldest() {
         .acquire_many(MAX_CONCURRENT_REQUESTS as u32)
         .await
         .unwrap();
-    let oldest = sampler.start(&request);
+    let mut oldest = sampler.spawn(&request, /*max_input_tokens*/ 128_000);
     let mut remaining = (1..MAX_CONCURRENT_REQUESTS)
-        .map(|_| sampler.start(&request))
+        .map(|_| sampler.spawn(&request, /*max_input_tokens*/ 128_000))
         .collect::<Vec<_>>();
-    remaining.push(sampler.start(&request));
-    assert!(oldest.finish().await.unwrap_err().is_cancelled());
+    remaining.push(sampler.spawn(&request, /*max_input_tokens*/ 128_000));
+    assert!((&mut oldest.handle).await.unwrap_err().is_cancelled());
     assert!(server.received_requests().await.unwrap().is_empty());
     drop(permits);
-    for task in remaining {
+    for mut task in remaining {
         assert_eq!(
-            task.finish().await.unwrap().0,
+            (&mut task.handle).await.unwrap().0,
             Err(DecisionsError::Http(403))
         );
     }
@@ -191,12 +193,13 @@ async fn cancelling_a_decisions_request_releases_thread_capacity() {
         )
         .unwrap(),
     );
-    let task = sampler.start(&super::super::sampler::tests::sample_request("turn"));
+    let request = super::super::sampler::tests::sample_request("turn");
+    let task = sampler.spawn(&request, /*max_input_tokens*/ 128_000);
     tokio::time::timeout(Duration::from_secs(5), received.notified())
         .await
         .unwrap();
     {
-        let recording = task.finish();
+        let recording = task.finish_and_record_outcome(/*metrics*/ None);
         tokio::pin!(recording);
         std::future::poll_fn(|cx| {
             assert!(std::future::Future::poll(recording.as_mut(), cx).is_pending());

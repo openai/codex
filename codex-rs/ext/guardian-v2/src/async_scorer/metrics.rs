@@ -7,6 +7,7 @@ use codex_api::TransportError;
 use codex_core::context::GuardianContextMode;
 use codex_extension_api::ExtensionMetrics;
 
+use super::decisions::DecisionsError;
 use super::sampler::LunaSamplerError;
 
 pub(super) const CLASSIFICATION_METRIC: &str = "codex.guardian_v2.classification";
@@ -154,5 +155,42 @@ pub(super) fn record_request_tokens(
             codex_guardian_context::REQUEST_TOKENS_BOUNDARIES,
             &[("target", "async"), ("component", component)],
         );
+    }
+}
+
+pub(super) fn record_decisions_comparison_outcome(
+    metrics: Option<&dyn ExtensionMetrics>,
+    outcome: &str,
+    reason: &str,
+) {
+    if let Some(metrics) = metrics {
+        metrics.counter(
+            "codex.guardian_v2.decisions_comparison",
+            /*inc*/ 1,
+            &[("outcome", outcome), ("reason", reason)],
+        );
+    }
+}
+
+// Keep all backend diagnostics bounded and free of raw transport data.
+pub(super) fn decisions_failure_reason(error: DecisionsError) -> &'static str {
+    match error {
+        DecisionsError::Credentials => "provider_error",
+        DecisionsError::ClientSetup => "request_build_error",
+        DecisionsError::UnsupportedEvidence => "decisions_unsupported_evidence",
+        DecisionsError::InputTooLarge => "input_too_large",
+        DecisionsError::Timeout => "transport_timeout",
+        // The adapter erases transport details; do not claim a specific network failure.
+        DecisionsError::Transport => "decisions_transport",
+        DecisionsError::Http(status) => match status {
+            401 => "http_401",
+            403 => "http_403",
+            429 => "http_429",
+            400..=499 => "http_4xx",
+            500..=599 => "http_5xx",
+            _ => "http_other",
+        },
+        DecisionsError::ResponseTooLarge => "response_too_large",
+        DecisionsError::InvalidResponse => "invalid_output",
     }
 }

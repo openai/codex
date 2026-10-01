@@ -15,6 +15,39 @@ use codex_model_provider::create_model_provider;
 use super::sampler::LunaSamplerConfig;
 use super::sampler::MODEL;
 
+// Decisions setup failures are telemetry only; they never affect the baseline sampler.
+pub(super) fn decisions_sampler(
+    input: &ThreadStartInput<'_, Config>,
+) -> Option<super::decisions::DecisionsSampler> {
+    use super::decisions::DecisionsError;
+    use super::decisions::DecisionsSampler;
+    use super::decisions::URL;
+    use codex_http_client::ClientRouteClass;
+    let result = std::env::var("CODEX_GUARDIAN_DECISIONS_API_KEY")
+        .map_err(|_| DecisionsError::Credentials)
+        .and_then(|key| {
+            let client = input
+                .config
+                .http_client_factory()
+                .build_client_without_request_logging(URL, ClientRouteClass::Api)
+                .map_err(|_| DecisionsError::ClientSetup)?;
+            DecisionsSampler::new(client, key, URL.to_owned())
+        });
+    match result {
+        Ok(sampler) => Some(sampler),
+        Err(error) => {
+            if let Some(metrics) = input.extension_metrics.as_deref() {
+                metrics.counter(
+                    "codex.guardian_v2.decisions_comparison.setup_failure",
+                    /*inc*/ 1,
+                    &[("reason", super::metrics::decisions_failure_reason(error))],
+                );
+            }
+            None
+        }
+    }
+}
+
 pub(super) async fn sampler_config(
     input: &ThreadStartInput<'_, Config>,
     auth_manager: Arc<AuthManager>,

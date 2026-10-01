@@ -359,6 +359,8 @@ pub enum Feature {
     GuardianConversationHistoryTools,
     /// Enable Guardian V2 automatic approval reviews.
     GuardianV2,
+    /// Run Decisions alongside Guardian V2 for measurement without changing approvals.
+    GuardianV2DecisionsComparison,
     /// Removed compatibility flag for the unused Guardian extension prototype.
     GuardianExt,
     /// Enable persisted thread goals and automatic goal continuation.
@@ -1749,6 +1751,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GuardianV2,
         key: "guardianv2",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GuardianV2DecisionsComparison,
+        key: "guardianv2_decisions_comparison",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

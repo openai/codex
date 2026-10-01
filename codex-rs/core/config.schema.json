@@ -920,6 +920,9 @@
             "guardianv2": {
               "$ref": "#/definitions/FeatureToml_for_GuardianV2ConfigToml"
             },
+            "guardianv2_decisions_comparison": {
+              "type": "boolean"
+            },
             "hooks": {
               "type": "boolean"
             },
@@ -7015,6 +7018,9 @@
         },
         "guardianv2": {
           "$ref": "#/definitions/FeatureToml_for_GuardianV2ConfigToml"
+        },
+        "guardianv2_decisions_comparison": {
+          "type": "boolean"
         },
         "hooks": {
           "type": "boolean"
