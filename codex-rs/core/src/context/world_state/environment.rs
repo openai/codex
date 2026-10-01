@@ -1,4 +1,5 @@
 use super::PreviousSectionState;
+use super::SectionTransition;
 use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
 use crate::context::environment_context::FileSystemContext;
@@ -105,8 +106,11 @@ impl WorldStateSection for EnvironmentsState {
     const ID: &'static str = "environments";
     type Snapshot = EnvironmentsSnapshot;
 
-    fn snapshot(&self) -> Self::Snapshot {
-        EnvironmentsSnapshot {
+    fn render_diff(
+        &self,
+        previous: PreviousSectionState<'_, Self::Snapshot>,
+    ) -> SectionTransition<Self::Snapshot> {
+        let current = EnvironmentsSnapshot {
             environments: self
                 .environments
                 .iter()
@@ -129,14 +133,7 @@ impl WorldStateSection for EnvironmentsState {
             network: self.network.as_ref().map(NetworkContext::render),
             filesystem: self.filesystem.as_ref().map(FileSystemContext::render),
             subagents: self.subagents.clone(),
-        }
-    }
-
-    fn render_diff(
-        &self,
-        previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
-        let current = self.snapshot();
+        };
         let empty = EnvironmentsSnapshot::default();
         let previous = match previous {
             PreviousSectionState::Known(previous) => previous,
@@ -175,7 +172,7 @@ impl WorldStateSection for EnvironmentsState {
             && updates
                 .values()
                 .all(|update| matches!(update, EnvironmentUpdate::Current(_)));
-        (!updates.is_empty() || turn_context_values_changed).then(|| {
+        let fragment = (!updates.is_empty() || turn_context_values_changed).then(|| {
             Box::new(RenderedEnvironments {
                 updates,
                 legacy_single,
@@ -191,7 +188,8 @@ impl WorldStateSection for EnvironmentsState {
                 filesystem: self.filesystem.clone(),
                 subagents: self.subagents.clone(),
             }) as Box<dyn ContextualUserFragment>
-        })
+        });
+        (Some(current), fragment)
     }
 }
 

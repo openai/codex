@@ -84,6 +84,7 @@ fn unchanged_mode_is_reemitted_after_usage_hint_migration() {
 
     let instructions = current
         .render_diff(PreviousSectionState::Known(&previous))
+        .1
         .expect("unchanged mode should follow migrated usage instructions");
 
     assert_eq!(
@@ -143,13 +144,19 @@ fn catalog_role_updates_remain_separate_from_active_mode() {
 #[test]
 fn custom_mode_is_bounded_before_snapshot_and_rendering() {
     let state = state(Some(MultiAgentMode::Custom("custom mode ".repeat(1_000))));
-    let Some(MultiAgentMode::Custom(snapshot_mode)) = state.snapshot().mode else {
+    let Some(MultiAgentMode::Custom(snapshot_mode)) = state
+        .render_diff(PreviousSectionState::Absent)
+        .0
+        .unwrap()
+        .mode
+    else {
         panic!("expected custom multi-agent mode")
     };
     assert!(approx_token_count(&snapshot_mode) < 1_000);
 
     let rendered = state
         .render_diff(PreviousSectionState::Absent)
+        .1
         .expect("custom mode should render")
         .render();
     assert!(approx_token_count(&rendered) < 1_000);

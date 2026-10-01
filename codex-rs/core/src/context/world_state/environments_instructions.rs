@@ -1,4 +1,5 @@
 use super::PreviousSectionState;
+use super::SectionTransition;
 use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
 use crate::context::EnvironmentsInstructions;
@@ -19,10 +20,6 @@ impl WorldStateSection for EnvironmentsInstructionsState {
     const ID: &'static str = "environments_instructions";
     type Snapshot = bool;
 
-    fn snapshot(&self) -> Self::Snapshot {
-        self.enabled
-    }
-
     fn matches_legacy_fragment(role: &str, text: &str) -> bool {
         role == "developer" && EnvironmentsInstructions::matches_text(text)
     }
@@ -38,15 +35,16 @@ impl WorldStateSection for EnvironmentsInstructionsState {
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
+    ) -> SectionTransition<Self::Snapshot> {
+        let current = self.enabled;
         if !self.enabled
             || matches!(previous, PreviousSectionState::Known(previous) if *previous)
             || matches!(previous, PreviousSectionState::Unknown)
         {
-            return None;
+            return (Some(current), None);
         }
 
-        Some(Box::new(EnvironmentsInstructions))
+        (Some(current), Some(Box::new(EnvironmentsInstructions)))
     }
 }
 

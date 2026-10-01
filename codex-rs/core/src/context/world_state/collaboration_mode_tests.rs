@@ -125,6 +125,7 @@ fn empty_catalog_collaboration_message_suppresses_legacy_instructions() {
     assert_eq!(
         state
             .render_diff(PreviousSectionState::Absent)
+            .1
             .expect("explicit empty collaboration message")
             .render(),
         format!("{COLLABORATION_MODE_OPEN_TAG}{COLLABORATION_MODE_CLOSE_TAG}")
@@ -172,6 +173,7 @@ fn legacy_collaboration_mode_snapshots_refresh_catalog_messages_once() {
             assert_eq!(
                 state
                     .render_diff(PreviousSectionState::Known(&previous))
+                    .1
                     .expect("legacy snapshot should refresh collaboration instructions")
                     .render(),
                 format!(
@@ -180,7 +182,10 @@ fn legacy_collaboration_mode_snapshots_refresh_catalog_messages_once() {
             );
             assert!(
                 state
-                    .render_diff(PreviousSectionState::Known(&state.snapshot()))
+                    .render_diff(PreviousSectionState::Known(
+                        &state.render_diff(PreviousSectionState::Absent).0.unwrap()
+                    ))
+                    .1
                     .is_none()
             );
         }

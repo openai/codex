@@ -78,6 +78,7 @@ fn sort_json(value: serde_json::Value) -> serde_json::Value {
 }
 
 fn snapshot_value<S: WorldStateSection>(section: &S) -> serde_json::Value {
-    super::section_snapshot(section, section.snapshot())
+    ErasedWorldStateSection::render_diff(section, PreviousSectionState::Absent)
+        .0
         .expect("world-state section snapshot should serialize to a non-null value")
 }

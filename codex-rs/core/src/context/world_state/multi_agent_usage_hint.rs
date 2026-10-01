@@ -1,4 +1,5 @@
 use super::PreviousSectionState;
+use super::SectionTransition;
 use super::WorldStateHash;
 use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
@@ -9,21 +10,22 @@ use crate::context::MultiAgentUsageHint;
 #[derive(Clone, Debug)]
 pub(crate) struct MultiAgentUsageHintState {
     instructions: MultiAgentRoleInstructions,
+    pub(super) fingerprint: WorldStateHash,
 }
 
 impl MultiAgentUsageHintState {
     pub(crate) fn new(instructions: MultiAgentRoleInstructions) -> Self {
-        Self { instructions }
+        let fingerprint = WorldStateHash::from_fragment(&instructions);
+        Self {
+            instructions,
+            fingerprint,
+        }
     }
 }
 
 impl WorldStateSection for MultiAgentUsageHintState {
     const ID: &'static str = "multi_agent_usage_hint";
     type Snapshot = WorldStateHash;
-
-    fn snapshot(&self) -> Self::Snapshot {
-        WorldStateHash::from_fragment(&self.instructions)
-    }
 
     fn matches_current_legacy_fragment(&self, role: &str, text: &str) -> bool {
         role == self.instructions.role() && text == self.instructions.render()
@@ -32,9 +34,11 @@ impl WorldStateSection for MultiAgentUsageHintState {
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
-        match previous {
-            PreviousSectionState::Known(previous) if previous == &self.snapshot() => None,
+    ) -> SectionTransition<Self::Snapshot> {
+        let fragment: Option<Box<dyn ContextualUserFragment>> = match previous {
+            PreviousSectionState::Known(previous) if previous == &self.fingerprint => {
+                return (None, None);
+            }
             PreviousSectionState::Unknown => None,
             PreviousSectionState::Known(_) | PreviousSectionState::Absent => {
                 if self.instructions.markers().0.is_empty() {
@@ -45,6 +49,7 @@ impl WorldStateSection for MultiAgentUsageHintState {
                     Some(Box::new(self.instructions.clone()))
                 }
             }
-        }
+        };
+        (Some(self.fingerprint.clone()), fragment)
     }
 }

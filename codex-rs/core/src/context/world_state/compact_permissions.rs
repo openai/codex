@@ -1,4 +1,5 @@
 use super::PreviousSectionState;
+use super::SectionTransition;
 use super::WorldStateSection;
 use crate::context::APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX;
 use crate::context::ApprovedCommandPrefixSaved;
@@ -25,10 +26,6 @@ impl WorldStateSection for CompactPermissionsState {
     const ID: &'static str = "approved_command_prefixes";
     type Snapshot = BTreeSet<Vec<String>>;
 
-    fn snapshot(&self) -> Self::Snapshot {
-        self.prefixes.clone()
-    }
-
     fn matches_legacy_fragment(role: &str, text: &str) -> bool {
         role == "developer"
             && text
@@ -39,18 +36,23 @@ impl WorldStateSection for CompactPermissionsState {
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
+    ) -> SectionTransition<Self::Snapshot> {
+        let current = self.prefixes.clone();
         let added_prefixes = match previous {
             PreviousSectionState::Known(previous) => self
                 .prefixes
                 .difference(previous)
                 .cloned()
                 .collect::<Vec<_>>(),
-            PreviousSectionState::Absent | PreviousSectionState::Unknown => return None,
+            PreviousSectionState::Absent | PreviousSectionState::Unknown => {
+                return (Some(current), None);
+            }
         };
-        format_allow_prefixes(added_prefixes)
-            .filter(|prefixes| !prefixes.is_empty())
-            .map(|prefixes| Box::new(ApprovedCommandPrefixSaved::new(prefixes)) as _)
+        let fragment: Option<Box<dyn ContextualUserFragment>> =
+            format_allow_prefixes(added_prefixes)
+                .filter(|prefixes| !prefixes.is_empty())
+                .map(|prefixes| Box::new(ApprovedCommandPrefixSaved::new(prefixes)) as _);
+        (Some(current), fragment)
     }
 }
 

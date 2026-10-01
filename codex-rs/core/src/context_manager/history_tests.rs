@@ -1,6 +1,7 @@
 use super::*;
 use crate::context::APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX;
 use crate::context::UserInstructions;
+use crate::context::world_state::SectionTransition;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateSection;
 use base64::Engine;
@@ -524,10 +525,6 @@ impl WorldStateSection for TestWorldStateSection {
     const ID: &'static str = "test";
     type Snapshot = bool;
 
-    fn snapshot(&self) -> Self::Snapshot {
-        true
-    }
-
     fn matches_legacy_fragment(role: &str, text: &str) -> bool {
         role == "user" && UserInstructions::matches_text(text)
     }
@@ -535,18 +532,24 @@ impl WorldStateSection for TestWorldStateSection {
     fn render_diff(
         &self,
         previous: crate::context::world_state::PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn crate::context::ContextualUserFragment>> {
+    ) -> SectionTransition<Self::Snapshot> {
+        let current = true;
         let text = match previous {
-            crate::context::world_state::PreviousSectionState::Known(true) => return None,
+            crate::context::world_state::PreviousSectionState::Known(true) => {
+                return (None, None);
+            }
             crate::context::world_state::PreviousSectionState::Unknown => "unknown",
             crate::context::world_state::PreviousSectionState::Absent
             | crate::context::world_state::PreviousSectionState::Known(false) => "test",
         };
-        Some(Box::new(UserInstructions {
-            directory: None,
-            text: text.to_string(),
-        })
-            as Box<dyn crate::context::ContextualUserFragment>)
+        (
+            Some(current),
+            Some(Box::new(UserInstructions {
+                directory: None,
+                text: text.to_string(),
+            })
+                as Box<dyn crate::context::ContextualUserFragment>),
+        )
     }
 }
 

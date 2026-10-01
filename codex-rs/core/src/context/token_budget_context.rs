@@ -1,6 +1,7 @@
 use super::ContextualUserFragment;
 use super::world_state::PreviousSectionState;
 use super::world_state::WorldStateSection;
+use crate::context::world_state::SectionTransition;
 use codex_protocol::AgentPath;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::protocol::CONTEXT_WINDOW_CLOSE_TAG;
@@ -79,16 +80,14 @@ impl WorldStateSection for TokenBudgetContext {
     const ID: &'static str = "context_window";
     type Snapshot = AgentPath;
 
-    fn snapshot(&self) -> Self::Snapshot {
-        self.agent_path.clone()
-    }
-
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
-        matches!(previous, PreviousSectionState::Known(agent_path) if agent_path != &self.agent_path)
-            .then(|| Box::new(self.clone()) as Box<dyn ContextualUserFragment>)
+    ) -> SectionTransition<Self::Snapshot> {
+        let current = self.agent_path.clone();
+        let fragment = matches!(previous, PreviousSectionState::Known(agent_path) if agent_path != &self.agent_path)
+            .then(|| Box::new(self.clone()) as Box<dyn ContextualUserFragment>);
+        (Some(current), fragment)
     }
 }
 

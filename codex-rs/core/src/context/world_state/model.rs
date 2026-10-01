@@ -1,4 +1,5 @@
 use super::PreviousSectionState;
+use super::SectionTransition;
 use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
 use crate::context::ModelSwitchInstructions;
@@ -25,10 +26,6 @@ impl WorldStateSection for ModelInstructionsState {
     const ID: &'static str = "model";
     type Snapshot = String;
 
-    fn snapshot(&self) -> Self::Snapshot {
-        self.model.clone()
-    }
-
     fn matches_legacy_fragment(role: &str, text: &str) -> bool {
         role == "developer" && ModelSwitchInstructions::matches_text(text)
     }
@@ -44,7 +41,8 @@ impl WorldStateSection for ModelInstructionsState {
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
+    ) -> SectionTransition<Self::Snapshot> {
+        let current = self.model.clone();
         let model_changed = match previous {
             PreviousSectionState::Known(previous) => previous != &self.model,
             PreviousSectionState::Unknown | PreviousSectionState::Absent => self
@@ -53,10 +51,12 @@ impl WorldStateSection for ModelInstructionsState {
                 .is_some_and(|previous| previous != self.model),
         };
 
-        (model_changed && !self.instructions.is_empty()).then(|| {
-            Box::new(ModelSwitchInstructions::new(self.instructions.clone()))
-                as Box<dyn ContextualUserFragment>
-        })
+        let fragment: Option<Box<dyn ContextualUserFragment>> =
+            (model_changed && !self.instructions.is_empty()).then(|| {
+                Box::new(ModelSwitchInstructions::new(self.instructions.clone()))
+                    as Box<dyn ContextualUserFragment>
+            });
+        (Some(current), fragment)
     }
 }
 

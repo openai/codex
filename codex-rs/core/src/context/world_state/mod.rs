@@ -56,7 +56,7 @@ pub(crate) use plugins_instructions::PluginsInstructionsState;
 pub(crate) use realtime::RealtimeState;
 pub(crate) use tools::ToolsState;
 
-type SectionTransition = (Option<Value>, Option<Box<dyn ContextualUserFragment>>);
+pub(crate) type SectionTransition<S = Value> = (Option<S>, Option<Box<dyn ContextualUserFragment>>);
 
 trait ErasedWorldStateSection: Send + Sync {
     fn matches_legacy_fragment(&self, role: &str, text: &str) -> bool;
@@ -130,10 +130,10 @@ impl<S: WorldStateSection> ErasedWorldStateSection for S {
             PreviousSectionState::Absent => PreviousSectionState::Absent,
             PreviousSectionState::Unknown => PreviousSectionState::Unknown,
         };
-        let snapshot = section_snapshot(self, self.snapshot()).unwrap_or(Value::Null);
+        let (snapshot, fragment) = WorldStateSection::render_diff(self, previous);
         (
-            Some(snapshot),
-            WorldStateSection::render_diff(self, previous),
+            snapshot.map(|snapshot| section_snapshot(self, snapshot).unwrap_or(Value::Null)),
+            fragment,
         )
     }
 }
@@ -224,8 +224,6 @@ pub(crate) trait WorldStateSection: Send + Sync + 'static {
     const ID: &'static str;
     type Snapshot: DeserializeOwned + Serialize;
 
-    fn snapshot(&self) -> Self::Snapshot;
-
     /// Whether the section contributes comparison state to persisted rollouts.
     fn should_persist(&self) -> bool {
         true
@@ -250,10 +248,12 @@ pub(crate) trait WorldStateSection: Send + Sync + 'static {
         false
     }
 
+    /// Returns independently optional updates to the snapshot and model context.
+    /// A missing snapshot leaves the stored comparison state unchanged.
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>>;
+    ) -> SectionTransition<Self::Snapshot>;
 }
 
 /// Stable fingerprint of a model-visible World State fragment.

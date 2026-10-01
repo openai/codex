@@ -1,6 +1,7 @@
 //! Tracks model-visible permission instructions and approved-command prefix changes.
 
 use super::PreviousSectionState;
+use super::SectionTransition;
 use super::WorldStateHash;
 use super::WorldStateSection;
 use crate::context::ApprovedCommandPrefixSaved;
@@ -75,10 +76,6 @@ impl WorldStateSection for PermissionsState {
     const ID: &'static str = "permissions";
     type Snapshot = PermissionsSnapshot;
 
-    fn snapshot(&self) -> Self::Snapshot {
-        self.snapshot.clone()
-    }
-
     fn matches_legacy_fragment(role: &str, text: &str) -> bool {
         role == "developer" && PermissionsInstructions::matches_text(text)
     }
@@ -94,7 +91,8 @@ impl WorldStateSection for PermissionsState {
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
+    ) -> SectionTransition<Self::Snapshot> {
+        let current = self.snapshot.clone();
         match (previous, &self.snapshot) {
             (
                 PreviousSectionState::Known(PermissionsSnapshot::Current {
@@ -107,7 +105,7 @@ impl WorldStateSection for PermissionsState {
                 },
             ) if previous_instructions == instructions => {
                 if previous_prefixes == approved_command_prefixes {
-                    return None;
+                    return (None, None);
                 }
                 if previous_prefixes.is_subset(approved_command_prefixes) {
                     let added_prefixes = approved_command_prefixes
@@ -115,18 +113,23 @@ impl WorldStateSection for PermissionsState {
                         .cloned()
                         .collect();
                     if let Some(prefixes) = format_allow_prefixes(added_prefixes) {
-                        return Some(Box::new(ApprovedCommandPrefixSaved::new(prefixes)));
+                        return (
+                            Some(current),
+                            Some(Box::new(ApprovedCommandPrefixSaved::new(prefixes))),
+                        );
                     }
                 }
             }
             (
                 PreviousSectionState::Known(PermissionsSnapshot::Legacy(previous)),
                 PermissionsSnapshot::Current { .. },
-            ) if previous == &WorldStateHash::from_fragment(&self.instructions) => return None,
+            ) if previous == &WorldStateHash::from_fragment(&self.instructions) => {
+                return (Some(current), None);
+            }
             _ => {}
         }
 
-        Some(Box::new(self.instructions.clone()))
+        (Some(current), Some(Box::new(self.instructions.clone())))
     }
 }
 

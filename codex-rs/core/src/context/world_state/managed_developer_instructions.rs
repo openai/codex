@@ -1,4 +1,5 @@
 use super::PreviousSectionState;
+use super::SectionTransition;
 use super::WorldStateHash;
 use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
@@ -104,15 +105,6 @@ impl WorldStateSection for ManagedDeveloperInstructionsState {
     const ID: &'static str = "managed_developer_instructions";
     type Snapshot = ManagedDeveloperInstructionsSnapshot;
 
-    fn snapshot(&self) -> Self::Snapshot {
-        ManagedDeveloperInstructionsSnapshot {
-            instructions: self
-                .instructions
-                .as_ref()
-                .map(WorldStateHash::from_fragment),
-        }
-    }
-
     fn matches_legacy_fragment(role: &str, text: &str) -> bool {
         role == "developer" && ManagedDeveloperInstructions::matches_text(text)
     }
@@ -128,10 +120,15 @@ impl WorldStateSection for ManagedDeveloperInstructionsState {
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
-        if matches!(previous, PreviousSectionState::Known(previous) if previous == &self.snapshot())
-        {
-            return None;
+    ) -> SectionTransition<Self::Snapshot> {
+        let current = ManagedDeveloperInstructionsSnapshot {
+            instructions: self
+                .instructions
+                .as_ref()
+                .map(WorldStateHash::from_fragment),
+        };
+        if matches!(previous, PreviousSectionState::Known(previous) if previous == &current) {
+            return (None, None);
         }
         let previous_had_instructions = match previous {
             PreviousSectionState::Absent => false,
@@ -146,9 +143,9 @@ impl WorldStateSection for ManagedDeveloperInstructionsState {
             (None, true) => ManagedDeveloperInstructions {
                 instructions: REMOVAL_NOTICE.to_string(),
             },
-            (None, false) => return None,
+            (None, false) => return (Some(current), None),
         };
-        Some(Box::new(fragment))
+        (Some(current), Some(Box::new(fragment)))
     }
 }
 

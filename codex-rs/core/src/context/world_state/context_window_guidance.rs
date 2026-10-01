@@ -1,4 +1,5 @@
 use super::PreviousSectionState;
+use super::SectionTransition;
 use super::WorldStateSection;
 use crate::context::ContextWindowGuidance;
 use crate::context::ContextualUserFragment;
@@ -29,10 +30,6 @@ impl WorldStateSection for ContextWindowGuidanceState {
     const ID: &'static str = "context_window_guidance";
     type Snapshot = String;
 
-    fn snapshot(&self) -> Self::Snapshot {
-        self.message.clone()
-    }
-
     fn matches_legacy_fragment(role: &str, text: &str) -> bool {
         role == "developer" && ContextWindowGuidance::matches_text(text)
     }
@@ -48,9 +45,9 @@ impl WorldStateSection for ContextWindowGuidanceState {
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
+    ) -> SectionTransition<Self::Snapshot> {
         if matches!(previous, PreviousSectionState::Known(previous) if previous == &self.message) {
-            return None;
+            return (None, None);
         }
         let previous_may_contain_guidance = match previous {
             PreviousSectionState::Known(previous) => !previous.is_empty(),
@@ -59,7 +56,7 @@ impl WorldStateSection for ContextWindowGuidanceState {
         };
         let message = if self.message.is_empty() {
             if !previous_may_contain_guidance {
-                return None;
+                return (Some(self.message.clone()), None);
             }
             REMOVAL_NOTICE.to_string()
         } else if previous_may_contain_guidance {
@@ -67,7 +64,10 @@ impl WorldStateSection for ContextWindowGuidanceState {
         } else {
             self.message.clone()
         };
-        Some(Box::new(ContextWindowGuidance::new(&message)))
+        (
+            Some(self.message.clone()),
+            Some(Box::new(ContextWindowGuidance::new(&message))),
+        )
     }
 }
 

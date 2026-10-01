@@ -17,21 +17,19 @@ impl WorldStateSection for TestSection {
     const ID: &'static str = "test";
     type Snapshot = Self;
 
-    fn snapshot(&self) -> Self::Snapshot {
-        self.clone()
-    }
-
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
-        match previous {
+    ) -> SectionTransition<Self::Snapshot> {
+        let current = self.clone();
+        let fragment: Option<Box<dyn ContextualUserFragment>> = match previous {
             PreviousSectionState::Known(previous) if self.value != previous.value => {
                 Some(Box::new(TestFragment(self.value.clone())))
             }
             PreviousSectionState::Unknown => Some(Box::new(TestFragment("unknown".to_string()))),
             PreviousSectionState::Absent | PreviousSectionState::Known(_) => None,
-        }
+        };
+        (Some(current), fragment)
     }
 }
 
@@ -73,13 +71,11 @@ impl WorldStateSection for DuplicateTestSection {
     const ID: &'static str = "test";
     type Snapshot = ();
 
-    fn snapshot(&self) -> Self::Snapshot {}
-
     fn render_diff(
         &self,
         _previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
-        None
+    ) -> SectionTransition<Self::Snapshot> {
+        (Some(()), None)
     }
 }
 
