@@ -997,7 +997,10 @@ impl Session {
         turn_metadata_state
             .set_responses_api_metadata(per_turn_config.responses_api_metadata.clone());
         let (current_date, timezone) = local_time_context();
-        let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
+        let extension_data = Arc::new(codex_extension_api::ExtensionData::new_with_init(
+            sub_id.clone(),
+            session_configuration.turn_extension_init.clone(),
+        ));
         extension_data.insert(skills_snapshot);
         TurnContext {
             sub_id,

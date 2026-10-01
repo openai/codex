@@ -58,6 +58,7 @@ pub use codex_core::TurnInputRequest;
 pub use codex_core::TurnInputSubmission;
 pub use codex_core::TurnStartOptions;
 pub use codex_core::WaitForEnvironmentToolConfig;
+pub use codex_core::WithTurnExtensionData;
 pub use codex_core::build_models_manager;
 pub use codex_core::config::Config;
 pub use codex_core::config::Constrained;

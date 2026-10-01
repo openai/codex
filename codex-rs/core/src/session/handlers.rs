@@ -1,4 +1,5 @@
 use super::Submission;
+use crate::WithTurnExtensionData;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
 use crate::realtime_conversation::handle_speech as handle_realtime_conversation_speech;
@@ -500,7 +501,11 @@ pub(super) async fn submission_loop(
                     mode,
                     reply,
                 } => {
-                    let result = turn_input::handle(&sess, *request, mode, sub.id.clone()).await;
+                    let request = WithTurnExtensionData {
+                        request: *request,
+                        turn_extension_init: sub.turn_extension_init,
+                    };
+                    let result = turn_input::handle(&sess, request, mode, sub.id.clone()).await;
                     let _ = reply.send(result);
                     false
                 }
@@ -511,7 +516,10 @@ pub(super) async fn submission_loop(
                 } => {
                     let result = turn_input::handle_recovery(
                         &sess,
-                        thread_settings,
+                        WithTurnExtensionData {
+                            request: thread_settings,
+                            turn_extension_init: sub.turn_extension_init,
+                        },
                         start_options,
                         sub.id.clone(),
                     )
@@ -537,6 +545,10 @@ pub(super) async fn submission_loop(
                     reply,
                 } => {
                     let _settings_guard = thread_settings::acquire_persistence_lock(&sess).await;
+                    let thread_settings = WithTurnExtensionData {
+                        request: thread_settings,
+                        turn_extension_init: sub.turn_extension_init,
+                    };
                     match thread_settings::update(&sess, thread_settings).await {
                         Ok(snapshot) => {
                             // Reply first: the caller may hold a lock its event consumer needs.
