@@ -59,6 +59,9 @@ mod daemon_telemetry;
 mod desktop_app;
 mod doctor;
 #[cfg(test)]
+#[path = "exec_args_tests.rs"]
+mod exec_args_tests;
+#[cfg(test)]
 #[path = "exec_server_args_tests.rs"]
 mod exec_server_args_tests;
 mod exec_server_auth;

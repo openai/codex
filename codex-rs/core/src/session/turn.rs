@@ -12,6 +12,7 @@ use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::context::UserVerificationNotice;
+use crate::cyber_access_program;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::feedback_tags;
 use crate::hook_runtime::drain_async_hook_results;
@@ -1335,21 +1336,23 @@ fn comp_hash_changed(previous: Option<&str>, current: Option<&str>) -> bool {
 
 /// Captures the current model's request-scoped state for retrying previous-model compaction.
 ///
-/// Returns `None` when the active authentication does not use the Codex backend, the provider is
-/// not OpenAI, or the previous and current model are the same.
+/// Returns `None` when auth uses neither the Codex backend nor an API key, the provider is
+/// not OpenAI, or the previous and current model/program pairs are the same.
 async fn capture_current_model_fallback_step_context(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    previous_model: &str,
+    previous_turn_context: &TurnContext,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Option<Arc<StepContext>>> {
-    let uses_codex_backend = turn_context
+    let supports_fallback = turn_context
         .auth_manager
         .as_deref()
-        .is_some_and(codex_login::AuthManager::current_auth_uses_codex_backend);
-    if !uses_codex_backend
+        .and_then(codex_login::AuthManager::auth_cached)
+        .is_some_and(|auth| auth.uses_codex_backend() || auth.is_api_key_auth());
+    if !supports_fallback
         || !turn_context.provider.info().is_openai()
-        || previous_model == turn_context.model_info().slug
+        || (previous_turn_context.model_info().slug == turn_context.model_info().slug
+            && previous_turn_context.cyber_access_program == turn_context.cyber_access_program)
     {
         return Ok(None);
     }
@@ -1386,7 +1389,10 @@ async fn maybe_run_previous_model_inline_compact(
     // turn's program so compaction uses the same model/cyber_access_program pair as that turn.
     // Combining the previous model with the current turn's program can produce a pair
     // that the server rejects.
-    previous_model_turn_context.cyber_access_program = previous_turn_settings.cyber_access_program;
+    previous_model_turn_context.cyber_access_program = cyber_access_program::for_provider(
+        &previous_model_turn_context.config.model_provider_id,
+        previous_turn_settings.cyber_access_program,
+    );
     let previous_model_turn_context = Arc::new(previous_model_turn_context);
 
     if should_compact_for_comp_hash_change {
@@ -1396,7 +1402,7 @@ async fn maybe_run_previous_model_inline_compact(
         let fallback_step_context = capture_current_model_fallback_step_context(
             sess,
             turn_context,
-            previous_model.as_str(),
+            &previous_model_turn_context,
             cancellation_token,
         )
         .await?;
@@ -1444,7 +1450,7 @@ async fn maybe_run_previous_model_inline_compact(
         let fallback_step_context = capture_current_model_fallback_step_context(
             sess,
             turn_context,
-            previous_model.as_str(),
+            &previous_model_turn_context,
             cancellation_token,
         )
         .await?;

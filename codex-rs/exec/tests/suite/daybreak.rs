@@ -213,6 +213,46 @@ async fn exec_resumes_and_forks_the_saved_daybreak_choice() -> anyhow::Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_explicit_cyber_program_overrides_daybreak_for_one_turn() -> anyhow::Result<()> {
+    let (test, server) = configured_daybreak_exec().await?;
+    let response =
+        responses::mount_sse_once(&server, responses::sse_completed("explicit-program")).await;
+    let output = test
+        .cmd_with_server(&server)
+        .env_remove("CODEX_ACCESS_TOKEN")
+        .env_remove("CODEX_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .args([
+            "--skip-git-repo-check",
+            "--json",
+            "--cyber-access-program",
+            "daybreak_red",
+            "hello",
+        ])
+        .output()?;
+    let thread_id = started_thread(output)?;
+    assert_eq!(
+        response.single_request().body_json()["access_programs"],
+        json!({"cyber": "daybreak_red"})
+    );
+
+    let response =
+        responses::mount_sse_once(&server, responses::sse_completed("saved-daybreak")).await;
+    test.cmd_with_server(&server)
+        .env_remove("CODEX_ACCESS_TOKEN")
+        .env_remove("CODEX_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .args(["--skip-git-repo-check", "resume", &thread_id, "continue"])
+        .assert()
+        .success();
+    assert_eq!(
+        response.single_request().body_json()["access_programs"],
+        json!({"cyber": "daybreak_blue"})
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_resume_override_does_not_change_a_standard_thread() -> anyhow::Result<()> {
     let (test, server) = configured_daybreak_exec().await?;
     let response =

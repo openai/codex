@@ -229,6 +229,48 @@ describe("Codex", () => {
     }
   });
 
+  it("passes cyber access program selections only to the turns that specify them", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      responseBodies: [
+        sse(responseCompleted("response_1")),
+        sse(responseCompleted("response_2")),
+        sse(responseCompleted("response_3")),
+        sse(responseCompleted("response_4")),
+      ],
+    });
+    const { args: spawnArgs, restore } = codexExecSpy();
+    const { client, cleanup } = createMockClient(url);
+
+    try {
+      const thread = client.startThread();
+      await thread.run("select blue", { cyberAccessProgram: "daybreak_blue" });
+      const threadId = thread.id;
+      expect(threadId).toEqual(expect.any(String));
+
+      const streamed = await thread.runStreamed("select red", {
+        cyberAccessProgram: "daybreak_red",
+      });
+      for await (const _ of streamed.events) {
+        // Consume the streamed turn before resuming the thread.
+      }
+      await thread.run("select standard", { cyberAccessProgram: "standard" });
+      await thread.run("use automatic selection");
+
+      expect(spawnArgs).toHaveLength(4);
+      expectPair(spawnArgs[0], ["--cyber-access-program", "daybreak_blue"]);
+      expectPair(spawnArgs[1], ["--cyber-access-program", "daybreak_red"]);
+      expectPair(spawnArgs[2], ["--cyber-access-program", "standard"]);
+      expect(spawnArgs[3]).not.toContain("--cyber-access-program");
+      for (const args of spawnArgs.slice(1)) {
+        expectPair(args, ["resume", threadId!]);
+      }
+    } finally {
+      cleanup();
+      restore();
+      await close();
+    }
+  }, 15_000);
+
   it.each(["high", "persistent"] as const)(
     "passes %s modelReasoningEffort to exec",
     async (effort) => {

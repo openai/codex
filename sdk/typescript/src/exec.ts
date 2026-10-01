@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 
 import type { CodexConfigObject, CodexConfigValue } from "./codexOptions";
 import { SandboxMode, ModelReasoningEffort, ApprovalMode, WebSearchMode } from "./threadOptions";
+import type { CyberAccessProgram } from "./turnOptions";
 
 export type CodexExecArgs = {
   input: string;
@@ -28,6 +29,8 @@ export type CodexExecArgs = {
   skipGitRepoCheck?: boolean;
   // --output-schema
   outputSchemaFile?: string;
+  // --cyber-access-program
+  cyberAccessProgram?: CyberAccessProgram;
   // --config model_reasoning_effort
   modelReasoningEffort?: ModelReasoningEffort;
   // AbortSignal to cancel the execution
@@ -138,6 +141,10 @@ export class CodexExec {
 
     if (args.outputSchemaFile) {
       commandArgs.push("--output-schema", args.outputSchemaFile);
+    }
+
+    if (args.cyberAccessProgram !== undefined) {
+      commandArgs.push("--cyber-access-program", args.cyberAccessProgram);
     }
 
     if (args.modelReasoningEffort) {

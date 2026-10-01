@@ -233,6 +233,7 @@ struct ExecRunArgs {
     skip_git_repo_check: bool,
     stderr_with_ansi: bool,
     thread_source: ThreadSource,
+    cyber_access_program: Option<codex_app_server_protocol::CyberAccessProgram>,
 }
 
 struct ManagedExecWorktree {
@@ -268,6 +269,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         strict_config,
         shared,
         thread_source,
+        cyber_access_program,
         skip_git_repo_check,
         ephemeral,
         ignore_user_config,
@@ -279,6 +281,17 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         output_schema: output_schema_path,
         mut config_overrides,
     } = cli;
+    if cyber_access_program.is_some() {
+        match command.as_ref() {
+            Some(ExecCommand::Review(_)) => {
+                anyhow::bail!("--cyber-access-program is not supported with `codex exec review`");
+            }
+            Some(ExecCommand::Fork(args)) if args.prompt.is_none() && prompt.is_none() => {
+                anyhow::bail!("Forking with --cyber-access-program requires a prompt");
+            }
+            Some(ExecCommand::Resume(_) | ExecCommand::Fork(_)) | None => {}
+        }
+    }
     let mut shared = shared.into_inner();
     shared.take_auto_review_config_overrides(&mut config_overrides);
     let SharedCliOptions {
@@ -757,6 +770,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         skip_git_repo_check,
         stderr_with_ansi,
         thread_source: thread_source.map(Into::into).unwrap_or(ThreadSource::User),
+        cyber_access_program: cyber_access_program.map(Into::into),
     })
     .instrument(exec_span)
     .await
@@ -858,6 +872,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         skip_git_repo_check,
         stderr_with_ansi,
         thread_source,
+        cyber_access_program,
     } = args;
 
     if config.daybreak_enabled && !matches!(&command, Some(ExecCommand::Review(_))) {
@@ -1191,14 +1206,19 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             items,
             output_schema,
         } => {
-            let cyber_access_program = daybreak::program_for_turn(
-                &client,
-                &mut request_ids,
-                &session_configured.model,
-                &session_configured.model_provider_id,
-                daybreak_enabled,
-            )
-            .await?;
+            let cyber_access_program = match cyber_access_program {
+                Some(program) => Some(program),
+                None => {
+                    daybreak::program_for_turn(
+                        &client,
+                        &mut request_ids,
+                        &session_configured.model,
+                        &session_configured.model_provider_id,
+                        daybreak_enabled,
+                    )
+                    .await?
+                }
+            };
             let response: TurnStartResponse = send_request_with_response(
                 &client,
                 ClientRequest::TurnStart {

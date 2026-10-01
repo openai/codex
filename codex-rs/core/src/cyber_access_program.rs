@@ -3,6 +3,7 @@
 use codex_api::AccessPrograms;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::turn_input::CyberAccessProgram;
@@ -16,7 +17,7 @@ pub(crate) enum ApiKeyCyberAccessPrograms {
 
 impl ApiKeyCyberAccessPrograms {
     pub(crate) fn from_config(config: &crate::config::Config) -> Self {
-        if config.model_provider_id != codex_model_provider_info::OPENAI_PROVIDER_ID {
+        if config.model_provider_id != OPENAI_PROVIDER_ID {
             Self::UnsupportedProvider
         } else if config.features.enabled(Feature::ApiKeyCyberAccessPrograms) {
             Self::Enabled
@@ -24,6 +25,13 @@ impl ApiKeyCyberAccessPrograms {
             Self::Disabled
         }
     }
+}
+
+pub(crate) fn for_provider(
+    provider_id: &str,
+    program: Option<CyberAccessProgram>,
+) -> Option<CyberAccessProgram> {
+    program.filter(|_| provider_id == OPENAI_PROVIDER_ID)
 }
 
 pub(crate) fn for_auth(

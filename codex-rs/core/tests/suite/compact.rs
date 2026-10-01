@@ -2853,8 +2853,12 @@ async fn pre_sampling_compact_falls_back_when_previous_model_is_not_found() {
     );
 }
 
+#[test_case::test_case("openai"; "built in provider")]
+#[test_case::test_case("local"; "cloud agent provider alias")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pre_sampling_compact_falls_back_after_previous_model_invalid_request_on_downshift() {
+async fn pre_sampling_compact_falls_back_after_previous_model_invalid_request_on_downshift(
+    provider_id: &'static str,
+) {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
@@ -2909,11 +2913,15 @@ async fn pre_sampling_compact_falls_back_after_previous_model_invalid_request_on
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model(retired_model)
         .with_config(move |config| {
+            config.model_provider_id = provider_id.to_owned();
             config.model_provider = model_provider;
             config.tool_registry.turn_metadata_includes_tool_info = true;
             set_test_compact_prompt(config);
         });
-    let test = builder.build(&server).await.expect("build test codex");
+    let test = builder
+        .build_with_auto_env(&server)
+        .await
+        .expect("build test codex");
 
     test.codex
         .start_or_steer_turn(disabled_permission_user_turn(
