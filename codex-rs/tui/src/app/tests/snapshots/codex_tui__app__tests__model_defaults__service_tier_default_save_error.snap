@@ -1,0 +1,6 @@
+---
+source: tui/src/app/tests/model_defaults_tests.rs
+expression: "service_tier_error.expect(\"expected a service-tier save error\")"
+---
+■ Failed to save default service tier: config/batchWrite failed in TUI: config/batchWrite failed: failed to load configuration: <config-path>:1:8: unclosed table, expected `]` (code -32603)
+You can continue this task. To save the default, resolve the error above, then switch to a different tier and back to the desired tier.

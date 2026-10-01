@@ -2525,8 +2525,10 @@ impl App {
                     }
                     Err(err) => {
                         tracing::error!(error = %err, "failed to persist service tier selection");
+                        let error = format_config_error(&err);
                         self.chat_widget.add_error_message(format!(
-                            "Failed to save default service tier: {err}"
+                            "Failed to save default service tier: {error}\n\
+                             You can continue this task. To save the default, resolve the error above, then switch to a different tier and back to the desired tier."
                         ));
                     }
                 }
