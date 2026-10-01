@@ -2,8 +2,13 @@
 //! Message IDs survive removal so replay cannot reopen an answered or skipped question.
 
 use super::*;
+use crate::history_cell::sanitize_user_text;
 use codex_context_fragments::AnsweredQuestion;
 use codex_context_fragments::ContextualUserFragment;
+use codex_utils_string::take_bytes_at_char_boundary;
+
+// Match the model-authored title budget used by AnsweredQuestion.
+const MAX_RECOVERED_QUESTION_TITLE_BYTES: usize = 512;
 
 impl AsyncQuestions {
     pub(crate) fn append(&mut self, message_id: &str, questions: &[AsyncUserInputQuestion]) {
@@ -206,15 +211,14 @@ impl AsyncQuestions {
         self.composer.reset_vim_mode();
     }
 
-    /// Recover unsent typed answers before clearing all pending questions.
+    /// Recover unsent typed answers with their quoted questions before clearing pending questions.
     pub(crate) fn take_pending_drafts(&mut self) -> Vec<String> {
         self.save_current_draft();
         let drafts = self
             .state
             .pending
             .iter()
-            .map(|question| question.draft.text_with_pending().trim().to_string())
-            .filter(|text| !text.is_empty())
+            .filter_map(PendingQuestion::recovered_draft)
             .collect();
         self.clear_pending();
         drafts
@@ -245,5 +249,30 @@ impl AsyncQuestions {
         }
         self.restore_current_draft();
         self.resolve_answers(&answered_ids.into_iter().collect::<Vec<_>>());
+    }
+}
+
+impl PendingQuestion {
+    fn recovered_draft(&self) -> Option<String> {
+        let answer = self.draft.text_with_pending();
+        let answer = answer.trim();
+        if answer.is_empty() {
+            return None;
+        }
+
+        let title = &self.question.title;
+        let prefix = take_bytes_at_char_boundary(title, MAX_RECOVERED_QUESTION_TITLE_BYTES);
+        let sanitized = sanitize_user_text(prefix.into());
+        let mut quoted = textwrap::indent(&sanitized, "> ");
+        if quoted.ends_with('\n') {
+            quoted.pop();
+        }
+        if quoted.is_empty() {
+            quoted.push_str("> ");
+        }
+        if prefix.len() < title.len() {
+            quoted.push('…');
+        }
+        Some(format!("{quoted}\n\n{answer}"))
     }
 }

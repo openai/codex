@@ -96,8 +96,9 @@
 //! # Question Draft Recovery
 //!
 //! Live terminal turns recover typed, unsubmitted question answers into the main composer.
-//! The append flushes buffered input, dismisses unused sparkle eligibility, and adds a newline
-//! after existing text. The separator and recovered answer form one Vim edit; large answers
+//! Each recovered answer follows its original question as a Markdown blockquote, with blank lines
+//! separating questions, answers, and existing text. The append flushes buffered input and dismisses
+//! unused sparkle eligibility. The separator and recovered answer form one Vim edit; large answers
 //! use atomic paste placeholders backed by their original text.
 //! Recovery escapes a shell or slash command prefix before appending answers, keeping the
 //! combined draft editable and its later submission literal. Shell mode's separate `!` becomes

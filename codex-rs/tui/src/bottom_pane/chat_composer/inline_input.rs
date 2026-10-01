@@ -46,7 +46,7 @@ impl ChatComposer {
         }
         self.move_cursor_to_end();
         if !self.current_text().is_empty() {
-            self.insert_str("\n");
+            self.insert_str("\n\n");
         }
         let char_count = drafts.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {

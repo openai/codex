@@ -1,11 +1,12 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 5289
 expression: terminal.backend()
 ---
 "                                        "
 "› existing draft                        "
-"  answer                                "
 "                                        "
+"  answer                                "
 "                                        "
 "                                        "
 "                                        "

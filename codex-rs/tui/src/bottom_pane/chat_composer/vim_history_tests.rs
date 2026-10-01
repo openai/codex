@@ -104,7 +104,7 @@ fn recovered_answers_undo_as_one_vim_edit() {
                     composer.current_text_with_pending(),
                     composer.draft.textarea.vim_mode_label(),
                 ),
-                (format!("{edited}\n{answer}"), Some(mode))
+                (format!("{edited}\n\n{answer}"), Some(mode))
             );
             escape(&mut composer);
             let after = composer.draft_snapshot();
@@ -127,7 +127,7 @@ fn recovered_answers_undo_as_one_vim_edit() {
                     composer.draft.textarea.vim_query().is_some(),
                     composer.draft.textarea.is_vim_operator_pending(),
                 ),
-                (format!("existing draft\n{answer}"), false, false)
+                (format!("existing draft\n\n{answer}"), false, false)
             );
             let after = composer.draft_snapshot();
             keys(&mut composer, "u");
@@ -151,7 +151,7 @@ fn recovered_answers_undo_as_one_vim_edit() {
         escape(&mut composer);
         assert_eq!(
             composer.current_text_with_pending(),
-            format!("bc\n{answer}")
+            format!("bc\n\n{answer}")
         );
         let after = composer.draft_snapshot();
         keys(&mut composer, "u");

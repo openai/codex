@@ -59,7 +59,7 @@ impl BottomPane {
             return;
         }
         self.composer
-            .edit_stored_draft(|composer| composer.append_recovered_drafts(&drafts.join("\n")));
+            .edit_stored_draft(|composer| composer.append_recovered_drafts(&drafts.join("\n\n")));
         self.request_redraw();
     }
 
