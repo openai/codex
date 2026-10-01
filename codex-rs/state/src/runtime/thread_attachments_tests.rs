@@ -7,6 +7,9 @@ use crate::MAX_THREAD_ATTACHMENT_PAYLOAD_BYTES;
 use crate::MAX_THREAD_ATTACHMENT_TYPE_BYTES;
 use crate::MAX_THREAD_ATTACHMENTS_PER_THREAD;
 use crate::RemoveThreadAttachmentOutcome;
+use crate::ThreadAttachmentArchiveFilter;
+use crate::ThreadAttachmentOwner;
+use crate::ThreadAttachmentOwnerPage;
 use crate::runtime::test_support::test_thread_metadata;
 use crate::runtime::test_support::unique_temp_dir;
 use anyhow::Result;
@@ -451,6 +454,135 @@ async fn concurrent_attachment_attachments_preserve_one_deterministic_identity()
             .attachments
             .len(),
         1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn attachment_reverse_lookup_filters_pages_and_tracks_membership() -> Result<()> {
+    let (runtime, codex_home, mut thread_ids) = runtime_with_threads(/*count*/ 3).await?;
+    thread_ids.sort_by_key(ThreadId::to_string);
+    // Reference-backed forks may have attachments before their own first user message.
+    sqlx::query("UPDATE threads SET preview = '', first_user_message = ''")
+        .execute(runtime.pool.as_ref())
+        .await?;
+    for thread_id in &thread_ids[..2] {
+        runtime
+            .add_thread_attachment(*thread_id, "worktree", "repo|branch", &json!({}))
+            .await?;
+    }
+    runtime
+        .add_thread_attachment(thread_ids[2], "pull_request", "repo|branch", &json!({}))
+        .await?;
+    runtime
+        .add_thread_attachment(thread_ids[2], "worktree", "other", &json!({}))
+        .await?;
+    runtime
+        .mark_archived(
+            thread_ids[0],
+            &codex_home.join("archived.jsonl"),
+            Utc::now(),
+        )
+        .await?;
+    let archived_thread = ThreadAttachmentOwner {
+        thread_id: thread_ids[0],
+        archived: true,
+    };
+    let active_thread = ThreadAttachmentOwner {
+        thread_id: thread_ids[1],
+        archived: false,
+    };
+    let first_page = runtime
+        .list_thread_attachment_threads(
+            "worktree",
+            "repo|branch",
+            ThreadAttachmentArchiveFilter::All,
+            /*cursor*/ None,
+            /*limit*/ 1,
+        )
+        .await?;
+    assert_eq!(first_page.threads, vec![archived_thread.clone()]);
+    let cursor = first_page
+        .next_cursor
+        .expect("second owner requires continuation");
+    assert_eq!(
+        runtime
+            .list_thread_attachment_threads(
+                "worktree",
+                "repo|branch",
+                ThreadAttachmentArchiveFilter::All,
+                Some(&cursor),
+                /*limit*/ 1
+            )
+            .await?,
+        ThreadAttachmentOwnerPage {
+            threads: vec![active_thread.clone()],
+            next_cursor: None
+        }
+    );
+    for (attachment_type, identity_key, archive_filter) in [
+        (
+            "pull_request",
+            "repo|branch",
+            ThreadAttachmentArchiveFilter::All,
+        ),
+        ("worktree", "other", ThreadAttachmentArchiveFilter::All),
+        (
+            "worktree",
+            "repo|branch",
+            ThreadAttachmentArchiveFilter::NonArchived,
+        ),
+    ] {
+        let error = runtime
+            .list_thread_attachment_threads(
+                attachment_type,
+                identity_key,
+                archive_filter,
+                Some(&cursor),
+                /*limit*/ 1,
+            )
+            .await
+            .expect_err("cursor is bound to the complete lookup");
+        assert!(error.to_string().contains("invalid pagination cursor"));
+    }
+    for (archive_filter, expected) in [
+        (ThreadAttachmentArchiveFilter::Archived, archived_thread),
+        (ThreadAttachmentArchiveFilter::NonArchived, active_thread),
+    ] {
+        assert_eq!(
+            runtime
+                .list_thread_attachment_threads(
+                    "worktree",
+                    "repo|branch",
+                    archive_filter,
+                    /*cursor*/ None,
+                    /*limit*/ 1
+                )
+                .await?,
+            ThreadAttachmentOwnerPage {
+                threads: vec![expected],
+                next_cursor: None
+            }
+        );
+    }
+    runtime
+        .remove_thread_attachment(thread_ids[0], "worktree", "repo|branch")
+        .await?;
+    runtime.delete_thread(thread_ids[1]).await?;
+    assert_eq!(
+        runtime
+            .list_thread_attachment_threads(
+                "worktree",
+                "repo|branch",
+                ThreadAttachmentArchiveFilter::All,
+                /*cursor*/ None,
+                /*limit*/ 10
+            )
+            .await?,
+        ThreadAttachmentOwnerPage {
+            threads: Vec::new(),
+            next_cursor: None
+        }
     );
     Ok(())
 }

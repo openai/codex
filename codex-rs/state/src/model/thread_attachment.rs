@@ -46,3 +46,25 @@ pub struct ThreadAttachmentPage {
     /// Opaque cursor for the next page, or `None` when the selection is exhausted.
     pub next_cursor: Option<String>,
 }
+
+/// Selects attachment owners by their persisted archive state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadAttachmentArchiveFilter {
+    All,
+    NonArchived,
+    Archived,
+}
+
+/// A thread whose current attachment membership contains the requested resource.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadAttachmentOwner {
+    pub thread_id: ThreadId,
+    pub archived: bool,
+}
+
+/// One page of attachment owners, ordered by thread ID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadAttachmentOwnerPage {
+    pub threads: Vec<ThreadAttachmentOwner>,
+    pub next_cursor: Option<String>,
+}
