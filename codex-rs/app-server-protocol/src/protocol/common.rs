@@ -678,6 +678,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadAttachmentListResponse,
     },
+    ThreadAttachmentOwnerList => "thread/attachmentOwner/list" {
+        params: v2::ThreadAttachmentOwnerListParams,
+        serialization: None,
+        response: v2::ThreadAttachmentOwnerListResponse,
+    },
     ThreadAttachmentRemove => "thread/attachment/remove" {
         params: v2::ThreadAttachmentRemoveParams,
         serialization: thread_id(params.thread_id),

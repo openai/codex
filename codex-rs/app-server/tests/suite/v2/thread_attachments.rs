@@ -19,6 +19,8 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadAttachment;
 use codex_app_server_protocol::ThreadAttachmentAddOutcome;
 use codex_app_server_protocol::ThreadAttachmentAddParams;
@@ -26,6 +28,9 @@ use codex_app_server_protocol::ThreadAttachmentAddResponse;
 use codex_app_server_protocol::ThreadAttachmentListParams;
 use codex_app_server_protocol::ThreadAttachmentListResponse;
 use codex_app_server_protocol::ThreadAttachmentOperation;
+use codex_app_server_protocol::ThreadAttachmentOwner;
+use codex_app_server_protocol::ThreadAttachmentOwnerListParams;
+use codex_app_server_protocol::ThreadAttachmentOwnerListResponse;
 use codex_app_server_protocol::ThreadAttachmentRemoveParams;
 use codex_app_server_protocol::ThreadAttachmentRemoveResponse;
 use codex_app_server_protocol::ThreadAttachmentUpdatedNotification;
@@ -140,7 +145,7 @@ async fn thread_attachments_support_unloaded_listing_and_idempotent_attachment()
         .request(|request_id| ClientRequest::ThreadAttachmentAdd {
             request_id,
             params: ThreadAttachmentAddParams {
-                thread_id: unrelated_thread,
+                thread_id: unrelated_thread.clone(),
                 attachment_type: "pull_request".to_string(),
                 identity_key: r#"["github.com","openai","codex",789]"#.to_string(),
                 payload: json!({ "url": "https://github.com/openai/codex/pull/789" }),
@@ -148,6 +153,97 @@ async fn thread_attachments_support_unloaded_listing_and_idempotent_attachment()
         })
         .await?;
     assert_eq!(unrelated.outcome, ThreadAttachmentAddOutcome::Created);
+
+    // Neither the same type with another key nor the same key with another type matches.
+    let _: ThreadAttachmentAddResponse = server
+        .request(|request_id| ClientRequest::ThreadAttachmentAdd {
+            request_id,
+            params: ThreadAttachmentAddParams {
+                thread_id: unrelated_thread.clone(),
+                attachment_type: "document".to_string(),
+                identity_key: first_attachment.identity_key.clone(),
+                payload: json!({}),
+            },
+        })
+        .await?;
+    let reverse_params = ThreadAttachmentOwnerListParams {
+        attachment_type: first_attachment.attachment_type.clone(),
+        identity_key: first_attachment.identity_key.clone(),
+        archived: None,
+        cursor: None,
+        limit: None,
+    };
+    let matched: ThreadAttachmentOwnerListResponse = server
+        .request(|request_id| ClientRequest::ThreadAttachmentOwnerList {
+            request_id,
+            params: reverse_params.clone(),
+        })
+        .await?;
+    let active_match = ThreadAttachmentOwner {
+        thread_id: first_thread.clone(),
+        archived: false,
+    };
+    assert_eq!(
+        matched,
+        ThreadAttachmentOwnerListResponse {
+            data: vec![active_match.clone()],
+            next_cursor: None,
+        }
+    );
+    let _: ThreadAttachmentAddResponse = server
+        .request(|request_id| ClientRequest::ThreadAttachmentAdd {
+            request_id,
+            params: ThreadAttachmentAddParams {
+                thread_id: unrelated_thread.clone(),
+                attachment_type: first_attachment.attachment_type.clone(),
+                identity_key: first_attachment.identity_key.clone(),
+                payload: first_attachment.payload.clone(),
+            },
+        })
+        .await?;
+    let _: ThreadArchiveResponse = server
+        .request(|request_id| ClientRequest::ThreadArchive {
+            request_id,
+            params: ThreadArchiveParams {
+                thread_id: unrelated_thread.clone(),
+            },
+        })
+        .await?;
+    let all_matches: ThreadAttachmentOwnerListResponse = server
+        .request(|request_id| ClientRequest::ThreadAttachmentOwnerList {
+            request_id,
+            params: reverse_params.clone(),
+        })
+        .await?;
+    let archived_match = ThreadAttachmentOwner {
+        thread_id: unrelated_thread,
+        archived: true,
+    };
+    let mut expected_matches = vec![active_match, archived_match.clone()];
+    expected_matches.sort_by(|left, right| left.thread_id.cmp(&right.thread_id));
+    assert_eq!(
+        all_matches,
+        ThreadAttachmentOwnerListResponse {
+            data: expected_matches,
+            next_cursor: None,
+        }
+    );
+    let archived_matches: ThreadAttachmentOwnerListResponse = server
+        .request(|request_id| ClientRequest::ThreadAttachmentOwnerList {
+            request_id,
+            params: ThreadAttachmentOwnerListParams {
+                archived: Some(true),
+                ..reverse_params
+            },
+        })
+        .await?;
+    assert_eq!(
+        archived_matches,
+        ThreadAttachmentOwnerListResponse {
+            data: vec![archived_match],
+            next_cursor: None,
+        }
+    );
 
     let first_page: ThreadAttachmentListResponse = server
         .request(|request_id| ClientRequest::ThreadAttachmentList {
@@ -340,6 +436,10 @@ async fn thread_attachment_requests_reject_invalid_identities_and_cursors() -> R
                 "attachmentType": "pull_request",
                 "identityKey": " "
             }),
+        ),
+        (
+            "thread/attachmentOwner/list",
+            json!({ "attachmentType": "pull_request", "identityKey": "key", "cursor": "invalid-cursor" }),
         ),
         ("thread/attachment/list", json!({ "threadId": "invalid" })),
         (

@@ -3,9 +3,11 @@
 use super::LocalThreadStore;
 use crate::AddThreadAttachmentOutcome;
 use crate::AddThreadAttachmentParams;
+use crate::ListThreadAttachmentThreadsParams;
 use crate::ListThreadAttachmentsParams;
 use crate::RemoveThreadAttachmentOutcome;
 use crate::RemoveThreadAttachmentParams;
+use crate::ThreadAttachmentOwnerPage;
 use crate::ThreadAttachmentPage;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
@@ -59,6 +61,23 @@ pub(super) async fn list_thread_attachments(
         .list_thread_attachments(params.thread_id, params.cursor.as_deref(), params.limit)
         .await
         .map_err(|error| attachment_error("list", /*thread_id*/ None, error))
+}
+
+pub(super) async fn list_thread_attachment_threads(
+    store: &LocalThreadStore,
+    params: ListThreadAttachmentThreadsParams,
+) -> ThreadStoreResult<ThreadAttachmentOwnerPage> {
+    let state_db = state_db(store, "thread/attachmentOwner/list")?;
+    state_db
+        .list_thread_attachment_threads(
+            &params.attachment_type,
+            &params.identity_key,
+            params.archive_filter,
+            params.cursor.as_deref(),
+            params.limit,
+        )
+        .await
+        .map_err(|error| attachment_error("list owners of", /*thread_id*/ None, error))
 }
 
 pub(super) async fn remove_thread_attachment(

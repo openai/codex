@@ -1,5 +1,6 @@
 //! Typed parameters for attachment operations on stored threads.
 
+use crate::ThreadAttachmentArchiveFilter;
 use codex_protocol::ThreadId;
 use serde_json::Value;
 
@@ -36,4 +37,14 @@ pub struct RemoveThreadAttachmentParams {
     pub attachment_type: String,
     /// Stable attachment identity within its thread and type.
     pub identity_key: String,
+}
+
+/// Parameters for finding all owners of one attachment identity in this store.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListThreadAttachmentThreadsParams {
+    pub attachment_type: String,
+    pub identity_key: String,
+    pub archive_filter: ThreadAttachmentArchiveFilter,
+    pub cursor: Option<String>,
+    pub limit: usize,
 }

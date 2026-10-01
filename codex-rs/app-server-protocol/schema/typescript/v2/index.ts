@@ -486,6 +486,9 @@ export type { ThreadAttachmentAddResponse } from "./ThreadAttachmentAddResponse"
 export type { ThreadAttachmentListParams } from "./ThreadAttachmentListParams";
 export type { ThreadAttachmentListResponse } from "./ThreadAttachmentListResponse";
 export type { ThreadAttachmentOperation } from "./ThreadAttachmentOperation";
+export type { ThreadAttachmentOwner } from "./ThreadAttachmentOwner";
+export type { ThreadAttachmentOwnerListParams } from "./ThreadAttachmentOwnerListParams";
+export type { ThreadAttachmentOwnerListResponse } from "./ThreadAttachmentOwnerListResponse";
 export type { ThreadAttachmentRemoveParams } from "./ThreadAttachmentRemoveParams";
 export type { ThreadAttachmentRemoveResponse } from "./ThreadAttachmentRemoveResponse";
 export type { ThreadAttachmentUpdatedNotification } from "./ThreadAttachmentUpdatedNotification";

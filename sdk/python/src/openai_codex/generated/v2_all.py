@@ -5169,6 +5169,43 @@ class ThreadAttachmentOperation(Enum):
     deleted = "deleted"
 
 
+class ThreadAttachmentOwner(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    archived: Annotated[
+        bool,
+        Field(
+            description="Whether the owning thread is archived, not whether it is currently executing a turn."
+        ),
+    ]
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadAttachmentOwnerListParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    archived: Annotated[
+        bool | None,
+        Field(
+            description="Omitted or null returns all matches; false returns non-archived threads only."
+        ),
+    ] = None
+    attachment_type: Annotated[str, Field(alias="attachmentType")]
+    cursor: str | None = None
+    identity_key: Annotated[str, Field(alias="identityKey")]
+    limit: Annotated[int | None, Field(ge=0)] = None
+
+
+class ThreadAttachmentOwnerListResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    data: list[ThreadAttachmentOwner]
+    next_cursor: Annotated[str | None, Field(alias="nextCursor")] = None
+
+
 class ThreadAttachmentRemoveParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6905,6 +6942,18 @@ class ThreadAttachmentListRequest(BaseModel):
         Literal["thread/attachment/list"], Field(title="Thread/attachment/listRequestMethod")
     ]
     params: ThreadAttachmentListParams
+
+
+class ThreadAttachmentOwnerListRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/attachmentOwner/list"],
+        Field(title="Thread/attachmentOwner/listRequestMethod"),
+    ]
+    params: ThreadAttachmentOwnerListParams
 
 
 class ThreadAttachmentRemoveRequest(BaseModel):
@@ -12545,6 +12594,7 @@ class ClientRequest(
         | ThreadMetadataUpdateRequest
         | ThreadAttachmentAddRequest
         | ThreadAttachmentListRequest
+        | ThreadAttachmentOwnerListRequest
         | ThreadAttachmentRemoveRequest
         | ThreadSectionMoveRequest
         | ThreadUnarchiveRequest
@@ -12655,6 +12705,7 @@ class ClientRequest(
         | ThreadMetadataUpdateRequest
         | ThreadAttachmentAddRequest
         | ThreadAttachmentListRequest
+        | ThreadAttachmentOwnerListRequest
         | ThreadAttachmentRemoveRequest
         | ThreadSectionMoveRequest
         | ThreadUnarchiveRequest

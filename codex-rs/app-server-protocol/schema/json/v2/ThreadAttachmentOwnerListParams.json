@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Parameters for reverse lookup by attachment identity within this server's store.",
+  "properties": {
+    "archived": {
+      "description": "Omitted or null returns all matches; false returns non-archived threads only.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "attachmentType": {
+      "type": "string"
+    },
+    "cursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "identityKey": {
+      "type": "string"
+    },
+    "limit": {
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "attachmentType",
+    "identityKey"
+  ],
+  "title": "ThreadAttachmentOwnerListParams",
+  "type": "object"
+}

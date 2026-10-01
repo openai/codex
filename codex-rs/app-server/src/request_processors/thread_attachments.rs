@@ -16,6 +16,9 @@ use codex_app_server_protocol::ThreadAttachmentAddResponse;
 use codex_app_server_protocol::ThreadAttachmentListParams;
 use codex_app_server_protocol::ThreadAttachmentListResponse;
 use codex_app_server_protocol::ThreadAttachmentOperation;
+use codex_app_server_protocol::ThreadAttachmentOwner;
+use codex_app_server_protocol::ThreadAttachmentOwnerListParams;
+use codex_app_server_protocol::ThreadAttachmentOwnerListResponse;
 use codex_app_server_protocol::ThreadAttachmentRemoveParams;
 use codex_app_server_protocol::ThreadAttachmentRemoveResponse;
 use codex_app_server_protocol::ThreadAttachmentUpdatedNotification;
@@ -26,10 +29,12 @@ use codex_state::MAX_THREAD_ATTACHMENT_PAYLOAD_BYTES;
 use codex_state::MAX_THREAD_ATTACHMENT_TYPE_BYTES;
 use codex_thread_store::AddThreadAttachmentOutcome;
 use codex_thread_store::AddThreadAttachmentParams;
+use codex_thread_store::ListThreadAttachmentThreadsParams;
 use codex_thread_store::ListThreadAttachmentsParams;
 use codex_thread_store::RemoveThreadAttachmentOutcome;
 use codex_thread_store::RemoveThreadAttachmentParams;
 use codex_thread_store::ThreadAttachment as StoredThreadAttachment;
+use codex_thread_store::ThreadAttachmentArchiveFilter;
 use codex_thread_store::ThreadStoreError;
 
 impl ThreadRequestProcessor {
@@ -124,6 +129,49 @@ impl ThreadRequestProcessor {
                     .attachments
                     .into_iter()
                     .map(api_thread_attachment)
+                    .collect(),
+                next_cursor: page.next_cursor,
+            }
+            .into(),
+        ))
+    }
+
+    pub(crate) async fn thread_attachment_owner_list(
+        &self,
+        params: ThreadAttachmentOwnerListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        const OPERATION: &str = "thread/attachmentOwner/list";
+        self.ensure_thread_attachments_supported(OPERATION)?;
+        validate_attachment_identity(&params.attachment_type, &params.identity_key)?;
+        let limit = params
+            .limit
+            .map(|limit| limit as usize)
+            .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
+            .clamp(1, MAX_THREAD_ATTACHMENT_LIST_PAGE_SIZE);
+        let page = self
+            .thread_store
+            .list_thread_attachment_threads(ListThreadAttachmentThreadsParams {
+                attachment_type: params.attachment_type,
+                identity_key: params.identity_key,
+                archive_filter: match params.archived {
+                    None => ThreadAttachmentArchiveFilter::All,
+                    Some(false) => ThreadAttachmentArchiveFilter::NonArchived,
+                    Some(true) => ThreadAttachmentArchiveFilter::Archived,
+                },
+                cursor: params.cursor,
+                limit,
+            })
+            .await
+            .map_err(|error| thread_attachment_store_error(OPERATION, error))?;
+        Ok(Some(
+            ThreadAttachmentOwnerListResponse {
+                data: page
+                    .threads
+                    .into_iter()
+                    .map(|thread| ThreadAttachmentOwner {
+                        thread_id: thread.thread_id.to_string(),
+                        archived: thread.archived,
+                    })
                     .collect(),
                 next_cursor: page.next_cursor,
             }

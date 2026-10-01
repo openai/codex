@@ -247,6 +247,7 @@ the entire network configuration.
 
 - `thread/attachment/add` — add a durable resource reference to a stored thread without loading it. Repeated writes with the same attachment type and identity key return the existing attachment.
 - `thread/attachment/list` — list attachments for one stored thread in a cursor-paginated request, including a thread that is not loaded.
+- `thread/attachmentOwner/list` — find stored threads with an exact attachment type and identity key, with cursor pagination and an optional archive filter.
 - `thread/attachment/remove` — remove an attachment by its thread, attachment type, and identity key; returns `{}`.
 - `thread/attachment/updated` — notification broadcast after an attachment is created or removed; contains the thread, attachment identity, attachment id, and operation.
 ### Example: Manage stored thread attachments
@@ -303,6 +304,8 @@ Attachments record the resources currently associated with a thread, independent
 ```
 
 `thread/attachment/list` accepts one `threadId` and returns at most 100 attachments per page, ordered by creation time and attachment id. Continue with `nextCursor` and the same `threadId` until the cursor is `null`. Each thread can retain up to 100 attachments. Removing an attachment frees a slot for a new attachment.
+
+`thread/attachmentOwner/list` performs the reverse lookup: pass `attachmentType` and `identityKey` to get `data: [{threadId, archived}]` and `nextCursor`. Omit `archived` (or pass `null`) to include both active and archived threads; `false` selects active threads and `true` selects archived threads. Use the same identity and archive filter on subsequent cursor pages. The lookup covers only this app-server's configured thread store, not other hosts or stores. Results describe current membership and are not an atomic resource-cleanup check: attachments can change after a lookup.
 
 A non-ephemeral fork copies the source thread's current attachments, even when forking at an earlier turn. The copies have new attachment IDs and creation timestamps, but retain the same resource identities and payloads. Clients use `forkedFromId` on `thread/started` to detect forks and call `thread/attachment/list` with the new thread ID to load their attachments. Fork copying does not emit per-attachment updates; explicit add/remove operations still do. Copying is awaited before publishing the fork, but is best effort: a copy failure is logged and the conversation fork succeeds without attachments. Membership can then change independently on either thread; the referenced resources themselves are not copied. Resuming a fork does not repeat the copy.
 

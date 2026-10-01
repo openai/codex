@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadAttachmentOwner": {
+      "description": "A thread that currently owns an attachment with the requested identity.",
+      "properties": {
+        "archived": {
+          "description": "Whether the owning thread is archived, not whether it is currently executing a turn.",
+          "type": "boolean"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "archived",
+        "threadId"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "One page of matching owners, including threads without their own user messages.",
+  "properties": {
+    "data": {
+      "items": {
+        "$ref": "#/definitions/ThreadAttachmentOwner"
+      },
+      "type": "array"
+    },
+    "nextCursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "data"
+  ],
+  "title": "ThreadAttachmentOwnerListResponse",
+  "type": "object"
+}

@@ -105,3 +105,38 @@ pub struct ThreadAttachmentUpdatedNotification {
     pub attachment_id: String,
     pub operation: ThreadAttachmentOperation,
 }
+
+/// Parameters for reverse lookup by attachment identity within this server's store.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAttachmentOwnerListParams {
+    pub attachment_type: String,
+    pub identity_key: String,
+    /// Omitted or null returns all matches; false returns non-archived threads only.
+    #[ts(optional = nullable)]
+    pub archived: Option<bool>,
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+}
+
+/// A thread that currently owns an attachment with the requested identity.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAttachmentOwner {
+    pub thread_id: String,
+    /// Whether the owning thread is archived, not whether it is currently executing a turn.
+    pub archived: bool,
+}
+
+/// One page of matching owners, including threads without their own user messages.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadAttachmentOwnerListResponse {
+    pub data: Vec<ThreadAttachmentOwner>,
+    pub next_cursor: Option<String>,
+}
