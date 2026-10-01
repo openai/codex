@@ -5,6 +5,34 @@ use crate::bottom_pane::goal_status_indicator_line;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn daybreak_status_surfaces_follow_the_thread_preference() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.tui.terminal_title = Some(vec!["daybreak".into()]);
+    let mut values = Vec::new();
+    for enabled in [false, true] {
+        chat.daybreak_enabled = enabled;
+        chat.refresh_terminal_title();
+        values.push(format!(
+            "{} | {}",
+            chat.status_line_value(StatusLineItem::Daybreak).unwrap(),
+            chat.last_terminal_title.as_deref().unwrap()
+        ));
+    }
+    chat.set_side_conversation_active(/*active*/ true);
+    chat.refresh_terminal_title();
+    values.push(format!(
+        "{} | {}",
+        chat.status_line_value(StatusLineItem::Daybreak).unwrap(),
+        chat.last_terminal_title.as_deref().unwrap()
+    ));
+    insta::assert_snapshot!(values.join("\n"), @r"
+    Daybreak off | Daybreak off
+    Daybreak on | Daybreak on
+    Daybreak off | Daybreak off
+    ");
+}
+
+#[tokio::test]
 async fn goal_clock_refresh_redraws_only_when_elapsed_label_changes() {
     let (frame_requester, mut draw_rx) = FrameRequester::test_channel();
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual_with_auth(

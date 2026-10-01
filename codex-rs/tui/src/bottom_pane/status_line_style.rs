@@ -54,7 +54,9 @@ impl StatusLineAccent {
             StatusLineItem::CodexVersion | StatusLineItem::Hostname | StatusLineItem::SessionId => {
                 Self::Metadata
             }
-            StatusLineItem::FastMode | StatusLineItem::RawOutput => Self::Mode,
+            StatusLineItem::FastMode | StatusLineItem::Daybreak | StatusLineItem::RawOutput => {
+                Self::Mode
+            }
             StatusLineItem::Permissions => Self::Mode,
             StatusLineItem::ApprovalMode => Self::Mode,
             StatusLineItem::ThreadName

@@ -448,10 +448,12 @@ async fn status_line_setup_popup_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.status_line_branch = Some("feature/mixed-preview".to_string());
     chat.thread_name = Some("Mixed preview thread".to_string());
+    chat.set_daybreak_enabled(/*enabled*/ true);
     chat.local_settings.tui.status_line = Some(vec![
         "project-name".to_string(),
         "git-branch".to_string(),
         "thread-title".to_string(),
+        "daybreak".to_string(),
     ]);
 
     assert_chatwidget_snapshot!(
@@ -499,10 +501,12 @@ async fn terminal_title_setup_popup_hardcoded_only_snapshot() {
 async fn terminal_title_setup_popup_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_name = Some("Mixed preview thread".to_string());
+    chat.set_daybreak_enabled(/*enabled*/ true);
     chat.local_settings.tui.terminal_title = Some(vec![
         "project-name".to_string(),
         "thread-title".to_string(),
         "task-progress".to_string(),
+        "daybreak".to_string(),
     ]);
 
     assert_chatwidget_snapshot!(
