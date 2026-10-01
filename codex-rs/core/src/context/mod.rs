@@ -91,6 +91,7 @@ pub use guardian_review_evidence::GuardianReviewEvidence;
 pub use guardian_review_evidence::GuardianReviewEvidenceFragment;
 pub use guardian_review_evidence::GuardianReviewEvidenceRecord;
 pub use guardian_review_evidence::GuardianUserInputSnapshot;
+pub(crate) use guardian_sender_messages::GuardianSenderExchange;
 pub(crate) use guardian_sender_messages::GuardianSenderMessages;
 pub(crate) use guardian_tool_descriptions::GuardianToolDescriptions;
 pub(crate) use hook_additional_context::HookAdditionalContext;

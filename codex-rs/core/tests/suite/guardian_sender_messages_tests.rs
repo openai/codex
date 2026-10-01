@@ -16,11 +16,17 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
-#[test_case::test_case(None; "default")]
-#[test_case::test_case(Some(false); "retired opt out")]
+#[test_case::test_case(None, "codex_app", "send_message_to_thread", 0; "default")]
+#[test_case::test_case(Some(false), "codex_app", "send_message_to_thread", 0; "retired opt out")]
+#[test_case::test_case(None, "codex_tui", "send_message_to_thread", 0; "tui")]
+#[test_case::test_case(None, "cloud_threads", "send_message", 0; "cloud threads")]
+#[test_case::test_case(None, "cloud_threads", "send_message", 850; "assistant context shares user budget")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_receives_sender_user_messages_by_default(
     thread_context: Option<bool>,
+    namespace: &str,
+    name: &str,
+    user_padding: usize,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
@@ -54,35 +60,62 @@ async fn guardian_receives_sender_user_messages_by_default(
         .thread;
     let done = || responses::sse(vec![responses::ev_completed("done")]);
     let mut requests = Vec::new();
-    for prompt in [
-        "OLDEST",
-        "Inspect the experiment.",
-        "Add twenty workers.",
-        "Only use staging.\nNever production.",
-    ] {
-        let mock = responses::mount_sse_once(&server, done()).await;
-        test.submit_text_turn(prompt).await?;
-        requests.extend(mock.requests());
-    }
-    for (namespace, output, expected) in [
+    let mut expected_messages = Vec::new();
+    let mut previous_reply = None;
+    for (index, (prompt, reply)) in [
+        ("OLDEST", "I can inspect the experiment."),
         (
-            "codex_app",
-            format!(
-                "<codex_delegation>\n  <source_thread_id>{sender}</source_thread_id>\n  <input>Inspect.</input>\n</codex_delegation>"
-            ),
-            vec![
-                "user: Inspect the experiment.",
-                "user: Add twenty workers.",
-                "user: Only use staging.",
-                "user: Never production.",
-            ],
+            "Inspect the experiment.",
+            "Rerun only the staging task?\nPreserve its checkpoints?",
         ),
+        ("👍", "I will use staging."),
+        ("Only use staging.\nNever production.", "LATER CONTEXT"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let prompt = format!("{prompt}{}", "x".repeat(user_padding));
+        let mock = responses::mount_sse_once(
+            &server,
+            responses::sse(vec![
+                responses::ev_assistant_message(&format!("reply-{index}"), reply),
+                responses::ev_completed("done"),
+            ]),
+        )
+        .await;
+        test.submit_text_turn(&prompt).await?;
+        requests.extend(mock.requests());
+        if index > 0 {
+            if user_padding == 0
+                && let Some(reply) = previous_reply
+            {
+                expected_messages
+                    .extend(str::lines(reply).map(|line| format!("assistant: {line}")));
+            }
+            expected_messages.extend(prompt.lines().map(|line| format!("user: {line}")));
+        }
+        previous_reply = Some(reply);
+    }
+    let delegation = if namespace == "cloud_threads" {
+        // The cloud producer serializes compact XML, while Desktop/TUI indent it.
+        format!(
+            "<codex_delegation><source_thread_id>{sender}</source_thread_id><input>Inspect.</input></codex_delegation>"
+        )
+    } else {
+        format!(
+            "<codex_delegation>\n  <source_thread_id>{sender}</source_thread_id>\n  <input>Inspect.</input>\n</codex_delegation>"
+        )
+    };
+    for (index, (output, expected)) in [
+        (delegation, expected_messages),
         (
-            "codex_tui",
             "Inspect again without sender provenance.".to_owned(),
             vec![],
         ),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let command = json!({
             "cmd": "exit 0",
             "sandbox_permissions": "require_escalated",
@@ -109,8 +142,8 @@ async fn guardian_receives_sender_user_messages_by_default(
         .await;
         let delivery: ResponseItem = serde_json::from_value(json!({
             "type": "function_call_output",
-            "id": format!("delivery-{namespace}"),
-            "name": "send_message_to_thread",
+            "id": format!("delivery-{index}"),
+            "name": name,
             "namespace": namespace,
             "output": output,
         }))?;
@@ -123,13 +156,10 @@ async fn guardian_receives_sender_user_messages_by_default(
         .await;
         let captured = mock.requests();
         assert_eq!(captured.len(), 3);
-        // The delegated agent receives the tool output; only Guardian sees original user text.
-        assert!(
-            !captured[0]
-                .body_json()
-                .to_string()
-                .contains("Add twenty workers.")
-        );
+        // Original user and assistant context stays out of the delegated agent's prompt.
+        let worker_request = captured[0].body_json().to_string();
+        assert!(!worker_request.contains("Never production."));
+        assert!(!worker_request.contains("Rerun only the staging task?"));
         let review_body = captured[1].body_json();
         let review = review_body["input"]
             .as_array()
@@ -150,9 +180,16 @@ async fn guardian_receives_sender_user_messages_by_default(
             snapshot
                 .text
                 .lines()
-                .filter(|line| line.starts_with("user: "))
+                .filter(|line| line.starts_with("user: ") || line.starts_with("assistant: "))
                 .collect::<Vec<_>>(),
             expected
+        );
+        assert!(snapshot.text.len() <= 3_600);
+        assert_eq!(
+            snapshot
+                .text
+                .contains("some original assistant context is unavailable"),
+            index == 0 && user_padding > 0
         );
         let start = ">>> SENDER USER MESSAGES START\n";
         let end = ">>> SENDER USER MESSAGES END\n";
