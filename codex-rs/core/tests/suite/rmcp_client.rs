@@ -38,6 +38,7 @@ use codex_http_client::HttpClientBuilder;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
+use codex_mcp::McpProtocolMode;
 use codex_mcp::SandboxState;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_utils_path_uri::LegacyAppPathString;
@@ -1367,9 +1368,12 @@ server_names = ["history", "notes"]
     Ok(())
 }
 
+#[test_case(McpProtocolMode::Legacy; "legacy")]
+#[test_case(McpProtocolMode::V20260728; "modern")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn modern_mcp_pagination_preserves_valid_tools_and_rejects_oversized_cursors()
--> anyhow::Result<()> {
+async fn mcp_pagination_preserves_valid_tools_and_rejects_oversized_cursors(
+    protocol_mode: McpProtocolMode,
+) -> anyhow::Result<()> {
     skip_if_wine_exec!(
         Ok(()),
         "requires a Windows test_stdio_server in the Wine-exec environment"
@@ -1377,43 +1381,45 @@ async fn modern_mcp_pagination_preserves_valid_tools_and_rejects_oversized_curso
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
+    let call_id = "call-second-page-tool";
     let response = mount_sse_once(
         &server,
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
-            responses::ev_assistant_message("msg-1", "done"),
+            responses::ev_function_call_with_namespace(call_id, "mcp__paginated", "sync", "{}"),
             responses::ev_completed("resp-1"),
         ]),
     )
     .await;
+    let final_mock = mount_sse_once(&server, responses::sse_completed("resp-2")).await;
     let command = remote_aware_stdio_server_bin()?;
     let fixture = test_codex()
         .with_model_info_override("gpt-5.4", |model| model.supports_search_tool = false)
         .with_config(move |config| {
             config
                 .features
-                .enable(Feature::Mcp20260728)
-                .expect("test config should allow modern MCP");
+                .set_enabled(
+                    Feature::Mcp20260728,
+                    protocol_mode == McpProtocolMode::V20260728,
+                )
+                .expect("test config should allow MCP protocol selection");
             for (server_name, pagination) in
                 [("paginated", "two-pages"), ("rejected", "oversized-cursor")]
             {
+                let mut env = HashMap::from([(
+                    "MCP_TEST_TOOL_PAGINATION".to_string(),
+                    pagination.to_string(),
+                )]);
+                if protocol_mode == McpProtocolMode::V20260728 {
+                    env.insert(
+                        "CODEX_MCP_PROTOCOL_VERSION".to_string(),
+                        "2026-07-28".to_string(),
+                    );
+                }
                 insert_mcp_server(
                     config,
                     server_name,
-                    stdio_transport(
-                        command.clone(),
-                        Some(HashMap::from([
-                            (
-                                "CODEX_MCP_PROTOCOL_VERSION".to_string(),
-                                "2026-07-28".to_string(),
-                            ),
-                            (
-                                "MCP_TEST_TOOL_PAGINATION".to_string(),
-                                pagination.to_string(),
-                            ),
-                        ])),
-                        Vec::new(),
-                    ),
+                    stdio_transport(command.clone(), Some(env), Vec::new()),
                     TestMcpServerOptions {
                         environment_id: remote_aware_environment_id(),
                         ..Default::default()
@@ -1446,9 +1452,9 @@ async fn modern_mcp_pagination_preserves_valid_tools_and_rejects_oversized_curso
 
     fixture
         .codex
-        .start_or_steer_turn(read_only_user_turn(
+        .start_or_steer_turn(auto_approved_user_turn(
             &fixture,
-            "show the paginated MCP tools",
+            "call the paginated sync tool",
         ))
         .await?;
     wait_for_event(&fixture.codex, |event| {
@@ -1467,6 +1473,12 @@ async fn modern_mcp_pagination_preserves_valid_tools_and_rejects_oversized_curso
         responses::namespace_child_tool(&body, "mcp__rejected", "echo").is_none(),
         "a rejected MCP catalog must not reach the model"
     );
+    let output = final_mock.single_request().function_call_output(call_id);
+    let output_text = output["output"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected successful MCP tool output, got {output}"));
+    let output_json: Value = serde_json::from_str(split_wall_time_wrapped_output(output_text))?;
+    assert_eq!(output_json, json!({"result": "ok"}));
     Ok(())
 }
 

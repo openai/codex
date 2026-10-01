@@ -412,7 +412,7 @@ impl InProcessTransportFactory for DisconnectingToolsTransportFactory {
 }
 
 #[tokio::test]
-async fn legacy_tool_catalog_does_not_follow_pagination_cursor() -> anyhow::Result<()> {
+async fn legacy_tool_catalog_rejects_repeated_pagination_cursor() -> anyhow::Result<()> {
     let requests = Arc::new(AtomicUsize::new(0));
     let client = Arc::new(
         RmcpClient::new_in_process_client(Arc::new(RefreshTestTransportFactory {
@@ -436,7 +436,7 @@ async fn legacy_tool_catalog_does_not_follow_pagination_cursor() -> anyhow::Resu
         )
         .await?;
 
-    let tools = list_tools_for_client_uncached(
+    let error = list_tools_for_client_uncached(
         "legacy",
         /*is_codex_apps_mcp_server*/ false,
         "test",
@@ -445,11 +445,14 @@ async fn legacy_tool_catalog_does_not_follow_pagination_cursor() -> anyhow::Resu
         crate::pagination::MAX_MCP_CATALOG_ITEMS,
         /*server_instructions*/ None,
     )
-    .await?;
+    .await
+    .expect_err("repeated pagination cursor must fail discovery");
 
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].tool.name.as_ref(), "first-page");
-    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        error.to_string(),
+        "tools/list returned a repeated pagination cursor"
+    );
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
     client.shutdown().await;
     Ok(())
 }
