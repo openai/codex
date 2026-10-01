@@ -48,7 +48,10 @@ def export_repository(root: Path, target: str, pkg_config: Path):
         raise ValueError("required Windows build tool missing")
     definitions = [
         'package(default_visibility = ["//visibility:public"])',
-        'filegroup(name = "cygwin", srcs = glob(["cygwin/**"], allow_empty = False))',
+        # Cygwin records installation timestamps in this unused Java truststore.
+        # Exclude it so reinstalling the same tools preserves action cache keys.
+        'filegroup(name = "cygwin", srcs = glob(["cygwin/**"], '
+        'exclude = ["cygwin/etc/pki/ca-trust/extracted/java/cacerts"], allow_empty = False))',
         'filegroup(name = "pkgconf", srcs = glob(["pkgconf-image/**"], allow_empty = False))',
         'filegroup(name = "tools", srcs = [":cygwin", ":pkgconf", "voice-tools.json"])',
     ]
