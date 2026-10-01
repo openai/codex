@@ -14,6 +14,7 @@
 //! Shortcut help expands above the composer, with its close hint replacing the final shortcuts row
 //! so input and persistent status stay anchored when help opens or closes.
 //! Escape dismisses visible shortcut help before editing, transcript backtracking, or interruption.
+//! Fullscreen limits the composer height; wheel browsing preserves the caret until editor input.
 //! Transcript interactions borrow the hint footer through `ComposerRenderOptions`;
 //! its resolved presentation drives height, painting, and the focused cursor together.
 //!
@@ -1277,6 +1278,7 @@ impl ChatComposer {
         self.attachments.local_images = kept_images;
 
         // Import literally so placeholders remain atomic and Replace recovery starts empty.
+        self.draft.textarea_state.get_mut().follow_cursor();
         self.draft.textarea.set_text_clearing_elements("");
         let mut remaining: HashMap<&str, usize> = HashMap::new();
         for img in &self.attachments.local_images {
@@ -1531,6 +1533,7 @@ impl ChatComposer {
         // Clear any existing content, placeholders, and attachments first.
         self.footer.flash = None;
         self.vim_history = VimHistory::default();
+        self.draft.textarea_state.get_mut().follow_cursor();
         self.draft.textarea.set_text_clearing_elements("");
         self.draft.is_bash_mode = false;
         self.draft.pending_pastes.clear();
@@ -1912,6 +1915,7 @@ impl ChatComposer {
             return (InputResult::None, false);
         }
 
+        self.draft.textarea_state.get_mut().follow_cursor();
         let before = self.before_sparkle_key(key_event);
         let result = self.handle_key_event_inner(key_event);
         self.after_sparkle_key(before, &result.0);
@@ -4786,9 +4790,20 @@ impl ChatComposer {
         let style = user_message_style();
         Block::default().style(style).render(composer_rect, buf);
         if !remote_images_rect.is_empty() {
-            Paragraph::new(self.attachments.remote_image_lines())
-                .style(style)
-                .render(remote_images_rect, buf);
+            let first = self
+                .attachments
+                .selected_remote_image_index
+                .unwrap_or_default()
+                .saturating_sub(usize::from(remote_images_rect.height) - 1);
+            Paragraph::new(
+                self.attachments
+                    .remote_image_lines()
+                    .into_iter()
+                    .skip(first)
+                    .collect::<Vec<_>>(),
+            )
+            .style(style)
+            .render(remote_images_rect, buf);
         }
         if !textarea_rect.is_empty() {
             let prompt = if self.draft.input_enabled {
@@ -4821,6 +4836,9 @@ impl ChatComposer {
         }
 
         let mut state = self.draft.textarea_state.borrow_mut();
+        if options.max_height.is_none() {
+            state.follow_cursor();
+        }
         let textarea_is_empty = self.draft.textarea.text().is_empty() && !self.draft.is_bash_mode;
         if self.draft.input_enabled {
             if let Some(mask_char) = mask_char {
@@ -4868,6 +4886,26 @@ impl ChatComposer {
             if !textarea_rect.is_empty() {
                 let placeholder = Span::from(text).dim();
                 Line::from(vec![placeholder]).render(textarea_rect.inner(Margin::new(0, 0)), buf);
+            }
+        }
+        // The reserved right margin indicates hidden rows without changing wrapping.
+        if options.max_height.is_some()
+            && self.draft.input_enabled
+            && !textarea_rect.is_empty()
+            && textarea_rect.right() < composer_rect.right()
+        {
+            if state.scroll > 0 {
+                buf.set_span(textarea_rect.right(), textarea_rect.y, &"↑".dim(), 1);
+            }
+            if state.scroll.saturating_add(textarea_rect.height)
+                < self.draft.textarea.desired_height(textarea_rect.width)
+            {
+                buf.set_span(
+                    textarea_rect.right(),
+                    textarea_rect.bottom() - 1,
+                    &"↓".dim(),
+                    1,
+                );
             }
         }
         if matches!(self.popups.active, ActivePopup::None)

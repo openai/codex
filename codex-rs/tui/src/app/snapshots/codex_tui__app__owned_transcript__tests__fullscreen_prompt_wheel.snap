@@ -1,0 +1,119 @@
+---
+source: tui/src/app/owned_transcript_tests.rs
+assertion_line: 1600
+expression: "normalize_snapshot_paths(frames.join(\"\\n\\n\"))"
+---
+Following caret
+History 34
+History 35
+History 36
+History 37
+History 38
+History 39
+History 40
+
+
+› Prompt 24 界                                              ↑
+  Prompt 25 界
+  Prompt 26 界
+  Prompt 27 界
+  Prompt 28 界
+  Prompt 29 界
+  Prompt 30 界
+  Prompt 31 界
+  Prompt 32 界
+  Prompt 33 界
+  Prompt 34 界
+  Prompt 35 界
+
+  GPT-5.6-Sol default · /tmp/project
+
+
+Wheel up
+History 34
+History 35
+History 36
+History 37
+History 38
+History 39
+History 40
+
+
+› Prompt 15 界                                              ↑
+  Prompt 16 界
+  Prompt 17 界
+  Prompt 18 界
+  Prompt 19 界
+  Prompt 20 界
+  Prompt 21 界
+  Prompt 22 界
+  Prompt 23 界
+  Prompt 24 界
+  Prompt 25 界
+  Prompt 26 界                                              ↓
+
+  GPT-5.6-Sol default · /tmp/project
+
+
+Edit at caret
+History 34
+History 35
+History 36
+History 37
+History 38
+History 39
+History 40
+
+
+› Prompt 24 界                                              ↑
+  Prompt 25 界
+  Prompt 26 界
+  Prompt 27 界
+  Prompt 28 界
+  Prompt 29 界
+  Prompt 30 界
+  Prompt 31 界
+  Prompt 32 界
+  Prompt 33 界
+  Prompt 34 界
+  Prompt 35 界
+
+  GPT-5.6-Sol default · /tmp/project
+
+
+Paste at caret
+History 34
+History 35
+History 36
+History 37
+History 38
+History 39
+History 40
+
+
+› Edited 24 界                                              ↑
+  Edited 25 界
+  Edited 26 界
+  Edited 27 界
+  Edited 28 界
+  Edited 29 界
+  Edited 30 界
+  Edited 31 界
+  Edited 32 界
+  Edited 33 界
+  Edited 34 界
+  Edited 35 界  pasted here
+
+  GPT-5.6-Sol default · /tmp/project
+
+
+Short screen
+History 40
+
+
+› Edited 32 界                          ↑
+  Edited 33 界
+  Edited 34 界
+  Edited 35 界  pasted here
+
+  GPT-5.6-Sol default · /tmp/project

@@ -116,16 +116,24 @@ impl App {
             /*height*/ 1,
         ));
         let footer = view.footer_with_navigation(footer_area.width, motion, latest_navigation);
-        let bottom = chat_widget.bottom_pane_renderable(
-            prompt_footer.as_ref().or(footer.as_ref()),
-            if view.has_active_interaction() {
-                crate::bottom_pane::CommandPopupPlacement::Hidden
-            } else {
-                crate::bottom_pane::CommandPopupPlacement::Overlay
-            },
-            composer_gap.as_ref(),
-            working_tip,
-        );
+        // Cap the whole composer (including padding and hints) at two-thirds of the screen,
+        // but allow at least 8 rows on small screens, without exceeding the screen itself.
+        let max_composer_height = ((u32::from(screen_size.height) * 2 / 3) as u16)
+            .max(8)
+            .min(screen_size.height);
+        let bottom =
+            chat_widget.bottom_pane_renderable(crate::bottom_pane::ComposerRenderOptions {
+                max_height: Some(max_composer_height),
+                footer: prompt_footer.as_ref().or(footer.as_ref()),
+                command_popup_placement: if view.has_active_interaction() {
+                    crate::bottom_pane::CommandPopupPlacement::Hidden
+                } else {
+                    crate::bottom_pane::CommandPopupPlacement::Overlay
+                },
+                composer_gap: composer_gap.as_ref(),
+                working_tip,
+                ..Default::default()
+            });
         let dashboard_visible = chat_widget
             .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
             .is_some();
@@ -185,16 +193,19 @@ impl App {
             {
                 *progress = crate::bottom_pane::footer_hint_items_line(&items);
             }
-            let bottom = chat_widget.bottom_pane_renderable(
-                prompt_footer.as_ref().or(footer.as_ref()),
-                if view.has_active_interaction() {
-                    crate::bottom_pane::CommandPopupPlacement::Hidden
-                } else {
-                    crate::bottom_pane::CommandPopupPlacement::Overlay
-                },
-                composer_gap.as_ref(),
-                working_tip,
-            );
+            let bottom =
+                chat_widget.bottom_pane_renderable(crate::bottom_pane::ComposerRenderOptions {
+                    max_height: Some(max_composer_height),
+                    footer: prompt_footer.as_ref().or(footer.as_ref()),
+                    command_popup_placement: if view.has_active_interaction() {
+                        crate::bottom_pane::CommandPopupPlacement::Hidden
+                    } else {
+                        crate::bottom_pane::CommandPopupPlacement::Overlay
+                    },
+                    composer_gap: composer_gap.as_ref(),
+                    working_tip,
+                    ..Default::default()
+                });
             footer_height_changed = !dashboard_visible
                 && bottom
                     .desired_height(screen_size.width)
@@ -361,9 +372,15 @@ impl App {
                 return Ok(true);
             }
             if composer_ready && self.chat_widget.handle_composer_mouse(*mouse) {
-                self.transcript_view.end_selection(&self.transcript_cells);
-                self.transcript_view.cancel_search();
-                self.transcript_view.clear_activity_focus();
+                if !matches!(
+                    mouse.kind,
+                    crossterm::event::MouseEventKind::ScrollUp
+                        | crossterm::event::MouseEventKind::ScrollDown
+                ) {
+                    self.transcript_view.end_selection(&self.transcript_cells);
+                    self.transcript_view.cancel_search();
+                    self.transcript_view.clear_activity_focus();
+                }
                 tui.frame_requester().schedule_frame();
                 return Ok(true);
             }

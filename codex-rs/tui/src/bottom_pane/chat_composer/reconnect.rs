@@ -104,6 +104,7 @@ impl ChatComposer {
             let before = if key.code == KeyCode::Null {
                 None
             } else {
+                self.draft.textarea_state.get_mut().follow_cursor();
                 self.before_sparkle_editor_key(key)
             };
             let (result, _) = self.handle_input_basic(key);

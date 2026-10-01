@@ -511,12 +511,11 @@ async fn owned_details_keep_the_composer_cursor_and_screen() -> Result<()> {
         app.render_owned_transcript(&mut tui, Size::new(/*width*/ 80, /*height*/ 24))?;
     let expected_cursor = app
         .chat_widget
-        .bottom_pane_renderable(
-            /*footer*/ None,
-            crate::bottom_pane::CommandPopupPlacement::Overlay,
-            Some(&crate::bottom_pane::ComposerGap::default()),
-            /*working_tip*/ None,
-        )
+        .bottom_pane_renderable(crate::bottom_pane::ComposerRenderOptions {
+            command_popup_placement: crate::bottom_pane::CommandPopupPlacement::Overlay,
+            composer_gap: Some(&crate::bottom_pane::ComposerGap::default()),
+            ..Default::default()
+        })
         .cursor_pos(bottom_area)
         .expect("composer cursor");
     assert_eq!(
@@ -1534,6 +1533,153 @@ async fn fullscreen_composer_mouse_copy_and_input_ownership() -> Result<()> {
     }
     assert!(!app.handle_owned_transcript_event(&mut tui, &mut server, &mouse(Down(Left), x, y))?);
     server.shutdown().await?;
+    tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn fullscreen_composer_scrolls_without_moving_caret_or_transcript() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let size = Size::new(/*width*/ 60, /*height*/ 24);
+    tui.terminal.resize(size)?;
+    app.transcript_cells = vec![Arc::new(crate::history_cell::PlainHistoryCell::new(
+        (1..=40).map(|n| format!("History {n:02}").into()).collect(),
+    ))];
+    let draft = (1..=35)
+        .map(|n| format!("Prompt {n:02} 界"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.chat_widget.apply_external_edit(draft.clone());
+    let bottom = app.render_owned_transcript(&mut tui, size)?;
+    assert!(bottom.y > 0);
+    let caret = tui.terminal.last_known_cursor_pos;
+    let original = app.chat_widget.capture_thread_input_state();
+    let mut frames = Vec::new();
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    frames.push(format!("Following caret\n{}", buffer_text(buffer)));
+    let wheel = mouse(MouseEventKind::ScrollUp, caret.x, caret.y);
+    for _ in 0..3 {
+        assert!(app.handle_owned_transcript_event(&mut tui, &mut server, &wheel)?);
+    }
+    assert_eq!(app.chat_widget.capture_thread_input_state(), original);
+    assert_eq!(app.render_owned_transcript(&mut tui, size)?, bottom);
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    let rendered = buffer_text(buffer);
+    assert!(!rendered.contains("Prompt 35"), "{rendered}");
+    assert!(rendered.contains("History 40"), "{rendered}");
+    frames.push(format!("Wheel up\n{rendered}"));
+
+    // The new draft key is applied at the real caret even while that caret is offscreen.
+    app.chat_widget.handle_key_event(KeyCode::Left.into());
+    app.render_owned_transcript(&mut tui, size)?;
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    assert!(buffer_text(buffer).contains("Prompt 35"));
+    frames.push(format!("Edit at caret\n{}", buffer_text(buffer)));
+    // Returning from an external editor restores the caret even for a same-length edit.
+    app.chat_widget.handle_key_event(KeyCode::Right.into());
+    app.render_owned_transcript(&mut tui, size)?;
+    let caret = tui.terminal.last_known_cursor_pos;
+    for _ in 0..3 {
+        assert!(app.handle_owned_transcript_event(
+            &mut tui,
+            &mut server,
+            &mouse(MouseEventKind::ScrollUp, caret.x, caret.y),
+        )?);
+    }
+    app.chat_widget
+        .apply_external_edit(draft.replace("Prompt", "Edited"));
+    app.render_owned_transcript(&mut tui, size)?;
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    assert!(buffer_text(buffer).contains("Edited 35"));
+
+    // Pasting while browsing also resumes following, without inserting into a visible earlier row.
+    let caret = tui.terminal.last_known_cursor_pos;
+    for _ in 0..3 {
+        assert!(app.handle_owned_transcript_event(
+            &mut tui,
+            &mut server,
+            &mouse(MouseEventKind::ScrollUp, caret.x, caret.y),
+        )?);
+    }
+    app.chat_widget.handle_paste(" pasted here".to_string());
+    app.render_owned_transcript(&mut tui, size)?;
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    let rendered = buffer_text(buffer);
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.contains("Edited 35") && line.contains("pasted here")),
+        "{rendered}"
+    );
+    frames.push(format!("Paste at caret\n{rendered}"));
+
+    // A shorter screen still leaves a usable composer.
+    let small = Size::new(/*width*/ 40, /*height*/ 10);
+    tui.terminal.resize(small)?;
+    app.render_owned_transcript(&mut tui, small)?;
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    frames.push(format!("Short screen\n{}", buffer_text(buffer)));
+    insta::assert_snapshot!(
+        "fullscreen_prompt_wheel",
+        normalize_snapshot_paths(frames.join("\n\n"))
+    );
+    server.shutdown().await?;
+    tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn fullscreen_composer_remote_images_leave_an_editable_prompt_row() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let size = Size::new(/*width*/ 60, /*height*/ 12);
+    tui.terminal.resize(size)?;
+    app.transcript_cells = vec![Arc::new(crate::history_cell::PlainHistoryCell::new(vec![
+        "History stays visible".into(),
+    ]))];
+    app.chat_widget
+        .apply_external_edit("Edit this prompt".to_string());
+    app.chat_widget.set_remote_image_urls(
+        (1..=12)
+            .map(|n| format!("https://example.com/image-{n}.png"))
+            .collect(),
+    );
+    let bottom = app.render_owned_transcript(&mut tui, size)?;
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    let rendered = buffer_text(buffer);
+    assert!(bottom.y > 0);
+    assert!(rendered.contains("Edit this prompt"), "{rendered}");
+    let mut frames = vec![format!("Draft\n{rendered}")];
+    app.chat_widget.handle_key_event(KeyCode::Home.into());
+    for (key, label) in [
+        (KeyCode::Up, "[Image #12]"),
+        (KeyCode::Up, "[Image #11]"),
+        (KeyCode::Delete, "[Image #11]"),
+        (KeyCode::Down, "Edit this prompt"),
+    ] {
+        app.chat_widget.handle_key_event(key.into());
+        app.render_owned_transcript(&mut tui, size)?;
+        let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+        let rendered = buffer_text(buffer);
+        assert!(rendered.contains(label), "{key:?}: {rendered}");
+        assert!(rendered.contains("Edit this prompt"), "{key:?}: {rendered}");
+        frames.push(format!("{key:?}\n{rendered}"));
+    }
+    assert_eq!(
+        app.chat_widget.remote_image_urls(),
+        (1..=12)
+            .filter(|n| *n != 11)
+            .map(|n| format!("https://example.com/image-{n}.png"))
+            .collect::<Vec<_>>()
+    );
+    insta::assert_snapshot!(
+        "fullscreen_prompt_remote_images",
+        normalize_snapshot_paths(frames.join("\n\n"))
+    );
     tui.set_owned_screen(/*owned*/ false)?;
     Ok(())
 }

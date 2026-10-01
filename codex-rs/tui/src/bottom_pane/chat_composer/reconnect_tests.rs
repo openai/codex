@@ -2,7 +2,65 @@
 
 use super::super::tests::new_test_composer;
 use super::*;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use pretty_assertions::assert_eq;
+
+#[test]
+fn offline_delete_reveals_the_edited_row_without_moving_the_caret() {
+    let (mut composer, _) = new_test_composer();
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 8,
+    );
+    let options = ComposerRenderOptions {
+        max_height: Some(area.height),
+        ..ComposerRenderOptions::default()
+    };
+    let text = (1..=20)
+        .map(|n| format!("line {n:02} abc"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    composer.set_text_content(text.clone(), Vec::new(), Vec::new());
+    let cursor = text.len() - 2;
+    composer.draft.textarea.set_cursor(cursor);
+    let mut buffer = Buffer::empty(area);
+    composer.render_with_options(area, &mut buffer, /*mask_char*/ None, options);
+    let (x, y) = composer.cursor_pos_with_options(area, options).unwrap();
+    for _ in 0..3 {
+        assert!(composer.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        }));
+    }
+    // Disconnect cleanup and blocked submits must not count as edits.
+    for key in [KeyCode::Null, KeyCode::Enter, KeyCode::Tab] {
+        composer.handle_restricted_key(key.into(), RestrictedInputMode::Disconnected);
+        let mut buffer = Buffer::empty(area);
+        composer.render_with_options(area, &mut buffer, /*mask_char*/ None, options);
+        assert_eq!(composer.cursor_pos_with_options(area, options), None);
+    }
+    composer.handle_restricted_key(KeyCode::Delete.into(), RestrictedInputMode::Disconnected);
+    let mut buffer = Buffer::empty(area);
+    composer.render_with_options(area, &mut buffer, /*mask_char*/ None, options);
+    assert_eq!(
+        (composer.current_text(), composer.draft.textarea.cursor()),
+        (text.replace("line 20 abc", "line 20 ac"), cursor)
+    );
+    assert!(composer.cursor_pos_with_options(area, options).is_some());
+    let rows = buffer
+        .content
+        .chunks(usize::from(area.width))
+        .map(|row| {
+            row.iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("offline_delete_after_wheel", rows);
+}
 
 #[test]
 fn reconnect_expands_pastes_preserving_images_and_cursor() {

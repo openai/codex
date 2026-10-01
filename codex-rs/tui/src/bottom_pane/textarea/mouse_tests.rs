@@ -27,6 +27,64 @@ fn mouse(t: &mut TextArea, state: TextAreaState, kind: MouseEventKind, x: u16, y
 }
 
 #[test]
+fn wheel_at_edges_preserves_caret_following_or_browsing_after_resize() {
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 14, /*height*/ 4,
+    );
+    let down = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: area.x,
+        row: area.y,
+        modifiers: KeyModifiers::NONE,
+    };
+    let up = MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        ..down
+    };
+    let mut t = TextArea::new();
+    t.insert_str(
+        "line one abc\nline two abc\nline three ab\nline four abc\nline five abc\nline six abc",
+    );
+    let mut frames = Vec::new();
+    for resized in [Rect { height: 2, ..area }, Rect { width: 7, ..area }] {
+        for browsing in [false, true] {
+            let mut state = TextAreaState::default();
+            render(&t, area, &mut state);
+            if browsing {
+                // The first event scrolls to the top; the second is a no-op.
+                assert!(t.scroll_mouse(up, &mut state));
+                assert!(t.scroll_mouse(up, &mut state));
+            } else {
+                // The caret was already at the bottom; consume this without detaching it.
+                assert!(t.scroll_mouse(down, &mut state));
+            }
+            let buffer = render(&t, resized, &mut state);
+            let expected_cursor = if browsing {
+                None
+            } else {
+                t.cursor_pos(resized)
+            };
+            assert_eq!(t.cursor_pos_with_state(resized, state), expected_cursor);
+            let rows = buffer
+                .content
+                .chunks(usize::from(resized.width))
+                .map(|row| {
+                    row.iter()
+                        .map(ratatui::buffer::Cell::symbol)
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            frames.push(format!(
+                "{}x{} browsing={browsing}\n{rows}",
+                resized.width, resized.height
+            ));
+        }
+    }
+    insta::assert_snapshot!("wheel_at_edges_after_resize", frames.join("\n\n"));
+}
+
+#[test]
 fn mouse_click_maps_wrapping_unicode_tabs_and_empty_lines() {
     let area = Rect::new(
         /*x*/ 3, /*y*/ 2, /*width*/ 8, /*height*/ 8,

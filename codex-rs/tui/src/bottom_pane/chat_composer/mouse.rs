@@ -2,6 +2,7 @@
 //! editable text using the textarea's last rendered viewport and hides completion suggestions.
 //! Double/triple clicks select words/logical lines using the transcript's shared gesture rules.
 //! Copy preserves the draft and cursor; confirmed copies clear selection for every gesture.
+//! Wheel browsing uses the current viewport without changing popup or selection ownership.
 
 use super::*;
 use crate::clipboard_copy::CopyStatus;
@@ -85,11 +86,19 @@ impl ChatComposer {
 
     /// Dispatch after preparation and rendering have refreshed the viewport.
     pub(crate) fn handle_mouse(&mut self, event: MouseEvent) -> bool {
+        if self
+            .draft
+            .textarea
+            .scroll_mouse(event, &mut self.draft.textarea_state.borrow_mut())
+        {
+            return true;
+        }
         let handled = self
             .draft
             .textarea
             .handle_mouse(event, *self.draft.textarea_state.borrow());
         if handled {
+            self.draft.textarea_state.borrow_mut().follow_cursor();
             self.attachments.clear_remote_image_selection();
             self.sync_popups();
         }

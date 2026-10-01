@@ -138,6 +138,7 @@ impl ChatComposer {
             query.editor.insert_str(&pasted);
             return true;
         }
+        self.draft.textarea_state.get_mut().follow_cursor();
         let started_vim_edit = self.begin_direct_vim_edit();
         let elements_before = self.draft.textarea.element_payloads();
         let target = self.draft.textarea.edit_target();

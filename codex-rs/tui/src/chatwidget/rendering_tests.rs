@@ -83,12 +83,10 @@ async fn owned_bottom_pane_preserves_draft_cursor_and_read_only_notice() {
         /*x*/ 0, /*y*/ 8, /*width*/ 60, /*height*/ 8,
     );
     let render_bottom = |widget: &ChatWidget| {
-        let bottom = widget.bottom_pane_renderable(
-            /*footer*/ None,
-            crate::bottom_pane::CommandPopupPlacement::Overlay,
-            /*composer_gap*/ None,
-            /*working_tip*/ None,
-        );
+        let bottom = widget.bottom_pane_renderable(crate::bottom_pane::ComposerRenderOptions {
+            command_popup_placement: crate::bottom_pane::CommandPopupPlacement::Overlay,
+            ..Default::default()
+        });
         let mut buffer = Buffer::empty(area);
         bottom.render(area, &mut buffer);
         (buffer, bottom.cursor_pos(area), bottom.cursor_style(area))

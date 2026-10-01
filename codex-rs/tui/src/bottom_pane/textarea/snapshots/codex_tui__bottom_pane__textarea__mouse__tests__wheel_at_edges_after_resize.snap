@@ -1,0 +1,24 @@
+---
+source: tui/src/bottom_pane/textarea/mouse_tests.rs
+assertion_line: 78
+expression: "frames.join(\"\\n\\n\")"
+---
+14x2 browsing=false
+line five abc 
+line six abc  
+
+14x2 browsing=true
+line one abc  
+line two abc  
+
+7x4 browsing=false
+abc    
+line   
+six abc
+       
+
+7x4 browsing=true
+line   
+one abc
+       
+line

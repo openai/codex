@@ -116,7 +116,7 @@ impl ChatComposer {
             .len()
             .try_into()
             .unwrap_or(u16::MAX)
-            .min(textarea_rect.height.saturating_sub(1));
+            .min(textarea_rect.height.saturating_sub(2));
         let remote_images_separator = u16::from(remote_images_height > 0);
         let consumed = remote_images_height.saturating_add(remote_images_separator);
         let remote_images_rect = Rect {
