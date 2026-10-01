@@ -447,19 +447,36 @@ impl ContextManager {
         &mut self,
         world_state: &WorldState,
     ) -> (Vec<Box<dyn ContextualUserFragment>>, Option<WorldStateItem>) {
-        let snapshot = world_state.snapshot();
-        let fragments =
+        let (snapshot, fragments) =
             world_state.render_history_diff(self.world_state_baseline.as_ref(), self.raw_items());
-        let rollout_item = self.world_state_baseline.as_ref().map_or_else(
+        let rollout_item = self.world_state_item(&snapshot);
+        self.world_state_baseline = Some(snapshot);
+        (fragments, rollout_item)
+    }
+
+    pub(crate) fn render_step_world_state(
+        &self,
+        world_state: &WorldState,
+    ) -> (
+        WorldStateSnapshot,
+        Vec<Box<dyn ContextualUserFragment>>,
+        Option<WorldStateItem>,
+    ) {
+        let (snapshot, fragments) =
+            world_state.render_history_diff(self.world_state_baseline.as_ref(), self.raw_items());
+        let rollout_item = self.world_state_item(&snapshot);
+        (snapshot, fragments, rollout_item)
+    }
+
+    fn world_state_item(&self, snapshot: &WorldStateSnapshot) -> Option<WorldStateItem> {
+        self.world_state_baseline.as_ref().map_or_else(
             || Some(WorldStateItem::full(snapshot.clone().into_object())),
             |previous| {
                 snapshot
                     .merge_patch_from(previous)
                     .map(WorldStateItem::patch)
             },
-        );
-        self.world_state_baseline = Some(snapshot);
-        (fragments, rollout_item)
+        )
     }
 
     pub(crate) fn set_world_state_baseline(&mut self, snapshot: WorldStateSnapshot) {

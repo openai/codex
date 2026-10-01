@@ -3637,31 +3637,23 @@ impl Session {
 
     pub(crate) async fn record_step_world_state_if_changed(
         &self,
-        previous_world_state: &Arc<WorldState>,
         step_context: &step_context::StepContext,
     ) -> CodexResult<Arc<WorldState>> {
         let turn_context = step_context.turn.as_ref();
         // Render model-visible state from the same step used to build and run tools.
         let world_state = Arc::new(self.build_world_state_for_step(step_context).await?);
-        // Derive the model update and persisted patch from the same two snapshots.
-        let previous_snapshot = previous_world_state.snapshot();
-        let world_state_snapshot = world_state.snapshot();
-        let world_state_item = world_state_snapshot
-            .merge_patch_from(&previous_snapshot)
-            .map(WorldStateItem::patch);
-        // A catalog may have left history during compaction even when its snapshot survives.
-        let items = crate::context_manager::updates::merge_contextual_fragments(
-            world_state.render_history_diff(
-                Some(&previous_snapshot),
-                self.state.lock().await.history.raw_items(),
-            ),
-        );
+        let (world_state_snapshot, fragments, world_state_item) = self
+            .state
+            .lock()
+            .await
+            .history
+            .render_step_world_state(world_state.as_ref());
+        let items = crate::context_manager::updates::merge_contextual_fragments(fragments);
         if !items.is_empty() {
             self.record_conversation_items(turn_context, &step_context.settings.model_info, &items)
                 .await;
         }
 
-        // ContextManager remembers this for later turns; run_turn owns the live value.
         self.state
             .lock()
             .await
@@ -4059,7 +4051,7 @@ impl Session {
         &self,
         mut items: Vec<ResponseItemEnvelope>,
         reference_context_item: Option<TurnContextItem>,
-        world_state_baseline: Option<Arc<WorldState>>,
+        world_state_baseline: Option<WorldStateSnapshot>,
         metadata: CompactedHistoryMetadata,
     ) {
         for envelope in &mut items {
@@ -4094,18 +4086,15 @@ impl Session {
         let mut world_state_item = None;
         let compacted_item = {
             let mut state = self.state.lock().await;
-            let snapshot = world_state_baseline
-                .map(|world_state| world_state.snapshot())
-                .or_else(|| {
-                    let previous = state.history.world_state_checkpoint()?;
-                    let mut retained = serde_json::Map::new();
-                    for contributor in self.services.extensions.context_contributors() {
-                        retained.extend(
-                            contributor.retain_world_state_after_compaction(&previous.state),
-                        );
-                    }
-                    (!retained.is_empty()).then(|| WorldStateSnapshot::from(&retained))
-                });
+            let snapshot = world_state_baseline.or_else(|| {
+                let previous = state.history.world_state_checkpoint()?;
+                let mut retained = serde_json::Map::new();
+                for contributor in self.services.extensions.context_contributors() {
+                    retained
+                        .extend(contributor.retain_world_state_after_compaction(&previous.state));
+                }
+                (!retained.is_empty()).then(|| WorldStateSnapshot::from(&retained))
+            });
             // Goal edits are published outside the running task. Keep edits accepted after
             // the compaction input snapshot, in their original order, after its replacement.
             let replacement_goal_ids = crate::context::UserGoalUpdate::message_ids(
@@ -4275,7 +4264,7 @@ impl Session {
         &self,
         step_context: &StepContext,
         world_state: &WorldState,
-    ) -> Vec<ResponseItem> {
+    ) -> (Vec<ResponseItem>, WorldStateSnapshot) {
         let turn_context = step_context.turn.as_ref();
         let mut developer_sections = Vec::<RenderedFragment>::with_capacity(8);
         let mut contextual_user_sections = Vec::<RenderedFragment>::with_capacity(2);
@@ -4421,7 +4410,8 @@ impl Session {
         // Render the active mode after the usage hint so it can override that hint.
         let mut initial_multi_agent_mode = None;
         let mut managed_developer_instructions = None;
-        for fragment in world_state.render_full() {
+        let (world_state_snapshot, fragments) = world_state.render_full();
+        for fragment in fragments {
             match fragment.role() {
                 "developer"
                     if fragment.markers().0 == ModelSwitchInstructions::type_markers().0 =>
@@ -4508,7 +4498,7 @@ impl Session {
         for item in &mut items {
             item.set_turn_id_if_missing(&turn_context.sub_id);
         }
-        items
+        (items, world_state_snapshot)
     }
 
     #[tracing::instrument(level = "trace", skip_all, fields(item_count = items.len()))]
@@ -4603,9 +4593,10 @@ impl Session {
             state.start_new_context_window()
         };
         let (window_number, window_ids) = window;
-        let context_items = self
+        let (context_items, world_state_snapshot) = self
             .build_initial_context_with_world_state(step_context, world_state.as_ref())
-            .await
+            .await;
+        let context_items = context_items
             .into_iter()
             .map(ResponseItemEnvelope::new)
             .chain(retained_client_developer_messages)
@@ -4614,7 +4605,7 @@ impl Session {
         self.replace_compacted_history(
             context_items,
             Some(turn_context_item),
-            Some(world_state),
+            Some(world_state_snapshot),
             CompactedHistoryMetadata {
                 input_goal_ids,
                 message: String::new(),
@@ -4664,10 +4655,9 @@ impl Session {
         let world_state = Arc::new(self.build_world_state_for_step(step_context).await?);
         // Full initial context resets the baseline; later turns persist only its changes.
         let (mut context_items, world_state_item) = if should_inject_full_context {
-            let context_items = self
+            let (context_items, snapshot) = self
                 .build_initial_context_with_world_state(step_context, world_state.as_ref())
                 .await;
-            let snapshot = world_state.snapshot();
             self.state
                 .lock()
                 .await

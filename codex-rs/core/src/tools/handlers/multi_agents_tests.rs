@@ -1182,7 +1182,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
         .await
         .expect("world state should build");
     assert_eq!(
-        world_state.snapshot().into_object()["environments"]["subagents"],
+        world_state.render_full().0.into_object()["environments"]["subagents"],
         json!(r#"<agent name="/root/test_process" />"#),
     );
 

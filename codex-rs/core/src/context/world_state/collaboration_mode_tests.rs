@@ -54,23 +54,25 @@ fn instruction_updates_are_applied_once_in_retained_history() {
         let expected: ResponseItem = ContextualUserFragment::into(CollaborationModeInstructions {
             instructions: instructions.unwrap_or_default().to_string(),
         });
-        let updates = world_state
-            .render_history_diff(previous.as_ref(), &history)
+        let (snapshot, fragments) = world_state.render_history_diff(previous.as_ref(), &history);
+        let updates = fragments
             .into_iter()
             .map(ContextualUserFragment::into_boxed_response_item)
             .collect::<Vec<_>>();
         assert_eq!(updates, vec![expected]);
         history.extend(updates);
-        previous = Some(world_state.snapshot());
+        previous = Some(snapshot);
 
         assert!(
             world_state
                 .render_history_diff(previous.as_ref(), &history)
+                .1
                 .is_empty()
         );
         assert_eq!(
             world_state
                 .render_history_diff(previous.as_ref(), &[])
+                .1
                 .len(),
             usize::from(instructions.is_some()),
         );

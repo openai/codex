@@ -197,13 +197,15 @@ impl ContextContributor for ReadyCapabilityRootsTestExtension {
             let body = root_ids.join(",");
             vec![WorldStateSectionContribution::new(
                 "ready_capability_roots_test",
-                json!(root_ids),
                 move |_| {
-                    Some(RenderedWorldStateFragment::new(
-                        "user",
-                        ("<ready_capability_roots>", "</ready_capability_roots>"),
-                        body.clone(),
-                    ))
+                    (
+                        Some(json!(root_ids)),
+                        Some(RenderedWorldStateFragment::new(
+                            "user",
+                            ("<ready_capability_roots>", "</ready_capability_roots>"),
+                            body.clone(),
+                        )),
+                    )
                 },
             )]
         })

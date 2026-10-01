@@ -841,7 +841,8 @@ async fn ignores_session_prefix_messages_when_truncating() {
     let step_context = StepContext::for_test(turn_context);
     let mut items = session
         .build_initial_context_with_world_state(&step_context, &world_state)
-        .await;
+        .await
+        .0;
     items.push(user_msg("feature request"));
     items.push(assistant_msg("ack"));
     items.push(user_msg("second question"));
@@ -1456,7 +1457,8 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
         .thread
         .session
         .build_initial_context_with_world_state(&reviewer_step, &reviewer_world_state)
-        .await;
+        .await
+        .0;
     assert!(
         !serde_json::to_string(&reviewer_context)
             .expect("reviewer context should serialize")

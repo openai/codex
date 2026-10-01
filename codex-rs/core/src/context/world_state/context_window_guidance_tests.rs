@@ -30,7 +30,12 @@ fn guidance_transitions_render_once(
 
     let mut refreshed = WorldState::default();
     refreshed.add_section(ContextWindowGuidanceState::new(current));
-    let fragments = refreshed.render_diff(&original.snapshot());
+    let mut history: Vec<ResponseItem> = previous
+        .map(|message| ContextualUserFragment::into(ContextWindowGuidance::new(message)))
+        .into_iter()
+        .collect();
+    let (next_snapshot, fragments) =
+        refreshed.render_history_diff(Some(&original.render_full().0), &history);
     assert_eq!(
         fragments
             .iter()
@@ -44,8 +49,16 @@ fn guidance_transitions_render_once(
 
     // Empty guidance must survive persistence as a known state, not a deleted section.
     let snapshot: WorldStateSnapshot =
-        serde_json::from_value(serde_json::to_value(refreshed.snapshot()).unwrap()).unwrap();
-    assert!(refreshed.render_diff(&snapshot).is_empty());
+        serde_json::from_value(serde_json::to_value(next_snapshot).unwrap()).unwrap();
+    history.extend(
+        fragments
+            .into_iter()
+            .map(ContextualUserFragment::into_boxed_response_item),
+    );
+    let (repeated_snapshot, repeated_fragments) =
+        refreshed.render_history_diff(Some(&snapshot), &history);
+    assert_eq!(repeated_snapshot, snapshot);
+    assert!(repeated_fragments.is_empty());
 }
 
 #[test_case(
@@ -69,7 +82,9 @@ fn legacy_guidance_is_reconciled_once(
     });
     let retained: ResponseItem =
         ContextualUserFragment::into(ContextWindowGuidance::new("previous guidance"));
-    let fragments = state.render_history_diff(snapshot.as_ref(), std::slice::from_ref(&retained));
+    let fragments = state
+        .render_history_diff(snapshot.as_ref(), std::slice::from_ref(&retained))
+        .1;
     assert_eq!(
         fragments
             .iter()
@@ -89,7 +104,8 @@ fn legacy_guidance_is_reconciled_once(
     }
     assert!(
         state
-            .render_history_diff(Some(&state.snapshot()), &history)
+            .render_history_diff(Some(&state.render_full().0), &history)
+            .1
             .is_empty()
     );
 }

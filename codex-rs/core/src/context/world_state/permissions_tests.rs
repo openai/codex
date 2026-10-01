@@ -141,13 +141,20 @@ fn legacy_snapshot_deserializes_and_only_suppresses_matching_full_permissions() 
     }))
     .expect("legacy world-state snapshot should deserialize");
     let expected_permissions = with_approved_prefix.instructions.render();
+    let retained = ContextualUserFragment::into(with_approved_prefix.instructions.clone());
     let mut world_state = WorldState::default();
     world_state.add_section(with_approved_prefix);
 
-    assert!(world_state.render_diff(&matching_legacy).is_empty());
+    assert!(
+        world_state
+            .render_history_diff(Some(&matching_legacy), std::slice::from_ref(&retained))
+            .1
+            .is_empty()
+    );
     assert_eq!(
         world_state
-            .render_diff(&stale_legacy)
+            .render_history_diff(Some(&stale_legacy), &[retained])
+            .1
             .into_iter()
             .map(|fragment| fragment.render())
             .collect::<Vec<_>>(),
@@ -180,7 +187,7 @@ fn persisted_permissions_are_detected_inside_bundled_developer_messages() {
     let retained = ContextualUserFragment::into(state.instructions.clone());
     let mut world_state = super::super::WorldState::default();
     world_state.add_section(state);
-    let snapshot = world_state.snapshot();
+    let snapshot = world_state.render_full().0;
     let mut bundled_retained = retained.clone();
     let ResponseItem::Message { content, .. } = &mut bundled_retained else {
         panic!("permissions should render as a message");
@@ -195,16 +202,21 @@ fn persisted_permissions_are_detected_inside_bundled_developer_messages() {
     assert_eq!(
         world_state
             .render_history_diff(/*previous*/ None, std::slice::from_ref(&retained))
+            .1
             .len(),
         1,
     );
     assert_eq!(
-        world_state.render_history_diff(Some(&snapshot), &[]).len(),
+        world_state
+            .render_history_diff(Some(&snapshot), &[])
+            .1
+            .len(),
         1,
     );
     assert!(
         world_state
             .render_history_diff(Some(&snapshot), &[bundled_retained])
+            .1
             .is_empty()
     );
 }

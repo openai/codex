@@ -194,8 +194,9 @@ fn changing_primary_environment_updates_model_context_and_persisted_state() -> R
     current_world_state.add_section(after);
     assert_eq!(
         current_world_state
-            .snapshot()
-            .merge_patch_from(&previous_world_state.snapshot())
+            .render_full()
+            .0
+            .merge_patch_from(&previous_world_state.render_full().0)
             .map(serde_json::Value::Object),
         Some(json!({
             "environments": {

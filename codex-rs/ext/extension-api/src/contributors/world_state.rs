@@ -73,7 +73,7 @@ impl RenderedWorldStateFragment {
     }
 }
 
-type RenderDiff = dyn for<'a> Fn(PreviousWorldStateSection<'a>) -> Option<RenderedWorldStateFragment>
+type RenderDiff = dyn for<'a> Fn(PreviousWorldStateSection<'a>) -> (Option<Value>, Option<RenderedWorldStateFragment>)
     + Send
     + Sync;
 type LegacyFragmentMatcher = dyn Fn(&str, &str) -> bool + Send + Sync;
@@ -85,26 +85,26 @@ type LegacyFragmentMatcher = dyn Fn(&str, &str) -> bool + Send + Sync;
 #[derive(Clone)]
 pub struct WorldStateSectionContribution {
     id: &'static str,
-    snapshot: Value,
     render_diff: Arc<RenderDiff>,
     matches_legacy_fragment: Arc<LegacyFragmentMatcher>,
     matches_retained_fragment: Option<Arc<LegacyFragmentMatcher>>,
 }
 
 impl WorldStateSectionContribution {
+    /// Return a replacement snapshot and/or fragment. A missing snapshot retains the
+    /// previous section state; a missing fragment emits no model-visible update. A null
+    /// snapshot removes the section from persisted state.
     pub fn new(
         id: &'static str,
-        snapshot: Value,
         render_diff: impl for<'a> Fn(
             PreviousWorldStateSection<'a>,
-        ) -> Option<RenderedWorldStateFragment>
+        ) -> (Option<Value>, Option<RenderedWorldStateFragment>)
         + Send
         + Sync
         + 'static,
     ) -> Self {
         Self {
             id,
-            snapshot,
             render_diff: Arc::new(render_diff),
             matches_legacy_fragment: Arc::new(|_, _| false),
             matches_retained_fragment: None,
@@ -132,14 +132,10 @@ impl WorldStateSectionContribution {
         self.id
     }
 
-    pub fn snapshot(&self) -> &Value {
-        &self.snapshot
-    }
-
     pub fn render_diff(
         &self,
         previous: PreviousWorldStateSection<'_>,
-    ) -> Option<RenderedWorldStateFragment> {
+    ) -> (Option<Value>, Option<RenderedWorldStateFragment>) {
         (self.render_diff)(previous)
     }
 

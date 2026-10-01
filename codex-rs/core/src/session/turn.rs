@@ -505,7 +505,7 @@ pub(crate) async fn run_turn(
             .await?;
 
             world_state = sess
-                .record_step_world_state_if_changed(&world_state, step_context.as_ref())
+                .record_step_world_state_if_changed(step_context.as_ref())
                 .await?;
 
             // Keep the override after accepted input so history truncation removes them together.

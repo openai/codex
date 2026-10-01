@@ -64,43 +64,47 @@ pub(crate) fn executor_skills_world_state_section(
         "lastAvailableFingerprint": last_available_fingerprint,
     });
     let retained_body = body.clone();
-    let contribution = WorldStateSectionContribution::new(
-        SKILLS_WORLD_STATE_ID,
-        snapshot,
-        move |previous| {
+    let contribution = WorldStateSectionContribution::new(SKILLS_WORLD_STATE_ID, move |previous| {
             if let PreviousWorldStateSection::Known(previous) = &previous
                 && previous.get("includeInstructions").and_then(serde_json::Value::as_bool)
                     == Some(include_instructions)
             {
                 if previous.get("body").and_then(serde_json::Value::as_str) == body.as_deref() {
-                    return None;
+                    return (Some(snapshot.clone()), None);
                 }
                 if let Some(body) = body.as_deref()
                     && previous.get("lastAvailableFingerprint").and_then(serde_json::Value::as_str)
                         == Some(blake3::hash(body.as_bytes()).to_hex().as_str())
                 {
-                    return Some(RenderedWorldStateFragment::new(
-                        "developer",
-                        (SKILLS_INSTRUCTIONS_OPEN_TAG, SKILLS_INSTRUCTIONS_CLOSE_TAG),
-                        "\n## Skills update\nThe previously listed selected-environment skills are available again.\n",
-                    ));
+                    return (
+                        Some(snapshot.clone()),
+                        Some(RenderedWorldStateFragment::new(
+                            "developer",
+                            (SKILLS_INSTRUCTIONS_OPEN_TAG, SKILLS_INSTRUCTIONS_CLOSE_TAG),
+                            "\n## Skills update\nThe previously listed selected-environment skills are available again.\n",
+                        )),
+                    );
                 }
             }
 
             let body = match body.as_deref() {
                 Some(body) => body,
-                None if matches!(previous, PreviousWorldStateSection::Absent) => return None,
+                None if matches!(previous, PreviousWorldStateSection::Absent) => {
+                    return (Some(snapshot.clone()), None);
+                }
                 None if !include_instructions => HIDDEN_EXECUTOR_SKILLS_BODY,
                 None => NO_EXECUTOR_SKILLS_BODY,
             };
             on_render();
-            Some(RenderedWorldStateFragment::new(
-                "developer",
-                (SKILLS_INSTRUCTIONS_OPEN_TAG, SKILLS_INSTRUCTIONS_CLOSE_TAG),
-                body,
-            ))
-        },
-    )
+            (
+                Some(snapshot.clone()),
+                Some(RenderedWorldStateFragment::new(
+                    "developer",
+                    (SKILLS_INSTRUCTIONS_OPEN_TAG, SKILLS_INSTRUCTIONS_CLOSE_TAG),
+                    body,
+                )),
+            )
+    })
     .with_legacy_matcher(|role, text| {
         role == "developer"
             && text.trim_start().starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG)
@@ -156,7 +160,7 @@ fn skills_world_state_section(
     } = state;
     let retained_body = body.clone();
 
-    let contribution = WorldStateSectionContribution::new(id, snapshot, move |previous| {
+    let contribution = WorldStateSectionContribution::new(id, move |previous| {
         if let PreviousWorldStateSection::Known(previous) = &previous {
             let previous_body = previous.get("body").and_then(serde_json::Value::as_str);
             let previous_include_instructions = previous
@@ -167,23 +171,28 @@ fn skills_world_state_section(
                 && previous_include_instructions == Some(include_instructions)
                 && previous_enabled == enabled
             {
-                return None;
+                return (Some(snapshot.clone()), None);
             }
         }
 
         let body = match body.as_deref() {
             Some(body) => body,
-            None if matches!(previous, PreviousWorldStateSection::Absent) => return None,
+            None if matches!(previous, PreviousWorldStateSection::Absent) => {
+                return (Some(snapshot.clone()), None);
+            }
             None if !include_instructions => hidden_skills_body,
             None => no_skills_body,
         };
         on_render();
 
-        Some(RenderedWorldStateFragment::new(
-            "developer",
-            (SKILLS_INSTRUCTIONS_OPEN_TAG, SKILLS_INSTRUCTIONS_CLOSE_TAG),
-            body,
-        ))
+        (
+            Some(snapshot.clone()),
+            Some(RenderedWorldStateFragment::new(
+                "developer",
+                (SKILLS_INSTRUCTIONS_OPEN_TAG, SKILLS_INSTRUCTIONS_CLOSE_TAG),
+                body,
+            )),
+        )
     });
     match retained_body {
         Some(body) => contribution.with_retained_fragment_matcher(move |role, text| {

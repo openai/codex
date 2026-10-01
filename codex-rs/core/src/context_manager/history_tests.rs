@@ -575,6 +575,45 @@ fn world_state_baseline_deduplicates_until_history_is_replaced() {
 }
 
 #[test]
+fn world_state_transitions_persist_changed_state_and_skip_unchanged_state() {
+    use codex_extension_api::PreviousWorldStateSection;
+    use codex_extension_api::RenderedWorldStateFragment;
+    use codex_extension_api::WorldStateSectionContribution;
+
+    let world_state = |value: &'static str| {
+        let mut state = WorldState::default();
+        state.add_extension_section(WorldStateSectionContribution::new("test", move |previous| {
+            let snapshot = serde_json::json!(value);
+            if matches!(previous, PreviousWorldStateSection::Known(previous) if previous == &snapshot) {
+                return (None, None);
+            }
+            (Some(snapshot), Some(RenderedWorldStateFragment::new(
+                "developer", ("<test>", "</test>"), value,
+            )))
+        }));
+        state
+    };
+    let mut history = ContextManager::new();
+    let (_, full) = history.update_world_state(&world_state("before"));
+    let full = full.expect("full checkpoint");
+    assert!(full.full);
+
+    let (snapshot, fragments, patch) = history.render_step_world_state(&world_state("after"));
+    assert_eq!(fragments[0].body(), "after");
+    let patch = patch.expect("changed snapshot must be persisted");
+    assert!(!patch.full);
+    let mut replayed = WorldStateSnapshot::from(&full.state);
+    replayed.apply_merge_patch(&patch.state);
+    assert_eq!(snapshot, replayed);
+    history.set_world_state_baseline(snapshot.clone());
+
+    let (unchanged, fragments, patch) = history.render_step_world_state(&world_state("after"));
+    assert_eq!(unchanged, snapshot);
+    assert!(fragments.is_empty());
+    assert_eq!(patch, None);
+}
+
+#[test]
 fn world_state_reconciles_matching_legacy_history_once() {
     let item = crate::context::ContextualUserFragment::into(UserInstructions {
         directory: None,
@@ -584,7 +623,8 @@ fn world_state_reconciles_matching_legacy_history_once() {
     let mut world_state = WorldState::default();
     world_state.add_section(TestWorldStateSection);
 
-    let (fragments, rollout_item) = history.update_world_state(&world_state);
+    let (snapshot, fragments, rollout_item) = history.render_step_world_state(&world_state);
+    history.set_world_state_baseline(snapshot);
     assert_eq!(
         vec!["\n\n<INSTRUCTIONS>\nunknown\n"],
         fragments

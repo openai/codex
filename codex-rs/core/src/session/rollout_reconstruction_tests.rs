@@ -369,6 +369,7 @@ async fn record_initial_history_restores_world_state_baseline(input: BaselineTur
     let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
     let expected_history = world_state
         .render_full()
+        .1
         .into_iter()
         .map(ContextualUserFragment::into_boxed_response_item)
         .collect::<Vec<_>>();
@@ -379,7 +380,7 @@ async fn record_initial_history_restores_world_state_baseline(input: BaselineTur
         .map(RolloutItem::ResponseItem)
         .collect::<Vec<_>>();
     world_state_items.push(RolloutItem::WorldState(WorldStateItem::full(
-        world_state.snapshot().into_object(),
+        world_state.render_full().0.into_object(),
     )));
     let context_item = turn_context.to_turn_context_item();
     let rollout_items = match input {

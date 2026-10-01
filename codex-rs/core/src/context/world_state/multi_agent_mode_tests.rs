@@ -48,21 +48,26 @@ fn persisted_mode_is_restored_only_when_missing_from_history() {
     );
     let mut world_state = WorldState::default();
     world_state.add_section(state);
-    let snapshot = world_state.snapshot();
+    let snapshot = world_state.render_full().0;
 
     assert_eq!(
         world_state
             .render_history_diff(/*previous*/ None, std::slice::from_ref(&retained))
+            .1
             .len(),
         1,
     );
     assert_eq!(
-        world_state.render_history_diff(Some(&snapshot), &[]).len(),
+        world_state
+            .render_history_diff(Some(&snapshot), &[])
+            .1
+            .len(),
         1
     );
     assert!(
         world_state
             .render_history_diff(Some(&snapshot), &[retained])
+            .1
             .is_empty()
     );
 }
@@ -105,6 +110,11 @@ fn catalog_role_updates_remain_separate_from_active_mode() {
     let mut previous = WorldState::default();
     previous.add_section(previous_hint);
     previous.add_section(previous_mode);
+    let (previous_snapshot, previous_fragments) = previous.render_full();
+    let history = previous_fragments
+        .into_iter()
+        .map(ContextualUserFragment::into_boxed_response_item)
+        .collect::<Vec<_>>();
 
     let current_role = catalog_role("Current role.");
     let current_hint = MultiAgentUsageHintState::new(current_role.clone());
@@ -115,7 +125,9 @@ fn catalog_role_updates_remain_separate_from_active_mode() {
     current.add_section(current_mode);
 
     let updates = crate::context_manager::updates::merge_contextual_fragments(
-        current.render_diff(&previous.snapshot()),
+        current
+            .render_history_diff(Some(&previous_snapshot), &history)
+            .1,
     );
     let expected_mode = MultiAgentModeInstructions::from_mode(MultiAgentMode::Proactive)
         .expect("proactive mode should render");

@@ -118,11 +118,22 @@ async fn cloud_preference_preserves_aliases_reads_and_executor_fallback() -> Tes
                     turn_store: &turn_store,
                 })
                 .await;
-            let executor_body = world_state_section(&sections, "skills").snapshot()["body"]
+            let snapshots: serde_json::Map<String, serde_json::Value> = sections
+                .iter()
+                .map(|section| {
+                    let previous = previous.get(section.id()).map_or(
+                        PreviousWorldStateSection::Absent,
+                        PreviousWorldStateSection::Known,
+                    );
+                    let snapshot = section.render_diff(previous).0.expect("skills snapshot");
+                    (section.id().to_string(), snapshot)
+                })
+                .collect();
+            let executor_body = snapshots["skills"]["body"]
                 .as_str()
                 .unwrap_or_default()
                 .to_string();
-            let cloud_body = world_state_section(&sections, "cloud_skills").snapshot()["body"]
+            let cloud_body = snapshots["cloud_skills"]["body"]
                 .as_str()
                 .unwrap_or_default()
                 .to_string();
@@ -156,10 +167,7 @@ async fn cloud_preference_preserves_aliases_reads_and_executor_fallback() -> Tes
                     assert!(executor_body.contains(&format!("- `e{index}` = `{root}`")));
                 }
             }
-            previous = sections
-                .iter()
-                .map(|section| (section.id().to_string(), section.snapshot().clone()))
-                .collect();
+            previous = snapshots;
             if !ready {
                 continue;
             }

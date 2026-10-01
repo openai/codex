@@ -28,35 +28,31 @@ Codex commit and pull request attribution is disabled for the current workspace.
 ";
 
 pub(super) fn git_attribution_world_state_section(enabled: bool) -> WorldStateSectionContribution {
-    let contribution =
-        WorldStateSectionContribution::new(WORLD_STATE_ID, Value::Bool(enabled), move |previous| {
-            match (enabled, previous) {
-                (true, PreviousWorldStateSection::Known(Value::Bool(true)))
-                | (true, PreviousWorldStateSection::Unknown) => None,
-                (true, PreviousWorldStateSection::Absent)
-                | (true, PreviousWorldStateSection::Known(_)) => {
-                    Some(RenderedWorldStateFragment::new(
-                        "developer",
-                        (START_MARKER, END_MARKER),
-                        ENABLED_INSTRUCTIONS,
-                    ))
-                }
-                (false, PreviousWorldStateSection::Known(Value::Bool(true)))
-                | (false, PreviousWorldStateSection::Unknown) => {
-                    Some(RenderedWorldStateFragment::new(
-                        "developer",
-                        (START_MARKER, END_MARKER),
-                        DISABLED_INSTRUCTIONS,
-                    ))
-                }
-                (false, PreviousWorldStateSection::Absent)
-                | (false, PreviousWorldStateSection::Known(_)) => None,
-            }
-        })
-        .with_legacy_matcher(move |role, text| {
-            is_enabled_fragment(role, text)
-                || (!enabled && is_legacy_commit_attribution_fragment(role, text))
-        });
+    let contribution = WorldStateSectionContribution::new(WORLD_STATE_ID, move |previous| {
+        let fragment = match (enabled, previous) {
+            (true, PreviousWorldStateSection::Known(Value::Bool(true)))
+            | (true, PreviousWorldStateSection::Unknown) => None,
+            (true, PreviousWorldStateSection::Absent)
+            | (true, PreviousWorldStateSection::Known(_)) => Some(RenderedWorldStateFragment::new(
+                "developer",
+                (START_MARKER, END_MARKER),
+                ENABLED_INSTRUCTIONS,
+            )),
+            (false, PreviousWorldStateSection::Known(Value::Bool(true)))
+            | (false, PreviousWorldStateSection::Unknown) => Some(RenderedWorldStateFragment::new(
+                "developer",
+                (START_MARKER, END_MARKER),
+                DISABLED_INSTRUCTIONS,
+            )),
+            (false, PreviousWorldStateSection::Absent)
+            | (false, PreviousWorldStateSection::Known(_)) => None,
+        };
+        (Some(Value::Bool(enabled)), fragment)
+    })
+    .with_legacy_matcher(move |role, text| {
+        is_enabled_fragment(role, text)
+            || (!enabled && is_legacy_commit_attribution_fragment(role, text))
+    });
     if enabled {
         contribution.with_retained_fragment_matcher(is_enabled_fragment)
     } else {

@@ -9,6 +9,7 @@ use crate::client_common::ResponseEvent;
 use crate::context::CompactionSummary;
 use crate::context::ContextualUserFragment;
 use crate::context::world_state::WorldState;
+use crate::context::world_state::WorldStateSnapshot;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
@@ -91,19 +92,19 @@ pub(crate) struct CompactedHistoryMetadata {
 pub(crate) async fn build_compaction_initial_context(
     sess: &Session,
     initial_context_injection: &InitialContextInjection,
-) -> (Vec<ResponseItemEnvelope>, Option<Arc<WorldState>>) {
+) -> (Vec<ResponseItemEnvelope>, Option<WorldStateSnapshot>) {
     // Return the rendered state with its items so history and its baseline stay identical.
     match initial_context_injection {
         InitialContextInjection::BeforeLastUserMessage {
             world_state,
             step_context,
         } => {
-            let items = sess
+            let (items, snapshot) = sess
                 .build_initial_context_with_world_state(step_context, world_state.as_ref())
                 .await;
             (
                 items.into_iter().map(ResponseItemEnvelope::new).collect(),
-                Some(Arc::clone(world_state)),
+                Some(snapshot),
             )
         }
         InitialContextInjection::DoNotInject => (Vec::new(), None),

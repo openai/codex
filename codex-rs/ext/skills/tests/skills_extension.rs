@@ -148,9 +148,11 @@ async fn skill_world_state_fragments(
 
     let executor = world_state_section(&sections, "skills")
         .render_diff(PreviousWorldStateSection::Absent)
+        .1
         .ok_or("executor skills should render through world state")?;
     let cloud = world_state_section(&sections, "cloud_skills")
         .render_diff(PreviousWorldStateSection::Absent)
+        .1
         .ok_or("cloud skills should render through world state")?;
     Ok((executor, cloud))
 }
@@ -333,12 +335,10 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
 
     assert_eq!(sections.len(), 2);
     let host_section = world_state_section(&sections, "host_skills");
-    let published_snapshot = host_section.snapshot().clone();
-    assert!(
-        host_section
-            .render_diff(PreviousWorldStateSection::Absent)
-            .is_some()
-    );
+    let (published_snapshot, fragment) =
+        host_section.render_diff(PreviousWorldStateSection::Absent);
+    let published_snapshot = published_snapshot.unwrap();
+    assert!(fragment.is_some());
     let mut expected = expected_catalog_metric_samples("host_world_state", /*count*/ 1);
     assert!(startup_metrics.samples().is_empty());
     assert_eq!(turn_metrics.samples(), expected);
@@ -361,6 +361,7 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
     assert!(
         world_state_section(&sections, "host_skills")
             .render_diff(PreviousWorldStateSection::Known(&published_snapshot))
+            .1
             .is_none()
     );
     assert!(startup_metrics.samples().is_empty());
@@ -399,6 +400,7 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
     assert!(
         world_state_section(&sections, "host_skills")
             .render_diff(PreviousWorldStateSection::Known(&published_snapshot))
+            .1
             .is_some()
     );
     expected.extend(expected_catalog_metric_samples(
@@ -469,12 +471,10 @@ async fn persisted_host_snapshot_deduplicates_warning_after_reinitialization() -
         })
         .await;
     let host_section = world_state_section(&sections, "host_skills");
-    let published_snapshot = host_section.snapshot().clone();
-    assert!(
-        host_section
-            .render_diff(PreviousWorldStateSection::Absent)
-            .is_some()
-    );
+    let (published_snapshot, fragment) =
+        host_section.render_diff(PreviousWorldStateSection::Absent);
+    let published_snapshot = published_snapshot.unwrap();
+    assert!(fragment.is_some());
     event_rx.try_recv()?.into_warning();
     assert!(event_rx.try_recv().is_err());
 
@@ -513,6 +513,7 @@ async fn persisted_host_snapshot_deduplicates_warning_after_reinitialization() -
     assert!(
         world_state_section(&sections, "host_skills")
             .render_diff(PreviousWorldStateSection::Known(&published_snapshot))
+            .1
             .is_none()
     );
     assert!(event_rx.try_recv().is_err());
@@ -627,6 +628,7 @@ async fn executor_cloud_and_host_share_catalog_world_state_flow() -> TestResult 
     ] {
         let fragment = world_state_section(&sections, section_id)
             .render_diff(PreviousWorldStateSection::Absent)
+            .1
             .ok_or("skill catalog should render through world state")?;
         assert!(fragment.body().contains(expected_line));
     }
@@ -715,11 +717,13 @@ async fn nonempty_executor_empty_host_records_catalog_metrics() -> TestResult {
     assert!(
         sections[0]
             .render_diff(PreviousWorldStateSection::Absent)
+            .1
             .is_some()
     );
     assert!(
         world_state_section(&sections, "host_skills")
             .render_diff(PreviousWorldStateSection::Absent)
+            .1
             .is_none()
     );
     let expected = expected_catalog_metric_samples("executor_world_state", /*count*/ 1);
@@ -791,6 +795,7 @@ async fn host_world_state_uses_provider_catalog_with_core_compatible_rendering()
         .await;
     let host_fragment = world_state_section(&sections, "host_skills")
         .render_diff(PreviousWorldStateSection::Absent)
+        .1
         .ok_or("host provider catalog should render")?;
 
     assert!(host_fragment.body().contains("Fix lint errors."));
@@ -890,6 +895,7 @@ async fn shadow_selection_uses_host_catalog_when_instructions_are_disabled() -> 
     assert!(
         world_state_section(&sections, "host_skills")
             .render_diff(PreviousWorldStateSection::Absent)
+            .1
             .is_none()
     );
     assert!(fragments.is_empty());
@@ -1147,10 +1153,10 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         })
         .await;
     assert_eq!(1, available_sections.len());
-    let available_snapshot = available_sections[0].snapshot().clone();
-    let available_fragment = available_sections[0]
-        .render_diff(PreviousWorldStateSection::Absent)
-        .ok_or("available skills should render")?;
+    let (available_snapshot, available_fragment) =
+        available_sections[0].render_diff(PreviousWorldStateSection::Absent);
+    let available_snapshot = available_snapshot.unwrap();
+    let available_fragment = available_fragment.ok_or("available skills should render")?;
     assert!(available_fragment.body().contains("lint-fix"));
     assert!(
         available_fragment
@@ -1205,7 +1211,9 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             turn_store: &unavailable_turn_store,
         })
         .await;
-    let unavailable_snapshot = unavailable_sections[0].snapshot().clone();
+    let (unavailable_snapshot, unavailable_fragment) =
+        unavailable_sections[0].render_diff(PreviousWorldStateSection::Known(&available_snapshot));
+    let unavailable_snapshot = unavailable_snapshot.unwrap();
     assert_eq!(
         unavailable_snapshot,
         serde_json::json!({
@@ -1216,9 +1224,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             ).to_hex().to_string(),
         }),
     );
-    let unavailable_fragment = unavailable_sections[0]
-        .render_diff(PreviousWorldStateSection::Known(&available_snapshot))
-        .ok_or("removed skills should render")?;
+    let unavailable_fragment = unavailable_fragment.ok_or("removed skills should render")?;
     assert!(
         unavailable_fragment
             .body()
@@ -1243,10 +1249,10 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             turn_store: &restored_turn_store,
         })
         .await;
-    let restored_snapshot = restored_sections[0].snapshot().clone();
-    let restored_fragment = restored_sections[0]
-        .render_diff(PreviousWorldStateSection::Known(&unavailable_snapshot))
-        .ok_or("restored skills should render")?;
+    let (restored_snapshot, restored_fragment) =
+        restored_sections[0].render_diff(PreviousWorldStateSection::Known(&unavailable_snapshot));
+    let restored_snapshot = restored_snapshot.unwrap();
+    let restored_fragment = restored_fragment.ok_or("restored skills should render")?;
     assert_eq!(
         restored_fragment.body(),
         "\n## Skills update\nThe previously listed selected-environment skills are available again.\n",
@@ -1256,7 +1262,9 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         !restored_sections[0].matches_retained_fragment("developer", unavailable_fragment.body())
     );
     assert_eq!(
-        restored_sections[0].render_diff(PreviousWorldStateSection::Absent),
+        restored_sections[0]
+            .render_diff(PreviousWorldStateSection::Absent)
+            .1,
         Some(available_fragment),
     );
     assert_eq!(1, list_calls.load(Ordering::Relaxed));
@@ -1326,14 +1334,15 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             turn_store: &listing_disabled_turn_store,
         })
         .await;
-    let listing_disabled_fragment = listing_disabled_sections[0]
-        .render_diff(PreviousWorldStateSection::Known(&restored_snapshot))
-        .ok_or("disabled skill listing should render")?;
+    let (listing_disabled_snapshot, listing_disabled_fragment) = listing_disabled_sections[0]
+        .render_diff(PreviousWorldStateSection::Known(&restored_snapshot));
+    let listing_disabled_fragment =
+        listing_disabled_fragment.ok_or("disabled skill listing should render")?;
     assert_eq!(
         "\n## Skills update\nSelected-environment skills are not listed automatically. Explicit skill mentions can still be resolved when available.\n",
         listing_disabled_fragment.body()
     );
-    let mut normalized_listing_disabled_snapshot = listing_disabled_sections[0].snapshot().clone();
+    let mut normalized_listing_disabled_snapshot = listing_disabled_snapshot.unwrap();
     normalized_listing_disabled_snapshot
         .as_object_mut()
         .ok_or("skills snapshot should be an object")?
@@ -1343,6 +1352,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             .render_diff(PreviousWorldStateSection::Known(
                 &normalized_listing_disabled_snapshot
             ))
+            .1
             .is_none()
     );
 
@@ -1589,17 +1599,26 @@ async fn catalog_rebalances_only_to_avoid_omissions_and_retains_the_allocation()
                         turn_store: &turn_store,
                     })
                     .await;
-                let cloud = world_state_section(&sections, "cloud_skills");
-                let cloud_body = cloud.snapshot()["body"].as_str().ok_or("cloud catalog")?;
+                let rendered = sections
+                    .iter()
+                    .map(|section| {
+                        let prior = previous.get(section.id()).map_or(
+                            PreviousWorldStateSection::Absent,
+                            PreviousWorldStateSection::Known,
+                        );
+                        (section.id().to_string(), section.render_diff(prior))
+                    })
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                let cloud = &rendered["cloud_skills"];
+                let cloud_snapshot = cloud.0.as_ref().expect("cloud snapshot");
+                let cloud_body = cloud_snapshot["body"].as_str().ok_or("cloud catalog")?;
                 match phase {
                     Phase::Initial => initial_cloud = Some(cloud_body.to_string()),
                     Phase::FirstReady => {
                         assert_eq!(initial_cloud.as_deref() != Some(cloud_body), rebalance);
-                        accepted_cloud = Some(cloud.snapshot().clone());
-                        let executor = world_state_section(&sections, "skills");
-                        let executor_body = executor.snapshot()["body"]
-                            .as_str()
-                            .ok_or("executor catalog")?;
+                        accepted_cloud = Some(cloud_snapshot.clone());
+                        let executor = rendered["skills"].0.as_ref().expect("executor snapshot");
+                        let executor_body = executor["body"].as_str().ok_or("executor catalog")?;
                         assert_eq!(
                             executor_body
                                 .lines()
@@ -1619,7 +1638,7 @@ async fn catalog_rebalances_only_to_avoid_omissions_and_retains_the_allocation()
                         }
                     }
                     Phase::CloudCatalogGrew => {
-                        let allocation = &cloud.snapshot()["allocation"];
+                        let allocation = &cloud_snapshot["allocation"];
                         let previous_limit = previous["cloud_skills"]["allocation"]["cloudLimit"]
                             .as_u64()
                             .ok_or("previous cloud limit")?;
@@ -1638,9 +1657,9 @@ async fn catalog_rebalances_only_to_avoid_omissions_and_retains_the_allocation()
                                 .count(),
                             15
                         );
-                        let executor = world_state_section(&sections, "skills");
+                        let executor = rendered["skills"].0.as_ref().expect("executor snapshot");
                         assert_eq!(
-                            executor.snapshot()["body"]
+                            executor["body"]
                                 .as_str()
                                 .ok_or("executor catalog")?
                                 .lines()
@@ -1648,22 +1667,16 @@ async fn catalog_rebalances_only_to_avoid_omissions_and_retains_the_allocation()
                                 .count(),
                             executor_count
                         );
-                        accepted_cloud = Some(cloud.snapshot().clone());
+                        accepted_cloud = Some(cloud_snapshot.clone());
                     }
                     Phase::Disconnected | Phase::Reconnected | Phase::Resumed => {
-                        assert_eq!(Some(cloud.snapshot()), accepted_cloud.as_ref());
-                        assert!(
-                            cloud
-                                .render_diff(PreviousWorldStateSection::Known(
-                                    &previous["cloud_skills"]
-                                ))
-                                .is_none()
-                        );
+                        assert_eq!(Some(cloud_snapshot), accepted_cloud.as_ref());
+                        assert!(cloud.1.is_none());
                     }
                     Phase::BudgetChanged => {
                         // A genuinely different total budget starts a new allocation.
                         assert_eq!(
-                            cloud.snapshot()["allocation"],
+                            cloud_snapshot["allocation"],
                             serde_json::json!({
                                 "totalBudget": {"tokens": 4_000}, "cloudLimit": 3_000,
                                 "cloudCatalogFingerprint": previous["cloud_skills"]["allocation"]["cloudCatalogFingerprint"],
@@ -1671,9 +1684,9 @@ async fn catalog_rebalances_only_to_avoid_omissions_and_retains_the_allocation()
                         );
                     }
                 }
-                previous = sections
-                    .iter()
-                    .map(|section| (section.id().to_string(), section.snapshot().clone()))
+                previous = rendered
+                    .into_iter()
+                    .map(|(id, (snapshot, _))| (id, snapshot.expect("skills snapshot")))
                     .collect();
             }
         }
@@ -2358,13 +2371,14 @@ async fn model_context_window_scales_executor_and_cloud_catalogs() -> TestResult
         .await;
     assert!(event_rx.try_recv().is_err());
     let executor_section = world_state_section(&sections, "skills");
-    let snapshot = executor_section.snapshot().clone();
-    let executor_fragment = executor_section
-        .render_diff(PreviousWorldStateSection::Absent)
-        .ok_or("bounded executor catalog should render")?;
+    let (snapshot, executor_fragment) =
+        executor_section.render_diff(PreviousWorldStateSection::Absent);
+    let snapshot = snapshot.unwrap();
+    let executor_fragment = executor_fragment.ok_or("bounded executor catalog should render")?;
     assert!(!executor_fragment.body().contains("skill-39"));
     let cloud_fragment = world_state_section(&sections, "cloud_skills")
         .render_diff(PreviousWorldStateSection::Absent)
+        .1
         .ok_or("bounded cloud catalog should render")?;
     assert!(cloud_fragment.body().contains("additional skills omitted"));
     let warnings = event_rx
@@ -2389,6 +2403,7 @@ async fn model_context_window_scales_executor_and_cloud_catalogs() -> TestResult
     assert!(
         executor_section
             .render_diff(PreviousWorldStateSection::Known(&snapshot))
+            .1
             .is_none()
     );
     assert!(event_rx.try_recv().is_err());
