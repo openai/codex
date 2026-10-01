@@ -1912,6 +1912,7 @@ impl ThreadManagerState {
             agent_control,
             self.session_source.clone(),
             /*history_mode*/ None,
+            /*dynamic_tools*/ Vec::new(),
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
@@ -1930,6 +1931,7 @@ impl ThreadManagerState {
         agent_control: LocalAgentControl,
         session_source: SessionSource,
         history_mode: Option<ThreadHistoryMode>,
+        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
@@ -1946,6 +1948,7 @@ impl ThreadManagerState {
             metrics_service_name,
             environments,
             client_mcp_extensions,
+            dynamic_tools,
             ..StartThreadOptions::new(config)
         };
         let mut request =

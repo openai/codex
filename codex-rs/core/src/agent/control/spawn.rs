@@ -25,6 +25,7 @@ use crate::session::multi_agents::resolve_usage_hints;
 use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
 use codex_extension_api::ExtensionDataInit;
+use codex_features::Feature;
 use codex_history::ResponseItemEnvelope;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::intersect_effective_permission_profiles;
@@ -739,16 +740,25 @@ impl LocalAgentControl {
                 .await?
             }
             (Some(session_source), None, inheritance) => {
-                let history_mode = if let Some(parent_thread_id) = options.parent_thread_id
+                let (history_mode, dynamic_tools) = if let Some(parent_thread_id) =
+                    options.parent_thread_id
                     && let Ok(parent_thread) = state.get_thread(parent_thread_id).await
                 {
-                    matches!(
+                    let history_mode = matches!(
                         parent_thread.config_snapshot().await.history_mode,
                         ThreadHistoryMode::Paginated
                     )
-                    .then_some(ThreadHistoryMode::Paginated)
+                    .then_some(ThreadHistoryMode::Paginated);
+                    let dynamic_tools = if multi_agent_version == MultiAgentVersion::V2
+                        && config.features.enabled(Feature::MultiAgentV2DynamicTools)
+                    {
+                        parent_thread.session.dynamic_tools().await
+                    } else {
+                        Vec::new()
+                    };
+                    (history_mode, dynamic_tools)
                 } else {
-                    None
+                    (None, Vec::new())
                 };
                 let environments = options
                     .environments
@@ -760,6 +770,7 @@ impl LocalAgentControl {
                     self.clone(),
                     session_source,
                     history_mode,
+                    dynamic_tools,
                     options.parent_thread_id,
                     /*forked_from_thread_id*/ None,
                     /*thread_source*/ Some(ThreadSource::Subagent),

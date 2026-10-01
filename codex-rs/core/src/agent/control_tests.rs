@@ -1928,10 +1928,52 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
         .expect("parent shutdown should submit");
 }
 
+#[test_case::test_case(MultiAgentVersion::V1, true, false; "v1_gate_enabled")]
+#[test_case::test_case(MultiAgentVersion::V2, false, false; "v2_gate_disabled")]
+#[test_case::test_case(MultiAgentVersion::V2, true, true; "v2_gate_enabled")]
 #[tokio::test]
-async fn spawn_agent_without_fork_from_paginated_parent_stays_fresh_and_paginated() {
-    let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, parent_thread) = harness.start_paginated_thread().await;
+async fn spawn_agent_without_fork_from_paginated_parent_stays_fresh_and_paginated(
+    multi_agent_version: MultiAgentVersion,
+    dynamic_tools_enabled: bool,
+    inherits_dynamic_tools: bool,
+) {
+    let mut harness = AgentControlHarness::new().await;
+    let features = &mut harness.config.features;
+    features
+        .disable(Feature::MultiAgentV2)
+        .expect("disable raw v2 feature");
+    if dynamic_tools_enabled {
+        features.enable(Feature::MultiAgentV2DynamicTools)
+    } else {
+        features.disable(Feature::MultiAgentV2DynamicTools)
+    }
+    .expect("configure dynamic tool inheritance");
+    let dynamic_tools = vec![codex_protocol::dynamic_tools::DynamicToolSpec::Function(
+        codex_protocol::dynamic_tools::DynamicToolFunctionSpec {
+            name: "echo".to_string(),
+            description: "Return the supplied message.".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {"message": {"type": "string"}}}),
+            defer_loading: false,
+        },
+    )];
+    let parent = harness
+        .manager
+        .start_thread(StartThreadOptions {
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            environments: Some(Vec::new()),
+            dynamic_tools: dynamic_tools.clone(),
+            ..StartThreadOptions::new(harness.config.clone())
+        })
+        .await
+        .expect("start parent with dynamic tools");
+    let parent_thread_id = parent.thread_id;
+    let parent_thread = parent.thread;
+    assert_eq!(
+        parent_thread
+            .session
+            .set_multi_agent_version_if_unset(multi_agent_version),
+        multi_agent_version
+    );
     parent_thread
         .inject_response_items(vec![user_message("parent-only context")])
         .await
@@ -1951,6 +1993,15 @@ async fn spawn_agent_without_fork_from_paginated_parent_stays_fresh_and_paginate
         .get_thread(child_thread_id)
         .await
         .expect("child thread should be registered");
+    let expected_dynamic_tools = if inherits_dynamic_tools {
+        dynamic_tools
+    } else {
+        Vec::new()
+    };
+    assert_eq!(
+        child_thread.session.dynamic_tools().await,
+        expected_dynamic_tools
+    );
     assert!(
         !history_contains_text(
             child_thread.session.clone_history().await.raw_items(),
@@ -1972,6 +2023,10 @@ async fn spawn_agent_without_fork_from_paginated_parent_stays_fresh_and_paginate
     .expect("read child session metadata");
     assert_eq!(meta.meta.history_mode, ThreadHistoryMode::Paginated);
     assert_eq!(meta.meta.subagent_history_start_ordinal, None);
+    assert_eq!(
+        meta.meta.dynamic_tools.unwrap_or_default(),
+        expected_dynamic_tools
+    );
 
     let _ = harness
         .control

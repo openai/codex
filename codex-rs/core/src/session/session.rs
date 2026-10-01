@@ -671,6 +671,11 @@ impl Session {
         state.session_configuration.originator.clone()
     }
 
+    pub(crate) async fn dynamic_tools(&self) -> Vec<DynamicToolSpec> {
+        let state = self.state.lock().await;
+        state.session_configuration.dynamic_tools.clone()
+    }
+
     pub(crate) async fn responses_metadata(
         &self,
         step_context: &StepContext,

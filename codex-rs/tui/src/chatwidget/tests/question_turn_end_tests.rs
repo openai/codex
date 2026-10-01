@@ -36,14 +36,14 @@ async fn question_turn_end_escapes_command_drafts_before_submission() {
             chat.thread_id = Some(ThreadId::new());
             chat.show_welcome_banner = false;
             handle_turn_started(&mut chat, "turn");
-            questions(&mut chat, "question");
+            questions(&mut chat, "question", "Which way?");
             chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
             chat.bottom_pane.handle_paste("answer".into());
             chat.bottom_pane
                 .set_composer_text(draft.into(), Vec::new(), Vec::new());
 
             handle_turn_completed(&mut chat, "turn", /*duration_ms*/ None);
-            let expected = format!("{escaped}\nanswer");
+            let expected = format!("{escaped}\n\n> Which way?\n\nanswer");
             let submitted_text = expected.trim().to_string();
             assert_eq!(chat.bottom_pane.composer_text(), expected);
             if draft == "!echo partial" && !queued {

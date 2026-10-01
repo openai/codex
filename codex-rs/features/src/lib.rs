@@ -213,6 +213,8 @@ pub enum Feature {
     MultiAgentV2,
     /// Keep spawn model choices in append-only context instead of tool descriptions.
     ModelCatalogInContext,
+    /// Inherit client-defined dynamic tools in fresh V2 subagents.
+    MultiAgentV2DynamicTools,
     /// Keep sampling through reasoning and commentary boundaries when agent mail arrives.
     /// Pending mail is delivered at the next normal input boundary instead.
     DeferMailboxPreemption,
@@ -1375,6 +1377,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ModelCatalogInContext,
         key: "model_catalog_in_context",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MultiAgentV2DynamicTools,
+        key: "multi_agent_v2_dynamic_tools",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
