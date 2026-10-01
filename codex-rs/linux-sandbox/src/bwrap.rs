@@ -1253,10 +1253,10 @@ fn append_read_only_subpath_args(
 }
 
 fn append_empty_file_bind_data_args(bwrap_args: &mut BwrapArgs, path: &Path) -> Result<()> {
-    if bwrap_args.preserved_files.is_empty() {
-        bwrap_args.preserved_files.push(File::open("/dev/null")?);
-    }
-    let null_fd = bwrap_args.preserved_files[0].as_raw_fd().to_string();
+    // Bubblewrap consumes and closes the descriptor for each bind-data mount.
+    let null_file = File::open("/dev/null")?;
+    let null_fd = null_file.as_raw_fd().to_string();
+    bwrap_args.preserved_files.push(null_file);
     bwrap_args.args.push("--ro-bind-data".to_string());
     bwrap_args.args.push(null_fd);
     bwrap_args.args.push(path_to_string(path));
@@ -2005,6 +2005,7 @@ mod tests {
         let temp_dir = TempDir::new().expect("temp dir");
         let workspace = temp_dir.path().join("workspace");
         let blocked = workspace.join("blocked");
+        let second_blocked = workspace.join("second-blocked");
         std::fs::create_dir_all(&workspace).expect("create workspace");
 
         let workspace_root =
@@ -2021,20 +2022,30 @@ mod tests {
                 access: FileSystemAccessMode::Read,
                 missing_path_behavior: None,
             },
+            FileSystemSandboxEntry {
+                path: AbsolutePathBuf::from_absolute_path(&second_blocked)
+                    .expect("absolute second blocked")
+                    .into(),
+                access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
+            },
         ]);
 
         let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
             .expect("filesystem args");
 
         assert_empty_file_bound_without_perms(&args.args, &blocked);
+        assert_empty_file_bound_without_perms(&args.args, &second_blocked);
         assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".git"));
         assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
         assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
-        assert_eq!(args.preserved_files.len(), 1);
+        assert_eq!(args.preserved_files.len(), 2);
+        assert_bind_data_uses_distinct_preserved_fds(&args);
         assert_eq!(
             synthetic_mount_target_paths(&args),
             vec![
                 blocked.clone(),
+                second_blocked.clone(),
                 workspace.join(".git"),
                 workspace.join(".agents"),
                 workspace.join(".codex"),
@@ -2042,7 +2053,7 @@ mod tests {
             ]
         );
         assert!(
-            !blocked.exists(),
+            !blocked.exists() && !second_blocked.exists(),
             "missing path mask should not materialize host-side metadata paths at arg construction time",
         );
     }
@@ -2848,7 +2859,9 @@ mod tests {
     fn split_policy_masks_root_read_file_carveouts() {
         let temp_dir = TempDir::new().expect("temp dir");
         let blocked_file = temp_dir.path().join("blocked.txt");
+        let second_blocked_file = temp_dir.path().join("second-blocked.txt");
         std::fs::write(&blocked_file, "secret").expect("create blocked file");
+        std::fs::write(&second_blocked_file, "dummy secret").expect("create second blocked file");
         let blocked_file =
             AbsolutePathBuf::from_absolute_path(&blocked_file).expect("absolute blocked file");
         let policy = FileSystemSandboxPolicy::restricted(vec![
@@ -2864,20 +2877,46 @@ mod tests {
                 access: FileSystemAccessMode::Deny,
                 missing_path_behavior: None,
             },
+            FileSystemSandboxEntry {
+                path: AbsolutePathBuf::from_absolute_path(&second_blocked_file)
+                    .expect("absolute second blocked file")
+                    .into(),
+                access: FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
+            },
         ]);
 
         let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
             .expect("filesystem args");
-        let blocked_file_str = path_to_string(blocked_file.as_path());
-
-        assert_eq!(args.preserved_files.len(), 1);
+        assert_eq!(args.preserved_files.len(), 2);
+        assert_bind_data_uses_distinct_preserved_fds(&args);
         assert!(args.synthetic_mount_targets.is_empty());
-        assert!(args.args.windows(5).any(|window| {
-            window[0] == "--perms"
-                && window[1] == "000"
-                && window[2] == "--ro-bind-data"
-                && window[4] == blocked_file_str
-        }));
+        for blocked_file in [blocked_file.as_path(), second_blocked_file.as_path()] {
+            assert!(args.args.windows(5).any(|window| {
+                window[0] == "--perms"
+                    && window[1] == "000"
+                    && window[2] == "--ro-bind-data"
+                    && window[4] == path_to_string(blocked_file)
+            }));
+        }
+    }
+
+    fn assert_bind_data_uses_distinct_preserved_fds(args: &BwrapArgs) {
+        let mount_fds = args
+            .args
+            .windows(3)
+            .filter(|window| window[0] == "--ro-bind-data")
+            .map(|window| window[1].parse::<i32>().expect("bind-data fd"))
+            .collect::<Vec<_>>();
+        let distinct_fds = mount_fds.iter().copied().collect::<HashSet<_>>();
+        assert_eq!(mount_fds.len(), distinct_fds.len());
+        assert_eq!(
+            distinct_fds,
+            args.preserved_files
+                .iter()
+                .map(AsRawFd::as_raw_fd)
+                .collect()
+        );
     }
 
     #[test]
