@@ -7,6 +7,7 @@ pub use backend::windows::DetachedLaunchRestricted;
 #[cfg(windows)]
 use backend::windows::try_lock_file;
 mod client;
+mod diagnostics;
 mod install_lock;
 mod launch;
 pub use launch::restart_with_features;
@@ -549,7 +550,10 @@ impl Daemon {
                 mode
             };
             match restart_decision(mode, info.as_ref(), managed_version.as_deref()) {
-                RestartDecision::NotReady => return Ok(RestartIfRunningOutcome::NotReady),
+                RestartDecision::NotReady => {
+                    diagnostics::event("daemon_not_ready", ());
+                    return Ok(RestartIfRunningOutcome::NotReady);
+                }
                 RestartDecision::AlreadyCurrent => RestartIfRunningOutcome::AlreadyCurrent,
                 RestartDecision::Restart => {
                     #[cfg(windows)]
@@ -559,13 +563,29 @@ impl Daemon {
                             "warning: failed to clear stale daemon recovery before update: {err}"
                         );
                     }
-                    backend
-                        .stop_with_grace(settings.shutdown_grace_seconds)
-                        .await?;
-                    let _ = self
-                        .start_managed_backend_with_bin(&settings, managed_codex_bin)
-                        .await?;
-                    self.wait_until_ready().await?;
+                    diagnostics::event(
+                        "restart_requested",
+                        serde_json::json!({
+                                "shutdownGraceSeconds": settings.shutdown_grace_seconds,
+                        }),
+                    );
+                    let started = std::time::Instant::now();
+                    diagnostics::result(
+                        "shutdown",
+                        started,
+                        backend
+                            .stop_with_grace(settings.shutdown_grace_seconds)
+                            .await,
+                    )?;
+                    let started = std::time::Instant::now();
+                    diagnostics::result(
+                        "replacement_launch",
+                        started,
+                        self.start_managed_backend_with_bin(&settings, managed_codex_bin)
+                            .await,
+                    )?;
+                    let started = std::time::Instant::now();
+                    diagnostics::result("readiness", started, self.wait_until_ready().await)?;
                     RestartIfRunningOutcome::Restarted
                 }
             }
@@ -574,6 +594,7 @@ impl Daemon {
                 "app server is running but is not managed by codex app-server daemon"
             ));
         } else {
+            diagnostics::event("daemon_not_running", ());
             RestartIfRunningOutcome::NotRunning
         };
 

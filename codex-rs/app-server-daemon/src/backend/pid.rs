@@ -172,6 +172,7 @@ impl PidBackend {
             }
 
             let pid = record.pid;
+            crate::diagnostics::event("shutdown_requested", serde_json::json!({ "pid": pid }));
             let started_at = tokio::time::Instant::now();
             let force_after = Duration::from_secs(grace_seconds.into());
             let deadline = started_at + force_after + STOP_FORCE_TIMEOUT;
@@ -227,6 +228,7 @@ impl PidBackend {
                     break;
                 }
                 if !forced && started_at.elapsed() >= force_after {
+                    crate::diagnostics::event("shutdown_forced", serde_json::json!({ "pid": pid }));
                     #[cfg(unix)]
                     self.force_terminate_process(pid)?;
                     #[cfg(windows)]
@@ -353,18 +355,28 @@ impl PidBackend {
     #[cfg(any(unix, windows))]
     async fn open_stderr_log(&self) -> Result<fs::File> {
         let stderr_log_file = stderr_log_file_for_pid_file(&self.pid_file);
-        fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&stderr_log_file)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to open stderr log for pid-managed app server {}",
-                    stderr_log_file.display()
-                )
-            })
+        super::stderr_log::preserve(&stderr_log_file).await;
+        let result = async {
+            fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&stderr_log_file)
+                .await?;
+            // The updater predecessor can still write after a Windows handoff
+            // truncates this file. Append handles prevent stale offsets and gaps.
+            fs::OpenOptions::new()
+                .append(true)
+                .open(&stderr_log_file)
+                .await
+        }
+        .await;
+        result.with_context(|| {
+            format!(
+                "failed to open stderr log for pid-managed app server {}",
+                stderr_log_file.display()
+            )
+        })
     }
 
     #[cfg(any(unix, windows))]

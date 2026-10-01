@@ -1,4 +1,5 @@
 mod pid;
+mod stderr_log;
 #[cfg(windows)]
 pub(crate) mod windows;
 

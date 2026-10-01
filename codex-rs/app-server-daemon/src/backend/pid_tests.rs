@@ -756,6 +756,7 @@ async fn failed_updater_handoff_preserves_predecessor_record() {
 #[tokio::test]
 async fn updater_readiness_and_post_publication_failure_preserve_ownership() {
     use futures::FutureExt;
+    use tokio::io::AsyncWriteExt;
     use windows_sys::Win32::Security::ImpersonateAnonymousToken;
     use windows_sys::Win32::Security::RevertToSelf;
     use windows_sys::Win32::System::Threading::GetCurrentThread;
@@ -770,13 +771,23 @@ async fn updater_readiness_and_post_publication_failure_preserve_ownership() {
         .acquire_reservation_lock()
         .await
         .expect("reservation lock");
+    let mut predecessor_stderr = backend.open_stderr_log().await.expect("predecessor log");
+    predecessor_stderr
+        .write_all(&vec![b'x'; 512 * 1024])
+        .await
+        .unwrap();
+    predecessor_stderr.flush().await.unwrap();
+    let successor_stderr = backend.open_stderr_log().await.expect("successor log");
+    let ready = backend.pid_file.with_extension("ready");
     let mut child = tokio::process::Command::new("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "Start-Sleep 60",
+            "[Console]::Error.WriteLine('successor startup'); [IO.File]::WriteAllText($env:CODEX_TEST_UPDATER_READY, ''); Start-Sleep 60",
         ])
+        .env("CODEX_TEST_UPDATER_READY", &ready)
+        .stderr(Stdio::from(successor_stderr.into_std().await))
         .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
         .kill_on_drop(true)
         .spawn()
@@ -801,12 +812,21 @@ async fn updater_readiness_and_post_publication_failure_preserve_ownership() {
     tokio::fs::write(&backend.pid_file, serde_json::to_vec(&successor).unwrap())
         .await
         .unwrap();
-    let ready = backend.pid_file.with_extension("ready");
-    tokio::fs::write(&ready, b"").await.unwrap();
     backend
         .finish_updater_start(&successor, Some(&predecessor))
         .await
         .expect("ready successor");
+    predecessor_stderr
+        .write_all(b"predecessor handoff complete\n")
+        .await
+        .unwrap();
+    predecessor_stderr.flush().await.unwrap();
+    let log_path = stderr_log_file_for_pid_file(&backend.pid_file);
+    let log = tokio::fs::read(&log_path).await.unwrap();
+    assert!(log.len() < 256 * 1024);
+    let log = String::from_utf8(log).expect("no stale-offset gap");
+    assert!(log.contains("successor startup"));
+    assert!(log.contains("predecessor handoff complete"));
     assert!(!ready.exists());
     assert_eq!(
         backend.read_pid_file_state().await.unwrap(),
@@ -933,4 +953,48 @@ fn inaccessible_pid_preserves_identity_check_error() {
     })
     .join()
     .expect("anonymous identity check");
+}
+
+#[tokio::test]
+async fn stderr_preservation_failure_does_not_prevent_opening_new_log() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let pid_file = home.path().join("daemon.pid");
+    let path = stderr_log_file_for_pid_file(&pid_file);
+    let backend = PidBackend::new(
+        home.path().join("codex"),
+        pid_file,
+        /*remote_control_enabled*/ false,
+    );
+    tokio::fs::write(&path, b"previous failure").await?;
+    tokio::fs::create_dir(path.with_extension("log.previous")).await?;
+    let _log = backend.open_stderr_log().await?;
+    assert_eq!(tokio::fs::read(&path).await?, b"");
+    Ok(())
+}
+
+#[tokio::test]
+async fn stderr_handoff_appends_after_truncation_without_gaps() -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let home = TempDir::new()?;
+    let backend = PidBackend::new_update_loop(
+        home.path().join("codex"),
+        home.path().join("updater.pid"),
+        /*restore_release*/ None,
+    );
+    let mut predecessor = backend.open_stderr_log().await?;
+    predecessor.write_all(&vec![b'x'; 512 * 1024]).await?;
+    predecessor.flush().await?;
+    let mut successor = backend.open_stderr_log().await?;
+    successor.write_all(b"successor startup failure\n").await?;
+    successor.flush().await?;
+    predecessor
+        .write_all(b"predecessor handoff complete\n")
+        .await?;
+    predecessor.flush().await?;
+    assert_eq!(
+        tokio::fs::read(stderr_log_file_for_pid_file(&backend.pid_file)).await?,
+        b"successor startup failure\npredecessor handoff complete\n"
+    );
+    Ok(())
 }

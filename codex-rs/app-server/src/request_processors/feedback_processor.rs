@@ -268,10 +268,15 @@ impl FeedbackRequestProcessor {
 
         let session_source = self.thread_manager.session_source();
         let runtime_handle = tokio::runtime::Handle::current();
+        let codex_home = self.config.codex_home.clone();
 
         let upload_result = tokio::task::spawn_blocking(move || {
             // Cancelling the RPC waiter must not release a still-running upload's slot.
             let _permit = permit;
+            if include_logs {
+                extra_attachments
+                    .extend(codex_feedback::daemon_log_attachments(codex_home.as_path()));
+            }
             let tags = (!upload_tags.is_empty()).then_some(&upload_tags);
             runtime_handle.block_on(snapshot.upload_feedback(
                 FeedbackUploadOptions {

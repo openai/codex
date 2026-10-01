@@ -188,10 +188,12 @@ impl PidBackend {
             }
         }
 
+        let started = std::time::Instant::now();
         #[cfg(windows)]
         let child = super::super::windows::spawn_without_inheriting_stdio(&mut command);
         #[cfg(not(windows))]
         let child = command.spawn().map_err(anyhow::Error::from);
+        let child = crate::diagnostics::result("process_spawn", started, child);
         let child = match child {
             Ok(child) => child,
             Err(err) => {
@@ -214,7 +216,9 @@ impl PidBackend {
         let pid = child
             .id()
             .context("spawned app-server process has no pid")?;
-        let record = match async {
+        crate::diagnostics::event("process_spawned", serde_json::json!({ "pid": pid }));
+        let started = std::time::Instant::now();
+        let record = async {
             let process_start_time = read_process_start_time(pid).await?;
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             let process_identity = super::identity::read_process_details(pid)
@@ -230,8 +234,8 @@ impl PidBackend {
                 executable_identity: launched_identity,
             })
         }
-        .await
-        {
+        .await;
+        let record = match crate::diagnostics::result("process_identity", started, record) {
             Ok(record) => record,
             Err(err) => {
                 let _ = self.terminate_process(pid);
@@ -246,7 +250,14 @@ impl PidBackend {
         };
         let contents = serde_json::to_vec(&record).context("failed to serialize pid record")?;
         let temp_pid_file = self.pid_file.with_extension("pid.tmp");
-        if let Err(err) = fs::write(&temp_pid_file, &contents).await {
+        let started = std::time::Instant::now();
+        if let Err(err) = crate::diagnostics::result(
+            "pid_write",
+            started,
+            fs::write(&temp_pid_file, &contents)
+                .await
+                .map_err(anyhow::Error::from),
+        ) {
             let _ = self.terminate_process(pid);
             if replacement.is_none() {
                 let _ = fs::remove_file(&self.pid_file).await;
@@ -255,7 +266,14 @@ impl PidBackend {
                 format!("failed to write pid temp file {}", temp_pid_file.display())
             });
         }
-        if let Err(err) = fs::rename(&temp_pid_file, &self.pid_file).await {
+        let started = std::time::Instant::now();
+        if let Err(err) = crate::diagnostics::result(
+            "pid_publish",
+            started,
+            fs::rename(&temp_pid_file, &self.pid_file)
+                .await
+                .map_err(anyhow::Error::from),
+        ) {
             let _ = self.terminate_process(pid);
             let _ = fs::remove_file(&temp_pid_file).await;
             if replacement.is_none() {

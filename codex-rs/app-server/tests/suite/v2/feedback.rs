@@ -107,6 +107,24 @@ async fn feedback_upload_includes_sqlite_flush_and_query_failures() -> Result<()
 
     // Terminate HTTPS locally and capture real Sentry envelopes. Never forward uploads.
     let home = tempfile::tempdir()?;
+    let daemon_logs = home.path().join("app-server-daemon");
+    std::fs::create_dir(&daemon_logs)?;
+    std::fs::write(
+        daemon_logs.join("daemon.stderr.log"),
+        "current daemon diagnostic",
+    )?;
+    std::fs::write(
+        daemon_logs.join("daemon-updater.stderr.log.previous"),
+        "previous updater failure",
+    )?;
+    std::fs::write(
+        daemon_logs.join("daemon.stderr.log.previous"),
+        "previous daemon startup failure",
+    )?;
+    std::fs::write(
+        daemon_logs.join("daemon-updater.stderr.log"),
+        "current updater diagnostic",
+    )?;
     let cert = rcgen::generate_simple_self_signed(vec!["o33249.ingest.us.sentry.io".to_string()])?;
     let cert_path = home.path().join("feedback-ca.pem");
     std::fs::write(&cert_path, cert.cert.pem())?;
@@ -268,6 +286,16 @@ async fn feedback_upload_includes_sqlite_flush_and_query_failures() -> Result<()
                 }
             }
         }
+        assert!(!attachments.contains_key("daemon.stderr.log"));
+        assert!(!attachments.contains_key("daemon.stderr.log.previous"));
+        assert_eq!(
+            attachments["daemon-updater.stderr.log"],
+            "current updater diagnostic"
+        );
+        assert_eq!(
+            attachments["daemon-updater.stderr.log.previous"],
+            "previous updater failure"
+        );
         let logs = &attachments["codex-logs.log"];
         if phase == Phase::Corrupt {
             assert!(
