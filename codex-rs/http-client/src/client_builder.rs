@@ -101,6 +101,8 @@ impl HttpClientBuilder {
 
     /// Uses HTTP/2 for SDKs such as gRPC that require framed bidirectional bodies.
     pub fn http2_prior_knowledge(mut self) -> Self {
+        // Native TLS may lack ALPN support; HTTPS HTTP/2 requires advertising h2.
+        self.tls_backend = TlsBackend::Rustls;
         self.http2_prior_knowledge = true;
         self
     }

@@ -2616,6 +2616,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-cloud-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "bytes",
+ "codex-http-client",
+ "futures",
+ "http 1.4.0",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "pretty_assertions",
+ "prost",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-rustls",
+ "tonic",
+ "tonic-prost",
+ "tower",
+ "url",
+]
+
+[[package]]
 name = "codex-cloud-config"
 version = "0.0.0"
 dependencies = [
