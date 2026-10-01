@@ -281,11 +281,7 @@ impl App {
         if let Err(err) = webbrowser::open(&url) {
             self.chat_widget
                 .add_error_message(format!("Failed to open browser for {url}: {err}"));
-            return;
         }
-
-        self.chat_widget
-            .add_info_message(format!("Opened {url} in your browser."), /*hint*/ None);
     }
 
     pub(super) fn open_desktop_thread(&mut self, thread_id: ThreadId) {
