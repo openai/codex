@@ -1778,6 +1778,11 @@ jobs:
       contents: read
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
       - name: Setup Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
@@ -1897,6 +1902,12 @@ jobs:
                 exit 1
                 ;;
             esac
+
+            # The workflow concurrency group holds the lock from this lookup
+            # through publish, including concurrent alpha/hotfix release runs.
+            if [[ "${NPM_TAG}" == "alpha" ]]; then
+              tag="$(python3 .github/scripts/npm_alpha_tag.py "${tarball}" "${VERSION}" "${tag}")"
+            fi
 
             publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}")
             if [[ -n "${tag}" ]]; then

@@ -26,6 +26,9 @@ pub static CODEX_ALIASES_TEMP_DIR: Option<TestBinaryDispatchGuard> = {
         if argv1 == Some(CODEX_FS_HELPER_ARG1) {
             return TestBinaryDispatchMode::DispatchArg0Only;
         }
+        if argv1 == Some(codex_sandboxing::CODEX_WINDOWS_MXC_ARG1) {
+            return TestBinaryDispatchMode::DispatchArg0Only;
+        }
         if exe_name == CODEX_LINUX_SANDBOX_ARG0 {
             return TestBinaryDispatchMode::DispatchArg0Only;
         }
@@ -218,6 +221,9 @@ mod turn_state;
 mod unified_exec;
 #[path = "unified_exec_launch_failure_tests.rs"]
 mod unified_exec_launch_failure;
+#[cfg(windows)]
+#[path = "unified_exec_mxc_powershell_tests.rs"]
+mod unified_exec_mxc_powershell;
 mod unified_exec_process_events;
 mod unified_exec_stdin_approval;
 mod unified_exec_stdin_review_size;
