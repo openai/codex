@@ -206,6 +206,16 @@ pub(crate) async fn handoff_scenario() -> Result<Vec<ResponsesRequest>> {
         "Cancel the deployment.".to_owned(),
     ));
     assert_eq!(root_messages(&leaf).await, expected);
+    // Later status questions do not revoke the cancellation, even outside the recent window.
+    for prompt in [
+        "How many deployment checks are pending?",
+        "How long have they been running?",
+        "What is the current throughput?",
+    ] {
+        test.submit_text_turn(prompt).await?;
+        expected.push(GuardianRootMessage::User(prompt.to_owned()));
+    }
+    assert_eq!(root_messages(&leaf).await, expected);
     let alpha_id = alpha.startup_metadata().thread_id;
     mount_sse_once_match(&server, move |request: &wiremock::Request| {
         is_root_request(request, alpha_id) && contains_text(request, "Check.") && !has_call_output(request, "check")
@@ -227,7 +237,7 @@ pub(crate) async fn handoff_scenario() -> Result<Vec<ResponsesRequest>> {
     handoff(
         &test,
         &server,
-        "Apply the cancellation.",
+        "Check the deployment status.",
         "followup-alpha",
         "followup_task",
         json!({"target":"alpha", "message":"Check."}),
@@ -236,14 +246,17 @@ pub(crate) async fn handoff_scenario() -> Result<Vec<ResponsesRequest>> {
     wait_for_event(&alpha, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     ThreadIdle::wait(&alpha).await;
     expected.push(GuardianRootMessage::User(
-        "Apply the cancellation.".to_owned(),
+        "Check the deployment status.".to_owned(),
     ));
     assert_eq!(root_messages(&leaf).await, expected);
     // Beta's latest window advances even though this follow-up only targets alpha.
     beta_messages.remove(/*index*/ 3);
     beta_messages.extend([
         GuardianRootMessage::User("Cancel the deployment.".to_owned()),
-        GuardianRootMessage::User("Apply the cancellation.".to_owned()),
+        GuardianRootMessage::User("How many deployment checks are pending?".to_owned()),
+        GuardianRootMessage::User("How long have they been running?".to_owned()),
+        GuardianRootMessage::User("What is the current throughput?".to_owned()),
+        GuardianRootMessage::User("Check the deployment status.".to_owned()),
     ]);
     assert_eq!(root_messages(&beta).await, beta_messages);
     assert!(

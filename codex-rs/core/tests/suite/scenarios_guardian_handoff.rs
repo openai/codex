@@ -14,7 +14,7 @@ async fn guardian_handoff_delegation_request_history() -> Result<()> {
     )
     .await??;
     let mut snapshot = context_snapshot::format_request_history_snapshot(
-        "Complete Guardian request history: root delegates through alpha to leaf and separately to beta. Root handoffs to alpha update leaf immediately. Every branch also sees the latest three root messages, including cancellation before another handoff. If compaction removes the handoff calls, the existing root context is used instead. The assessment is mocked.",
+        "Complete Guardian request history: root delegates through alpha to leaf and separately to beta. Root handoffs to alpha update leaf immediately. Every branch keeps genuine root user messages, including cancellation followed by unrelated status questions. Handoff windows and the latest three root messages select assistant context. If compaction removes the handoff calls, the existing root context is used instead. The assessment is mocked.",
         &requests,
         &ContextSnapshotOptions::default().rewrite_known_segments(),
     );

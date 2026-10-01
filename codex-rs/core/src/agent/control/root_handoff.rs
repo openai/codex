@@ -1,5 +1,6 @@
 //! Best-effort handoff windows plus recent root context, without saved handoff state.
 //! History position approximates dispatch order; absent calls leave the existing context unchanged.
+//! User inputs bypass relevance filtering; only assistant context is narrowed.
 
 use std::collections::BTreeSet;
 
@@ -19,15 +20,6 @@ pub(super) fn selected_message_indices(
     worker: &AgentPath,
     tool_namespace: Option<&str>,
 ) -> Option<BTreeSet<usize>> {
-    // Coalesced heartbeat instructions no longer occupy their invocation's history position.
-    if history
-        .iter()
-        .rev()
-        .find(|envelope| crate::context::is_user_authorization_message(&envelope.item))
-        .is_some_and(|envelope| codex_history::Heartbeat::from_message(&envelope.item).is_some())
-    {
-        return None;
-    }
     let configured_handoff_names = ["spawn_agent", "send_message", "followup_task"].map(|name| {
         (
             codex_tools::code_mode_name_for_tool_name(&ToolName::new(
@@ -114,14 +106,19 @@ pub(super) fn selected_message_indices(
                 })
                 .take(ROOT_CONTEXT_WINDOW),
         );
-        // This relevance filter leaves verified tool answers and unordered legacy evidence alone.
+        // Later user inputs can restrict an earlier handoff even when they are not recent.
+        // Leave all user inputs, verified answers, and unordered legacy evidence to the shared cap.
         selected.extend(
             messages
                 .iter()
                 .enumerate()
                 .filter_map(|(index, (order, message))| {
-                    (order.is_none() || matches!(message, GuardianRootMessage::UserInput(_)))
-                        .then_some(index)
+                    (order.is_none()
+                        || matches!(
+                            message,
+                            GuardianRootMessage::User(_) | GuardianRootMessage::UserInput(_)
+                        ))
+                    .then_some(index)
                 }),
         );
     }

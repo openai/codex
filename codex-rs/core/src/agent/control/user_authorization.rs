@@ -6,7 +6,8 @@
 //! Retained-history reconciliation owns recovery order and missing-instruction provenance.
 //! Known positions preserve host order, not delivery order or inferred question-answer pairs.
 //! Unmatched legacy instructions supplement retained facts without claiming a known ordering.
-//! Optional handoff filtering uses surviving calls as approximate relevance boundaries.
+//! Optional handoff filtering narrows assistant context using surviving calls as relevance boundaries.
+//! Handoff projection preserves saved heartbeat instructions and the active turn's skills.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -314,21 +315,15 @@ impl LocalAgentControl {
             review_context_revision.hash(&mut revision);
             selected.hash(&mut revision);
             review_context_revision = revision.finish();
-            let latest_user_order =
-                reconciled
-                    .ordered_entries()
-                    .rev()
-                    .find_map(|(order, entry)| {
-                        matches!(entry, RetainedContextEntry::UserMessage(message)
-                    if Some(&message.turn_id) == latest_user_turn_id.as_ref())
-                        .then_some(order)
-                    });
-            if !selected.iter().any(|index| {
-                matches!(&messages[*index], (Some(order), GuardianRootMessage::User(_))
-                    if Some(*order) == latest_user_order)
-            }) {
-                latest_user_turn_id = None;
-            }
+            missing_assistant_context |=
+                messages.iter().enumerate().any(|(index, (_, message))| {
+                    !selected.contains(&index)
+                        && matches!(
+                            message,
+                            GuardianRootMessage::Assistant(_)
+                                | GuardianRootMessage::UnorderedAssistant(_)
+                        )
+                });
             messages = messages
                 .into_iter()
                 .enumerate()
