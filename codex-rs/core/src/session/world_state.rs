@@ -340,12 +340,7 @@ impl Session {
                 .expose_spawn_agent_model_overrides
                 .then(|| {
                     ToolName::new(
-                        turn_context
-                            .provider
-                            .capabilities()
-                            .namespace_tools
-                            .then(|| turn_context.config.multi_agent_v2.tool_namespace.clone())
-                            .flatten(),
+                        turn_context.config.multi_agent_v2.tool_namespace.clone(),
                         "spawn_agent",
                     )
                 }),

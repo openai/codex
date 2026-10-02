@@ -4,16 +4,12 @@
     "imageGeneration": {
       "type": "boolean"
     },
-    "namespaceTools": {
-      "type": "boolean"
-    },
     "webSearch": {
       "type": "boolean"
     }
   },
   "required": [
     "imageGeneration",
-    "namespaceTools",
     "webSearch"
   ],
   "title": "ModelProviderCapabilitiesReadResponse",
