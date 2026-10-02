@@ -208,6 +208,7 @@ $handle = $file.SafeFileHandle.DangerousGetHandle().ToInt64()
         crate::sandboxed_file_open::open(
             command,
             PathUri::from_host_native_path(&path).expect("image path URI"),
+            crate::protocol::FsOpenMode::Read,
         ),
     )
     .await

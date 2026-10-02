@@ -3,6 +3,7 @@
 use crate::FILE_READ_CHUNK_SIZE;
 use crate::ReadFileOptions;
 use crate::no_follow;
+use crate::protocol::FsOpenMode;
 use crate::regular_file;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::io;
@@ -22,7 +23,7 @@ pub(super) async fn read_file(
             return Err(io::Error::other("file read cancelled"));
         }
         let file = if options.follow_symlinks {
-            regular_file::open_sync(path.as_path())?
+            regular_file::open_sync(path.as_path(), FsOpenMode::Read)?
         } else {
             no_follow::open_file(path.as_path())?
         };

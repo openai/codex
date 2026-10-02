@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::io;
 
 use crate::LocalFileSystem;
+use crate::protocol::FsOpenMode;
 use codex_config::loader::system_config_toml_file;
 use codex_file_system::ExecutorFileSystem;
 use codex_file_system::WalkEntryKind;
@@ -182,7 +183,7 @@ async fn discover_cached_plugins(
 
 async fn read_remote_plugin_id(path: &std::path::Path) -> io::Result<Option<String>> {
     // Nonblocking open and handle validation reject FIFOs and other non-regular files.
-    let file = match crate::regular_file::open(path).await {
+    let file = match crate::regular_file::open(path, FsOpenMode::Read).await {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),

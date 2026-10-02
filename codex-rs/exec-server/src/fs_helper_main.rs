@@ -43,7 +43,7 @@ async fn run_main() -> Result<(), Box<dyn Error + Send + Sync>> {
         FsHelperRequest::Open(params) => {
             let result: io::Result<_> = async {
                 let path = params.path.to_abs_path()?;
-                let file = regular_file::open(path.as_path()).await?;
+                let file = regular_file::open(path.as_path(), params.mode).await?;
                 // Unix can hand the opened fd directly to the parent.
                 #[cfg(unix)]
                 crate::sandboxed_file_open::transfer_file(&file)?;

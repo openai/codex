@@ -283,7 +283,7 @@ impl EnvironmentInfo {
                 environment_config_read: true,
                 http_header_env_vars: true,
                 sandboxed_file_streaming: true,
-                file_write_streaming: false,
+                file_write_streaming: true,
                 shell_snapshot_v2: cfg!(unix),
                 windows_mxc,
                 linux_root_write_preserves_devices: cfg!(target_os = "linux"),

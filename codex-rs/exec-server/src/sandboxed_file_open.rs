@@ -18,14 +18,16 @@ use crate::fs_sandbox::reap_helper_after_response;
 use crate::fs_sandbox::spawn_command;
 #[cfg(unix)]
 use crate::fs_sandbox::wait_for_helper_output;
+use crate::protocol::FsOpenMode;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 
 pub(crate) async fn open(
     command: SandboxExecRequest,
     path: PathUri,
+    mode: FsOpenMode,
 ) -> Result<tokio::fs::File, JSONRPCErrorError> {
-    let request = serde_json::to_vec(&FsHelperRequest::Open(FsHelperOpenParams { path }))
+    let request = serde_json::to_vec(&FsHelperRequest::Open(FsHelperOpenParams { path, mode }))
         .map_err(|error| internal_error(format!("invalid fs sandbox helper request: {error}")))?;
     open_platform(command, request).await
 }

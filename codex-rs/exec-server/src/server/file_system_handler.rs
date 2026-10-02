@@ -28,7 +28,6 @@ use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
-use crate::protocol::FsOpenMode;
 use crate::protocol::FsOpenParams;
 use crate::protocol::FsOpenResponse;
 use crate::protocol::FsReadBlockParams;
@@ -125,18 +124,12 @@ impl FileSystemHandler {
         params: FsOpenParams,
     ) -> Result<FsOpenResponse, JSONRPCErrorError> {
         validate_file_handle_id(&params.handle_id)?;
-        // TODO(anp): Enable replacement opens when writable file streams are implemented.
-        if params.mode == FsOpenMode::Replace {
-            return Err(invalid_request(
-                "exec-server does not support writable file streams".to_string(),
-            ));
-        }
         let handle_id = self
             .file_handles
             .open(
                 params.handle_id,
                 self.file_system
-                    .open_file(&params.path, params.sandbox.as_ref()),
+                    .open_file(&params.path, params.mode, params.sandbox.as_ref()),
             )
             .await
             .map_err(map_fs_error)?;
@@ -164,10 +157,11 @@ impl FileSystemHandler {
         params: FsWriteBlockParams,
     ) -> Result<FsWriteBlockResponse, JSONRPCErrorError> {
         validate_file_handle_id(&params.handle_id)?;
-        // TODO(anp): Implement positional writes before advertising writable file streams.
-        Err(invalid_request(
-            "exec-server does not support writable file streams".to_string(),
-        ))
+        self.file_handles
+            .write_block(&params.handle_id, params.offset, params.chunk.into_inner())
+            .await
+            .map_err(map_fs_error)?;
+        Ok(FsWriteBlockResponse {})
     }
 
     pub(crate) async fn close(
@@ -357,7 +351,7 @@ impl FileSystemHandler {
 fn validate_file_handle_id(handle_id: &str) -> Result<(), JSONRPCErrorError> {
     if handle_id.len() > MAX_FILE_HANDLE_ID_BYTES {
         return Err(invalid_request(format!(
-            "file read handle ID must not exceed {MAX_FILE_HANDLE_ID_BYTES} bytes"
+            "file handle ID must not exceed {MAX_FILE_HANDLE_ID_BYTES} bytes"
         )));
     }
     Ok(())
@@ -383,7 +377,6 @@ mod tests {
     use super::*;
     use crate::FileSystemSandboxContext;
     use crate::protocol::FsReadFileParams;
-
     use crate::protocol::FsWriteFileParams;
 
     #[tokio::test]

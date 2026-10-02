@@ -6,17 +6,26 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::path::Path;
 use tokio::io::AsyncReadExt;
 
-pub(crate) async fn open(path: &Path) -> io::Result<tokio::fs::File> {
+use crate::protocol::FsOpenMode;
+
+pub(crate) async fn open(path: &Path, mode: FsOpenMode) -> io::Result<tokio::fs::File> {
     let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || open_sync(&path).map(tokio::fs::File::from_std))
+    tokio::task::spawn_blocking(move || open_sync(&path, mode).map(tokio::fs::File::from_std))
         .await
         .map_err(|error| io::Error::other(format!("filesystem task failed: {error}")))?
 }
 
 /// Opens a regular file without blocking on Unix FIFOs or impersonating Windows pipe servers.
-pub(crate) fn open_sync(path: &Path) -> io::Result<std::fs::File> {
+pub(crate) fn open_sync(path: &Path, mode: FsOpenMode) -> io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
-    options.read(true);
+    match mode {
+        FsOpenMode::Read => {
+            options.read(true);
+        }
+        FsOpenMode::Replace => {
+            options.write(true).create(true).truncate(true);
+        }
+    }
     configure_open(&mut options);
 
     let file = options.open(path)?;

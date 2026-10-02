@@ -434,8 +434,8 @@ for invalid or unavailable paths. Native absolute path strings are rejected;
 callers must convert them to `file:` URIs before sending requests:
 
 - `fs/readFile`
-- `fs/open`, `fs/readBlock`, and `fs/close` (internal transport for
-  `ExecutorFileSystem::read_file_stream`)
+- `fs/open`, `fs/readBlock`, `fs/writeBlock`, and `fs/close` (file handles;
+  reads also back `ExecutorFileSystem::read_file_stream`)
 - `fs/writeFile`
 - `fs/createDirectory`
 - `fs/getMetadata`
@@ -444,7 +444,11 @@ callers must convert them to `file:` URIs before sending requests:
 - `fs/remove`
 - `fs/copy`
 
-Each filesystem request accepts an optional `sandbox` object. When `sandbox`
+`fs/open.mode` is `read` (default) or `replace` (create or truncate for writing).
+Writable handles require `fileWriteStreaming`; `fs/writeBlock` writes a nonempty
+base64 `chunk` of up to 1 MiB at an explicit `offset`.
+
+Path-based filesystem requests accept an optional `sandbox` object. When `sandbox`
 contains a `ReadOnly` or `WorkspaceWrite` policy, the operation runs in a
 hidden helper process launched from the top-level `codex` executable and
 prepared through the shared sandbox transform path. Helper requests and

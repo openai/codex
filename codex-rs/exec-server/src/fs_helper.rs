@@ -39,6 +39,7 @@ use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
+use crate::protocol::FsOpenMode;
 use crate::protocol::FsReadDirectoryEntry;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
@@ -92,6 +93,8 @@ pub(crate) enum FsHelperRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FsHelperOpenParams {
     pub(crate) path: PathUri,
+    #[serde(default)]
+    pub(crate) mode: FsOpenMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
