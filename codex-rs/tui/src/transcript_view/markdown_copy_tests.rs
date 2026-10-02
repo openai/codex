@@ -16,7 +16,7 @@ mod elements;
 #[test]
 fn selected_markdown_preserves_lists_and_inline_code() {
     let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(AgentMarkdownCell::new(
-        "- setting `closeRequested_`,\n- removing the tailer from `tailers_`,\n- clearing its live/discovery state.".into(),
+        "- setting `closeRequested_`,\n- removing the tailer from `tailers_`,\n- clearing /repo/my_notes!.txt.".into(),
         Path::new("/"),
     ))];
     let mut view = TranscriptView::default();
@@ -53,11 +53,13 @@ fn selected_markdown_preserves_lists_and_inline_code() {
         &plain,
         /*clear_selection*/ true,
         |text, format| {
-            assert_eq!(format, CopyFormat::Markdown);
+            let CopyFormat::MarkdownSelection(source) = format else {
+                panic!("expected rich selection");
+            };
             insta::assert_snapshot!(text);
             insta::assert_snapshot!(
                 "selected_list_html",
-                crate::clipboard_html::render_markdown(text)
+                crate::clipboard_html::render_markdown(&source)
             );
             Ok(crate::clipboard_copy::CopyStatus::Confirmed)
         },
@@ -414,12 +416,15 @@ fn explicit_hard_breaks_survive_only_when_selected() {
 
 #[test]
 fn task_lists_and_transformed_tables_keep_their_meaning() {
-    for (source, expected) in [
-        ("- [x] done\n- [ ] next", "- [x] done\n- [ ] next"),
-        ("1. [x] done\n2. [ ] next", "1. [x] done\n2. [ ] next"),
-    ] {
+    for source in ["- [x] done\n- [ ] next", "1. [x] done\n2. [ ] next"] {
         let layout = markdown_layout(source, /*width*/ 80);
-        assert_eq!(payload(&layout, 0..layout.text().len()).0, expected);
+        let mut lines = Vec::new();
+        layout.copy_lines(0..layout.text().len(), "", &mut lines);
+        assert_eq!(payload(&layout, 0..layout.text().len()).0, source);
+        assert_eq!(
+            crate::markdown_copy::literal_selection(&lines, "unused"),
+            source
+        );
     }
     let layout = markdown_layout(
         "Prose\n\n| A | B |\n| - | - |\n| x | y |",
@@ -554,9 +559,12 @@ fn selected_hard_breaks_survive_surrounding_blocks() {
     view.extend_selection(/*column*/ 79, /*row*/ 39);
     let plain = view.selected_text(&cells).unwrap();
     view.copy_selected_text_with(&cells, &plain, /*clear_selection*/ true, |text, format| {
-        assert_eq!(format, CopyFormat::Markdown);
+        let CopyFormat::MarkdownSelection(source) = format else {
+            panic!("expected rich selection");
+        };
+        assert_eq!(text, "First paragraph.\n\nSecond paragraph with a hard break:\nnext line.\n\n> quoted words\n> next quote line\n\nFinal paragraph.");
         assert_eq!(
-            crate::clipboard_html::render_markdown(text),
+            crate::clipboard_html::render_markdown(&source),
             "<p>First paragraph.</p>\n<p>Second paragraph with a hard break:<br />\nnext line.</p>\n<blockquote>\n<p>quoted <strong>words</strong><br />\nnext quote line</p>\n</blockquote>\n<p>Final paragraph.</p>\n"
         );
         Ok(crate::clipboard_copy::CopyStatus::Confirmed)
@@ -590,8 +598,11 @@ fn selected_open_code_fence_keeps_streamed_rows_in_one_block() {
         &plain,
         /*clear_selection*/ true,
         |text, format| {
-            assert_eq!(format, CopyFormat::Markdown);
-            insta::assert_snapshot!(crate::clipboard_html::render_markdown(text), @r#"
+            let CopyFormat::MarkdownSelection(source) = format else {
+                panic!("expected rich selection");
+            };
+            assert_eq!(text, "Prose\n\nlet a = 1;\nlet b = 2;");
+            insta::assert_snapshot!(crate::clipboard_html::render_markdown(&source), @r#"
         <p>Prose</p>
         <pre><code>let a = 1;
         let b = 2;

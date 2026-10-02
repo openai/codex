@@ -387,7 +387,7 @@ fn find_and_shift_click_release_copy_payload() {
             .unwrap() as u16;
     view.extend_selection(/*column*/ 6, row);
     assert!(view.copy_mode.is_none());
-    assert_eq!(payload(&mut view, &cells), "**bold**");
+    assert_eq!(payload(&mut view, &cells), "bold");
 }
 
 #[test]

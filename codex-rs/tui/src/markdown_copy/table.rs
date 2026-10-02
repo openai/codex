@@ -6,6 +6,7 @@
 
 use super::CopyLine;
 use super::SelectedLine;
+use super::SelectionOutput;
 use crate::clipboard_copy::CopyFormat;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::LogicalLineSource;
@@ -105,6 +106,7 @@ pub(super) fn render(
     lines: &[&SelectedLine],
     table: &TableLine,
     entire_selection: bool,
+    output: SelectionOutput,
 ) -> (String, CopyFormat) {
     let mut cells: BTreeMap<(usize, usize), Vec<LogicalLineSource>> = BTreeMap::new();
     for line in lines {
@@ -180,14 +182,17 @@ pub(super) fn render(
             let text = parts
                 .into_iter()
                 .map(|source| {
-                    source.copy.as_ref().map_or_else(
-                        || super::escape(&source.text[source.range.clone()]),
-                        |copy| {
-                            let mut copy = (**copy).clone();
-                            copy.table_cell = !standalone;
-                            copy.render(&source.text, source.range.clone(), /*depth*/ 0)
-                        },
-                    )
+                    let text = &source.text[source.range.clone()];
+                    output.render(text, || {
+                        source.copy.as_ref().map_or_else(
+                            || super::escape(text),
+                            |copy| {
+                                let mut copy = (**copy).clone();
+                                copy.table_cell = !standalone;
+                                copy.render(&source.text, source.range.clone(), /*depth*/ 0)
+                            },
+                        )
+                    })
                 })
                 .collect::<Vec<_>>()
                 .join(" ");
@@ -204,7 +209,10 @@ pub(super) fn render(
         return (
             lines
                 .iter()
-                .map(|line| super::escape(&line.source.text[line.range.clone()]))
+                .map(|line| {
+                    let text = &line.source.text[line.range.clone()];
+                    output.render(text, || super::escape(text))
+                })
                 .collect::<Vec<_>>()
                 .join("\n"),
             CopyFormat::Markdown,

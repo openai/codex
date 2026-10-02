@@ -37,6 +37,28 @@ pub(crate) fn quote_content(source: &str) -> String {
 // Bound retained inline stacks and container prefixes independently of parser nesting.
 pub(crate) const MAX_COPY_DEPTH: usize = 64;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SelectionOutput {
+    Markdown,
+    PlainText,
+}
+
+impl SelectionOutput {
+    fn render(self, plain: &str, markdown: impl FnOnce() -> String) -> String {
+        match self {
+            Self::Markdown => markdown(),
+            Self::PlainText => plain.to_owned(),
+        }
+    }
+
+    fn push_prose(self, out: &mut String, plain: &str, markdown: impl FnOnce() -> String) {
+        match self {
+            Self::Markdown => push_prose_fragment(out, &markdown()),
+            Self::PlainText => out.push_str(plain),
+        }
+    }
+}
+
 // A fixed, deduplicated style order gives each nested wrapper a distinct delimiter family.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Inline {
@@ -298,9 +320,29 @@ impl SelectedLine {
             });
         }
     }
+
+    fn separator(&self, output: SelectionOutput) -> &str {
+        if output == SelectionOutput::PlainText && self.separator.starts_with("  \n") {
+            &self.separator[2..]
+        } else {
+            &self.separator
+        }
+    }
 }
 
 pub(crate) fn selection(lines: &[SelectedLine], plain: &str) -> (String, CopyFormat) {
+    render_selection(lines, plain, SelectionOutput::Markdown)
+}
+
+pub(crate) fn literal_selection(lines: &[SelectedLine], plain: &str) -> String {
+    render_selection(lines, plain, SelectionOutput::PlainText).0
+}
+
+fn render_selection(
+    lines: &[SelectedLine],
+    plain: &str,
+    output: SelectionOutput,
+) -> (String, CopyFormat) {
     // Soft wraps and streamed fragments of the same logical line are already coalesced.
     if let [line] = lines
         && line
@@ -380,7 +422,7 @@ pub(crate) fn selection(lines: &[SelectedLine], plain: &str) -> (String, CopyFor
     let mut indentation: Option<usize> = None;
     while let Some(line) = lines.next() {
         if !first {
-            out.push_str(&line.separator);
+            out.push_str(line.separator(output));
         }
         let prefix = line.source.copy.as_ref().map_or("", |copy| {
             if indentation.is_none() && !line.range.is_empty() && lines.peek().is_some() {
@@ -422,7 +464,7 @@ pub(crate) fn selection(lines: &[SelectedLine], plain: &str) -> (String, CopyFor
                 selected.extend(lines.next());
             }
             let entire_selection = first && lines.peek().is_none();
-            let (mut body, format) = table::render(&selected, table, entire_selection);
+            let (mut body, format) = table::render(&selected, table, entire_selection, output);
             if format == CopyFormat::PlainText {
                 body.retain(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'));
                 return (body, format);
@@ -451,15 +493,17 @@ pub(crate) fn selection(lines: &[SelectedLine], plain: &str) -> (String, CopyFor
             }
         } else if line.source.copy_as_prose {
             let text = &line.source.text[line.range.clone()];
-            push_prose_fragment(&mut out, &escape(text));
+            output.push_prose(&mut out, text, || escape(text));
         } else if let Some(copy) = &line.source.copy
             && !copy.code
         {
             if line.range.start == 0 || first && lines.peek().is_some() {
                 out.push_str(&prefix);
             }
-            let body = copy.render(&line.source.text, line.range.clone(), /*depth*/ 0);
-            push_prose_fragment(&mut out, &body);
+            let text = &line.source.text[line.range.clone()];
+            output.push_prose(&mut out, text, || {
+                copy.render(&line.source.text, line.range.clone(), /*depth*/ 0)
+            });
         } else {
             // Preserve whitespace and Markdown-looking tool output within mixed selections.
             let mut code = line.source.text[line.range.clone()].to_owned();
@@ -485,9 +529,15 @@ pub(crate) fn selection(lines: &[SelectedLine], plain: &str) -> (String, CopyFor
                     .map_or("", |copy| copy.continuation.as_str())
                     == continuation
             {
-                code.push_str(&next.separator);
+                code.push_str(next.separator(output));
                 code.push_str(&next.source.text[next.range.clone()]);
                 lines.next();
+            }
+            if output == SelectionOutput::PlainText {
+                out.push_str(&prefix);
+                out.push_str(&code);
+                first = false;
+                continue;
             }
             let fence = fence(&code, /*minimum*/ 3);
             if !out.is_empty() && !out.ends_with('\n') {

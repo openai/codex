@@ -358,8 +358,17 @@ impl TranscriptView {
                     .map(|text| (text.clone(), crate::clipboard_copy::CopyFormat::PlainText))
             }
         });
-        let (text, format) =
-            override_payload.unwrap_or_else(|| crate::markdown_copy::selection(&lines, text));
+        let (text, format) = override_payload.unwrap_or_else(|| {
+            let (serialized, format) = crate::markdown_copy::selection(&lines, text);
+            if format == CopyFormat::Markdown {
+                (
+                    crate::markdown_copy::literal_selection(&lines, text),
+                    CopyFormat::MarkdownSelection(serialized.into()),
+                )
+            } else {
+                (serialized, format)
+            }
+        });
         let characters = text.chars().count();
         let result = copy(&text, format);
         self.show_copy_feedback(&result, characters);

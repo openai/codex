@@ -25,16 +25,19 @@ pub(crate) mod worker;
 
 use base64::Engine;
 use std::io::Write;
+use std::sync::Arc;
 use tmux::copy as tmux_clipboard_copy;
 
 /// Maximum raw bytes sent through tmux or directly encoded into OSC 52.
 /// Large payloads are rejected before encoding to avoid overwhelming the terminal.
 const OSC52_MAX_RAW_BYTES: usize = 100_000;
-/// Whether copied text should also have a rendered HTML representation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Whether copied text should also have a rendered HTML representation and its source.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CopyFormat {
     PlainText,
     Markdown,
+    /// Visible selection text is copied literally; only HTML uses the semantic Markdown.
+    MarkdownSelection(Arc<str>),
 }
 
 /// A native clipboard write or an unacknowledged request to the user's terminal.
@@ -196,6 +199,9 @@ fn copy_to_clipboard_with(
     let html = match format {
         CopyFormat::PlainText => None,
         CopyFormat::Markdown => Some(crate::clipboard_html::render_markdown(text)),
+        CopyFormat::MarkdownSelection(source) => {
+            Some(crate::clipboard_html::render_markdown(&source))
+        }
     };
     let native_result = arboard_copy_fn(text, html.as_deref()).or_else(|native_error| {
         if environment.wsl_session {
@@ -656,21 +662,27 @@ mod tests {
 
     #[test]
     fn local_copy_offers_html_only_for_markdown() {
-        for (format, html) in [
+        for (text, format, html) in [
             (
+                "**hello**",
                 CopyFormat::Markdown,
                 Some("<p><strong>hello</strong></p>\n"),
             ),
-            (CopyFormat::PlainText, None),
+            ("**hello**", CopyFormat::PlainText, None),
+            (
+                "hello /repo/my_notes!.txt",
+                CopyFormat::MarkdownSelection(r"**hello** /repo/my\_notes\!.txt".into()),
+                Some("<p><strong>hello</strong> /repo/my_notes!.txt</p>\n"),
+            ),
         ] {
             let result = copy_to_clipboard_with(
-                "**hello**",
+                text,
                 format,
                 local_environment(),
                 |_| panic!("native copy should succeed"),
                 |_| panic!("native copy should succeed"),
-                |text, actual_html| {
-                    assert_eq!((text, actual_html), ("**hello**", html));
+                |actual_text, actual_html| {
+                    assert_eq!((actual_text, actual_html), (text, html));
                     Ok(None)
                 },
                 |_| panic!("native copy should succeed"),

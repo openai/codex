@@ -98,7 +98,7 @@ impl ChatWidget {
                         tx.send(AppEvent::CopySelection {
                             text: Arc::clone(&text),
                             label: label.clone(),
-                            format,
+                            format: format.clone(),
                         });
                     })],
                     dismiss_on_select: true,
