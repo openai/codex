@@ -168,14 +168,30 @@ async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {
         background_thread_id,
         crate::app::side::SideThreadState::new(thread_id),
     );
-    app.submit_thread_op(&mut server, background_thread_id, turn)
+    app.submit_thread_op(&mut server, background_thread_id, turn.clone())
         .await?;
     let turns = recorded_params(&requests, "turn/start");
     assert_eq!(turns.len(), 3);
     assert_eq!(turns[0]["cyberAccessProgram"], "standard");
     assert_eq!(turns[1]["cyberAccessProgram"], "daybreakBlue");
     assert_eq!(turns[2]["cyberAccessProgram"], "standard");
+    app.chat_widget.update_account_state(
+        Some(crate::status::StatusAccountDisplay::ApiKey),
+        /*plan_type*/ None,
+        /*has_chatgpt_account*/ false,
+        /*has_codex_backend_auth*/ false,
+    );
+    assert!(
+        !app.chat_widget
+            .set_feature_enabled(Feature::ApiKeyCyberAccessPrograms, /*enabled*/ false,)
+    );
+    app.submit_thread_op(&mut server, thread_id, turn.clone())
+        .await?;
     app.chat_widget.set_daybreak_enabled(/*enabled*/ false);
+    app.submit_thread_op(&mut server, thread_id, turn).await?;
+    let turns = recorded_params(&requests, "turn/start");
+    assert_eq!(turns[3]["cyberAccessProgram"], "daybreakBlue");
+    assert!(turns[4]["cyberAccessProgram"].is_null());
     while events.try_recv().is_ok() {}
 
     let missing_thread_id = ThreadId::new();

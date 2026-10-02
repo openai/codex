@@ -85,11 +85,10 @@ impl App {
                 .add_error_message(format!("Failed to retry with a faster model: {err}"));
             return;
         }
-        let eligible_account = self.chat_widget.has_chatgpt_account()
-            && self.chat_widget.config_ref().model_provider_id == "openai";
         let daybreak_enabled = self.chat_widget.daybreak_enabled
             && !self.chat_widget.side_conversation_active()
             && !self.side_threads.contains_key(&thread_id);
+        let eligible_account = self.chat_widget.daybreak_turn_eligible(daybreak_enabled);
         if let Err(message) = crate::daybreak::program_for_turn(
             &self.chat_widget.model_catalog().models,
             &model,

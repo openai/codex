@@ -392,9 +392,8 @@ impl ChatWidget {
     }
 
     pub(super) fn on_cyber_policy_error(&mut self) {
-        let can_enable_daybreak = self.has_chatgpt_account
-            && self.config.model_provider_id == "openai"
-            && !self.side_conversation_active();
+        let can_enable_daybreak =
+            self.daybreak_account_eligible() && !self.side_conversation_active();
         let notice = crate::daybreak::notice_for_setting(
             &self.model_catalog.models,
             self.current_model(),

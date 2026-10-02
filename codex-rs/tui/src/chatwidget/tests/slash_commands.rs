@@ -2204,6 +2204,20 @@ async fn slash_daybreak_offers_an_application_when_unavailable() {
         .cyber
         .push(codex_protocol::turn_input::CyberAccessProgram::DaybreakBlue);
     chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![model]));
+    chat.has_chatgpt_account = false;
+    chat.status_account_display = Some(StatusAccountDisplay::ApiKey);
+    chat.set_daybreak_enabled(/*enabled*/ false);
+    chat.bottom_pane
+        .set_composer_text("/daybreak".to_string(), Vec::new(), Vec::new());
+    assert_chatwidget_snapshot!(
+        "slash_daybreak_api_key_help",
+        render_bottom_popup(&chat, /*width*/ 80)
+            .lines()
+            .next()
+            .unwrap()
+    );
+    chat.has_chatgpt_account = true;
+    chat.status_account_display = None;
     for (enabled, name) in [
         (false, "slash_daybreak_help_enable"),
         (true, "slash_daybreak_help_disable"),

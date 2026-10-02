@@ -13,7 +13,7 @@ pub(crate) fn program_for_turn(
 ) -> Result<Option<CyberAccessProgram>, String> {
     if !eligible_account {
         return if enabled {
-            Err("Daybreak requires a signed-in ChatGPT account and the OpenAI provider. Turn it off to continue.".into())
+            Err("Daybreak requires the OpenAI provider with either ChatGPT sign-in or an API key with Daybreak support enabled. Turn it off to continue.".into())
         } else {
             Ok(None)
         };
