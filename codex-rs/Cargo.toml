@@ -324,7 +324,7 @@ core_test_support = { path = "core/tests/common" }
 # External
 learning_mode_windows = { git = "https://github.com/microsoft/mxc", rev = "6cd3d58f05d3447e67109cfb75e042803b843ca4" }
 wxc_common = { git = "https://github.com/microsoft/mxc", rev = "6cd3d58f05d3447e67109cfb75e042803b843ca4" }
-age = "0.11.1"
+age = "0.12.1"
 ansi-to-tui = "8.0.1"
 anyhow = "1"
 appcontainer_common = { git = "https://github.com/microsoft/mxc", rev = "6cd3d58f05d3447e67109cfb75e042803b843ca4" }
