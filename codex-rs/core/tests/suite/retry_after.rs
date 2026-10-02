@@ -686,7 +686,6 @@ async fn compact_v2_uses_retry_after() -> Result<()> {
     Ok(())
 }
 
-// TODO(anp) respect Retry-After
 /// Remote compaction v2 stream failures retry without using the enclosing response header.
 #[tokio::test(flavor = "current_thread")]
 async fn compact_v2_stream_failure_uses_local_backoff_despite_retry_after() -> Result<()> {
@@ -856,14 +855,26 @@ async fn compact_v2_stream_failure_without_retry_after_exhausts_stream_retries()
     Ok(())
 }
 
-// TODO(anp) respect Retry-After
-/// Remote compaction v2 already honors exact retry advice embedded in rate-limit messages.
+/// Remote compaction honors message-only advice within its budget, with headers taking precedence.
+#[test_case::test_case(Some("1"), "Try again in 4 seconds."; "nested_header")]
+#[test_case::test_case(None, "Try again in 1 second."; "plaintext")]
 #[tokio::test(flavor = "current_thread")]
-async fn compact_v2_rate_limit_message_uses_server_advised_retry_delay() -> Result<()> {
+async fn compact_v2_rate_limit_uses_server_advice(
+    error_header: Option<&str>,
+    message: &str,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let mut telemetry = RetryTelemetryCapture::install();
     let server = responses::start_mock_server().await;
+    let failed = responses::sse_response(responses::sse(vec![json!({
+        "type": "response.failed",
+        "response": {"error": {
+            "code": "rate_limit_exceeded",
+            "message": message,
+            "headers": {"Retry-After": error_header}
+        }}
+    })]));
     let response_mock = responses::mount_response_sequence(
         &server,
         vec![
@@ -871,87 +882,7 @@ async fn compact_v2_rate_limit_message_uses_server_advised_retry_delay() -> Resu
                 responses::ev_response_created("seed"),
                 responses::ev_completed("seed"),
             ])),
-            responses::sse_response(responses::sse_failed(
-                "rate-limited",
-                "rate_limit_exceeded",
-                "Rate limit exceeded. Please try again in 1s.",
-            ))
-            .insert_header("Retry-After", "2"),
-            responses::sse_response(responses::sse(vec![
-                json!({
-                    "type": "response.output_item.done",
-                    "item": {
-                        "type": "compaction",
-                        "encrypted_content": "RETRIED_COMPACTION_SUMMARY",
-                    }
-                }),
-                responses::ev_completed("compacted"),
-            ])),
-        ],
-    )
-    .await;
-    let test = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(1);
-        })
-        .build_with_auto_env(&server)
-        .await?;
-    test.submit_turn("seed history for compaction").await?;
-
-    test.codex.submit(Op::Compact).await?;
-    let retry = telemetry.next_retry().await;
-    assert!(retry.delay <= Duration::from_secs(1));
-    assert_eq!(
-        retry,
-        RetryTelemetryEvent {
-            attempt: 1,
-            delay: retry.delay,
-            layer: "stream".into(),
-            operation: "remote_compaction_v2".into(),
-        }
-    );
-    assert!(wait_for_retry(&mut telemetry, &retry).await >= Duration::from_secs(1));
-    wait_for_turn_completion(&test).await;
-
-    let requests = response_mock.requests();
-    assert_eq!(requests.len(), 3);
-    for request in &requests[1..] {
-        assert_eq!(request.path(), "/v1/responses");
-        assert!(
-            !request.inputs_of_type("compaction_trigger").is_empty(),
-            "expected a remote compaction v2 request"
-        );
-    }
-    assert_eq!(
-        telemetry.events.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
-    );
-
-    Ok(())
-}
-
-/// Remote compaction rate-limit messages provide exact retry advice without an HTTP header.
-#[tokio::test(flavor = "current_thread")]
-async fn compact_v2_rate_limit_message_without_retry_after_uses_server_advised_delay() -> Result<()>
-{
-    skip_if_no_network!(Ok(()));
-
-    let mut telemetry = RetryTelemetryCapture::install();
-    let server = responses::start_mock_server().await;
-    let response_mock = responses::mount_response_sequence(
-        &server,
-        vec![
-            responses::sse_response(responses::sse(vec![
-                responses::ev_response_created("seed"),
-                responses::ev_completed("seed"),
-            ])),
-            responses::sse_response(responses::sse_failed(
-                "rate-limited",
-                "rate_limit_exceeded",
-                "Rate limit exceeded. Please try again in 1s.",
-            )),
+            failed,
             responses::sse_response(responses::sse(vec![
                 json!({
                     "type": "response.output_item.done",
@@ -1116,7 +1047,6 @@ async fn compact_v2_overload_without_retry_after_exhausts_request_retries() -> R
     Ok(())
 }
 
-// TODO(anp) respect Retry-After
 /// SSE failures currently retry with local backoff instead of the enclosing response header.
 #[tokio::test(flavor = "current_thread")]
 async fn sse_failure_uses_local_backoff_despite_retry_after() -> Result<()> {
@@ -1272,23 +1202,35 @@ async fn sse_failure_without_retry_after_exhausts_stream_retries(code: &str) -> 
     Ok(())
 }
 
-/// Rate-limit messages already provide an exact retry delay without an HTTP header.
-#[test_case::test_case("rate_limit_exceeded"; "rate_limit")]
-#[test_case::test_case("slow_down"; "slow_down")]
+/// Both sources survive to the agent's retry loop, and valid headers always beat message advice.
+#[test_case::test_case("rate_limit_exceeded", Some("1"), "Rate limit exceeded. Try again in 4 seconds."; "azure_style_header")]
+#[test_case::test_case("rate_limit_exceeded", None, "Rate limit exceeded. Try again in 1 second."; "azure_style_plaintext")]
+#[test_case::test_case("slow_down", Some("1"), "Please try again in 4.000s."; "slow_down_fractional_header")]
+#[test_case::test_case("slow_down", None, "Please try again in 1.000s."; "slow_down_fractional_plaintext")]
+#[test_case::test_case("rate_limit_exceeded", Some("bad"), "Try again in 1 second."; "malformed_header")]
+#[test_case::test_case("server_is_overloaded", Some("1"), "This model is overloaded."; "overload_header")]
 #[tokio::test(flavor = "current_thread")]
-async fn sse_rate_limit_message_uses_server_advised_retry_delay(code: &str) -> Result<()> {
+async fn sse_failure_uses_server_advice(
+    code: &str,
+    error_header: Option<&str>,
+    message: &str,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let mut telemetry = RetryTelemetryCapture::install();
     let server = responses::start_mock_server().await;
+    let failed = responses::sse_response(responses::sse(vec![json!({
+        "type": "response.failed",
+        "response": {"error": {
+            "code": code,
+            "message": message,
+            "headers": {"Retry-After": error_header}
+        }}
+    })]));
     let response_mock = responses::mount_response_sequence(
         &server,
         vec![
-            responses::sse_response(responses::sse_failed(
-                "rate-limited",
-                code,
-                "Rate limit exceeded. Please try again in 1s.",
-            )),
+            failed,
             responses::sse_response(responses::sse(vec![
                 responses::ev_response_created("recovered"),
                 responses::ev_completed("recovered"),
@@ -1304,7 +1246,7 @@ async fn sse_rate_limit_message_uses_server_advised_retry_delay(code: &str) -> R
         .build_with_auto_env(&server)
         .await?;
 
-    submit_user_input(&test, "retry after the rate-limit message delay").await?;
+    submit_user_input(&test, "retry after the server's advice").await?;
     let retry = telemetry.next_retry().await;
     assert!(retry.delay <= Duration::from_secs(1));
     assert_eq!(
@@ -1328,63 +1270,6 @@ async fn sse_rate_limit_message_uses_server_advised_retry_delay(code: &str) -> R
     Ok(())
 }
 
-// TODO(anp) respect Retry-After
-/// Rate-limit messages currently override an enclosing response's different retry delay.
-#[tokio::test(flavor = "current_thread")]
-async fn sse_rate_limit_message_with_retry_after_uses_server_advised_retry_delay() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let mut telemetry = RetryTelemetryCapture::install();
-    let server = responses::start_mock_server().await;
-    let response_mock = responses::mount_response_sequence(
-        &server,
-        vec![
-            responses::sse_response(responses::sse_failed(
-                "rate-limited",
-                "rate_limit_exceeded",
-                "Rate limit exceeded. Please try again in 1s.",
-            ))
-            .insert_header("Retry-After", "2"),
-            responses::sse_response(responses::sse(vec![
-                responses::ev_response_created("recovered"),
-                responses::ev_completed("recovered"),
-            ])),
-        ],
-    )
-    .await;
-    let test = test_codex()
-        .with_config(|config| {
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(1);
-        })
-        .build_with_auto_env(&server)
-        .await?;
-
-    submit_user_input(&test, "retry after both rate-limit delay signals").await?;
-    let retry = telemetry.next_retry().await;
-    assert!(retry.delay <= Duration::from_secs(1));
-    assert_eq!(
-        retry,
-        RetryTelemetryEvent {
-            attempt: 1,
-            delay: retry.delay,
-            layer: "stream".into(),
-            operation: "sampling".into(),
-        }
-    );
-    assert!(wait_for_retry(&mut telemetry, &retry).await >= Duration::from_secs(1));
-    wait_for_turn_completion(&test).await;
-
-    assert_eq!(response_mock.requests().len(), 2);
-    assert_eq!(
-        telemetry.events.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
-    );
-
-    Ok(())
-}
-
-// TODO(anp) respect Retry-After
 /// A streamed backend overload remains terminal despite an enclosing retry header.
 #[tokio::test(flavor = "current_thread")]
 async fn sse_overload_with_retry_after_is_terminal() -> Result<()> {
@@ -1790,6 +1675,77 @@ async fn websocket_connection_limit_retries_with_local_backoff() -> Result<()> {
     assert_eq!(connections.len(), 2);
     let request_count: usize = connections.iter().map(Vec::len).sum();
     assert_eq!(request_count, 3);
+    assert_eq!(
+        telemetry.events.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    );
+    server.shutdown().await;
+
+    Ok(())
+}
+
+/// WebSocket failed-event headers take precedence over plaintext during an allowed retry.
+#[tokio::test(flavor = "current_thread")]
+async fn websocket_failed_event_uses_header_over_plaintext_retry_after() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut telemetry = RetryTelemetryCapture::install();
+    let server = responses::start_websocket_server(vec![
+        vec![
+            vec![
+                responses::ev_response_created("prewarm"),
+                responses::ev_completed("prewarm"),
+            ],
+            vec![json!({
+                "type": "response.failed",
+                "response": {
+                    "error": {
+                        "code": "rate_limit_exceeded",
+                        "message": "Rate limit exceeded. Try again in 4 seconds.",
+                        "headers": {"Retry-After": "1"}
+                    }
+                }
+            })],
+        ],
+        vec![vec![
+            responses::ev_response_created("recovered"),
+            responses::ev_completed("recovered"),
+        ]],
+    ])
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(1);
+        })
+        .build_with_websocket_server(&server)
+        .await?;
+
+    let warmup = server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
+    assert_eq!(warmup.body_json()["generate"].as_bool(), Some(false));
+    submit_user_input(&test, "retry the rate-limited websocket stream").await?;
+
+    let retry = telemetry.next_retry().await;
+    assert!(retry.delay <= Duration::from_secs(1));
+    assert_eq!(
+        retry,
+        RetryTelemetryEvent {
+            attempt: 1,
+            delay: retry.delay,
+            layer: "stream".into(),
+            operation: "sampling".into(),
+        }
+    );
+    assert!(wait_for_retry(&mut telemetry, &retry).await >= Duration::from_secs(1));
+    wait_for_turn_completion(&test).await;
+
+    let connections = server.connections();
+    assert_eq!(
+        connections.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![2, 1]
+    );
     assert_eq!(
         telemetry.events.try_recv(),
         Err(mpsc::error::TryRecvError::Empty)

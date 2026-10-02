@@ -650,6 +650,10 @@ async fn process_sse_with_treatment(
 }
 
 #[cfg(test)]
+#[path = "responses_error_tests.rs"]
+mod error_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use assert_matches::assert_matches;

@@ -1,8 +1,9 @@
-//! Classifies failed Responses events and their rate-limit retry delays.
+//! Classifies failed Responses events and their retry advice.
 //! Only rate-limit codes derive retry delays from plaintext messages.
 
 use crate::error::ApiError;
 use crate::error::parse_flex_unavailable;
+use crate::responses_headers::json_headers_to_http_headers;
 use codex_http_client::RetryAfter;
 use codex_protocol::protocol::MisalignmentErrorDetails;
 use serde::Deserialize;
@@ -23,19 +24,24 @@ struct Error {
 }
 
 pub(super) fn parse_failed_response(response: Option<Value>) -> ApiError {
-    if let Some(error) = response
-        .as_ref()
-        .and_then(|response| response.get("error"))
-        .and_then(parse_flex_unavailable)
-    {
+    let error = response.as_ref().and_then(|response| response.get("error"));
+    let retry_after_header = error
+        .and_then(|error| error.get("headers"))
+        .and_then(Value::as_object)
+        .and_then(|headers| RetryAfter::from_headers(&json_headers_to_http_headers(headers)));
+    if let Some(error) = error.and_then(parse_flex_unavailable) {
         return error;
     }
-    let Some(error) = response
-        .as_ref()
-        .and_then(|response| response.get("error"))
-        .and_then(|error| serde_json::from_value::<Error>(error.clone()).ok())
+    let Some(error) = error.and_then(|error| serde_json::from_value::<Error>(error.clone()).ok())
     else {
-        return ApiError::Stream("response.failed event received".into());
+        let message = "response.failed event received".to_string();
+        return match retry_after_header {
+            Some(_) => ApiError::Retryable {
+                message,
+                retry_after: retry_after_header,
+            },
+            None => ApiError::Stream(message),
+        };
     };
 
     match error.code.as_deref() {
@@ -78,9 +84,12 @@ pub(super) fn parse_failed_response(response: Option<Value>) -> ApiError {
                 .message
                 .unwrap_or_else(|| "Invalid request.".to_string()),
         },
-        Some("server_is_overloaded") => ApiError::ServerOverloaded { retry_after: None },
+        Some("server_is_overloaded") => ApiError::ServerOverloaded {
+            retry_after: retry_after_header,
+        },
         Some("rate_limit_exceeded" | "slow_down") => {
-            let retry_after = try_parse_retry_delay(&error).and_then(RetryAfter::from_delay);
+            let retry_after = retry_after_header
+                .or_else(|| try_parse_retry_delay(&error).and_then(RetryAfter::from_delay));
             ApiError::RateLimitExceeded {
                 message: error.message.unwrap_or_default(),
                 retry_after,
@@ -88,7 +97,7 @@ pub(super) fn parse_failed_response(response: Option<Value>) -> ApiError {
         }
         _ => ApiError::Retryable {
             message: error.message.unwrap_or_default(),
-            retry_after: None,
+            retry_after: retry_after_header,
         },
     }
 }
@@ -106,7 +115,7 @@ fn try_parse_retry_delay(err: &Error) -> Option<Duration> {
             let unit = unit.as_str().to_ascii_lowercase();
 
             if unit == "s" || unit.starts_with("second") {
-                return Some(Duration::from_secs_f64(value));
+                return Duration::try_from_secs_f64(value).ok();
             } else if unit == "ms" {
                 return Some(Duration::from_millis(value as u64));
             }
