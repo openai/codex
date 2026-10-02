@@ -1857,8 +1857,6 @@ impl Session {
                 *guard = Arc::downgrade(&sess);
             }
             // Dispatch the SessionConfiguredEvent first and then report any errors.
-            // If resuming, include converted initial messages in the payload so UIs can render them immediately.
-            let initial_messages = initial_history.get_event_msgs();
             let thread_config =
                 session_configuration.thread_config_snapshot(turn_environments.selections());
             let events = std::iter::once(Event {
@@ -1884,7 +1882,6 @@ impl Session {
                     permission_profile: thread_config.permission_profile,
                     active_permission_profile: thread_config.active_permission_profile,
                     reasoning_effort: thread_config.reasoning_effort,
-                    initial_messages,
                     rollout_path,
                 }),
             })

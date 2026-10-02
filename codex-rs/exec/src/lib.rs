@@ -1651,7 +1651,6 @@ fn session_configured_from_thread_response(
         active_permission_profile,
         cwd,
         reasoning_effort,
-        initial_messages: None,
         network_proxy: None,
         rollout_path,
     })

@@ -66,7 +66,6 @@ async fn interrupt_if_no_pending_input_handles_cancelled_submission() {
             active_permission_profile: None,
             cwd: turn_context.config.cwd.clone(),
             reasoning_effort: None,
-            initial_messages: None,
             network_proxy: None,
             rollout_path: None,
         }),

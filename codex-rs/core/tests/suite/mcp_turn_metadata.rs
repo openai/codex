@@ -200,11 +200,17 @@ async fn mcp_app_ui_survives_tool_events_and_resume(
 
     let resumed = builder.restart(&server, &test).await?;
     let completed_history = resumed
-        .session_configured
-        .initial_messages
-        .expect("resumed history")
+        .codex
+        .load_history(/*include_archived*/ false)
+        .await?
+        .items
         .into_iter()
-        .filter(|event| matches!(event, EventMsg::McpToolCallEnd(end) if end.call_id == call_id))
+        .filter_map(|item| match item {
+            RolloutItem::EventMsg(EventMsg::McpToolCallEnd(end)) if end.call_id == call_id => {
+                Some(EventMsg::McpToolCallEnd(end))
+            }
+            _ => None,
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         serde_json::to_value(completed_history)?,
