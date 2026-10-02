@@ -243,9 +243,9 @@ async fn registration_selection_preserves_dcr_capabilities_and_exact_redirects()
 fn legacy_provider_exceptions_require_exact_issuer_and_endpoint_origins() -> Result<()> {
     for (issuer, authorization_endpoint, token_endpoint, accepted) in [
         (
-            "https://api.figma.com",
-            "https://www.figma.com/oauth/mcp",
-            "https://api.figma.com/v1/oauth/token",
+            "https://mcp.mercadopago.com/mcp",
+            "https://auth.mercadopago.com/mcp/authorization",
+            "https://mcp.mercadopago.com/oauth/token",
             true,
         ),
         (
@@ -255,21 +255,21 @@ fn legacy_provider_exceptions_require_exact_issuer_and_endpoint_origins() -> Res
             true,
         ),
         (
-            "https://api.figma.com.attacker.example",
-            "https://www.figma.com/oauth/mcp",
-            "https://api.figma.com.attacker.example/token",
+            "https://mcp.mercadopago.com.attacker.example/mcp",
+            "https://auth.mercadopago.com/mcp/authorization",
+            "https://mcp.mercadopago.com.attacker.example/oauth/token",
             false,
         ),
         (
-            "https://api.figma.com",
-            "https://www.figma.com/oauth/mcp",
+            "https://mcp.mercadopago.com/mcp",
+            "https://auth.mercadopago.com/mcp/authorization",
             "https://attacker.example/token",
             false,
         ),
         (
-            "http://api.figma.com",
-            "https://www.figma.com/oauth/mcp",
-            "http://api.figma.com/v1/oauth/token",
+            "http://mcp.mercadopago.com/mcp",
+            "https://auth.mercadopago.com/mcp/authorization",
+            "http://mcp.mercadopago.com/oauth/token",
             false,
         ),
         (

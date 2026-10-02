@@ -50,9 +50,9 @@ pub(crate) fn validate_authorization_server_endpoints(
                     token_endpoint.origin().ascii_serialization().as_str(),
                 ),
                 (
-                    "https://api.figma.com/",
-                    "https://www.figma.com",
-                    "https://api.figma.com",
+                    "https://mcp.mercadopago.com/mcp",
+                    "https://auth.mercadopago.com",
+                    "https://mcp.mercadopago.com",
                 ) | (
                     "https://agent.robinhood.com/mcp/trading",
                     "https://robinhood.com",
