@@ -415,6 +415,24 @@ fn doctor_reports_only_safe_config_error_metadata() -> Result<()> {
 }
 
 #[test]
+fn doctor_reports_configured_tui_mode() -> Result<()> {
+    let fixture = Fixture::new()?;
+    for (setting, expected) in [("true", "fullscreen"), ("false", "scrollback")] {
+        let output = fixture
+            .command()?
+            .args(["-c", &format!("tui.fullscreen_transcript={setting}")])
+            .args(["doctor", "--json"])
+            .output()?;
+        let report: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(
+            report["checks"]["config.load"]["details"]["configured TUI mode"],
+            expected
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn doctor_reports_configured_filesystem_paths() -> Result<()> {
     let fixture = Fixture::new()?;
     let config_file = fixture.home.join("config.toml");

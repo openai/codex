@@ -1415,6 +1415,10 @@ Background Server
     #[test]
     fn render_human_report_snapshot_covers_environment_rows() {
         let mut report = sample_report();
+        report.checks.push(
+            DoctorCheck::new("config.load", "config", CheckStatus::Ok, "config loaded")
+                .detail("configured TUI mode: fullscreen"),
+        );
         report.checks.push(DoctorCheck::new(
             "system.disk",
             "disk",

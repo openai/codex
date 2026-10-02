@@ -45,6 +45,9 @@ Environment
   ✓ state        state paths inspectable
 
 Configuration
+  ✓ config       loaded
+      feature flags            0 enabled · 0 overridden
+      configured TUI mode      fullscreen
   ✗ auth         token expired — Run `codex login`.
       OPENAI_API_KEY           present
 
@@ -69,7 +72,7 @@ Background Server
   ✓ app-server   background server is not running
 
 ─────────────────────────────────────────────────────────────
-15 ok · 5 notes · 3 warn · 1 fail failed
+16 ok · 5 notes · 3 warn · 1 fail failed
 
 --summary compact output           --all expand truncated lists
 --json redacted report
