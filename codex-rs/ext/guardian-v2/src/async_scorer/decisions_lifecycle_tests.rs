@@ -9,13 +9,17 @@ async fn decisions_disagreement_failures_and_disabled_flag_preserve_baseline() -
     skip_if_no_network!(Ok(()));
     for (case, enabled, status, choice, baseline, expected_risk) in [
         ("disabled", false, 200, "high", "low", 0.0),
+        ("not_initialized", true, 200, "high", "low", 0.0),
         ("cannot_escalate", true, 200, "high", "low", 0.0),
         ("cannot_lower", true, 200, "low", "high", 1.0),
         ("candidate_failure", true, 403, "low", "low", 0.0),
         ("baseline_failure", true, 200, "low", "invalid", 1.0),
     ] {
         let server = responses::start_mock_server().await;
-        let fixture = GuardianFailureFixture::new().await?;
+        let fixture = GuardianFailureFixture::with_config(&format!(
+            "[features]\nguardianv2_decisions_comparison = {enabled}\n"
+        ))
+        .await?;
         let test = &fixture.test;
         let mut config = test.config.clone();
         config.features.enable(Feature::GuardianApproval)?;
@@ -65,11 +69,13 @@ async fn decisions_disagreement_failures_and_disabled_flag_preserve_baseline() -
                     "choice":choice}]
                 })),
             )
-            .expect(/*r*/ u64::from(enabled))
+            .expect(/*r*/ u64::from(enabled && case != "not_initialized"))
             .mount(&decisions_server)
             .await;
         // Inject only the transport, using the existing mock HTTP server instead of credentials.
-        if enabled {
+        if case == "not_initialized" {
+            store.remove::<DecisionsSampler>();
+        } else if enabled {
             store.insert(DecisionsSampler::new(
                 HttpClientBuilder::new().build_direct()?,
                 "synthetic-key".into(),
@@ -103,7 +109,7 @@ async fn decisions_disagreement_failures_and_disabled_flag_preserve_baseline() -
             tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
                 loop {
                     if metrics.0.lock().unwrap().iter().any(|sample| matches!(sample,
-                        RecordedMetric::Counter(name, _, _) if name == "codex.guardian_v2.decisions_comparison")) { break; }
+                        RecordedMetric::Counter(name, _, _) if name == "codex.guardian_v2.decisions_comparison.comparison")) { break; }
                     tokio::task::yield_now().await;
                 }
             }).await?;
@@ -127,7 +133,11 @@ async fn decisions_disagreement_failures_and_disabled_flag_preserve_baseline() -
                     .collect::<Vec<_>>();
                 assert_eq!(body["input"], json!(evidence));
             }
-            let reason = if status == 403 { "http_403" } else { "none" };
+            let (outcome, reason) = match case {
+                "not_initialized" => ("skipped", "not_initialized"),
+                "candidate_failure" => ("failure", "http_403"),
+                _ => ("success", "none"),
+            };
             let outcomes = metrics.0.lock().unwrap().iter().filter(|sample| matches!(sample,
                 RecordedMetric::Counter(name, _, _) if name == "codex.guardian_v2.decisions_comparison"))
                 .cloned().collect::<Vec<_>>();
@@ -137,20 +147,29 @@ async fn decisions_disagreement_failures_and_disabled_flag_preserve_baseline() -
                     "codex.guardian_v2.decisions_comparison".into(),
                     1,
                     vec![
-                        (
-                            "outcome".into(),
-                            if reason == "none" {
-                                "success"
-                            } else {
-                                "failure"
-                            }
-                            .into()
-                        ),
+                        ("outcome".into(), outcome.into()),
                         ("reason".into(), reason.into())
                     ]
                 )],
                 "{case}"
             );
+            if case == "not_initialized" {
+                let comparisons = metrics.0.lock().unwrap().iter().filter(|sample| matches!(sample,
+                    RecordedMetric::Counter(name, _, _) if name == "codex.guardian_v2.decisions_comparison.comparison"))
+                    .cloned().collect::<Vec<_>>();
+                assert_eq!(
+                    comparisons,
+                    vec![RecordedMetric::Counter(
+                        "codex.guardian_v2.decisions_comparison.comparison".into(),
+                        1,
+                        vec![
+                            ("comparison".into(), "unavailable".into()),
+                            ("responses".into(), "low".into()),
+                            ("decisions".into(), "unavailable".into()),
+                        ],
+                    )]
+                );
+            }
         }
         assert_eq!(cached_score(store), Some(published), "{case}");
         decisions_server.verify().await;

@@ -3,12 +3,9 @@
 //! Unsupported evidence is rejected intact; errors never contain credentials or wire bodies.
 //! The caller records measurements after baseline publication; dropping its task aborts Decisions work.
 
-use super::metrics::decisions_failure_reason;
-use super::metrics::record_decisions_comparison_outcome;
 use super::sampler::LunaSampler;
 use super::sampler::LunaSamplingRequest;
 use codex_context_fragments::RenderedFragment;
-use codex_extension_api::ExtensionMetrics;
 use codex_history::ResponseItemEnvelope;
 use codex_http_client::HttpClient;
 use codex_protocol::models::ContentItem;
@@ -89,35 +86,10 @@ impl Drop for DecisionsTask {
 }
 
 impl DecisionsTask {
-    pub(super) async fn finish_and_record_outcome(
+    pub(super) async fn finish(
         mut self,
-        metrics: Option<&dyn ExtensionMetrics>,
-    ) {
-        let (result, _duration) = match (&mut self.handle).await {
-            Ok(result) => result,
-            Err(error) => {
-                let (outcome, reason) = if error.is_cancelled() {
-                    ("skipped", "superseded")
-                } else {
-                    ("failure", "task_error")
-                };
-                record_decisions_comparison_outcome(metrics, outcome, reason);
-                return;
-            }
-        };
-        let outcome = match &result {
-            Ok(_) => "success",
-            Err(DecisionsError::UnsupportedEvidence | DecisionsError::InputTooLarge) => "skipped",
-            Err(_) => "failure",
-        };
-        record_decisions_comparison_outcome(
-            metrics,
-            outcome,
-            result
-                .as_ref()
-                .err()
-                .map_or("none", |error| decisions_failure_reason(*error)),
-        );
+    ) -> Result<(Result<&'static str, DecisionsError>, Duration), tokio::task::JoinError> {
+        (&mut self.handle).await
     }
 }
 
@@ -146,6 +118,7 @@ impl DecisionsSampler {
         request: &LunaSamplingRequest,
         max_input_tokens: usize,
     ) -> DecisionsTask {
+        let started = Instant::now();
         let body = request_body(
             &request.instructions,
             &request.input,
@@ -173,7 +146,7 @@ impl DecisionsSampler {
             Ok(body) => body,
             Err(error) => {
                 return DecisionsTask {
-                    handle: tokio::spawn(async move { (Err(error), Duration::ZERO) }),
+                    handle: tokio::spawn(async move { (Err(error), started.elapsed()) }),
                     sampler: Weak::new(),
                 };
             }
@@ -191,9 +164,8 @@ impl DecisionsSampler {
         let sampler = Arc::clone(self);
         let handle = tokio::spawn(async move {
             let Ok(_permit) = sampler.slots.acquire().await else {
-                return (Err(DecisionsError::Transport), Duration::ZERO);
+                return (Err(DecisionsError::Transport), started.elapsed());
             };
-            let started = Instant::now();
             let result = tokio::time::timeout(DEADLINE, sampler.request(body))
                 .await
                 .unwrap_or(Err(DecisionsError::Timeout));

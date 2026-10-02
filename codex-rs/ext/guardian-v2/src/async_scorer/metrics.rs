@@ -194,3 +194,75 @@ pub(super) fn decisions_failure_reason(error: DecisionsError) -> &'static str {
         DecisionsError::InvalidResponse => "invalid_output",
     }
 }
+
+// Called after the authoritative baseline has been published.
+pub(super) fn record_decisions_comparison(
+    completed: Result<(Result<&'static str, DecisionsError>, Duration), tokio::task::JoinError>,
+    responses_sample: Option<(&str, Duration)>,
+    metrics: Option<&dyn ExtensionMetrics>,
+) {
+    let decisions_sample = match completed {
+        Ok((result, duration)) => {
+            let outcome = match &result {
+                Ok(_) => "success",
+                Err(DecisionsError::UnsupportedEvidence | DecisionsError::InputTooLarge) => {
+                    "skipped"
+                }
+                Err(_) => "failure",
+            };
+            record_decisions_comparison_outcome(
+                metrics,
+                outcome,
+                result
+                    .as_ref()
+                    .err()
+                    .map_or("none", |error| decisions_failure_reason(*error)),
+            );
+            result.ok().map(|risk| (risk, duration))
+        }
+        Err(error) => {
+            let (outcome, reason) = if error.is_cancelled() {
+                ("skipped", "superseded")
+            } else {
+                ("failure", "task_error")
+            };
+            record_decisions_comparison_outcome(metrics, outcome, reason);
+            None
+        }
+    };
+    if let Some(metrics) = metrics {
+        if let (Some((_, responses_duration)), Some((_, decisions_duration))) =
+            (responses_sample, decisions_sample)
+        {
+            // Compare latency only for the same successfully classified requests.
+            for (backend, duration) in [
+                ("responses", responses_duration),
+                ("decisions", decisions_duration),
+            ] {
+                metrics.histogram(
+                    "codex.guardian_v2.decisions_comparison.duration_ms",
+                    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+                    &[("backend", backend), ("outcome", "success")],
+                );
+            }
+        }
+        let responses_risk = responses_sample.map(|(risk, _)| risk);
+        let decisions_risk = decisions_sample.map(|(risk, _)| risk);
+        let comparison = match (responses_risk, decisions_risk) {
+            (Some(responses_risk), Some(decisions_risk)) if responses_risk == decisions_risk => {
+                "agree"
+            }
+            (Some(_), Some(_)) => "disagree",
+            _ => "unavailable",
+        };
+        metrics.counter(
+            "codex.guardian_v2.decisions_comparison.comparison",
+            /*inc*/ 1,
+            &[
+                ("comparison", comparison),
+                ("responses", responses_risk.unwrap_or("unavailable")),
+                ("decisions", decisions_risk.unwrap_or("unavailable")),
+            ],
+        );
+    }
+}

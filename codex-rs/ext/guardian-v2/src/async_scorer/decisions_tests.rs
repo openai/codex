@@ -76,9 +76,8 @@ async fn http_contract_and_untrusted_response_validation() {
     )
     .unwrap();
     let mut sampler = Arc::new(sampler);
-    let mut task = sampler.spawn(&request, /*max_input_tokens*/ 128_000);
-    assert_eq!((&mut task.handle).await.unwrap().0, Ok("low"));
-    drop(task);
+    let task = sampler.spawn(&request, /*max_input_tokens*/ 128_000);
+    assert_eq!(task.finish().await.unwrap().0, Ok("low"));
     let mut invalid = response;
     invalid["answers"][0]["choice"] = json!("untrusted server text");
     assert_eq!(parse_answer(&invalid), Err(DecisionsError::InvalidResponse));
@@ -114,17 +113,17 @@ async fn decisions_admits_newest_request_by_cancelling_oldest() {
         .acquire_many(MAX_CONCURRENT_REQUESTS as u32)
         .await
         .unwrap();
-    let mut oldest = sampler.spawn(&request, /*max_input_tokens*/ 128_000);
+    let oldest = sampler.spawn(&request, /*max_input_tokens*/ 128_000);
     let mut remaining = (1..MAX_CONCURRENT_REQUESTS)
         .map(|_| sampler.spawn(&request, /*max_input_tokens*/ 128_000))
         .collect::<Vec<_>>();
     remaining.push(sampler.spawn(&request, /*max_input_tokens*/ 128_000));
-    assert!((&mut oldest.handle).await.unwrap_err().is_cancelled());
+    assert!(oldest.finish().await.unwrap_err().is_cancelled());
     assert!(server.received_requests().await.unwrap().is_empty());
     drop(permits);
-    for mut task in remaining {
+    for task in remaining {
         assert_eq!(
-            (&mut task.handle).await.unwrap().0,
+            task.finish().await.unwrap().0,
             Err(DecisionsError::Http(403))
         );
     }
@@ -199,7 +198,7 @@ async fn cancelling_a_decisions_request_releases_thread_capacity() {
         .await
         .unwrap();
     {
-        let recording = task.finish_and_record_outcome(/*metrics*/ None);
+        let recording = task.finish();
         tokio::pin!(recording);
         std::future::poll_fn(|cx| {
             assert!(std::future::Future::poll(recording.as_mut(), cx).is_pending());
