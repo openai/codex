@@ -3439,6 +3439,8 @@ dependencies = [
  "pretty_assertions",
  "sentry",
  "serde_json",
+ "tar",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

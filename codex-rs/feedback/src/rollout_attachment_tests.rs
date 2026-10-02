@@ -46,40 +46,88 @@ impl Drop for Fixture {
     }
 }
 
-#[test]
-fn unloaded_compressed_rollout_is_included_as_jsonl_attachment() {
+#[tokio::test]
+async fn feedback_upload_archives_two_rollouts_that_can_be_extracted_and_read() -> Result<()> {
+    use codex_http_client::OutboundProxyPolicy;
+    use flate2::read::GzDecoder;
+    use sentry::protocol::Envelope;
+    use sentry::protocol::EnvelopeItem;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
     let fixture = Fixture::new();
-    // The app-server supplies the DB's logical .jsonl path without loading this thread.
-    let paths = [fixture.attachment()];
-    let snapshot = CodexFeedback::new().snapshot(/*session_id*/ None);
-    let attachments = snapshot
-        .feedback_attachments(
-            /*include_logs*/ false,
-            &[],
-            &paths,
-            /*logs_override*/ None,
+    let second_filename = format!("rollout-2026-09-09T12-00-00-{}.jsonl", ThreadId::new());
+    let second_bytes = b"{\"message\":\"second rollout\"}\n";
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/42/envelope/"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(/*r*/ 2)
+        .mount(&server)
+        .await;
+    let dsn = format!("http://public@{}/42", server.address());
+    CodexFeedback::new()
+        .snapshot(/*session_id*/ None)
+        .with_feedback_diagnostics(FeedbackDiagnostics::default())
+        .upload_feedback_with_dsn(
+            FeedbackUploadOptions {
+                classification: "bug",
+                reason: None,
+                tags: None,
+                include_logs: false,
+                extra_attachments: vec![FeedbackAttachment {
+                    filename: second_filename.clone(),
+                    content_type: Some("text/plain".to_string()),
+                    buffer: second_bytes.to_vec(),
+                }],
+                extra_attachment_paths: &[fixture.attachment()],
+                session_source: None,
+                logs_override: None,
+            },
+            &HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            &dsn,
+            Instant::now() + UPLOAD_TIMEOUT,
         )
-        .collect::<Result<Vec<_>>>()
-        .unwrap();
+        .await?;
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    let mut body = requests[1].body.clone();
+    if body.starts_with(&[0x1f, 0x8b]) {
+        let mut decoded = Vec::new();
+        GzDecoder::new(body.as_slice()).read_to_end(&mut decoded)?;
+        body = decoded;
+    }
+    let envelope = Envelope::from_slice(&body)?;
+    let mut items = envelope.items();
+    let Some(EnvelopeItem::Attachment(attachment)) = items.next() else {
+        anyhow::bail!("expected a rollout archive attachment");
+    };
+    assert_eq!(attachment.filename, "rollouts.tar.gz");
+    assert!(items.next().is_none());
+
+    let extracted = tempfile::tempdir()?;
+    tar::Archive::new(GzDecoder::new(attachment.buffer.as_slice())).unpack(extracted.path())?;
+    let files = fs::read_dir(extracted.path())?
+        .map(|entry| {
+            let entry = entry?;
+            Ok((entry.file_name(), fs::read(entry.path())?))
+        })
+        .collect::<io::Result<BTreeMap<_, _>>>()?;
     assert_eq!(
-        attachments
-            .iter()
-            .map(|attachment| (
-                attachment.filename.as_str(),
-                attachment.content_type.as_deref(),
-                attachment.buffer.as_slice(),
-            ))
-            .collect::<Vec<_>>(),
-        vec![(
-            fixture.plain.file_name().unwrap().to_str().unwrap(),
-            Some("text/plain"),
-            JSONL
-        )]
+        files,
+        BTreeMap::from([
+            (
+                fixture.plain.file_name().unwrap().to_owned(),
+                JSONL.to_vec()
+            ),
+            (second_filename.into(), second_bytes.to_vec()),
+        ])
     );
-    assert!(
-        !fixture.plain.exists(),
-        "feedback must not materialize the durable rollout"
-    );
+    Ok(())
 }
 
 #[test]

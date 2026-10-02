@@ -200,7 +200,7 @@ async fn feedback_upload_sends_safe_reason_tag_and_full_comment() {
                 reason: Some(&reason),
                 tags: Some(&tags),
                 include_logs: false,
-                extra_attachments: &[],
+                extra_attachments: Vec::new(),
                 extra_attachment_paths: &[],
                 session_source: None,
                 logs_override: None,

@@ -36,6 +36,7 @@ pub use daemon_logs::daemon_log_attachments;
 pub(crate) mod feedback_diagnostics;
 mod guardian;
 mod report_upload;
+mod rollout_archive;
 mod upload;
 pub use feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
 pub use feedback_diagnostics::FeedbackDiagnostic;
@@ -508,12 +509,11 @@ pub struct FeedbackUploadOptions<'a> {
     pub reason: Option<&'a str>,
     pub tags: Option<&'a BTreeMap<String, String>>,
     pub include_logs: bool,
-    /// Generated attachments that are already buffered and safe to upload.
+    /// Owned diagnostics and frozen rollout prefixes that are safe to upload.
     ///
-    /// These are included after `codex-logs.log` and before path-backed rollout
-    /// attachments. They are only passed by the caller after any user consent
-    /// gate has decided logs and diagnostics should be uploaded.
-    pub extra_attachments: &'a [FeedbackAttachment],
+    /// Diagnostics follow `codex-logs.log`; rollout prefixes join the archive with
+    /// path-backed rollouts. Callers must apply any user consent gate first.
+    pub extra_attachments: Vec<FeedbackAttachment>,
     pub extra_attachment_paths: &'a [FeedbackAttachmentPath],
     pub session_source: Option<SessionSource>,
     pub logs_override: Option<Vec<u8>>,
@@ -676,6 +676,7 @@ impl FeedbackSnapshot {
         );
 
         let mut attachments = self.feedback_attachments(
+            &headers,
             options.include_logs,
             options.extra_attachments,
             options.extra_attachment_paths,
@@ -817,16 +818,74 @@ impl FeedbackSnapshot {
 
     fn feedback_attachments<'a>(
         &'a self,
+        headers: &'a sentry::protocol::EnvelopeHeaders,
         include_logs: bool,
-        extra_attachments: &'a [FeedbackAttachment],
+        extra_attachments: Vec<FeedbackAttachment>,
         extra_attachment_paths: &'a [FeedbackAttachmentPath],
         logs_override: Option<Vec<u8>>,
     ) -> impl Iterator<Item = Result<sentry::protocol::Attachment>> + 'a {
         use sentry::protocol::Attachment;
 
-        // Priority: logs, generated attachments (doctor report), connectivity diagnostics,
-        // then files in caller order. Measure each file’s envelope independently;
-        // the size limit applies per request, not to the sum of all files.
+        // Partition metadata without reading files before the event is accepted. Keep
+        // generated diagnostics first, then rollouts, then remaining files in caller order.
+        let (rollouts, diagnostics_attachments): (Vec<_>, Vec<_>) =
+            extra_attachments.into_iter().partition(|attachment| {
+                codex_rollout::rollout_id_from_path(Path::new(&attachment.filename)).is_some()
+            });
+        let (rollout_paths, diagnostic_paths): (Vec<_>, Vec<_>) =
+            extra_attachment_paths.iter().partition(|attachment| {
+                codex_rollout::rollout_id_from_path(&attachment.path).is_some()
+            });
+        let has_rollouts = !rollouts.is_empty() || !rollout_paths.is_empty();
+        let archive = has_rollouts
+            .then_some((rollout_paths, rollouts))
+            .into_iter()
+            .flat_map(move |(paths, rollouts)| {
+                let archive =
+                    tempfile::tempdir()
+                        .map_err(anyhow::Error::from)
+                        .and_then(|directory| {
+                            let output_path = directory.path().join("rollouts.tar.gz");
+                            let Some(archive) = rollout_archive::archive_rollouts(
+                                &output_path,
+                                paths.iter().copied(),
+                                &rollouts,
+                                MAX_DECODED_UPLOAD_BYTES,
+                            )?
+                            else {
+                                return Ok(None);
+                            };
+                            let attachment = archive
+                                .read_attachment(MAX_DECODED_UPLOAD_BYTES)?
+                                .context("rollout archive is missing or exceeds the size limit")?;
+                            // Measure framing without copying the archive. Account for the extra
+                            // decimal digits when the empty attachment's length becomes nonzero.
+                            let mut envelope =
+                                sentry::protocol::Envelope::new().with_headers(headers.clone());
+                            envelope.add_item(Attachment {
+                                filename: attachment.filename.clone(),
+                                content_type: attachment.content_type.clone(),
+                                ..Default::default()
+                            });
+                            let mut framing = Vec::new();
+                            envelope.to_writer(&mut framing)?;
+                            let archive_bytes = attachment.buffer.len();
+                            let envelope_bytes = framing.len()
+                                + archive_bytes
+                                + archive_bytes.checked_ilog10().unwrap_or(0) as usize;
+                            anyhow::ensure!(
+                                envelope_bytes <= MAX_DECODED_UPLOAD_BYTES,
+                                "rollout archive envelope exceeds the size limit"
+                            );
+                            Ok(Some(attachment))
+                        });
+                rollout_archive::with_individual_fallback(
+                    archive,
+                    paths,
+                    rollouts,
+                    MAX_DECODED_UPLOAD_BYTES,
+                )
+            });
         let logs = include_logs.then(|| self.log_attachment(logs_override));
         let diagnostics = self
             .feedback_diagnostics_attachment_text(include_logs)
@@ -837,18 +896,11 @@ impl FeedbackSnapshot {
             });
 
         logs.into_iter()
-            .chain(
-                extra_attachments
-                    .iter()
-                    .map(|attachment| FeedbackAttachment {
-                        buffer: attachment.buffer.clone(),
-                        filename: attachment.filename.clone(),
-                        content_type: attachment.content_type.clone(),
-                    }),
-            )
+            .chain(diagnostics_attachments)
             .chain(diagnostics)
             .map(Ok)
-            .chain(extra_attachment_paths.iter().map(|attachment_path| {
+            .chain(archive)
+            .chain(diagnostic_paths.into_iter().map(|attachment_path| {
                 attachment_path
                     .read_attachment(MAX_DECODED_UPLOAD_BYTES)?
                     .context("feedback attachment is not a regular file or exceeds the size limit")
@@ -1068,7 +1120,7 @@ mod tests {
     async fn upload_test_feedback(
         feedback: &CodexFeedback,
         dsn: &str,
-        extra_attachments: &[FeedbackAttachment],
+        extra_attachments: Vec<FeedbackAttachment>,
     ) -> Result<()> {
         feedback
             .snapshot(/*session_id*/ None)
@@ -1110,7 +1162,7 @@ mod tests {
             content_type: None,
             buffer: b"later diagnostic".to_vec(),
         };
-        upload_test_feedback(&CodexFeedback::new(), &dsn, &[attachment])
+        upload_test_feedback(&CodexFeedback::new(), &dsn, vec![attachment])
             .await
             .expect("all three envelopes should finish across twelve seconds of network waits");
     }
@@ -1152,7 +1204,7 @@ mod tests {
                     reason: None,
                     tags: None,
                     include_logs: true,
-                    extra_attachments: &attachments,
+                    extra_attachments: attachments.into(),
                     extra_attachment_paths: &[],
                     session_source: Some(SessionSource::Cli),
                     logs_override: Some(b"log contents".to_vec()),
@@ -1211,7 +1263,7 @@ mod tests {
             buffer: filename.as_bytes().to_vec(),
         });
         let started = Instant::now();
-        upload_test_feedback(&CodexFeedback::new(), &dsn, &attachments)
+        upload_test_feedback(&CodexFeedback::new(), &dsn, attachments.into())
             .await
             .expect_err("legacy uploads report incomplete diagnostics");
         assert!(started.elapsed() >= Duration::from_secs(2));
@@ -1292,7 +1344,7 @@ mod tests {
                     reason: Some("large diagnostic upload"),
                     tags: None,
                     include_logs: false,
-                    extra_attachments: &[],
+                    extra_attachments: Vec::new(),
                     extra_attachment_paths: &[
                         FeedbackAttachmentPath {
                             path: first_path.clone(),
@@ -1392,7 +1444,7 @@ mod tests {
                         reason: None,
                         tags: None,
                         include_logs: false,
-                        extra_attachments: &[],
+                        extra_attachments: Vec::new(),
                         extra_attachment_paths: &[FeedbackAttachmentPath {
                             path,
                             attachment_filename_override: None,
@@ -1473,7 +1525,7 @@ mod tests {
                 content_type: None,
                 buffer: b"later diagnostic".to_vec(),
             };
-            upload_test_feedback(&CodexFeedback::new(), &dsn, &[later])
+            upload_test_feedback(&CodexFeedback::new(), &dsn, vec![later])
                 .await
                 .expect_err("legacy uploads report rate-limited diagnostics");
         }
@@ -1492,7 +1544,7 @@ mod tests {
         let feedback = CodexFeedback::new();
         let dsn = format!("http://public@{}/42", server.address());
 
-        let error = upload_test_feedback(&feedback, &dsn, &[])
+        let error = upload_test_feedback(&feedback, &dsn, Vec::new())
             .await
             .expect_err("rejected Sentry responses must fail feedback uploads");
 
@@ -1515,7 +1567,7 @@ mod tests {
             .mount(&sentry_server)
             .await;
         let dsn = format!("http://public@{}/42", sentry_server.address());
-        let error = upload_test_feedback(&CodexFeedback::new(), &dsn, &[])
+        let error = upload_test_feedback(&CodexFeedback::new(), &dsn, Vec::new())
             .await
             .expect_err("redirected feedback uploads must be rejected");
 
@@ -1539,7 +1591,7 @@ mod tests {
         drop(listener);
 
         let dsn = format!("http://public@{address}/42");
-        let error = upload_test_feedback(&CodexFeedback::new(), &dsn, &[])
+        let error = upload_test_feedback(&CodexFeedback::new(), &dsn, Vec::new())
             .await
             .expect_err("transport failures must fail feedback uploads");
 
@@ -1570,8 +1622,9 @@ mod tests {
 
         let attachments_with_diagnostics = snapshot_with_diagnostics
             .feedback_attachments(
+                &sentry::protocol::EnvelopeHeaders::default(),
                 /*include_logs*/ true,
-                &[FeedbackAttachment {
+                vec![FeedbackAttachment {
                     filename: DOCTOR_REPORT_ATTACHMENT_FILENAME.to_string(),
                     content_type: Some("application/json".to_string()),
                     buffer: b"{\"overallStatus\":\"ok\"}".to_vec(),
@@ -1615,7 +1668,13 @@ mod tests {
         let attachments_without_diagnostics = CodexFeedback::new()
             .snapshot(/*session_id*/ None)
             .with_feedback_diagnostics(FeedbackDiagnostics::default())
-            .feedback_attachments(/*include_logs*/ true, &[], &[], Some(vec![1]))
+            .feedback_attachments(
+                &sentry::protocol::EnvelopeHeaders::default(),
+                /*include_logs*/ true,
+                Vec::new(),
+                &[],
+                Some(vec![1]),
+            )
             .collect::<Result<Vec<_>>>()
             .unwrap();
 
@@ -1645,8 +1704,9 @@ mod tests {
         let attachments = CodexFeedback::new()
             .snapshot(/*session_id*/ None)
             .feedback_attachments(
+                &sentry::protocol::EnvelopeHeaders::default(),
                 /*include_logs*/ false,
-                &[],
+                Vec::new(),
                 &[
                     FeedbackAttachmentPath {
                         path: gzip_path.clone(),

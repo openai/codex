@@ -1,5 +1,6 @@
 //! Selects a bounded feedback subtree, preserving the reported thread and prioritizing
-//! children with retained failed reviews. The index describes selection, not delivery.
+//! children with retained failed reviews. Filenames name archive entries or individual
+//! attachments when archiving fails; the index describes selection, not delivery.
 
 use codex_feedback::FeedbackAttachment;
 use codex_feedback::GuardianReviewFailures;
@@ -13,6 +14,7 @@ const MAX_LISTED_OMISSIONS: usize = 64;
 
 #[derive(Serialize)]
 pub(super) struct FeedbackThreadIndex {
+    rollout_archive_filename: &'static str,
     pub threads: Vec<FeedbackThread>,
     retained_failure_thread_ids: Vec<ThreadId>,
     omitted_thread_ids: Vec<ThreadId>,
@@ -56,6 +58,7 @@ impl FeedbackThreadIndex {
             .take(MAX_LISTED_OMISSIONS)
             .collect::<Vec<_>>();
         Self {
+            rollout_archive_filename: "rollouts.tar.gz",
             threads: thread_ids
                 .into_iter()
                 .map(|thread_id| FeedbackThread {

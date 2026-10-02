@@ -28,6 +28,7 @@ fn old_failed_child_precedes_new_children_and_index_explains_selection() -> anyh
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&attachment.buffer)?,
         json!({
+            "rollout_archive_filename": "rollouts.tar.gz",
             "threads": selected.into_iter().map(|i| json!({
                 "thread_id": ids[i],
                 "rollout_filename": match i {

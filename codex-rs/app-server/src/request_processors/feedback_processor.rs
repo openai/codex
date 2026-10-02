@@ -284,7 +284,7 @@ impl FeedbackRequestProcessor {
                     reason: reason.as_deref(),
                     tags,
                     include_logs,
-                    extra_attachments: &extra_attachments,
+                    extra_attachments,
                     extra_attachment_paths: &attachment_paths,
                     session_source: Some(session_source),
                     logs_override: sqlite_feedback_logs,
