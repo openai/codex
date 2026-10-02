@@ -12,6 +12,7 @@
 //! 4. Completed runs only persist when they have user-facing output or a non-success status.
 use super::HistoryCell;
 use super::plain_lines;
+use codex_ansi_escape::ansi_escape;
 use codex_app_server_protocol::HookOutputEntry;
 use codex_app_server_protocol::HookOutputEntryKind;
 use codex_app_server_protocol::HookRunStatus;
@@ -280,11 +281,18 @@ impl HookCell {
             let system_message = entries
                 .iter()
                 .find(|entry| entry.kind == HookOutputEntryKind::Warning);
-            let mut system_message_lines = system_message.map(|entry| entry.text.split('\n'));
+            let mut system_message_lines = system_message.map(|entry| {
+                let mut lines = ansi_escape(&entry.text).lines;
+                if entry.text.ends_with('\n') {
+                    lines.push("".into());
+                }
+                lines.into_iter()
+            });
             if *status == HookRunStatus::Completed
-                && let Some(first_line) = system_message_lines.as_mut().and_then(Iterator::next)
+                && let Some(mut first_line) = system_message_lines.as_mut().and_then(Iterator::next)
             {
-                lines.push(vec!["↳ Hook · ".dim(), first_line.to_string().into()].into());
+                first_line.spans.insert(/*index*/ 0, "↳ Hook · ".dim());
+                lines.push(first_line);
             } else {
                 let header_text = match status {
                     HookRunStatus::Completed => "Hook completed",
@@ -301,16 +309,22 @@ impl HookCell {
                     ]
                     .into(),
                 );
-                if let Some(first_line) = system_message_lines.as_mut().and_then(Iterator::next) {
-                    lines.push(format!("{HOOK_OUTPUT_INDENT}└ {first_line}").into());
+                if let Some(mut first_line) = system_message_lines.as_mut().and_then(Iterator::next)
+                {
+                    first_line
+                        .spans
+                        .insert(/*index*/ 0, format!("{HOOK_OUTPUT_INDENT}└ ").into());
+                    lines.push(first_line);
                 }
             }
             if let Some(system_message_lines) = system_message_lines {
-                for line in system_message_lines {
-                    if line.is_empty() {
+                for mut line in system_message_lines {
+                    if line.spans.is_empty() {
                         lines.push("".into());
                     } else {
-                        lines.push(format!("{HOOK_OUTPUT_BODY_INDENT}{line}").into());
+                        line.spans
+                            .insert(/*index*/ 0, HOOK_OUTPUT_BODY_INDENT.into());
+                        lines.push(line);
                     }
                 }
             }
@@ -554,6 +568,29 @@ mod tests {
     }
 
     #[test]
+    fn completed_hook_system_message_renders_ansi_styles() {
+        let cell = completed_hook_cell(
+            HookEventName::UserPromptSubmit,
+            HookRunStatus::Completed,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Warning,
+                text: "\x1b[1;92mStyled output\nacross lines\x1b[0m plain".to_string(),
+            }],
+        );
+
+        let lines = cell.display_lines(/*width*/ 80);
+
+        assert_eq!(
+            line_texts(&cell.raw_lines()),
+            vec![
+                "↳ Hook · Styled output".to_string(),
+                "    across lines plain".to_string(),
+            ],
+        );
+        insta::assert_debug_snapshot!("completed_hook_system_message_ansi_styles", lines);
+    }
+
+    #[test]
     fn completed_hook_with_only_context_is_quiet_on_every_tui_surface() {
         let cell = completed_hook_cell(
             HookEventName::SessionStart,
@@ -684,7 +721,7 @@ mod tests {
             HookRunStatus::Completed,
             vec![HookOutputEntry {
                 kind: HookOutputEntryKind::Warning,
-                text: "Heads up\nReview generated files".to_string(),
+                text: "Heads up\n\u{301}\nReview generated files\n".to_string(),
             }],
         );
 
@@ -692,7 +729,9 @@ mod tests {
             line_texts(&cell.display_lines(/*width*/ 80)),
             vec![
                 "↳ Hook · Heads up".to_string(),
+                "    \u{301}".to_string(),
                 "    Review generated files".to_string(),
+                "".to_string(),
             ]
         );
     }

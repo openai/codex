@@ -1,0 +1,15 @@
+---
+source: tui/src/history_cell/hook_cell.rs
+expression: lines
+---
+[
+    Line::from_iter([
+        Span::from("↳ Hook · ").dim(),
+        Span::from("Styled output").light_green().bold(),
+    ]),
+    Line::from_iter([
+        Span::from("    "),
+        Span::from("across lines").light_green().bold(),
+        Span::from(" plain").fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).not_bold().not_dim().not_italic().not_underlined().not_slow_blink().not_rapid_blink().not_reversed().not_hidden().not_crossed_out(),
+    ]),
+]
