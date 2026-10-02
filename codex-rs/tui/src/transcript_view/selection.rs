@@ -20,6 +20,7 @@ struct PendingCopy {
     detailed: bool,
     follow: bool,
     clear_selection: bool,
+    characters: usize,
 }
 
 pub(super) struct Selection {
@@ -41,6 +42,49 @@ pub(super) struct Selection {
 }
 
 impl TranscriptView {
+    pub(super) fn select_copy_range(
+        &mut self,
+        cells: &[Arc<dyn HistoryCell>],
+        index: usize,
+        range: std::ops::Range<usize>,
+    ) {
+        let Some(layout) = self.layout(cells, index) else {
+            return;
+        };
+        let key = self.entry_key(cells, index);
+        let start = Anchor {
+            key,
+            index,
+            offset: range.start,
+            row_bias: 0,
+        };
+        let end = Anchor {
+            offset: range.end,
+            ..start
+        };
+        let mut snapshot = self.capture_snapshot(cells);
+        snapshot.pinned.retain(|key, _| *key == EntryKey::Live);
+        snapshot.pinned.insert(key, layout);
+        self.selection = Some(Selection {
+            pending_copy: None,
+            primary_owner: None,
+            snapshot,
+            start,
+            end,
+            dragging: false,
+            moved: false,
+            moved_vertically: false,
+            pointer_origin_row: 0,
+            resume_on_empty: false,
+            pointer: None,
+            pressed_link: None,
+            origin: (start, end),
+            unit: SelectionUnit::Character,
+            preferred_column: None,
+        });
+        self.reveal_copy_context(cells);
+    }
+
     pub(super) fn begin_selection(
         &mut self,
         cells: &[Arc<dyn HistoryCell>],
@@ -48,6 +92,7 @@ impl TranscriptView {
         row: u16,
         clicks: u8,
     ) {
+        self.copy_mode = None;
         let Some((anchor, layout)) = self.hit_test(column, row) else {
             return;
         };
@@ -90,6 +135,7 @@ impl TranscriptView {
     /// Rejoin current history, retaining Find offsets or a replaced group until navigation.
     /// Real selections keep their reading position, including a retired live revision.
     pub(crate) fn end_selection(&mut self, cells: &[Arc<dyn HistoryCell>]) {
+        self.copy_mode = None;
         let Some(selection) = self.selection.take() else {
             return;
         };
@@ -133,6 +179,7 @@ impl TranscriptView {
         let Some(mut selection) = self.selection.take() else {
             return;
         };
+        self.copy_mode = None;
         // A Shift-click starts a new pointer gesture while retaining the text anchor.
         if !selection.dragging {
             selection.pointer_origin_row = row;
@@ -297,12 +344,33 @@ impl TranscriptView {
             layout.copy_lines(range, separator, &mut lines);
             previous = Some(layout);
         }
-        let (text, format) = crate::markdown_copy::selection(&lines, text);
+        let override_payload = self.copy_mode.as_ref().and_then(|mode| {
+            if mode.whole {
+                mode.response.as_ref().map(|(_, text)| {
+                    (
+                        text.to_string(),
+                        crate::clipboard_copy::CopyFormat::Markdown,
+                    )
+                })
+            } else {
+                mode.source
+                    .as_ref()
+                    .map(|text| (text.clone(), crate::clipboard_copy::CopyFormat::PlainText))
+            }
+        });
+        let (text, format) =
+            override_payload.unwrap_or_else(|| crate::markdown_copy::selection(&lines, text));
+        let characters = text.chars().count();
         let result = copy(&text, format);
+        self.show_copy_feedback(&result, characters);
         match result {
             Ok(crate::clipboard_copy::CopyStatus::Confirmed) => {
                 if clear_selection {
+                    let copy_mode = self.copy_mode.is_some();
                     self.end_selection(cells);
+                    if copy_mode {
+                        self.jump_to_latest();
+                    }
                 }
             }
             Ok(crate::clipboard_copy::CopyStatus::Pending(id)) => {
@@ -313,8 +381,9 @@ impl TranscriptView {
                         end: selection.end,
                         position: self.position,
                         detailed: self.detailed,
-                        follow: false,
+                        follow: clear_selection && self.copy_mode.is_some(),
                         clear_selection,
+                        characters,
                     });
                 }
             }
@@ -369,9 +438,7 @@ impl TranscriptView {
         {
             return None;
         }
-        let characters = self
-            .selected_text(cells)
-            .map_or(/*default*/ 0, |text| text.chars().count());
+        let characters = pending.characters;
         if pending.clear_selection
             && completion.1 == Ok(crate::clipboard_copy::CopyStatus::Confirmed)
         {
@@ -525,6 +592,20 @@ impl TranscriptView {
                 self.area.width,
                 /*height*/ 1,
             );
+            if self.copy_mode.is_some() {
+                // Full-entry selections include final padding; partial ranges stay half-open.
+                let last = if begin == 0 && finish == visible.layout.text().len() {
+                    finish
+                } else {
+                    finish.saturating_sub(/*rhs*/ 1)
+                };
+                let rows =
+                    visible.layout.row_for_offset(begin)..=visible.layout.row_for_offset(last);
+                if rows.contains(&visible.row) {
+                    buf.set_style(area, crate::style::selection_style());
+                }
+                continue;
+            }
             let next = (visible.index + 1..=end.index)
                 .filter_map(|index| {
                     selection

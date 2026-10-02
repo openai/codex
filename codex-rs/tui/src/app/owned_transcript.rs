@@ -568,8 +568,6 @@ impl App {
                     &text,
                     !copy_on_select,
                 );
-                self.transcript_view
-                    .show_copy_feedback(&result, text.chars().count());
                 if resume_following
                     && matches!(result, Ok(crate::clipboard_copy::CopyStatus::Pending(_)))
                 {

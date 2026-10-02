@@ -8,6 +8,7 @@
 mod activity;
 mod bookmark;
 mod composer_gap;
+mod copy_mode;
 mod disclosure;
 mod follow_control;
 mod footer;
@@ -103,6 +104,7 @@ pub(crate) struct TranscriptView {
     suppressed_prompt_header: Option<prompt_header::SuppressedHeader>,
     visible: Vec<VisibleRow>,
     selection: Option<Selection>,
+    copy_mode: Option<copy_mode::CopyMode>,
     held_reading: Option<ViewSnapshot>,
     search: Search,
     detailed: bool,
@@ -138,6 +140,7 @@ impl Default for TranscriptView {
             suppressed_prompt_header: None,
             visible: Vec::new(),
             selection: None,
+            copy_mode: None,
             held_reading: None,
             search: Search::default(),
             detailed: false,
@@ -177,15 +180,21 @@ impl TranscriptView {
         let cells = snapshot.as_deref().unwrap_or(cells);
         let suppressed_prompt_header = self.suppressed_prompt_header.take();
         Clear.render(area, buf);
+        let previous_height = self.area.height;
+        let resized = self.area.width != area.width || self.area.bottom() != area.bottom();
         self.prepare_width(area.width);
         self.area = area;
         self.normalize_selection(cells);
+        if resized {
+            self.reveal_copy_context(cells);
+        }
         self.visible.clear();
         if area.is_empty() {
             self.tail_visible = false;
             return;
         }
         let initial_start = self.start(cells);
+        let initial_position = self.position;
         let mut start = initial_start;
         let mut body = area;
         let header_position = prompt_header::SuppressedHeader {
@@ -200,7 +209,12 @@ impl TranscriptView {
             self.suppressed_prompt_header = Some(header_position);
         } else if area.height >= 4 && prompt_header::line(cells, start.0, area.width).is_some() {
             body = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
+            let resized = resized || previous_height != body.height;
             self.area = body;
+            // Copy targets must also leave context after the prompt reserves its row.
+            if resized {
+                self.reveal_copy_context(cells);
+            }
             // Following may advance into the next turn after reserving the header row.
             start = self.start(cells);
             if let Some(header) = prompt_header::line(cells, start.0, area.width) {
@@ -209,6 +223,9 @@ impl TranscriptView {
                 body = area;
                 self.area = area;
                 start = initial_start;
+                if resized && self.copy_mode.is_some() {
+                    self.position = initial_position;
+                }
                 self.suppressed_prompt_header = Some(header_position);
             }
         }
@@ -336,6 +353,7 @@ impl TranscriptView {
             return;
         }
         self.selection = None;
+        self.copy_mode = None;
         self.release_live_reading();
         self.cache.clear();
         self.suppressed_prompt_header = None;
@@ -381,6 +399,7 @@ impl TranscriptView {
         self.cancel_beginning();
         self.position = Position::Latest;
         self.selection = None;
+        self.copy_mode = None;
         self.release_live_reading();
         self.unseen_activity = false;
         self.disclosure.focused = None;

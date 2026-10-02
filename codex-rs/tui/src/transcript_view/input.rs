@@ -135,6 +135,9 @@ impl TranscriptView {
         {
             return true;
         }
+        if self.copy_mode.is_some() {
+            return true;
+        }
         if self.selection.is_some() {
             return crate::text_selection::is_copy_key(key)
                 || code == KeyCode::Esc
@@ -163,6 +166,9 @@ impl TranscriptView {
     ) -> Option<ViewAction> {
         if key.kind == KeyEventKind::Release {
             return None;
+        }
+        if let Some(action) = self.handle_copy_mode_key(key, cells) {
+            return Some(action);
         }
         if let Some(action) = self.handle_disclosure_key(key, cells) {
             return Some(action);
@@ -336,7 +342,7 @@ impl TranscriptView {
         self.handle_scroll_key(key, cells)
     }
 
-    fn handle_scroll_key(
+    pub(super) fn handle_scroll_key(
         &mut self,
         key: KeyEvent,
         cells: &[Arc<dyn HistoryCell>],

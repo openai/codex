@@ -1562,6 +1562,7 @@ async fn slash_copy_state_tracks_turn_complete_final_reply() {
 #[tokio::test]
 async fn slash_copy_picker_uses_completed_commentary_during_active_turn() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
     complete_turn_with_message(&mut chat, "turn-1", Some("Previous final response"));
     handle_turn_started(&mut chat, "active");
     let commentary = "Here is the command:\n\n```sh\necho current\n```";
@@ -1596,6 +1597,7 @@ async fn slash_copy_picker_uses_completed_commentary_during_active_turn() {
 #[tokio::test]
 async fn slash_copy_state_tracks_plan_item_completion() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
     complete_turn_with_message(&mut chat, "previous", Some("```rust\nstale();\n```"));
     let plan_text = "## Plan\n\n1. Build it\n2. Test it\n\n```sh\r\njust test  \r\n```".to_string();
 
@@ -1653,6 +1655,7 @@ async fn slash_copy_state_tracks_plan_item_completion() {
 #[tokio::test]
 async fn slash_copy_picker_preserves_completed_source_whitespace_and_hides_directives() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
     let source = concat!(
         "Intro ::git-push{cwd=\"/repo\"}\r\n\r\n",
         "```powershell\r\nWrite-Output value  \r\nWrite-Output done\t\r\n```\r\n\r\n",
@@ -1709,6 +1712,7 @@ async fn slash_copy_picker_defers_queued_input_until_selection_or_cancellation_s
         for close_key in [KeyCode::Enter, KeyCode::Esc] {
             let (mut chat, mut rx, mut op_rx) =
                 make_chatwidget_manual(/*model_override*/ None).await;
+            chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
             chat.thread_id = Some(ThreadId::new());
             complete_turn_with_message(&mut chat, "previous", Some("Previous response"));
             handle_turn_started(&mut chat, "active");
@@ -1762,6 +1766,7 @@ async fn slash_copy_picker_defers_queued_input_until_selection_or_cancellation_s
 #[tokio::test]
 async fn slash_copy_picker_previews_whole_response_code_blocks_and_blockquotes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
     chat.transcript.last_agent_markdown = Some(
         "Overview\n\n```python\nprint('first')\nprint('second')\n```\n\n> Important quote\n\n```sh\necho done\n```"
             .to_string(),
@@ -1881,6 +1886,7 @@ async fn slash_copy_status_yields_to_later_turns_and_commands_even_after_refresh
         NextTurn::ShellCommand,
     ] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+        chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
         chat.thread_id = Some(ThreadId::new());
         complete_turn_with_message(&mut chat, "turn-1", Some("Original reply"));
         set_chatgpt_auth(&mut chat);
@@ -1929,6 +1935,7 @@ async fn slash_copy_status_yields_to_later_turns_and_commands_even_after_refresh
 async fn slash_copy_status_yields_to_queued_commands_after_queued_status() {
     for command in ["/rename Queued rename", "!echo hello"] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
         chat.thread_id = Some(ThreadId::new());
         handle_turn_started(&mut chat, "turn-1");
         queue_composer_text_with_tab(&mut chat, "/status");
@@ -1955,6 +1962,7 @@ async fn slash_copy_status_yields_to_queued_commands_after_queued_status() {
 async fn slash_copy_picker_waits_for_submission_after_typing_or_autocomplete() {
     for select_from_autocomplete in [false, true] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
         chat.transcript.last_agent_markdown = Some("Ready to copy".to_string());
         chat.bottom_pane
             .set_composer_text("/cop".to_string(), Vec::new(), Vec::new());
@@ -1990,6 +1998,7 @@ async fn slash_copy_picker_waits_for_submission_after_typing_or_autocomplete() {
 #[tokio::test]
 async fn slash_copy_picker_waits_for_submission_after_paste() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
     chat.transcript.last_agent_markdown = Some("Ready to copy".to_string());
 
     chat.handle_paste("/copy".to_string());
@@ -2009,6 +2018,7 @@ async fn slash_copy_picker_waits_for_submission_after_paste() {
 #[tokio::test]
 async fn slash_copy_picker_numeric_shortcuts_copy_whole_response_and_exact_code() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
     let markdown = "Intro\n\n```rust\nfn main() {\n    run();\n}\n```";
     chat.transcript.last_agent_markdown = Some(markdown.to_string());
 
@@ -2035,6 +2045,7 @@ async fn slash_copy_picker_renders_only_whole_responses_as_markdown() {
     use crate::clipboard_copy::CopyFormat;
 
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
     let markdown = "**Intro**\n\n```text\n# literal *code*\n```\n\n> **Quote**\n";
     chat.transcript.last_agent_markdown = Some(markdown.to_string());
     for (key, expected) in [
@@ -2064,6 +2075,7 @@ async fn slash_copy_picker_renders_only_whole_responses_as_markdown() {
 #[tokio::test]
 async fn slash_copy_picker_preserves_nested_blockquote_markdown_and_code() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
     chat.transcript.last_agent_markdown =
         Some("> **outer**\n> > _nested_\n> ```sh\n> nested()\n> ```\n".to_string());
 
@@ -2088,6 +2100,7 @@ async fn slash_copy_picker_preserves_nested_blockquote_markdown_and_code() {
 #[tokio::test]
 async fn slash_copy_picker_supports_arrow_navigation_enter_and_scrolling() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
     chat.transcript.last_agent_markdown = Some(
         (1..=11)
             .map(|index| format!("```sh\nexample_{index}()\n```\n"))
@@ -2114,6 +2127,7 @@ async fn slash_copy_picker_supports_arrow_navigation_enter_and_scrolling() {
 #[tokio::test]
 async fn slash_copy_picker_escape_dismisses_without_copying() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
     chat.transcript.last_agent_markdown = Some("Nothing copied".to_string());
 
     chat.dispatch_command(SlashCommand::Copy);
@@ -2128,6 +2142,7 @@ async fn slash_copy_picker_escape_dismisses_without_copying() {
 #[tokio::test]
 async fn slash_copy_picker_remains_available_from_parent_owned_threads() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
     chat.transcript.last_agent_markdown = Some("Safe local copy".to_string());
     chat.set_parent_owned_thread();
     chat.bottom_pane
@@ -2240,6 +2255,7 @@ async fn slash_daybreak_offers_an_application_when_unavailable() {
 #[tokio::test]
 async fn slash_copy_reports_when_no_agent_response_exists() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
 
     chat.dispatch_command(SlashCommand::Copy);
 
@@ -3731,4 +3747,36 @@ async fn transcript_copy_feedback_stays_in_the_footer_without_history_or_interru
         "transcript_copy_failure",
         render_bottom_popup(&chat, /*width*/ 80)
     );
+}
+
+#[tokio::test]
+async fn owned_copy_guard_defers_queued_input_until_released() {
+    for queued in ["/new", "/clear", "follow-up prompt"] {
+        let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Owned;
+        chat.thread_id = Some(ThreadId::new());
+        complete_turn_with_message(&mut chat, "previous", Some("Previous response"));
+        handle_turn_started(&mut chat, "active");
+        queue_composer_text_with_tab(&mut chat, queued);
+        chat.dispatch_command(SlashCommand::Copy);
+        let guard = std::iter::from_fn(|| rx.try_recv().ok())
+            .find_map(|event| match event {
+                AppEvent::SelectTranscriptCopy { guard, .. } => Some(guard),
+                _ => None,
+            })
+            .unwrap();
+        complete_turn_with_message(&mut chat, "active", Some("New response"));
+        assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
+        assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+        while let Ok(event) = rx.try_recv() {
+            assert!(!matches!(
+                event,
+                AppEvent::NewSession { .. } | AppEvent::ClearUi { .. }
+            ));
+        }
+        drop(guard);
+        assert_matches!(rx.try_recv(), Ok(AppEvent::TranscriptCopyClosed));
+        chat.maybe_send_next_queued_input();
+        assert!(chat.input_queue.queued_user_messages.is_empty());
+    }
 }

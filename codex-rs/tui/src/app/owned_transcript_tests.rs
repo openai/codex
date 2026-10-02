@@ -178,9 +178,10 @@ async fn list_spacing_completion_preserves_the_scrolled_reader() -> Result<()> {
     assert!(buffer_text(&before).contains("• c"));
     app.handle_consolidate_agent_message(
         &mut tui,
-        "- First item wraps onto a second row\n- b\n- c".into(),
-        app.config.cwd.to_path_buf(),
-        /*inline_visualization_context*/ None,
+        crate::history_cell::AgentMarkdownCell::new(
+            "- First item wraps onto a second row\n- b\n- c".into(),
+            &app.config.cwd,
+        ),
         ConsolidationScrollbackReflow::Required,
         /*deferred_history_cell*/ None,
     )?;

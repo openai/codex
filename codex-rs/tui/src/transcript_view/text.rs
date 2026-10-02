@@ -69,6 +69,62 @@ struct TextRow {
 }
 
 impl TextLayout {
+    pub(super) fn copy_block_ranges(&self) -> Vec<(Range<usize>, &'static str, Option<String>)> {
+        let mut ranges = Vec::new();
+        for (label, code) in [("Code block", true), ("Blockquote", false)] {
+            let mut active: Option<(Range<usize>, Option<std::sync::Arc<str>>)> = None;
+            let mut offset = 0;
+            for line in &self.logical {
+                let end = offset + line.origin.range.len();
+                let metadata = line.origin.copy.as_deref();
+                let matches = metadata.is_some_and(|copy| {
+                    if code {
+                        copy.code || copy.code_source.is_some()
+                    } else {
+                        copy.prefix.contains('>')
+                    }
+                });
+                if matches {
+                    let source = metadata.and_then(|copy| {
+                        if code {
+                            copy.code_source.as_ref()
+                        } else {
+                            copy.quote_source.as_ref()
+                        }
+                    });
+                    // Shared source identity survives wrapping and separates adjacent blocks,
+                    // including equal payloads. A list marker can precede the first source row.
+                    if let Some(source) = source
+                        && active
+                            .as_ref()
+                            .and_then(|(_, retained)| retained.as_ref())
+                            .is_some_and(|retained| !std::sync::Arc::ptr_eq(retained, source))
+                        && let Some((range, retained)) = active.take()
+                    {
+                        ranges.push((range, label, retained.map(|source| source.to_string())));
+                    }
+                    let (range, retained) = active.get_or_insert((offset..end, None));
+                    range.end = end;
+                    if retained.is_none() {
+                        *retained = source.cloned();
+                    }
+                } else if let Some((range, source)) = active.take() {
+                    ranges.push((range, label, source.map(|source| source.to_string())));
+                }
+                offset = end + 1;
+            }
+            if let Some((range, source)) = active {
+                ranges.push((range, label, source.map(|source| source.to_string())));
+            }
+        }
+        ranges.retain(|(range, _, _)| {
+            self.text
+                .get(range.clone())
+                .is_some_and(|text| !text.trim().is_empty())
+        });
+        ranges
+    }
+
     pub(super) fn new(lines: Vec<HyperlinkLine>, width: u16) -> Self {
         let logical = logical_lines(&lines);
         Self::from_logical(logical, width)

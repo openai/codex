@@ -16,6 +16,24 @@ use crate::terminal_hyperlinks::LogicalLineSource;
 
 pub(crate) mod table;
 
+/// A transformed fenced block and its coordinates in the renderer input.
+#[derive(Clone)]
+pub(crate) struct SourceBlock {
+    pub(crate) range: Range<usize>,
+    pub(crate) content: Arc<str>,
+}
+
+pub(crate) fn quote_content(source: &str) -> String {
+    source
+        .split_inclusive('\n')
+        .map(|line| {
+            line.trim_start_matches(' ')
+                .strip_prefix('>')
+                .map_or(line, |line| line.strip_prefix(' ').unwrap_or(line))
+        })
+        .collect()
+}
+
 // Bound retained inline stacks and container prefixes independently of parser nesting.
 pub(crate) const MAX_COPY_DEPTH: usize = 64;
 
@@ -60,6 +78,10 @@ pub(crate) struct CopyLine {
     /// Restore the containing item when a multiline selection starts in its later paragraph.
     pub(crate) item_prefix: String,
     pub(crate) code: bool,
+    /// Source shared by rows when rendering replaces code with a diagram or table.
+    pub(crate) code_source: Option<Arc<str>>,
+    /// Outer quote source, retained even when it contains only code.
+    pub(crate) quote_source: Option<Arc<str>>,
     pub(crate) table: Option<table::TableLine>,
     table_cell: bool,
     pub(crate) rule: bool,

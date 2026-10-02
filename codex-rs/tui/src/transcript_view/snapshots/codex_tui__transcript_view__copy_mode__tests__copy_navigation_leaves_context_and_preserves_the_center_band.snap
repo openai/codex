@@ -1,0 +1,14 @@
+---
+source: tui/src/transcript_view/copy_mode_tests.rs
+expression: text(&buffer)
+---
+
+  Context 9
+
+  Context 10
+
+  Context 11
+
+  second target
+
+  Context 0

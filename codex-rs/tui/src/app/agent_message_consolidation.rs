@@ -8,7 +8,6 @@
 //! resize re-renders. The retained view preserves its displayed revision before that
 //! replacement, then repaints without replaying terminal scrollback.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use color_eyre::eyre::Result;
@@ -18,7 +17,6 @@ use super::resize_reflow::trailing_run_start;
 use crate::app_event::ConsolidationScrollbackReflow;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
-use crate::inline_visualization::InlineVisualizationContext;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 
@@ -26,9 +24,7 @@ impl App {
     pub(super) fn handle_consolidate_agent_message(
         &mut self,
         tui: &mut tui::Tui,
-        source: String,
-        cwd: PathBuf,
-        inline_visualization_context: Option<InlineVisualizationContext>,
+        source: history_cell::AgentMarkdownCell,
         scrollback_reflow: ConsolidationScrollbackReflow,
         deferred_history_cell: Option<Box<dyn HistoryCell>>,
     ) -> Result<()> {
@@ -51,20 +47,14 @@ impl App {
         let end = self.transcript_cells.len();
         tracing::debug!(
             "ConsolidateAgentMessage: transcript_cells.len()={end}, source_len={}",
-            source.len()
+            source.copy_source().map_or(/*default*/ 0, str::len)
         );
         let start = trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells);
         if start < end {
             tracing::debug!(
                 "ConsolidateAgentMessage: replacing cells [{start}..{end}] with AgentMarkdownCell"
             );
-            let consolidated: Arc<dyn HistoryCell> = Arc::new(
-                history_cell::AgentMarkdownCell::new_with_inline_visualizations(
-                    source,
-                    &cwd,
-                    inline_visualization_context,
-                ),
-            );
+            let consolidated: Arc<dyn HistoryCell> = Arc::new(source);
             self.native_history
                 .consolidate(&self.transcript_cells[start..end], &consolidated);
             if tui.is_owned_screen() {

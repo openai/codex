@@ -102,6 +102,7 @@ impl TranscriptView {
         if self.is_search_editing() {
             return;
         }
+        self.copy_mode = None;
         let saved_position = self.position;
         let saved_snapshot = self
             .selection

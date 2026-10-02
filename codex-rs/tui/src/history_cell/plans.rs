@@ -148,6 +148,10 @@ impl ProposedPlanCell {
 }
 
 impl HistoryCell for ProposedPlanCell {
+    fn copy_source(&self) -> Option<&str> {
+        Some(&self.plan_markdown)
+    }
+
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         visible_lines(self.display_hyperlink_lines(width))
     }

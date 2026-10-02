@@ -268,6 +268,7 @@ async fn inactive_thread_user_verification_preserves_foreground_stream() -> Resu
             AppEvent::InsertHistoryCell(cell) => app.insert_history_cell(&mut tui, cell),
             AppEvent::ConsolidateAgentMessage {
                 source,
+                copy_source,
                 cwd,
                 inline_visualization_context,
                 scrollback_reflow,
@@ -276,9 +277,12 @@ async fn inactive_thread_user_verification_preserves_foreground_stream() -> Resu
                 completed_messages.push(source.clone());
                 app.handle_consolidate_agent_message(
                     &mut tui,
-                    source,
-                    cwd,
-                    inline_visualization_context,
+                    history_cell::AgentMarkdownCell::new_with_inline_visualizations(
+                        source,
+                        &cwd,
+                        inline_visualization_context,
+                    )
+                    .with_copy_source(copy_source),
                     scrollback_reflow,
                     deferred_history_cell,
                 )?;

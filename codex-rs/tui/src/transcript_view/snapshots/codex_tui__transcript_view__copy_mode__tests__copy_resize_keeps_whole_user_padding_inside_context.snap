@@ -1,0 +1,13 @@
+---
+source: tui/src/transcript_view/copy_mode_tests.rs
+assertion_line: 620
+expression: text(&buffer)
+---
+
+
+› One
+  Two
+  Three
+  Four
+  Five
+  Six

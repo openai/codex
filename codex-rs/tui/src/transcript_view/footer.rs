@@ -20,6 +20,17 @@ impl TranscriptView {
         motion: MotionMode,
         latest_navigation: &str,
     ) -> Option<TranscriptFooter> {
+        if let Some(mode) = &self.copy_mode {
+            return Some(TranscriptFooter {
+                text: vec![
+                    Line::from(format!("Copy {}", mode.label.to_lowercase())).bold(),
+                    navigation_line("↑/↓/j/k select · g/G ends · enter copy · esc close"),
+                ]
+                .into(),
+                cursor_column: None,
+                is_interactive: true,
+            });
+        }
         // A mouse-down anchor owns the gesture, but has no text to copy yet. Compare
         // source positions so movement across wrapping or padding is not a selection.
         let has_selected_text = self.selection.as_ref().is_some_and(|selection| {

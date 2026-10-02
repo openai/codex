@@ -133,7 +133,7 @@ impl ChatWidget {
                 }
                 let main = self.bottom_pane.composer_draft_snapshot();
                 let accepted = if queued
-                    || self.input_queue.suppress_queue_autosend
+                    || self.input_queue.submissions_paused()
                     || self.is_plan_streaming_in_tui()
                     || self.input_queue.user_turn_pending_start
                         && !self.turn_lifecycle.agent_turn_running
