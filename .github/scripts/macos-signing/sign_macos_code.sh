@@ -202,6 +202,10 @@ sign_with_rcodesign() {
     --pkcs11-key-label "$OAI_AKV_KEY_LABEL"
   )
 
+  if [[ "${OAI_RCODESIGN_ARM64_16K_CODE_PAGES:-false}" == "true" ]]; then
+    rcodesign_args+=(--arm64-16k-code-pages)
+  fi
+
   if [[ "$deep" == "false" ]]; then
     rcodesign_args+=(--shallow)
   fi
