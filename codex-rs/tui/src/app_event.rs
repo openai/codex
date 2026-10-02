@@ -276,6 +276,12 @@ pub(crate) struct AgentsOverviewThreadRefresh {
     pub(crate) discovery: Option<crate::app::agents_overview_discovery::AgentsOverviewDiscovery>,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct AgentPickerThreadRefresh {
+    pub(crate) threads: Vec<Thread>,
+    pub(crate) archived_thread_ids: std::collections::HashSet<ThreadId>,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, IntoStaticStr)]
 pub(crate) enum AppEvent {
@@ -382,7 +388,7 @@ pub(crate) enum AppEvent {
     AgentPickerThreadsLoaded {
         primary_thread_id: ThreadId,
         request_id: Uuid,
-        result: Result<Vec<Thread>, String>,
+        result: Result<AgentPickerThreadRefresh, String>,
     },
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),

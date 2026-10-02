@@ -354,8 +354,9 @@ async fn reconnect_restores_history_permissions_and_resumes_unsent_input() -> Re
         );
         assert!(app.agent_navigation.begin_picker_refresh(id).is_some());
         assert!(
-            !app.agent_navigation
+            app.agent_navigation
                 .finish_picker_refresh(id, stale_picker_refresh)
+                .is_none()
         );
         // Let the rebound timer become due without depending on machine uptime.
         tokio::time::pause();

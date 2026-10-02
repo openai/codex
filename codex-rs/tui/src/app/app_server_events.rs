@@ -88,6 +88,13 @@ impl App {
                 self.agents_overview.usage_disabled = false;
                 self.repaint_agents_overview();
                 self.refresh_agents_overview_threads(app_server_client);
+                if let Some(primary_thread_id) = self.primary_thread_id
+                    && !self
+                        .agent_navigation
+                        .queue_picker_refresh(primary_thread_id)
+                {
+                    self.refresh_agent_picker_threads(app_server_client, primary_thread_id);
+                }
             }
             AppServerEvent::ServerNotification(notification) => {
                 let request_resolved = matches!(
@@ -205,6 +212,7 @@ impl App {
 
             return;
         }
+        self.handle_agent_picker_visibility_notification(app_server_client, &notification);
 
         if let ServerNotification::ThreadStarted(started) = &notification
             && let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {

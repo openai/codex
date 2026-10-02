@@ -1,11 +1,21 @@
 ---
 source: tui/src/app/tests.rs
-expression: "render_bottom_popup(&app.chat_widget, 80)"
+expression: "format!(\"Archived:\\n{archived_picker}\\nUnarchived:\\n{}\",\nrender_bottom_popup(&app.chat_widget,\n80)).replace(&archived_thread_id.to_string(), \"[archived]\")"
 ---
+Archived:
   Subagents
   Select an agent to watch. ⌥← previous, ⌥→ next.
 
 
 › 1. • Main [default] (current)  00000000-0000-0000-0000-000000000123
+
+  enter select · esc back
+Unarchived:
+  Subagents
+  Select an agent to watch. ⌥← previous, ⌥→ next.
+
+
+› 1. • Main [default] (current)  00000000-0000-0000-0000-000000000123
+  2. • Missed archive [worker]   [archived]
 
   enter select · esc back

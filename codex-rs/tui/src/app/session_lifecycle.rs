@@ -174,7 +174,7 @@ impl App {
         let mut initial_selected_idx = selected;
         let items: Vec<SelectionItem> = self
             .agent_navigation
-            .ordered_threads()
+            .visible_threads()
             .into_iter()
             .enumerate()
             .map(|(idx, (thread_id, entry))| {

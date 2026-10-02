@@ -105,6 +105,7 @@ mod user_verification_routes;
 #[path = "tests/worktree_background_terminals_tests.rs"]
 mod worktree_background_terminals_tests;
 
+use super::agent_navigation::AgentPickerThreadVisibility;
 use super::*;
 use crate::app_backtrack::BacktrackSelection;
 use crate::app_backtrack::BacktrackState;
@@ -180,6 +181,7 @@ use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
+use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::TokenUsageBreakdown;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::Turn;
@@ -2128,15 +2130,54 @@ async fn archived_untracked_threads_do_not_appear_in_agent_picker() -> Result<()
             .contains_key(&attachment_thread_id)
     );
 
+    app.upsert_agent_picker_thread(
+        archived_thread_id,
+        Some("Missed archive".to_string()),
+        Some("worker".to_string()),
+        /*is_closed*/ false,
+    );
+    app.thread_event_channels
+        .insert(archived_thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+    let request_id = app
+        .agent_navigation
+        .begin_picker_refresh(primary_thread_id)
+        .expect("picker refresh after missed archive");
+    app.apply_agent_picker_thread_refresh(
+        &app_server,
+        primary_thread_id,
+        request_id,
+        Ok(crate::app_event::AgentPickerThreadRefresh {
+            threads: Vec::new(),
+            archived_thread_ids: std::collections::HashSet::from([archived_thread_id]),
+        }),
+    );
+    assert_eq!(
+        app.thread_event_channels[&archived_thread_id].attachment(),
+        ThreadEventAttachment::ReplayOnly
+    );
     Box::pin(app.open_agent_picker(&mut app_server)).await;
+    let archived_picker = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+            ServerNotification::ThreadUnarchived(ThreadUnarchivedNotification {
+                thread_id: archived_thread_id.to_string(),
+            }),
+        )),
+    )
+    .await;
 
     assert_app_snapshot!(
         "untracked_thread_notifications_agent_picker",
-        render_bottom_popup(&app.chat_widget, /*width*/ 80)
+        format!(
+            "Archived:\n{archived_picker}\nUnarchived:\n{}",
+            render_bottom_popup(&app.chat_widget, /*width*/ 80)
+        )
+        .replace(&archived_thread_id.to_string(), "[archived]")
     );
     assert_eq!(
         app.agent_navigation.ordered_thread_ids(),
-        vec![primary_thread_id]
+        vec![primary_thread_id, archived_thread_id]
     );
     assert_eq!(app.active_thread_id, Some(primary_thread_id));
     Ok(())
@@ -2993,17 +3034,40 @@ async fn select_uncached_agent_thread_still_refreshes_liveness() -> Result<()> {
 
 #[tokio::test]
 async fn open_agent_picker_prompts_when_subagents_disabled() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+    let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
         app.chat_widget.config_ref(),
     ))
     .await
     .expect("embedded app server");
     let _ = app.config.features.disable(Feature::Collab);
+    let primary_thread_id = ThreadId::new();
+    app.enqueue_primary_thread_session(
+        test_thread_session(primary_thread_id, test_path_buf("/tmp/project")),
+        Vec::new(),
+    )
+    .await?;
+    let archived_thread_id = ThreadId::new();
+    app.upsert_agent_picker_thread(
+        archived_thread_id,
+        Some("Archived".to_string()),
+        Some("worker".to_string()),
+        /*is_closed*/ false,
+    );
+    app.set_agent_picker_thread_visibility(archived_thread_id, AgentPickerThreadVisibility::Hidden);
 
     Box::pin(app.open_agent_picker(&mut app_server)).await;
-    assert!(app.chat_widget.has_active_view());
-    assert!(app_event_rx.try_recv().is_err());
+    assert_snapshot!(render_bottom_popup(&app.chat_widget, /*width*/ 80), @r###"
+      Enable subagents?
+      Subagents are disabled in this TUI session.
+
+
+    › 1. Yes, enable  Save on the server for new threads without changing this
+                      thread
+      2. Not now      Keep subagents disabled
+
+      enter select · esc back
+    "###);
     Ok(())
 }
 
