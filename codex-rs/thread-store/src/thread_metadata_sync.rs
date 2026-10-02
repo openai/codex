@@ -27,6 +27,10 @@ use crate::types::canonical_history_mode_from_rollout_items;
 
 const THREAD_UPDATED_AT_TOUCH_INTERVAL: Duration = Duration::from_secs(5);
 
+#[cfg(test)]
+#[path = "thread_metadata_sync_preview_tests.rs"]
+mod preview_tests;
+
 /// Live-thread helper that derives metadata updates from appended rollout items.
 ///
 /// Stores receive raw rollout items plus explicit metadata patches. This helper
@@ -302,6 +306,12 @@ impl ThreadMetadataSync {
                             &user.as_legacy_user_message_event(),
                             &mut update,
                         );
+                    } else if let TurnItem::FunctionCallOutput(output) = &event.item
+                        && !self.preview_seen
+                        && let Some(preview) = codex_state::delegated_output_preview(output)
+                    {
+                        self.preview_seen = true;
+                        update.preview = Some(preview);
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::TokenCount(token_count)) => {
