@@ -1,7 +1,8 @@
 //! Keyboard input, external editor, and status-line dispatch for the TUI app.
 //!
 //! This module owns global key bindings that sit above ChatWidget, including transcript overlay
-//! entry, Ctrl-L clear, external editor launch, and agent navigation shortcuts.
+//! entry, Ctrl-L clear, external editor launch, agent navigation shortcuts, and legacy Vim
+//! Escape recovery for the active composer or command-center rename editor.
 
 use super::*;
 use crate::app_backtrack::SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE;
@@ -11,25 +12,40 @@ use crate::keymap::keymap_action_ids;
 impl App {
     pub(super) fn should_recover_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
         let active_contexts = self.active_keymap_contexts();
+        let rename_active = self
+            .chat_widget
+            .selected_index_for_active_view(AGENTS_OVERVIEW_VIEW_ID)
+            .is_some();
+        let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let insert_escape = if rename_active {
+            let state = self
+                .agents_overview
+                .view_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.rename_target.is_some() && state.input.should_handle_vim_insert_escape(escape)
+        } else {
+            self.chat_widget.no_modal_or_popup_active()
+                && self.chat_widget.should_handle_vim_insert_escape(escape)
+        };
         // Legacy terminals encode Alt+character and Escape+character identically. Active
         // bindings and either stroke of a chord win; inactive bindings do not consume input.
         cfg!(unix)
             && !self.enhanced_keys_supported
             && self.overlay.is_none()
             && !self.transcript_view.is_search_editing()
-            && self.chat_widget.no_modal_or_popup_active()
+            && insert_escape
             && matches!(key_event.code, KeyCode::Char(_))
             && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
             && (key_event.modifiers == KeyModifiers::ALT
                 || key_event.modifiers == (KeyModifiers::ALT | KeyModifiers::SHIFT))
-            && self
-                .chat_widget
-                .should_handle_vim_insert_escape(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
             // ChatWidget's fixed image-paste shortcut is not in the configurable keymap.
-            && !(key_event.kind == KeyEventKind::Press
+            && !(!rename_active
+                && key_event.kind == KeyEventKind::Press
                 && matches!(key_event.code, KeyCode::Char('v' | 'V')))
             // Empty-draft agent navigation also has fixed legacy-terminal fallbacks.
-            && !(self.chat_widget.composer_text_with_pending().is_empty()
+            && !(!rename_active
+                && self.chat_widget.composer_text_with_pending().is_empty()
                 && (previous_agent_shortcut_matches(key_event, /*allow_word_motion_fallback*/ true)
                     || next_agent_shortcut_matches(key_event, /*allow_word_motion_fallback*/ true)))
             && !keymap_action_ids()
@@ -111,12 +127,14 @@ impl App {
         }
         if !was_pending
             && contexts.contains(crate::keymap::KeymapContext::Agents)
-            && self
-                .agents_overview
-                .view_state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .editing_metadata()
+            && {
+                let state = self
+                    .agents_overview
+                    .view_state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.editing_metadata() && state.rename_target.is_none()
+            }
             && crate::key_hint::is_plain_text_key_event(key_event)
         {
             return Some(key_event);

@@ -275,7 +275,7 @@ async fn hiding_rename_target_does_not_transfer_draft_to_neighbor() -> Result<()
     {
         let state = app.agents_overview.view_state.lock().unwrap();
         assert_eq!(
-            (state.rename_target.is_some(), state.input.as_str()),
+            (state.rename_target.is_some(), state.input.text()),
             (false, "")
         );
     }

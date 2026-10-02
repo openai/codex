@@ -548,7 +548,9 @@ impl TextArea {
     pub(super) fn handle_vim_pending_command(&mut self, pending: VimPending, event: KeyEvent) {
         match pending {
             VimPending::Replace => {
-                if let Some(ch) = vim_command_char(event) {
+                if let Some(ch) = vim_command_char(event)
+                    && !(self.single_line && matches!(ch, '\r' | '\n'))
+                {
                     self.start_vim_edit(VimAction::Replace(ch));
                 }
             }

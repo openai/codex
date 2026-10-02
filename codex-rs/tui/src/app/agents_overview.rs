@@ -294,12 +294,12 @@ impl App {
             self.chat_widget.add_info_message(
                 format!(
                     "The rename target disappeared. Unsubmitted title: {}",
-                    state.input
+                    state.input.text()
                 ),
                 /*hint*/ None,
             );
             state.rename_target = None;
-            state.input.clear();
+            state.input.set_text_clearing_elements("");
         }
         self.chat_widget
             .replace_bottom_pane_view_if_present(AGENTS_OVERVIEW_VIEW_ID, Box::new(view));
@@ -364,6 +364,11 @@ impl App {
             });
         }
 
+        self.agents_overview
+            .view_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .vim_enabled = self.chat_widget.composer_is_vim_enabled();
         AgentsOverviewView::new(
             rows,
             selected_thread_id,

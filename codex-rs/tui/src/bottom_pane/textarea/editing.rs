@@ -39,6 +39,8 @@ impl TextArea {
     }
 
     pub(crate) fn insert_str_at_target(&mut self, target: EditTarget, text: &str) {
+        let filtered = self.filter_line_breaks(text);
+        let text = filtered.as_ref();
         // Empty text must not delete a selection or create a Vim replacement step.
         if text.is_empty() {
             if !self.is_vim_replace_mode() {
@@ -64,6 +66,8 @@ impl TextArea {
     }
 
     pub(crate) fn insert_element_at_target(&mut self, target: EditTarget, text: &str) -> u64 {
+        let filtered = self.filter_line_breaks(text);
+        let text = filtered.as_ref();
         let start = target.start();
         if target.replaces_text() {
             self.vim_commands = VimCommandState::default();

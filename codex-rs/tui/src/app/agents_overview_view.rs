@@ -17,6 +17,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::TextArea;
 use crate::bottom_pane::ViewCompletion;
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::ShortcutHint;
@@ -136,7 +137,8 @@ pub(super) struct AgentsOverviewViewState {
     page_height: usize,
     status_filter: usize,
     help: bool,
-    pub(super) input: String,
+    pub(super) input: TextArea,
+    pub(super) vim_enabled: bool,
     pub(super) key_chord_hint: Option<Vec<(String, String)>>,
     pub(super) creating_worktree: bool,
     pub(super) refresh_failed: bool,
@@ -154,6 +156,16 @@ pub(super) struct AgentsOverviewViewState {
 }
 
 impl AgentsOverviewViewState {
+    pub(super) fn set_rename_input(&mut self, text: &str, keymap: &RuntimeKeymap) {
+        let mut input = TextArea::new_single_line();
+        input.set_keymap_bindings(keymap);
+        input.set_vim_enabled(self.vim_enabled);
+        input.set_text_clearing_elements(text);
+        input.set_cursor(input.text().len());
+        input.enter_vim_insert_mode();
+        self.input = input;
+    }
+
     pub(super) fn editing_metadata(&self) -> bool {
         self.searching || self.rename_target.is_some()
     }
@@ -170,6 +182,7 @@ pub(super) struct AgentsOverviewView {
     agents_keymap: AgentsKeymap,
     center_shortcut_keys: Vec<crate::key_hint::KeyBinding>,
     worktrees_enabled: bool,
+    editor_keymap: RuntimeKeymap,
 }
 
 impl AgentsOverviewView {
@@ -214,7 +227,19 @@ impl AgentsOverviewView {
                 .then_some(binding.chord.prefix)
             }))
             .collect();
+        {
+            let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+            let vim_enabled = state.vim_enabled;
+            if state.rename_target.is_some() {
+                state.input.set_keymap_bindings(&keymap);
+                if state.input.is_vim_enabled() != vim_enabled {
+                    state.input.set_vim_enabled(vim_enabled);
+                    state.input.enter_vim_insert_mode();
+                }
+            }
+        }
         let mut view = Self {
+            editor_keymap: keymap.clone(),
             use_theme_colors,
             rows,
             project_groups,
@@ -324,7 +349,7 @@ impl AgentsOverviewView {
             }
             return;
         }
-        let input = self.state().input.clone();
+        let input = self.state().input.text().to_owned();
         if self.state().rename_target.is_some() && !input.trim().is_empty() {
             if let Some(row) = self.selected_row() {
                 self.app_event_tx
@@ -334,7 +359,7 @@ impl AgentsOverviewView {
                     });
             }
             self.state().rename_target = None;
-            self.state().input.clear();
+            self.state().input.set_text_clearing_elements("");
             self.reconcile_command_center_selection();
         } else if let Some(row) = self
             .selected_row()
@@ -355,11 +380,9 @@ impl AgentsOverviewView {
     fn edit_input(&mut self, edit: impl FnOnce(&mut String)) -> bool {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let searching = state.searching;
-        edit(if searching {
-            &mut state.search
-        } else {
-            &mut state.input
-        });
+        if searching {
+            edit(&mut state.search);
+        }
         drop(state);
         if searching {
             self.selected = self
@@ -480,7 +503,19 @@ impl BottomPaneView for AgentsOverviewView {
     }
 
     fn keymap_contexts(&self) -> KeymapContextSet {
-        KeymapContextSet::new(KeymapContext::List).with(KeymapContext::Agents)
+        let state = self.state();
+        if state.rename_target.is_some() {
+            let contexts = KeymapContextSet::new(state.input.keymap_context());
+            if state.input.is_vim_operator_pending() {
+                contexts
+            } else {
+                contexts
+                    .with(KeymapContext::List)
+                    .with(KeymapContext::Agents)
+            }
+        } else {
+            KeymapContextSet::new(KeymapContext::List).with(KeymapContext::Agents)
+        }
     }
 
     fn completion(&self) -> Option<ViewCompletion> {
@@ -501,7 +536,7 @@ impl BottomPaneView for AgentsOverviewView {
             state.searching = false;
             state.rename_target = None;
             state.search.clear();
-            state.input.clear();
+            state.input.set_text_clearing_elements("");
             drop(state);
             self.reconcile_command_center_selection();
             return CancellationEvent::Handled;
@@ -510,6 +545,12 @@ impl BottomPaneView for AgentsOverviewView {
     }
 
     fn handle_paste(&mut self, pasted: String) -> bool {
+        if self.state().rename_target.is_some() {
+            self.state()
+                .input
+                .insert_str(&crate::history_cell::sanitize_user_text(pasted.into()));
+            return true;
+        }
         if self.state().editing_metadata() {
             return self.edit_input(|input| {
                 input.push_str(&crate::history_cell::sanitize_user_text(pasted.into()))
@@ -527,7 +568,7 @@ impl BottomPaneView for AgentsOverviewView {
         if key.kind == crossterm::event::KeyEventKind::Release {
             return;
         }
-        if self.command_center_key(key) {
+        if self.rename_key(key) || self.command_center_key(key) {
             return;
         }
         if key.code == KeyCode::Backspace
@@ -611,8 +652,11 @@ impl BottomPaneView for AgentsOverviewView {
         if self.agents_keymap.rename.is_pressed(key) {
             if let Some(row) = self.selected_row() {
                 let mut state = self.state();
-                if state.input.is_empty() {
-                    state.input = row.thread.name.clone().unwrap_or_default();
+                if state.rename_target.is_none() {
+                    state.set_rename_input(
+                        row.thread.name.as_deref().unwrap_or_default(),
+                        &self.editor_keymap,
+                    );
                     state.search.clear();
                     state.searching = false;
                     state.rename_target = Some(row.thread_id);

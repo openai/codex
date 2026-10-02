@@ -199,6 +199,12 @@ async fn live_center_metadata_clips_at_grapheme_boundaries() {
             Some((36, 3))
         );
         if key == 'r' {
+            let cursor = view
+                .cursor_pos(Rect::new(
+                    /*x*/ 0, /*y*/ 0, /*width*/ 24, /*height*/ 18,
+                ))
+                .unwrap();
+            assert!(cursor.0 < 24);
             insta::assert_snapshot!("live_center_narrow_rename", rendered);
         }
         view.handle_key_event(KeyCode::Esc.into());
@@ -208,6 +214,7 @@ async fn live_center_metadata_clips_at_grapheme_boundaries() {
 #[tokio::test]
 async fn live_center_rename_retains_target_when_status_leaves_filter() -> Result<()> {
     let mut app = make_test_app().await;
+    app.chat_widget.toggle_vim_mode_and_notify();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.app_event_tx = AppEventSender::new(tx);
     let id = ThreadId::new();
@@ -216,7 +223,7 @@ async fn live_center_rename_retains_target_when_status_leaves_filter() -> Result
         overview_thread(
             id,
             /*parent_thread_id*/ None,
-            "Target",
+            "Tar\nget",
             ThreadStatus::Idle,
         ),
         overview_thread(
@@ -236,10 +243,32 @@ async fn live_center_rename_retains_target_when_status_leaves_filter() -> Result
             }
         }
         view.handle_key_event(KeyCode::Char('r').into());
+        assert_eq!(
+            view.cursor_style(Rect::default()),
+            crossterm::cursor::SetCursorStyle::SteadyBar
+        );
         threads[0].status = ThreadStatus::SystemError;
         view = app.agents_overview_view(threads.clone(), Some(id));
+        if key == KeyCode::Enter {
+            for edit in [
+                KeyCode::Esc,
+                KeyCode::Char('0'),
+                KeyCode::Char('c'),
+                KeyCode::Char('w'),
+            ] {
+                view.handle_key_event(edit.into());
+            }
+            view.handle_paste("Target".into());
+        }
         view.handle_key_event(KeyCode::Char('!').into());
         view.handle_key_event(key.into());
+        if key == KeyCode::Esc {
+            assert_eq!(
+                view.cursor_style(Rect::default()),
+                crossterm::cursor::SetCursorStyle::DefaultUserShape
+            );
+            view.handle_key_event(KeyCode::Esc.into());
+        }
         assert_eq!(view.rows[view.selected_index().unwrap()].thread_id, other);
         if key == KeyCode::Enter {
             let rename = rx.try_recv().unwrap();

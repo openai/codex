@@ -2810,7 +2810,7 @@ impl App {
                     }
                     Err(error) => {
                         if let Ok(mut state) = self.agents_overview.view_state.lock() {
-                            state.input = name;
+                            state.set_rename_input(&name, &self.keymap);
                             state.rename_target = Some(thread_id);
                         }
                         self.repaint_agents_overview();

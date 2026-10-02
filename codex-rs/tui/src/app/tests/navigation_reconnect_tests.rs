@@ -8,6 +8,7 @@ use crate::app::reconnect::reconnect;
 use crate::app_event::AgentsOverviewThreadRefresh;
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_server_session::ThreadParamsMode;
+use crate::bottom_pane::BottomPaneView;
 use codex_app_server_client::AppServerEvent;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -135,7 +136,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
         app.agents_overview.initialized = overview_initialized;
         // This task was unarchived elsewhere while disconnected.
         app.agents_overview.removed_threads.insert(added);
-        let view = app.agents_overview_view(
+        let mut view = app.agents_overview_view(
             stale.clone(),
             Some(if previous_thread.is_some() {
                 vanished
@@ -143,16 +144,20 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
                 selected
             }),
         );
+        view.handle_key_event(KeyCode::Char('r').into());
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        view.handle_paste("Keep this task draft".into());
         app.agents_overview.visible_thread_ids = view.thread_ids();
         app.chat_widget.show_bottom_pane_view(Box::new(view));
-        app.agents_overview.view_state.lock().unwrap().input = "Keep this task draft".into();
-        app.agents_overview.view_state.lock().unwrap().rename_target =
-            Some(if previous_thread.is_some() {
-                vanished
-            } else {
-                selected
-            });
-        let draft = |app: &App| app.agents_overview.view_state.lock().unwrap().input.clone();
+        let draft = |app: &App| {
+            app.agents_overview
+                .view_state
+                .lock()
+                .unwrap()
+                .input
+                .text()
+                .to_string()
+        };
         let stale_request = Uuid::new_v4();
         app.agents_overview.request_id = Some(stale_request);
         app.agents_overview.refresh_pending = true;

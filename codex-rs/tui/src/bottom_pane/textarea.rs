@@ -1,5 +1,5 @@
 //! The textarea owns editable composer text, placeholder elements, cursor/wrap state, and a
-//! single-entry kill buffer.
+//! single-entry kill buffer. Single-line inputs ignore line breaks and scroll horizontally.
 //!
 //! Whole-buffer replacement APIs intentionally rebuild only the visible draft state. They clear
 //! element ranges and derived cursor/wrapping caches, but they keep the kill buffer intact so a
@@ -55,6 +55,7 @@ use unicode_segmentation::UnicodeSegmentation;
 mod editing;
 mod hyperlinks;
 mod mouse;
+mod single_line;
 mod vim;
 mod vim_commands;
 mod vim_search;
@@ -141,6 +142,7 @@ pub(crate) struct TextElementSnapshot {
 #[derive(Debug)]
 pub(crate) struct TextArea {
     text: String,
+    single_line: bool,
     cursor_pos: usize,
     mouse_selection: Option<mouse::MouseSelection>,
     last_click: Option<(std::time::Instant, u16, u16, u8)>,
@@ -199,11 +201,18 @@ pub(crate) struct KillBufferSnapshot {
     kind: KillBufferKind,
 }
 
+impl Default for TextArea {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TextArea {
     pub fn new() -> Self {
         let defaults = RuntimeKeymap::defaults();
         Self {
             text: String::new(),
+            single_line: false,
             cursor_pos: 0,
             mouse_selection: None,
             last_click: None,
@@ -262,6 +271,8 @@ impl TextArea {
     }
 
     fn set_text_inner(&mut self, text: &str, elements: Option<&[UserTextElement]>) {
+        let filtered = self.filter_line_breaks(text);
+        let text = filtered.as_ref();
         self.mouse_selection = None;
         // Stage 1: replace the raw text and keep the cursor in a safe byte range.
         self.text = text.to_string();
@@ -455,6 +466,8 @@ impl TextArea {
     }
 
     pub fn insert_str_at(&mut self, pos: usize, text: &str) {
+        let filtered = self.filter_line_breaks(text);
+        let text = filtered.as_ref();
         self.mouse_selection = None;
         self.clear_vim_replace_recovery();
         let pos = self.clamp_pos_for_insertion(pos);
@@ -479,6 +492,8 @@ impl TextArea {
     }
 
     fn replace_range_raw(&mut self, range: std::ops::Range<usize>, text: &str) {
+        let filtered = self.filter_line_breaks(text);
+        let text = filtered.as_ref();
         self.mouse_selection = None;
         assert!(range.start <= range.end);
         let start = range.start.clamp(0, self.text.len());
@@ -524,6 +539,9 @@ impl TextArea {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
+        if self.single_line {
+            return 1;
+        }
         self.wrapped_lines(width).len() as u16
     }
 
@@ -540,6 +558,10 @@ impl TextArea {
             return None;
         }
 
+        if self.single_line {
+            let (_, col) = self.single_line_viewport(area.width);
+            return Some((area.x + col, area.y));
+        }
         let lines = self.wrapped_lines(area.width);
         let effective_scroll = self.effective_scroll(area, &lines, state);
         let (i, col) = wrapping::cursor_position(&self.text, &lines, area.width, self.cursor_pos)?;
@@ -824,11 +846,15 @@ impl TextArea {
             return;
         }
         if self.vim_normal_keymap.open_line_below.is_pressed(event) {
-            self.start_vim_edit(VimAction::Insert(VimInsertPosition::OpenBelow));
+            if !self.single_line {
+                self.start_vim_edit(VimAction::Insert(VimInsertPosition::OpenBelow));
+            }
             return;
         }
         if self.vim_normal_keymap.open_line_above.is_pressed(event) {
-            self.start_vim_edit(VimAction::Insert(VimInsertPosition::OpenAbove));
+            if !self.single_line {
+                self.start_vim_edit(VimAction::Insert(VimInsertPosition::OpenAbove));
+            }
             return;
         }
         if self.vim_normal_keymap.move_left.is_pressed(event) {
@@ -1359,7 +1385,7 @@ impl TextArea {
         if self.kill_buffer.is_empty() {
             return;
         }
-        if self.kill_buffer_kind == KillBufferKind::Linewise {
+        if self.kill_buffer_kind == KillBufferKind::Linewise && !self.single_line {
             self.paste_line_after_current_line();
             return;
         }
@@ -1659,6 +1685,8 @@ impl TextArea {
     /// Use this when the element payload is an identifier (e.g. a placeholder) that must be
     /// updated without converting the element back into normal text.
     pub fn replace_element_payload(&mut self, old: &str, new: &str) -> bool {
+        let filtered = self.filter_line_breaks(new);
+        let new = filtered.as_ref();
         let Some(idx) = self
             .elements
             .iter()
@@ -2131,6 +2159,10 @@ impl TextArea {
 
 impl WidgetRef for &TextArea {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        if self.single_line {
+            StatefulWidgetRef::render_ref(self, area, buf, &mut TextAreaState::default());
+            return;
+        }
         let lines = self.wrapped_lines(area.width);
         self.render_lines(
             area,
@@ -2148,6 +2180,20 @@ impl StatefulWidgetRef for &TextArea {
 
     fn render_ref(&self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         self.rendered_area.set(area);
+        if self.single_line {
+            if !area.is_empty() {
+                let (start, _) = self.single_line_viewport(area.width);
+                self.render_lines(
+                    area,
+                    buf,
+                    std::slice::from_ref(&(start..self.text.len() + 1)),
+                    0..1,
+                    Style::default(),
+                    &[],
+                );
+            }
+            return;
+        }
         let lines = self.wrapped_lines(area.width);
         let scroll = self.effective_scroll(area, &lines, *state);
         state.scroll = scroll;
