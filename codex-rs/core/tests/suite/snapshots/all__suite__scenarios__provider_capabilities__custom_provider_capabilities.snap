@@ -1,0 +1,60 @@
+---
+source: core/tests/suite/scenarios_provider_capabilities.rs
+expression: "context_snapshot::format_request_history_snapshot(\"Custom provider overrides keep unrestricted search cached and enable V2 compaction.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: Custom provider overrides keep unrestricted search cached and enable V2 compaction.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  instructions: <MODEL_INSTRUCTIONS>
+  model: "gpt-5.5"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+  tools (6; hash=3b8fa9a9ca9788e3):
+    - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
+    - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
+    - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e
+    - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=3b8ac3e34b9c55bb
+      - function/followup_task
+      - function/interrupt_agent
+      - function/list_agents
+      - function/send_message
+      - function/spawn_agent
+      - function/wait_agent
+    - web_search; hash=f103e327c6870a46
+-- request 1 (turn) --
+00:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+01:message/developer:
+    You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
+
+    At the start of your turn, you are the active agent.
+    You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.
+    All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
+
+    You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task an...message to a running agent without triggering a turn. [hash=7d40ff8b58977202]
+    Child agents can also spawn their own sub-agents.
+    <OMITTED 14 LINES; ~204 TOKENS; hash=f7be62db50c2fa5f>
+    All agents share the same directory. In detail:
+    - All agents have access to the same container and filesystem as you.
+    - All agents use the same current working directory.
+    - As a result, edits made by one agent are immediately visible to all other agents.
+
+    When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
+
+    There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
+02:message/developer:
+    <MULTI_AGENT_MODE>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
+    Check the configuration.
+-- request 2 (compaction) --
+05:compaction_trigger

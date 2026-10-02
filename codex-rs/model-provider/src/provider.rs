@@ -8,7 +8,6 @@ use codex_api::ApiError;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_api::TransportError;
-use codex_api::is_azure_responses_provider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::GatewayAuthManager;
@@ -23,6 +22,9 @@ use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
 use codex_protocol::openai_models::ModelsResponse;
 
+use crate::ProviderCapabilities;
+#[cfg(test)]
+use crate::RemoteCompactionSupport;
 use crate::ResolvedResponsesProvider;
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
 use crate::auth::ProviderAuthScope;
@@ -33,39 +35,6 @@ use crate::auth::resolve_provider_auth_for_scope;
 use crate::combined_auth::compose_auth;
 use crate::models_endpoint::OpenAiModelsEndpoint;
 use crate::workspace_routing::WorkspaceRoutingContext;
-
-/// Remote context-compaction protocols supported by a model provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RemoteCompactionSupport {
-    /// The provider does not support remote compaction.
-    Unsupported,
-    /// The provider supports `compaction_trigger` items over the Responses endpoint.
-    V2,
-}
-
-/// Optional provider-backed features that Codex may expose at runtime.
-///
-/// These capabilities are a provider-owned upper bound. Callers can disable
-/// more functionality through normal config, but should not expose a feature
-/// that the active provider marks unsupported here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProviderCapabilities {
-    pub image_generation: bool,
-    pub web_search: bool,
-    pub external_web_access: bool,
-    pub remote_compaction: RemoteCompactionSupport,
-}
-
-impl Default for ProviderCapabilities {
-    fn default() -> Self {
-        Self {
-            image_generation: true,
-            web_search: true,
-            external_web_access: true,
-            remote_compaction: RemoteCompactionSupport::Unsupported,
-        }
-    }
-}
 
 /// Current app-visible account state for a model provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -457,18 +426,7 @@ impl ModelProvider for ConfiguredModelProvider {
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
-        let remote_compaction = if self.info.is_openai()
-            || is_azure_responses_provider(&self.info.name, self.info.base_url.as_deref())
-        {
-            RemoteCompactionSupport::V2
-        } else {
-            RemoteCompactionSupport::Unsupported
-        };
-
-        ProviderCapabilities {
-            remote_compaction,
-            ..ProviderCapabilities::default()
-        }
+        ProviderCapabilities::from_config(&self.info)
     }
 
     fn approval_review_preferred_model(&self) -> &'static str {
@@ -696,6 +654,7 @@ mod tests {
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+            capabilities: None,
             include_internal_metadata: false,
         }
     }

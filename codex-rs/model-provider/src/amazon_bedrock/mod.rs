@@ -30,6 +30,8 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::openai_models::ModelsResponse;
 
+use crate::ProviderCapabilities;
+use crate::RemoteCompactionSupport;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth as resolve_configured_provider_auth;
 use crate::provider::ModelProvider;
@@ -37,9 +39,7 @@ use crate::provider::ModelProviderFuture;
 use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderAccountState;
 use crate::provider::ProviderAuthRecoveryMessages;
-use crate::provider::ProviderCapabilities;
 use crate::provider::ProviderUnauthorizedRecovery;
-use crate::provider::RemoteCompactionSupport;
 use crate::shared_state::process_shared_state;
 use auth::resolve_provider_auth as resolve_bedrock_provider_auth;
 pub(crate) use auth_refresh::AwsAuthRecovery;

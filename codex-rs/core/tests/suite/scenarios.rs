@@ -123,6 +123,9 @@ mod preparation;
 #[path = "scenarios_content_filter.rs"]
 mod content_filter;
 
+#[path = "scenarios_provider_capabilities.rs"]
+mod provider_capabilities;
+
 #[path = "scenarios_shared_instructions.rs"]
 mod shared_instructions;
 

@@ -2693,6 +2693,25 @@
       },
       "type": "object"
     },
+    "ModelProviderCapabilities": {
+      "additionalProperties": false,
+      "description": "Overrides for the optional API features supported by a custom provider.",
+      "properties": {
+        "external_web_access": {
+          "description": "Whether hosted web search may access the live web.",
+          "type": "boolean"
+        },
+        "remote_compaction": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RemoteCompactionSupport"
+            }
+          ],
+          "description": "Remote context-compaction protocol; omission preserves provider defaults."
+        }
+      },
+      "type": "object"
+    },
     "ModelProviderInfo": {
       "additionalProperties": false,
       "description": "Serializable representation of a provider definition.",
@@ -2716,6 +2735,14 @@
         "base_url": {
           "description": "Base URL for the provider's OpenAI-compatible API.",
           "type": "string"
+        },
+        "capabilities": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelProviderCapabilities"
+            }
+          ],
+          "description": "Optional API capability overrides for a custom Responses-compatible provider. Unspecified capabilities retain their existing provider defaults."
         },
         "env_http_headers": {
           "additionalProperties": {
@@ -3914,6 +3941,25 @@
           "description": "Option to disable reasoning summaries.",
           "enum": [
             "none"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "RemoteCompactionSupport": {
+      "description": "Remote context-compaction protocols supported by a model provider.",
+      "oneOf": [
+        {
+          "description": "Use local compaction instead of a provider compaction protocol.",
+          "enum": [
+            "unsupported"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Send `compaction_trigger` items over the Responses endpoint.",
+          "enum": [
+            "v2"
           ],
           "type": "string"
         }
