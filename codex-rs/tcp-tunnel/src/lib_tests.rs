@@ -31,6 +31,7 @@ use super::control::MAX_CONNECT_METADATA_BYTES;
 use super::control::MAX_TOKEN_BYTES;
 use super::control::read_connect_headers;
 use super::control_input;
+use super::diagnostics::Diagnostics;
 use super::parse_trusted_origins;
 use super::serve;
 use super::update_auth_tokens;
@@ -272,6 +273,14 @@ async fn transport_reconnect_keeps_listener_and_does_not_replay_old_tcp_streams(
                             request.headers()["x-test-route"].clone(),
                         ))
                         .unwrap();
+                    if request.headers()[http::header::AUTHORIZATION] == "Bearer rejected-test" {
+                        stream
+                            .send_response(Response::builder().status(403).body(()).unwrap())
+                            .await
+                            .unwrap();
+                        stream.finish().await.unwrap();
+                        continue;
+                    }
                     request_count.fetch_add(1, Ordering::SeqCst);
                     tokio::spawn(async move {
                         if stream
@@ -306,7 +315,14 @@ async fn transport_reconnect_keeps_listener_and_does_not_replay_old_tcp_streams(
         connect: read_connect_headers(&mut &b"[[\"x-test-route\",\"custom-route\"]]\n"[..])?,
     };
     let initial = ProxyConnection::connect(&target, &config).await?;
-    let client = tokio::spawn(serve(listener, target, config, headers, initial));
+    let client = tokio::spawn(serve(
+        listener,
+        target,
+        config,
+        headers,
+        initial,
+        Diagnostics::Json,
+    ));
     let (first_connection, _) = timeout(Duration::from_secs(5), connections.recv())
         .await?
         .unwrap();
@@ -317,6 +333,17 @@ async fn transport_reconnect_keeps_listener_and_does_not_replay_old_tcp_streams(
     assert_eq!(
         tokens.recv().await.unwrap(),
         ("Bearer local-test".parse()?, "custom-route".parse()?)
+    );
+
+    updates.send_replace("Bearer rejected-test".parse()?);
+    let mut rejected = TcpStream::connect(address).await?;
+    assert_eq!(
+        timeout(Duration::from_secs(5), rejected.read(&mut data)).await??,
+        0
+    );
+    assert_eq!(
+        tokens.recv().await.unwrap(),
+        ("Bearer rejected-test".parse()?, "custom-route".parse()?)
     );
 
     updates.send_replace("Bearer replacement-test".parse()?);
@@ -376,4 +403,38 @@ async fn transport_reconnect_keeps_listener_and_does_not_replay_old_tcp_streams(
     client.abort();
     server.abort();
     Ok(())
+}
+
+#[test]
+fn diagnostics_flag_is_optional_and_advertised() {
+    #[derive(clap::Parser)]
+    struct Cli {
+        #[command(flatten)]
+        args: super::Args,
+    }
+    use clap::CommandFactory;
+    use clap::Parser;
+    let args = [
+        "tcp-tunnel",
+        "--proxy-url",
+        "https://proxy.example",
+        "--proxy-origins-file",
+        "origins",
+        "--target",
+        "target:22",
+        "--auth-token-stdin",
+    ];
+    assert!(!Cli::try_parse_from(args).unwrap().args.diagnostics_json);
+    assert!(
+        Cli::try_parse_from(args.into_iter().chain(["--diagnostics-json"]))
+            .unwrap()
+            .args
+            .diagnostics_json
+    );
+    assert!(
+        Cli::command()
+            .render_help()
+            .to_string()
+            .contains("--diagnostics-json")
+    );
 }
