@@ -1,0 +1,9 @@
+---
+source: tui/src/app/agents_overview_tests.rs
+assertion_line: 1271
+expression: "linked_rows.join(\"\\n\")"
+---
+a pull request with a label
+that wraps across rows
+https://example.com/a/long/path/to/
+the/pull/request

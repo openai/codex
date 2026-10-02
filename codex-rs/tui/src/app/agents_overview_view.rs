@@ -29,6 +29,11 @@ use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
 use crate::keymap::RuntimeKeymap;
 use crate::render::renderable::Renderable;
+use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
+use crate::terminal_hyperlinks::plain_hyperlink_lines;
+use crate::terminal_hyperlinks::remap_wrapped_line;
+use crate::terminal_hyperlinks::visible_lines;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadActiveFlag;
 use codex_app_server_protocol::ThreadStatus;
@@ -442,38 +447,51 @@ impl AgentsOverviewView {
             lines.push("Branch".dim().into());
             lines.push(branch.clone().into());
         }
+        // Keep destinations attached to their text through wrapping and clipping.
+        let wrap = |lines: Vec<HyperlinkLine>| {
+            lines
+                .into_iter()
+                .flat_map(|line| {
+                    let wrapped = crate::wrapping::word_wrap_lines([line.line.clone()], width);
+                    remap_wrapped_line(&line, wrapped)
+                })
+                .collect::<Vec<_>>()
+        };
         let preview = super::agents_overview_details::preview_markdown(&row.thread.preview);
         let prompt_start = crate::wrapping::word_wrap_lines(lines.clone(), width).len();
         lines.extend([Line::default(), Line::from("Prompt".dim())]);
-        let prompt = crate::markdown_render::render_markdown_text_with_width_and_cwd(
+        let prompt = crate::markdown_render::render_markdown_lines_with_width_and_cwd(
             match preview.as_str() {
                 "" => "No prompt available.",
                 preview => preview,
             },
             Some(width),
             Some(row.thread.cwd.as_path()),
-        )
-        .lines;
-        let mut prompt = crate::wrapping::word_wrap_lines(prompt, width);
+        );
+        let mut prompt = wrap(prompt);
         if prompt.len() > 2 {
             prompt.truncate(2);
-            prompt[1] = "…".dim().into();
+            prompt[1] = HyperlinkLine::new("…".dim().into());
         }
-        lines.extend(prompt);
         let details_start = crate::wrapping::word_wrap_lines(lines[..4].to_vec(), width).len();
-        let mut lines = crate::wrapping::word_wrap_lines(lines, width);
+        let mut lines = wrap(plain_hyperlink_lines(lines));
+        lines.extend(prompt);
         if self.state().connection_notice.is_none() {
-            let mut details = row.details.lines.clone();
+            let mut details = plain_hyperlink_lines(row.details.lines.clone());
             if let Some((message, cwd)) = &row.details.last_message {
-                details.extend([Line::default(), "Last message".dim().into()]);
-                crate::markdown::append_markdown(
-                    &crate::markdown::normalize_markdown_for_rendering(message),
-                    Some(width),
-                    Some(cwd.as_path()),
-                    &mut details,
+                details.extend(plain_hyperlink_lines(vec![
+                    Line::default(),
+                    "Last message".dim().into(),
+                ]));
+                details.extend(
+                    crate::markdown_render::render_markdown_lines_with_width_and_cwd(
+                        &crate::markdown::normalize_markdown_for_rendering(message),
+                        Some(width),
+                        Some(cwd.as_path()),
+                    ),
                 );
             }
-            let mut details = crate::wrapping::word_wrap_lines(details, width);
+            let mut details = wrap(details);
             if !row.details.usage_lines.is_empty()
                 && details.len() > usize::from(area.height).saturating_sub(lines.len())
             {
@@ -484,12 +502,13 @@ impl AgentsOverviewView {
             if details.len() > available {
                 details.truncate(available);
                 if let Some(last) = details.last_mut() {
-                    *last = "…".dim().into();
+                    *last = HyperlinkLine::new("…".dim().into());
                 }
             }
             lines.splice(details_start..details_start, details);
         }
-        Paragraph::new(lines).render(area, buf);
+        Paragraph::new(visible_lines(lines.clone())).render(area, buf);
+        mark_buffer_hyperlinks(buf, area, &lines, /*scroll_rows*/ 0);
     }
 }
 

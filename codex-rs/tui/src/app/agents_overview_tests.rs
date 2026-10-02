@@ -959,6 +959,56 @@ async fn agents_overview_details_render_markdown() {
     );
 }
 
+#[tokio::test]
+async fn agents_overview_preview_links_survive_wrapping_and_clipping() {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    let mut thread = overview_thread(
+        thread_id,
+        /*parent_thread_id*/ None,
+        "Review links",
+        ThreadStatus::Idle,
+    );
+    let destination = "https://example.com/a/long/path/to/the/pull/request";
+    thread.preview = "[Prompt](https://example.com/prompt)".into();
+    app.agents_overview.last_messages.insert(
+        thread_id,
+        format!("Opened [a pull request with a label that wraps across rows]({destination}).\n\nMore context that should be clipped in a short preview.\n\nAdditional details."),
+    );
+    let view = app.agents_overview_view(vec![thread], Some(thread_id));
+    for height in [40, 22] {
+        let area =
+            ratatui::layout::Rect::new(/*x*/ 0, /*y*/ 0, /*width*/ 96, height);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        view.render(area, &mut buffer);
+        let mut linked_rows = Vec::new();
+        for y in 0..height {
+            let linked = (0..area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .filter(|symbol| symbol.starts_with(&format!("\x1b]8;;{destination}\x07")))
+                .map(crate::terminal_hyperlinks::strip_osc8)
+                .collect::<String>();
+            if !linked.is_empty() {
+                linked_rows.push(linked);
+            }
+        }
+        assert!(linked_rows.len() >= 2, "link must span multiple rows");
+        assert!(buffer.content.iter().all(|cell| {
+            crate::terminal_hyperlinks::strip_osc8(cell.symbol()) != "…"
+                || !cell.symbol().contains("\x1b]8;;")
+        }));
+        if height == 40 {
+            insta::assert_snapshot!("agents_overview_link_rows", linked_rows.join("\n"));
+            assert!(buffer.content.iter().any(|cell| {
+                cell.symbol()
+                    .starts_with("\x1b]8;;https://example.com/prompt\x07")
+            }));
+        } else {
+            assert!(buffer.content.iter().any(|cell| cell.symbol() == "…"));
+        }
+    }
+}
+
 #[test]
 fn agents_overview_markdown_preview_preserves_layout_and_bounds() {
     let text = format!("a\r\n\t\u{1b}{}", "界".repeat(600));
