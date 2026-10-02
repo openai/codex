@@ -36,6 +36,7 @@ async fn incomplete_chat_batches_retain_available_estimates_without_inventing_ze
             thread_id: "available".into(),
             estimated_usage_credits_micros: 1250000,
             estimated_usage_usd_micros: None,
+            native_usage_usd_micros: None,
             groups: Vec::new(),
         }]
     );

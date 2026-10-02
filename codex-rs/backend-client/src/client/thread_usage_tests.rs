@@ -41,11 +41,13 @@ async fn get_thread_usage_returns_requested_thread_totals() {
                 "thread_id": "thread-123",
                 "estimated_usage_credits_micros": 46_000_000,
                 "estimated_usage_usd_micros": 1_820_000,
+                "native_usage_usd_micros": 3_250_000,
                 "groups": [{
                     "model": "gpt-5.4",
                     "reasoning_effort": "high",
                     "speed": "fast",
                     "estimated_usage_credits_micros": 46_000_000,
+                    "native_usage_usd_micros": 3_250_000,
                     "net_new_input_tokens": 80,
                     "cached_input_tokens": 20,
                     "input_tokens": 100,
@@ -71,11 +73,13 @@ async fn get_thread_usage_returns_requested_thread_totals() {
             thread_id: "thread-123".to_string(),
             estimated_usage_credits_micros: 46_000_000,
             estimated_usage_usd_micros: Some(1_820_000),
+            native_usage_usd_micros: Some(3_250_000),
             groups: vec![ThreadUsageBreakdownGroup {
                 model: Some("gpt-5.4".to_string()),
                 reasoning_effort: Some("high".to_string()),
                 speed: Some("fast".to_string()),
                 estimated_usage_credits_micros: 46_000_000,
+                native_usage_usd_micros: Some(3_250_000),
                 net_new_input_tokens: Some(80),
                 cached_input_tokens: Some(20),
                 input_tokens: Some(100),
@@ -115,6 +119,7 @@ async fn get_thread_usage_accepts_credits_without_usd_estimate() {
             thread_id: "thread-123".to_string(),
             estimated_usage_credits_micros: 46_000_000,
             estimated_usage_usd_micros: None,
+            native_usage_usd_micros: None,
             groups: Vec::new(),
         }
     );
@@ -197,4 +202,162 @@ async fn batch_usage_rejects_duplicate_and_unrequested_response_rows() {
             assert!(error.to_string().contains("unexpected threads"));
         }
     }
+}
+
+#[test]
+fn thread_usage_preserves_unknown_and_zero_native_group_amounts() {
+    let usage: ThreadUsage = serde_json::from_value(json!({
+        "thread_id": "thread-123",
+        "estimated_usage_credits_micros": 0,
+        "native_usage_usd_micros": null,
+        "groups": [
+            { "model": "legacy", "estimated_usage_credits_micros": 0 },
+            {
+                "model": "unknown",
+                "estimated_usage_credits_micros": 0,
+                "native_usage_usd_micros": null
+            },
+            {
+                "model": "zero",
+                "estimated_usage_credits_micros": 0,
+                "native_usage_usd_micros": 0
+            }
+        ]
+    }))
+    .expect("decode native groups from legacy and current backend responses");
+
+    assert_eq!(
+        usage,
+        ThreadUsage {
+            thread_id: "thread-123".to_string(),
+            estimated_usage_credits_micros: 0,
+            estimated_usage_usd_micros: None,
+            native_usage_usd_micros: None,
+            groups: [("legacy", None), ("unknown", None), ("zero", Some(0))]
+                .into_iter()
+                .map(
+                    |(model, native_usage_usd_micros)| ThreadUsageBreakdownGroup {
+                        model: Some(model.to_string()),
+                        reasoning_effort: None,
+                        speed: None,
+                        estimated_usage_credits_micros: 0,
+                        native_usage_usd_micros,
+                        net_new_input_tokens: None,
+                        cached_input_tokens: None,
+                        input_tokens: None,
+                        output_tokens: None,
+                        total_tokens: None,
+                    }
+                )
+                .collect(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn get_threads_usage_preserves_native_amounts_and_absence() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/codex/usage/thread_usage/query"))
+        .and(body_json(json!({ "thread_ids": ["priced", "unknown"] })))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "threads": [
+                {
+                    "thread_id": "priced",
+                    "estimated_usage_credits_micros": 46_000_000,
+                    "estimated_usage_usd_micros": 2_505_000,
+                    "native_usage_usd_micros": 3_250_000,
+                    "groups": [
+                        {
+                            "model": "test-model-a",
+                            "reasoning_effort": "medium",
+                            "speed": "standard",
+                            "estimated_usage_credits_micros": 12_000_000,
+                            "native_usage_usd_micros": 750_000
+                        },
+                        {
+                            "model": "test-model-b",
+                            "reasoning_effort": "high",
+                            "speed": "fast",
+                            "estimated_usage_credits_micros": 34_000_000,
+                            "native_usage_usd_micros": 2_500_000
+                        }
+                    ]
+                },
+                {
+                    "thread_id": "unknown",
+                    "estimated_usage_credits_micros": 7_000_000,
+                    "groups": [{
+                        "model": "legacy-model",
+                        "estimated_usage_credits_micros": 7_000_000
+                    }]
+                }
+            ]
+        })))
+        .expect(/*r*/ 1)
+        .mount(&server)
+        .await;
+
+    let client = Client::new(
+        server.uri(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    );
+    assert_eq!(
+        client
+            .get_threads_usage(&["priced", "unknown"])
+            .await
+            .expect("read native and legacy usage in one batch"),
+        vec![
+            ThreadUsage {
+                thread_id: "priced".to_string(),
+                estimated_usage_credits_micros: 46_000_000,
+                estimated_usage_usd_micros: Some(2_505_000),
+                native_usage_usd_micros: Some(3_250_000),
+                groups: vec![
+                    ThreadUsageBreakdownGroup {
+                        model: Some("test-model-a".to_string()),
+                        reasoning_effort: Some("medium".to_string()),
+                        speed: Some("standard".to_string()),
+                        estimated_usage_credits_micros: 12_000_000,
+                        native_usage_usd_micros: Some(750_000),
+                        net_new_input_tokens: None,
+                        cached_input_tokens: None,
+                        input_tokens: None,
+                        output_tokens: None,
+                        total_tokens: None,
+                    },
+                    ThreadUsageBreakdownGroup {
+                        model: Some("test-model-b".to_string()),
+                        reasoning_effort: Some("high".to_string()),
+                        speed: Some("fast".to_string()),
+                        estimated_usage_credits_micros: 34_000_000,
+                        native_usage_usd_micros: Some(2_500_000),
+                        net_new_input_tokens: None,
+                        cached_input_tokens: None,
+                        input_tokens: None,
+                        output_tokens: None,
+                        total_tokens: None,
+                    },
+                ],
+            },
+            ThreadUsage {
+                thread_id: "unknown".to_string(),
+                estimated_usage_credits_micros: 7_000_000,
+                estimated_usage_usd_micros: None,
+                native_usage_usd_micros: None,
+                groups: vec![ThreadUsageBreakdownGroup {
+                    model: Some("legacy-model".to_string()),
+                    reasoning_effort: None,
+                    speed: None,
+                    estimated_usage_credits_micros: 7_000_000,
+                    native_usage_usd_micros: None,
+                    net_new_input_tokens: None,
+                    cached_input_tokens: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    total_tokens: None,
+                }],
+            },
+        ]
+    );
 }

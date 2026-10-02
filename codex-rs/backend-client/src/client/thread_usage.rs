@@ -1,4 +1,4 @@
-//! Authoritative estimated credit and dollar usage for bounded batches of Codex threads.
+//! Backend credit estimates and native-dollar usage for bounded batches of Codex threads.
 
 use super::Client;
 use super::PathStyle;
@@ -17,6 +17,7 @@ pub struct ThreadUsageBreakdownGroup {
     pub reasoning_effort: Option<String>,
     pub speed: Option<String>,
     pub estimated_usage_credits_micros: i64,
+    pub native_usage_usd_micros: Option<i64>,
     pub net_new_input_tokens: Option<i64>,
     pub cached_input_tokens: Option<i64>,
     pub input_tokens: Option<i64>,
@@ -24,12 +25,13 @@ pub struct ThreadUsageBreakdownGroup {
     pub total_tokens: Option<i64>,
 }
 
-/// Backend-estimated usage totals expressed in integer millionths.
+/// Backend usage totals expressed in integer millionths of their respective units.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct ThreadUsage {
     pub thread_id: String,
     pub estimated_usage_credits_micros: i64,
     pub estimated_usage_usd_micros: Option<i64>,
+    pub native_usage_usd_micros: Option<i64>,
     #[serde(default)]
     pub groups: Vec<ThreadUsageBreakdownGroup>,
 }
@@ -50,6 +52,7 @@ struct ThreadUsageEstimate {
     thread_id: String,
     estimated_usage_credits_micros: Option<i64>,
     estimated_usage_usd_micros: Option<i64>,
+    native_usage_usd_micros: Option<i64>,
     groups: Option<Vec<ThreadUsageBreakdownGroup>>,
 }
 
@@ -103,6 +106,7 @@ impl Client {
                     thread_id: row.thread_id,
                     estimated_usage_credits_micros: row.estimated_usage_credits_micros?,
                     estimated_usage_usd_micros: row.estimated_usage_usd_micros,
+                    native_usage_usd_micros: row.native_usage_usd_micros,
                     groups: row.groups.unwrap_or_default(),
                 })
             })
