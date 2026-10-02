@@ -19,7 +19,7 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::RolloutItem;
-use codex_rollout::persisted_rollout_items;
+use codex_rollout::into_persisted_rollout_items;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::AppendThreadItemsParams;
@@ -653,7 +653,7 @@ impl InMemoryThreadStore {
         }
         let mut state = self.state.lock().await;
         let history_mode = history_mode_from_state(&state, params.thread_id);
-        let persisted_items = persisted_rollout_items(params.items.as_slice(), history_mode);
+        let persisted_items = into_persisted_rollout_items(params.items, history_mode);
         if persisted_items.is_empty() {
             return Ok(());
         }

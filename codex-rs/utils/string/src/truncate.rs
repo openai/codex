@@ -3,9 +3,33 @@
 
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 
-/// Truncate a string to `max_bytes` using a character-count marker.
+/// Retain at most `max_bytes` from a string's ends and add a character-count
+/// marker outside that budget.
+///
+/// Use [`truncate_middle_with_marker`] when the complete result must fit a hard
+/// byte limit.
 pub fn truncate_middle_chars(s: &str, max_bytes: usize) -> String {
     truncate_with_byte_estimate(s, max_bytes, /*use_tokens*/ false)
+}
+
+/// Truncate the middle of a UTF-8 string so the result, including `marker`, is
+/// at most `max_bytes` bytes.
+///
+/// Returns the original string when it already fits. If the marker itself does
+/// not fit, returns the longest original prefix that does.
+pub fn truncate_middle_with_marker(s: &str, max_bytes: usize, marker: &str) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+
+    let Some(content_budget) = max_bytes.checked_sub(marker.len()) else {
+        return s[..s.floor_char_boundary(max_bytes)].to_string();
+    };
+    let (left_budget, right_budget) = split_budget(content_budget);
+    let prefix_end = s.floor_char_boundary(left_budget);
+    let suffix_start = s.ceil_char_boundary(s.len().saturating_sub(right_budget));
+
+    assemble_truncated_output(&s[..prefix_end], &s[suffix_start..], marker)
 }
 
 /// Truncate the middle of a UTF-8 string to at most `max_tokens` approximate

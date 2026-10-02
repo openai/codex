@@ -8,7 +8,7 @@ use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutItem;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::RolloutRecorderParams;
-use codex_rollout::is_persisted_rollout_item;
+use codex_rollout::into_persisted_rollout_items;
 use tracing::warn;
 
 use super::LocalThreadStore;
@@ -336,8 +336,8 @@ async fn write_and_project(
     let (recorder, rollout_id, history_mode) = live_writer_parts(store, thread_id).await?;
     let sync_rollout_path = matches!(&write_op, RolloutWriteOp::Persist | RolloutWriteOp::Flush);
     let write_op = match write_op {
-        RolloutWriteOp::AppendItems(mut items) => {
-            items.retain(|item| is_persisted_rollout_item(item, history_mode));
+        RolloutWriteOp::AppendItems(items) => {
+            let items = into_persisted_rollout_items(items, history_mode);
             if items.is_empty() {
                 return Ok(());
             }

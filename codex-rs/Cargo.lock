@@ -4471,6 +4471,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-path",
  "codex-utils-process",
+ "codex-utils-string",
  "memchr",
  "pretty_assertions",
  "regex",

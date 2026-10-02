@@ -1,19 +1,40 @@
+use std::borrow::Cow;
+
 use crate::RolloutItem;
 use crate::protocol::EventMsg;
 use codex_extension_items::ExtensionItem;
+use codex_protocol::items::CommandExecutionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::SubAgentActivityKind;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_utils_string::truncate_middle_with_marker;
 
-/// Whether a rollout `item` should be persisted in rollout files.
-pub fn is_persisted_rollout_item(item: &RolloutItem, history_mode: ThreadHistoryMode) -> bool {
+pub(super) const PERSISTED_COMMAND_OUTPUT_MAX_BYTES: usize = 64 * 1024;
+const PERSISTED_COMMAND_OUTPUT_TRUNCATION_MARKER: &str =
+    "\n... command output truncated for persistence ...\n";
+
+/// Returns the authoritative durable representation of a rollout item.
+pub fn persisted_rollout_item(
+    item: &RolloutItem,
+    history_mode: ThreadHistoryMode,
+) -> Option<Cow<'_, RolloutItem>> {
     match item {
-        RolloutItem::ResponseItem(item) => should_persist_response_item(&item.item),
+        RolloutItem::ResponseItem(response_item) => {
+            should_persist_response_item(&response_item.item).then_some(Cow::Borrowed(item))
+        }
         RolloutItem::InterAgentCommunication(_)
-        | RolloutItem::InterAgentCommunicationMetadata { .. } => true,
-        RolloutItem::EventMsg(ev) => should_persist_event_msg(ev, history_mode),
-        RolloutItem::RealtimeItem(_) => matches!(history_mode, ThreadHistoryMode::Paginated),
+        | RolloutItem::InterAgentCommunicationMetadata { .. } => Some(Cow::Borrowed(item)),
+        RolloutItem::EventMsg(ev) => {
+            persisted_event_msg(ev, history_mode).map(|event| match event {
+                Cow::Borrowed(_) => Cow::Borrowed(item),
+                Cow::Owned(event) => Cow::Owned(RolloutItem::EventMsg(event)),
+            })
+        }
+        RolloutItem::RealtimeItem(_) => {
+            matches!(history_mode, ThreadHistoryMode::Paginated).then_some(Cow::Borrowed(item))
+        }
         // Persist Codex executive markers so we can analyze flows (e.g., compaction, API turns).
         RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
@@ -21,7 +42,7 @@ pub fn is_persisted_rollout_item(item: &RolloutItem, history_mode: ThreadHistory
         | RolloutItem::WorldState(_)
         | RolloutItem::RetainedContext(_)
         | RolloutItem::SecurityRiskScore(_)
-        | RolloutItem::SessionMeta(_) => true,
+        | RolloutItem::SessionMeta(_) => Some(Cow::Borrowed(item)),
     }
 }
 
@@ -30,13 +51,25 @@ pub fn persisted_rollout_items(
     items: &[RolloutItem],
     history_mode: ThreadHistoryMode,
 ) -> Vec<RolloutItem> {
-    let mut persisted = Vec::new();
-    for item in items {
-        if is_persisted_rollout_item(item, history_mode) {
-            persisted.push(item.clone());
-        }
-    }
-    persisted
+    items
+        .iter()
+        .filter_map(|item| persisted_rollout_item(item, history_mode).map(Cow::into_owned))
+        .collect()
+}
+
+/// Return the owned rollout items that should be persisted for a live append.
+pub fn into_persisted_rollout_items(
+    items: Vec<RolloutItem>,
+    history_mode: ThreadHistoryMode,
+) -> Vec<RolloutItem> {
+    items
+        .into_iter()
+        .filter_map(|item| match persisted_rollout_item(&item, history_mode) {
+            Some(Cow::Borrowed(_)) => Some(item),
+            Some(Cow::Owned(item)) => Some(item),
+            None => None,
+        })
+        .collect()
 }
 
 /// Whether a `ResponseItem` should be persisted in rollout files.
@@ -89,34 +122,19 @@ pub fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
     }
 }
 
-/// Whether an `EventMsg` should be persisted in rollout files.
-#[inline]
-pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) -> bool {
+fn persisted_event_msg(
+    ev: &EventMsg,
+    history_mode: ThreadHistoryMode,
+) -> Option<Cow<'_, EventMsg>> {
     match ev {
-        EventMsg::ItemCompleted(event) => {
-            // Paginated rollouts store TurnItems.
-            // Legacy rollouts keep only items with no lossless raw ResponseItem or legacy
-            // equivalent.
-            matches!(history_mode, ThreadHistoryMode::Paginated)
-                || matches!(
-                    event.item,
-                    TurnItem::FunctionCallOutput(_)
-                        | TurnItem::Plan(_)
-                        | TurnItem::Extension(ExtensionItem::Sleep(_))
-                )
-                || matches!(
-                    &event.item,
-                    TurnItem::SubAgentActivity(item)
-                        if item.kind == SubAgentActivityKind::Completed
-                )
-        }
+        EventMsg::ItemCompleted(event) => persisted_item_completed_event(ev, event, history_mode),
         EventMsg::TokenCount(_)
         | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnAborted(_)
         | EventMsg::TurnStarted(_)
         | EventMsg::TurnComplete(_)
-        | EventMsg::ThreadSettingsApplied(_) => true,
+        | EventMsg::ThreadSettingsApplied(_) => Some(Cow::Borrowed(ev)),
 
         // Only persist these legacy events when the thread's history mode is Legacy.
         // New, paginated rollouts persist ItemCompleted events with TurnItems.
@@ -131,12 +149,11 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) 
         | EventMsg::McpToolCallEnd(_)
         | EventMsg::WebSearchEnd(_)
         | EventMsg::ImageGenerationEnd(_) => {
-            matches!(history_mode, ThreadHistoryMode::Legacy)
+            matches!(history_mode, ThreadHistoryMode::Legacy).then_some(Cow::Borrowed(ev))
         }
-        EventMsg::SubAgentActivity(event) => {
-            matches!(history_mode, ThreadHistoryMode::Legacy)
-                && event.kind != SubAgentActivityKind::Completed
-        }
+        EventMsg::SubAgentActivity(event) => (matches!(history_mode, ThreadHistoryMode::Legacy)
+            && event.kind != SubAgentActivityKind::Completed)
+            .then_some(Cow::Borrowed(ev)),
 
         // Transient, non-durable events.
         EventMsg::Error(_)
@@ -201,6 +218,49 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) 
         | EventMsg::CollabAgentInteractionBegin(_)
         | EventMsg::CollabWaitingBegin(_)
         | EventMsg::CollabCloseBegin(_)
-        | EventMsg::CollabResumeBegin(_) => false,
+        | EventMsg::CollabResumeBegin(_) => None,
+    }
+}
+
+/// Returns the persisted representation of an `ItemCompleted` event.
+fn persisted_item_completed_event<'a>(
+    ev: &'a EventMsg,
+    event: &ItemCompletedEvent,
+    history_mode: ThreadHistoryMode,
+) -> Option<Cow<'a, EventMsg>> {
+    match history_mode {
+        ThreadHistoryMode::Legacy => {
+            // Legacy rollouts keep only items with no lossless raw ResponseItem or legacy
+            // equivalent.
+            (matches!(
+                event.item,
+                TurnItem::FunctionCallOutput(_)
+                    | TurnItem::Plan(_)
+                    | TurnItem::Extension(ExtensionItem::Sleep(_))
+            ) || matches!(
+                &event.item,
+                TurnItem::SubAgentActivity(item)
+                    if item.kind == SubAgentActivityKind::Completed
+            ))
+            .then_some(Cow::Borrowed(ev))
+        }
+        ThreadHistoryMode::Paginated => match &event.item {
+            TurnItem::CommandExecution(CommandExecutionItem {
+                aggregated_output: Some(aggregated_output),
+                ..
+            }) if aggregated_output.len() > PERSISTED_COMMAND_OUTPUT_MAX_BYTES => {
+                let aggregated_output = truncate_middle_with_marker(
+                    aggregated_output,
+                    PERSISTED_COMMAND_OUTPUT_MAX_BYTES,
+                    PERSISTED_COMMAND_OUTPUT_TRUNCATION_MARKER,
+                );
+                let mut event = event.clone();
+                if let TurnItem::CommandExecution(command) = &mut event.item {
+                    command.aggregated_output = Some(aggregated_output);
+                }
+                Some(Cow::Owned(EventMsg::ItemCompleted(event)))
+            }
+            _ => Some(Cow::Borrowed(ev)),
+        },
     }
 }

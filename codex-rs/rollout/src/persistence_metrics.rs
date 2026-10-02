@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -11,7 +12,7 @@ use codex_protocol::protocol::ThreadHistoryMode;
 
 use crate::ResponseItemEnvelope;
 use crate::RolloutItem;
-use crate::policy::is_persisted_rollout_item;
+use crate::policy::persisted_rollout_item;
 
 const ITEM_BYTES_METRIC: &str = "codex.rollout.persistence.item_bytes";
 const APPEND_METRIC: &str = "codex.rollout.persistence.append";
@@ -46,6 +47,7 @@ pub struct RolloutItemMeasurement {
     pub decision: PersistenceDecision,
     pub rollout_item_type: String,
     pub payload_bytes: Option<u64>,
+    pub persisted_payload_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -106,22 +108,28 @@ pub fn measure_and_filter_rollout_items(
     };
 
     for item in items {
-        let kept = is_persisted_rollout_item(item, history_mode);
-        let decision = if kept {
+        let projected = persisted_rollout_item(item, history_mode);
+        let decision = if projected.is_some() {
             PersistenceDecision::Kept
         } else {
             PersistenceDecision::Dropped
         };
         let payload_bytes = serialized_len(item).ok();
+        let persisted_payload_bytes = match projected.as_ref() {
+            Some(Cow::Borrowed(_)) => payload_bytes,
+            Some(Cow::Owned(item)) => serialized_len(item).ok(),
+            None => None,
+        };
         add_to_totals(&mut measurement.pre_filter, payload_bytes);
-        if kept {
-            add_to_totals(&mut measurement.post_filter, payload_bytes);
-            persisted.push(item.clone());
+        if let Some(projected) = projected {
+            add_to_totals(&mut measurement.post_filter, persisted_payload_bytes);
+            persisted.push(projected.into_owned());
         }
         measurement.items.push(RolloutItemMeasurement {
             decision,
             rollout_item_type: rollout_item_type(item),
             payload_bytes,
+            persisted_payload_bytes,
         });
     }
 
@@ -199,7 +207,7 @@ fn finish_turn(
 fn add_item_to_turn(totals: &mut TurnSizeTotals, item: &RolloutItemMeasurement) {
     add_to_totals(&mut totals.pre_filter, item.payload_bytes);
     if item.decision == PersistenceDecision::Kept {
-        add_to_totals(&mut totals.post_filter, item.payload_bytes);
+        add_to_totals(&mut totals.post_filter, item.persisted_payload_bytes);
     }
 }
 

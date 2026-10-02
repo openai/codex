@@ -458,12 +458,6 @@ async fn load_rollout_items_preserves_security_risk_scores() -> std::io::Result<
         sampled_at: None,
     };
     let security_risk_item = RolloutItem::SecurityRiskScore(security_risk.clone());
-    for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
-        assert!(crate::is_persisted_rollout_item(
-            &security_risk_item,
-            history_mode
-        ));
-    }
 
     let mut file = File::create(&rollout_path)?;
     for (ordinal, item) in [

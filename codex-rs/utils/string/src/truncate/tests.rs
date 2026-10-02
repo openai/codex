@@ -1,5 +1,6 @@
 use super::split_string;
 use super::truncate_middle_chars;
+use super::truncate_middle_with_marker;
 use super::truncate_middle_with_token_budget;
 use pretty_assertions::assert_eq;
 
@@ -128,4 +129,37 @@ fn truncate_middle_bytes_handles_utf8_content() {
     let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
     let out = truncate_middle_chars(s, /*max_bytes*/ 20);
     assert_eq!(out, "😀😀…21 chars truncated…with text\n");
+}
+
+#[test]
+fn truncate_middle_with_marker_enforces_the_total_byte_limit() {
+    let input = format!("head{}tail", "x".repeat(100));
+    assert_eq!(
+        truncate_middle_with_marker(&input, /*max_bytes*/ 32, "<truncated>"),
+        "headxxxxxx<truncated>xxxxxxxtail"
+    );
+}
+
+#[test]
+fn truncate_middle_with_marker_preserves_utf8_boundaries() {
+    assert_eq!(
+        truncate_middle_with_marker("head🦀🦀🦀🦀🦀tail", /*max_bytes*/ 18, "..."),
+        "head...🦀tail"
+    );
+}
+
+#[test]
+fn truncate_middle_with_marker_returns_input_that_fits() {
+    assert_eq!(
+        truncate_middle_with_marker("short", /*max_bytes*/ 5, "..."),
+        "short"
+    );
+}
+
+#[test]
+fn truncate_middle_with_marker_keeps_a_prefix_when_the_marker_does_not_fit() {
+    assert_eq!(
+        truncate_middle_with_marker("🦀abc", /*max_bytes*/ 4, "marker"),
+        "🦀"
+    );
 }
