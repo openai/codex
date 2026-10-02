@@ -1267,6 +1267,12 @@ impl App {
                         elicitation_target: None,
                     });
             }
+            AppEvent::AccountEmailLoaded { request_id, email } => {
+                if self.account_email_request_id == Some(request_id) {
+                    self.account_email_request_id = None;
+                    self.chat_widget.on_account_email_loaded(email);
+                }
+            }
             AppEvent::SecuritySetupLoaded { request_id, identity, notice } => {
                 tracing::debug!(current = request_id == self.chat_widget.security_setup_request_id, "handling security setup notice");
                 if request_id == self.chat_widget.security_setup_request_id {

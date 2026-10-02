@@ -198,6 +198,13 @@ impl ChatWidget {
         self.model_catalog.clone()
     }
 
+    pub(crate) fn on_account_email_loaded(&mut self, current_email: Option<String>) {
+        if let Some(StatusAccountDisplay::ChatGpt { email, .. }) = &mut self.status_account_display
+        {
+            *email = current_email;
+        }
+    }
+
     pub(crate) fn current_plan_type(&self) -> Option<PlanType> {
         self.plan_type
     }

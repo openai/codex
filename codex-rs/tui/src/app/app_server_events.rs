@@ -349,18 +349,22 @@ impl App {
                             | AuthMode::PersonalAccessToken
                     )
                 );
-                self.chat_widget.update_account_state(
-                    status_account_display_from_auth_mode(
-                        notification.auth_mode,
-                        notification.plan_type,
-                    ),
+                let account_display = status_account_display_from_auth_mode(
+                    notification.auth_mode,
                     notification.plan_type,
-                    notification
-                        .auth_mode
-                        .is_some_and(AuthMode::has_chatgpt_account),
+                );
+                let has_chatgpt_account = notification
+                    .auth_mode
+                    .is_some_and(AuthMode::has_chatgpt_account);
+                self.account_email_request_id = None;
+                self.chat_widget.update_account_state(
+                    account_display,
+                    notification.plan_type,
+                    has_chatgpt_account,
                     has_codex_backend_auth,
                 );
                 if self.chat_widget.has_chatgpt_account() {
+                    self.refresh_account_email(app_server_client);
                     crate::security_setup::prefetch(
                         &self.config,
                         app_server_client,

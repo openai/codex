@@ -279,6 +279,10 @@ pub(crate) struct AgentsOverviewThreadRefresh {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, IntoStaticStr)]
 pub(crate) enum AppEvent {
+    AccountEmailLoaded {
+        request_id: uuid::Uuid,
+        email: Option<String>,
+    },
     SecuritySetupLoaded {
         request_id: uuid::Uuid,
         identity: crate::security_setup::Identity,
