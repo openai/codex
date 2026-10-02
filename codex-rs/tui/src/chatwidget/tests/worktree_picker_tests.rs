@@ -32,8 +32,8 @@ async fn slash_new_and_fork_offer_checkout_choices_inside_local_git_repository()
     chat.dispatch_command(SlashCommand::New);
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("worktrees_new_choices", popup);
-    assert!(popup.contains("Current checkout"), "popup: {popup}");
-    assert!(popup.contains("New worktree"), "popup: {popup}");
+    assert!(popup.contains("Use current Git worktree"), "popup: {popup}");
+    assert!(popup.contains("Create new Git worktree"), "popup: {popup}");
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     chat.bottom_pane

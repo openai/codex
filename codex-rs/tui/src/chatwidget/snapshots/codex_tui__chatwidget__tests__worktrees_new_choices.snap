@@ -5,7 +5,8 @@ expression: popup
   Where should the new conversation run?
 
 
-› 1. Current checkout  Keep using the current working directory
-  2. New worktree      Create an isolated managed checkout
+› 1. Use current Git worktree  Keep using the current working directory
+  2. Create new Git worktree   Create a separate checkout of this repository in
+                               another directory
 
   enter select · esc back
