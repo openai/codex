@@ -15,9 +15,10 @@
 //! every column's width and reshape all prior rows.  The holdback mechanism
 //! (`table_holdback_state`) detects pipe-table patterns (header + delimiter
 //! pair) in the accumulated source and keeps content from the table header
-//! onward as mutable tail until the stream finalizes. Holdback is enabled for
-//! agent and proposed-plan streams. Lines in `Outside` and `Markdown` fence
-//! contexts are scanned; lines inside non-markdown fences are skipped.
+//! onward as mutable tail until its containing top-level block is stable.
+//! Holdback is enabled for agent and proposed-plan streams. Lines in `Outside`
+//! and `Markdown` fence contexts are scanned; lines inside non-markdown fences
+//! are skipped.
 //!
 //! Transformable fences stay mutable while their containing top-level block is last. Markdown
 //! fences may gain literal delimiters when table rendering is disabled. For Mermaid, the closing fence replaces
@@ -161,7 +162,6 @@ impl StreamCore {
         {
             let source = self.state.collector.committed_source();
             let committed_source = &source[range];
-            self.holdback_scanner.push_source_chunk(committed_source);
             self.render.append(
                 source,
                 committed_source,
@@ -170,6 +170,8 @@ impl StreamCore {
                 self.render_mode,
                 self.inline_visualization_context.as_ref(),
             );
+            self.holdback_scanner
+                .scan(source, self.render.completed_source_len);
             enqueued = self.sync_stable_queue();
         }
         let preview_changed = self.refresh_preview();
@@ -385,6 +387,8 @@ impl StreamCore {
             self.render_mode,
             self.inline_visualization_context.as_ref(),
         );
+        self.holdback_scanner
+            .scan(source, self.render.completed_source_len);
         if let Some(start) = previous_tail_start.or(self.active_tail_source_start(self.render_mode))
         {
             let prefix_len = |width, mode| {
@@ -678,6 +682,28 @@ impl StreamController {
     #[inline]
     pub(crate) fn has_live_tail(&self) -> bool {
         self.core.has_tail()
+    }
+
+    /// Completion must repair emitted rows when reference definitions can change earlier blocks.
+    pub(crate) fn needs_scrollback_reflow(&self) -> bool {
+        if self.has_live_tail() || self.core.render.has_reference_link_definition {
+            return true;
+        }
+        if self.core.render_mode == HistoryRenderMode::Raw
+            || self.core.state.collector.pending_source().is_empty()
+        {
+            return false;
+        }
+        let source = format!(
+            "{}{}",
+            self.core.state.collector.committed_source(),
+            self.core.state.collector.pending_source(),
+        );
+        pulldown_cmark::Parser::new(&source)
+            .reference_definitions()
+            .iter()
+            .next()
+            .is_some()
     }
 
     pub(crate) fn clear_queue(&mut self) {
@@ -1441,6 +1467,65 @@ mod tests {
             "expected pre-table line to commit independently: {committed:?}",
         );
         assert!(idle, "only pre-table content should have been queued");
+
+        ctrl.push(
+            "| first | row |\n\nAfter table.\n\n| Next | Table |\n| --- | --- |\n| second | row |\n",
+        );
+        let (cell, idle) = ctrl.on_commit_tick_batch(usize::MAX);
+        let committed = cell.expect("completed table and prose should enter scrollback");
+        assert!(idle);
+        assert!(ctrl.has_live_tail(), "the later table must stay mutable");
+        insta::assert_debug_snapshot!(
+            "completed_table_scrollback",
+            lines_to_plain_strings(&committed.transcript_lines(u16::MAX)),
+        );
+
+        let context = InlineVisualizationContext::new(&test_cwd(), codex_protocol::ThreadId::new())
+            .expect("visualization context");
+        for (context, definition) in [
+            (None, "[ref]: https://example.com\n"),
+            (Some(context), "[ref]: https://example.com\n"),
+            (None, "[ref]: https://example.com"),
+        ] {
+            let mut ctrl = StreamController::new_with_inline_visualizations(
+                Some(80),
+                &test_cwd(),
+                HistoryRenderMode::Rich,
+                context,
+            );
+            let mut committed = Vec::new();
+            for delta in [
+                "| Key | Value |\n| --- | --- |\n| [A][ref] | row |\n",
+                "\nAfter table.\n\n",
+                definition,
+            ] {
+                ctrl.push(delta);
+                if let (Some(cell), _) = ctrl.on_commit_tick_batch(usize::MAX) {
+                    committed.extend(lines_to_plain_strings(&cell.transcript_lines(u16::MAX)));
+                }
+            }
+            assert!(committed.iter().any(|line| line.contains("[A][ref]")));
+            assert!(
+                !ctrl.has_live_tail(),
+                "the completed table should be released"
+            );
+            assert!(
+                ctrl.needs_scrollback_reflow(),
+                "late definitions must repair scrollback"
+            );
+            let (_, source) = ctrl.finalize();
+            let rendered = render_source(
+                source.as_deref().unwrap(),
+                Some(80),
+                &test_cwd(),
+                HistoryRenderMode::Rich,
+                /*inline_visualization_context*/ None,
+            );
+            insta::assert_debug_snapshot!(
+                "completed_table_reference",
+                lines_to_plain_strings(&visible_lines(rendered))
+            );
+        }
     }
 
     #[test]
@@ -1778,6 +1863,10 @@ mod tests {
                 "live view diverged after delta: {delta:?}"
             );
         }
+        assert!(
+            !ctrl.has_live_tail(),
+            "completed tables and prose should enter scrollback before finalization",
+        );
     }
 
     #[test]
@@ -1984,7 +2073,7 @@ mod tests {
         let mut source = String::new();
         for chunk in chunks {
             source.push_str(chunk);
-            scanner.push_source_chunk(chunk);
+            scanner.scan(&source, /*completed_source_len*/ 0);
             assert_eq!(
                 scanner.state(),
                 table_holdback_state(&source),
@@ -1996,12 +2085,15 @@ mod tests {
     #[test]
     fn incremental_holdback_detects_header_delimiter_across_chunk_boundary() {
         let mut scanner = TableHoldbackScanner::new();
-        scanner.push_source_chunk("| A | B |\n");
+        scanner.scan("| A | B |\n", /*completed_source_len*/ 0);
         assert_eq!(
             scanner.state(),
             TableHoldbackState::PendingHeader { header_start: 0 }
         );
-        scanner.push_source_chunk("| --- | --- |\n");
+        scanner.scan(
+            "| A | B |\n| --- | --- |\n",
+            /*completed_source_len*/ 0,
+        );
         assert_eq!(
             scanner.state(),
             TableHoldbackState::Confirmed { table_start: 0 }

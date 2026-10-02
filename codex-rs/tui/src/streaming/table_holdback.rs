@@ -45,10 +45,9 @@ struct PreviousLineState {
 
 /// Incremental scanner for table holdback state on append-only source streams.
 ///
-/// `push_source_chunk` must receive source in the same order it will be
-/// appended to the stream. The scanner stores byte offsets into that logical
-/// source buffer, so feeding chunks out of order would make later tail
-/// boundaries point at the wrong rendered region.
+/// `scan` receives the append-only source and the renderer's completed-block
+/// boundary. Completed tables are released only when their containing top-level
+/// block is stable; the remaining tail is rescanned to find later tables.
 pub(super) struct TableHoldbackScanner {
     source_offset: usize,
     fence_tracker: FenceTracker,
@@ -81,7 +80,7 @@ impl TableHoldbackScanner {
     /// header but the delimiter row has not arrived yet, so callers should
     /// optimistically keep that region mutable. `Confirmed` means the header
     /// and delimiter pair has been seen and all subsequent body rows remain in
-    /// the live tail until finalization.
+    /// the live tail until their containing top-level block is stable.
     pub(super) fn state(&self) -> TableHoldbackState {
         if let Some(table_start) = self.confirmed_table_start {
             TableHoldbackState::Confirmed { table_start }
@@ -99,14 +98,24 @@ impl TableHoldbackScanner {
             && self.fence_tracker.kind() == FenceKind::Outside
     }
 
-    /// Advance the scanner with newly committed source.
+    /// Scan newly committed source, releasing holdback for completed blocks.
     ///
-    /// Chunks are expected to contain only source that is now safe to commit
-    /// into `raw_source`, typically newline-terminated lines from the
-    /// streaming collector. Partial rows are intentionally excluded so the
-    /// scanner never treats an unfinished table row as a stable structural
-    /// signal.
-    pub(super) fn push_source_chunk(&mut self, source_chunk: &str) {
+    /// Source must contain only complete lines. Releasing a table rescans from
+    /// the final top-level block, where fence state can safely start outside.
+    /// This also detects later tables that arrived in the same delta.
+    pub(super) fn scan(&mut self, source: &str, completed_source_len: usize) {
+        let holdback_start = match self.state() {
+            TableHoldbackState::Confirmed { table_start } => Some(table_start),
+            TableHoldbackState::PendingHeader { header_start } => Some(header_start),
+            TableHoldbackState::None => None,
+        };
+        if self.source_offset < completed_source_len
+            || holdback_start.is_some_and(|start| start < completed_source_len)
+        {
+            self.reset();
+            self.source_offset = completed_source_len;
+        }
+        let source_chunk = &source[self.source_offset..];
         if source_chunk.is_empty() {
             return;
         }

@@ -86,7 +86,7 @@ impl ChatWidget {
     fn flush_answer_stream(&mut self, completed_message: Option<&str>) {
         let had_stream_controller = self.stream_controller.is_some();
         if let Some(mut controller) = self.stream_controller.take() {
-            let had_live_tail = controller.has_live_tail();
+            let needs_scrollback_reflow = controller.needs_scrollback_reflow();
             self.clear_active_stream_tail();
             let (cell, streamed_source) = controller.finalize();
             let completed_message_differs = completed_message.is_some_and(|completed| {
@@ -96,7 +96,7 @@ impl ChatWidget {
                 // Stream finalization supplies one trailing newline when the last delta omitted it.
                 streamed != completed && streamed.strip_suffix('\n') != Some(completed)
             });
-            let scrollback_reflow = if had_live_tail || completed_message_differs {
+            let scrollback_reflow = if needs_scrollback_reflow || completed_message_differs {
                 crate::app_event::ConsolidationScrollbackReflow::Required
             } else {
                 crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan

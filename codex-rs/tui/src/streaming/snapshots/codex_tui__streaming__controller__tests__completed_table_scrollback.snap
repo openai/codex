@@ -1,0 +1,13 @@
+---
+source: tui/src/streaming/controller.rs
+assertion_line: 1456
+expression: "lines_to_plain_strings(&committed.transcript_lines(u16::MAX))"
+---
+[
+    "  ",
+    "   Key      Value",
+    "  ━━━━━━━  ━━━━━━━",
+    "   first    row",
+    "  ",
+    "  After table.",
+]

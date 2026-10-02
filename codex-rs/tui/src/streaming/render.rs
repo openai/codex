@@ -26,12 +26,14 @@ pub(super) struct StreamingRender {
     pub(super) lines: Vec<HyperlinkLine>,
     pub(super) pending_math_start: Option<usize>,
     pub(super) mutable_fence_start: Option<usize>,
+    /// Source boundary before the final top-level block, including after full re-renders.
+    pub(super) completed_source_len: usize,
     /// Source prefix containing only completed top-level markdown blocks.
     stable_source_len: usize,
     /// Rendered-line boundary corresponding to `stable_source_len`.
     stable_rendered_len: usize,
     /// Reference-style link definitions can affect any earlier or later markdown block.
-    has_reference_link_definition: bool,
+    pub(super) has_reference_link_definition: bool,
     /// Inline visualization directives require source-wide rewriting once one is committed.
     has_inline_visualization_directive: bool,
     /// Parser state for a directly appendable, open top-level code fence.
@@ -45,6 +47,7 @@ impl StreamingRender {
             lines: Vec::with_capacity(64),
             pending_math_start: None,
             mutable_fence_start: None,
+            completed_source_len: 0,
             stable_source_len: 0,
             stable_rendered_len: 0,
             has_reference_link_definition: false,
@@ -57,6 +60,7 @@ impl StreamingRender {
         self.lines.clear();
         self.pending_math_start = None;
         self.mutable_fence_start = None;
+        self.completed_source_len = 0;
         self.stable_source_len = 0;
         self.stable_rendered_len = 0;
         self.has_reference_link_definition = false;
@@ -79,6 +83,7 @@ impl StreamingRender {
         self.open_code_fence = None;
         self.pending_math_start = None;
         self.mutable_fence_start = None;
+        self.completed_source_len = 0;
         self.has_inline_visualization_directive = contains_inline_visualization(source);
         self.lines = match (render_mode, inline_visualization_context) {
             (HistoryRenderMode::Rich, None) if !self.has_inline_visualization_directive => {
@@ -89,6 +94,7 @@ impl StreamingRender {
                     self.list_spacing,
                 );
                 self.has_reference_link_definition = rendered.has_reference_link_definition;
+                self.completed_source_len = rendered.last_top_level_block_start.unwrap_or(0);
                 self.pending_math_start = rendered.pending_math_start;
                 self.mutable_fence_start = rendered.mutable_fence_start;
                 rendered.lines
@@ -102,6 +108,8 @@ impl StreamingRender {
                         Some(cwd),
                         self.list_spacing,
                     );
+                    self.has_reference_link_definition = rendered.has_reference_link_definition;
+                    self.completed_source_len = rendered.last_top_level_block_start.unwrap_or(0);
                     self.pending_math_start = rendered.pending_math_start;
                     self.mutable_fence_start = rendered.mutable_fence_start;
                 }
@@ -200,6 +208,7 @@ impl StreamingRender {
         }
 
         let final_block_start = pending.last_top_level_block_start.unwrap_or(/*default*/ 0);
+        self.completed_source_len = self.stable_source_len + final_block_start;
         self.open_code_fence = OpenCodeFence::detect(
             &pending_source[final_block_start..],
             raw_source.len(),
