@@ -93,12 +93,9 @@ fn exec_command_trace_payloads_use_inferred_native_cwd() -> anyhow::Result<()> {
         parsed_cmd: Vec::new(),
         source: ExecCommandSource::UnifiedExecInteraction,
         interaction_input: Some("input".to_string()),
-        stdout: "output".to_string(),
-        stderr: String::new(),
-        aggregated_output: "output".to_string(),
+        aggregated_output: "combined output".to_string(),
         exit_code: 0,
         duration: Duration::from_millis(250),
-        formatted_output: "output".to_string(),
         status: ExecCommandStatus::Completed,
     });
 
@@ -138,12 +135,9 @@ fn exec_command_trace_payloads_use_inferred_native_cwd() -> anyhow::Result<()> {
             "parsed_cmd": [],
             "source": "unified_exec_interaction",
             "interaction_input": "input",
-            "stdout": "output",
-            "stderr": "",
-            "aggregated_output": "output",
+            "aggregated_output": "combined output",
             "exit_code": 0,
             "duration": {"secs": 0, "nanos": 250000000},
-            "formatted_output": "output",
             "status": "completed"
         })
     );

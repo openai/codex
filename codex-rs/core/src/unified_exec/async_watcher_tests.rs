@@ -357,13 +357,6 @@ async fn exit_watcher_waits_for_late_network_denial_before_classifying_end() -> 
             Some("LATE_DENIAL")
         )
     );
-    assert_eq!(
-        item.formatted_output,
-        Some(codex_utils_output_truncation::formatted_truncate_text(
-            "LATE_DENIAL",
-            codex_utils_output_truncation::TruncationPolicy::Bytes(4),
-        ))
-    );
     assert!(
         elapsed >= Duration::from_millis(10) && elapsed < TRAILING_OUTPUT_GRACE,
         "completion should wait for denial without falling back to the output grace: {elapsed:?}"

@@ -1113,12 +1113,8 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
     );
     let end_event = end_event.expect("expected command completion");
     assert_eq!(
-        (
-            end_event.exit_code,
-            end_event.stdout,
-            end_event.aggregated_output
-        ),
-        (0, "HELLO-UEXECé�".to_string(), "HELLO-UEXECé�".to_string())
+        (end_event.exit_code, end_event.aggregated_output),
+        (0, "HELLO-UEXECé�".to_string())
     );
     Ok(())
 }

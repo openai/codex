@@ -471,6 +471,7 @@ async fn migration_projects_explicit_and_implicit_legacy_completed_items() {
     let reasoning: serde_json::Value =
         serde_json::from_slice(&items.items[1].item_json).expect("parse projected reasoning");
     assert_eq!(command["type"], "commandExecution");
+    assert_eq!(command["aggregatedOutput"], "ok");
     assert_eq!(reasoning["type"], "reasoning");
     assert_eq!(reasoning["summary"], json!(["summary"]));
     assert_eq!(reasoning["content"], json!(["raw"]));

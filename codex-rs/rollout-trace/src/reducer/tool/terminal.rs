@@ -450,9 +450,9 @@ fn parse_protocol_terminal_response(payload: ExecCommandEndPayload) -> ParsedTer
         terminal_id: payload.process_id,
         result: TerminalResult {
             exit_code: Some(payload.exit_code),
-            stdout: payload.stdout,
-            stderr: payload.stderr,
-            formatted_output: Some(payload.formatted_output),
+            stdout: payload.aggregated_output,
+            stderr: String::new(),
+            formatted_output: None,
             original_token_count: None,
             chunk_id: None,
         },
@@ -557,10 +557,9 @@ struct ExecCommandBeginPayload {
 #[derive(Deserialize)]
 struct ExecCommandEndPayload {
     process_id: Option<String>,
-    stdout: String,
-    stderr: String,
+    #[serde(default)]
+    aggregated_output: String,
     exit_code: i32,
-    formatted_output: String,
 }
 
 #[derive(Deserialize)]

@@ -220,12 +220,9 @@ struct ExecCommandEndTracePayload<'a> {
     source: ExecCommandSource,
     #[serde(skip_serializing_if = "Option::is_none")]
     interaction_input: Option<&'a str>,
-    stdout: &'a str,
-    stderr: &'a str,
     aggregated_output: &'a str,
     exit_code: i32,
     duration: Duration,
-    formatted_output: &'a str,
     status: &'a ExecCommandStatus,
 }
 
@@ -243,12 +240,9 @@ impl<'a> From<&'a ExecCommandEndEvent> for ExecCommandEndTracePayload<'a> {
             parsed_cmd,
             source,
             interaction_input,
-            stdout,
-            stderr,
             aggregated_output,
             exit_code,
             duration,
-            formatted_output,
             status,
         } = event;
         Self {
@@ -263,12 +257,9 @@ impl<'a> From<&'a ExecCommandEndEvent> for ExecCommandEndTracePayload<'a> {
             parsed_cmd,
             source: *source,
             interaction_input: interaction_input.as_deref(),
-            stdout,
-            stderr,
             aggregated_output,
             exit_code: *exit_code,
             duration: *duration,
-            formatted_output,
             status,
         }
     }

@@ -81,10 +81,8 @@ fn exec_tool_reduces_to_terminal_operation_and_session() -> anyhow::Result<()> {
             "turn_id": "turn-1",
             "command": ["cargo", "test"],
             "cwd": "/repo",
-            "stdout": "ok\n",
-            "stderr": "",
+            "aggregated_output": "ok\n",
             "exit_code": 0,
-            "formatted_output": "ok\n",
             "status": "completed"
         }),
     )?;
@@ -180,7 +178,7 @@ fn exec_tool_reduces_to_terminal_operation_and_session() -> anyhow::Result<()> {
                 exit_code: Some(0),
                 stdout: "ok\n".to_string(),
                 stderr: String::new(),
-                formatted_output: Some("ok\n".to_string()),
+                formatted_output: None,
                 original_token_count: None,
                 chunk_id: None,
             }),

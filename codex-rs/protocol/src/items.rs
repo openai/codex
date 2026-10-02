@@ -271,12 +271,6 @@ pub struct CommandExecutionItem {
     pub status: CommandExecutionStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub stdout: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub stderr: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub aggregated_output: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -284,9 +278,6 @@ pub struct CommandExecutionItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(type = "string", optional)]
     pub duration: Option<Duration>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub formatted_output: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]

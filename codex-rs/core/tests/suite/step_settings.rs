@@ -2815,8 +2815,6 @@ async fn captured_step_controls_exec_completion_and_write_stdin_output() -> Resu
     .await;
     let end = end.expect("exec completion");
 
-    use codex_utils_output_truncation::TruncationPolicy;
-    use codex_utils_output_truncation::formatted_truncate_text;
     let requests = responses.requests();
     let exec = requests[2]
         .function_call_output_text("exec-b")
@@ -2836,13 +2834,7 @@ async fn captured_step_controls_exec_completion_and_write_stdin_output() -> Resu
         "{stdin}"
     );
     assert_eq!(end.exit_code, 7);
-    // The formatting check needs an untruncated chunk, independent of how the executor
-    // aggregates output across the initial command and later stdin interactions.
     assert!(end.aggregated_output.contains(&output));
-    assert_eq!(
-        end.formatted_output,
-        formatted_truncate_text(&end.aggregated_output, TruncationPolicy::Bytes(400))
-    );
     Ok(())
 }
 

@@ -3330,12 +3330,9 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         source: CoreExecCommandSource::Agent,
         interaction_input: None,
         status: CoreCommandExecutionStatus::Completed,
-        stdout: Some("done\n".to_string()),
-        stderr: Some(String::new()),
         aggregated_output: Some("done\n".to_string()),
         exit_code: Some(0),
         duration: Some(Duration::from_millis(5)),
-        formatted_output: Some("done\n".to_string()),
     });
 
     assert_eq!(

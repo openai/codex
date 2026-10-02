@@ -905,7 +905,7 @@ async fn shell_snapshot_v2_filters_profile_secrets_without_creating_files() -> R
 
         assert_eq!(end.exit_code, 0);
         assert_eq!(
-            normalize_newlines(&end.stdout).trim(),
+            normalize_newlines(&end.aggregated_output).trim(),
             "helper|path|policy|missing"
         );
     }
@@ -953,7 +953,7 @@ async fn shell_snapshot_v2_preserves_legacy_snapshots_for_user_shell() -> Result
     .await;
 
     assert_eq!(end.exit_code, 0);
-    assert_eq!(normalize_newlines(&end.stdout).trim(), "legacy");
+    assert_eq!(normalize_newlines(&end.aggregated_output).trim(), "legacy");
     Ok(())
 }
 
@@ -962,7 +962,7 @@ async fn shell_snapshot_v2_preserves_legacy_snapshots_for_user_shell() -> Result
 async fn linux_unified_exec_uses_shell_snapshot() -> Result<()> {
     let command = "echo snapshot-linux";
     let run = run_snapshot_command(command).await?;
-    let stdout = normalize_newlines(&run.end.stdout);
+    let output = normalize_newlines(&run.end.aggregated_output);
 
     assert_eq!(run.begin.command.get(1).map(String::as_str), Some("-lc"));
     assert_eq!(run.begin.command.get(2).map(String::as_str), Some(command));
@@ -971,8 +971,8 @@ async fn linux_unified_exec_uses_shell_snapshot() -> Result<()> {
     assert_posix_snapshot_sections(&run.snapshot_content);
     assert_eq!(run.end.exit_code, 0);
     assert!(
-        stdout.contains("snapshot-linux"),
-        "stdout should contain snapshot marker; stdout={stdout:?}"
+        output.contains("snapshot-linux"),
+        "output should contain snapshot marker; output={output:?}"
     );
 
     Ok(())
@@ -1018,7 +1018,7 @@ async fn unified_exec_snapshot_preserves_shell_environment_policy_set() -> Resul
     .await?;
 
     assert_eq!(
-        normalize_newlines(&end.stdout).trim(),
+        normalize_newlines(&end.aggregated_output).trim(),
         POLICY_SUCCESS_OUTPUT
     );
     assert_eq!(end.exit_code, 0);
@@ -1239,10 +1239,13 @@ async fn macos_unified_exec_resolves_command_from_tied_path_snapshot(
 
     assert_eq!(
         end.exit_code, 0,
-        "tied-path command failed: stderr={:?}",
-        end.stderr
+        "tied-path command failed: output={:?}",
+        end.aggregated_output
     );
-    assert_eq!(normalize_newlines(&end.stdout).trim(), "tied-path-command");
+    assert_eq!(
+        normalize_newlines(&end.aggregated_output).trim(),
+        "tied-path-command"
+    );
 
     Ok(())
 }
@@ -1274,7 +1277,10 @@ async fn macos_unified_exec_uses_shell_snapshot() -> Result<()> {
 
     assert!(run.snapshot_path.starts_with(&run.codex_home));
     assert_posix_snapshot_sections(&run.snapshot_content);
-    assert_eq!(normalize_newlines(&run.end.stdout).trim(), "snapshot-macos");
+    assert_eq!(
+        normalize_newlines(&run.end.aggregated_output).trim(),
+        "snapshot-macos"
+    );
     assert_eq!(run.end.exit_code, 0);
 
     Ok(())
@@ -1308,7 +1314,7 @@ async fn windows_unified_exec_uses_shell_snapshot() -> Result<()> {
     assert!(run.snapshot_content.contains("# aliases "));
     assert!(run.snapshot_content.contains("# exports "));
     assert_eq!(
-        normalize_newlines(&run.end.stdout).trim(),
+        normalize_newlines(&run.end.aggregated_output).trim(),
         "snapshot-windows"
     );
     assert_eq!(run.end.exit_code, 0);
