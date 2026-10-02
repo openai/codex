@@ -477,9 +477,15 @@ mod tests {
 
     #[test]
     fn tool_call_timing_guard_ignores_code_mode_source() {
+        let buffer: &'static std::sync::Mutex<Vec<u8>> =
+            Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
         let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
             .with_max_level(tracing::Level::INFO)
+            .with_writer(MockWriter::new(buffer))
             .finish();
+        // Keep callsite interest independent of untraced parallel test threads.
+        let _untraced = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
         tracing::subscriber::with_default(subscriber, || {
             let call = ToolCall {
                 tool_name: codex_tools::ToolName::plain("test_tool"),
@@ -519,6 +525,15 @@ mod tests {
                 "nested code-mode calls should not create overlapping timing events"
             );
         });
+
+        let logs = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+        assert_eq!(
+            logs.lines()
+                .filter(|line| line.contains("event.name=\"codex.tool_call\""))
+                .count(),
+            1,
+            "only direct tool calls should emit a timing event; logs:\n{logs}"
+        );
     }
 
     #[test]
