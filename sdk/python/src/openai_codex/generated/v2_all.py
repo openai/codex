@@ -3934,6 +3934,16 @@ class ResourceTemplate(BaseModel):
     uri_template: Annotated[str, Field(alias="uriTemplate")]
 
 
+class AdditionalToolsResponseItem(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: str | None = None
+    role: str
+    tools: list
+    type: Annotated[Literal["additional_tools"], Field(title="AdditionalToolsResponseItemType")]
+
+
 class AgentMessageResponseItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -11147,7 +11157,8 @@ class CustomToolCallOutputResponseItem(BaseModel):
 
 class ResponseItem(
     RootModel[
-        MessageResponseItem
+        AdditionalToolsResponseItem
+        | MessageResponseItem
         | AgentMessageResponseItem
         | ReasoningResponseItem
         | LocalShellCallResponseItem
@@ -11170,7 +11181,8 @@ class ResponseItem(
         populate_by_name=True,
     )
     root: (
-        MessageResponseItem
+        AdditionalToolsResponseItem
+        | MessageResponseItem
         | AgentMessageResponseItem
         | ReasoningResponseItem
         | LocalShellCallResponseItem

@@ -76,7 +76,8 @@ pub fn into_persisted_rollout_items(
 #[inline]
 pub fn should_persist_response_item(item: &ResponseItem) -> bool {
     match item {
-        ResponseItem::Message { .. }
+        ResponseItem::AdditionalTools { .. }
+        | ResponseItem::Message { .. }
         | ResponseItem::AgentMessage { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
@@ -91,9 +92,7 @@ pub fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::ConfigurationUpdate { .. }
         | ResponseItem::Compaction { .. }
         | ResponseItem::ContextCompaction { .. } => true,
-        ResponseItem::AdditionalTools { .. }
-        | ResponseItem::CompactionTrigger { .. }
-        | ResponseItem::Other => false,
+        ResponseItem::CompactionTrigger { .. } | ResponseItem::Other => false,
     }
 }
 

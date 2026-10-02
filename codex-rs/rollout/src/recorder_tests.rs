@@ -614,6 +614,58 @@ fn strip_legacy_ghost_snapshot_keeps_checkpoint_metadata_aligned() {
 }
 
 #[tokio::test]
+async fn recorder_preserves_additional_tools_in_both_history_modes() -> std::io::Result<()> {
+    for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let thread_id = ThreadId::new();
+        let recorder = RolloutRecorder::new(
+            &config,
+            RolloutRecorderParams::new(
+                thread_id,
+                /*forked_from_id*/ None,
+                /*parent_thread_id*/ None,
+                SessionSource::Exec,
+                /*thread_source*/ None,
+                "test_originator".to_string(),
+                BaseInstructions::default(),
+                Vec::new(),
+            )
+            .with_history_mode(history_mode),
+        )
+        .await?;
+        let item = RolloutItem::ResponseItem(
+            ResponseItem::AdditionalTools {
+                id: None,
+                role: "developer".to_string(),
+                tools: vec![serde_json::json!({
+                    "type": "namespace",
+                    "name": "functions",
+                    "description": "Available tools.",
+                    "tools": [{"type": "function", "name": "lookup",
+                        "description": "Look up a value.",
+                        "parameters": {"type": "object", "properties": {}}}]
+                })],
+            }
+            .into(),
+        );
+        let persisted = crate::persisted_rollout_items(std::slice::from_ref(&item), history_mode);
+        recorder.record_canonical_items(&persisted).await?;
+        recorder.flush().await?;
+        let (items, loaded_thread_id, parse_errors) =
+            RolloutRecorder::load_rollout_items(recorder.rollout_path()).await?;
+        assert_eq!(loaded_thread_id, Some(thread_id));
+        assert_eq!(parse_errors, 0);
+        assert_eq!(
+            serde_json::to_value(&items[1..])?,
+            serde_json::to_value([item])?
+        );
+        recorder.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());

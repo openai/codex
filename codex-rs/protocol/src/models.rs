@@ -1010,12 +1010,12 @@ impl InternalChatMessageMetadataPassthrough {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
-    #[schemars(skip)]
-    #[ts(skip)]
     AdditionalTools {
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         id: Option<ResponseItemId>,
         role: String,
+        #[ts(type = "unknown[]")]
         tools: Vec<serde_json::Value>,
     },
     Message {
