@@ -154,21 +154,32 @@ pub(super) async fn ensure_conversation_listener(
             )));
         }
     };
-    let thread_state = {
+    let (thread_state, result) = {
         let pending_thread_unloads = listener_task_context.pending_thread_unloads.lock().await;
         if pending_thread_unloads.contains(&conversation_id) {
             return Err(invalid_request(format!(
                 "thread {conversation_id} is closing; retry after the thread is closed"
             )));
         }
-        let Some(thread_state) = listener_task_context
+        match listener_task_context
             .thread_state_manager
             .try_ensure_connection_subscribed(conversation_id, connection_id, raw_events_enabled)
             .await
-        else {
-            return Ok(EnsureConversationListenerResult::ConnectionClosed);
-        };
-        thread_state
+        {
+            Some(thread_state) => (thread_state, EnsureConversationListenerResult::Attached),
+            None => {
+                // Startup can outlast connection cleanup; the thread still needs a
+                // listener to unload once it is idle and has no subscribers.
+                let thread_state = listener_task_context
+                    .thread_state_manager
+                    .thread_state(conversation_id)
+                    .await;
+                (
+                    thread_state,
+                    EnsureConversationListenerResult::ConnectionClosed,
+                )
+            }
+        }
     };
     if let Err(error) = ensure_listener_task_running(
         listener_task_context.clone(),
@@ -184,7 +195,7 @@ pub(super) async fn ensure_conversation_listener(
             .await;
         return Err(error);
     }
-    Ok(EnsureConversationListenerResult::Attached)
+    Ok(result)
 }
 
 pub(super) fn log_listener_attach_result(
