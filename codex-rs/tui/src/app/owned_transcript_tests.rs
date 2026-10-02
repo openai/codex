@@ -801,10 +801,11 @@ async fn owned_search_and_selection_consume_input_before_composer_and_backtrack(
             &TuiEvent::Key(key)
         )?);
     }
-    let copy = app.transcript_view.handle_key(
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-        &app.transcript_cells,
-    );
+    let copy_key = KeyEvent::new(KeyCode::Insert, KeyModifiers::CONTROL);
+    assert!(app.transcript_view.owns_interaction_key(copy_key));
+    let copy = app
+        .transcript_view
+        .handle_key(copy_key, &app.transcript_cells);
     assert!(matches!(copy, Some(ViewAction::Copy(text)) if !text.is_empty()));
     assert!(app.handle_owned_transcript_event(&mut tui, &mut app_server, &escape)?);
     assert!(!app.backtrack.overlay_preview_active);
@@ -1414,6 +1415,7 @@ async fn fullscreen_composer_mouse_copy_and_input_ownership() -> Result<()> {
     let copy_events = [
         TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER)),
         TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        TuiEvent::Key(KeyEvent::new(KeyCode::Insert, KeyModifiers::CONTROL)),
         mouse(Down(Right), x + 2, y),
     ];
     let mut selection_frames = Vec::new();
@@ -1473,6 +1475,7 @@ async fn fullscreen_composer_mouse_copy_and_input_ownership() -> Result<()> {
             );
             let gesture = match event {
                 TuiEvent::Mouse(_) => "right-click",
+                TuiEvent::Key(key) if key.code == KeyCode::Insert => "ctrl-insert",
                 TuiEvent::Key(key) if key.modifiers == KeyModifiers::SUPER => "cmd-c",
                 _ => "ctrl-c",
             };

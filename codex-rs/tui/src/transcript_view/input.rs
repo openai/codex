@@ -136,10 +136,7 @@ impl TranscriptView {
             return true;
         }
         if self.selection.is_some() {
-            return (code == KeyCode::Char('c')
-                && matches!(modifiers, KeyModifiers::CONTROL | KeyModifiers::SUPER))
-                || (code == KeyCode::Char('c')
-                    && modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT))
+            return crate::text_selection::is_copy_key(key)
                 || code == KeyCode::Esc
                 || (code == KeyCode::Enter && modifiers == KeyModifiers::NONE)
                 || (matches!(modifiers, KeyModifiers::NONE | KeyModifiers::SHIFT)

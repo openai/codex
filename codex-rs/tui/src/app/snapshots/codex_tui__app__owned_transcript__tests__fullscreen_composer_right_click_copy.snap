@@ -26,6 +26,18 @@ ctrl-c Ok(Confirmed)
 hello world
 ···········
 
+ctrl-insert Err("clipboard unavailable")
+hello world
+^^^^^······
+
+ctrl-insert Ok(Unconfirmed)
+hello world
+^^^^^······
+
+ctrl-insert Ok(Confirmed)
+hello world
+···········
+
 right-click Err("clipboard unavailable")
 hello world
 ^^^^^······

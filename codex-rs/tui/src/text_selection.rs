@@ -67,10 +67,12 @@ pub(crate) fn click_count(
 
 pub(crate) fn is_copy_key(key: KeyEvent) -> bool {
     // Kitty reports Cmd+C as Super+C, including over SSH. Crossterm may report
-    // Ctrl+Shift+C as uppercase C with only Control set.
+    // Ctrl+Shift+C as uppercase C with only Control set. Windows Terminal forwards
+    // Ctrl+Insert when its Copy action has no native terminal selection.
     let (code, modifiers) = crate::key_hint::normalize_key_parts(key.code, key.modifiers);
     key.kind != KeyEventKind::Release
-        && code == KeyCode::Char('c')
-        && (matches!(modifiers, KeyModifiers::CONTROL | KeyModifiers::SUPER)
-            || modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT))
+        && ((code == KeyCode::Char('c')
+            && (matches!(modifiers, KeyModifiers::CONTROL | KeyModifiers::SUPER)
+                || modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT)))
+            || (code == KeyCode::Insert && modifiers == KeyModifiers::CONTROL))
 }
