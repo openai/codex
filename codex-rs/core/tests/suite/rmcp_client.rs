@@ -133,6 +133,8 @@ use wiremock::MockServer;
 
 #[path = "mcp_oauth_refresh_tests.rs"]
 mod oauth_refresh_tests;
+#[path = "mcp_sandbox_tests.rs"]
+mod sandbox_tests;
 #[path = "mcp_storage_telemetry_tests.rs"]
 mod storage_telemetry_tests;
 
