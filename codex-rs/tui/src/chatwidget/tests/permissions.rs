@@ -96,6 +96,7 @@ async fn permission_discovery_discards_stale_results_and_preserves_covering_moda
     chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
     chat.on_permission_profiles_loaded(first, Ok(Discovery::local(&chat.config)));
     assert!(!chat.bottom_pane.has_active_view());
+    chat.permission_discovery = None;
     chat.open_permissions_popup();
     let second = chat.permission_popup_request_id.unwrap();
     chat.on_permission_profiles_loaded(first, Ok(Discovery::local(&chat.config)));
@@ -107,6 +108,7 @@ async fn permission_discovery_discards_stale_results_and_preserves_covering_moda
     chat.on_permission_profiles_loaded(second, Ok(Discovery::local(&chat.config)));
     assert!(!chat.bottom_pane.has_active_view());
 
+    chat.permission_discovery = None;
     chat.open_permissions_popup();
     let request_id = chat.permission_popup_request_id.unwrap();
     chat.bottom_pane.show_selection_view(SelectionViewParams {

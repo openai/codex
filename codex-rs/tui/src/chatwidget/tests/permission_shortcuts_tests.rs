@@ -16,6 +16,17 @@ async fn permission_shortcuts_cycle_builtin_modes() {
     {
         chat.set_windows_sandbox_mode(Some(WindowsSandboxSetupMode::Unelevated));
     }
+    chat.permission_discovery = Some(crate::permission_discovery::PermissionDiscovery::local(
+        &chat.config,
+    ));
+    chat.config.config_layer_stack = requirements_stack(
+        serde_json::from_value(serde_json::json!({
+            "allowed_approvals_reviewers": ["auto_review"],
+            "allowed_permission_profiles": {":workspace": false, ":read-only": false}
+        }))
+        .unwrap(),
+    );
+    chat.turn_lifecycle.agent_turn_running = true;
     for (current, reviewer, key, expected, next_reviewer) in [
         (":workspace", User, KeyCode::F(8), ":workspace", AutoReview),
         (":workspace", AutoReview, KeyCode::F(8), ":read-only", User),
@@ -117,19 +128,13 @@ async fn permission_shortcuts_respect_managed_mode_requirements() {
         .expect("set active profile");
 
     for requirements in [
-        codex_config::ConfigRequirementsToml {
-            allowed_approvals_reviewers: Some(vec![AutoReview]),
-            ..Default::default()
-        },
-        codex_config::ConfigRequirementsToml {
-            auto_review: Some(codex_config::AutoReviewRequirementsToml {
-                required_on_models: Some(vec![chat.current_model().to_string()]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
+        serde_json::json!({"allowedApprovalsReviewers": ["auto_review"]}),
+        serde_json::json!({"autoReview": {"requiredOnModels": [chat.current_model()]}}),
+        serde_json::json!({"allowedPermissionProfiles": {":workspace": false, ":read-only": false}}),
     ] {
-        chat.config.config_layer_stack = requirements_stack(requirements);
+        let mut discovery = crate::permission_discovery::PermissionDiscovery::local(&chat.config);
+        discovery.requirements = Some(serde_json::from_value(requirements).unwrap());
+        chat.permission_discovery = Some(discovery);
         chat.handle_key_event(KeyEvent::from(KeyCode::F(8)));
         let AppEvent::InsertHistoryCell(cell) = rx.try_recv().expect("unavailable-mode notice")
         else {
@@ -141,4 +146,48 @@ async fn permission_shortcuts_respect_managed_mode_requirements() {
         );
         assert!(rx.try_recv().is_err(), "must not submit a forbidden mode");
     }
+}
+
+#[tokio::test]
+async fn permission_shortcuts_load_once_and_reuse_the_picker_catalog() {
+    let (mut chat, mut events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.chat_keymap.next_permission_mode = vec![crate::key_hint::plain(KeyCode::F(8))];
+    chat.handle_key_event(KeyEvent::from(KeyCode::F(8)));
+    let request_id = assert_matches!(events.try_recv(), Ok(AppEvent::FetchPermissionProfiles { request_id, .. }) => request_id);
+    assert_chatwidget_snapshot!(
+        "permission_shortcut_loading",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+    chat.handle_key_event(KeyEvent::from(KeyCode::F(8)));
+    assert!(events.try_recv().is_err(), "reuse pending fetch");
+    chat.on_permission_profiles_loaded(
+        request_id,
+        Ok(crate::permission_discovery::PermissionDiscovery::local(
+            &chat.config,
+        )),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+    chat.open_permissions_popup();
+    assert!(chat.bottom_pane.has_active_view());
+    assert!(
+        events.try_recv().is_err(),
+        "reopening must use the cached catalog"
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+    chat.handle_key_event(KeyEvent::from(KeyCode::F(8)));
+    assert_matches!(
+        events.try_recv(),
+        Ok(AppEvent::ApplyPermissionShortcut { .. })
+    );
+    chat.complete_permission_shortcut(thread_id);
+    chat.pause_for_disconnect();
+    while events.try_recv().is_ok() {}
+    chat.handle_key_event(KeyEvent::from(KeyCode::F(8)));
+    assert_matches!(
+        events.try_recv(),
+        Ok(AppEvent::FetchPermissionProfiles { .. })
+    );
 }

@@ -57,6 +57,7 @@ impl ChatWidget {
                 session.windows_sandbox_host
             };
         self.invalidate_permission_discovery();
+        self.permission_discovery = None;
         self.permission_profiles_menu_opened = false;
         self.transcript.reset_copy_history();
         let history_metadata = session.message_history.unwrap_or_default();

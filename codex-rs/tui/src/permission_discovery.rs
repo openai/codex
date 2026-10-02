@@ -1,4 +1,4 @@
-//! Bounded discovery for permission pickers; fixed request IDs bound abandoned RPCs.
+//! Bounded permission catalog discovery with distinct IDs for concurrent requests.
 //! Discovery and availability come from the connected server; selection uses its settings API.
 
 use crate::app_event::AppEvent;
@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 use uuid::Uuid;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct PermissionDiscovery {
     pub(crate) profiles: Vec<PermissionProfileSummary>,
     pub(crate) requirements: Option<ConfigRequirements>,
@@ -98,7 +98,9 @@ pub(crate) fn fetch(
         let request = async {
             let requirements: ConfigRequirementsReadResponse = handle
                 .request_typed(ClientRequest::ConfigRequirementsRead {
-                    request_id: RequestId::String("tui-permission-requirements".to_string()),
+                    request_id: RequestId::String(format!(
+                        "tui-permission-requirements-{request_id}"
+                    )),
                     params: None,
                 })
                 .await
@@ -106,10 +108,12 @@ pub(crate) fn fetch(
             let mut profiles = Vec::new();
             let mut cursor = None;
             let mut cursors = HashSet::new();
-            for _ in 0..10 {
+            for page in 0..10 {
                 let response: PermissionProfileListResponse = handle
                     .request_typed(ClientRequest::PermissionProfileList {
-                        request_id: RequestId::String("tui-permission-profiles".to_string()),
+                        request_id: RequestId::String(format!(
+                            "tui-permission-profiles-{request_id}-{page}"
+                        )),
                         params: PermissionProfileListParams {
                             cursor,
                             limit: Some(100),

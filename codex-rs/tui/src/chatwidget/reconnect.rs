@@ -7,6 +7,8 @@ use crate::bottom_pane::RestrictedInputMode;
 
 impl ChatWidget {
     pub(crate) fn pause_for_disconnect(&mut self) {
+        self.permission_discovery = None;
+        self.invalidate_permission_discovery();
         self.cancel_startup_submission();
         self.cancel_image_submission();
         // The app-server transport can fail while the separate WebRTC helper
