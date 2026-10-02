@@ -61,6 +61,16 @@ pub(crate) fn normalize_key_aliases(value: &TomlValue) -> TomlValue {
 }
 
 fn normalize_key_aliases_at_path(value: &TomlValue, path: &[String]) -> TomlValue {
+    // Alias normalization cannot affect subtrees outside the registered legacy paths.
+    if !CONFIG_KEY_ALIASES.iter().any(|alias| {
+        alias
+            .legacy
+            .get(..path.len())
+            .is_some_and(|prefix| path.iter().map(String::as_str).eq(prefix.iter().copied()))
+    }) {
+        return value.clone();
+    }
+
     match value {
         TomlValue::Table(table) => {
             let mut normalized = TomlMap::new();
