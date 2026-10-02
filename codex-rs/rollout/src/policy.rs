@@ -4,13 +4,16 @@ use crate::RolloutItem;
 use crate::protocol::EventMsg;
 use codex_extension_items::ExtensionItem;
 use codex_protocol::items::CommandExecutionItem;
+use codex_protocol::items::McpToolCallItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::SubAgentActivityKind;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_utils_output_truncation::truncate_mcp_tool_result;
 use codex_utils_string::truncate_middle_with_marker;
 
+const PERSISTED_MCP_RESULT_MAX_BYTES: usize = 64 * 1024;
 pub(super) const PERSISTED_COMMAND_OUTPUT_MAX_BYTES: usize = 64 * 1024;
 const PERSISTED_COMMAND_OUTPUT_TRUNCATION_MARKER: &str =
     "\n... command output truncated for persistence ...\n";
@@ -256,6 +259,21 @@ fn persisted_item_completed_event<'a>(
                 let mut event = event.clone();
                 if let TurnItem::CommandExecution(command) = &mut event.item {
                     command.aggregated_output = Some(aggregated_output);
+                }
+                Some(Cow::Owned(EventMsg::ItemCompleted(event)))
+            }
+            TurnItem::McpToolCall(McpToolCallItem {
+                result: Some(result),
+                ..
+            }) => {
+                let Cow::Owned(result) =
+                    truncate_mcp_tool_result(result, PERSISTED_MCP_RESULT_MAX_BYTES)
+                else {
+                    return Some(Cow::Borrowed(ev));
+                };
+                let mut event = event.clone();
+                if let TurnItem::McpToolCall(tool_call) = &mut event.item {
+                    tool_call.result = Some(result);
                 }
                 Some(Cow::Owned(EventMsg::ItemCompleted(event)))
             }

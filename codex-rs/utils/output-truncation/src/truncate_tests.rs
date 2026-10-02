@@ -4,11 +4,68 @@ use crate::approx_tokens_from_byte_count_i64;
 use crate::formatted_truncate_text;
 use crate::formatted_truncate_text_content_items_with_policy;
 use crate::truncate_function_output_items_with_policy;
+use crate::truncate_mcp_tool_result;
 use crate::truncate_text;
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageReference;
 use pretty_assertions::assert_eq;
+
+#[test]
+fn truncate_mcp_tool_result_borrows_small_result() {
+    let result = CallToolResult {
+        content: vec![serde_json::json!({
+            "type": "text",
+            "text": "hello",
+        })],
+        structured_content: Some(serde_json::json!({"x": 1})),
+        is_error: Some(false),
+        meta: Some(serde_json::json!({"k": "v"})),
+    };
+
+    let truncated = truncate_mcp_tool_result(&result, /*max_bytes*/ 1024);
+
+    assert!(matches!(truncated, std::borrow::Cow::Borrowed(_)));
+    assert_eq!(truncated.as_ref(), &result);
+}
+
+#[test]
+fn truncate_mcp_tool_result_compacts_large_result() {
+    let result = CallToolResult {
+        content: vec![serde_json::json!({
+            "type": "text",
+            "text": format!("head\n{}\ntail", "x".repeat(5_000)),
+        })],
+        structured_content: Some(serde_json::json!({"x": "y".repeat(5_000)})),
+        is_error: Some(true),
+        meta: Some(serde_json::json!({
+            "private": format!("meta-head{}meta-tail", "z".repeat(5_000)),
+        })),
+    };
+
+    let truncated = truncate_mcp_tool_result(&result, /*max_bytes*/ 1024).into_owned();
+
+    let preview = truncated.content[0]["text"]
+        .as_str()
+        .expect("truncated result should contain a text preview");
+    assert_eq!(
+        truncated,
+        CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": preview,
+            })],
+            structured_content: None,
+            is_error: Some(true),
+            meta: None,
+        }
+    );
+    assert!(preview.len() < 2 * 1024);
+    assert!(preview.contains("head"));
+    assert!(preview.contains("chars truncated"));
+    assert!(preview.contains("meta-tail"));
+}
 
 #[test]
 fn truncate_bytes_less_than_placeholder_returns_placeholder() {

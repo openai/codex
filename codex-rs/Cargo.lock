@@ -4471,6 +4471,7 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "codex-utils-absolute-path",
+ "codex-utils-output-truncation",
  "codex-utils-path",
  "codex-utils-process",
  "codex-utils-string",
@@ -5090,6 +5091,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-string",
  "pretty_assertions",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,5 +1,8 @@
 //! Shared byte/token truncation for tool and exec output.
 
+use std::borrow::Cow;
+
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -35,6 +38,30 @@ pub fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
         TruncationPolicy::Bytes(bytes) => truncate_middle_chars(content, bytes),
         TruncationPolicy::Tokens(tokens) => truncate_middle_with_token_budget(content, tokens).0,
     }
+}
+
+/// Replaces an oversized serialized MCP result with a text preview while preserving its error
+/// status and supported bounded metadata.
+pub fn truncate_mcp_tool_result(
+    result: &CallToolResult,
+    max_bytes: usize,
+) -> Cow<'_, CallToolResult> {
+    let Ok(serialized) = serde_json::to_string(result) else {
+        return Cow::Borrowed(result);
+    };
+    if serialized.len() <= max_bytes {
+        return Cow::Borrowed(result);
+    }
+
+    Cow::Owned(CallToolResult {
+        content: vec![serde_json::json!({
+            "type": "text",
+            "text": truncate_text(&serialized, TruncationPolicy::Bytes(max_bytes)),
+        })],
+        structured_content: None,
+        is_error: result.is_error,
+        meta: None,
+    })
 }
 
 /// Applies the existing byte/token budget without changing success metadata or media ordering.
