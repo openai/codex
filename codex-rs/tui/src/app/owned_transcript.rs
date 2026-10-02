@@ -9,6 +9,7 @@ use super::*;
 use crate::history_cell::HistoryRenderMode;
 use crate::keymap::KeymapContext;
 use crate::keymap::bindings_for_action;
+use crate::keymap::configured_binding_for_action;
 use crate::keymap::keymap_action_ids;
 use crate::motion::MotionMode;
 use crate::pager_overlay::TranscriptHistoryState;
@@ -472,15 +473,30 @@ impl App {
             self.close_transcript_overlay(tui);
             return Ok(true);
         }
+        let empty_enter_returns_to_latest = matches!(
+            event,
+            TuiEvent::Key(KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            })
+        ) && self.enter_returns_to_latest()
+            && self.transcript_view.can_return_to_latest();
         if let TuiEvent::Key(key) = event
-            && ((key.modifiers.is_empty()
-                && matches!(key.code, KeyCode::PageUp | KeyCode::PageDown))
-                || crate::transcript_view::JumpTarget::from_key(*key).is_some())
             && !self.transcript_view.has_active_interaction()
             && keymap_action_ids().any(|action| {
                 action.context != KeymapContext::Pager
                     && !matches!(action.action, "find_transcript" | "focus_activity")
                     && self.active_keymap_contexts().contains_action(action)
+                    && !(empty_enter_returns_to_latest
+                        && action.context == KeymapContext::Composer
+                        && action.action == "submit")
+                    && ((key.modifiers.is_empty()
+                        && matches!(key.code, KeyCode::PageUp | KeyCode::PageDown))
+                        || crate::transcript_view::JumpTarget::from_key(*key).is_some()
+                        || configured_binding_for_action(&self.local_settings.tui.keymap, action)
+                            .is_some_and(std::option::Option::is_some))
                     && bindings_for_action(
                         &self.keymap,
                         action.context.config_name(),
@@ -521,17 +537,7 @@ impl App {
             | TuiEvent::FocusLost => None,
         };
         let Some(action) = action else {
-            if matches!(
-                event,
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Enter,
-                    modifiers: KeyModifiers::NONE,
-                    kind: KeyEventKind::Press,
-                    ..
-                })
-            ) && self.enter_returns_to_latest()
-                && self.transcript_view.can_return_to_latest()
-            {
+            if empty_enter_returns_to_latest {
                 self.transcript_view.jump_to_latest();
                 tui.frame_requester().schedule_frame();
                 return Ok(true);
