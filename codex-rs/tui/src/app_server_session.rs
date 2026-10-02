@@ -333,6 +333,8 @@ pub(crate) struct AppServerSession {
     managed_new_thread_defaults: Option<NewThreadModelDefaults>,
     external_agent_config_import_id: Mutex<Option<String>>,
     dynamic_tool_mcp: Option<Arc<DynamicToolMcpServer>>,
+    pub(crate) worktree_source_config_builder:
+        Option<Box<crate::legacy_core::config::ConfigBuilder>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -437,6 +439,7 @@ impl AppServerSession {
             managed_new_thread_defaults: None,
             external_agent_config_import_id: Mutex::default(),
             dynamic_tool_mcp: None,
+            worktree_source_config_builder: None,
         }
     }
 
@@ -446,17 +449,57 @@ impl AppServerSession {
         app_event_tx: AppEventSender,
         status_updates: tokio::sync::broadcast::Sender<ThreadStatusChangedNotification>,
     ) -> std::io::Result<()> {
-        if self.uses_embedded_app_server() {
+        let worktrees = if !self.uses_remote_workspace()
+            && !config.active_project.is_untrusted()
+            && config.features.enabled(codex_features::Feature::Worktrees)
+        {
+            // Listing a fresh, nonexistent thread is read-only and returns an empty page
+            // on supported stores. Probe before advertising tools or allocating a checkout.
+            let support = self
+                .request_handle()
+                .request_typed::<codex_app_server_protocol::ThreadAttachmentListResponse>(
+                    ClientRequest::ThreadAttachmentList {
+                        request_id: RequestId::String(uuid::Uuid::new_v4().to_string()),
+                        params: codex_app_server_protocol::ThreadAttachmentListParams {
+                            thread_id: uuid::Uuid::new_v4().to_string(),
+                            cursor: None,
+                            limit: Some(1),
+                        },
+                    },
+                )
+                .await;
+            match support {
+                Err(error) => {
+                    tracing::warn!(%error, "managed worktree attachment storage unavailable");
+                    None
+                }
+                Ok(_) => {
+                    match crate::managed_worktree_tools::ManagedWorktreeTools::new(&config).await {
+                        Ok(service) => Some(match self.worktree_source_config_builder.as_deref() {
+                            Some(builder) => service.with_source_config_builder(builder.clone()),
+                            None => service,
+                        }),
+                        Err(error) => {
+                            tracing::warn!(%error, "managed worktree tools unavailable");
+                            None
+                        }
+                    }
+                }
+            }
+        } else {
+            None
+        };
+        let services = crate::dynamic_tools_mcp::ToolServices {
+            task_tools: !self.uses_embedded_app_server(),
+            worktrees,
+        };
+        if !services.task_tools && services.worktrees.is_none() {
             return Ok(());
         }
-        if config
-            .mcp_servers
-            .get()
-            .contains_key(crate::dynamic_tools::NAMESPACE)
-        {
+        if config.mcp_servers.get().contains_key(services.namespace()) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
-                "a user-configured MCP server already owns the codex_tui namespace",
+                "a user-configured MCP server already owns the TUI tools namespace",
             ));
         }
         let managed_requirement = config
@@ -465,15 +508,12 @@ impl AppServerSession {
             .mcp_servers
             .as_ref()
             .map(|requirements| {
-                requirements
-                    .value
-                    .get(crate::dynamic_tools::NAMESPACE)
-                    .ok_or_else(|| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::PermissionDenied,
-                            "managed MCP requirements do not permit the TUI task-tools server",
-                        )
-                    })
+                requirements.value.get(services.namespace()).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "managed MCP requirements do not permit the TUI task-tools server",
+                    )
+                })
             })
             .transpose()?;
         let mut thread_start_params = thread_start_params_from_config(
@@ -505,6 +545,7 @@ impl AppServerSession {
                 app_event_tx,
                 status_updates,
                 managed_requirement,
+                services,
             )
             .await?,
         ));
@@ -512,10 +553,10 @@ impl AppServerSession {
     }
 
     pub(crate) fn thread_tool_transport(&self) -> ThreadToolTransport {
-        if self.uses_embedded_app_server() {
-            ThreadToolTransport::Disabled
-        } else if let Some(server) = self.dynamic_tool_mcp.as_ref() {
+        if let Some(server) = self.dynamic_tool_mcp.as_ref() {
             ThreadToolTransport::Mcp(Arc::clone(server))
+        } else if self.uses_embedded_app_server() {
+            ThreadToolTransport::Disabled
         } else {
             ThreadToolTransport::Dynamic
         }
@@ -801,6 +842,7 @@ impl AppServerSession {
         if self.history_support == ThreadHistorySupport::LegacyOnly {
             params.history_mode = None;
         }
+        self.thread_tool_transport().validate_config(config)?;
         self.thread_tool_transport().configure(&mut params);
         let request_handle = self.request_handle();
         let (response, history_support, task_tools_available) =
@@ -942,6 +984,7 @@ impl AppServerSession {
         permission_mode: ForkPermissionMode,
         config_source: ForkConfigSource,
     ) -> Result<AppServerStartedThread> {
+        self.thread_tool_transport().validate_config(&config)?;
         let fork_parent = match presentation {
             ForkPresentation::Regular => self
                 .thread_read(thread_id, /*include_turns*/ false)
@@ -1740,6 +1783,7 @@ pub(crate) async fn start_thread_with_request_handle(
         remote_cwd_override.as_deref(),
         /*session_start_source*/ None,
     );
+    thread_tool_transport.validate_config(&config)?;
     launch_choices.configure(&mut params);
     params.daybreak_enabled = (config.daybreak_enabled && !config.ephemeral).then_some(true);
     thread_tool_transport.configure(&mut params);

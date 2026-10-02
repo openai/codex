@@ -386,19 +386,30 @@ impl App {
         if let Some(updated_model) = config.model.clone() {
             model = updated_model;
         }
+        let mut source_overrides = harness_overrides.clone();
+        source_overrides.cwd = None;
+        app_server.worktree_source_config_builder = Some(Box::new(
+            crate::legacy_core::config::ConfigBuilder::default()
+                .codex_home(config.codex_home.to_path_buf())
+                .cli_overrides(cli_kv_overrides.clone())
+                .harness_overrides(source_overrides)
+                .loader_overrides(loader_overrides.clone())
+                .cloud_config_bundle(cloud_config_bundle.clone()),
+        ));
         let dynamic_tool_status_updates = tokio::sync::broadcast::channel(/*capacity*/ 64).0;
-        if matches!(&app_server_target, AppServerTarget::LocalDaemon { .. })
-            && !crate::uses_remote_workspace_or_environment(
-                &app_server_target,
-                environment_manager.as_ref(),
+        if matches!(
+            &app_server_target,
+            AppServerTarget::LocalDaemon { .. } | AppServerTarget::Embedded
+        ) && !crate::uses_remote_workspace_or_environment(
+            &app_server_target,
+            environment_manager.as_ref(),
+        ) && let Err(error) = app_server
+            .start_dynamic_tool_mcp(
+                config.clone(),
+                app_event_tx.clone(),
+                dynamic_tool_status_updates.clone(),
             )
-            && let Err(error) = app_server
-                .start_dynamic_tool_mcp(
-                    config.clone(),
-                    app_event_tx.clone(),
-                    dynamic_tool_status_updates.clone(),
-                )
-                .await
+            .await
         {
             tracing::warn!(%error, "TUI task delegation is unavailable without its MCP server");
         }

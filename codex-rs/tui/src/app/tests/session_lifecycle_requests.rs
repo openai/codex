@@ -1273,12 +1273,14 @@ async fn archive_current_thread_returns_shared_servers_to_agents() -> Result<()>
 #[tokio::test]
 async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths() -> Result<()> {
     let (mut app, events, _ops) = Box::pin(make_test_app_with_channels()).await;
+    // Invalid optional worktree settings must preserve both daemon start paths.
+    app.config.features.enable(Feature::Worktrees)?;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
     std::fs::write(
         codex_home.path().join("config.toml"),
-        "web_search = \"disabled\"\n",
+        "web_search = \"disabled\"\n[desktop]\ngit-worktree-root = 'relative'\n",
     )?;
     // Keep the large lifecycle futures off the Windows test thread's stack.
     let (mut app_server, mut requests, mut proxy) = Box::pin(start_recording_app_server(

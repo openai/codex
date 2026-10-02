@@ -1,0 +1,53 @@
+---
+source: tui/src/managed_worktree_model_tests.rs
+assertion_line: 245
+expression: "context_snapshot::format_context_snapshot(\"Model request history for creating, polling and listing a task-attached checkout through MCP, without a separate creation confirmation. Separate assertions verify retained cwd/environment roots, not sandbox enforcement.\",\n&entries,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: Model request history for creating, polling and listing a task-attached checkout through MCP, without a separate creation confirmation. Separate assertions verify retained cwd/environment roots, not sandbox enforcement.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  instructions: <MODEL_INSTRUCTIONS>
+  model: "mock-model"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {}
+  store: false
+  stream: true
+  tool_choice: "auto"
+  tools (1; hash=291b147361c7e927):
+    - namespace/mcp__codex_worktrees: Tools in the mcp__codex_worktrees namespace.; hash=51011289080f7067
+      - function/create_worktree
+      - function/get_worktree_creation_status
+      - function/list_worktrees
+-- request 1 (request) --
+00:message/developer[2]:
+    [01] <SKILLS_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+01:message/user:
+    <ENVIRONMENT_CONTEXT>
+02:message/user:
+    Run create_worktree.
+-- request 2 (request) --
+03:function_call/mcp__codex_worktrees.create_worktree:{"allowAsync":true}
+04:function_call_output:Wall time: <DURATION> seconds
+    Output: | {"type":"pending","operationId":"<UUID 1>","message":"Creation is running. Poll status; do not repeat creation. Work on independent tasks while waiting."}
+-- request 3 (request) --
+05:message/assistant:
+    Done.
+06:message/user:
+    Run get_worktree_creation_status.
+-- request 4 (request) --
+07:function_call/mcp__codex_worktrees.get_worktree_creation_status:{"operationId":"<UUID 1>"}
+08:function_call_output:Wall time: <DURATION> seconds
+    Output: | {"type":"created","worktree":{"root":"<WORKTREE>","workspaceRoot":"<WORKTREE>/","sourceCwd":"<SOURCE>"},...citly and request filesystem permissions if needed."} [hash=b855a2f161fd3a36]
+-- request 5 (request) --
+09:message/assistant:
+    Done.
+10:message/user:
+    Run list_worktrees.
+-- request 6 (request) --
+11:function_call/mcp__codex_worktrees.list_worktrees:{}
+12:function_call_output:Wall time: <DURATION> seconds
+    Output: | {"data":[{"id":"<UUID 2>","type":"worktree","root":"<WORKTREE>","workspaceRoot":"<WORKTREE>/","sourceCwd":"<SOURCE>"}],"nextCursor":null}
