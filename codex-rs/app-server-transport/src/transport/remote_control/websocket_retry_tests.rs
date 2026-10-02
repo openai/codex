@@ -81,7 +81,7 @@ async fn assert_conflict_recovery(subscribe_cursor: Option<&str>) {
             .unwrap();
         if let Some(rejected_at) = rejected_at {
             assert!(
-                Instant::now().duration_since(rejected_at) >= Duration::from_secs(30),
+                Instant::now().duration_since(rejected_at) >= Duration::from_secs(15),
                 "sustained HTTP 409 responses must not restart fast retries"
             );
         }
@@ -123,14 +123,17 @@ async fn assert_conflict_recovery(subscribe_cursor: Option<&str>) {
                 // The real loop is sleeping after the second rejection. Skip the
                 // middle of this wait, retaining its boundary assertion below.
                 tokio::time::pause();
-                tokio::time::advance(Duration::from_secs(28)).await;
+                tokio::time::advance(Duration::from_secs(13)).await;
                 tokio::time::resume();
             }
         } else {
             let _server_connection = result.expect("available ownership should allow recovery");
-            let (websocket, outcome) = connect_task.await.unwrap();
+            let (mut websocket, outcome) = connect_task.await.unwrap();
             assert!(matches!(outcome, ConnectOutcome::Connected(_)));
-            assert_eq!(websocket.reconnect_attempt, 0);
+            assert!(
+                next_reconnect_delay(&mut websocket.reconnect_attempt) >= Duration::from_secs(15),
+                "a successful handshake must not reset backoff before the connection stays healthy"
+            );
             assert_eq!(current_enrollment.snapshot(), Some(enrollment));
             assert_eq!(
                 websocket.state.lock().await.subscribe_cursor.as_deref(),
@@ -144,14 +147,16 @@ async fn assert_conflict_recovery(subscribe_cursor: Option<&str>) {
 #[test]
 fn reconnect_backoff_stays_capped_during_sustained_failures() {
     let mut reconnect_attempt = 0;
-    // Allow the initial exponential ramp, then exercise a long failure streak.
-    for _ in 0..10 {
-        assert!(next_reconnect_delay(&mut reconnect_attempt) <= Duration::from_secs(30));
+    for max_delay in [5, 10, 20] {
+        let delay = next_reconnect_delay(&mut reconnect_attempt);
+        assert!(delay >= Duration::from_secs(max_delay) / 2);
+        assert!(delay <= Duration::from_secs(max_delay));
     }
-    for _ in 0..1000 {
-        assert_eq!(
-            next_reconnect_delay(&mut reconnect_attempt),
-            Duration::from_secs(30)
-        );
+    for mut reconnect_attempt in [reconnect_attempt, 9, u64::MAX] {
+        for _ in 0..1000 {
+            let delay = next_reconnect_delay(&mut reconnect_attempt);
+            assert!(delay >= Duration::from_secs(15));
+            assert!(delay <= Duration::from_secs(30));
+        }
     }
 }
