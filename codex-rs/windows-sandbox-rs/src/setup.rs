@@ -504,7 +504,7 @@ impl SandboxUsersFile {
     }
 }
 
-fn is_elevated() -> Result<bool> {
+pub(crate) fn is_elevated() -> Result<bool> {
     unsafe {
         let mut administrators_group: *mut c_void = std::ptr::null_mut();
         let ok = AllocateAndInitializeSid(

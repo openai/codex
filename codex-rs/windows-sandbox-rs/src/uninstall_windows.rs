@@ -5,6 +5,10 @@ use std::path::Path;
 
 use anyhow::Result;
 use anyhow::anyhow;
+use anyhow::ensure;
+use windows::Win32::System::Com::COINIT_MULTITHREADED;
+use windows::Win32::System::Com::CoInitializeEx;
+use windows::Win32::System::Com::CoUninitialize;
 
 use crate::setup::OFFLINE_USERNAME;
 use crate::setup::ONLINE_USERNAME;
@@ -13,6 +17,28 @@ mod firewall;
 mod principals;
 mod processes;
 mod retained_logons;
+
+/// Removes machine-wide legacy sandbox resources without reading or changing Codex home.
+pub fn clean_up_legacy_windows_sandbox() -> Result<()> {
+    ensure!(
+        crate::setup::is_elevated()?,
+        "sandbox cleanup requires administrator privileges"
+    );
+    let _setup_lock = crate::setup_mutex::acquire_sandbox_setup_lock(/*timeout_ms*/ 5_000)?;
+    // Retire the previous owner so future setup can use a different user or home.
+    crate::runtime_ownership::remove_installation()?;
+    unsafe {
+        CoInitializeEx(/*pvreserved*/ None, COINIT_MULTITHREADED).ok()?
+    };
+    // No home or desktop callback: retain all user files, including sandbox caches and ACLs.
+    let result = clean_up_packaged_windows_sandbox(
+        /*codex_home*/ None,
+        |message| eprintln!("{message}"),
+        || Ok(()),
+    );
+    unsafe { CoUninitialize() };
+    result
+}
 
 /// Removes sandbox resources created for one authenticated packaged installation.
 /// Keep a supplied home and its ancestors pinned until `clean_up_desktop` starts.
