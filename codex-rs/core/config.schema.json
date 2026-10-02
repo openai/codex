@@ -956,6 +956,9 @@
             "in_app_voice": {
               "type": "boolean"
             },
+            "incremental_tools": {
+              "type": "boolean"
+            },
             "instant_interrupt": {
               "type": "boolean"
             },
@@ -7106,6 +7109,9 @@
           "type": "boolean"
         },
         "in_app_voice": {
+          "type": "boolean"
+        },
+        "incremental_tools": {
           "type": "boolean"
         },
         "instant_interrupt": {

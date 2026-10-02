@@ -248,6 +248,8 @@ pub enum Feature {
     ToolSearchAlwaysDeferMcpTools,
     /// Describe deferred tool namespaces in the model-visible world state.
     DeferredToolWorldState,
+    /// Track top-level tool definitions in world state and emit incremental context updates.
+    IncrementalTools,
     /// Expose MCP model-visible namespaces without the legacy `mcp__` prefix.
     NonPrefixedMcpToolNames,
     /// Enable discoverable tool suggestions for apps.
@@ -1475,6 +1477,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::DeferredToolWorldState,
         key: "deferred_tool_world_state",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::IncrementalTools,
+        key: "incremental_tools",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
