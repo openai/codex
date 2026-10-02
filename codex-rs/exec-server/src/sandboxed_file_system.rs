@@ -80,7 +80,7 @@ impl SandboxedFileSystem {
             .map_err(map_sandbox_error)
     }
 
-    pub(crate) async fn open_file_for_read(
+    pub(crate) async fn open_file(
         &self,
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
@@ -367,7 +367,7 @@ impl ExecutorFileSystem for SandboxedFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
         Box::pin(async move {
-            let file = self.open_file_for_read(path, sandbox).await?;
+            let file = self.open_file(path, sandbox).await?;
             Ok(FileSystemReadStream::new(ReaderStream::with_capacity(
                 file,
                 FILE_READ_CHUNK_SIZE,

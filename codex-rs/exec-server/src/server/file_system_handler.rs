@@ -70,7 +70,7 @@ impl FileSystemHandler {
     }
 
     pub(crate) async fn shutdown(&self) {
-        self.file_handles.close_all().await;
+        self.file_handles.close_all();
     }
 
     pub(crate) async fn discover_capability_roots(
@@ -131,14 +131,13 @@ impl FileSystemHandler {
                 "exec-server does not support writable file streams".to_string(),
             ));
         }
-        let file = self
-            .file_system
-            .open_file_for_read(&params.path, params.sandbox.as_ref())
-            .await
-            .map_err(map_fs_error)?;
         let handle_id = self
             .file_handles
-            .open(params.handle_id, file)
+            .open(
+                params.handle_id,
+                self.file_system
+                    .open_file(&params.path, params.sandbox.as_ref()),
+            )
             .await
             .map_err(map_fs_error)?;
         Ok(FsOpenResponse { handle_id })
@@ -176,7 +175,7 @@ impl FileSystemHandler {
         params: FsCloseParams,
     ) -> Result<FsCloseResponse, JSONRPCErrorError> {
         validate_file_handle_id(&params.handle_id)?;
-        self.file_handles.close(&params.handle_id).await;
+        self.file_handles.close(&params.handle_id);
         Ok(FsCloseResponse {})
     }
 

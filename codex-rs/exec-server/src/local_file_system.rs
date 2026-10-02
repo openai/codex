@@ -118,7 +118,7 @@ impl LocalFileSystem {
 }
 
 impl LocalFileSystem {
-    pub(crate) async fn open_file_for_read(
+    pub(crate) async fn open_file(
         &self,
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
@@ -127,11 +127,9 @@ impl LocalFileSystem {
             sandbox.validate_file_system_paths_for_current_host()?;
         }
         if sandbox.is_some_and(FileSystemSandboxContext::should_read_from_sandbox) {
-            return self.sandboxed()?.open_file_for_read(path, sandbox).await;
+            return self.sandboxed()?.open_file(path, sandbox).await;
         }
-        self.unsandboxed
-            .open_file_for_read(path, /*sandbox*/ None)
-            .await
+        self.unsandboxed.open_file(path, /*sandbox*/ None).await
     }
 
     async fn canonicalize(
@@ -350,15 +348,13 @@ impl ExecutorFileSystem for LocalFileSystem {
 }
 
 impl UnsandboxedFileSystem {
-    async fn open_file_for_read(
+    async fn open_file(
         &self,
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<tokio::fs::File> {
         reject_platform_sandbox_context(sandbox)?;
-        self.file_system
-            .open_file_for_read(path, /*sandbox*/ None)
-            .await
+        self.file_system.open_file(path, /*sandbox*/ None).await
     }
 
     async fn canonicalize(
@@ -581,7 +577,7 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
 }
 
 impl DirectFileSystem {
-    async fn open_file_for_read(
+    async fn open_file(
         &self,
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
@@ -619,7 +615,7 @@ impl DirectFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileSystemReadStream> {
-        let file = self.open_file_for_read(path, sandbox).await?;
+        let file = self.open_file(path, sandbox).await?;
         Ok(FileSystemReadStream::new(ReaderStream::with_capacity(
             file,
             FILE_READ_CHUNK_SIZE,
