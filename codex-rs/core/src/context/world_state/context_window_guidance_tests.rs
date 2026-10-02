@@ -35,7 +35,7 @@ fn guidance_transitions_render_once(
         .into_iter()
         .collect();
     let (next_snapshot, fragments) =
-        refreshed.render_history_diff(Some(&original.render_full().0), &history);
+        refreshed.render_history_fragment_diff(Some(&original.render_full().0), &history);
     assert_eq!(
         fragments
             .iter()
@@ -56,7 +56,7 @@ fn guidance_transitions_render_once(
             .map(ContextualUserFragment::into_boxed_response_item),
     );
     let (repeated_snapshot, repeated_fragments) =
-        refreshed.render_history_diff(Some(&snapshot), &history);
+        refreshed.render_history_fragment_diff(Some(&snapshot), &history);
     assert_eq!(repeated_snapshot, snapshot);
     assert!(repeated_fragments.is_empty());
 }
@@ -83,7 +83,7 @@ fn legacy_guidance_is_reconciled_once(
     let retained: ResponseItem =
         ContextualUserFragment::into(ContextWindowGuidance::new("previous guidance"));
     let fragments = state
-        .render_history_diff(snapshot.as_ref(), std::slice::from_ref(&retained))
+        .render_history_fragment_diff(snapshot.as_ref(), std::slice::from_ref(&retained))
         .1;
     assert_eq!(
         fragments
@@ -104,7 +104,7 @@ fn legacy_guidance_is_reconciled_once(
     }
     assert!(
         state
-            .render_history_diff(Some(&state.render_full().0), &history)
+            .render_history_fragment_diff(Some(&state.render_full().0), &history)
             .1
             .is_empty()
     );

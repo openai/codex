@@ -7,6 +7,7 @@ use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateContextFragment;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::RenderedWorldStateFragment;
 use codex_otel::THREAD_TOOLS_FRAGMENT_BYTES_METRIC;
@@ -101,7 +102,7 @@ impl WorldStateSection for ToolsState {
                     PreviousSectionState::Absent | PreviousSectionState::Unknown
                 )
         {
-            return (Some(current), None);
+            return (Some(current), Vec::new());
         }
 
         let rendered = match previous {
@@ -137,14 +138,14 @@ impl WorldStateSection for ToolsState {
         record_fragment_metrics(self.metrics.as_ref(), previous, &rendered);
         (
             Some(current),
-            Some(Box::new(WorldStateContextFragment {
+            vec![WorldStateUpdate::fragment(WorldStateContextFragment {
                 fragment: RenderedWorldStateFragment::new(
                     "developer",
                     (TOOLS_OPEN_TAG, TOOLS_CLOSE_TAG),
                     rendered.body,
                 ),
                 content_kind: ContentItemKind("tools.deferred_namespaces".to_string()),
-            })),
+            })],
         )
     }
 }

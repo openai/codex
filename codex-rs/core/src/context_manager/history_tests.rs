@@ -4,6 +4,7 @@ use crate::context::UserInstructions;
 use crate::context::world_state::SectionTransition;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateSection;
+use crate::context::world_state::WorldStateUpdateContent;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_history::CodexHarnessMetadata;
@@ -536,7 +537,7 @@ impl WorldStateSection for TestWorldStateSection {
         let current = true;
         let text = match previous {
             crate::context::world_state::PreviousSectionState::Known(true) => {
-                return (None, None);
+                return (None, Vec::new());
             }
             crate::context::world_state::PreviousSectionState::Unknown => "unknown",
             crate::context::world_state::PreviousSectionState::Absent
@@ -544,11 +545,10 @@ impl WorldStateSection for TestWorldStateSection {
         };
         (
             Some(current),
-            Some(Box::new(UserInstructions {
+            vec![WorldStateUpdate::fragment(UserInstructions {
                 directory: None,
                 text: text.to_string(),
-            })
-                as Box<dyn crate::context::ContextualUserFragment>),
+            })],
         )
     }
 }
@@ -602,7 +602,10 @@ fn world_state_transitions_persist_changed_state_and_skip_unchanged_state() {
     assert!(full.full);
 
     let (snapshot, fragments, patch) = history.render_step_world_state(&world_state("after"));
-    assert_eq!(fragments[0].body(), "after");
+    let WorldStateUpdateContent::Fragment(fragment) = &fragments[0].content else {
+        panic!("expected a text fragment");
+    };
+    assert_eq!(fragment.body(), "after");
     let patch = patch.expect("changed snapshot must be persisted");
     assert!(!patch.full);
     let mut replayed = WorldStateSnapshot::from(&full.state);
@@ -632,7 +635,11 @@ fn world_state_reconciles_matching_legacy_history_once() {
         vec!["\n\n<INSTRUCTIONS>\nunknown\n"],
         fragments
             .into_iter()
-            .map(|fragment| fragment.body())
+            .map(|update| match update.content {
+                WorldStateUpdateContent::Fragment(fragment) => fragment.body(),
+                WorldStateUpdateContent::Item(item) =>
+                    panic!("expected a text fragment, got {item:?}"),
+            })
             .collect::<Vec<_>>()
     );
     assert!(rollout_item.is_some_and(|item| item.full));

@@ -11156,7 +11156,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
     let previous_context = Arc::new(turn_context);
     let world_state = build_world_state_from_turn_context(&session, &previous_context).await;
     let retained_world_state = world_state
-        .render_full()
+        .render_full_fragments()
         .1
         .into_iter()
         .map(ContextualUserFragment::into_boxed_response_item)

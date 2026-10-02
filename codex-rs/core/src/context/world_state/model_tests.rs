@@ -1,4 +1,5 @@
 use super::*;
+use crate::context::world_state::test_support::FragmentSectionTestExt as _;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -13,7 +14,7 @@ fn model_change_renders_when_persisted_or_inferred_from_previous_turn() {
     ] {
         assert_eq!(
             state
-                .render_diff(previous)
+                .render_fragment_diff(previous)
                 .1
                 .expect("model change should render")
                 .markers(),
@@ -29,9 +30,14 @@ fn unchanged_model_does_not_render() {
 
     assert!(
         state
-            .render_diff(PreviousSectionState::Known(&previous))
+            .render_fragment_diff(PreviousSectionState::Known(&previous))
             .1
             .is_none()
     );
-    assert!(state.render_diff(PreviousSectionState::Absent).1.is_none());
+    assert!(
+        state
+            .render_fragment_diff(PreviousSectionState::Absent)
+            .1
+            .is_none()
+    );
 }

@@ -2,6 +2,7 @@ use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateHash;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use crate::context::ContextualUserFragment;
 use codex_prompts::ResolvedCollaborationModeMessages;
 use codex_prompts::ResolvedModelMessages;
@@ -134,14 +135,14 @@ impl WorldStateSection for CollaborationModeState {
             }
         };
         if unchanged {
-            return (Some(current), None);
+            return (Some(current), Vec::new());
         }
 
         (
             Some(current),
-            Some(Box::new(CollaborationModeInstructions {
+            vec![WorldStateUpdate::fragment(CollaborationModeInstructions {
                 instructions: self.instructions.clone().unwrap_or_default(),
-            })),
+            })],
         )
     }
 }

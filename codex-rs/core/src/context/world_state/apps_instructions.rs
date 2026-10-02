@@ -1,6 +1,7 @@
 use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use crate::context::AppsInstructions;
 use crate::context::ContextualUserFragment;
 
@@ -41,10 +42,13 @@ impl WorldStateSection for AppsInstructionsState {
             || matches!(previous, PreviousSectionState::Known(previous) if *previous)
             || matches!(previous, PreviousSectionState::Unknown)
         {
-            return (Some(current), None);
+            return (Some(current), Vec::new());
         }
 
-        (Some(current), Some(Box::new(AppsInstructions)))
+        (
+            Some(current),
+            vec![WorldStateUpdate::fragment(AppsInstructions)],
+        )
     }
 }
 

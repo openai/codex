@@ -1,3 +1,4 @@
+use crate::context::world_state::test_support::FragmentSectionTestExt as _;
 use crate::shell::ShellType;
 
 use super::*;
@@ -368,11 +369,14 @@ fn powershell_environment() -> EnvironmentsState {
 #[test]
 fn shell_version_diff_restates_shell_from_legacy_snapshot() {
     let current = powershell_environment();
-    let mut previous = current.render_diff(PreviousSectionState::Absent).0.unwrap();
+    let mut previous = current
+        .render_fragment_diff(PreviousSectionState::Absent)
+        .0
+        .unwrap();
     previous.shell_version = None;
     previous.environments.get_mut("local").expect("local").shell = None;
     let rendered = current
-        .render_diff(PreviousSectionState::Known(&previous))
+        .render_fragment_diff(PreviousSectionState::Known(&previous))
         .1
         .expect("shell version update")
         .render();
@@ -391,9 +395,9 @@ fn shell_version_diff_clears_previously_visible_version() {
     };
     assert_eq!(
         current
-            .render_diff(PreviousSectionState::Known(
+            .render_fragment_diff(PreviousSectionState::Known(
                 &previous
-                    .render_diff(PreviousSectionState::Absent)
+                    .render_fragment_diff(PreviousSectionState::Absent)
                     .0
                     .unwrap()
             ))
@@ -413,9 +417,9 @@ fn current_date_diff_clears_once_and_recovers() {
     let unavailable = EnvironmentsState::default();
     assert_eq!(
         unavailable
-            .render_diff(PreviousSectionState::Known(
+            .render_fragment_diff(PreviousSectionState::Known(
                 &available
-                    .render_diff(PreviousSectionState::Absent)
+                    .render_fragment_diff(PreviousSectionState::Absent)
                     .0
                     .unwrap()
             ))
@@ -426,9 +430,9 @@ fn current_date_diff_clears_once_and_recovers() {
     );
     assert!(
         unavailable
-            .render_diff(PreviousSectionState::Known(
+            .render_fragment_diff(PreviousSectionState::Known(
                 &unavailable
-                    .render_diff(PreviousSectionState::Absent)
+                    .render_fragment_diff(PreviousSectionState::Absent)
                     .0
                     .unwrap()
             ))
@@ -437,9 +441,9 @@ fn current_date_diff_clears_once_and_recovers() {
     );
     assert_eq!(
         available
-            .render_diff(PreviousSectionState::Known(
+            .render_fragment_diff(PreviousSectionState::Known(
                 &unavailable
-                    .render_diff(PreviousSectionState::Absent)
+                    .render_fragment_diff(PreviousSectionState::Absent)
                     .0
                     .unwrap()
             ))

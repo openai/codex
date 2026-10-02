@@ -1,6 +1,7 @@
 use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use crate::context::ContextualUserFragment;
 use crate::context::environment_context::FileSystemContext;
 use crate::context::environment_context::NetworkContext;
@@ -189,7 +190,10 @@ impl WorldStateSection for EnvironmentsState {
                 subagents: self.subagents.clone(),
             }) as Box<dyn ContextualUserFragment>
         });
-        (Some(current), fragment)
+        (
+            Some(current),
+            WorldStateUpdate::optional_boxed_fragment(fragment),
+        )
     }
 }
 

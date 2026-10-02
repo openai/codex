@@ -1,4 +1,5 @@
 use super::*;
+use crate::context::world_state::test_support::FragmentSectionTestExt as _;
 use crate::context::world_state::test_support::render_section_cases;
 use codex_execpolicy::Decision;
 use codex_models_manager::model_info::model_info_from_slug;
@@ -50,15 +51,15 @@ fn approved_prefix_is_rendered_without_reinjecting_permissions() {
     let with_approved_prefix = permissions_state_with_default_messages(&exec_policy);
     let approved_prefix = r#"["touch", "allow-prefix.txt"]"#;
     let without_snapshot = without_approved_prefix
-        .render_diff(PreviousSectionState::Absent)
+        .render_fragment_diff(PreviousSectionState::Absent)
         .0
         .unwrap();
     let with_snapshot = with_approved_prefix
-        .render_diff(PreviousSectionState::Absent)
+        .render_fragment_diff(PreviousSectionState::Absent)
         .0
         .unwrap();
     let rendered_update = with_approved_prefix
-        .render_diff(Known(&without_snapshot))
+        .render_fragment_diff(Known(&without_snapshot))
         .1
         .expect("approving a prefix should render a world-state update")
         .render();
@@ -113,22 +114,22 @@ fn renders_only_newly_approved_prefixes() {
         .expect("test prefix should be valid");
     let with_new_prefix = permissions_state_with_default_messages(&exec_policy);
     let existing_snapshot = with_existing_prefix
-        .render_diff(PreviousSectionState::Absent)
+        .render_fragment_diff(PreviousSectionState::Absent)
         .0
         .unwrap();
     let current_snapshot = with_new_prefix
-        .render_diff(PreviousSectionState::Absent)
+        .render_fragment_diff(PreviousSectionState::Absent)
         .0
         .unwrap();
 
     assert_eq!(
         with_new_prefix
-            .render_diff(Known(&existing_snapshot))
+            .render_fragment_diff(Known(&existing_snapshot))
             .1
             .map(|fragment| fragment.render()),
         Some("Approved command prefix saved:\n- [\"cargo\", \"test\"]".to_string())
     );
-    let (snapshot, fragment) = with_new_prefix.render_diff(Known(&current_snapshot));
+    let (snapshot, fragment) = with_new_prefix.render_fragment_diff(Known(&current_snapshot));
     assert_eq!(
         (snapshot, fragment.map(|fragment| fragment.render())),
         (None, None)
@@ -161,13 +162,13 @@ fn legacy_snapshot_deserializes_and_only_suppresses_matching_full_permissions() 
 
     assert!(
         world_state
-            .render_history_diff(Some(&matching_legacy), std::slice::from_ref(&retained))
+            .render_history_fragment_diff(Some(&matching_legacy), std::slice::from_ref(&retained))
             .1
             .is_empty()
     );
     assert_eq!(
         world_state
-            .render_history_diff(Some(&stale_legacy), &[retained])
+            .render_history_fragment_diff(Some(&stale_legacy), &[retained])
             .1
             .into_iter()
             .map(|fragment| fragment.render())
@@ -188,9 +189,9 @@ fn removing_an_approved_prefix_renders_full_permissions() {
     let without_approved_prefix = permissions_state_with_default_messages(&Policy::empty());
 
     let rendered = without_approved_prefix
-        .render_diff(Known(
+        .render_fragment_diff(Known(
             &with_approved_prefix
-                .render_diff(PreviousSectionState::Absent)
+                .render_fragment_diff(PreviousSectionState::Absent)
                 .0
                 .unwrap(),
         ))
@@ -221,21 +222,21 @@ fn persisted_permissions_are_detected_inside_bundled_developer_messages() {
 
     assert_eq!(
         world_state
-            .render_history_diff(/*previous*/ None, std::slice::from_ref(&retained))
+            .render_history_fragment_diff(/*previous*/ None, std::slice::from_ref(&retained))
             .1
             .len(),
         1,
     );
     assert_eq!(
         world_state
-            .render_history_diff(Some(&snapshot), &[])
+            .render_history_fragment_diff(Some(&snapshot), &[])
             .1
             .len(),
         1,
     );
     assert!(
         world_state
-            .render_history_diff(Some(&snapshot), &[bundled_retained])
+            .render_history_fragment_diff(Some(&snapshot), &[bundled_retained])
             .1
             .is_empty()
     );

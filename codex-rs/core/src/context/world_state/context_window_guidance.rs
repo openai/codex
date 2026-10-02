@@ -1,6 +1,7 @@
 use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use crate::context::ContextWindowGuidance;
 use crate::context::ContextualUserFragment;
 
@@ -47,7 +48,7 @@ impl WorldStateSection for ContextWindowGuidanceState {
         previous: PreviousSectionState<'_, Self::Snapshot>,
     ) -> SectionTransition<Self::Snapshot> {
         if matches!(previous, PreviousSectionState::Known(previous) if previous == &self.message) {
-            return (None, None);
+            return (None, Vec::new());
         }
         let previous_may_contain_guidance = match previous {
             PreviousSectionState::Known(previous) => !previous.is_empty(),
@@ -56,7 +57,7 @@ impl WorldStateSection for ContextWindowGuidanceState {
         };
         let message = if self.message.is_empty() {
             if !previous_may_contain_guidance {
-                return (Some(self.message.clone()), None);
+                return (Some(self.message.clone()), Vec::new());
             }
             REMOVAL_NOTICE.to_string()
         } else if previous_may_contain_guidance {
@@ -66,7 +67,9 @@ impl WorldStateSection for ContextWindowGuidanceState {
         };
         (
             Some(self.message.clone()),
-            Some(Box::new(ContextWindowGuidance::new(&message))),
+            vec![WorldStateUpdate::fragment(ContextWindowGuidance::new(
+                &message,
+            ))],
         )
     }
 }

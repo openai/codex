@@ -2,6 +2,7 @@ use super::super::PreviousSectionState;
 use super::super::test_support::render_section_cases;
 use super::*;
 use crate::context::world_state::WorldState;
+use crate::context::world_state::test_support::FragmentSectionTestExt as _;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_prompts::ResolvedCollaborationModeMessages;
 use codex_prompts::ResolvedMessage;
@@ -54,7 +55,8 @@ fn instruction_updates_are_applied_once_in_retained_history() {
         let expected: ResponseItem = ContextualUserFragment::into(CollaborationModeInstructions {
             instructions: instructions.unwrap_or_default().to_string(),
         });
-        let (snapshot, fragments) = world_state.render_history_diff(previous.as_ref(), &history);
+        let (snapshot, fragments) =
+            world_state.render_history_fragment_diff(previous.as_ref(), &history);
         let updates = fragments
             .into_iter()
             .map(ContextualUserFragment::into_boxed_response_item)
@@ -65,13 +67,13 @@ fn instruction_updates_are_applied_once_in_retained_history() {
 
         assert!(
             world_state
-                .render_history_diff(previous.as_ref(), &history)
+                .render_history_fragment_diff(previous.as_ref(), &history)
                 .1
                 .is_empty()
         );
         assert_eq!(
             world_state
-                .render_history_diff(previous.as_ref(), &[])
+                .render_history_fragment_diff(previous.as_ref(), &[])
                 .1
                 .len(),
             usize::from(instructions.is_some()),
@@ -124,7 +126,7 @@ fn empty_catalog_collaboration_message_suppresses_legacy_instructions() {
 
     assert_eq!(
         state
-            .render_diff(PreviousSectionState::Absent)
+            .render_fragment_diff(PreviousSectionState::Absent)
             .1
             .expect("explicit empty collaboration message")
             .render(),
@@ -172,7 +174,7 @@ fn legacy_collaboration_mode_snapshots_refresh_catalog_messages_once() {
 
             assert_eq!(
                 state
-                    .render_diff(PreviousSectionState::Known(&previous))
+                    .render_fragment_diff(PreviousSectionState::Known(&previous))
                     .1
                     .expect("legacy snapshot should refresh collaboration instructions")
                     .render(),
@@ -182,8 +184,11 @@ fn legacy_collaboration_mode_snapshots_refresh_catalog_messages_once() {
             );
             assert!(
                 state
-                    .render_diff(PreviousSectionState::Known(
-                        &state.render_diff(PreviousSectionState::Absent).0.unwrap()
+                    .render_fragment_diff(PreviousSectionState::Known(
+                        &state
+                            .render_fragment_diff(PreviousSectionState::Absent)
+                            .0
+                            .unwrap()
                     ))
                     .1
                     .is_none()

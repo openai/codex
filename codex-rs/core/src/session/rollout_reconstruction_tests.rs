@@ -368,7 +368,7 @@ async fn record_initial_history_restores_world_state_baseline(input: BaselineTur
     let turn_context = Arc::new(turn_context);
     let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
     let expected_history = world_state
-        .render_full()
+        .render_full_fragments()
         .1
         .into_iter()
         .map(ContextualUserFragment::into_boxed_response_item)

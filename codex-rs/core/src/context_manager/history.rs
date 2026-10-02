@@ -18,6 +18,7 @@ use crate::context::is_guardian_context_message;
 use crate::context::world_state::PersistentModeState;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateSnapshot;
+use crate::context::world_state::WorldStateUpdate;
 use crate::context_manager::normalize;
 use crate::event_mapping::has_non_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_dev_message_content;
@@ -446,7 +447,7 @@ impl ContextManager {
     pub(crate) fn update_world_state(
         &mut self,
         world_state: &WorldState,
-    ) -> (Vec<Box<dyn ContextualUserFragment>>, Option<WorldStateItem>) {
+    ) -> (Vec<WorldStateUpdate>, Option<WorldStateItem>) {
         let (snapshot, fragments) =
             world_state.render_history_diff(self.world_state_baseline.as_ref(), self.raw_items());
         let rollout_item = self.world_state_item(&snapshot);
@@ -459,7 +460,7 @@ impl ContextManager {
         world_state: &WorldState,
     ) -> (
         WorldStateSnapshot,
-        Vec<Box<dyn ContextualUserFragment>>,
+        Vec<WorldStateUpdate>,
         Option<WorldStateItem>,
     ) {
         let (snapshot, fragments) =

@@ -30,8 +30,11 @@ use crate::context::ModelSwitchInstructions;
 use crate::context::MultiAgentRoleInstructions;
 use crate::context::NetworkRuleSaved;
 use crate::context::RecommendedPluginsInstructions;
+use crate::context::world_state::Placement;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateSnapshot;
+use crate::context::world_state::WorldStateUpdateContent;
+use crate::context::world_state::split_prefix_updates;
 use crate::current_time::TimeProvider;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::BANNED_PREFIX_SUGGESTIONS;
@@ -3599,7 +3602,7 @@ impl Session {
             .await
             .history
             .render_step_world_state(world_state.as_ref());
-        let items = crate::context_manager::updates::merge_contextual_fragments(fragments);
+        let items = crate::context_manager::updates::merge_world_state_updates(fragments);
         if !items.is_empty() {
             self.record_conversation_items(turn_context, &step_context.settings.model_info, &items)
                 .await;
@@ -4347,92 +4350,118 @@ impl Session {
                 .render_fragment(),
             );
         }
-        // Render the active mode after the usage hint so it can override that hint.
-        let mut initial_multi_agent_mode = None;
-        let mut managed_developer_instructions = None;
-        let (world_state_snapshot, fragments) = world_state.render_full();
-        for fragment in fragments {
-            match fragment.role() {
-                "developer"
-                    if fragment.markers().0 == ModelSwitchInstructions::type_markers().0 =>
-                {
-                    // New-model instructions must precede the rest of the developer context.
-                    developer_sections.insert(0, fragment.render_fragment());
+        let (world_state_snapshot, updates) = world_state.render_full();
+        let (mut items, context) = split_prefix_updates(updates);
+        let mut context = context.into_iter();
+        // Keep the initial-context grouping within each fragment run, but never across an item.
+        loop {
+            let mut next_item = None;
+            // Render the active mode after the usage hint so it can override that hint.
+            let mut initial_multi_agent_mode = None;
+            let mut managed_developer_instructions = None;
+            for update in context.by_ref() {
+                let fragment = match update.content {
+                    WorldStateUpdateContent::Fragment(fragment) => fragment,
+                    WorldStateUpdateContent::Item(item) => {
+                        next_item = Some(*item);
+                        break;
+                    }
+                };
+                match fragment.role() {
+                    "developer"
+                        if fragment.markers().0 == ModelSwitchInstructions::type_markers().0 =>
+                    {
+                        // New-model instructions must precede the rest of the developer context.
+                        developer_sections.insert(0, fragment.render_fragment());
+                    }
+                    "developer" if fragment.markers().0 == MULTI_AGENT_MODE_OPEN_TAG => {
+                        initial_multi_agent_mode = Some(fragment);
+                    }
+                    "developer"
+                        if fragment.markers().0
+                            == ManagedDeveloperInstructions::type_markers().0 =>
+                    {
+                        managed_developer_instructions = Some(fragment);
+                    }
+                    "developer"
+                        if fragment.markers().0 == MultiAgentRoleInstructions::type_markers().0 =>
+                    {
+                        separate_developer_sections.push(fragment.render_fragment());
+                    }
+                    "developer"
+                        if update.placement == Placement::Standalone
+                            && fragment.markers().0.is_empty() =>
+                    {
+                        separate_developer_sections.push(fragment.render_fragment());
+                    }
+                    "developer" => developer_sections.push(fragment.render_fragment()),
+                    "user" => contextual_user_sections.push(fragment.render_fragment()),
+                    _ => {}
                 }
-                "developer" if fragment.markers().0 == MULTI_AGENT_MODE_OPEN_TAG => {
-                    initial_multi_agent_mode = Some(fragment);
-                }
-                "developer"
-                    if fragment.markers().0 == ManagedDeveloperInstructions::type_markers().0 =>
-                {
-                    managed_developer_instructions = Some(fragment);
-                }
-                "developer"
-                    if fragment.markers().0 == MultiAgentRoleInstructions::type_markers().0 =>
-                {
-                    separate_developer_sections.push(fragment.render_fragment());
-                }
-                "developer"
-                    if fragment.requires_separate_message() && fragment.markers().0.is_empty() =>
-                {
-                    separate_developer_sections.push(fragment.render_fragment());
-                }
-                "developer" => developer_sections.push(fragment.render_fragment()),
-                "user" => contextual_user_sections.push(fragment.render_fragment()),
-                _ => {}
             }
-        }
 
-        if let Some(recommended_plugins) = recommended_plugin_candidates
-            .as_deref()
-            .and_then(RecommendedPluginsInstructions::from_plugins)
-        {
-            developer_sections.push(recommended_plugins.render_fragment());
-        }
-
-        let mut items = Vec::with_capacity(4);
-        if let Some(developer_message) =
-            crate::context_manager::updates::build_rendered_message(developer_sections)
-        {
-            items.push(developer_message);
-        }
-        for section in separate_developer_sections {
-            if let Some(developer_message) =
-                crate::context_manager::updates::build_rendered_message(vec![section])
+            if next_item.is_none()
+                && let Some(recommended_plugins) = recommended_plugin_candidates
+                    .as_deref()
+                    .and_then(RecommendedPluginsInstructions::from_plugins)
             {
+                developer_sections.push(recommended_plugins.render_fragment());
+            }
+
+            if let Some(developer_message) = crate::context_manager::updates::build_rendered_message(
+                std::mem::take(&mut developer_sections),
+            ) {
                 items.push(developer_message);
             }
-        }
-        if let Some(initial_multi_agent_mode) = initial_multi_agent_mode
-            && let Some(message) = crate::context_manager::updates::build_rendered_message(vec![
-                initial_multi_agent_mode.render_fragment(),
-            ])
-        {
-            items.push(message);
-        }
-        if let Some(contextual_user_message) =
-            crate::context_manager::updates::build_rendered_message(contextual_user_sections)
-        {
-            items.push(contextual_user_message);
-        }
-        // Emit the guardian policy prompt as a separate developer item so the guardian
-        // subagent sees a distinct, easy-to-audit instruction block.
-        if separate_guardian_developer_message
-            && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
-            && !developer_instructions.is_empty()
-            && let Some(guardian_developer_message) =
-                crate::context_manager::updates::build_rendered_message(vec![
-                    GuardianPolicy::new(developer_instructions).render_fragment(),
-                ])
-        {
-            items.push(guardian_developer_message);
-        }
-        if let Some(managed_developer_instructions) = managed_developer_instructions
-            && let Some(message) = crate::context_manager::updates::build_rendered_message(vec![
-                managed_developer_instructions.render_fragment(),
-            ])
-        {
-            items.push(message);
+            for section in separate_developer_sections.drain(..) {
+                if let Some(developer_message) =
+                    crate::context_manager::updates::build_rendered_message(vec![section])
+                {
+                    items.push(developer_message);
+                }
+            }
+            if let Some(initial_multi_agent_mode) = initial_multi_agent_mode
+                && let Some(message) =
+                    crate::context_manager::updates::build_rendered_message(vec![
+                        initial_multi_agent_mode.render_fragment(),
+                    ])
+            {
+                items.push(message);
+            }
+            if let Some(contextual_user_message) =
+                crate::context_manager::updates::build_rendered_message(std::mem::take(
+                    &mut contextual_user_sections,
+                ))
+            {
+                items.push(contextual_user_message);
+            }
+            // Emit the guardian policy prompt as a separate developer item so the guardian
+            // subagent sees a distinct, easy-to-audit instruction block.
+            if next_item.is_none()
+                && separate_guardian_developer_message
+                && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
+                && !developer_instructions.is_empty()
+                && let Some(guardian_developer_message) =
+                    crate::context_manager::updates::build_rendered_message(vec![
+                        GuardianPolicy::new(developer_instructions).render_fragment(),
+                    ])
+            {
+                items.push(guardian_developer_message);
+            }
+            if let Some(managed_developer_instructions) = managed_developer_instructions
+                && let Some(message) =
+                    crate::context_manager::updates::build_rendered_message(vec![
+                        managed_developer_instructions.render_fragment(),
+                    ])
+            {
+                items.push(message);
+            }
+
+            if let Some(item) = next_item {
+                items.push(item);
+            } else {
+                break;
+            }
         }
         // New context windows and compaction install these items directly into replacement history.
         for item in &mut items {
@@ -4613,7 +4642,7 @@ impl Session {
                 let (fragments, rollout_item) =
                     state.history.update_world_state(world_state.as_ref());
                 (
-                    crate::context_manager::updates::merge_contextual_fragments(fragments),
+                    crate::context_manager::updates::merge_world_state_updates(fragments),
                     rollout_item,
                 )
             };
@@ -5119,3 +5148,7 @@ mod elicitation_holders_tests;
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "world_state_item_tests.rs"]
+mod world_state_item_tests;

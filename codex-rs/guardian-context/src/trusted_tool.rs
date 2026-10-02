@@ -37,10 +37,6 @@ impl ContextualUserFragment for TrustedTool {
         ContentItemKind("guardian.trusted_tool".to_owned())
     }
 
-    fn requires_separate_message(&self) -> bool {
-        true
-    }
-
     fn markers(&self) -> (&'static str, &'static str) {
         Self::type_markers()
     }

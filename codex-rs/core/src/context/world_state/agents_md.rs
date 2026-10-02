@@ -1,6 +1,7 @@
 use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use crate::agents_md::LoadedAgentsMd;
 use crate::context::ContextualUserFragment;
 use crate::context::UserInstructions;
@@ -52,7 +53,7 @@ impl WorldStateSection for AgentsMdState {
             None => AgentsMdSnapshot::default(),
         };
         if matches!(previous, PreviousSectionState::Known(previous) if previous == &current) {
-            return (None, None);
+            return (None, Vec::new());
         }
 
         let previous_may_contain_instructions = match previous {
@@ -70,9 +71,12 @@ impl WorldStateSection for AgentsMdState {
                 directory: None,
                 text: REMOVAL_NOTICE.to_string(),
             },
-            (None, false) => return (Some(current), None),
+            (None, false) => return (Some(current), Vec::new()),
         };
-        (Some(current), Some(Box::new(instructions)))
+        (
+            Some(current),
+            vec![WorldStateUpdate::fragment(instructions)],
+        )
     }
 }
 

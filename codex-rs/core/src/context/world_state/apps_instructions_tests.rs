@@ -34,7 +34,7 @@ fn legacy_guidance_is_not_injected_again() {
 
     assert!(
         world_state
-            .render_history_diff(/*previous*/ None, &[legacy])
+            .render_history_fragment_diff(/*previous*/ None, &[legacy])
             .1
             .is_empty()
     );
@@ -49,14 +49,14 @@ fn persisted_guidance_is_restored_only_when_missing_from_history() {
 
     assert_eq!(
         world_state
-            .render_history_diff(Some(&snapshot), &[])
+            .render_history_fragment_diff(Some(&snapshot), &[])
             .1
             .len(),
         1
     );
     assert!(
         world_state
-            .render_history_diff(Some(&snapshot), &[retained])
+            .render_history_fragment_diff(Some(&snapshot), &[retained])
             .1
             .is_empty()
     );

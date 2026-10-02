@@ -1,6 +1,7 @@
 use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use crate::context::APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX;
 use crate::context::ApprovedCommandPrefixSaved;
 use crate::context::ContextualUserFragment;
@@ -45,14 +46,17 @@ impl WorldStateSection for CompactPermissionsState {
                 .cloned()
                 .collect::<Vec<_>>(),
             PreviousSectionState::Absent | PreviousSectionState::Unknown => {
-                return (Some(current), None);
+                return (Some(current), Vec::new());
             }
         };
         let fragment: Option<Box<dyn ContextualUserFragment>> =
             format_allow_prefixes(added_prefixes)
                 .filter(|prefixes| !prefixes.is_empty())
                 .map(|prefixes| Box::new(ApprovedCommandPrefixSaved::new(prefixes)) as _);
-        (Some(current), fragment)
+        (
+            Some(current),
+            WorldStateUpdate::optional_boxed_fragment(fragment),
+        )
     }
 }
 

@@ -2,6 +2,7 @@ use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateHash;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use crate::context::ContextualUserFragment;
 use crate::context::MultiAgentRoleInstructions;
 use crate::context::MultiAgentUsageHint;
@@ -37,7 +38,7 @@ impl WorldStateSection for MultiAgentUsageHintState {
     ) -> SectionTransition<Self::Snapshot> {
         let fragment: Option<Box<dyn ContextualUserFragment>> = match previous {
             PreviousSectionState::Known(previous) if previous == &self.fingerprint => {
-                return (None, None);
+                return (None, Vec::new());
             }
             PreviousSectionState::Unknown => None,
             PreviousSectionState::Known(_) | PreviousSectionState::Absent => {
@@ -50,6 +51,9 @@ impl WorldStateSection for MultiAgentUsageHintState {
                 }
             }
         };
-        (Some(self.fingerprint.clone()), fragment)
+        (
+            Some(self.fingerprint.clone()),
+            WorldStateUpdate::optional_standalone_boxed_fragment(fragment),
+        )
     }
 }

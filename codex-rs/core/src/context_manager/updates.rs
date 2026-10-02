@@ -1,13 +1,11 @@
-use crate::context::ContextualUserFragment;
+//! Groups contextual fragments without moving them across explicit response items.
+
+use crate::context::world_state::Placement;
+use crate::context::world_state::WorldStateUpdate;
+use crate::context::world_state::WorldStateUpdateContent;
 use codex_context_fragments::RenderedFragment;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseItem;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum MessageGroup {
-    Standalone,
-    Mergeable,
-}
 
 pub(crate) fn build_rendered_message(fragments: Vec<RenderedFragment>) -> Option<ResponseItem> {
     let role = fragments.first()?.role();
@@ -29,32 +27,36 @@ pub(crate) fn build_rendered_message(fragments: Vec<RenderedFragment>) -> Option
     })
 }
 
-pub(crate) fn merge_contextual_fragments(
-    fragments: Vec<Box<dyn ContextualUserFragment>>,
-) -> Vec<ResponseItem> {
-    let mut messages: Vec<(&str, MessageGroup, Vec<RenderedFragment>)> =
-        Vec::with_capacity(fragments.len());
-    for fragment in fragments {
-        let group = if fragment.requires_separate_message() {
-            MessageGroup::Standalone
-        } else {
-            MessageGroup::Mergeable
+pub(crate) fn merge_world_state_updates(updates: Vec<WorldStateUpdate>) -> Vec<ResponseItem> {
+    let mut items = Vec::new();
+    let mut pending = Vec::<RenderedFragment>::new();
+    for update in updates {
+        let fragment = match update.content {
+            WorldStateUpdateContent::Fragment(fragment) => fragment,
+            WorldStateUpdateContent::Item(item) => {
+                items.extend(build_rendered_message(std::mem::take(&mut pending)));
+                items.push(*item);
+                continue;
+            }
         };
         let rendered = fragment.render_fragment();
-        let role = rendered.role();
-        match messages.last_mut() {
-            Some((previous_role, previous_group, rendered_fragments))
-                if *previous_role == role
-                    && *previous_group == MessageGroup::Mergeable
-                    && group == MessageGroup::Mergeable =>
-            {
-                rendered_fragments.push(rendered);
-            }
-            _ => messages.push((role, group, vec![rendered])),
+        if update.placement != Placement::Mergeable {
+            items.extend(build_rendered_message(std::mem::take(&mut pending)));
+            items.extend(build_rendered_message(vec![rendered]));
+            continue;
         }
+        if pending
+            .first()
+            .is_some_and(|previous| previous.role() != rendered.role())
+        {
+            items.extend(build_rendered_message(std::mem::take(&mut pending)));
+        }
+        pending.push(rendered);
     }
-    messages
-        .into_iter()
-        .filter_map(|(_, _, fragments)| build_rendered_message(fragments))
-        .collect()
+    items.extend(build_rendered_message(pending));
+    items
 }
+
+#[cfg(test)]
+#[path = "updates_tests.rs"]
+mod tests;

@@ -6,6 +6,7 @@ use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateHash;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use crate::agent::child_config::MAX_SPAWN_AGENT_MODEL_OVERRIDES;
 use crate::agent::child_config::model_supports_multi_agent_backend;
 use crate::context::ContextualUserFragment;
@@ -135,8 +136,11 @@ impl WorldStateSection for ModelCatalogState {
         if matches!(previous, PreviousSectionState::Known(previous) if previous == &current)
             || self.catalog.is_empty() && matches!(previous, PreviousSectionState::Absent)
         {
-            return (Some(current), None);
+            return (Some(current), Vec::new());
         }
-        (Some(current), Some(Box::new(self.clone())))
+        (
+            Some(current),
+            vec![WorldStateUpdate::fragment(self.clone())],
+        )
     }
 }

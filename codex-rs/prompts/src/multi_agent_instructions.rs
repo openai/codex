@@ -41,10 +41,6 @@ impl ContextualUserFragment for MultiAgentRoleInstructions {
         "developer"
     }
 
-    fn requires_separate_message(&self) -> bool {
-        true
-    }
-
     fn markers(&self) -> (&'static str, &'static str) {
         match self {
             Self::Composed { marked: true, .. } => Self::type_markers(),

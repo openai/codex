@@ -1,7 +1,12 @@
 use super::ErasedWorldStateSection;
 use super::PreviousSectionState;
+use super::WorldState;
 use super::WorldStateSection;
+use super::WorldStateSnapshot;
+use super::WorldStateUpdate;
+use super::WorldStateUpdateContent;
 use crate::context::ContextualUserFragment;
+use codex_protocol::models::ResponseItem;
 
 pub(super) fn render_section_cases<'a, S: WorldStateSection>(
     cases: &[(PreviousSectionState<'a, S>, PreviousSectionState<'a, S>)],
@@ -50,7 +55,9 @@ fn render_diff<S: WorldStateSection>(
             PreviousSectionState::Known(&previous_snapshot)
         }
     };
-    ErasedWorldStateSection::render_diff(*after, previous).1
+    let mut fragments = expect_fragments(ErasedWorldStateSection::render_diff(*after, previous).1);
+    assert!(fragments.len() <= 1, "expected at most one fragment");
+    fragments.pop()
 }
 
 fn render_snapshot<S: WorldStateSection>(section: &S) -> String {
@@ -81,4 +88,62 @@ fn snapshot_value<S: WorldStateSection>(section: &S) -> serde_json::Value {
     ErasedWorldStateSection::render_diff(section, PreviousSectionState::Absent)
         .0
         .expect("world-state section snapshot should serialize to a non-null value")
+}
+
+/// Keeps text-only section assertions explicit when a section gains item output.
+pub(crate) fn expect_fragments(
+    updates: Vec<WorldStateUpdate>,
+) -> Vec<Box<dyn ContextualUserFragment>> {
+    updates
+        .into_iter()
+        .map(|update| expect_fragment(update.content))
+        .collect()
+}
+
+fn expect_fragment(content: WorldStateUpdateContent) -> Box<dyn ContextualUserFragment> {
+    match content {
+        WorldStateUpdateContent::Fragment(fragment) => fragment,
+        WorldStateUpdateContent::Item(item) => panic!("expected a context fragment, got {item:?}"),
+    }
+}
+
+/// Renders a section that is expected to emit at most one contextual fragment.
+pub(crate) trait FragmentSectionTestExt: WorldStateSection {
+    fn render_fragment_diff(
+        &self,
+        previous: PreviousSectionState<'_, Self::Snapshot>,
+    ) -> (
+        Option<Self::Snapshot>,
+        Option<Box<dyn ContextualUserFragment>>,
+    ) {
+        let (snapshot, updates) = self.render_diff(previous);
+        let mut fragments = expect_fragments(updates);
+        assert!(fragments.len() <= 1, "expected at most one fragment");
+        (snapshot, fragments.pop())
+    }
+}
+
+impl<S: WorldStateSection> FragmentSectionTestExt for S {}
+
+impl WorldState {
+    pub(crate) fn render_full_fragments(
+        &self,
+    ) -> (WorldStateSnapshot, Vec<Box<dyn ContextualUserFragment>>) {
+        let (snapshot, updates) = self.render_full();
+        let (prefix, context) = super::split_prefix_updates(updates);
+        assert!(
+            prefix.is_empty(),
+            "expected fragments, got prefix {prefix:?}"
+        );
+        (snapshot, expect_fragments(context))
+    }
+
+    pub(crate) fn render_history_fragment_diff<'a>(
+        &self,
+        previous: Option<&WorldStateSnapshot>,
+        items: impl IntoIterator<Item = &'a ResponseItem> + Clone,
+    ) -> (WorldStateSnapshot, Vec<Box<dyn ContextualUserFragment>>) {
+        let (snapshot, updates) = self.render_history_diff(previous, items);
+        (snapshot, expect_fragments(updates))
+    }
 }

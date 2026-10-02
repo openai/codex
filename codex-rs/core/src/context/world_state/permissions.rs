@@ -4,6 +4,7 @@ use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateHash;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use crate::context::ApprovedCommandPrefixSaved;
 use crate::context::ContextualUserFragment;
 use crate::context::PermissionsInstructions;
@@ -105,7 +106,7 @@ impl WorldStateSection for PermissionsState {
                 },
             ) if previous_instructions == instructions => {
                 if previous_prefixes == approved_command_prefixes {
-                    return (None, None);
+                    return (None, Vec::new());
                 }
                 if previous_prefixes.is_subset(approved_command_prefixes) {
                     let added_prefixes = approved_command_prefixes
@@ -115,7 +116,9 @@ impl WorldStateSection for PermissionsState {
                     if let Some(prefixes) = format_allow_prefixes(added_prefixes) {
                         return (
                             Some(current),
-                            Some(Box::new(ApprovedCommandPrefixSaved::new(prefixes))),
+                            vec![WorldStateUpdate::fragment(ApprovedCommandPrefixSaved::new(
+                                prefixes,
+                            ))],
                         );
                     }
                 }
@@ -124,12 +127,15 @@ impl WorldStateSection for PermissionsState {
                 PreviousSectionState::Known(PermissionsSnapshot::Legacy(previous)),
                 PermissionsSnapshot::Current { .. },
             ) if previous == &WorldStateHash::from_fragment(&self.instructions) => {
-                return (Some(current), None);
+                return (Some(current), Vec::new());
             }
             _ => {}
         }
 
-        (Some(current), Some(Box::new(self.instructions.clone())))
+        (
+            Some(current),
+            vec![WorldStateUpdate::fragment(self.instructions.clone())],
+        )
     }
 }
 
