@@ -3,6 +3,7 @@
 //! Shift-click extends the existing selection from its original text unit.
 //! Optional automatic copying happens only when a nonempty mouse selection is released.
 //! Automatic copies retain the selection; explicit copies clear it after confirmed delivery.
+//! Wheel input accumulates fractional rows and discards the remainder when direction reverses.
 
 use crate::key_hint::KeyBindingListExt;
 use crossterm::event::KeyCode;
@@ -232,8 +233,27 @@ impl TranscriptView {
             selection.pointer = None;
         }
         match event.kind {
-            MouseEventKind::ScrollUp => self.scroll(cells, /*rows*/ -3),
-            MouseEventKind::ScrollDown => self.scroll(cells, /*rows*/ 3),
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let direction = if event.kind == MouseEventKind::ScrollUp {
+                    -1.0
+                } else {
+                    1.0
+                };
+                if self.pending_mouse_scroll.signum() != direction {
+                    self.pending_mouse_scroll = 0.0;
+                }
+                self.pending_mouse_scroll += direction * self.mouse_scroll_speed;
+                // Decimal speeds can land just short of a whole row after repeated addition.
+                let rounded = self.pending_mouse_scroll.round();
+                if rounded != 0.0 && (self.pending_mouse_scroll - rounded).abs() < 1e-9 {
+                    self.pending_mouse_scroll = rounded;
+                }
+                let rows = self.pending_mouse_scroll as isize;
+                self.pending_mouse_scroll = self.pending_mouse_scroll.fract();
+                if rows != 0 {
+                    self.scroll(cells, rows);
+                }
+            }
             MouseEventKind::Down(MouseButton::Right) if inside => {
                 return self
                     .selected_text(cells)

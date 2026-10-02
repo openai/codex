@@ -2,6 +2,27 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn mouse_scroll_speed_accepts_integer_and_fractional_multipliers() {
+    for (value, expected) in [("1", 1.0), ("0.5", 0.5), ("3.0", 3.0)] {
+        let tui: Tui = toml::from_str(&format!("mouse_scroll_speed = {value}")).unwrap();
+        assert_eq!(tui.mouse_scroll_speed, Some(expected));
+    }
+}
+
+#[test]
+fn mouse_scroll_speed_rejects_nonpositive_and_nonfinite_values() {
+    for value in ["0", "-0.5", "nan", "inf", "-inf"] {
+        let error = toml::from_str::<Tui>(&format!("mouse_scroll_speed = {value}")).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("tui.mouse_scroll_speed must be a finite positive number"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn deserialize_skill_config_with_name_selector() {
     let cfg: SkillConfig = toml::from_str(
         r#"

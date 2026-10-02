@@ -85,6 +85,8 @@ struct VisibleRow {
 
 /// Shared scrolling and interaction state for compact and detailed transcript presentations.
 pub(crate) struct TranscriptView {
+    pub(crate) mouse_scroll_speed: f64,
+    pending_mouse_scroll: f64,
     pub(crate) copy_on_select: bool,
     pub(crate) primary_selection: bool,
     position: Position,
@@ -118,6 +120,8 @@ pub(crate) struct TranscriptView {
 impl Default for TranscriptView {
     fn default() -> Self {
         Self {
+            mouse_scroll_speed: 1.0,
+            pending_mouse_scroll: 0.0,
             copy_on_select: false,
             primary_selection: false,
             position: Position::Latest,

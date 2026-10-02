@@ -1,0 +1,27 @@
+---
+source: tui/src/transcript_view/input_tests.rs
+expression: "frames.join(\"\\n\\n\")"
+---
+speed None, 1 up events:
+row 12
+row 13
+row 14
+row 15
+
+speed Some(0.5), 3 up events:
+row 12
+row 13
+row 14
+row 15
+
+speed Some(1.5), 2 up events:
+row 10
+row 11
+row 12
+row 13
+
+speed Some(3.0), 1 up events:
+row 10
+row 11
+row 12
+row 13

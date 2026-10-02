@@ -2,8 +2,6 @@
 source: tui/src/app/owned_transcript_input_tests.rs
 expression: scrolled
 ---
-  • Plan step 27
-  • Plan step 28
   • Plan step 29
   • Plan step 30
   • Plan step 31
@@ -16,6 +14,8 @@ expression: scrolled
   • Plan step 38
   • Plan step 39
   • Plan step 40
+
+
 
 
   Implement this plan?

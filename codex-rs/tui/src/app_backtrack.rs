@@ -171,6 +171,7 @@ impl App {
             self.keymap.pager.clone(),
             self.local_settings
                 .copy_on_select(&codex_terminal_detection::terminal_info()),
+            self.local_settings.tui.mouse_scroll_speed.unwrap_or(1.0),
         ));
         if self.scrollback_has_older_history
             && let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut()

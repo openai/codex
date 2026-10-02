@@ -4686,6 +4686,13 @@
           "default": {},
           "description": "Startup tooltip availability NUX state persisted by the TUI."
         },
+        "mouse_scroll_speed": {
+          "default": null,
+          "description": "Mouse wheel speed multiplier for transcript scrolling, based on one row per event. Defaults to `1.0`. Positive fractional values slow scrolling; values above `1.0` speed it up.",
+          "exclusiveMinimum": 0.0,
+          "format": "double",
+          "type": "number"
+        },
         "notification_condition": {
           "allOf": [
             {

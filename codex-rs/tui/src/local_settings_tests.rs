@@ -105,6 +105,7 @@ show_tooltips = false
 show_server_version_notice = false
 auto_recap = false
 fullscreen_transcript = true
+mouse_scroll_speed = 0.5
 copy_on_select = "never"
 right_click_paste = "off"
 vim_mode_default = true
@@ -136,6 +137,7 @@ fast_default_opt_out = true
             .cli_overrides(vec![
                 ("tui.disable_paste_burst".into(), true.into()),
                 ("tui.right_click_paste".into(), "on".into()),
+                ("tui.mouse_scroll_speed".into(), 1.5.into()),
                 // The deprecated flag must not override or migrate into the TUI preference.
                 (
                     "features.transcript_v2".into(),
@@ -145,12 +147,14 @@ fast_default_opt_out = true
             .build()
             .await?;
         assert_eq!(config.startup_warnings, Vec::<String>::new());
+        assert_eq!(config.tui_mouse_scroll_speed, Some(1.5));
         let bootstrap = crate::legacy_core::config::load_config_toml_with_layer_stack(
             home.path(),
             /*cwd*/ None,
             vec![
                 ("tui.disable_paste_burst".into(), true.into()),
                 ("tui.right_click_paste".into(), "on".into()),
+                ("tui.mouse_scroll_speed".into(), 1.5.into()),
                 (
                     "features.transcript_v2".into(),
                     config_text.is_empty().into(),

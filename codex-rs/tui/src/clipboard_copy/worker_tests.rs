@@ -82,6 +82,7 @@ async fn blocked_copy_allows_overlay_exit_rejects_backlog_and_wakes_completion()
         vec![Arc::new(PlainHistoryCell::new(vec!["selected".into()]))],
         RuntimeKeymap::defaults().pager,
         /*copy_on_select*/ false,
+        /*mouse_scroll_speed*/ 1.0,
     );
     overlay
         .handle_event(

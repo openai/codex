@@ -803,6 +803,9 @@ pub struct Config {
     /// Own the fullscreen transcript when the alternate screen is enabled.
     pub tui_fullscreen_transcript: bool,
 
+    /// Mouse wheel speed multiplier for transcript scrolling; defaults to one row per event.
+    pub tui_mouse_scroll_speed: Option<f64>,
+
     /// Override the terminal-specific default for copying transcript mouse selections.
     pub tui_copy_on_select: codex_config::types::CopyOnSelect,
 
@@ -4533,6 +4536,7 @@ impl Config {
                 .tui
                 .as_ref()
                 .is_none_or(|tui| tui.fullscreen_transcript),
+            tui_mouse_scroll_speed: cfg.tui.as_ref().and_then(|tui| tui.mouse_scroll_speed),
             tui_copy_on_select: cfg
                 .tui
                 .as_ref()
