@@ -12,6 +12,7 @@ use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
 use codex_core::test_support::auth_manager_from_auth;
 use codex_history::InitialHistory;
+use codex_history::ResponseItemEnvelope;
 use codex_history::RolloutItem;
 use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
@@ -2238,6 +2239,7 @@ async fn assert_transport_close_tail_flush(
         }
     });
     let test = builder.build(&api_server).await?;
+    test.codex.ensure_rollout_materialized().await;
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
@@ -2288,22 +2290,32 @@ async fn assert_transport_close_tail_flush(
 
     let closed = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        EventMsg::TurnStarted(_) | EventMsg::ItemStarted(_) | EventMsg::ItemCompleted(_) => {
+            panic!("idle transcript flush must not create an unfinished client turn")
+        }
         _ => None,
     })
     .await;
     assert_eq!(closed.reason.as_deref(), Some("transport_closed"));
-    if flush_transcript_tail_on_session_end {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-        while response_mock.requests().is_empty() {
-            assert!(tokio::time::Instant::now() < deadline);
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert!(response_mock.single_request().message_input_texts("user").iter().any(|text| text
-            == "<realtime_delegation>\n  <source>transcript_tail_flush</source>\n  <input>The user just ended their realtime session. Here is the remaining handoff/transcript tail. You probably do not have to do anything; acknowledge the handoff unless the transcript itself asks for something.</input>\n  <transcript_delta>user: transport tail</transcript_delta>\n</realtime_delegation>"));
-    } else {
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        assert!(response_mock.requests().is_empty());
-    }
+    // Closed must be a history barrier, including when there is no active turn.
+    let history = test.codex.load_history(/*include_archived*/ false).await?;
+    let tails = history.items.iter().filter(|item| {
+        matches!(item, RolloutItem::ResponseItem(ResponseItemEnvelope { item: ResponseItem::Message { role, content, .. }, .. })
+            if role == "user" && content.iter().any(|item| matches!(item,
+                ContentItem::InputText { text } if text.contains("<source>transcript_tail_flush</source>")
+                    && text.contains("user: transport tail"))))
+    }).count();
+    assert_eq!(tails, usize::from(flush_transcript_tail_on_session_end));
+    assert!(response_mock.requests().is_empty());
+
+    test.submit_text_turn("continue in text").await?;
+    let user_texts = response_mock.single_request().message_input_texts("user");
+    assert_eq!(
+        user_texts
+            .iter()
+            .any(|text| text.contains("user: transport tail")),
+        flush_transcript_tail_on_session_end
+    );
 
     realtime_server.shutdown().await;
     Ok(())
@@ -5073,33 +5085,38 @@ async fn conversation_close_routes_only_remaining_transcript_tail_once() -> Resu
         ],
     )
     .await;
-    let realtime_server = start_websocket_server(vec![vec![
-        vec![
-            json!({
-                "type": "session.updated",
-                "session": { "id": "sess_tail", "instructions": "backend prompt" }
-            }),
-            json!({
-                "type": "conversation.input_transcript.delta",
-                "delta": "already handed off"
-            }),
-            json!({
-                "type": "conversation.handoff.requested",
-                "handoff_id": "handoff_tail",
-                "item_id": "item_tail",
-                "input_transcript": "already handed off"
-            }),
-            json!({
-                "type": "conversation.output_transcript.delta",
-                "delta": "remaining answer"
-            }),
-            json!({
-                "type": "conversation.input_transcript.delta",
-                "delta": "remaining question"
-            }),
+    let realtime_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![
+            vec![
+                json!({
+                    "type": "session.updated",
+                    "session": { "id": "sess_tail", "instructions": "backend prompt" }
+                }),
+                json!({
+                    "type": "conversation.input_transcript.delta",
+                    "delta": "already handed off"
+                }),
+                json!({
+                    "type": "conversation.handoff.requested",
+                    "handoff_id": "handoff_tail",
+                    "item_id": "item_tail",
+                    "input_transcript": "already handed off"
+                }),
+                json!({
+                    "type": "conversation.output_transcript.delta",
+                    "delta": "remaining answer"
+                }),
+                json!({
+                    "type": "conversation.input_transcript.delta",
+                    "delta": "remaining question"
+                }),
+            ],
+            vec![],
         ],
-        vec![],
-    ]])
+        response_headers: Vec::new(),
+        accept_delay: None,
+        close_after_requests: false,
+    }])
     .await;
     let mut builder = test_codex().with_config({
         let realtime_base_url = realtime_server.uri().to_string();
@@ -5143,19 +5160,30 @@ async fn conversation_close_routes_only_remaining_transcript_tail_once() -> Resu
 
     let closed = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        EventMsg::TurnStarted(_) | EventMsg::ItemStarted(_) | EventMsg::ItemCompleted(_) => {
+            panic!("idle transcript flush must not create an unfinished client turn")
+        }
         _ => None,
     })
     .await;
     assert_eq!(closed.reason.as_deref(), Some("requested"));
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-    while response_mock.requests().len() < 2 {
-        assert!(tokio::time::Instant::now() < deadline);
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    let history = test.codex.load_history(/*include_archived*/ false).await?;
+    let tails = history.items.iter().filter(|item| {
+        matches!(item, RolloutItem::ResponseItem(ResponseItemEnvelope { item: ResponseItem::Message { role, content, .. }, .. })
+            if role == "user" && content.iter().any(|item| matches!(item,
+                ContentItem::InputText { text } if text.contains("<source>transcript_tail_flush</source>")
+                    && text.contains("assistant: remaining answer\nuser: remaining question"))))
+    }).count();
+    assert_eq!(tails, 1);
+    assert_eq!(response_mock.requests().len(), 1);
 
     test.codex.submit(Op::RealtimeConversationClose).await?;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::RealtimeConversationClosed(_))
+    })
+    .await;
+    test.submit_text_turn("continue in text").await?;
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
@@ -5581,8 +5609,14 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
     Ok(())
 }
 
+#[test_case(false, false; "without_tail")]
+#[test_case(true, false; "with_tail")]
+#[test_case(true, true; "interrupt_after_close")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn inbound_handoff_request_updates_realtime_state_during_active_turn() -> Result<()> {
+async fn inbound_handoff_request_updates_realtime_state_during_active_turn(
+    flush_transcript_tail_on_session_end: bool,
+    interrupt: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let (gate_completed_tx, gate_completed_rx) = oneshot::channel();
@@ -5647,6 +5681,10 @@ async fn inbound_handoff_request_updates_realtime_state_during_active_turn() -> 
                     "item_id": "item_steer",
                     "input_transcript": "steer via realtime"
                 }),
+                json!({
+                    "type": "conversation.input_transcript.delta",
+                    "delta": "final transcript tail"
+                }),
             ],
         ],
         response_headers: Vec::new(),
@@ -5684,7 +5722,7 @@ async fn inbound_handoff_request_updates_realtime_state_during_active_turn() -> 
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             client_managed_handoffs: false,
             delegation_ack_filler: None,
-            flush_transcript_tail_on_session_end: false,
+            flush_transcript_tail_on_session_end,
             codex_responses_as_items: false,
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
@@ -5752,12 +5790,34 @@ async fn inbound_handoff_request_updates_realtime_state_during_active_turn() -> 
     .await
     .context("steered request did not start")?;
 
-    // End the call while the same text turn is still in flight.
+    // Closed and the persisted tail must not wait for the in-flight model response.
     test.codex.submit(Op::RealtimeConversationClose).await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::RealtimeConversationClosed(_))
+    let closed = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
     })
     .await;
+    assert_eq!(closed.reason.as_deref(), Some("requested"));
+    if flush_transcript_tail_on_session_end {
+        let history = test.codex.load_history(/*include_archived*/ false).await?;
+        assert!(history.items.iter().any(|item| {
+            matches!(item, RolloutItem::ResponseItem(ResponseItemEnvelope {
+                item: ResponseItem::Message { role, content, .. }, ..
+            }) if role == "user" && content.iter().any(|item| matches!(item,
+                ContentItem::InputText { text } if text.contains("user: final transcript tail"))))
+        }));
+    }
+    if interrupt {
+        test.codex.submit(Op::Interrupt).await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnAborted(_))
+        })
+        .await;
+        let _ = second_completed_tx.send(());
+        realtime_server.shutdown().await;
+        api_server.shutdown().await;
+        return Ok(());
+    }
     let steered = test
         .codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
@@ -5811,14 +5871,31 @@ async fn inbound_handoff_request_updates_realtime_state_during_active_turn() -> 
         "<realtime_conversation>\nGive frequent spoken progress updates.\n</realtime_conversation>";
     let end_instructions =
         "<realtime_conversation>\nReturn to normal text updates.\n</realtime_conversation>";
+    assert!(realtime_instructions[0].is_empty());
     assert_eq!(
-        realtime_instructions,
-        vec![
-            vec![],
-            vec![start_instructions.to_string()],
-            vec![start_instructions.to_string(), end_instructions.to_string()],
-        ]
+        realtime_instructions[1],
+        vec![start_instructions.to_string()]
     );
+    assert_eq!(
+        realtime_instructions.last().expect("missing final request"),
+        &vec![start_instructions.to_string(), end_instructions.to_string()]
+    );
+    if flush_transcript_tail_on_session_end {
+        for request in &requests {
+            let body: Value = serde_json::from_slice(request)?;
+            let input = body["input"].as_array().expect("request input array");
+            if let Some(end) = input
+                .iter()
+                .position(|item| item.to_string().contains("Return to normal text updates."))
+            {
+                let tail = input
+                    .iter()
+                    .position(|item| item.to_string().contains("user: final transcript tail"))
+                    .expect("realtime_end must not overtake the tail");
+                assert!(tail < end);
+            }
+        }
+    }
 
     realtime_server.shutdown().await;
     api_server.shutdown().await;

@@ -88,6 +88,7 @@ use tracing::warn;
 mod bem;
 mod existing_call;
 mod sideband;
+mod transcript_tail;
 
 use self::bem::ChannelParser as BemChannelParser;
 use self::bem::message_phase as bem_message_phase;
@@ -171,6 +172,8 @@ pub(crate) struct RealtimeConversationManager {
 struct RealtimeConversationManagerState {
     conversation: Option<ConversationState>,
     mode_instructions: Option<RealtimeModeInstructions>,
+    // Keep context active until the terminal transcript is recorded.
+    context_active: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -556,6 +559,7 @@ impl RealtimeConversationManager {
             state: Mutex::new(RealtimeConversationManagerState {
                 conversation: None,
                 mode_instructions: None,
+                context_active: false,
             }),
         }
     }
@@ -563,10 +567,7 @@ impl RealtimeConversationManager {
     pub(crate) async fn snapshot(&self) -> RealtimeConversationSnapshot {
         let state = self.state.lock().await;
         RealtimeConversationSnapshot {
-            active: state
-                .conversation
-                .as_ref()
-                .is_some_and(|conversation| conversation.realtime_active.load(Ordering::Relaxed)),
+            active: state.context_active,
             mode_instructions: state.mode_instructions.clone(),
         }
     }
@@ -780,6 +781,7 @@ impl RealtimeConversationManager {
             stop_token,
         });
         state.mode_instructions = Some(mode_instructions);
+        state.context_active = true;
         Ok(RealtimeStartOutput {
             realtime_active,
             route_handoffs,
@@ -1785,8 +1787,16 @@ async fn handle_start_inner(
         if handoff_error.is_none()
             && let Ok(text) = transcript_tail_rx.recv().await
         {
-            handoff_error = route_handoffs.route(&sess_clone, text).await.err();
+            let _permit = route_handoffs.gate.acquire().await;
+            if !route_handoffs.retired.load(Ordering::Acquire)
+                && let Err(err) = transcript_tail::record(&sess_clone, text).await
+            {
+                warn!("failed to flush realtime transcript before closure: {err}");
+                handoff_error = Some("failed to save the realtime transcript before closure");
+            }
         }
+        // Make realtime_end eligible only after the tail has reached history.
+        sess_clone.conversation.state.lock().await.context_active = false;
         if let Some(error) = handoff_error {
             end = RealtimeConversationEnd::Error;
             sess_clone

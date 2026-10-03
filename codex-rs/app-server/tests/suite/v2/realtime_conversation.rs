@@ -15,6 +15,10 @@ use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemsListParams;
+use codex_app_server_protocol::ThreadItemsListResponse;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendSpeechParams;
@@ -50,10 +54,13 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadTimelineEntry;
 use codex_app_server_protocol::ThreadTimelineListParams;
 use codex_app_server_protocol::ThreadTimelineListResponse;
+use codex_app_server_protocol::ThreadTurnsListParams;
+use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
+use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -1713,16 +1720,32 @@ async fn realtime_list_voices_returns_supported_names() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
+#[test_matrix([ThreadHistoryMode::Paginated, ThreadHistoryMode::Legacy], [false, true])]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn realtime_conversation_stop_emits_closed_notification(
+    history_mode: ThreadHistoryMode,
+    running: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let responses_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let responses_server = MockServer::start().await;
+    let (response_tx, response_rx) = mpsc::channel();
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(GatedSseResponse {
+            gate_rx: Mutex::new(Some(response_rx)),
+            response: create_final_assistant_message_sse_response("Done.")?,
+        })
+        .mount(&responses_server)
+        .await;
     let realtime_server = start_websocket_server(vec![vec![
-        vec![json!({
-            "type": "session.updated",
-            "session": { "id": "sess_backend", "instructions": "backend prompt" }
-        })],
+        vec![
+            json!({
+                "type": "session.updated",
+                "session": { "id": "sess_backend", "instructions": "backend prompt" }
+            }),
+            json!({"type": "conversation.input_transcript.delta", "delta": "final words"}),
+        ],
         vec![],
     ]])
     .await;
@@ -1742,16 +1765,38 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            history_mode: Some(history_mode),
+            ..Default::default()
+        })
         .await?;
     let thread_start: ThreadStartResponse =
         timeout(DEFAULT_TIMEOUT, mcp.read_response(thread_start_request_id)).await??;
+
+    let running_turn_id = if running {
+        let request = mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread_start.thread.id.clone(),
+                input: vec![V2UserInput::Text {
+                    text: "keep working".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let response: TurnStartResponse =
+            timeout(DEFAULT_TIMEOUT, mcp.read_response(request)).await??;
+        read_notification::<ItemCompletedNotification>(&mut mcp, "item/completed").await?;
+        Some(response.turn.id)
+    } else {
+        None
+    };
 
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             client_managed_handoffs: None,
             delegation_ack_filler: None,
-            flush_transcript_tail_on_session_end: None,
+            flush_transcript_tail_on_session_end: Some(true),
             codex_responses_as_items: None,
             codex_response_item_prefix: None,
             codex_response_handoff_mode: None,
@@ -1767,7 +1812,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: None,
-            version: None,
+            version: Some(RealtimeConversationVersion::V1),
             voice: None,
         })
         .await?;
@@ -1777,6 +1822,12 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
     let started =
         read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
             .await?;
+    let transcript = read_notification::<ThreadRealtimeTranscriptDeltaNotification>(
+        &mut mcp,
+        "thread/realtime/transcript/delta",
+    )
+    .await?;
+    assert_eq!(transcript.delta, "final words");
 
     let stop_request_id = mcp
         .send_thread_realtime_stop_request(ThreadRealtimeStopParams {
@@ -1794,6 +1845,84 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
         closed.reason.as_deref(),
         Some("requested" | "transport_closed")
     ));
+
+    // The parent's handback uses this API immediately after Closed, even when
+    // the child's model response is still blocked on response_tx above.
+    let turns = if history_mode == ThreadHistoryMode::Paginated {
+        let request = mcp
+            .send_thread_items_list_request(ThreadItemsListParams {
+                thread_id: started.thread_id.clone(),
+                turn_id: None,
+                cursor: None,
+                limit: None,
+                sort_direction: None,
+            })
+            .await?;
+        let items: ThreadItemsListResponse =
+            timeout(DEFAULT_TIMEOUT, mcp.read_response(request)).await??;
+        let tails = items.data.iter().filter(|entry| matches!(
+            &entry.item, ThreadItem::UserMessage { content, .. }
+            if content.iter().any(|part| matches!(part, V2UserInput::Text { text, .. }
+                if text.contains("<source>transcript_tail_flush</source>") && text.contains("user: final words")))
+        )).collect::<Vec<_>>();
+        assert_eq!(tails.len(), 1);
+        if let Some(id) = &running_turn_id {
+            assert_eq!(&tails[0].turn_id, id);
+        }
+        let request = mcp
+            .send_thread_turns_list_request(ThreadTurnsListParams {
+                thread_id: started.thread_id.clone(),
+                cursor: None,
+                limit: None,
+                sort_direction: None,
+                items_view: None,
+            })
+            .await?;
+        let turns: ThreadTurnsListResponse =
+            timeout(DEFAULT_TIMEOUT, mcp.read_response(request)).await??;
+        assert_eq!(tails[0].turn_id, turns.data[0].id);
+        turns.data
+    } else {
+        let request = mcp
+            .send_thread_read_request(ThreadReadParams {
+                thread_id: started.thread_id.clone(),
+                include_turns: true,
+            })
+            .await?;
+        let history: ThreadReadResponse =
+            timeout(DEFAULT_TIMEOUT, mcp.read_response(request)).await??;
+        assert_eq!(history.thread.turns.iter().flat_map(|turn| &turn.items).filter(|item| matches!(
+            item, ThreadItem::UserMessage { content, .. }
+            if content.iter().any(|part| matches!(part, V2UserInput::Text { text, .. }
+                if text.contains("<source>transcript_tail_flush</source>") && text.contains("user: final words")))
+        )).count(), 1);
+        history.thread.turns
+    };
+    assert_eq!(turns.len(), 1);
+    assert_eq!(
+        turns[0].status,
+        if running {
+            TurnStatus::InProgress
+        } else {
+            TurnStatus::Completed
+        }
+    );
+    assert_eq!(Uuid::parse_str(&turns[0].id)?.get_version_num(), 7);
+
+    response_tx.send(())?;
+    if running {
+        let completed =
+            read_notification::<TurnCompletedNotification>(&mut mcp, "turn/completed").await?;
+        assert_eq!(Some(completed.turn.id), running_turn_id);
+    }
+    assert_eq!(
+        responses_server
+            .received_requests()
+            .await
+            .expect("request recording is enabled")
+            .len(),
+        usize::from(running)
+    );
 
     realtime_server.shutdown().await;
     Ok(())
