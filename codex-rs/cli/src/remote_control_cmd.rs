@@ -112,12 +112,20 @@ async fn run_foreground_remote_control(
     arg0_paths: Arg0DispatchPaths,
     root_config_overrides: CliConfigOverrides,
 ) -> anyhow::Result<()> {
+    #[cfg(not(windows))]
     let socket_dir = tempfile::Builder::new()
         .prefix("codex-rc-")
         .tempdir_in("/tmp")
         .or_else(|_| tempfile::tempdir())
         .context("failed to create private app-server socket directory")?;
+    #[cfg(not(windows))]
     let socket_path = socket_dir.path().join("rc.sock");
+    // Let the transport create this parent with a protected DACL instead of
+    // inheriting the broader ACL from a directory created under `%TEMP%`.
+    #[cfg(windows)]
+    let socket_path = std::env::temp_dir()
+        .join("codex-remote-control")
+        .join(format!("rc-{}.sock", std::process::id()));
     let socket_path = AbsolutePathBuf::from_absolute_path(&socket_path)
         .context("private app-server socket path was not absolute")?;
     let transport = AppServerTransport::UnixSocket {
