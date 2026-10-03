@@ -431,6 +431,10 @@ fn daemon_exclusion_warning_snapshot() {
     let cell = crate::history_cell::StartupWarningsCell::new(vec![
         "Running without the shared background server: --strict-config requires embedded mode."
             .into(),
+        format!(
+            "Running without the shared background server: {} requires embedded mode.",
+            daemon_startup::WSL_DRVFS_EXCLUSION
+        ),
     ]);
     let text = cell
         .transcript_lines(/*width*/ 80)

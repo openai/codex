@@ -15,6 +15,37 @@ const SERVER_FEATURES: [Feature; 4] = [
 ];
 
 pub(super) const FAILURE_HINT: &str = "To work without the background server, rerun the same command with --no-daemon (including resume or fork and its arguments).";
+pub(super) const WSL_DRVFS_EXCLUSION: &str = "a Windows-mounted WSL CODEX_HOME (DrvFS/9p)";
+
+pub(super) fn uses_wsl_drvfs(codex_home: &std::path::Path) -> bool {
+    // The managed daemon writes an executable and Unix-style state beneath CODEX_HOME.
+    // DrvFS does not reliably support the required permission semantics, so starting it
+    // there can fail before the TUI opens.
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+
+        if !codex_utils_path::is_wsl() && std::env::var_os("WSL_INTEROP").is_none() {
+            return false;
+        }
+        let Some(directory) = codex_home
+            .ancestors()
+            .find_map(|path| std::fs::File::open(path).ok())
+        else {
+            return false;
+        };
+        let mut stats = std::mem::MaybeUninit::<libc::statfs>::uninit();
+        if unsafe { libc::fstatfs(directory.as_raw_fd(), stats.as_mut_ptr()) } != 0 {
+            return false;
+        }
+        unsafe { stats.assume_init() }.f_type as u64 == 0x0102_1997
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = codex_home;
+        false
+    }
+}
 
 #[cfg(any(windows, test))]
 pub(super) const ELEVATED_LAUNCH_WARNING: &str = "Running as administrator: shared background server disabled. To enable it, restart Codex in a terminal without administrator permissions.";

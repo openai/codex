@@ -533,6 +533,13 @@ pub(super) async fn run_main_inner(
         daemon_exclusion = Some("Bedrock sign-in");
         app_server_target = AppServerTarget::Embedded;
     }
+    if auto_start_daemon
+        && daemon_exclusion.is_none()
+        && matches!(&app_server_target, AppServerTarget::Embedded)
+        && daemon_startup::uses_wsl_drvfs(&codex_home)
+    {
+        daemon_exclusion = Some(daemon_startup::WSL_DRVFS_EXCLUSION);
+    }
     let mut daemon_features = daemon_startup::server_features(&cli_kv_overrides);
     // Disabling shared services requires confirmation, even on a fresh auto-start.
     daemon_features.retain(|_, enabled| *enabled);
