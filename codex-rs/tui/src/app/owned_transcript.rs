@@ -316,17 +316,32 @@ impl App {
         Ok(bottom_area)
     }
 
-    /// Keep modal input ownership while allowing wheel scrolling over the visible transcript.
+    /// Keep modal input ownership while allowing selection and copying in the visible transcript.
     pub(super) fn handle_owned_transcript_event(
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         event: &TuiEvent,
     ) -> Result<bool> {
+        let has_modal = self.chat_widget.has_active_modal();
+        let modal_transcript_mouse = has_modal
+            && matches!(event, TuiEvent::Mouse(mouse)
+                if self.chat_widget.centered_dialog().is_none()
+                    || matches!(mouse.kind, crossterm::event::MouseEventKind::ScrollUp
+                        | crossterm::event::MouseEventKind::ScrollDown));
+        let modal_transcript_draw = has_modal
+            && self.chat_widget.centered_dialog().is_none()
+            && matches!(event, TuiEvent::Draw);
+        let modal_transcript_event = modal_transcript_mouse
+            || modal_transcript_draw
+            || (has_modal
+                && matches!(event, TuiEvent::Key(key)
+                    if crate::text_selection::is_copy_key(*key)
+                        && self.transcript_view.owns_interaction_key(*key)));
         if !tui.is_owned_screen()
             || matches!(event, TuiEvent::FocusLost | TuiEvent::Resume)
             || self.overlay.is_some()
-            || !self.chat_widget.no_modal_or_popup_active()
+            || (!self.chat_widget.no_modal_or_popup_active() && !modal_transcript_event)
         {
             self.transcript_view.end_drag();
         }
@@ -403,17 +418,7 @@ impl App {
         }
         if !self.chat_widget.no_modal_or_popup_active() {
             self.chat_widget.end_composer_drag();
-            let is_modal_scroll = self.chat_widget.has_active_modal()
-                && matches!(
-                    event,
-                    TuiEvent::Mouse(mouse)
-                        if matches!(
-                            mouse.kind,
-                            crossterm::event::MouseEventKind::ScrollUp
-                                | crossterm::event::MouseEventKind::ScrollDown
-                        )
-                );
-            if !is_modal_scroll {
+            if !modal_transcript_event {
                 return Ok(false);
             }
         }
@@ -532,6 +537,9 @@ impl App {
             TuiEvent::Key(key) => self
                 .transcript_view
                 .handle_key(*key, &self.transcript_cells),
+            TuiEvent::Mouse(mouse) if modal_transcript_mouse => self
+                .transcript_view
+                .handle_selection_mouse(*mouse, &self.transcript_cells),
             TuiEvent::Mouse(mouse) => self
                 .transcript_view
                 .handle_mouse(*mouse, &self.transcript_cells),

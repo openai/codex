@@ -307,6 +307,38 @@ fn ordinary_click_opens_bare_and_markdown_links_on_release() {
 }
 
 #[test]
+fn selection_mouse_does_not_open_links() {
+    for modifiers in [KeyModifiers::NONE, KeyModifiers::CONTROL] {
+        let (mut view, cells) = transcript("[docs](https://example.com/docs)", /*width*/ 60);
+        let down = MouseEvent {
+            modifiers,
+            ..mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                /*column*/ 4,
+                /*row*/ 1,
+            )
+        };
+        assert!(matches!(
+            view.handle_selection_mouse(down, &cells),
+            Some(ViewAction::Changed)
+        ));
+        let area = view.area;
+        view.render(area, &mut Buffer::empty(area), &cells);
+        assert!(matches!(
+            view.handle_selection_mouse(
+                MouseEvent {
+                    kind: MouseEventKind::Up(MouseButton::Left),
+                    ..down
+                },
+                &cells,
+            ),
+            Some(ViewAction::Changed)
+        ));
+        assert_eq!(view.selected_text(&cells), None);
+    }
+}
+
+#[test]
 fn dragging_a_link_selects_text_and_never_opens_it() {
     for return_to_origin in [false, true] {
         let (mut view, cells) = transcript(

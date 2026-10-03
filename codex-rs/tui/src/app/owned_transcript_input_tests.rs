@@ -325,8 +325,9 @@ async fn plan_menu_allows_transcript_wheel_scrolling_and_keeps_keyboard_ownershi
 }
 
 #[tokio::test]
-async fn plan_menu_wheel_scrolling_respects_modal_and_completion_popup_bounds() -> Result<()> {
+async fn plan_menu_allows_transcript_selection_and_copy_but_respects_popup_bounds() -> Result<()> {
     let (mut app, mut events, _operations) = make_test_app_with_channels().await;
+    app.local_settings.tui.copy_on_select = codex_config::types::CopyOnSelect::Never;
     let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
     tui.set_owned_screen(/*owned*/ true)?;
@@ -343,9 +344,6 @@ async fn plan_menu_wheel_scrolling_respects_modal_and_completion_popup_bounds() 
         (MouseEventKind::ScrollUp, 1, bottom.y),
         (MouseEventKind::ScrollDown, 1, bottom.y),
         (MouseEventKind::ScrollUp, size.width, 1),
-        (MouseEventKind::Down(MouseButton::Left), 1, 1),
-        (MouseEventKind::Drag(MouseButton::Left), 6, 1),
-        (MouseEventKind::Up(MouseButton::Left), 6, 1),
     ] {
         app.handle_tui_event(&mut tui, &mut server, pointer_event(kind, column, row))
             .await?;
@@ -353,8 +351,73 @@ async fn plan_menu_wheel_scrolling_respects_modal_and_completion_popup_bounds() 
         assert_eq!(screen(&tui), before);
         assert!(!app.transcript_view.has_active_interaction());
     }
+    let (plan_row, plan_column) = before
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| {
+            line.find("Plan step")
+                .map(|column| (row as u16, column as u16))
+        })
+        .expect("visible plan step");
+    for event in [
+        pointer_event(
+            MouseEventKind::Down(MouseButton::Left),
+            plan_column,
+            plan_row,
+        ),
+        TuiEvent::Draw,
+        pointer_event(
+            MouseEventKind::Drag(MouseButton::Left),
+            plan_column + 4,
+            plan_row,
+        ),
+        TuiEvent::Draw,
+        pointer_event(
+            MouseEventKind::Up(MouseButton::Left),
+            plan_column + 4,
+            plan_row,
+        ),
+    ] {
+        app.handle_tui_event(&mut tui, &mut server, event).await?;
+    }
+    let selected = app
+        .transcript_view
+        .selected_text(&app.transcript_cells)
+        .expect("selected plan text");
+    assert!("Plan step".contains(&selected), "selected {selected:?}");
+    app.handle_tui_event(
+        &mut tui,
+        &mut server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Insert, KeyModifiers::CONTROL)),
+    )
+    .await?;
+    assert!(tui.clipboard.is_busy());
+    assert!(app.chat_widget.has_active_modal());
+    app.render_owned_transcript(&mut tui, size)?;
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    let selection = (0..size.width)
+        .map(|column| {
+            if buffer[(column, plan_row)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+            {
+                '^'
+            } else {
+                '·'
+            }
+        })
+        .collect::<String>();
+    insta::assert_snapshot!(
+        "plan_prompt_selection",
+        format!(
+            "{selection}\n\n{}",
+            render_bottom_popup(&app.chat_widget, /*width*/ 80),
+        )
+    );
     app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into()))
         .await?;
+    app.transcript_view.end_selection(&app.transcript_cells);
+    app.transcript_view.jump_to_latest();
     app.chat_widget.apply_external_edit("/m".to_string());
     app.render_owned_transcript(&mut tui, size)?;
     let popup = screen(&tui);
