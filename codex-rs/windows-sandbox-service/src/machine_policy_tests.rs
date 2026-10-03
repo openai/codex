@@ -2,6 +2,9 @@ use anyhow::Result;
 use codex_config::ConfigRequirementsToml;
 use codex_windows_sandbox::WindowsSandboxProvisioningSettings;
 use codex_windows_sandbox::WindowsSandboxProxyListeners;
+use pretty_assertions::assert_eq;
+
+use crate::ipc::ProvisioningRequest;
 
 fn validate_requirements(
     settings: &WindowsSandboxProvisioningSettings,
@@ -13,16 +16,29 @@ fn validate_requirements(
 }
 
 #[test]
-fn runtime_worker_impersonation_failure_rejects_provisioning() {
-    let error = super::validate_provisioning_settings(
-        &std::env::temp_dir(),
-        &WindowsSandboxProvisioningSettings::default(),
-        &WindowsSandboxProxyListeners::default(),
-        std::ptr::null_mut(),
-    )
-    .expect_err("runtime workers must not load configuration without impersonating the client");
-
-    assert!(error.to_string().contains("failed to impersonate"));
+fn only_registered_refresh_skips_configuration_loading() {
+    for (registered_core, refresh_only) in
+        [(true, true), (true, false), (false, false), (false, true)]
+    {
+        let request = ProvisioningRequest {
+            codex_home: std::env::temp_dir(),
+            registered_core,
+            refresh_only,
+            settings: WindowsSandboxProvisioningSettings::default(),
+            listeners: WindowsSandboxProxyListeners::default(),
+        };
+        // An invalid worker token makes any attempt to load config fail closed.
+        // Refresh must succeed without starting that runtime; setup must not.
+        let result = super::validate_provisioning_request(
+            &request.codex_home,
+            &request,
+            std::ptr::null_mut(),
+        );
+        assert_eq!(result.is_ok(), registered_core && refresh_only);
+        if let Err(error) = result {
+            assert!(error.to_string().contains("failed to impersonate"));
+        }
+    }
 }
 
 #[test]

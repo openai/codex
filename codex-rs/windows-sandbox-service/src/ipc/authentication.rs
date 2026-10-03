@@ -57,10 +57,9 @@ pub(super) fn authenticate_client(
                     // Registration does not provision resources or change sandbox policy.
                     ServiceRequest::RegisterInstallation { .. } => Ok(()),
                     ServiceRequest::ProvisionSandbox(request) => {
-                        crate::machine_policy::validate_provisioning_settings(
+                        crate::machine_policy::validate_provisioning_request(
                             &identity.codex_home,
-                            &request.settings,
-                            &request.listeners,
+                            request,
                             identity.token.as_raw_handle(),
                         )
                     }

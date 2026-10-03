@@ -1,4 +1,5 @@
-//! Validates provisioning requests against the standard managed configuration layers.
+//! Validates sandbox provisioning against managed policy; registration-only refresh
+//! retains the existing sandbox and is admitted by the registered-runtime transaction.
 
 use anyhow::Context;
 use anyhow::Result;
@@ -17,6 +18,8 @@ use tokio::sync::Notify;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Security::ImpersonateLoggedOnUser;
 
+use crate::ipc::ProvisioningRequest;
+
 struct NonOwningImpersonationToken(HANDLE);
 
 // SAFETY: Windows access token handles are opaque process-wide values that may
@@ -25,12 +28,18 @@ struct NonOwningImpersonationToken(HANDLE);
 unsafe impl Send for NonOwningImpersonationToken {}
 unsafe impl Sync for NonOwningImpersonationToken {}
 
-pub(crate) fn validate_provisioning_settings(
+pub(crate) fn validate_provisioning_request(
     codex_home: &Path,
-    settings: &WindowsSandboxProvisioningSettings,
-    listeners: &WindowsSandboxProxyListeners,
+    request: &ProvisioningRequest,
     impersonation_token: HANDLE,
 ) -> Result<()> {
+    if request.registered_core && request.refresh_only {
+        // The caller is already authenticated. registered::run checks the existing
+        // owner, accounts and unchanged settings under the setup lock; it cannot
+        // provision or repair a sandbox. Backend use still obeys managed config.
+        // Package maintenance must not require another cloud-policy fetch.
+        return Ok(());
+    }
     let impersonation_failure = Arc::new(Notify::new());
     let worker_impersonation_failure = Arc::clone(&impersonation_failure);
     let impersonation_token = NonOwningImpersonationToken(impersonation_token);
@@ -90,7 +99,7 @@ pub(crate) fn validate_provisioning_settings(
         }
     })?;
 
-    validate_requirements(settings, listeners, &requirements)
+    validate_requirements(&request.settings, &request.listeners, &requirements)
         .context("enforce managed provisioning requirements")
 }
 
