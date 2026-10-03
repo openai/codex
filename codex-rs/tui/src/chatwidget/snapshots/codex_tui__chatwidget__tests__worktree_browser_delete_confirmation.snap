@@ -2,11 +2,11 @@
 source: tui/src/chatwidget/tests/worktree_picker_tests.rs
 expression: "render_bottom_popup(&chat, 80)"
 ---
-  Delete this worktree?
-  /repo/worktree
+      Delete this worktree?
+› As  /repo/worktree
 
+  GP
+    › 1. Cancel
+      2. Delete worktree  Keeps thread history; may disrupt other sessions
 
-› 1. Cancel
-  2. Delete worktree  Keeps thread history; may disrupt other sessions
-
-  enter select · esc back
+      enter select · esc back

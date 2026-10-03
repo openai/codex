@@ -2,11 +2,11 @@
 source: tui/src/chatwidget/tests/slash_commands.rs
 expression: popup
 ---
-  Archive this session?
-  Are you sure? This will archive the current session
+      Archive this session?
+› As  Are you sure? This will archive the current session
 
+  GP
+    › 1. No, don't archive  Return to the current session
+      2. Yes, archive       Archive this session now
 
-› 1. No, don't archive  Return to the current session
-  2. Yes, archive       Archive this session now
-
-  enter select · esc back
+      enter select · esc back

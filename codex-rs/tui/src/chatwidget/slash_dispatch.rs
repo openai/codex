@@ -258,7 +258,7 @@ impl ChatWidget {
                             ..Default::default()
                         },
                     ],
-                    ..SelectionViewParams::picker()
+                    ..SelectionViewParams::confirmation()
                 });
                 self.request_redraw();
             }
@@ -291,7 +291,7 @@ impl ChatWidget {
                             ..Default::default()
                         },
                     ],
-                    ..SelectionViewParams::picker()
+                    ..SelectionViewParams::confirmation()
                 });
                 self.request_redraw();
             }

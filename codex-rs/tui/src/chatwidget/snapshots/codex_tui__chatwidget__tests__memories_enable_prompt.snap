@@ -2,13 +2,13 @@
 source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: "render_bottom_popup(&chat, 80)"
 ---
-  Enable memories?
-  Memories are disabled in this TUI session.
+      Enable memories?
+› As  Memories are disabled in this TUI session.
 
+  GP
+    › 1. Yes, enable  Save on the server for new threads without changing
+                      this thread
+      2. Not now      Keep memories disabled
 
-› 1. Yes, enable  Save on the server for new threads without changing this
-                  thread
-  2. Not now      Keep memories disabled
-
-  Learn more: https://developers.openai.com/codex/memories
-  enter select · esc back
+      Learn more: https://developers.openai.com/codex/memories
+      enter select · esc back

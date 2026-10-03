@@ -2,25 +2,25 @@
 source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: popup
 ---
-  Upload logs?
+      Upload logs?
+› As
+      The following files will be sent:
+  GP    • codex-logs.log
+        • client-logs.txt (if available)
+        • codex-doctor-report.json
+        • codex-apps-tools-cache.json (if available)
+        • codex-app-directory-cache.json (if available)
+        • windows-sandbox.log
+        • auto-review-rollout-thread-1.jsonl
+        • codex-connectivity-diagnostics.txt
 
-  The following files will be sent:
-    • codex-logs.log
-    • client-logs.txt (if available)
-    • codex-doctor-report.json
-    • codex-apps-tools-cache.json (if available)
-    • codex-app-directory-cache.json (if available)
-    • windows-sandbox.log
-    • auto-review-rollout-thread-1.jsonl
-    • codex-connectivity-diagnostics.txt
-
-  Connectivity diagnostics
-    - Proxy environment variables are set and may affect connectivity.
-      - HTTPS_PROXY = hello
+      Connectivity diagnostics
+        - Proxy environment variables are set and may affect connectivity.
+          - HTTPS_PROXY = hello
 
 
-› 1. Yes  Share the current Codex session logs and diagnostics with the team for
-          troubleshooting
-  2. No
+    › 1. Yes  Share the current Codex session logs and diagnostics with the
+              team for troubleshooting
+      2. No
 
-  enter select · esc back
+      enter select · esc back

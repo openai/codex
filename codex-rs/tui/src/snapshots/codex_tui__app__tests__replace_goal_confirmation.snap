@@ -2,11 +2,11 @@
 source: tui/src/app/tests.rs
 expression: "render_bottom_popup(&app.chat_widget, 80)"
 ---
-  Replace goal?
-  New objective: New goal
+      Replace goal?
+› As  New objective: New goal
 
+  GP
+    › 1. Replace current goal  Set the new objective and start it now
+      2. Cancel                Keep the current goal
 
-› 1. Replace current goal  Set the new objective and start it now
-  2. Cancel                Keep the current goal
-
-  enter select · esc back
+      enter select · esc back

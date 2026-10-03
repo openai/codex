@@ -2,14 +2,27 @@
 source: tui/src/app/daemon_menu_tests.rs
 expression: "render_bottom_popup(&app.chat_widget,\nwidth).replace(r\"C:\\cli-build\\bin\\codex\", \"/x/cli-build/bin/codex\")"
 ---
-  Update daemon and exit Codex?
-  Install the latest public stable release. Restore production updates; keep
-  your automatic-update setting.
-  This may restart the daemon and interrupt active or queued work.
-  Codex exits to update in this terminal. Relaunch it afterward.
+  Agent command center  Group: Project  g
+   All 0   Needs you 0   Working 0   Ready 0   Inactive 0
+  ────────────────────────────────────────────────────────────────────────────
+  No tasks yet
 
 
-› 1. Cancel
-  2. Update and exit
 
-  enter select · esc back
+      Update daemon and exit Codex?
+      Install the latest public stable release. Restore production
+      updates; keep your automatic-update setting.
+      This may restart the daemon and interrupt active or queued work.
+      Codex exits to update in this terminal. Relaunch it afterward.
+
+
+    › 1. Cancel
+      2. Update and exit
+
+      enter select · esc back
+
+
+
+
+
+  Service v0.153.0 < Codex CLI v0.154.0 · /daemon

@@ -267,6 +267,8 @@ async fn misalignment_review_requires_current_findings() {
     chat.on_misalignment_error(Some("turn-1".to_string()), Some(review_details()));
     let review = select_review(&mut chat, &mut rx);
     chat.show_misalignment_review_confirmation(Arc::clone(&review));
+    chat.bottom_pane
+        .set_status_line(Some("test project".into()));
     assert_chatwidget_snapshot!(
         "misalignment_review_narrow",
         render_bottom_popup(&chat, /*width*/ 38)

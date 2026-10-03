@@ -26,10 +26,6 @@ async fn archive_confirmation_number_keys_act_immediately() {
             )),
         );
         app.confirm_agents_overview_action(id, AgentsOverviewAction::Archive);
-        insta::assert_snapshot!(
-            "archive_task_confirmation",
-            render_bottom_popup(&app.chat_widget, /*width*/ 72)
-        );
 
         app.chat_widget.handle_key_event(KeyCode::Char(key).into());
 
@@ -684,7 +680,10 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
         Box::pin(app.handle_event(&mut tui, &mut app_server, confirmation)).await?;
         insta::assert_snapshot!(
             format!("{snapshot}_confirmation"),
-            render_bottom_popup(&app.chat_widget, /*width*/ 72)
+            normalize_agent_center_snapshot(render_bottom_popup(
+                &app.chat_widget,
+                /*width*/ 80
+            ))
         );
         app.chat_widget.handle_key_event(KeyCode::Enter.into());
         assert!(

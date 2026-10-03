@@ -2,11 +2,12 @@
 source: tui/src/chatwidget/tests/goal_menu.rs
 expression: "render_bottom_popup(&chat, 100)"
 ---
-  Resume paused goal?
-  Goal: Keep improving the bare goal command until it feels calm and useful.
+                Resume paused goal?
+› Ask Codex to  Goal: Keep improving the bare goal command until it feels calm and
+                useful.
+  GPT-5.6-Sol
 
+              › 1. Resume goal   Mark it active and continue when idle
+                2. Leave paused  Keep it paused; use /goal resume later
 
-› 1. Resume goal   Mark it active and continue when idle
-  2. Leave paused  Keep it paused; use /goal resume later
-
-  enter select · esc back
+                enter select · esc back

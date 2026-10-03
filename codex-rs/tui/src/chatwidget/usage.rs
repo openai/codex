@@ -272,7 +272,7 @@ impl ChatWidget {
             on_cancel: Some(Box::new(move |_| {
                 confirmation_gate.store(true, Ordering::Release);
             })),
-            ..SelectionViewParams::picker()
+            ..SelectionViewParams::confirmation()
         });
         true
     }

@@ -1583,6 +1583,39 @@ async fn fullscreen_composer_mouse_copy_and_input_ownership() -> Result<()> {
 }
 
 #[tokio::test]
+async fn inline_confirmation_preserves_compact_viewport_without_replaying_history() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    attach_thread(&mut app, ThreadId::new());
+    app.local_settings.tui.animations = false;
+    app.chat_widget
+        .apply_external_edit("preserved draft".to_string());
+    app.transcript_cells = vec![user_cell("Completed conversation behind the confirmation")];
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ false)?;
+    let size = Size::new(/*width*/ 80, /*height*/ 24);
+    app.show_replace_thread_goal_confirmation(
+        ThreadId::new(),
+        crate::goal_files::GoalDraft {
+            objective: "A replacement goal".to_string(),
+            ..Default::default()
+        },
+    );
+    app.render_chat_widget_frame(&mut tui, size)?;
+    assert!(tui.terminal.viewport_area.height < size.height);
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    app.render_chat_widget_frame(&mut tui, size)?;
+    assert!(tui.terminal.viewport_area.height < size.height);
+    assert!(app.last_rendered_history_tail.is_none());
+    assert!(
+        buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(
+            &tui.terminal
+        ))
+        .contains("preserved draft")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn fullscreen_composer_scrolls_without_moving_caret_or_transcript() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
     let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;

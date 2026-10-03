@@ -331,7 +331,7 @@ pub(crate) fn feedback_upload_consent_params(
         header: Box::new(crate::render::renderable::ColumnRenderable::with(
             header_lines,
         )),
-        ..super::SelectionViewParams::picker()
+        ..super::SelectionViewParams::confirmation()
     }
 }
 

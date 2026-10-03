@@ -8,6 +8,15 @@ use super::SelectionDescriptionLayout;
 use super::SelectionViewParams;
 
 impl SelectionViewParams {
+    /// A confirmation floats over its retained parent using the shared dialog geometry.
+    /// Actions, initial selection, and cancellation remain the caller's responsibility.
+    pub(crate) fn confirmation() -> Self {
+        Self {
+            presentation: super::ViewPresentation::Centered,
+            ..Self::picker()
+        }
+    }
+
     /// Start a panel picker with stable columns, hiding descriptions when they become too narrow.
     /// Titles and subtitles wrap; standard hints follow the active list keymap.
     pub(crate) fn picker() -> Self {

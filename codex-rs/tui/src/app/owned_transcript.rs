@@ -271,9 +271,23 @@ impl App {
             feedback_tick =
                 view.render_composer_gap(follow_area, composer_hint.as_ref(), frame.buffer, now);
             chat_widget.note_rendered_width(screen_size.width);
-            rendered_cursor = bottom.cursor_pos(bottom_area);
+            let dialog = chat_widget.centered_dialog();
+            let (foreground, foreground_area): (&dyn Renderable, Rect) =
+                if let Some(dialog) = &dialog {
+                    let area = Rect::new(
+                        /*x*/ 0,
+                        /*y*/ 0,
+                        screen_size.width,
+                        screen_size.height,
+                    );
+                    dialog.render(area, frame.buffer);
+                    (dialog, area)
+                } else {
+                    (&bottom, bottom_area)
+                };
+            rendered_cursor = foreground.cursor_pos(foreground_area);
             if let Some(position) = rendered_cursor {
-                frame.set_cursor_style(bottom.cursor_style(bottom_area));
+                frame.set_cursor_style(foreground.cursor_style(foreground_area));
                 frame.set_cursor_position(position);
             }
         })?;

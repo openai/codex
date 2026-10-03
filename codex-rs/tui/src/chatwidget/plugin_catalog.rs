@@ -447,7 +447,7 @@ impl ChatWidget {
                     response: plugins_response_for_on_cancel.clone(),
                 });
             })),
-            ..SelectionViewParams::picker()
+            ..SelectionViewParams::confirmation()
         }
     }
 

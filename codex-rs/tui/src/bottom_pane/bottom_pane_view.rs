@@ -16,8 +16,21 @@ pub(crate) enum ViewCompletion {
     Cancelled,
 }
 
+/// How a view is placed over the preceding view in the bottom-pane stack.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ViewPresentation {
+    #[default]
+    Inline,
+    Centered,
+}
+
 /// Trait implemented by every view that can be shown in the bottom pane.
 pub(crate) trait BottomPaneView: Renderable {
+    /// Centered views preserve the preceding view as their backdrop.
+    fn presentation(&self) -> ViewPresentation {
+        ViewPresentation::Inline
+    }
+
     /// Handle a key event while the view is active. A redraw is always
     /// scheduled after this call.
     fn handle_key_event(&mut self, _key_event: KeyEvent) {}
