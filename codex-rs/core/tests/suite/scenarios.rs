@@ -89,6 +89,9 @@ use tokio::sync::oneshot;
 
 const ONE_PIXEL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
+#[path = "scenarios_incremental_tools.rs"]
+mod incremental_tools;
+
 #[path = "scenarios_agent_message_board.rs"]
 mod agent_message_board;
 

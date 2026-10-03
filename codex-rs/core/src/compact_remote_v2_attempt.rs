@@ -83,7 +83,11 @@ pub(super) async fn run_remote_compact_v2_attempt(
     input.push(ResponseItem::CompactionTrigger {});
     let prompt = Prompt {
         input,
-        tools: tool_router.model_visible_specs(),
+        tools: if step_context.uses_incremental_tools() {
+            Arc::default()
+        } else {
+            tool_router.model_visible_specs()
+        },
         parallel_tool_calls: true,
         base_instructions,
         output_schema: None,

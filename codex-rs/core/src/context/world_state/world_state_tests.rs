@@ -68,6 +68,22 @@ fn world_state_hash_normalizes_crlf_line_endings() {
     );
 }
 
+#[test]
+fn world_state_json_hash_ignores_object_key_order() {
+    let first: Value = serde_json::from_str(
+        r#"{"type":"function","parameters":{"type":"object","properties":{"query":{"type":"string"}}}}"#,
+    )
+    .unwrap();
+    let reordered: Value = serde_json::from_str(
+        r#"{"parameters":{"properties":{"query":{"type":"string"}},"type":"object"},"type":"function"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        WorldStateHash::from_json(&first),
+        WorldStateHash::from_json(&reordered),
+    );
+}
+
 struct DuplicateTestSection;
 
 impl WorldStateSection for DuplicateTestSection {

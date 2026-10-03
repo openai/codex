@@ -21,6 +21,7 @@ use crate::context::world_state::PersistentModeState;
 use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::RealtimeState;
 use crate::context::world_state::ToolsState;
+use crate::context::world_state::TopLevelToolsState;
 use crate::context::world_state::WorldState;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use codex_connectors::AppToolPolicyEvaluator;
@@ -117,6 +118,11 @@ impl Session {
             String::new()
         };
         let mut world_state = WorldState::default();
+        if step_context.uses_incremental_tools() {
+            let specs = step_context.tool_router.model_visible_specs();
+            let definitions = codex_tools::create_tools_json_for_responses_lite(&specs)?;
+            world_state.add_section(TopLevelToolsState::new(definitions)?);
+        }
         world_state.add_section(ModelInstructionsState::new(
             &model_info.slug,
             previous_model.as_deref(),

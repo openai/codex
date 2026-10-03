@@ -1,4 +1,5 @@
 use super::ErasedWorldStateSection;
+use super::Placement;
 use super::PreviousSectionState;
 use super::WorldState;
 use super::WorldStateSection;
@@ -14,15 +15,34 @@ pub(super) fn render_section_cases<'a, S: WorldStateSection>(
     cases
         .iter()
         .map(|(before, after)| {
-            let rendered = render_diff(before, after);
-            let role = rendered.as_ref().map_or_else(String::new, |fragment| {
-                format!(" (role - {})", fragment.role())
-            });
-            let content = rendered
-                .as_ref()
-                .map_or_else(|| "None".to_string(), |fragment| fragment.render());
+            let updates = render_diff(before, after);
+            let rendered = if updates.is_empty() {
+                "\nNone".to_string()
+            } else {
+                updates
+                    .into_iter()
+                    .map(|update| match update.content {
+                        WorldStateUpdateContent::Fragment(fragment) => {
+                            format!(" (role - {})\n{}", fragment.role(), fragment.render())
+                        }
+                        WorldStateUpdateContent::Item(item) => {
+                            let placement = match update.placement {
+                                Placement::Prefix => "prefix",
+                                Placement::Standalone => "standalone",
+                                Placement::Mergeable => "mergeable",
+                            };
+                            let value = serde_json::to_value(&item)
+                                .expect("world-state item should serialize");
+                            let content = serde_json::to_string_pretty(&sort_json(value))
+                                .expect("world-state item should serialize");
+                            format!(" (item - {placement})\n{content}")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
             format!(
-                "{} -> {}{role}\n{content}",
+                "{} -> {}{rendered}",
                 render_state(before),
                 render_state(after),
             )
@@ -42,9 +62,9 @@ fn render_state<S: WorldStateSection>(state: &PreviousSectionState<'_, S>) -> St
 fn render_diff<S: WorldStateSection>(
     before: &PreviousSectionState<'_, S>,
     after: &PreviousSectionState<'_, S>,
-) -> Option<Box<dyn ContextualUserFragment>> {
+) -> Vec<WorldStateUpdate> {
     let PreviousSectionState::Known(after) = after else {
-        return None;
+        return Vec::new();
     };
     let previous_snapshot;
     let previous = match before {
@@ -55,9 +75,7 @@ fn render_diff<S: WorldStateSection>(
             PreviousSectionState::Known(&previous_snapshot)
         }
     };
-    let mut fragments = expect_fragments(ErasedWorldStateSection::render_diff(*after, previous).1);
-    assert!(fragments.len() <= 1, "expected at most one fragment");
-    fragments.pop()
+    ErasedWorldStateSection::render_diff(*after, previous).1
 }
 
 fn render_snapshot<S: WorldStateSection>(section: &S) -> String {

@@ -497,13 +497,21 @@ pub(super) fn portable_tool_schema(tool: &Value) -> Value {
     if definition.get("name").and_then(Value::as_str) != Some("exec_command") {
         return stable;
     }
-    if let Some(Value::String(description)) = definition.get_mut("description")
-        && description.strip_prefix(BASE).is_some_and(|rest| {
-            rest.starts_with("\n\nWindows safety rules:")
-                && fnv1a(normalize_line_endings(rest).as_bytes()) == WINDOWS_SAFETY_SUFFIX_HASH
-        })
-    {
-        *description = BASE.to_string();
+    if let Some(Value::String(description)) = definition.get_mut("description") {
+        if let Some(rest) = description.strip_prefix(BASE) {
+            let suffix = rest
+                .split_once("\n\nexec tool declaration:")
+                .map_or(rest, |(suffix, _)| suffix);
+            if suffix.starts_with("\n\nWindows safety rules:")
+                && fnv1a(normalize_line_endings(suffix).as_bytes()) == WINDOWS_SAFETY_SUFFIX_HASH
+            {
+                *description = format!("{BASE}{}", &rest[suffix.len()..]);
+            }
+        }
+        *description = description.replace(
+            &format!("  // {WINDOWS_WAIT}"),
+            &format!("  // {UNIX_WAIT}"),
+        );
     }
     if let Some(Value::String(wait)) =
         definition.pointer_mut("/parameters/properties/yield_time_ms/description")

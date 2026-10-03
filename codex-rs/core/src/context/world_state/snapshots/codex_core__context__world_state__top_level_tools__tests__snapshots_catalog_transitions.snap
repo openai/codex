@@ -1,0 +1,73 @@
+---
+source: core/src/context/world_state/top_level_tools_tests.rs
+expression: "render_section_cases(&[(Absent, Known(&original)),\n(Known(&original), Known(&original)), (Known(&original), Known(&updated)),\n(Known(&updated), Known(&only_web)), (Known(&only_web), Known(&empty)),\n(Known(&empty), Known(&original)),])"
+---
+Absent -> {"tool_search":"bfee90bd93851aed12eecbb728658337d2da406d"} (item - prefix)
+{
+  "role": "developer",
+  "tools": [
+    {
+      "description": "Search tools.",
+      "execution": "client",
+      "parameters": {
+        "properties": {},
+        "type": "object"
+      },
+      "type": "tool_search"
+    }
+  ],
+  "type": "additional_tools"
+}
+
+{"tool_search":"bfee90bd93851aed12eecbb728658337d2da406d"} -> {"tool_search":"bfee90bd93851aed12eecbb728658337d2da406d"}
+None
+
+{"tool_search":"bfee90bd93851aed12eecbb728658337d2da406d"} -> {"tool_search":"237fed8bc2eaaab94fe11b9a85520c82c1d347ba","web_search":"b1f849d856edd2e24392555fd84e602e78680451"} (item - prefix)
+{
+  "role": "developer",
+  "tools": [
+    {
+      "description": "Search tools.",
+      "execution": "client",
+      "parameters": {
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "type": "tool_search"
+    },
+    {
+      "external_web_access": true,
+      "type": "web_search"
+    }
+  ],
+  "type": "additional_tools"
+}
+
+{"tool_search":"237fed8bc2eaaab94fe11b9a85520c82c1d347ba","web_search":"b1f849d856edd2e24392555fd84e602e78680451"} -> {"web_search":"b1f849d856edd2e24392555fd84e602e78680451"} (role - developer)
+The following tools are no longer available. Do not call them:
+- tool_search
+
+{"web_search":"b1f849d856edd2e24392555fd84e602e78680451"} -> {} (role - developer)
+The following tools are no longer available. Do not call them:
+- web_search
+
+{} -> {"tool_search":"bfee90bd93851aed12eecbb728658337d2da406d"} (item - prefix)
+{
+  "role": "developer",
+  "tools": [
+    {
+      "description": "Search tools.",
+      "execution": "client",
+      "parameters": {
+        "properties": {},
+        "type": "object"
+      },
+      "type": "tool_search"
+    }
+  ],
+  "type": "additional_tools"
+}

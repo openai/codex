@@ -1605,7 +1605,11 @@ pub(crate) fn build_prompt(
     let turn_context = &step_context.turn;
     Prompt {
         input,
-        tools: step_context.tool_router.model_visible_specs(),
+        tools: if step_context.uses_incremental_tools() {
+            Arc::default()
+        } else {
+            step_context.tool_router.model_visible_specs()
+        },
         parallel_tool_calls: true,
         base_instructions,
         output_schema: turn_context.final_output_json_schema.clone(),

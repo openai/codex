@@ -1017,7 +1017,18 @@ fn responses_lite_prefix_ids_track_thread_and_payload() -> anyhow::Result<()> {
     let client = test_model_client_with_thread_id(thread_id, SessionSource::Cli);
     let mut model = test_model_info();
     model.use_responses_lite = true;
+    let mut tool = codex_tools::FreeformTool {
+        name: "exec".to_string(),
+        description: "Execute JavaScript.".to_string(),
+        defer_loading: None,
+        format: codex_tools::FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "lark".to_string(),
+            definition: "start: /.+/".to_string(),
+        },
+    };
     let mut prompt = Prompt {
+        tools: vec![codex_tools::ToolSpec::Freeform(tool.clone())].into(),
         base_instructions: BaseInstructions {
             text: "base instructions".to_string(),
             provenance: None,
@@ -1050,17 +1061,9 @@ fn responses_lite_prefix_ids_track_thread_and_payload() -> anyhow::Result<()> {
     assert_eq!(changed_instructions.input[0], original.input[0]);
     assert_ne!(changed_instructions.input[1].id(), original.input[1].id());
 
-    prompt.tools = vec![codex_tools::ToolSpec::Freeform(codex_tools::FreeformTool {
-        name: "exec".to_string(),
-        description: "Execute JavaScript.".to_string(),
-        defer_loading: None,
-        format: codex_tools::FreeformToolFormat {
-            r#type: "grammar".to_string(),
-            syntax: "lark".to_string(),
-            definition: "start: /.+/".to_string(),
-        },
-    })]
-    .into();
+    tool.description
+        .push_str(" Updated execution instructions.");
+    prompt.tools = vec![codex_tools::ToolSpec::Freeform(tool)].into();
     let changed_tools = build(&client, &prompt)?;
     assert_ne!(
         changed_tools.input[0].id(),

@@ -49,6 +49,15 @@ pub(crate) struct StepContext {
 }
 
 impl StepContext {
+    pub(crate) fn uses_incremental_tools(&self) -> bool {
+        self.settings.model_info.use_responses_lite
+            && self
+                .turn
+                .config
+                .features
+                .enabled(codex_features::Feature::IncrementalTools)
+    }
+
     /// Pairs the step's environments with access using current session and originating-turn grants.
     pub(crate) fn environments(&self) -> Vec<(&TurnEnvironment, impl EnvironmentAccess + '_)> {
         self.environments

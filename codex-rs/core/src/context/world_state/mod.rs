@@ -17,6 +17,7 @@ mod realtime;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod tools;
+mod top_level_tools;
 
 use crate::context::ContextualUserFragment;
 use codex_extension_api::PreviousWorldStateSection;
@@ -55,6 +56,7 @@ pub(crate) use persistent_mode::PersistentModeState;
 pub(crate) use plugins_instructions::PluginsInstructionsState;
 pub(crate) use realtime::RealtimeState;
 pub(crate) use tools::ToolsState;
+pub(crate) use top_level_tools::TopLevelToolsState;
 
 /// One contribution to model context and its placement policy.
 pub(crate) struct WorldStateUpdate {
@@ -65,10 +67,6 @@ pub(crate) struct WorldStateUpdate {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Placement {
     /// A separate item placed at the front when assembling initial context.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Prefix producers are added separately")
-    )]
     Prefix,
     Standalone,
     Mergeable,
@@ -76,10 +74,6 @@ pub(crate) enum Placement {
 
 pub(crate) enum WorldStateUpdateContent {
     Fragment(Box<dyn ContextualUserFragment>),
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Item producers are added separately")
-    )]
     Item(Box<ResponseItem>),
 }
 
@@ -114,6 +108,13 @@ impl WorldStateUpdate {
     pub(crate) fn standalone(mut self) -> Self {
         self.placement = Placement::Standalone;
         self
+    }
+
+    pub(crate) fn prefix_item(item: ResponseItem) -> Self {
+        Self {
+            placement: Placement::Prefix,
+            content: WorldStateUpdateContent::Item(Box::new(item)),
+        }
     }
 }
 
@@ -338,12 +339,18 @@ pub(crate) trait WorldStateSection: Send + Sync + 'static {
     ) -> SectionTransition<Self::Snapshot>;
 }
 
-/// Stable fingerprint of a model-visible World State fragment.
+/// Stable fingerprint of model-visible world-state content.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub(crate) struct WorldStateHash(String);
 
 impl WorldStateHash {
+    pub(crate) fn from_json(value: &Value) -> Self {
+        let mut value = value.clone();
+        value.sort_all_objects();
+        Self(format!("{:x}", Sha1::digest(value.to_string().as_bytes())))
+    }
+
     pub(crate) fn from_fragment(fragment: &(impl ContextualUserFragment + ?Sized)) -> Self {
         let mut hasher = Sha1::new();
         hasher.update(b"codex-world-state-fragment-v1\0");

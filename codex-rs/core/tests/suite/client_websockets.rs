@@ -2048,18 +2048,13 @@ async fn responses_lite_websocket_uses_incremental_create_on_prefix() {
     let second = connection.get(1).expect("missing request").body_json();
     let first_input = first["input"].as_array().expect("request input");
 
-    assert_eq!(first_input.len(), 3);
+    assert_eq!(first_input.len(), 2);
     assert!(
         first_input[0]["id"]
             .as_str()
-            .is_some_and(|id| id.starts_with("at_"))
-    );
-    assert!(
-        first_input[1]["id"]
-            .as_str()
             .is_some_and(|id| id.starts_with("msg_"))
     );
-    assert_eq!(first_input[2]["id"], "msg_supplied");
+    assert_eq!(first_input[1]["id"], "msg_supplied");
     assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(
         second["input"],
