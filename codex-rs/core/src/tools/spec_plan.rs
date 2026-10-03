@@ -89,7 +89,6 @@ use codex_tools::ToolExecutor;
 use codex_tools::ToolExposures;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use codex_tools::UnifiedExecShellMode;
 use codex_tools::can_request_original_image_detail;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::collect_request_plugin_install_entries;
@@ -1081,13 +1080,8 @@ fn standalone_web_search_enabled(turn_context: &TurnContext, model_info: &ModelI
 }
 
 fn tool_environment_mode(environments: &TurnEnvironmentSnapshot) -> ToolEnvironmentMode {
-    ToolEnvironmentMode::from_count(environments.turn_environments().count())
-}
-
-fn any_environment_allows_login_shell(environments: &TurnEnvironmentSnapshot) -> bool {
-    environments
-        .turn_environments()
-        .any(|environment| environment.config().allow_login_shell)
+    // Keep environment selectors stable as selected attachments change readiness.
+    ToolEnvironmentMode::from_count(environments.environments.len())
 }
 
 fn should_include_windows_shell_guidance(environments: &TurnEnvironmentSnapshot) -> bool {
@@ -1114,14 +1108,12 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
     let turn_context = context.turn_context;
     let features = turn_context.config.features.get();
     let environment_mode = tool_environment_mode(context.environments);
-    if !environment_mode.has_environment()
-        || !features.enabled(Feature::ShellTool)
+    if !features.enabled(Feature::ShellTool)
         || matches!(context.model_info.shell_type, ConfigShellToolType::Disabled)
     {
         return;
     }
 
-    let allow_login_shell = any_environment_allows_login_shell(context.environments);
     if context.tool_policy.require_unified_exec && !features.enabled(Feature::UnifiedExec) {
         return;
     }
@@ -1129,14 +1121,9 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
         && context.tool_policy.expose_additional_permissions;
     let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
     let options = ExecCommandHandlerOptions {
-        allow_login_shell,
         allow_tty: features.enabled(Feature::UnifiedExecTty),
         exec_permission_approvals_enabled,
         include_environment_id,
-        include_shell_parameter: unified_exec_should_include_shell_parameter(
-            turn_context,
-            context.environments,
-        ),
         include_windows_shell_guidance: should_include_windows_shell_guidance(context.environments),
     };
     if features.enabled(Feature::UnifiedExec) {
@@ -1148,18 +1135,6 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
         // resumable process or write_stdin authority prohibited by policy.
         registry.add(ExecCommandHandler::one_shot(options));
     }
-}
-
-fn unified_exec_should_include_shell_parameter(
-    turn_context: &TurnContext,
-    environments: &TurnEnvironmentSnapshot,
-) -> bool {
-    !matches!(
-        &turn_context.unified_exec_shell_mode,
-        UnifiedExecShellMode::ZshFork(_)
-    ) || environments
-        .turn_environments()
-        .any(|environment| environment.environment.is_remote())
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -1249,7 +1224,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         registry.add_with_exposure(SendMessageToUserAsyncHandler, ToolExposure::DirectModelOnly);
     }
 
-    if environment_mode.has_environment() && features.enabled(Feature::RequestPermissionsTool) {
+    if features.enabled(Feature::RequestPermissionsTool) {
         registry.add(RequestPermissionsHandler);
     }
 
@@ -1302,7 +1277,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         ));
     }
 
-    if environment_mode.has_environment() && context.model_info.apply_patch_tool_type.is_some() {
+    if context.model_info.apply_patch_tool_type.is_some() {
         let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
         registry.add(ApplyPatchHandler::new(include_environment_id));
     }
@@ -1316,7 +1291,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         registry.add(TestSyncHandler);
     }
 
-    if environment_mode.has_environment() && features.enabled(Feature::ViewImage) {
+    if features.enabled(Feature::ViewImage) {
         let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
         registry.add(ViewImageHandler::new(ViewImageToolOptions {
             can_request_original_image_detail: can_request_original_image_detail(

@@ -44,7 +44,27 @@ Settings:
     <ENVIRONMENT_CONTEXT>
 02:message/user:
     Inspect the available skills.
+
+## Window 2 (after request 1)
+Settings: relative to window 1
+  tools (9; hash=1df9146cc32e8188):
+    ~ function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
 -- request 2 (turn) --
+00:message/developer[3]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <environments_instructions>
+        ## Execution environments
+        Execution environments are separate machines or workspaces with their own files, shell, and installed ca...text>` lists the environments selected for this task. [hash=bc910d398b9b4d83]
+
+        An environment marked `starting` is not yet usable. Its files, commands, AGENTS.md instructions, skills,...CP tools may become available when startup completes. [hash=42a360e5075e8edb]
+
+        Wait only when the current task needs that environment. Continue using tools that are already available for unrelated work.
+        </environments_instructions>
+    [03] <SKILLS_INSTRUCTIONS>
+01:message/user:
+    <ENVIRONMENT_CONTEXT>
+02:message/user:
+    Inspect the available skills.
 03:function_call/wait_for_environment:{"environment_id":"skills-executor"}
 04:function_call_output:{"environment_id":"skills-executor","status":"ready"}
 05:message/user:
@@ -56,8 +76,8 @@ Settings:
 07:message/user:
     Inspect the available skills again.
 
-## Window 2 (after request 3)
-Settings: relative to window 1
+## Window 3 (after request 3)
+Settings: relative to window 2
   parallel_tool_calls: false
   tools (0; hash=09612b07b5ecb5a5):
     - removed function/exec_command
@@ -97,7 +117,7 @@ Settings: relative to window 1
 08:message/user:
     <SUMMARIZATION_PROMPT>
 
-## Window 3 (after request 4: input diverged at item 00)
+## Window 4 (after request 4: input diverged at item 00)
 Settings: same as window 1
 -- request 5 (turn) --
 00:message/user:
@@ -122,7 +142,32 @@ Settings: same as window 1
     <ENVIRONMENT_CONTEXT>
 05:message/user:
     Inspect the skills after resuming.
+
+## Window 5 (after request 5)
+Settings: same as window 2
 -- request 6 (turn) --
+00:message/user:
+    Inspect the available skills.
+01:message/user:
+    Inspect the available skills again.
+02:message/user:
+    <COMPACTION_SUMMARY>
+    The available skills were inspected.
+03:message/developer[3]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <environments_instructions>
+        ## Execution environments
+        Execution environments are separate machines or workspaces with their own files, shell, and installed ca...text>` lists the environments selected for this task. [hash=bc910d398b9b4d83]
+
+        An environment marked `starting` is not yet usable. Its files, commands, AGENTS.md instructions, skills,...CP tools may become available when startup completes. [hash=42a360e5075e8edb]
+
+        Wait only when the current task needs that environment. Continue using tools that are already available for unrelated work.
+        </environments_instructions>
+    [03] <SKILLS_INSTRUCTIONS>
+04:message/user:
+    <ENVIRONMENT_CONTEXT>
+05:message/user:
+    Inspect the skills after resuming.
 06:function_call/wait_for_environment:{"environment_id":"skills-executor"}
 07:function_call_output:{"environment_id":"skills-executor","status":"ready"}
 08:message/user:

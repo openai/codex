@@ -68,15 +68,10 @@ impl RequestPermissionsHandler {
         };
 
         let environment_args: RequestPermissionsEnvironmentArgs = parse_arguments(&arguments)?;
-        let Some(turn_environment) = resolve_tool_environment(
+        let turn_environment = resolve_tool_environment(
             &step_context.environments,
             environment_args.environment_id.as_deref(),
-        )?
-        else {
-            return Err(FunctionCallError::RespondToModel(
-                "request_permissions requires a primary environment".to_string(),
-            ));
-        };
+        )?;
         let sandbox_context =
             turn_environment.sandbox_context(/*additional_permissions*/ None);
         let context = sandbox_context.policy_context();

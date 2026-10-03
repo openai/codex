@@ -42,6 +42,7 @@ use codex_otel::OtelSettings;
 use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::mcp_policy::EnvironmentMcpPolicy;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
@@ -3163,6 +3164,11 @@ async fn production_turn_keeps_rebalanced_catalogs_stable_after_compaction_and_r
     .await;
 
     let mut ready_config = environment_config_for_selection(&test.config, &pending_selection);
+    // This fixture supplies its own skill catalogs; do not inherit the executor host's MCP servers.
+    ready_config.mcp_policy = Some(EnvironmentMcpPolicy {
+        servers: Some(Default::default()),
+        ..Default::default()
+    });
     ready_config.selected_capability_roots = vec![SelectedCapabilityRoot {
         id: "skills".to_string(),
         location: CapabilityRootLocation::Environment {
@@ -3341,7 +3347,12 @@ async fn production_turn_keeps_rebalanced_catalogs_stable_after_compaction_and_r
     }
 
     insta::assert_snapshot!(
-        "cloud_skills_across_executor_readiness",
+        // The in-process executor uses the host OS. Windows guidance appears when it is ready.
+        if cfg!(windows) {
+            "cloud_skills_across_executor_readiness_windows"
+        } else {
+            "cloud_skills_across_executor_readiness"
+        },
         context_snapshot::format_request_history_snapshot(
             "Cloud skills rebalance once to retain every executor skill. Post-turn compaction and resume restore the same cloud allocation before the executor reconnects; both catalogs are fully reinjected once into the new history.",
             &requests,

@@ -345,15 +345,10 @@ impl ApplyPatchHandler {
             require_environment_id(args.environment_id.as_deref(), self.multi_environment)?;
 
         // Verify the parsed patch against the selected environment filesystem.
-        let Some(turn_environment) = resolve_tool_environment(
+        let turn_environment = resolve_tool_environment(
             &step_context.environments,
             selected_environment_id.as_deref(),
-        )?
-        else {
-            return Err(FunctionCallError::RespondToModel(
-                "apply_patch is unavailable in this session".to_string(),
-            ));
-        };
+        )?;
         let fs = turn_environment.environment.get_filesystem();
         let sandbox = turn_environment.sandbox_context(/*additional_permissions*/ None);
         match codex_apply_patch::verify_apply_patch_args_with_mode(

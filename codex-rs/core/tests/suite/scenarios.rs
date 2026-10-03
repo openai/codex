@@ -1755,7 +1755,14 @@ async fn subagent_waits_for_its_inherited_environment_configuration() -> Result<
             .replace_all(&snapshot, replacement)
             .into_owned();
     }
-    insta::assert_snapshot!("subagent_inherits_pending_environment", snapshot);
+    // Windows guidance appears when the executor is ready, including under Wine.
+    let snapshot_name =
+        if core_test_support::test_target_os() == core_test_support::TestTargetOs::Windows {
+            "subagent_inherits_pending_environment_windows"
+        } else {
+            "subagent_inherits_pending_environment"
+        };
+    insta::assert_snapshot!(snapshot_name, snapshot);
     Ok(())
 }
 

@@ -160,21 +160,30 @@ where
 fn resolve_tool_environment<'a>(
     environments: &'a TurnEnvironmentSnapshot,
     environment_id: Option<&str>,
-) -> Result<Option<&'a TurnEnvironment>, FunctionCallError> {
+) -> Result<&'a TurnEnvironment, FunctionCallError> {
     environment_id.map_or_else(
-        || Ok(environments.primary()),
+        || environments.primary(),
         |environment_id| {
             environments
                 .turn_environments()
                 .find(|environment| environment.selection.environment_id == environment_id)
-                .map(Some)
-                .ok_or_else(|| {
-                    FunctionCallError::RespondToModel(format!(
-                        "unknown turn environment id `{environment_id}`"
-                    ))
-                })
         },
-    )
+    ).ok_or_else(|| {
+        if let Some(environment_id) = environment_id
+            && !environments
+                .all_selections()
+                .iter()
+                .any(|selection| selection.environment_id == environment_id)
+        {
+            return FunctionCallError::RespondToModel(format!(
+                "unknown turn environment id `{environment_id}`"
+            ));
+        }
+        FunctionCallError::RespondToModel(
+            "No usable execution environment is available. Wait for an environment to become available before using this tool."
+                .to_string(),
+        )
+    })
 }
 
 /// Validates feature/policy constraints for `with_additional_permissions` and

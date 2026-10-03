@@ -245,7 +245,7 @@ async fn strict_tool_collisions_do_not_duplicate_unrelated_compaction_errors() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn empty_turn_environments_omits_environment_backed_tools() -> Result<()> {
+async fn empty_turn_environments_keeps_environment_backed_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -278,8 +278,8 @@ async fn empty_turn_environments_omits_environment_backed_tools() -> Result<()> 
     );
     for environment_tool in ["exec_command", "write_stdin", "apply_patch", "view_image"] {
         assert!(
-            !tools.contains(&environment_tool.to_string()),
-            "{environment_tool} should be omitted for explicit empty turn environments; got {tools:?}"
+            tools.contains(&environment_tool.to_string()),
+            "{environment_tool} should remain available for explicit empty turn environments; got {tools:?}"
         );
     }
 

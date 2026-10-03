@@ -58,11 +58,9 @@ const EXEC_COMMAND_REJECTION_MAX_BYTES: usize = 900;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ExecCommandHandlerOptions {
-    pub(crate) allow_login_shell: bool,
     pub(crate) allow_tty: bool,
     pub(crate) exec_permission_approvals_enabled: bool,
     pub(crate) include_environment_id: bool,
-    pub(crate) include_shell_parameter: bool,
     pub(crate) include_windows_shell_guidance: bool,
 }
 
@@ -82,11 +80,9 @@ impl Default for ExecCommandHandler {
         Self {
             lifetime: ExecCommandLifetime::Interactive,
             options: ExecCommandHandlerOptions {
-                allow_login_shell: false,
                 allow_tty: true,
                 exec_permission_approvals_enabled: false,
                 include_environment_id: false,
-                include_shell_parameter: true,
                 include_windows_shell_guidance: cfg!(windows),
             },
         }
@@ -117,11 +113,9 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
     fn spec(&self) -> ToolSpec {
         let spec = create_exec_command_tool_with_environment_id(
             CommandToolOptions {
-                allow_login_shell: self.options.allow_login_shell,
                 exec_permission_approvals_enabled: self.options.exec_permission_approvals_enabled,
             },
             self.options.include_environment_id,
-            self.options.include_shell_parameter,
             self.options.include_windows_shell_guidance,
         );
         let mut spec = match self.lifetime {
@@ -184,15 +178,10 @@ impl ExecCommandHandler {
             call_id.clone(),
         );
         let environment_args: ExecCommandEnvironmentArgs = parse_arguments(&arguments)?;
-        let Some(turn_environment) = resolve_tool_environment(
+        let turn_environment = resolve_tool_environment(
             &step_context.environments,
             environment_args.environment_id.as_deref(),
-        )?
-        else {
-            return Err(FunctionCallError::RespondToModel(
-                "unified exec is unavailable in this session".to_string(),
-            ));
-        };
+        )?;
         let native_environment_cwd = turn_environment.cwd().clone();
         let cwd = environment_args
             .workdir
