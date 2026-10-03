@@ -3,7 +3,7 @@
 //! Search retains one match and one entry being scanned. Each frame examines a bounded text
 //! chunk; reaching the oldest loaded entry asks the app's existing history pager to continue.
 //! The pager owns loading and failure status; search only remembers that it needs another page.
-//! Closing the query keeps the match readable; cancellation restores the original presentation.
+//! Accepting a match keeps it readable; cancellation restores the original presentation.
 
 use crate::bottom_pane::TextArea;
 use crate::keymap::RuntimeKeymap;
@@ -152,25 +152,35 @@ impl TranscriptView {
         let (code, modifiers) = crate::key_hint::normalize_key_parts(key.code, key.modifiers);
         match (code, modifiers) {
             (KeyCode::Esc, _) if self.search.is_reading() => self.jump_to_latest(),
-            (KeyCode::Esc, _) if !self.search.editor.is_empty() => {
-                self.search.mode = SearchMode::Reading;
-                self.search.progress = if matches!(self.search.progress, Progress::Exhausted) {
-                    Progress::Exhausted
-                } else if self.search.current.is_some() {
-                    Progress::Found
-                } else {
-                    Progress::Idle
-                };
-                self.search.scanning_layout = None;
-            }
             (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                 self.cancel_search();
             }
-            (KeyCode::Enter, _) if self.search.is_reading() => return false,
+            // Some terminals report held Enter as Press, indistinguishable from a fresh key.
+            // Keep it in Find so accepting a hit cannot submit the composer draft.
+            (KeyCode::Enter, _) if self.search.is_reading() => {
+                return modifiers == KeyModifiers::NONE;
+            }
+            (KeyCode::Enter, KeyModifiers::NONE) => {
+                // Accept the displayed match even if finding an older one is still pending.
+                // An idle nonempty query can also mean scrolling released a live match.
+                // Leave initial scans and empty/unmatched queries open until they find a hit.
+                if !self.search.editor.is_empty()
+                    && (self.search.current.is_some()
+                        || matches!(self.search.progress, Progress::Idle))
+                {
+                    self.search.mode = SearchMode::Reading;
+                    self.search.progress = match self.search.progress {
+                        Progress::Exhausted => Progress::Exhausted,
+                        _ if self.search.current.is_some() => Progress::Found,
+                        _ => Progress::Idle,
+                    };
+                    self.search.scanning_layout = None;
+                }
+            }
             (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
                 self.next_search_match(cells, Direction::Newer);
             }
-            (KeyCode::Enter, KeyModifiers::NONE) | (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+            (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
                 self.next_search_match(cells, Direction::Older);
             }
             (KeyCode::PageUp | KeyCode::PageDown, KeyModifiers::NONE) => return false,

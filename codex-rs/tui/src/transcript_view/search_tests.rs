@@ -62,10 +62,10 @@ fn find_keeps_context_and_allows_reading_without_losing_the_query() {
     let scrolled = view.position;
     assert_ne!(scrolled, matched);
     assert_eq!(view.search.editor.text(), "needle");
-    view.handle_key(KeyCode::Esc.into(), &cells);
+    view.handle_key(KeyCode::Enter.into(), &cells);
     insta::assert_snapshot!(
         view.footer(/*width*/ 80, crate::motion::MotionMode::Reduced).unwrap().text.to_string(),
-        @"ctrl+p older · ctrl+n newer · esc latest"
+        @"Find · ctrl+p older · ctrl+n newer · esc latest"
     );
     assert_eq!(
         (
@@ -75,13 +75,16 @@ fn find_keeps_context_and_allows_reading_without_losing_the_query() {
         ),
         (scrolled, false, true),
     );
-    assert!(view.handle_key(KeyCode::Enter.into(), &cells).is_none());
+    assert!(matches!(
+        view.handle_key(KeyCode::Enter.into(), &cells),
+        Some(ViewAction::Changed)
+    ));
     view.begin_search();
     assert_eq!(
         (view.position, view.search.editor.text()),
         (scrolled, "needle")
     );
-    view.handle_key(KeyCode::Esc.into(), &cells);
+    view.handle_key(KeyCode::Enter.into(), &cells);
     view.handle_key(
         KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
         &cells,
@@ -194,7 +197,7 @@ fn paging_away_from_a_live_match_does_not_restart_find() {
     let scrolled = view.position;
     assert!(view.held_reading.is_none());
     finish_scan(&mut view, &cells);
-    view.handle_key(KeyCode::Esc.into(), &cells);
+    view.handle_key(KeyCode::Enter.into(), &cells);
     assert_eq!(
         (
             view.position,
@@ -233,8 +236,10 @@ fn reading_without_a_match_searches_from_the_visible_entry_in_each_direction() {
         };
         view.begin_search();
         view.paste_search("needle");
-        // Close the query before its initial scan has found a match.
-        view.handle_key(KeyCode::Esc.into(), &cells);
+        finish_scan(&mut view, &cells);
+        view.handle_key(KeyCode::Enter.into(), &cells);
+        view.jump_to_entry(&cells, /*index*/ 1);
+        view.restart_search();
         view.handle_key(
             KeyEvent::new(KeyCode::Char(key), KeyModifiers::CONTROL),
             &cells,
@@ -262,7 +267,7 @@ fn resizing_a_read_find_result_preserves_relative_navigation() {
     view.begin_search();
     view.paste_search("needle");
     finish_scan(&mut view, &cells);
-    view.handle_key(KeyCode::Esc.into(), &cells);
+    view.handle_key(KeyCode::Enter.into(), &cells);
     view.prepare_width(/*width*/ 20);
     let mut resized = Buffer::empty(view.area);
     view.render(view.area, &mut resized, &cells);
@@ -314,7 +319,7 @@ fn reading_a_find_result_loads_older_context() {
     finish_scan(&mut view, &cells);
     view.handle_key(KeyCode::PageUp.into(), &cells);
     assert!(view.needs_history(&cells));
-    view.handle_key(KeyCode::Esc.into(), &cells);
+    view.handle_key(KeyCode::Enter.into(), &cells);
     view.handle_key(KeyCode::PageUp.into(), &cells);
     assert!(view.needs_history(&cells));
     assert_eq!(view.search.editor.text(), "needle");
@@ -618,7 +623,7 @@ fn previous_match_continues_through_regrouped_pages_without_revisiting_newer_hit
         ),
         (EntryKey::cell(&middle), true),
     );
-    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"Searching earlier history… · full transcript · esc close");
+    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"Searching earlier history… · full transcript · esc cancel");
 
     let oldest = cell("needle oldest");
     cells.insert(/*index*/ 0, Arc::clone(&oldest));
@@ -710,7 +715,7 @@ fn enter_preserves_the_initial_scan_and_each_older_page_until_the_first_match() 
     view.begin_search();
     view.paste_search("LONG T0000 USER");
     view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
-    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"Searching… · full transcript · esc close");
+    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"Searching… · full transcript · esc cancel");
     assert!(view.advance_search(&cells));
     let Progress::Scanning(before) = view.search.progress else {
         panic!("initial scan should still have unread text");
@@ -747,7 +752,7 @@ fn enter_preserves_the_initial_scan_and_each_older_page_until_the_first_match() 
     ));
     finish_scan(&mut view, &cells);
     assert!(view.search.needs_history(view.history));
-    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"Searching earlier history… · full transcript · esc close");
+    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"Searching earlier history… · full transcript · esc cancel");
 
     for page in ["middle page without a hit", "LONG T0000 USER"] {
         view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
@@ -841,7 +846,10 @@ fn next_previous_highlight_and_cancel_share_the_transcript_position() {
         view.search.current.as_ref().map(|found| found.anchor.index),
         Some(1)
     );
-    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
+    view.handle_search_key(
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        &cells,
+    );
     finish_scan(&mut view, &cells);
     assert_eq!(
         view.search.current.as_ref().map(|found| found.anchor.index),
@@ -862,14 +870,18 @@ fn next_previous_highlight_and_cancel_share_the_transcript_position() {
             true, true, true, true, true, true, false, false, false, false
         ]
     );
-    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"enter/⌃p older · ⌃n newer · full transcript · esc close");
+    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"enter accept · ⌃p older · ⌃n newer · full transcript · esc cancel");
     view.handle_search_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), &cells);
     assert!(matches!(view.search.progress, Progress::Found));
-    view.handle_search_key(
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-        &cells,
+    view.handle_key(KeyCode::Esc.into(), &cells);
+    assert_eq!(
+        (
+            view.position,
+            view.search.is_active(),
+            view.search.editor.text()
+        ),
+        (original, false, ""),
     );
-    assert_eq!((view.position, view.search.is_active()), (original, false));
 }
 
 #[test]
@@ -909,7 +921,7 @@ fn legacy_search_shortcuts_navigate_in_both_directions_without_wrapping() {
             (2, true)
         ],
     );
-    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"No more matches · enter/⌃p older · ⌃n newer · full transcript · esc close");
+    insta::assert_snapshot!(view.search.status_line(/*width*/ 80, view.history).to_string(), @"No more matches · enter accept · ⌃p older · ⌃n newer · esc cancel");
 }
 
 #[test]
@@ -947,7 +959,10 @@ fn find_expands_only_the_match_and_preserves_manual_disclosures() {
     finish_scan(&mut view, &cells);
     for (key, expected) in [
         (None, [false, false, true, true]),
-        (Some(KeyCode::Enter.into()), [false, true, false, true]),
+        (
+            Some(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)),
+            [false, true, false, true],
+        ),
         (
             Some(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL)),
             [false, false, true, true],
@@ -975,7 +990,7 @@ fn find_expands_only_the_match_and_preserves_manual_disclosures() {
         "find_selective_expansion",
         crate::transcript_view::tests::text(&buffer)
     );
-    view.handle_key(KeyCode::Esc.into(), &cells);
+    view.handle_key(KeyCode::Enter.into(), &cells);
     // Reading keeps the result and lets the normal activity controls open another block.
     view.handle_key(KeyCode::F(4).into(), &cells);
     view.handle_key(KeyCode::Home.into(), &cells);
@@ -1066,7 +1081,7 @@ fn find_searches_hidden_live_content_and_collapses_it_when_leaving_the_match() {
             view.layout(&cells, /*index*/ 1).unwrap().text(),
             "hidden live needle"
         );
-        view.handle_key(KeyCode::Esc.into(), &cells);
+        view.handle_key(KeyCode::Enter.into(), &cells);
         view.prepare_width(/*width*/ 20);
         assert_eq!(
             view.layout(&cells, /*index*/ 1).unwrap().text(),
@@ -1226,7 +1241,7 @@ fn find_reveals_hidden_command_output_and_restores_compact_presentation() {
     assert!(!view.is_detailed());
     let mut found = Buffer::empty(view.area);
     view.render(view.area, &mut found, &cells);
-    view.handle_search_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &cells);
+    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
     let mut reading = Buffer::empty(view.area);
     view.render(view.area, &mut reading, &cells);
     assert_eq!(reading, found);
@@ -1320,7 +1335,7 @@ fn failed_history_waits_for_explicit_retry_and_empty_query_cancels_loading() {
         view.search
             .status_line(/*width*/ 32, view.history)
             .to_string(),
-        "⌃p retry · esc close",
+        "⌃p retry · esc cancel",
     );
     view.handle_search_key(
         KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
@@ -1435,7 +1450,10 @@ fn live_match_stays_displayed_after_commit_and_a_fresh_query_searches_current_co
         (found.anchor.key, found.anchor.offset..found.end),
         (EntryKey::Live, 8..14)
     );
-    view.handle_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
+    view.handle_search_key(
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        &cells,
+    );
     finish_scan(&mut view, &cells);
     assert!(view.held_reading.is_none());
     assert_eq!(
@@ -1628,7 +1646,7 @@ fn bounded_query_paste_keeps_the_suffix_and_whole_graphemes() {
         (view.search.editor.text(), view.search.query_truncated),
         (full.as_str(), true)
     );
-    insta::assert_snapshot!(view.search.status_line(/*width*/ 100, view.history).to_string(), @"Searching… · full transcript · esc close · query limited to 4 KiB");
+    insta::assert_snapshot!(view.search.status_line(/*width*/ 100, view.history).to_string(), @"Searching… · full transcript · esc cancel · query limited to 4 KiB");
     view.handle_search_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE), &[]);
     assert_eq!(view.search.editor.text(), &full[..full.len() - 1]);
 }

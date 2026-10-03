@@ -787,9 +787,50 @@ async fn owned_search_and_selection_consume_input_before_composer_and_backtrack(
             .to_string()
             .starts_with("Find: needle")
     );
-    let escape = TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(app.handle_owned_transcript_event(&mut tui, &mut app_server, &escape)?);
+    let accept = TuiEvent::Key(KeyCode::Enter.into());
+    let escape = TuiEvent::Key(KeyCode::Esc.into());
+    assert!(app.handle_owned_transcript_event(&mut tui, &mut app_server, &accept)?);
+    assert!(!app.transcript_view.is_search_editing());
+    assert!(app.transcript_view.has_active_interaction());
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "composer draft"
+    );
     assert!(!app.backtrack.overlay_preview_active);
+    // Ghostty, iTerm2 and some tmux paths report held keys as Press, not Repeat.
+    for kind in [
+        crossterm::event::KeyEventKind::Press,
+        crossterm::event::KeyEventKind::Repeat,
+    ] {
+        let repeat = KeyEvent {
+            kind,
+            ..KeyCode::Enter.into()
+        };
+        assert!(app.transcript_view.owns_interaction_key(repeat));
+        assert!(app.handle_owned_transcript_event(
+            &mut tui,
+            &mut app_server,
+            &TuiEvent::Key(repeat)
+        )?);
+    }
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "composer draft"
+    );
+    // Once Find is accepted, modified Enter can still reach configured composer bindings.
+    for modifiers in [
+        KeyModifiers::SHIFT,
+        KeyModifiers::ALT,
+        KeyModifiers::CONTROL,
+    ] {
+        let key = KeyEvent::new(KeyCode::Enter, modifiers);
+        assert!(!app.transcript_view.owns_interaction_key(key));
+        assert!(!app.handle_owned_transcript_event(
+            &mut tui,
+            &mut app_server,
+            &TuiEvent::Key(key)
+        )?);
+    }
     // Start and extend a selection through the app, then inspect its copy action without touching
     // the host clipboard. The app's existing clipboard handler is tested with an injected writer.
     for key in [
@@ -844,13 +885,13 @@ async fn inline_transcript_search_draws_and_escape_precedes_backtrack() -> Resul
         &tui.terminal,
     ));
     assert!(
-        rendered.contains("enter/⌃p older"),
+        rendered.contains("enter accept"),
         "search advances on the inline overlay draw path"
     );
     app.handle_backtrack_overlay_event(
         &mut tui,
         &mut app_server,
-        TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        TuiEvent::Key(KeyCode::Enter.into()),
     )
     .await?;
     assert!(
@@ -920,7 +961,7 @@ async fn find_owns_editor_chords_without_changing_the_composer_draft() -> Result
                     crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
                 );
                 assert!(
-                    rendered.contains("enter/⌃p older"),
+                    rendered.contains("enter accept"),
                     "Find must resume after pasting over selection"
                 );
             }
@@ -1328,7 +1369,7 @@ async fn find_refreshes_live_details_before_searching_the_first_query() -> Resul
     let rendered = buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(
         &tui.terminal,
     ));
-    assert!(rendered.contains("enter/⌃p older"), "{rendered}");
+    assert!(rendered.contains("enter accept"), "{rendered}");
     tui.set_owned_screen(/*owned*/ false)?;
     app.open_transcript_overlay(&mut tui);
     let Some(Overlay::Transcript(overlay)) = &mut app.overlay else {

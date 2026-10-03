@@ -6,17 +6,19 @@ Buffer {
     area: Rect { x: 0, y: 0, width: 80, height: 2 },
     content: [
         "Find: Activity                                                                  ",
-        "enter/⌃p older · ⌃n newer · full transcript · esc close                         ",
+        "enter accept · ⌃p older · ⌃n newer · full transcript · esc cancel               ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
         x: 6, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 8, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 17, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 19, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 46, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 49, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 55, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 5, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 15, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 17, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 26, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 28, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 55, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 58, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 65, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

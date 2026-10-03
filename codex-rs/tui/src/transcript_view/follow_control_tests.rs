@@ -166,7 +166,7 @@ fn closing_find_at_bottom_does_not_show_back_to_bottom() {
     assert!(!view.advance_search(&cells));
     let before = paint(&mut view, &cells, /*width*/ 40);
 
-    view.handle_key(KeyCode::Esc.into(), &cells);
+    view.handle_key(KeyCode::Enter.into(), &cells);
     let after = paint(&mut view, &cells, /*width*/ 40);
     assert!(!view.is_search_editing());
     assert!(!view.is_following());

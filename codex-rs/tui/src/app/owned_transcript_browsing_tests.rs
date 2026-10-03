@@ -101,7 +101,9 @@ async fn browsing_search_and_selection_consume_escape_before_mode_exit() -> Resu
     app.transcript_view.begin_search();
     app.handle_tui_event(&mut tui, &mut server, TuiEvent::Paste("first".to_string()))
         .await?;
-    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into()))
+    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Draw)
+        .await?;
+    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Enter.into()))
         .await?;
     assert_eq!(
         (

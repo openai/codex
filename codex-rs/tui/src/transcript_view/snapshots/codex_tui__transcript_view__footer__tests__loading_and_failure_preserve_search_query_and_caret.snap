@@ -2,9 +2,9 @@
 source: tui/src/transcript_view/footer_tests.rs
 expression: "hints.join(\"\\n\")"
 ---
-32 columns, LoadingOlder: Loading… · esc close
-32 columns, LoadingBeginning: Loading… · esc close
-32 columns, Failed: ⌃p retry · esc close
-12 columns, LoadingOlder: esc close
-12 columns, LoadingBeginning: esc close
-12 columns, Failed: esc close
+32 columns, LoadingOlder: Loading… · esc cancel
+32 columns, LoadingBeginning: Loading… · esc cancel
+32 columns, Failed: ⌃p retry · esc cancel
+12 columns, LoadingOlder: esc cancel
+12 columns, LoadingBeginning: esc cancel
+12 columns, Failed: esc cancel

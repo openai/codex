@@ -269,7 +269,7 @@ fn loading_and_failure_preserve_search_query_and_caret() {
     view.history = TranscriptHistoryState::Complete;
     assert!(!view.advance_search(&cells));
     view.handle_key(KeyCode::Esc.into(), &cells);
-    insta::assert_snapshot!(view.footer(/*width*/ 32, MotionMode::Reduced).unwrap().text.to_string(), @"No matches · esc latest");
+    assert!(!view.has_active_interaction());
     view.handle_key(
         KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
         &cells,
@@ -289,7 +289,7 @@ fn reading_a_find_result_shows_history_loading_and_failure() {
     view.begin_search();
     view.paste_search("needle");
     assert!(!view.advance_search(&cells));
-    view.handle_key(KeyCode::Esc.into(), &cells);
+    view.handle_key(KeyCode::Enter.into(), &cells);
 
     let mut hints = Vec::new();
     for history in [
@@ -305,7 +305,7 @@ fn reading_a_find_result_shows_history_loading_and_failure() {
     insta::assert_snapshot!(hints.join("\n"), @"
     ↑ Loading earlier messages… · esc latest
     Retry history: ⌥</⌃home.  esc latest
-    ctrl+p older · ctrl+n newer · esc latest
+    Find · ctrl+p older · ctrl+n newer · esc latest
     ");
 }
 

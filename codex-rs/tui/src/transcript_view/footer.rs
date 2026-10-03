@@ -241,6 +241,8 @@ pub(super) fn navigation_line(navigation: &str) -> Line<'static> {
             " clear selection",
             " copy+↓",
             " previous",
+            " accept",
+            " cancel",
             " older",
             " newer",
             " latest",

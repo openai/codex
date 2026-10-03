@@ -16,7 +16,7 @@ searching=false · released empty
 
 searching=true · mouse down
 Find:
-Searching… · full transcript · esc close
+Searching… · full transcript · esc cancel
 
 searching=true · one character
 Find:
@@ -24,8 +24,8 @@ Find:
 
 searching=true · back to anchor
 Find:
-Searching… · full transcript · esc close
+Searching… · full transcript · esc cancel
 
 searching=true · released empty
 Find:
-Searching… · full transcript · esc close
+Searching… · full transcript · esc cancel

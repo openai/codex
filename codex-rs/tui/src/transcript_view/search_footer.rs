@@ -52,25 +52,26 @@ impl Search {
         let next = crate::key_hint::ctrl(crossterm::event::KeyCode::Char('n')).display_label();
         let retry_hint = format!("{previous} retry");
         let unavailable_hint = format!("History unavailable · {retry_hint}");
-        let next_hint = format!("enter/{previous} older · {next} newer");
+        let next_hint = format!("enter accept · {previous} older · {next} newer");
         let exhausted_hint = format!("No more matches · {next_hint}");
         let (status, compact) = match self.progress {
             Progress::Idle | Progress::Found if self.is_reading() => {
                 ("ctrl+p older · ctrl+n newer", "ctrl+p older")
             }
+            Progress::Idle if !self.editor.is_empty() => (next_hint.as_str(), "enter accept"),
             Progress::Idle => ("Type to find", "Type to find"),
             Progress::Restart | Progress::Scanning(_) => ("Searching…", "Searching…"),
             Progress::AwaitingHistory if history == TranscriptHistoryState::Failed => {
                 (unavailable_hint.as_str(), retry_hint.as_str())
             }
             Progress::AwaitingHistory => ("Searching earlier history…", "Loading…"),
-            Progress::Found => (next_hint.as_str(), "enter older"),
+            Progress::Found => (next_hint.as_str(), "enter accept"),
             Progress::Exhausted if self.is_reading() && self.current.is_some() => (
                 "No more matches · ctrl+p older · ctrl+n newer",
                 "ctrl+p older",
             ),
             Progress::Exhausted if self.current.is_some() => {
-                (exhausted_hint.as_str(), "enter older")
+                (exhausted_hint.as_str(), "enter accept")
             }
             Progress::Exhausted => ("No matches", "No matches"),
         };
@@ -82,8 +83,8 @@ impl Search {
         if self.is_reading() {
             return crate::footer_hint::first_fitting_line(
                 [
-                    format!("{status} · esc latest"),
-                    format!("{compact} · esc latest"),
+                    format!("Find · {status} · esc latest"),
+                    format!("Find · {compact} · esc latest"),
                     "esc latest".to_owned(),
                 ]
                 .map(|hint| crate::transcript_view::footer::navigation_line(&hint)),
@@ -92,11 +93,11 @@ impl Search {
         }
         crate::footer_hint::first_fitting_line(
             [
-                format!("{status} · full transcript · esc close{limit}"),
-                format!("{status} · esc close{limit}"),
-                format!("{compact} · esc close"),
+                format!("{status} · full transcript · esc cancel{limit}"),
+                format!("{status} · esc cancel{limit}"),
+                format!("{compact} · esc cancel"),
                 format!("{compact} · esc"),
-                "esc close".to_owned(),
+                "esc cancel".to_owned(),
             ]
             .map(|hint| crate::transcript_view::footer::navigation_line(&hint)),
             width,
