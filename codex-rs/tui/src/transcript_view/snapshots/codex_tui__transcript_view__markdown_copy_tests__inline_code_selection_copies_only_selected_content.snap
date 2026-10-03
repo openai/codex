@@ -22,9 +22,9 @@ before [`foo_bar!`](/repo/foo_bar!) after
 Selected "repo/foo_bar!" → ("repo/foo_bar!", PlainText)
 before [`foo_bar!`](/repo/foo_bar!) after
 Selected "bar!" → ("bar!", PlainText)
-[foo_bar!](/foo_bar!)[baz_qux!](/baz_qux!)
+[](/foo_bar!)[](/baz_qux!)
 Selected "foo_bar!baz_qux!" → ("foo_bar!baz_qux!", PlainText)
-`foo_bar!`[baz_qux!](/baz_qux!)
+`foo_bar!`[](/baz_qux!)
 Selected "foo_bar!baz_qux!" → ("foo_bar!baz_qux!", PlainText)
 before **[file](/repo/foo_bar!)** after
 Selected "foo_bar!" → ("foo_bar!", PlainText)

@@ -1,5 +1,21 @@
 ---
 source: tui/src/markdown_render_tests.rs
-expression: rendered
+expression: "plain_lines(&text).join(\"\\n\")"
 ---
-See codex-rs/tui/src/markdown_render.rs:74.
+analysis.md (analysis/021_all_experiments_best_per_group/analysis.md)
+
+analysis .md (analysis.md:12)
+
+analysis.md:12:3
+
+../analysis.md
+
+file://[
+
+broken (file://[)
+
+ File
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ analysis.md (analysis.md)
+───────────────────────────
+ ./empty.md

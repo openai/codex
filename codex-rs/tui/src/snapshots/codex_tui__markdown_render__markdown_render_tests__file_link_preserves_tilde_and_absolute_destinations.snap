@@ -2,9 +2,9 @@
 source: tui/src/markdown_render_tests.rs
 expression: "plain_lines(&text).join(\"\\n\")"
 ---
-~/notes
+~/notes (~/notes)
 
-/home/alice/notes
+/home/alice/notes (/home/alice/notes)
 
 /home/alice/notes (~/notes)
 
@@ -12,8 +12,8 @@ expression: "plain_lines(&text).join(\"\\n\")"
 
 my notes (~/notes:12:3)
 
-~/project/src/lib.rs
+~/project/src/lib.rs (~/project/src/lib.rs)
 
-src/lib.rs
+/home/alice/project/src/lib.rs (src/lib.rs)
 
 ~ (/home/alice:12)

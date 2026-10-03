@@ -24,6 +24,7 @@ fn file_citation_paths_preserve_markdown_significant_characters() {
         "/tmp/report:10",
         "/tmp/report%20final.xlsx",
         "/tmp/report?final.xlsx",
+        "file://[",
     ] {
         let markdown = format!(":codex-file-citation{{path=\"{path}\"}}");
         assert_eq!(rendered_text(&markdown, /*cwd*/ None), path);

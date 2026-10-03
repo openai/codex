@@ -2,10 +2,10 @@
 source: tui/src/markdown_render_tests.rs
 expression: "plain_lines(&text).join(\"\\n\")"
 ---
-./dir/
+dir (./dir/)
 
-./dir
+dir/ (./dir)
 
-/outside/dir/
+dir (/outside/dir/)
 
-/outside/dir
+dir/ (/outside/dir)

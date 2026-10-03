@@ -1,11 +1,9 @@
-//! Local file-link parsing, label comparison, and display for Markdown transcripts.
+//! Local file-link destination parsing and display for Markdown transcripts.
 //!
-//! Markdown rendering intentionally treats local file links differently from normal web links. For
-//! local paths, transcripts always show the real file target (including normalized location
-//! suffixes) and can shorten absolute paths relative to a known working directory. Descriptive
-//! Markdown labels remain visible alongside that target, while path-like labels collapse to the
-//! canonical target to avoid duplicate file references.
-//!
+//! Local Markdown links preserve their labels. Since ordinary file destinations have no trusted
+//! navigation capability, the renderer also displays their target, shortening absolute paths
+//! relative to the session working directory when possible. This module only formats destinations;
+//! it does not resolve files or infer execution-host paths from the frontend filesystem.
 
 use codex_utils_path_uri::PathUri;
 use codex_utils_string::normalize_markdown_hash_location_suffix;
@@ -41,53 +39,6 @@ pub(super) fn is_local_path_like_link(dest_url: &str) -> bool {
             [drive, b':', separator, ..]
                 if drive.is_ascii_alphabetic() && matches!(separator, b'/' | b'\\')
         )
-}
-
-/// Decide whether a local-file link label adds meaning beyond its canonical target.
-///
-/// Matching path-like labels collapse to the target; prose labels remain visible.
-pub(super) fn should_render_local_link_label(label: &str, destination: &str) -> bool {
-    let label = label.trim();
-    if label.is_empty() {
-        return false;
-    }
-    let Some(parsed_label) = comparable_local_link_path(label) else {
-        return true;
-    };
-    let Some(target) = comparable_local_link_path(destination) else {
-        return true;
-    };
-    let target_path = trim_trailing_local_path_separator(target.trim_start_matches("./"));
-    let has_boundary_suffix = |path: &str, suffix: &str| {
-        !suffix.is_empty()
-            && path
-                .strip_suffix(suffix)
-                .is_some_and(|prefix| prefix.is_empty() || prefix.ends_with('/'))
-    };
-    // Labels can spell a filename literally or URL-encode it. Compare both without decoding
-    // the destination twice (for example, percent%2520.rs denotes percent%20.rs).
-    let literal_label = normalize_local_link_path_text(label).to_lowercase();
-    ![literal_label, parsed_label].iter().any(|label| {
-        let label_path = trim_trailing_local_path_separator(label.trim_start_matches("./"));
-        has_boundary_suffix(target_path, label_path)
-            || (is_absolute_local_link_path(label_path)
-                && has_boundary_suffix(label_path, target_path))
-    })
-}
-
-/// Normalize original Markdown strings for comparison only, never already-rendered path text.
-/// Case and URL spelling are intentionally forgiving; the visible target retains its spelling.
-fn comparable_local_link_path(text: &str) -> Option<String> {
-    let text = if text
-        .get(..7)
-        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file://"))
-    {
-        std::borrow::Cow::Owned(format!("file://{}", &text[7..]))
-    } else {
-        std::borrow::Cow::Borrowed(text)
-    };
-    let (path, _) = parse_local_link_target(&text)?;
-    Some(normalize_local_link_path_text(&path).to_lowercase())
 }
 
 /// Parse a local link target into normalized path text plus an optional location suffix.

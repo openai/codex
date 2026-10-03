@@ -133,11 +133,8 @@ fn inline_code_selection_copies_only_selected_content() {
         (r"before ``real\_literal\!`` after", r"real\_literal\!"),
         ("before [`foo_bar!`](/repo/foo_bar!) after", "repo/foo_bar!"),
         ("before [`foo_bar!`](/repo/foo_bar!) after", "bar!"),
-        (
-            "[foo_bar!](/foo_bar!)[baz_qux!](/baz_qux!)",
-            "foo_bar!baz_qux!",
-        ),
-        ("`foo_bar!`[baz_qux!](/baz_qux!)", "foo_bar!baz_qux!"),
+        ("[](/foo_bar!)[](/baz_qux!)", "foo_bar!baz_qux!"),
+        ("`foo_bar!`[](/baz_qux!)", "foo_bar!baz_qux!"),
         ("before **[file](/repo/foo_bar!)** after", "foo_bar!"),
         (
             "| File |\n|---|\n| [`foo_bar!`](/repo/foo_bar!) |",
@@ -168,11 +165,11 @@ fn inline_code_selection_copies_only_selected_content() {
 #[test]
 fn mixed_file_targets_preserve_markdown_escaping() {
     for (source, expected) in [
-        ("before [+](/+) after", "before + after"),
-        ("before [1.)](</1.)>) after", "before 1.) after"),
+        ("before [+](/+) after", "before + (+) after"),
+        ("before [1.)](</1.)>) after", "before 1.) (1.)) after"),
         (
             "| File |\n|---|\n| [`foo_bar!`](/repo/foo_bar!) |",
-            "| File |\n|---|\n| repo/foo\\_bar\\! |",
+            "| File |\n|---|\n| `foo_bar!` (repo/foo\\_bar\\!) |",
         ),
     ] {
         let layout = markdown_layout(source, /*width*/ 80);

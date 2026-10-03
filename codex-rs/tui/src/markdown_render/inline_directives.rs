@@ -233,18 +233,17 @@ impl<'a> InlineDirectives<'a> {
                     let suffix_start = destination.len() - suffix.len();
                     destination.replace_range(suffix_start.., &suffix.replace(':', "%3A"));
                 }
-                // Citations have no descriptive label; compare the same encoded path on both sides.
+                // Citations have no author-provided label; render the formatted destination alone.
                 events.extend([
                     (
                         Event::Start(Tag::Link {
                             link_type: LinkType::Inline,
-                            dest_url: destination.clone().into(),
+                            dest_url: destination.into(),
                             title: "".into(),
                             id: "".into(),
                         }),
                         span.clone(),
                     ),
-                    (Event::Text(destination.into()), span.clone()),
                     (Event::End(TagEnd::Link), span.clone()),
                 ]);
             }

@@ -92,7 +92,6 @@ pub(crate) use list_spacing::ListSpacing;
 use list_spacing::UniformList;
 use local_links::is_local_path_like_link;
 use local_links::render_local_link_target;
-use local_links::should_render_local_link_label;
 pub(crate) use streaming::StreamingMarkdownRender;
 pub(crate) use streaming::render_streaming_markdown_lines_with_width_and_cwd;
 #[cfg(test)]
@@ -2172,7 +2171,10 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             style_label,
             has_visible_label: false,
             local_target_display: if is_local_path_like_link(&dest_url) {
-                render_local_link_target(&dest_url, self.cwd.as_deref())
+                Some(
+                    render_local_link_target(&dest_url, self.cwd.as_deref())
+                        .unwrap_or_else(|| dest_url.clone()),
+                )
             } else {
                 None
             },
@@ -2217,13 +2219,10 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                     self.push_span(")".into());
                 }
             } else if let Some(local_target_display) = link.local_target_display {
-                let local_label_text = link
+                let show_label = link
                     .local_label_spans
                     .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>();
-                let show_label =
-                    should_render_local_link_label(&local_label_text, &link.destination);
+                    .any(|span| !span.content.trim().is_empty());
                 let style = self
                     .inline_styles
                     .last()
