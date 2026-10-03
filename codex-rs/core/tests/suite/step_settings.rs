@@ -2436,7 +2436,7 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                     .collect::<serde_json::Map<String, Value>>(),
                 "channel_post_description": format!("post description for {model}."),
                 "channel_post_required": ["text"],
-                "exec_description": format!("Exec description for {model}."),
+                "exec_description": format!("Exec description for {model}.\n\nSome deferred nested tools may be omitted from this description. They are still available on the global `tools` object and listed in `ALL_TOOLS`.\nTo find one, filter `ALL_TOOLS` by `name` and `description`.\n\nTool availability can change between calls."),
                 "wait_description": format!("Wait description for {model}."),
                 "wait_parameters": wait_parameters(model),
             }))

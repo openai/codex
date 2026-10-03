@@ -18,8 +18,8 @@ Settings:
 -- request 1 (turn) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
-01:additional_tools/developer (2; hash=1e63b25da7155640):
-        - namespace/functions; hash=cc6eebc2891d0fea
+01:additional_tools/developer (2; hash=49f981f03ae5c5ce):
+        - namespace/functions; hash=cc6e8cf0e5405f3a
           - custom/exec
           - function/wait
           - function/exec_command
@@ -44,8 +44,8 @@ Settings: relative to window 1
 -- request 3 (turn) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
-01:additional_tools/developer (2; hash=1e63b25da7155640):
-        - namespace/functions; hash=cc6eebc2891d0fea
+01:additional_tools/developer (2; hash=49f981f03ae5c5ce):
+        - namespace/functions; hash=cc6e8cf0e5405f3a
           - custom/exec
           - function/wait
           - function/exec_command
@@ -62,8 +62,8 @@ Settings: relative to window 1
     Begin work.
 05:message/user:
     Continue with the same tools.
-06:additional_tools/developer (1; hash=458b87f50d4f6057):
-        - namespace/functions; hash=3045d6c5c31286d9
+06:additional_tools/developer (1; hash=26cd263a29587cc7):
+        - namespace/functions; hash=771cad2ff250d2f3
           - custom/exec
 07:message/developer:
     <MODEL_SWITCH>

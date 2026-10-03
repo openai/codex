@@ -2699,10 +2699,10 @@ async fn excluded_deferred_namespaces_do_not_enable_nested_tool_guidance() {
         panic!("expected code mode exec tool");
     };
     assert!(
-        !exec
-            .description
+        exec.description
             .contains("Some deferred nested tools may be omitted")
     );
+    assert!(!exec.description.contains("excluded__lookup("));
     plan.assert_registered_contains(&[
         &ToolName::namespaced("excluded", "lookup").to_string(),
         "tool_search",
