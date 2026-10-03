@@ -1,4 +1,4 @@
-//! Amazon Bedrock credential discovery and setup within the authentication step.
+//! Amazon Bedrock credential discovery, setup, and post-login checks within authentication.
 
 use super::auth::AuthModeWidget;
 use super::auth::SignInState;
@@ -8,6 +8,8 @@ use crate::key_hint::KeyBindingListExt;
 use crate::wrapping::word_wrap_lines;
 use codex_app_server_protocol::AwsCredentialType;
 use codex_app_server_protocol::BedrockAwsProfile;
+use codex_app_server_protocol::BedrockCheckGovCloudRequirementsParams;
+use codex_app_server_protocol::BedrockCheckGovCloudRequirementsResponse;
 use codex_app_server_protocol::BedrockDiscoverParams;
 use codex_app_server_protocol::BedrockDiscoverResponse;
 use codex_app_server_protocol::BedrockEnvironmentCredential;
@@ -27,7 +29,13 @@ use ratatui::prelude::Widget;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
+use std::sync::Arc;
 use std::sync::PoisonError;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+
+const GOV_CLOUD_GUIDANCE_URL: &str =
+    "https://learn.chatgpt.com/docs/enterprise/govcloud-configuration";
 
 #[derive(Clone)]
 pub(super) struct BedrockState {
@@ -53,6 +61,9 @@ enum BedrockView {
     },
     EnvironmentInstructions,
     Configuring(RequestId),
+    CheckingGovCloud(RequestId),
+    // Render-clamped scroll offset shared with the auth widget's cloned state.
+    GovCloudWarning(Arc<AtomicUsize>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -87,6 +98,7 @@ enum BedrockMethod {
 enum BedrockAction {
     BackToAuth,
     Configure(BedrockCredential, String),
+    ContinueAfterGovCloudWarning,
 }
 
 impl BedrockState {
@@ -213,6 +225,21 @@ impl BedrockState {
     }
 
     fn handle_key_event(&mut self, key_event: &KeyEvent) -> Option<BedrockAction> {
+        match &self.view {
+            BedrockView::CheckingGovCloud(_) => return None,
+            BedrockView::GovCloudWarning(scroll) => {
+                let offset = scroll.load(Ordering::Relaxed);
+                if keys::MOVE_UP.is_pressed(*key_event) {
+                    scroll.store(offset.saturating_sub(1), Ordering::Relaxed);
+                } else if keys::MOVE_DOWN.is_pressed(*key_event) {
+                    scroll.store(offset.saturating_add(1), Ordering::Relaxed);
+                }
+                return (key_event.kind == KeyEventKind::Press
+                    && keys::CONFIRM.is_pressed(*key_event))
+                .then_some(BedrockAction::ContinueAfterGovCloudWarning);
+            }
+            _ => {}
+        }
         if keys::CANCEL.is_pressed(*key_event) {
             let leave_wizard = matches!(
                 self.view,
@@ -343,7 +370,23 @@ impl BedrockState {
             Line::from(vec!["> ".into(), "Set up Amazon Bedrock".bold()]),
             "".into(),
         ];
+        let mut footer = Vec::new();
         match &self.view {
+            BedrockView::CheckingGovCloud(_) => {
+                lines = vec!["Checking for AWS GovCloud...".dim().into()];
+            }
+            BedrockView::GovCloudWarning(_) => {
+                lines = vec!["Using Codex with AWS GovCloud".bold().into(), "".into()];
+                lines.push(Line::from(vec![
+                    "You are using Codex with AWS GovCloud. Please ensure you or your administrator have read the ".into(),
+                    "application configuration and security guidance"
+                        .cyan()
+                        .underlined(),
+                    " before proceeding.".into(),
+                ]));
+                footer.push("".into());
+                footer.push("> Acknowledge".cyan().into());
+            }
             BedrockView::Discovering(_) => {
                 lines.push("  Checking for existing AWS credentials...".dim().into());
             }
@@ -450,8 +493,10 @@ impl BedrockState {
                 self.render_methods(&mut lines);
             }
         }
-        let mut footer = Vec::new();
-        if !matches!(self.view, BedrockView::Discovering(_)) {
+        if !matches!(
+            self.view,
+            BedrockView::Discovering(_) | BedrockView::CheckingGovCloud(_)
+        ) {
             footer.push("".into());
             if !matches!(self.view, BedrockView::Configuring(_)) {
                 footer.push(Line::from(vec![
@@ -460,24 +505,48 @@ impl BedrockState {
                     " to continue".dim(),
                 ]));
             }
-            footer.push(Line::from(vec![
-                "  Press ".dim(),
-                keys::CANCEL[0].into(),
-                " to go back".dim(),
-            ]));
+            if !matches!(self.view, BedrockView::GovCloudWarning(_)) {
+                footer.push(Line::from(vec![
+                    "  Press ".dim(),
+                    keys::CANCEL[0].into(),
+                    " to go back".dim(),
+                ]));
+            }
         }
         if let Some(error) = error {
             footer.push("".into());
             footer.push(error.red().into());
         }
         let mut lines = word_wrap_lines(lines, usize::from(area.width));
-        let footer = word_wrap_lines(footer, usize::from(area.width));
+        let mut footer = word_wrap_lines(footer, usize::from(area.width));
+        if matches!(self.view, BedrockView::GovCloudWarning(_))
+            && lines.len() + footer.len() > usize::from(area.height)
+        {
+            footer = vec!["> Acknowledge".cyan().into()];
+            if area.height > 2 {
+                footer.push(Line::from(vec![
+                    keys::MOVE_UP[0].into(),
+                    "/".dim(),
+                    keys::MOVE_DOWN[0].into(),
+                    " scroll · ".dim(),
+                    keys::CONFIRM[0].into(),
+                ]));
+            }
+            footer = word_wrap_lines(footer, usize::from(area.width));
+        }
         if lines.len() + footer.len() <= usize::from(area.height) || footer.is_empty() {
             lines.extend(footer);
             Paragraph::new(lines).render(area, buf);
+            if let BedrockView::GovCloudWarning(scroll) = &self.view {
+                scroll.store(0, Ordering::Relaxed);
+                crate::terminal_hyperlinks::mark_underlined_hyperlink(
+                    buf,
+                    area,
+                    GOV_CLOUD_GUIDANCE_URL,
+                );
+            }
             return;
         }
-
         let footer_height = u16::try_from(footer.len())
             .unwrap_or(u16::MAX)
             .min(area.height.saturating_sub(1));
@@ -493,10 +562,17 @@ impl BedrockState {
                     .then_some(index)
             })
             .unwrap_or_default();
-        let scroll = highlighted_row
-            .saturating_add(2)
-            .saturating_sub(usize::from(content_height))
-            .min(lines.len().saturating_sub(usize::from(content_height)));
+        let max_scroll = lines.len().saturating_sub(usize::from(content_height));
+        let scroll = if let BedrockView::GovCloudWarning(scroll) = &self.view {
+            let offset = scroll.load(Ordering::Relaxed).min(max_scroll);
+            scroll.store(offset, Ordering::Relaxed);
+            offset
+        } else {
+            highlighted_row
+                .saturating_add(2)
+                .saturating_sub(usize::from(content_height))
+                .min(max_scroll)
+        };
         let content_area = Rect {
             height: content_height,
             ..area
@@ -510,6 +586,13 @@ impl BedrockState {
             .scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0))
             .render(content_area, buf);
         Paragraph::new(footer).render(footer_area, buf);
+        if matches!(self.view, BedrockView::GovCloudWarning(_)) {
+            crate::terminal_hyperlinks::mark_underlined_hyperlink(
+                buf,
+                content_area,
+                GOV_CLOUD_GUIDANCE_URL,
+            );
+        }
     }
 
     fn render_methods(&self, lines: &mut Vec<Line<'static>>) {
@@ -593,6 +676,46 @@ impl BedrockState {
     }
 }
 
+fn start_gov_cloud_check(
+    request_handle: codex_app_server_client::AppServerRequestHandle,
+    sign_in_state: std::sync::Arc<std::sync::RwLock<SignInState>>,
+    request_frame: crate::tui::FrameRequester,
+    state: &mut BedrockState,
+) {
+    let request_id = onboarding_request_id();
+    state.highlighted = 0;
+    state.view = BedrockView::CheckingGovCloud(request_id.clone());
+    tokio::spawn(async move {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(/*secs*/ 15),
+            request_handle.request_typed::<BedrockCheckGovCloudRequirementsResponse>(
+                ClientRequest::BedrockCheckGovCloudRequirements {
+                    request_id: request_id.clone(),
+                    params: BedrockCheckGovCloudRequirementsParams {},
+                },
+            ),
+        )
+        .await;
+        let mut guard = sign_in_state
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let SignInState::Bedrock(state) = &mut *guard else {
+            return;
+        };
+        if !matches!(&state.view, BedrockView::CheckingGovCloud(active) if *active == request_id) {
+            return;
+        }
+        match result {
+            Ok(Ok(response)) if response.is_gov_cloud => {
+                state.view = BedrockView::GovCloudWarning(Arc::default());
+            }
+            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => *guard = SignInState::BedrockConfigured,
+        }
+        drop(guard);
+        request_frame.schedule_frame();
+    });
+}
+
 impl AuthModeWidget {
     pub(super) fn start_bedrock_discovery(&mut self) {
         let request_id = onboarding_request_id();
@@ -646,7 +769,7 @@ impl AuthModeWidget {
     }
 
     pub(super) fn handle_bedrock_key_event(&mut self, key_event: &KeyEvent) -> bool {
-        let (action, fallback) = {
+        {
             let mut guard = self
                 .sign_in_state
                 .write()
@@ -655,21 +778,20 @@ impl AuthModeWidget {
                 return false;
             };
             *self.error.write().unwrap_or_else(PoisonError::into_inner) = None;
-            let action = state.handle_key_event(key_event);
-            (action, state.clone())
-        };
-
-        match action {
-            Some(BedrockAction::BackToAuth) => {
-                *self
-                    .sign_in_state
-                    .write()
-                    .unwrap_or_else(PoisonError::into_inner) = SignInState::PickMode;
+            match state.handle_key_event(key_event) {
+                Some(BedrockAction::BackToAuth) => {
+                    *guard = SignInState::PickMode;
+                }
+                Some(BedrockAction::Configure(credential, region)) => {
+                    let fallback = state.clone();
+                    drop(guard);
+                    self.start_bedrock_setup(credential, region, fallback);
+                }
+                Some(BedrockAction::ContinueAfterGovCloudWarning) => {
+                    *guard = SignInState::BedrockConfigured;
+                }
+                None => {}
             }
-            Some(BedrockAction::Configure(credential, region)) => {
-                self.start_bedrock_setup(credential, region, fallback);
-            }
-            None => {}
         }
         self.request_frame.schedule_frame();
         true
@@ -784,7 +906,14 @@ impl AuthModeWidget {
             match result {
                 Ok(()) => {
                     *error.write().unwrap_or_else(PoisonError::into_inner) = None;
-                    *guard = SignInState::BedrockConfigured;
+                    if let SignInState::Bedrock(state) = &mut *guard {
+                        start_gov_cloud_check(
+                            request_handle,
+                            sign_in_state.clone(),
+                            request_frame.clone(),
+                            state,
+                        );
+                    }
                 }
                 Err(err) => {
                     *error.write().unwrap_or_else(PoisonError::into_inner) =
