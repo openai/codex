@@ -90,6 +90,8 @@ pub(crate) mod test_support;
 mod tmux;
 #[cfg(any(windows, test))]
 mod windows_console;
+#[cfg(any(windows, test))]
+mod windows_key_sequence;
 
 /// Target frame interval for UI redraw scheduling.
 pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME_INTERVAL;

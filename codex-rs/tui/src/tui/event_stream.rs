@@ -125,11 +125,22 @@ impl<S: EventSource + Default> EventBroker<S> {
 }
 
 /// Real crossterm-backed event source.
-pub struct CrosstermEventSource(pub crossterm::event::EventStream);
+pub struct CrosstermEventSource {
+    #[cfg(not(windows))]
+    events: crossterm::event::EventStream,
+    #[cfg(windows)]
+    events: super::windows_key_sequence::WindowsKeySequence<crossterm::event::EventStream>,
+}
 
 impl Default for CrosstermEventSource {
     fn default() -> Self {
-        Self(crossterm::event::EventStream::new())
+        let events = crossterm::event::EventStream::new();
+        Self {
+            #[cfg(not(windows))]
+            events,
+            #[cfg(windows)]
+            events: super::windows_key_sequence::WindowsKeySequence::new(events),
+        }
     }
 }
 
@@ -140,7 +151,7 @@ impl EventSource for CrosstermEventSource {
         #[cfg(windows)]
         let _ = super::windows_console::ensure_input_record_mode();
 
-        let result = Pin::new(&mut self.get_mut().0).poll_next(cx);
+        let result = Pin::new(&mut self.get_mut().events).poll_next(cx);
 
         // EventStream starts its blocking reader before returning Pending, so reassert the mode
         // after that transition as well.
