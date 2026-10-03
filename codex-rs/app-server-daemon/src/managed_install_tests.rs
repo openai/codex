@@ -18,7 +18,7 @@ fn rejects_malformed_codex_cli_version_output() {
 }
 
 #[tokio::test]
-async fn executable_identity_uses_binary_contents() {
+async fn executable_identity_uses_path_and_binary_contents() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let executable = directory.path().join("codex");
     // Span multiple reads, including a partial final buffer, and preserve the
@@ -30,9 +30,18 @@ async fn executable_identity_uses_binary_contents() {
             executable_identity(&executable).await.expect("identity"),
             ExecutableIdentity {
                 digest: *blake3::hash(contents).as_bytes(),
+                path_digest: Some(super::path_digest(
+                    &std::fs::canonicalize(&executable).expect("canonical executable"),
+                )),
             }
         );
     }
+    let copy = directory.path().join("codex-copy");
+    std::fs::copy(&executable, &copy).expect("copy executable");
+    let identity = executable_identity(&executable).await.expect("identity");
+    let copy_identity = executable_identity(&copy).await.expect("copy identity");
+    assert_ne!(identity, copy_identity);
+    assert!(identity.same_contents(&copy_identity));
     std::fs::write(&executable, &bytes).expect("write executable");
     let old = executable_identity(&executable).await.expect("identity");
     bytes[100_000] ^= 1;

@@ -184,6 +184,15 @@ pub(crate) async fn managed_codex_version(codex_bin: &Path) -> Result<String> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ExecutableIdentity {
     digest: [u8; 32],
+    // Distinguish release generations whose executable bytes are identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path_digest: Option<[u8; 32]>,
+}
+
+impl ExecutableIdentity {
+    pub(crate) fn same_contents(&self, other: &Self) -> bool {
+        self.digest == other.digest
+    }
 }
 
 pub(crate) async fn executable_identity(executable: &Path) -> Result<ExecutableIdentity> {
@@ -191,9 +200,12 @@ pub(crate) async fn executable_identity(executable: &Path) -> Result<ExecutableI
     // Debug executables can be hundreds of MB. Stream the digest off the async
     // runtime instead of allocating the whole file and blocking a runtime thread.
     tokio::task::spawn_blocking(move || {
-        std::fs::File::open(&executable)
+        let executable = std::fs::canonicalize(&executable).unwrap_or(executable);
+        let mut identity = std::fs::File::open(&executable)
             .and_then(executable_identity_from_reader)
-            .with_context(|| format!("failed to read executable {}", executable.display()))
+            .with_context(|| format!("failed to read executable {}", executable.display()))?;
+        identity.path_digest = Some(path_digest(&executable));
+        Ok(identity)
     })
     .await
     .context("executable identity task failed")?
@@ -206,7 +218,25 @@ pub(crate) fn executable_identity_from_reader(
     hasher.update_reader(reader)?;
     Ok(ExecutableIdentity {
         digest: *hasher.finalize().as_bytes(),
+        path_digest: None,
     })
+}
+
+fn path_digest(path: &Path) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        hasher.update(path.as_os_str().as_bytes());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        for unit in path.as_os_str().encode_wide() {
+            hasher.update(&unit.to_le_bytes());
+        }
+    }
+    *hasher.finalize().as_bytes()
 }
 
 fn managed_codex_file_name() -> &'static str {

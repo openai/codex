@@ -15,6 +15,8 @@ use super::manual_update::run as manual_update_once;
 #[cfg(unix)]
 use crate::Daemon;
 #[cfg(unix)]
+use crate::RestartIfRunningOutcome;
+#[cfg(unix)]
 use crate::UpdateOutput;
 #[cfg(unix)]
 use crate::UpdateStatus;
@@ -712,6 +714,92 @@ async fn test_control_server(
                 .expect("frame");
         }
     })
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn scheduled_no_op_preserves_daemon_and_hands_off_stale_updater() {
+    let home = TempDir::new().expect("home");
+    let (daemon, _) = manual_update_daemon(&home);
+    let settings = crate::settings::DaemonSettings::default();
+    let backend = crate::backend::pid_backend(daemon.backend_paths(&settings));
+    backend.start().await.expect("start daemon");
+    let server = test_control_server(&daemon, home.path()).await;
+    let pid_record = std::fs::read(&daemon.pid_file).expect("daemon PID record");
+    let no_op = FakeInstallerHttp::new(InstallerResponse::Success(
+        b"# CODEX_INSTALL_IF_LATEST\nexit 0\n".to_vec(),
+    ));
+
+    let outcome = super::update_once(
+        &no_op,
+        &daemon,
+        &executable_identity_from_reader(&b"stale updater"[..]).expect("updater identity"),
+        &mut test_terminate(),
+        super::UpdateTrigger::Scheduled,
+    )
+    .await
+    .expect("scheduled update");
+
+    assert!(matches!(
+        outcome,
+        (
+            super::UpdateLoopControl::Continue,
+            Some(RestartIfRunningOutcome::AlreadyCurrent)
+        )
+    ));
+    assert_eq!(
+        std::fs::read(&daemon.pid_file).expect("daemon PID record"),
+        pid_record
+    );
+    backend.stop().await.expect("stop daemon");
+    server.abort();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn scheduled_resource_only_update_restarts_daemon() {
+    let home = TempDir::new().expect("home");
+    let (daemon, release) = manual_update_daemon(&home);
+    let settings = crate::settings::DaemonSettings::default();
+    let backend = crate::backend::pid_backend(daemon.backend_paths(&settings));
+    backend.start().await.expect("start daemon");
+    let server = test_control_server(&daemon, home.path()).await;
+    let previous_pid_record = std::fs::read(&daemon.pid_file).expect("daemon PID record");
+    let root = home.path().join("packages/standalone");
+    let next_release = release.replacen("1.0.0", "1.0.1", 1);
+    let installer = FakeInstallerHttp::new(InstallerResponse::Success(
+        format!(
+            "#!/bin/sh\n# CODEX_INSTALL_IF_LATEST\nmkdir -p '{root}/releases/{next_release}'\ncp '{root}/releases/{release}/codex' '{root}/releases/{next_release}/codex'\nln -sfn 'releases/{next_release}' '{root}/current'\nprintf '{next_release}' > '{root}/auto-update-version'\n",
+            root = root.display(),
+        )
+        .into_bytes(),
+    ));
+
+    let outcome = super::update_once(
+        &installer,
+        &daemon,
+        &executable_identity(&daemon.managed_codex_bin)
+            .await
+            .expect("updater identity"),
+        &mut test_terminate(),
+        super::UpdateTrigger::Scheduled,
+    )
+    .await
+    .expect("scheduled update");
+
+    assert!(matches!(
+        outcome,
+        (
+            super::UpdateLoopControl::Continue,
+            Some(RestartIfRunningOutcome::Restarted)
+        )
+    ));
+    assert_ne!(
+        std::fs::read(&daemon.pid_file).expect("daemon PID record"),
+        previous_pid_record
+    );
+    backend.stop().await.expect("stop daemon");
+    server.abort();
 }
 
 #[cfg(unix)]

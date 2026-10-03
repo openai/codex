@@ -138,10 +138,9 @@ async fn run_with_http(
     updater.mark_ready().await?;
     let needs_managed_handoff =
         match resolved_managed_codex_bin(&daemon.current_managed_codex_bin()?).await {
-            Ok(managed_bin) => {
-                executable_identity(&managed_bin).await.ok().as_ref()
-                    != Some(running_updater_identity)
-            }
+            Ok(managed_bin) => executable_identity(&managed_bin)
+                .await
+                .map_or(true, |identity| identity != *running_updater_identity),
             Err(_) => true,
         };
     let auto_update_enabled = UpdaterSettings::load(&daemon.settings_file)
@@ -341,7 +340,7 @@ async fn update_once(
         // latest-channel marker. Retry after the interval instead of exiting.
         return Ok((UpdateLoopControl::Continue, None));
     }
-    let (package_root, previous_selection, previous_release) = selected_release(daemon)?;
+    let (package_root, _, previous_release) = selected_release(daemon)?;
     let codex_home = package_root
         .parent()
         .and_then(Path::parent)
@@ -430,20 +429,14 @@ async fn update_once(
         }),
     );
     let restart_mode = match trigger {
-        // The package can contain different resources even when its CLI binary
-        // is identical. A release change must also replace the running process.
-        UpdateTrigger::Manual | UpdateTrigger::RestoreProduction(_)
-            if selected_release(daemon)?.1 != previous_selection =>
-        {
-            RestartMode::Always
-        }
         UpdateTrigger::Manual | UpdateTrigger::RestoreProduction(_) => {
             RestartMode::IfBinaryOrVersionChanged
         }
+        // Updater adoption does not imply daemon replacement.
         UpdateTrigger::Scheduled
             if executable_identity(&managed_codex_bin).await? != *running_updater_identity =>
         {
-            RestartMode::Always
+            RestartMode::IfBinaryOrVersionChanged
         }
         UpdateTrigger::Scheduled => RestartMode::IfVersionChanged,
     };
@@ -474,8 +467,7 @@ async fn update_once(
                 ));
             }
             RestartIfRunningOutcome::AlreadyCurrent
-                if trigger != UpdateTrigger::Scheduled
-                    && restart_mode == RestartMode::IfBinaryOrVersionChanged =>
+                if restart_mode == RestartMode::IfBinaryOrVersionChanged =>
             {
                 anyhow::ensure!(
                     daemon.is_stable_standalone_release()?
@@ -486,6 +478,15 @@ async fn update_once(
                 return Ok((
                     UpdateLoopControl::Continue,
                     Some(RestartIfRunningOutcome::AlreadyCurrent),
+                ));
+            }
+            RestartIfRunningOutcome::NotReady
+                if trigger == UpdateTrigger::Scheduled
+                    && restart_mode == RestartMode::IfBinaryOrVersionChanged =>
+            {
+                return Ok((
+                    UpdateLoopControl::Continue,
+                    Some(RestartIfRunningOutcome::NotReady),
                 ));
             }
             RestartIfRunningOutcome::NotReady | RestartIfRunningOutcome::AlreadyCurrent => {
