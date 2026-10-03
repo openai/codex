@@ -108,6 +108,8 @@ mod provisioning_protocol;
 #[cfg(target_os = "windows")]
 mod runtime_ownership;
 #[cfg(target_os = "windows")]
+mod service_diagnostics;
+#[cfg(target_os = "windows")]
 mod service_identity;
 #[cfg(target_os = "windows")]
 #[doc(hidden)]
@@ -133,6 +135,9 @@ pub use runtime_ownership::remove_installation;
 #[cfg(target_os = "windows")]
 #[doc(hidden)]
 pub use runtime_ownership::save_installation;
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use service_diagnostics::ServiceStopReason;
 #[cfg(target_os = "windows")]
 mod resolved_permissions;
 #[cfg(target_os = "windows")]

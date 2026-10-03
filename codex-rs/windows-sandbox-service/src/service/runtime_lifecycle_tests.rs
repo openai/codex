@@ -3,6 +3,7 @@
 use super::retry_cleanup;
 use crate::service::SERVICE_STATE;
 use crate::service::ServiceState;
+use crate::service::fatal_error_hresult;
 use crate::service::service_control_handler;
 use anyhow::Context;
 use anyhow::Result;
@@ -19,6 +20,29 @@ use windows_sys::Win32::Foundation::NO_ERROR;
 use windows_sys::Win32::System::Services::SERVICE_CONTROL_SHUTDOWN;
 use windows_sys::Win32::System::Services::SERVICE_CONTROL_STOP;
 use windows_sys::Win32::System::Services::SERVICE_STOPPED;
+
+#[test]
+fn fatal_diagnostics_keep_typed_codes_without_error_text() {
+    let errors = [
+        (
+            anyhow::Error::new(io::Error::from_raw_os_error(5)),
+            0x80070005,
+        ),
+        (
+            anyhow::Error::new(windows::core::Error::from_hresult(windows::core::HRESULT(
+                0x80073cf3_u32 as i32,
+            ))),
+            0x80073cf3,
+        ),
+        (anyhow::anyhow!("token=private (os error 5)"), 0),
+    ];
+    for (error, expected) in errors {
+        assert_eq!(
+            fatal_error_hresult(&error.context("private path/account")),
+            expected
+        );
+    }
+}
 
 #[test]
 fn cleanup_retries_after_scm_stop_but_not_system_shutdown() -> Result<()> {
