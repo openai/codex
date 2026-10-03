@@ -75,7 +75,14 @@ fn exec_override_preserves_empty_and_whitespace_only_text() {
                     ..Default::default()
                 }),
             ),
-            description_override,
+            [
+                description_override,
+                "Shared MCP Types:\n```ts\nNo MCP tools; omit this.\n```"
+            ]
+            .into_iter()
+            .filter(|section| !section.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
         );
     }
 }
@@ -157,5 +164,47 @@ fn exec_override_preserves_runtime_sections() {
             ),
             expected,
         );
+    }
+}
+
+#[test]
+fn mcp_types_stay_stable_when_a_deferred_tool_changes_its_output_schema() {
+    let mut tool = ToolDefinition {
+        name: "sample".to_string(),
+        tool_name: ToolName::plain("sample"),
+        description: "Deferred tool".to_string(),
+        kind: CodeModeToolKind::Function,
+        input_schema: None,
+        input_schema_max_bytes: None,
+        output_schema: None,
+    };
+    let render = |tool: &ToolDefinition, preamble: Option<&str>| {
+        build_exec_tool_description(
+            &[],
+            std::slice::from_ref(tool),
+            &BTreeMap::new(),
+            crate::DEFAULT_EXEC_YIELD_TIME_MS,
+            /*code_mode_only*/ true,
+            ImageDetailVisibility::Visible,
+            Some(&CodeModeToolMessages {
+                mcp_typescript_preamble: preamble.map(str::to_string),
+                ..Default::default()
+            }),
+        )
+    };
+    // Keep one deferred tool throughout to isolate this from the independent
+    // discovery guidance transition when the entire deferred catalog empties.
+    for preamble in [None, Some("type CustomMcpResult = string;"), Some("")] {
+        tool.output_schema = None;
+        let before = render(&tool, preamble);
+        tool.output_schema = Some(json!({
+            "type": "object",
+            "properties": {
+                "content": { "type": "array", "items": { "type": "object" } },
+                "isError": { "type": "boolean" },
+                "_meta": { "type": "object" }
+            }
+        }));
+        assert_eq!(before, render(&tool, preamble));
     }
 }
