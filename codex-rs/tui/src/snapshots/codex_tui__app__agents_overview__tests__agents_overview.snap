@@ -10,18 +10,18 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
   › ● Build the dashboard                             │ Build the dashboard
     ● Repair authentication                           │ ● Needs input
     ○ Review yesterday's changes                      │
+                                                      │ Model: gpt-6.1-sol
+                                                      │ Reasoning: Unknown
+                                                      │
+                                                      │ Project
+                                                      │ /tmp/project
+                                                      │
                                                       │ Agent: Inspect keyboard shortcuts
                                                       │ Open task to review.
                                                       │ Waiting for approval.
                                                       │
-                                                      │ Project
-                                                      │ /tmp/project
-                                                      │ Model: Unknown
-                                                      │
                                                       │ Prompt
                                                       │ Build the dashboard
-                                                      │
-                                                      │
                                                       │
                                                       │
                                                       │

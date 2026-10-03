@@ -38,6 +38,7 @@ use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadActiveFlag;
 use codex_app_server_protocol::ThreadStatus;
 use codex_protocol::ThreadId;
+use codex_protocol::openai_models::ReasoningEffort;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -432,6 +433,25 @@ impl AgentsOverviewView {
         };
         let (status, dot) = Self::status(row);
         let width = usize::from(area.width);
+        let model = crate::line_truncation::truncate_line_with_ellipsis_if_overflow(
+            Line::from(vec![
+                "Model: ".dim(),
+                model_name(&row.thread).to_string().into(),
+            ]),
+            width,
+        );
+        let reasoning = crate::line_truncation::truncate_line_with_ellipsis_if_overflow(
+            Line::from(vec![
+                "Reasoning: ".dim(),
+                row.thread
+                    .reasoning_effort
+                    .as_ref()
+                    .map_or("Unknown", ReasoningEffort::as_str)
+                    .to_string()
+                    .into(),
+            ]),
+            width,
+        );
         let mut lines = vec![
             Line::from("Task details".bold()),
             Line::default(),
@@ -444,12 +464,11 @@ impl AgentsOverviewView {
             ),
             Line::from(vec![dot, " ".into(), status.into()]),
             Line::default(),
+            model,
+            reasoning,
+            Line::default(),
             Line::from("Project".dim()),
             Line::from(row.thread.cwd.display().to_string()),
-            Line::from(vec![
-                "Model: ".dim(),
-                model_name(&row.thread).to_string().into(),
-            ]),
         ];
         lines.extend(row.details.usage_lines.clone());
         if let Some(branch) = row
@@ -488,7 +507,7 @@ impl AgentsOverviewView {
             prompt.truncate(2);
             prompt[1] = HyperlinkLine::new("…".dim().into());
         }
-        let details_start = crate::wrapping::word_wrap_lines(lines[..4].to_vec(), width).len();
+        let details_start = prompt_start;
         let mut lines = wrap(plain_hyperlink_lines(lines));
         lines.extend(prompt);
         if self.state().connection_notice.is_none() {

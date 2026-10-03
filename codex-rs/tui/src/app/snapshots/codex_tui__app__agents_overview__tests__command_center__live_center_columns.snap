@@ -10,14 +10,14 @@ expression: "screen(&view, 160, 22)"
   › ○ Current task                                                                            Ready              now  │ Current task
     ○ A longer task title that uses the available column                              voice   Ready           5m ago  │ ○ Ready
     ! Failed task                                                                             Error           1h ago  │
-    ● Needs an answer                                                                         Needs input     2h ago  │ Project
-    ● Working task                                                                            Working         1d ago  │ /tmp/project
-    ○ Unloaded task                                                                           Inactive        2d ago  │ Model: Unknown
+    ● Needs an answer                                                                         Needs input     2h ago  │ Model: Unknown
+    ● Working task                                                                            Working         1d ago  │ Reasoning: Unknown
+    ○ Unloaded task                                                                           Inactive        2d ago  │
+                                                                                                                      │ Project
+                                                                                                                      │ /tmp/project
                                                                                                                       │
                                                                                                                       │ Prompt
                                                                                                                       │ Current task
-                                                                                                                      │
-                                                                                                                      │
                                                                                                                       │
                                                                                                                       │
                                                                                                                       │

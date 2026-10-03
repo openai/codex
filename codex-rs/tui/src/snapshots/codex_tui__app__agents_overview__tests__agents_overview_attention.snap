@@ -10,19 +10,19 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
   › ● Repair authentication                           │ Repair authentication
     ○ Investigate parser                              │ ● Needs input
                                                       │
+                                                      │ Model: Unknown
+                                                      │ Reasoning: Unknown
+                                                      │
+                                                      │ Project
+                                                      │ /tmp/project
+                                                      │
                                                       │ Agent: Check dependencies
                                                       │ Which dependency version should I use?
                                                       │ Open task to review.
                                                       │ Waiting for approval.
                                                       │ Waiting for your response.
                                                       │
-                                                      │ Project
-                                                      │ /tmp/project
-                                                      │ Model: Unknown
-                                                      │
                                                       │ Prompt
                                                       │ Repair authentication
-                                                      │
-                                                      │
                                                       │
   ? help  esc back  ↑/↓ move  enter open  n new

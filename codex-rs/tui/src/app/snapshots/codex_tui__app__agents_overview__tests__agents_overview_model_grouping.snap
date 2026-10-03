@@ -10,14 +10,14 @@ expression: "render_bottom_popup(&app.chat_widget,\n100).replace(&test_path_disp
   › ○ Legacy task                                         │ Legacy task
                                                           │ ○ Ready
   model-a  2                                              │
-    ○ Recent task                                         │ Project
-    ○ Older task                                          │ /tmp/project
-                                                          │ Model: Unknown
-  model-b  1                                              │
-    ○ Other model                                         │ Prompt
+    ○ Recent task                                         │ Model: Unknown
+    ○ Older task                                          │ Reasoning: Unknown
+                                                          │
+  model-b  1                                              │ Project
+    ○ Other model                                         │ /tmp/project
+                                                          │
+                                                          │ Prompt
                                                           │ Legacy task
-                                                          │
-                                                          │
                                                           │
                                                           │
                                                           │

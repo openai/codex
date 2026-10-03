@@ -10,17 +10,17 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
   › ● Check startup performance                       │ Check startup performance
                                                       │ ● Working
                                                       │
-                                                      │ Latest activity
-                                                      │ Checking cold-start regressions
+                                                      │ Model: Unknown
+                                                      │ Reasoning: Unknown
                                                       │
                                                       │ Project
                                                       │ /tmp/project
-                                                      │ Model: Unknown
+                                                      │
+                                                      │ Latest activity
+                                                      │ Checking cold-start regressions
                                                       │
                                                       │ Prompt
                                                       │ No prompt available.
-                                                      │
-                                                      │
                                                       │
                                                       │
                                                       │

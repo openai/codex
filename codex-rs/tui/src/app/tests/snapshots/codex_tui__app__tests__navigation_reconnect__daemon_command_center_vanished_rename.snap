@@ -10,14 +10,14 @@ expression: "render_bottom_popup(&app.chat_widget, 100)"
     ● New task                                            │ Selected task
   › ○ Selected task                                       │ ○ Ready
                                                           │
+                                                          │ Model: Unknown
+                                                          │ Reasoning: Unknown
+                                                          │
                                                           │ Project
                                                           │ /tmp/project
-                                                          │ Model: Unknown
                                                           │
                                                           │ Prompt
                                                           │ Selected task
-                                                          │
-                                                          │
                                                           │
                                                           │
                                                           │

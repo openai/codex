@@ -10,17 +10,17 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
     ● Repair authentication                           │ Investigate parser
   › ○ Investigate parser                              │ ○ Inactive
                                                       │
+                                                      │ Model: provider/provider/provider/pro…
+                                                      │ Reasoning: deliberatedeliberatedelibe…
+                                                      │
+                                                      │ Project
+                                                      │ /tmp/project
+                                                      │
                                                       │ Last message
                                                       │ Found the regression in the parser.
                                                       │ Found the regression in the parser.
                                                       │ Found the regression in the parser.
-                                                      │ Found the regression in the parser.
-                                                      │ Found the regression in the parser.
                                                       │ …
-                                                      │
-                                                      │ Project
-                                                      │ /tmp/project
-                                                      │ Model: Unknown
                                                       │
                                                       │ Prompt
                                                       │ Investigate parser

@@ -10,19 +10,19 @@ expression: "normalize_agent_center_snapshot(render_bottom_popup(&app.chat_widge
   › ○ Review parser                                   │ Review parser
                                                       │ ○ Ready
                                                       │
+                                                      │ Model: Unknown
+                                                      │ Reasoning: Unknown
+                                                      │
+                                                      │ Project
+                                                      │ /tmp/project
+                                                      │
                                                       │ Last message
                                                       │ let explanation = "A long code line
                                                       │ should wrap inside the task details
                                                       │ panel.";
                                                       │
-                                                      │ Project
-                                                      │ /tmp/project
-                                                      │ Model: Unknown
-                                                      │
                                                       │ Prompt
                                                       │ long prompt long prompt long prompt
                                                       │ …
-                                                      │
-                                                      │
                                                       │
   ? help  esc back  ↑/↓ move  enter open  n new
