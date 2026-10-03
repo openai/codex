@@ -1113,7 +1113,9 @@ fn unified_exec_should_include_shell_parameter(
 
 #[instrument(level = "trace", skip_all)]
 fn add_mcp_resource_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistry) {
-    if context.mcp.has_servers() {
+    if context.mcp.has_servers()
+        || effective_tool_mode(context.turn_context, context.model_info) == ToolMode::CodeModeOnly
+    {
         let messages = ResolvedModelMessages::from_model(context.model_info).mcp_resources();
         registry.add(ListMcpResourcesHandler::new(
             messages.and_then(|messages| messages.list_mcp_resources.as_ref()),
