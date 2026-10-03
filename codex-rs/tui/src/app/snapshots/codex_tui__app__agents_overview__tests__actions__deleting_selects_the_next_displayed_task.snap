@@ -1,0 +1,9 @@
+---
+source: tui/src/app/agents_overview_actions_tests.rs
+assertion_line: 308
+expression: "selections.join(\"\\n\")"
+---
+› ○ Task 3
+› ○ Other 2
+› ○ Task 1
+› ○ Task 4

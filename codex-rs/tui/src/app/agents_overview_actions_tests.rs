@@ -110,6 +110,254 @@ async fn lifecycle_shortcuts_target_filtered_task_in_any_state() {
 }
 
 #[tokio::test]
+async fn archiving_selects_the_next_displayed_task() -> Result<()> {
+    for action in [AgentsOverviewAction::Archive, AgentsOverviewAction::Delete] {
+        let mut selections = Vec::new();
+        for grouping in [
+            AgentsOverviewGrouping::Project,
+            AgentsOverviewGrouping::Status,
+            AgentsOverviewGrouping::Model,
+        ] {
+            for filtered in [false, true] {
+                let (mut app, mut rx, _op_rx) =
+                    crate::app::tests::make_test_app_with_channels().await;
+                let mut app_server =
+                    crate::start_embedded_app_server_for_picker(&app.config).await?;
+                let mut tui = crate::tui::test_support::make_test_tui()?;
+                tui.pause_events();
+                app.app_server_target = AppServerTarget::LocalDaemon {
+                    allow_embedded_fallback: true,
+                    endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                        socket_path: test_path_buf("/tmp/unused.sock").abs(),
+                    },
+                };
+                let mut keymap = TuiKeymap::default();
+                match action {
+                    AgentsOverviewAction::Archive => {
+                        keymap.agents.archive =
+                            Some(KeybindingsSpec::One(KeybindingSpec("f5".into())))
+                    }
+                    AgentsOverviewAction::Delete => {
+                        keymap.agents.delete =
+                            Some(KeybindingsSpec::One(KeybindingSpec("f5".into())))
+                    }
+                }
+                app.keymap = RuntimeKeymap::from_config(&keymap).unwrap();
+                let mut threads = Vec::new();
+                let mut ids = Vec::new();
+                for index in 1..=4 {
+                    let title = format!("{} {index}", if index == 2 { "Other" } else { "Task" });
+                    let id = ThreadId::from_string(
+                        &app_test_support::create_fake_rollout(
+                            &app.config.codex_home,
+                            &format!("2025-01-0{index}T12-00-00"),
+                            &format!("2025-01-0{index}T12:00:00Z"),
+                            &title,
+                            Some(&app.config.model_provider_id),
+                            /*git_info*/ None,
+                        )
+                        .expect("materialize task"),
+                    )?;
+                    let mut thread = overview_thread(
+                        id,
+                        /*parent_thread_id*/ None,
+                        &title,
+                        ThreadStatus::Idle,
+                    );
+                    thread.cwd = test_path_buf(&format!("/tmp/project-{index}")).abs();
+                    thread.model = Some(format!("model-{index}"));
+                    thread.updated_at = index as i64;
+                    app.agents_overview.threads.insert(id, Some(thread.clone()));
+                    threads.push(thread);
+                    ids.push(id);
+                }
+                // Task 1 exercises rebuilding the dashboard after archiving the attached task.
+                let resumed = app_server
+                    .resume_thread(
+                        &app.local_settings,
+                        app.config.clone(),
+                        ids[0],
+                        crate::app_server_session::ResumeModelSettings::PreserveExistingThread,
+                    )
+                    .await?;
+                app.enqueue_primary_thread_session(resumed.session, resumed.turns)
+                    .await?;
+                app.agents_overview.view_state.lock().unwrap().grouping = grouping;
+                let mut view = app.agents_overview_view(threads, Some(ids[2]));
+                if filtered {
+                    view.handle_key_event(KeyCode::Char('/').into());
+                    view.handle_paste("Task".into());
+                    view.handle_key_event(KeyCode::Down.into());
+                }
+                let expected = match (grouping, filtered) {
+                    (AgentsOverviewGrouping::Status, false) => vec![3, 2, 1, 4],
+                    (AgentsOverviewGrouping::Status, true) => vec![3, 1, 4],
+                    (AgentsOverviewGrouping::Project | AgentsOverviewGrouping::Model, false) => {
+                        vec![3, 4, 2, 1]
+                    }
+                    (AgentsOverviewGrouping::Project | AgentsOverviewGrouping::Model, true) => {
+                        vec![3, 4, 1]
+                    }
+                };
+                assert_eq!(
+                    view.selection_after_removal(&HashSet::from([ids[2], ids[expected[1] - 1]])),
+                    Some(ids[expected[2] - 1])
+                );
+                app.agents_overview.visible_thread_ids = view.thread_ids();
+                app.chat_widget.show_bottom_pane_view(Box::new(view));
+                for index in expected {
+                    let selected = app
+                        .chat_widget
+                        .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+                        .unwrap();
+                    assert_eq!(
+                        app.agents_overview.visible_thread_ids.get(selected),
+                        Some(&ids[index - 1])
+                    );
+                    let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 100);
+                    let selected_row = rendered
+                        .lines()
+                        .find(|line| line.trim_start().starts_with('›'))
+                        .expect("selected task");
+                    let selected_row = selected_row.split('│').next().unwrap().trim();
+                    if !filtered && grouping == AgentsOverviewGrouping::Status {
+                        selections.push(selected_row.to_owned());
+                    }
+                    if !filtered {
+                        app.chat_widget.handle_key_event(KeyCode::Char('r').into());
+                    }
+                    app.chat_widget.handle_key_event(KeyCode::F(5).into());
+                    let confirmation = std::iter::from_fn(|| rx.try_recv().ok())
+                        .find(|event| matches!(event, AppEvent::ConfirmAgentsOverviewAction { .. }))
+                        .expect("archive shortcut while editing");
+                    Box::pin(app.handle_event(&mut tui, &mut app_server, confirmation)).await?;
+                    app.chat_widget.handle_key_event(KeyCode::Char('2').into());
+                    if action == AgentsOverviewAction::Delete {
+                        app.chat_widget.handle_key_event(KeyCode::Enter.into());
+                    }
+                    let confirmed = std::iter::from_fn(|| rx.try_recv().ok())
+                        .find(|event| matches!(event, AppEvent::RunAgentsOverviewAction { .. }))
+                        .expect("confirmed archive");
+                    Box::pin(app.handle_event(&mut tui, &mut app_server, confirmed)).await?;
+                    // Later repaints retain the selected successor.
+                    app.repaint_agents_overview();
+                }
+                let selected = app
+                    .chat_widget
+                    .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+                    .unwrap();
+                assert_eq!(app.agents_overview.visible_thread_ids.get(selected), None);
+                assert_eq!(app.agents_overview.selection_after_removal, None);
+                app_server.shutdown().await?;
+            }
+        }
+        let snapshot = match action {
+            AgentsOverviewAction::Archive => "archiving_selects_the_next_displayed_task",
+            AgentsOverviewAction::Delete => "deleting_selects_the_next_displayed_task",
+        };
+        insta::assert_snapshot!(snapshot, selections.join("\n"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn external_removals_preserve_adjacent_selection() {
+    for grouping in [
+        AgentsOverviewGrouping::Project,
+        AgentsOverviewGrouping::Status,
+        AgentsOverviewGrouping::Model,
+    ] {
+        for filtered in [false, true] {
+            let mut app = make_test_app().await;
+            let ids = [1, 2, 3, 4].map(ThreadId::from_u128);
+            let threads = ids
+                .iter()
+                .enumerate()
+                .map(|(index, id)| {
+                    let mut thread = overview_thread(
+                        *id,
+                        /*parent_thread_id*/ None,
+                        if index == 1 { "Other" } else { "Task" },
+                        ThreadStatus::Idle,
+                    );
+                    thread.cwd = test_path_buf(&format!("/tmp/project-{index}")).abs();
+                    thread.model = Some(format!("model-{index}"));
+                    thread.updated_at = index as i64;
+                    thread
+                })
+                .collect::<Vec<_>>();
+            app.agents_overview.threads = ids
+                .into_iter()
+                .zip(threads.iter().cloned().map(Some))
+                .collect();
+            app.agents_overview.view_state.lock().unwrap().grouping = grouping;
+            let mut view = app.agents_overview_view(threads, Some(ids[2]));
+            if filtered {
+                view.handle_key_event(KeyCode::Char('/').into());
+                view.handle_paste("Task".into());
+                view.handle_key_event(KeyCode::Down.into());
+            }
+            app.agents_overview.visible_thread_ids = view.thread_ids();
+            app.chat_widget.show_bottom_pane_view(Box::new(view));
+            // Removing another task must retain selection even when its index changes.
+            let other = ServerNotification::ThreadDeleted(ThreadDeletedNotification {
+                thread_id: ids[1].to_string(),
+            });
+            app.track_agents_overview_notification(&other);
+            app.repaint_agents_overview();
+            let selected = app
+                .chat_widget
+                .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+                .unwrap();
+            assert_eq!(
+                app.agents_overview.visible_thread_ids.get(selected),
+                Some(&ids[2])
+            );
+            let expected = match grouping {
+                AgentsOverviewGrouping::Status => [ids[0], ids[3]],
+                AgentsOverviewGrouping::Project | AgentsOverviewGrouping::Model => [ids[3], ids[0]],
+            };
+            let archive = ServerNotification::ThreadArchived(ThreadArchivedNotification {
+                thread_id: ids[2].to_string(),
+            });
+            app.track_agents_overview_notification(&archive);
+            app.track_agents_overview_notification(&archive);
+            assert_eq!(
+                app.agents_overview.selection_after_removal,
+                Some(expected[0])
+            );
+            // A notification burst can remove the pending successor before repaint.
+            let delete = ServerNotification::ThreadDeleted(ThreadDeletedNotification {
+                thread_id: expected[0].to_string(),
+            });
+            app.track_agents_overview_notification(&delete);
+            app.track_agents_overview_notification(&archive);
+            app.repaint_agents_overview();
+            app.repaint_agents_overview();
+            let selected = app
+                .chat_widget
+                .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+                .unwrap();
+            assert_eq!(
+                app.agents_overview.visible_thread_ids.get(selected),
+                Some(&expected[1])
+            );
+            app.track_agents_overview_notification(&ServerNotification::ThreadDeleted(
+                ThreadDeletedNotification {
+                    thread_id: expected[1].to_string(),
+                },
+            ));
+            app.repaint_agents_overview();
+            let selected = app
+                .chat_widget
+                .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+                .unwrap();
+            assert_eq!(app.agents_overview.visible_thread_ids.get(selected), None);
+        }
+    }
+}
+
+#[tokio::test]
 async fn hiding_tasks_keeps_selection_adjacent_in_display_order() -> Result<()> {
     let (mut app, mut rx, _op_rx) = crate::app::tests::make_test_app_with_channels().await;
     let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;

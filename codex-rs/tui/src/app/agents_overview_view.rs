@@ -204,8 +204,10 @@ impl AgentsOverviewView {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .rename_target
-            .or(selected_thread_id)
             .and_then(|thread_id| rows.iter().position(|row| row.thread_id == thread_id))
+            .or_else(|| {
+                selected_thread_id.and_then(|id| rows.iter().position(|row| row.thread_id == id))
+            })
             .or_else(|| rows.iter().position(|row| row.is_current))
             .unwrap_or(0);
         let project_groups = rows
@@ -266,6 +268,19 @@ impl AgentsOverviewView {
 
     pub(super) fn thread_ids(&self) -> Vec<ThreadId> {
         self.rows.iter().map(|row| row.thread_id).collect()
+    }
+
+    pub(super) fn selection_after_removal(
+        &self,
+        removed: &std::collections::HashSet<ThreadId>,
+    ) -> Option<ThreadId> {
+        let visible = self.visible_indices();
+        let position = visible.iter().position(|index| *index == self.selected)?;
+        visible[position..]
+            .iter()
+            .chain(visible[..position].iter().rev())
+            .map(|index| self.rows[*index].thread_id)
+            .find(|id| !removed.contains(id))
     }
 
     fn title_style(&self, thread_id: ThreadId) -> Style {
@@ -701,9 +716,6 @@ impl BottomPaneView for AgentsOverviewView {
         if self.agents_keymap.hide.is_pressed(key) {
             if let Some(row) = self.selected_row() {
                 let thread_id = row.thread_id;
-                // Keep an adjacent task selected when hiding rebuilds the view.
-                let forward = self.visible_indices().last() != Some(&self.selected);
-                self.move_selection(forward);
                 self.app_event_tx
                     .send(AppEvent::HideAgentsOverviewThread { thread_id });
             }

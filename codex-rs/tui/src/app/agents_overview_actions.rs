@@ -268,6 +268,7 @@ impl App {
             {
                 removed.insert(primary);
             }
+            self.prepare_agents_overview_removal(&removed);
             for removed_id in removed {
                 self.remove_agents_overview_thread(removed_id);
                 self.agents_overview.activity.remove(&removed_id);

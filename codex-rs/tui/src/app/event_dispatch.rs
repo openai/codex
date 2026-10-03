@@ -2902,6 +2902,7 @@ impl App {
                 }
             }
             AppEvent::HideAgentsOverviewThread { thread_id } => {
+                self.prepare_agents_overview_removal(&HashSet::from([thread_id]));
                 self.agents_overview.hidden_threads.insert(thread_id);
                 self.repaint_agents_overview();
             }
