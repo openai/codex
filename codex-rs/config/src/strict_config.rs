@@ -14,15 +14,17 @@ use crate::diagnostics::span_for_toml_key_path;
 use crate::diagnostics::text_range_from_span;
 use crate::format_config_layer_source;
 use crate::requirements_layers::strip_cloud_auth_requirements;
+use crate::types::Tui;
 use codex_features::is_known_feature_key;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::de::DeserializeOwned;
+use std::any::TypeId;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::path::Path;
 use toml::Value as TomlValue;
 
-pub fn config_error_from_ignored_toml_fields<T: DeserializeOwned>(
+pub fn config_error_from_ignored_toml_fields<T: DeserializeOwned + 'static>(
     path: impl AsRef<Path>,
     contents: &str,
 ) -> Option<ConfigError> {
@@ -35,7 +37,7 @@ pub fn config_error_from_ignored_toml_fields<T: DeserializeOwned>(
     }
 }
 
-pub(crate) fn config_error_from_ignored_toml_value_fields<T: DeserializeOwned>(
+pub(crate) fn config_error_from_ignored_toml_value_fields<T: DeserializeOwned + 'static>(
     path: impl AsRef<Path>,
     contents: &str,
     value: TomlValue,
@@ -47,7 +49,9 @@ pub(crate) fn config_error_from_ignored_toml_value_fields<T: DeserializeOwned>(
     )
 }
 
-pub(crate) fn config_error_from_ignored_toml_value_fields_for_source_name<T: DeserializeOwned>(
+pub(crate) fn config_error_from_ignored_toml_value_fields_for_source_name<
+    T: DeserializeOwned + 'static,
+>(
     source_name: &str,
     contents: &str,
     value: TomlValue,
@@ -59,12 +63,17 @@ pub(crate) fn config_error_from_ignored_toml_value_fields_for_source_name<T: Des
     )
 }
 
-fn config_error_from_ignored_toml_value_fields_for_source<T: DeserializeOwned>(
+fn config_error_from_ignored_toml_value_fields_for_source<T: DeserializeOwned + 'static>(
     source: ConfigDiagnosticSource<'_>,
     contents: &str,
     value: TomlValue,
 ) -> Option<ConfigError> {
     let unknown_feature_paths = unknown_feature_toml_value_path(&value);
+    let unknown_tui_paths = if TypeId::of::<T>() == TypeId::of::<ConfigToml>() {
+        unknown_tui_toml_value_path(&value)
+    } else {
+        Vec::new()
+    };
     let mut ignored_paths = Vec::new();
     let mut ignored_callback = |ignored_path: serde_ignored::Path<'_>| {
         let path_segments = ignored_path_segments(&ignored_path);
@@ -77,6 +86,7 @@ fn config_error_from_ignored_toml_value_fields_for_source<T: DeserializeOwned>(
 
     match result {
         Ok(_) => unknown_field_error_from_paths(source, contents, ignored_paths)
+            .or_else(|| unknown_field_error_from_paths(source, contents, unknown_tui_paths))
             .or_else(|| unknown_field_error_from_paths(source, contents, unknown_feature_paths)),
         Err(err) => {
             let path_hint = err.path().clone();
@@ -92,6 +102,29 @@ fn config_error_from_ignored_toml_value_fields_for_source<T: DeserializeOwned>(
             ))
         }
     }
+}
+
+pub(crate) fn unknown_tui_toml_value_path(value: &TomlValue) -> Vec<Vec<String>> {
+    // `serde_ignored` cannot observe keys consumed by the flattened notification settings.
+    // Round-trip the TUI config so accepted input keys stay derived from `Tui` itself.
+    let Some(tui_value) = value.as_table().and_then(|root| root.get("tui")) else {
+        return Vec::new();
+    };
+    let Some(configured_tui) = tui_value.as_table() else {
+        return Vec::new();
+    };
+    let Ok(tui) = tui_value.clone().try_into::<Tui>() else {
+        return Vec::new();
+    };
+    let Ok(TomlValue::Table(serialized_tui)) = TomlValue::try_from(tui) else {
+        return Vec::new();
+    };
+
+    configured_tui
+        .keys()
+        .filter(|key| !serialized_tui.contains_key(*key))
+        .map(|key| vec!["tui".to_string(), key.clone()])
+        .collect()
 }
 
 pub(crate) fn ignored_toml_value_fields<T: DeserializeOwned>(value: TomlValue) -> Vec<Vec<String>> {

@@ -27,13 +27,19 @@ fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
 
 #[test]
 fn strict_config_rejects_unknown_config_override() -> Result<()> {
-    let codex_home = TempDir::new()?;
-
-    let mut cmd = codex_command(codex_home.path())?;
-    cmd.args(["--strict-config", "-c", "foo=bar", "exec", "hello"])
-        .assert()
-        .failure()
-        .stderr(contains("unknown configuration field"));
+    for (config_override, ignored_path) in [
+        ("foo=bar", "foo"),
+        ("tui.bogus_key_xyz=1", "tui.bogus_key_xyz"),
+    ] {
+        let codex_home = TempDir::new()?;
+        let mut cmd = codex_command(codex_home.path())?;
+        cmd.args(["--strict-config", "-c", config_override, "exec", "hello"])
+            .assert()
+            .failure()
+            .stderr(contains(format!(
+                "unknown configuration field `{ignored_path}`"
+            )));
+    }
 
     Ok(())
 }
@@ -72,6 +78,12 @@ fn interactive_validates_config_before_requiring_terminal() -> Result<()> {
             "config.toml",
             "unknown_key = true",
             "unknown configuration field",
+        ),
+        (
+            &["--strict-config"],
+            "config.toml",
+            "[tui]\nbogus_key_xyz = 1",
+            "unknown configuration field `tui.bogus_key_xyz`",
         ),
         (
             &["--strict-config", "-c", "foo=bar"],
