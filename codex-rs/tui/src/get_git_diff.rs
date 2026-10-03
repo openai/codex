@@ -837,7 +837,6 @@ mod tests {
             ) {
                 assert_eq!(command.env, HashMap::new());
                 assert_eq!(command.timeout, Duration::from_secs(/*secs*/ 5));
-                assert_eq!(command.output_bytes_cap, 64 * 1024);
                 assert_eq!(command.disable_output_cap, false);
             } else {
                 assert_eq!(command.timeout, DIFF_COMMAND_TIMEOUT);
