@@ -40,8 +40,8 @@ pub fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
     }
 }
 
-/// Replaces an oversized serialized MCP result with a text preview while preserving its error
-/// status and supported bounded metadata.
+/// Replaces an oversized serialized MCP result with a bounded text preview while preserving its
+/// error status and supported bounded metadata.
 pub fn truncate_mcp_tool_result(
     result: &CallToolResult,
     max_bytes: usize,
@@ -53,15 +53,37 @@ pub fn truncate_mcp_tool_result(
         return Cow::Borrowed(result);
     }
 
-    Cow::Owned(CallToolResult {
-        content: vec![serde_json::json!({
-            "type": "text",
-            "text": truncate_text(&serialized, TruncationPolicy::Bytes(max_bytes)),
-        })],
-        structured_content: None,
-        is_error: result.is_error,
-        meta: None,
-    })
+    let meta = None;
+
+    let mut preview_budget = max_bytes;
+    loop {
+        let preview = if preview_budget == 0 {
+            String::new()
+        } else {
+            truncate_text(&serialized, TruncationPolicy::Bytes(preview_budget))
+        };
+        let truncated = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": preview,
+            })],
+            structured_content: None,
+            is_error: result.is_error,
+            meta: meta.clone(),
+        };
+        let Ok(truncated_serialized) = serde_json::to_string(&truncated) else {
+            return Cow::Borrowed(result);
+        };
+        let truncated_len = truncated_serialized.len();
+        if truncated_len <= max_bytes || preview_budget == 0 {
+            return Cow::Owned(truncated);
+        }
+
+        // The preview is serialized as a JSON string, so escaping can make it exceed its raw byte
+        // budget. Scale the next budget by the observed size of the complete replacement.
+        preview_budget = (preview_budget.saturating_mul(max_bytes) / truncated_len)
+            .min(preview_budget.saturating_sub(1));
+    }
 }
 
 /// Applies the existing byte/token budget without changing success metadata or media ordering.

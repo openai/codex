@@ -32,10 +32,11 @@ fn truncate_mcp_tool_result_borrows_small_result() {
 
 #[test]
 fn truncate_mcp_tool_result_compacts_large_result() {
+    let max_bytes = 1024;
     let result = CallToolResult {
         content: vec![serde_json::json!({
             "type": "text",
-            "text": format!("head\n{}\ntail", "x".repeat(5_000)),
+            "text": format!("head\n{}\ntail", "\"\\\n".repeat(5_000)),
         })],
         structured_content: Some(serde_json::json!({"x": "y".repeat(5_000)})),
         is_error: Some(true),
@@ -44,7 +45,7 @@ fn truncate_mcp_tool_result_compacts_large_result() {
         })),
     };
 
-    let truncated = truncate_mcp_tool_result(&result, /*max_bytes*/ 1024).into_owned();
+    let truncated = truncate_mcp_tool_result(&result, max_bytes).into_owned();
 
     let preview = truncated.content[0]["text"]
         .as_str()
@@ -61,10 +62,14 @@ fn truncate_mcp_tool_result_compacts_large_result() {
             meta: None,
         }
     );
-    assert!(preview.len() < 2 * 1024);
+    assert!(serde_json::to_string(&truncated).unwrap().len() <= max_bytes);
     assert!(preview.contains("head"));
     assert!(preview.contains("chars truncated"));
     assert!(preview.contains("meta-tail"));
+
+    let truncated_again = truncate_mcp_tool_result(&truncated, max_bytes);
+    assert!(matches!(truncated_again, std::borrow::Cow::Borrowed(_)));
+    assert_eq!(truncated_again.as_ref(), &truncated);
 }
 
 #[test]
