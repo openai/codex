@@ -1,9 +1,12 @@
 //! Owns scheduled and manual installs, daemon restarts, and updater replacement.
 
+use std::collections::VecDeque;
 use std::path::Path;
 #[cfg(unix)]
 use std::process::Command as StdCommand;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -14,6 +17,7 @@ use codex_http_client::RouteAwareClientPool;
 use futures::FutureExt;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 #[cfg(unix)]
@@ -62,6 +66,10 @@ pub(crate) async fn request_manual_update(
 
 const INITIAL_UPDATE_DELAY: Duration = Duration::from_secs(5 * 60);
 const RESTART_RETRY_INTERVAL: Duration = Duration::from_millis(50);
+// Manual update responses are capped after JSON serialization. This leaves room for the status,
+// envelope, and the worst-case six-byte JSON escape for every captured byte.
+const INSTALLER_STDERR_TAIL_BYTES: usize = 2 * 1024;
+const INSTALLER_STDERR_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 #[cfg(unix)]
 const INSTALL_URL: &str = "https://chatgpt.com/codex/install.sh";
 #[cfg(windows)]
@@ -571,7 +579,7 @@ async fn run_installer_script(
     let mut command = {
         let mut command = Command::new("powershell.exe");
         command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-        command.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "try { Invoke-Expression ([Console]::In.ReadToEnd()) } catch { Write-Error $_; exit 1 }"])
+        command.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); try { Invoke-Expression ([Console]::In.ReadToEnd()) } catch { Write-Error $_; exit 1 }"])
             .kill_on_drop(true);
         command
     };
@@ -605,9 +613,44 @@ async fn run_installer_script(
         .kill_on_drop(true)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .context("failed to invoke standalone Codex updater")?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .context("standalone Codex updater stderr was unavailable")?;
+    let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(
+        INSTALLER_STDERR_TAIL_BYTES,
+    )));
+    let captured_tail = Arc::clone(&stderr_tail);
+    let mut stderr_task = tokio::spawn(async move {
+        let mut buf = [0; 4096];
+        loop {
+            let read = stderr.read(&mut buf).await?;
+            if read == 0 {
+                return Ok::<_, std::io::Error>(());
+            }
+            let Ok(mut tail) = captured_tail.lock() else {
+                return Ok(());
+            };
+            if read >= INSTALLER_STDERR_TAIL_BYTES {
+                tail.clear();
+                tail.extend(
+                    buf[read - INSTALLER_STDERR_TAIL_BYTES..read]
+                        .iter()
+                        .copied(),
+                );
+            } else {
+                let retained = INSTALLER_STDERR_TAIL_BYTES - read;
+                if tail.len() > retained {
+                    let remove = tail.len() - retained;
+                    tail.drain(..remove);
+                }
+                tail.extend(buf[..read].iter().copied());
+            }
+        }
+    });
     #[cfg(windows)]
     let _installer_job = crate::backend::windows::installer_job(&child)?;
     let mut stdin = child
@@ -627,11 +670,13 @@ async fn run_installer_script(
     #[cfg(unix)]
     if write_result.is_none() {
         cancel_installer(&mut child, package_root).await;
+        stderr_task.abort();
         return Ok(UpdateLoopControl::Stop);
     }
-    write_result
-        .context("installer write was cancelled")?
-        .context("failed to pass standalone Codex updater to shell")?;
+    if let Some(Err(err)) = write_result {
+        stderr_task.abort();
+        return Err(err).context("failed to pass standalone Codex updater to shell");
+    }
     #[cfg(unix)]
     let status = tokio::select! {
         result = child.wait() => result,
@@ -642,12 +687,30 @@ async fn run_installer_script(
     };
     #[cfg(windows)]
     let status = child.wait().await;
-    let status = status.context("failed to wait for standalone Codex updater")?;
+    let status = match status {
+        Ok(status) => status,
+        Err(err) => {
+            stderr_task.abort();
+            return Err(err).context("failed to wait for standalone Codex updater");
+        }
+    };
 
     if status.success() {
+        stderr_task.abort();
         Ok(UpdateLoopControl::Continue)
     } else {
-        anyhow::bail!("standalone Codex updater exited with status {status}")
+        let _ = tokio::time::timeout(INSTALLER_STDERR_DRAIN_TIMEOUT, &mut stderr_task).await;
+        stderr_task.abort();
+        let bytes = stderr_tail
+            .lock()
+            .map(|tail| tail.iter().copied().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let detail = String::from_utf8_lossy(&bytes);
+        let detail = detail.trim();
+        if detail.is_empty() {
+            anyhow::bail!("standalone Codex updater exited with status {status}")
+        }
+        anyhow::bail!("standalone Codex updater exited with status {status}:\n{detail}")
     }
 }
 

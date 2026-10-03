@@ -23,6 +23,8 @@ use crate::client;
 use crate::managed_install::executable_identity;
 use crate::managed_install::managed_codex_version;
 
+pub(super) const MAX_RESPONSE_BYTES: u64 = 16 * 1024;
+
 pub(crate) async fn request(daemon: &Daemon) -> Result<UpdateOutput> {
     let socket_path = daemon.manual_update_socket_path();
     let mut replacement_deadline = None;
@@ -103,7 +105,7 @@ pub(crate) async fn request(daemon: &Daemon) -> Result<UpdateOutput> {
             connection.ensure_non_elevated_peer()?;
             connection.write_all(b"update\n").await?;
             connection
-                .take(16 * 1024)
+                .take(MAX_RESPONSE_BYTES)
                 .read_to_end(&mut response)
                 .await?;
             Ok::<_, std::io::Error>(())

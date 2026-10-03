@@ -513,6 +513,46 @@ async fn manual_request_retries_after_updater_replacement() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn manual_request_accepts_maximum_installer_stderr_detail() {
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
+
+    let home = TempDir::new().expect("home");
+    let (daemon, _) = manual_update_daemon(&home);
+    let socket_path = daemon.manual_update_socket_path();
+    codex_uds::prepare_private_socket_directory(socket_path.parent().expect("socket parent"))
+        .await
+        .expect("socket directory");
+    let mut listener = codex_uds::UnixListener::bind(&socket_path)
+        .await
+        .expect("updater socket");
+    let expected_suffix = "installer failed";
+    let message = format!(
+        "standalone updater failed:\n{}{}",
+        "\0".repeat(super::INSTALLER_STDERR_TAIL_BYTES),
+        expected_suffix,
+    );
+    let response = serde_json::to_vec(&Err::<UpdateOutput, _>(message)).expect("serialize error");
+    assert!(response.len() < super::manual_update::MAX_RESPONSE_BYTES as usize);
+    let server = tokio::spawn(async move {
+        let mut connection = listener.accept().await.expect("request connection");
+        let mut request = [0; 7];
+        connection.read_exact(&mut request).await.expect("request");
+        connection
+            .write_all(&response)
+            .await
+            .expect("send response");
+    });
+
+    let error = super::manual_update::request(&daemon)
+        .await
+        .expect_err("manual update should fail");
+    assert!(error.to_string().ends_with(expected_suffix));
+    server.await.expect("server task");
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn manual_request_recovers_when_one_shot_updater_exits() {
     use tokio::io::AsyncReadExt;
 
@@ -1023,20 +1063,60 @@ Test-Installer
     .await
     .expect("installer succeeds");
     let failing = FakeInstallerHttp::new(InstallerResponse::Success(
-        b"throw 'installer failed'".to_vec(),
+        b"throw ([string][char]0x00E9 + 'chec installation')".to_vec(),
     ));
     let script = super::fetch_installer_script(&failing)
         .await
         .expect("fetch failing installer");
-    assert!(
-        super::run_installer_script(
-            &script,
-            super::InstallerMode::RestoreProduction("0.150.0-x86_64-pc-windows-msvc"),
-            std::path::Path::new("packages/app-server-daemon")
-        )
-        .await
-        .is_err()
+    let error = super::run_installer_script(
+        &script,
+        super::InstallerMode::RestoreProduction("0.150.0-x86_64-pc-windows-msvc"),
+        std::path::Path::new("packages/app-server-daemon"),
+    )
+    .await
+    .err()
+    .expect("installer should fail");
+    assert!(error.to_string().contains("échec installation"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn installer_failure_includes_stderr() {
+    let script = format!(
+        "printf 'discard me{}' >&2\nprintf 'installer failed' >&2\nexit 1\n",
+        "x".repeat(super::INSTALLER_STDERR_TAIL_BYTES),
     );
+    let error = super::run_installer_script(
+        script.as_bytes(),
+        super::InstallerMode::Update("0.150.0-x86_64-unknown-linux-gnu"),
+        std::path::Path::new("packages/app-server-daemon"),
+        futures::future::pending(),
+    )
+    .await
+    .err()
+    .expect("installer should fail");
+    let error = error.to_string();
+    assert!(error.contains("installer failed"));
+    assert!(!error.contains("discard me"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn installer_failure_preserves_stderr_before_drain_timeout() {
+    let error = tokio::time::timeout(
+        Duration::from_secs(3),
+        super::run_installer_script(
+            b"printf 'installer failed' >&2\nsleep 5 &\nexit 1\n",
+            super::InstallerMode::Update("0.150.0-x86_64-unknown-linux-gnu"),
+            std::path::Path::new("packages/app-server-daemon"),
+            futures::future::pending(),
+        ),
+    )
+    .await
+    .expect("stderr drain should time out")
+    .err()
+    .expect("installer should fail");
+    assert!(error.to_string().contains("installer failed"));
 }
 
 #[cfg(unix)]
