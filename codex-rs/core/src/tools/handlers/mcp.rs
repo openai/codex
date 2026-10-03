@@ -308,6 +308,10 @@ impl CoreToolRuntime for McpHandler {
         }))
     }
 
+    fn is_third_party_tool(&self) -> bool {
+        true
+    }
+
     fn mcp_server_name(&self) -> Option<&str> {
         Some(&self.tool_info.server_name)
     }

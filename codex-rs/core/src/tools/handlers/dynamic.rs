@@ -165,7 +165,11 @@ impl DynamicToolHandler {
     }
 }
 
-impl CoreToolRuntime for DynamicToolHandler {}
+impl CoreToolRuntime for DynamicToolHandler {
+    fn is_third_party_tool(&self) -> bool {
+        true
+    }
+}
 
 #[expect(
     clippy::await_holding_invalid_type,

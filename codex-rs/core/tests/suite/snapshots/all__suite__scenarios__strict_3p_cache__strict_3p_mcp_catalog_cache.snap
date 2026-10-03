@@ -1,0 +1,103 @@
+---
+source: core/tests/suite/scenarios_strict_3p_cache.rs
+expression: snapshot
+---
+Scenario: Strict Code Mode Only: MCP config changes between turns, with omit-all and namespace skips. Exec calls the live catalog. One window means the captured prefix stayed stable. The execution environment remains running.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-6-astra"
+  parallel_tool_calls: false
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"context":"all_turns","effort":"low"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+-- request 1 (turn; turn 1: no MCP server registered) --
+00:additional_tools/developer (3; hash=<INITIAL_BUILD_HASH>):
+        - namespace/functions; hash=<INITIAL_BUILD_HASH>
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=b263e3c84ad07c37
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user:
+    List and call the tools provided by the environment MCP server.
+-- request 2 (turn; turn 1: exec discovery and call results) --
+07:custom_tool_call/exec:const available = ALL_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
+    const results = [];
+    for (const t of available) {
+      const result = await tools[t.name]({});
+      results.push({name: t.name, result: result.content[0].text});
+    }
+    text(JSON.stringify(results));
+08:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+     | []
+-- request 3 (turn; turn 2: register MCP with lookup; omit-all, direct-only and excluded) --
+09:message/user:
+    List and call the tools provided by the environment MCP server.
+-- request 4 (turn; turn 2: exec discovery and call results) --
+10:custom_tool_call/exec:const available = ALL_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
+    const results = [];
+    for (const t of available) {
+      const result = await tools[t.name]({});
+      results.push({name: t.name, result: result.content[0].text});
+    }
+    text(JSON.stringify(results));
+11:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+     | [{"name":"mcp__environment__lookup","result":"called lookup for  at  with "}]
+-- request 5 (turn; turn 3: same MCP name, new endpoint; replace lookup with resolve and search) --
+12:message/user:
+    List and call the tools provided by the environment MCP server.
+-- request 6 (turn; turn 3: exec discovery and call results) --
+13:custom_tool_call/exec:const available = ALL_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
+    const results = [];
+    for (const t of available) {
+      const result = await tools[t.name]({});
+      results.push({name: t.name, result: result.content[0].text});
+    }
+    text(JSON.stringify(results));
+14:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+     | [{"name":"mcp__environment__resolve","result":"called resolve for  at  with "},{"name":"mcp__environment__search","result":"called search for  at  with "}]
+-- request 7 (turn; turn 4: remove MCP server from config) --
+15:message/user:
+    List and call the tools provided by the environment MCP server.
+-- request 8 (turn; turn 4: exec discovery and call results) --
+16:custom_tool_call/exec:const available = ALL_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
+    const results = [];
+    for (const t of available) {
+      const result = await tools[t.name]({});
+      results.push({name: t.name, result: result.content[0].text});
+    }
+    text(JSON.stringify(results));
+17:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+     | []

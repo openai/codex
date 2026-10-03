@@ -797,6 +797,9 @@
             "code_mode_only": {
               "type": "boolean"
             },
+            "code_mode_only_strict_3p_tools": {
+              "type": "boolean"
+            },
             "code_mode_prewarm": {
               "type": "boolean"
             },
@@ -6950,6 +6953,9 @@
           "type": "boolean"
         },
         "code_mode_only": {
+          "type": "boolean"
+        },
+        "code_mode_only_strict_3p_tools": {
           "type": "boolean"
         },
         "code_mode_prewarm": {

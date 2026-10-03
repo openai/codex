@@ -230,3 +230,6 @@ pub(super) async fn connector_exposure_requests(
     test.codex.shutdown_and_wait().await?;
     Ok(requests)
 }
+
+#[path = "app_tool_exposure_strict_tests.rs"]
+mod strict_third_party;

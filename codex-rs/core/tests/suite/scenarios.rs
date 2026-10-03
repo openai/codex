@@ -92,6 +92,9 @@ const ONE_PIXEL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ
 #[path = "scenarios_incremental_tools.rs"]
 mod incremental_tools;
 
+#[path = "scenarios_strict_3p_cache.rs"]
+mod strict_3p_cache;
+
 #[path = "scenarios_agent_message_board.rs"]
 mod agent_message_board;
 
