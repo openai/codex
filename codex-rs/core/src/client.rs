@@ -975,12 +975,17 @@ impl ModelClient {
             prompt.output_schema_strict,
         );
         let prompt_cache_key = Some(self.prompt_cache_key(responses_metadata));
-        let service_tier = if self.state.provider.info().is_amazon_bedrock() {
-            // Bedrock only supports the implicit default tier, including with custom catalogs.
-            None
-        } else {
-            model_info.service_tier_for_request(service_tier)
-        };
+        let service_tier = model_info
+            .service_tier_for_request(service_tier)
+            .filter(|tier| {
+                // Bedrock requires an advertised tier, including for flex, which the
+                // generic OpenAI resolver permits without catalog support.
+                !self.state.provider.info().is_amazon_bedrock()
+                    || model_info
+                        .service_tiers
+                        .iter()
+                        .any(|supported| supported.id == *tier)
+            });
         if !include_internal {
             for item in &mut input {
                 item.clear_tool_result_metadata();

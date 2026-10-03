@@ -7,6 +7,8 @@ use codex_model_provider_info::AMAZON_BEDROCK_GPT_6_LUNA_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_6_SOL_MODEL_ID;
 use codex_protocol::openai_models::ModelsResponse;
 
+use super::BedrockEndpoint;
+use super::catalog::normalize_bundled_bedrock_catalog;
 use super::catalog::static_model_catalog;
 
 const ROUTING_VARIANTS: [(&str, &str, i32); 2] =
@@ -40,7 +42,7 @@ pub(super) fn static_runtime_model_catalog() -> ModelsResponse {
             models.push(variant);
         }
     }
-    ModelsResponse { models }
+    normalize_bundled_bedrock_catalog(ModelsResponse { models }, BedrockEndpoint::Runtime)
 }
 
 #[cfg(test)]
