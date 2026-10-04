@@ -2755,24 +2755,19 @@ async fn slash_clear_is_disabled_while_task_running() {
 }
 
 #[tokio::test]
-async fn slash_archive_is_disabled_while_task_running() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn slash_archive_cancellation_keeps_task_running() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_task_running(/*running*/ true);
 
     chat.dispatch_command(SlashCommand::Archive);
 
-    let event = rx.try_recv().expect("expected disabled command error");
-    match event {
-        AppEvent::InsertHistoryCell(cell) => {
-            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
-            assert!(
-                rendered.contains("'/archive' is disabled while a task is in progress."),
-                "expected /archive task-running error, got {rendered:?}"
-            );
-        }
-        other => panic!("expected InsertHistoryCell error, got {other:?}"),
-    }
-    assert!(rx.try_recv().is_err(), "expected no follow-up events");
+    assert!(chat.bottom_pane.has_active_view());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert!(!chat.bottom_pane.has_active_view());
+    assert!(chat.bottom_pane.is_task_running());
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]
@@ -2927,20 +2922,28 @@ async fn slash_import_opens_claude_code_import_picker() {
 
 #[tokio::test]
 async fn slash_archive_confirmation_requests_current_thread_archive() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    for running in [false, true] {
+        let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.bottom_pane.set_task_running(running);
 
-    chat.dispatch_command(SlashCommand::Archive);
+        chat.dispatch_command(SlashCommand::Archive);
 
-    assert!(chat.bottom_pane.has_active_view());
-    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+        assert!(chat.bottom_pane.has_active_view());
+        assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+        assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 
-    let popup = render_bottom_popup(&chat, /*width*/ 80);
-    assert_chatwidget_snapshot!("slash_archive_confirmation_popup", popup);
+        let popup = render_bottom_popup(&chat, /*width*/ 80);
+        if running {
+            assert_chatwidget_snapshot!("slash_archive_running_confirmation_popup", popup);
+        } else {
+            assert_chatwidget_snapshot!("slash_archive_confirmation_popup", popup);
+        }
 
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ArchiveCurrentThread));
+        assert_matches!(rx.try_recv(), Ok(AppEvent::ArchiveCurrentThread));
+    }
 }
 
 #[tokio::test]

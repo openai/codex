@@ -238,7 +238,12 @@ impl ChatWidget {
                 self.bottom_pane.show_selection_view(SelectionViewParams {
                     title: Some("Archive this session?".to_string()),
                     subtitle: Some(
-                        "Are you sure? This will archive the current session".to_string(),
+                        if self.bottom_pane.is_task_running() {
+                            "This will stop the current turn and archive the session."
+                        } else {
+                            "Are you sure? This will archive the current session"
+                        }
+                        .to_string(),
                     ),
                     footer_hint: Some(standard_popup_hint_line()),
                     items: vec![

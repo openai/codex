@@ -241,7 +241,6 @@ impl SlashCommand {
     pub fn available_during_task(self) -> bool {
         match self {
             SlashCommand::New
-            | SlashCommand::Archive
             | SlashCommand::Delete
             | SlashCommand::Fork
             | SlashCommand::Worktree
@@ -264,6 +263,7 @@ impl SlashCommand {
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff
+            | SlashCommand::Archive
             | SlashCommand::Resume
             | SlashCommand::Model
             | SlashCommand::Daybreak
