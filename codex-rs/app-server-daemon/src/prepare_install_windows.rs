@@ -3,7 +3,9 @@
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
+use std::os::windows::process::CommandExt;
 use std::path::Path;
+use std::process::Command;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -15,6 +17,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::System::IO::DeviceIoControl;
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 const PUBLISH_RELEASE_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 const PUBLISH_RELEASE_RETRY_LIMIT: usize = 100;
@@ -47,30 +50,97 @@ pub(super) async fn publish_release(stage: &Path, release: &Path) -> Result<()> 
 }
 
 pub(super) fn select_release(root: &Path, release: &Path) -> Result<()> {
+    select_release_with(root, release, retarget_junction)
+}
+
+fn select_release_with(
+    root: &Path,
+    release: &Path,
+    retarget: impl FnOnce(&Path, &Path) -> Result<()>,
+) -> Result<()> {
     let release = release.canonicalize()?;
     let current = root.join("current");
     if current.symlink_metadata().is_err() {
         let temporary = tempfile::TempDir::new_in(root)?;
         let junction = temporary.path().join("current");
         std::fs::create_dir(&junction)?;
-        retarget_junction(&junction, &release)?;
-        std::fs::rename(junction, &current)?;
-        return Ok(());
+        return match retarget(&junction, &release) {
+            Ok(()) => Ok(std::fs::rename(junction, current)?),
+            Err(error) if is_permission_denied(&error) => install_junction(root, &release)
+                .with_context(|| format!("failed to create managed daemon junction after native creation was denied: {error:#}")),
+            Err(error) => Err(error),
+        };
     }
     validate_selection(root)?;
-    retarget_junction(&current, &release)
+    match retarget(&current, &release) {
+        Ok(()) => Ok(()),
+        Err(error) if is_permission_denied(&error) => {
+            install_junction(root, &release).with_context(|| format!("failed to replace managed daemon junction after retargeting was denied: {error:#}"))
+        }
+        Err(error) => Err(error),
+    }
 }
 
-pub(super) fn validate_selection(root: &Path) -> Result<()> {
+fn is_permission_denied(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied)
+}
+
+fn install_junction(root: &Path, release: &Path) -> Result<()> {
+    let temporary = tempfile::TempDir::new_in(root)?;
+    let junction = temporary.path().join("current");
     let current = root.join("current");
-    if matches!(current.symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
-    {
+    let replacing = current.symlink_metadata().is_ok();
+    if replacing {
+        validate_selection(root)?;
+    }
+    // Some Windows policies deny in-process reparse-point mutation while allowing the system
+    // junction creator. Pass paths through the environment so cmd metacharacters stay quoted.
+    let system_root = std::env::var_os("SystemRoot").context("SystemRoot is not set")?;
+    let command_shell = Path::new(&system_root).join("System32").join("cmd.exe");
+    anyhow::ensure!(
+        command_shell.is_absolute(),
+        "SystemRoot must be an absolute path"
+    );
+    let output = Command::new(command_shell)
+        .env("CODEX_DAEMON_JUNCTION_LINK", &junction)
+        .env("CODEX_DAEMON_JUNCTION_TARGET", release)
+        .args(["/d", "/s", "/e:on", "/v:off", "/c"])
+        .raw_arg(r#""mklink /J "%CODEX_DAEMON_JUNCTION_LINK%" "%CODEX_DAEMON_JUNCTION_TARGET%"""#)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .context("failed to run cmd.exe to create managed daemon junction")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "cmd.exe could not create managed daemon junction (status {}): stdout: {}; stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout).trim(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    if !replacing {
+        std::fs::rename(junction, current)?;
         return Ok(());
     }
-    anyhow::ensure!(
-        current.canonicalize()?.parent() == Some(root.join("releases").canonicalize()?.as_path()),
-        "refusing to replace a daemon selection outside its releases directory"
-    );
+
+    let previous = temporary.path().join("previous");
+    std::fs::rename(&current, &previous)?;
+    if let Err(error) = std::fs::rename(&junction, &current) {
+        if let Err(restore_error) = std::fs::rename(&previous, &current) {
+            let preserved = temporary.keep();
+            anyhow::bail!(
+                "failed to replace managed daemon junction: {error}; also failed to restore the previous junction from {}: {restore_error}",
+                preserved.display()
+            );
+        }
+        return Err(error).context("failed to replace managed daemon junction");
+    }
+    if let Err(error) = std::fs::remove_dir(previous) {
+        tracing::warn!(
+            %error,
+            "failed to remove previous managed daemon junction"
+        );
+    }
     Ok(())
 }
 
@@ -121,6 +191,19 @@ fn retarget_junction(current: &Path, release: &Path) -> Result<()> {
         return Err(std::io::Error::last_os_error())
             .context("failed to retarget managed daemon junction");
     }
+    Ok(())
+}
+
+pub(super) fn validate_selection(root: &Path) -> Result<()> {
+    let current = root.join("current");
+    if matches!(current.symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Ok(());
+    }
+    anyhow::ensure!(
+        current.canonicalize()?.parent() == Some(root.join("releases").canonicalize()?.as_path()),
+        "refusing to replace a daemon selection outside its releases directory"
+    );
     Ok(())
 }
 

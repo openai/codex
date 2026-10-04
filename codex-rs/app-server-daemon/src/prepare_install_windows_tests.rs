@@ -1,4 +1,6 @@
 //! Verifies Windows package publication and selection without requiring an elevated daemon.
+
+use anyhow::Context;
 use pretty_assertions::assert_eq;
 use std::os::windows::fs::OpenOptionsExt;
 use std::time::Duration;
@@ -32,17 +34,27 @@ async fn publishing_release_retries_transient_access_denied() {
 
 #[cfg(windows)]
 #[test]
-fn daemon_junction_can_be_created_and_retargeted_without_cli_links() {
+fn daemon_junction_can_be_created_retargeted_and_replaced_without_cli_links() {
     let home = tempfile::TempDir::new().unwrap();
-    let root = home.path().join("packages/app-server-daemon");
-    for version in ["first", "second"] {
+    let root = home
+        .path()
+        .join("home & 100% ready!/packages/app-server-daemon");
+    for (version, native_denied) in [("first", true), ("second", false), ("third", true)] {
         let release = root.join("releases").join(version);
         std::fs::create_dir_all(&release).unwrap();
-        super::select_release(&root, &release).unwrap();
+        if native_denied {
+            super::select_release_with(&root, &release, |_, _| {
+                Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+                    .context("failed to retarget managed daemon junction")
+            })
+            .unwrap();
+        } else {
+            super::select_release(&root, &release).unwrap();
+        }
         assert_eq!(
             root.join("current").canonicalize().unwrap(),
             release.canonicalize().unwrap()
         );
     }
-    assert!(!home.path().join("packages/standalone").exists());
+    assert!(!root.with_file_name("standalone").exists());
 }
