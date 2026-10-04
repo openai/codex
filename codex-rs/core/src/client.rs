@@ -49,6 +49,7 @@ use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseCreateWsRequest;
 use codex_api::ResponsesApiRequest;
+use codex_api::ResponsesApiTools;
 use codex_api::ResponsesClient as ApiResponsesClient;
 use codex_api::ResponsesEndpoint;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
@@ -221,6 +222,14 @@ struct ModelClientState {
     disable_websockets: AtomicBool,
     agent_identity_session_fallback: AgentIdentitySessionFallback,
     cached_websocket_session: StdMutex<WebsocketSession>,
+    /// Last tools actually sent for inference, independent of connection/turn lifetime.
+    last_inference_tools: StdMutex<Option<InferenceTools>>,
+}
+
+#[derive(Debug, PartialEq)]
+enum InferenceTools {
+    Responses(ResponsesApiTools),
+    ResponsesLite(Vec<serde_json::Value>),
 }
 
 /// Resolved API client setup for a single request attempt.
@@ -479,6 +488,7 @@ impl ModelClient {
                 disable_websockets: AtomicBool::new(false),
                 agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
+                last_inference_tools: StdMutex::new(None),
             }),
             agent_identity_policy,
             prompt_cache_key_override: None,
@@ -978,6 +988,30 @@ impl ModelClient {
             access_programs: None,
         };
         Ok(request)
+    }
+
+    // Compare the model-visible representation (including order and schemas), so local-only
+    // ToolSpec fields and request retries do not count as cache-prefix changes.
+    fn record_inference_tools(&self, request: &ResponsesApiRequest, telemetry: &SessionTelemetry) {
+        let tools = match (&request.tools, request.input.first()) {
+            (Some(tools), _) => InferenceTools::Responses(tools.clone()),
+            (None, Some(ResponseItem::AdditionalTools { tools, .. })) => {
+                InferenceTools::ResponsesLite(tools.clone())
+            }
+            (None, _) => return,
+        };
+        let mut last_tools = self
+            .state
+            .last_inference_tools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if last_tools
+            .as_ref()
+            .is_some_and(|previous| previous != &tools)
+        {
+            telemetry.counter("codex.responses.tools_changed", /*inc*/ 1, &[]);
+        }
+        *last_tools = Some(tools);
     }
 
     fn prepare_response_items_for_request(&self, input: &mut [ResponseItem]) {
@@ -1588,6 +1622,8 @@ impl ModelClientSession {
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);
+            self.client
+                .record_inference_tools(&request, &request_session_telemetry);
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
@@ -1771,6 +1807,10 @@ impl ModelClientSession {
 
             let (incremental_request, previous_response_id_from_untraced_warmup) =
                 self.prepare_websocket_request(&request);
+            if !warmup {
+                self.client
+                    .record_inference_tools(&request, &request_session_telemetry);
+            }
             let inference_trace_attempt = if warmup {
                 // Prewarm sends `generate=false`; it is connection setup, not a
                 // model inference attempt that should appear in rollout traces.

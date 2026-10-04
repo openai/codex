@@ -39,6 +39,8 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_models_manager::manager::SharedModelsManager;
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::auth::AuthMode;
@@ -61,7 +63,13 @@ use codex_rollout_trace::RawTraceEventPayload;
 use codex_rollout_trace::RolloutTrace;
 use codex_rollout_trace::TraceWriter;
 use codex_rollout_trace::replay_bundle;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolSpec;
 use futures::StreamExt;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -297,6 +305,162 @@ fn test_session_telemetry() -> SessionTelemetry {
         "test-terminal".to_string(),
         SessionSource::Cli,
     )
+}
+
+// Exercise both wire formats over HTTP, including a new turn and a transport reset.
+// A tool's output schema stays local, whereas its description, parameters and order
+// form the model-visible cache prefix.
+#[tokio::test]
+async fn inference_tools_metric_tracks_wire_changes_across_turns_by_originator()
+-> anyhow::Result<()> {
+    for use_responses_lite in [false, true] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(
+                ResponseTemplate::new(/*status*/ 200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(
+                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"output\":[]}}\n\n",
+                    ),
+            )
+            .expect(/*requests*/ 8)
+            .mount(&server)
+            .await;
+        let client = ModelClient::new(
+            /*auth_manager*/ None,
+            AgentIdentityAuthPolicy::JwtOnly,
+            ThreadId::new(),
+            create_oss_provider_with_base_url(&format!("{}/v1", server.uri()), WireApi::Responses),
+            SessionSource::Cli,
+            "test-originator".to_string(),
+            /*model_verbosity*/ None,
+            /*content_item_kinds_enabled*/ true,
+            /*enable_request_compression*/ false,
+            /*include_timing_metrics*/ false,
+            /*beta_features_header*/ None,
+            /*concurrent_reasoning_summaries_enabled*/ false,
+            /*attestation_provider*/ None,
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
+        let metrics = MetricsClient::new(
+            MetricsConfig::in_memory(
+                "test",
+                "codex-core",
+                env!("CARGO_PKG_VERSION"),
+                InMemoryMetricExporter::default(),
+            )
+            .with_runtime_reader(),
+        )?;
+        let telemetry = test_session_telemetry().with_metrics(metrics.clone());
+        let mut model_info = test_model_info();
+        model_info.use_responses_lite = use_responses_lite;
+        let metadata = test_responses_metadata_for_client(
+            &client,
+            Some("turn-1"),
+            format!("{}:0", client.state.thread_id),
+            /*parent_thread_id*/ None,
+            TestCodexResponsesRequestKind::Turn,
+        );
+        let a = ResponsesApiTool {
+            name: "alpha".into(),
+            description: "Original".into(),
+            strict: false,
+            defer_loading: None,
+            parameters: JsonSchema::default(),
+            output_schema: None,
+        };
+        let b = ResponsesApiTool {
+            name: "beta".into(),
+            ..a.clone()
+        };
+        let mut local_change = a.clone();
+        local_change.output_schema = Some(json!({"type": "object"}));
+        let mut schema_change = b.clone();
+        schema_change.parameters = JsonSchema::string(Some("Changed parameters".into()));
+        let tool_lists = [
+            vec![a.clone()],                        // baseline, no event
+            vec![local_change.clone()],             // not in the request, no event
+            vec![local_change.clone(), b.clone()],  // add
+            vec![local_change.clone(), b.clone()],  // retry, no event
+            vec![b.clone(), a.clone()],             // reorder
+            vec![schema_change.clone(), a.clone()], // schema changes, same tool names
+            vec![],                                 // remove all
+            vec![],                                 // retry, no event
+        ];
+        let mut turn = client.new_session();
+        for (index, tools) in tool_lists.into_iter().enumerate() {
+            if index == 4 {
+                turn.try_switch_fallback_transport(&telemetry, &model_info);
+                drop(turn);
+                // New ModelClient clone/new turn must retain the prior comparison baseline.
+                turn = client.clone().new_session();
+            }
+            let prompt = Prompt {
+                tools: tools
+                    .into_iter()
+                    .map(ToolSpec::Function)
+                    .collect::<Vec<_>>()
+                    .into(),
+                base_instructions: BaseInstructions {
+                    text: format!("Instructions may change: {index}"),
+                    provenance: None,
+                },
+                ..Default::default()
+            };
+            let mut stream = turn
+                .stream(
+                    &prompt,
+                    &model_info,
+                    &telemetry,
+                    /*effort*/ None,
+                    codex_protocol::config_types::ReasoningSummary::None,
+                    /*service_tier*/ None,
+                    &metadata,
+                    &InferenceTraceContext::disabled(),
+                )
+                .await?;
+            while let Some(event) = stream.next().await {
+                event?;
+            }
+        }
+        let snapshot = metrics.snapshot()?;
+        let recorded = snapshot
+            .scope_metrics()
+            .flat_map(|scope| scope.metrics())
+            .find(|metric| metric.name() == "codex.responses.tools_changed")
+            .expect("tools changes counter");
+        let AggregatedMetrics::U64(MetricData::Sum(sum)) = recorded.data() else {
+            panic!("expected unsigned counter");
+        };
+        let points = sum
+            .data_points()
+            .map(|point| {
+                (
+                    point.value(),
+                    point
+                        .attributes()
+                        .map(|kv| (kv.key.as_str().to_string(), kv.value.as_str().to_string()))
+                        .collect::<BTreeMap<_, _>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            points,
+            vec![(
+                4,
+                BTreeMap::from([
+                    ("app.version".into(), env!("CARGO_PKG_VERSION").into()),
+                    ("model".into(), "gpt-test".into()),
+                    ("originator".into(), "test-originator".into()),
+                    ("session_source".into(), "cli".into()),
+                ])
+            )],
+            "use_responses_lite={use_responses_lite}"
+        );
+        server.verify().await;
+    }
+    Ok(())
 }
 
 #[test]
