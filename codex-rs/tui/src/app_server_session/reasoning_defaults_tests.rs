@@ -10,17 +10,22 @@ use serde_json::json;
 #[tokio::test]
 async fn reasoning_defaults_reach_responses() -> Result<()> {
     for (settings, summary, stream_options, mode) in [
-        ("", json!(null), json!(null), ThreadParamsMode::Embedded),
+        (
+            "",
+            json!("concise"),
+            json!(null),
+            ThreadParamsMode::Embedded,
+        ),
         (
             "[features]\nconcurrent_reasoning_summaries = false",
-            json!(null),
+            json!("concise"),
             json!(null),
             ThreadParamsMode::Embedded,
         ),
         (
             "[features]\nconcurrent_reasoning_summaries = true",
-            json!(null),
-            json!(null),
+            json!("concise"),
+            json!({"reasoning_summary_delivery": "sequential_cutoff"}),
             ThreadParamsMode::Embedded,
         ),
         (
@@ -73,10 +78,18 @@ stream_max_retries = 0
             codex_protocol::config_types::TrustLevel::Trusted,
         )
         .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
-        let server_config = ConfigBuilder::default()
+        let mut server_config = ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
             .build()
             .await?;
+        let mut catalog = codex_models_manager::bundled_models_response()?;
+        catalog
+            .models
+            .iter_mut()
+            .find(|model| model.slug == "gpt-5.5")
+            .expect("bundled model")
+            .default_reasoning_summary = codex_protocol::config_types::ReasoningSummary::Concise;
+        server_config.model_catalog = Some(catalog);
         let client_home = tempfile::tempdir()?;
         let config = if mode == ThreadParamsMode::Remote {
             std::fs::write(
@@ -192,83 +205,4 @@ stream_max_retries = 0
         app_server.shutdown().await?;
     }
     Ok(())
-}
-
-#[tokio::test]
-async fn new_tui_threads_disable_summaries_unless_explicitly_enabled() {
-    let temp_dir = tempfile::tempdir().expect("tempdir");
-    for (config_text, expected_summary, expected_concurrent) in [
-        ("", "none", false),
-        (
-            "[features]\nconcurrent_reasoning_summaries = true",
-            "none",
-            false,
-        ),
-        ("model_reasoning_summary = 'auto'", "auto", false),
-        ("model_reasoning_summary = 'detailed'", "detailed", false),
-        (
-            "model_reasoning_summary = 'detailed'\n[features]\nconcurrent_reasoning_summaries = true",
-            "detailed",
-            true,
-        ),
-        ("model_reasoning_summary = 'none'", "none", false),
-        (
-            "model_reasoning_summary = 'none'\n[features]\nconcurrent_reasoning_summaries = true",
-            "none",
-            false,
-        ),
-        (
-            "model_reasoning_summary = 'concise'\n[features]\nconcurrent_reasoning_summaries = false",
-            "concise",
-            false,
-        ),
-    ] {
-        std::fs::write(temp_dir.path().join("config.toml"), config_text).expect("config");
-        let config = ConfigBuilder::default()
-            .codex_home(temp_dir.path().to_path_buf())
-            .build()
-            .await
-            .expect("config should build");
-        let start = thread_start_params_from_config(
-            &config,
-            ThreadParamsMode::Embedded,
-            /*remote_cwd_override*/ None,
-            /*session_start_source*/ None,
-        );
-        let overrides = start.config.expect("thread config");
-        assert_eq!(
-            overrides.get("model_reasoning_summary"),
-            Some(&serde_json::json!(expected_summary)),
-        );
-        assert_eq!(
-            overrides["features"]["concurrent_reasoning_summaries"],
-            expected_concurrent,
-        );
-    }
-    std::fs::write(
-        temp_dir.path().join("config.toml"),
-        "model_reasoning_summary = 'detailed'",
-    )
-    .expect("config");
-    let config = ConfigBuilder::default()
-        .codex_home(temp_dir.path().to_path_buf())
-        .cli_overrides(vec![(
-            "model_reasoning_summary".to_string(),
-            toml::Value::String("none".to_string()),
-        )])
-        .build()
-        .await
-        .expect("override config");
-    let start = thread_start_params_from_config(
-        &config,
-        ThreadParamsMode::Embedded,
-        /*remote_cwd_override*/ None,
-        /*session_start_source*/ None,
-    );
-    let overrides = start.config.expect("thread config");
-    assert_eq!(overrides["model_reasoning_summary"], "none");
-    assert_eq!(
-        overrides["features"]["concurrent_reasoning_summaries"],
-        false
-    );
 }

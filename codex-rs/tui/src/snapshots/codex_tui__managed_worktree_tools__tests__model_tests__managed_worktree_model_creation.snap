@@ -12,7 +12,7 @@ Settings:
   model: "mock-model"
   parallel_tool_calls: true
   prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
-  reasoning: {}
+  reasoning: {"summary":"auto"}
   store: false
   stream: true
   tool_choice: "auto"

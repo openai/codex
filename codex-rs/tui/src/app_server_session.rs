@@ -1946,8 +1946,8 @@ fn config_request_overrides_from_config(
         &origins,
         &mut overrides,
     );
-    for key in ["model_reasoning_summary", "model_verbosity"] {
-        if origins.get(key).is_some_and(|origin| {
+    let is_launch = |key: &str| {
+        origins.get(key).is_some_and(|origin| {
             matches!(
                 origin.name,
                 ConfigLayerSource::SessionFlags
@@ -1956,9 +1956,18 @@ fn config_request_overrides_from_config(
                         ..
                     }
             )
-        }) {
+        })
+    };
+    for key in ["model_reasoning_summary", "model_verbosity"] {
+        if is_launch(key) {
             overrides.insert(key.to_string(), serde_json::json!(effective[key]));
         }
+    }
+    if is_launch("features.concurrent_reasoning_summaries") {
+        overrides
+            .entry("features".to_string())
+            .or_insert_with(|| serde_json::json!({}))["concurrent_reasoning_summaries"] =
+            serde_json::json!(effective["features"]["concurrent_reasoning_summaries"]);
     }
     if config.bypass_hook_trust {
         overrides.insert("bypass_hook_trust".to_string(), true.into());
@@ -1980,37 +1989,6 @@ fn remove_permission_config_overrides(config: &mut Option<HashMap<String, serde_
     if config.as_ref().is_some_and(HashMap::is_empty) {
         *config = None;
     }
-}
-
-fn new_thread_reasoning_overrides(config: &Config) -> Option<HashMap<String, serde_json::Value>> {
-    let mut overrides = config_request_overrides_from_config(config, ThreadParamsMode::Embedded)
-        .unwrap_or_default();
-    let summary = config
-        .model_reasoning_summary
-        .unwrap_or(codex_protocol::config_types::ReasoningSummary::None);
-    overrides.insert(
-        "model_reasoning_summary".to_string(),
-        serde_json::Value::String(summary.to_string()),
-    );
-    let explicit_feature = config
-        .config_layer_stack
-        .effective_config()
-        .get("features")
-        .and_then(|features| features.get("concurrent_reasoning_summaries"))
-        .and_then(toml::Value::as_bool);
-    let features = overrides
-        .entry("features".to_string())
-        .or_insert_with(|| serde_json::json!({}));
-    if let Some(features) = features.as_object_mut() {
-        features.insert(
-            "concurrent_reasoning_summaries".to_string(),
-            serde_json::Value::Bool(
-                summary != codex_protocol::config_types::ReasoningSummary::None
-                    && explicit_feature.unwrap_or(/*default*/ false),
-            ),
-        );
-    }
-    Some(overrides)
 }
 
 fn service_tier_override_from_config(config: &Config) -> Option<Option<String>> {
@@ -2145,12 +2123,7 @@ pub(crate) fn thread_start_params_from_config(
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox,
         permissions,
-        config: match thread_params_mode {
-            ThreadParamsMode::Embedded => new_thread_reasoning_overrides(config),
-            ThreadParamsMode::Remote => {
-                config_request_overrides_from_config(config, thread_params_mode)
-            }
-        },
+        config: config_request_overrides_from_config(config, thread_params_mode),
         ephemeral: Some(config.ephemeral),
         history_mode: (!config.ephemeral).then_some(ThreadHistoryMode::Paginated),
         session_start_source,
@@ -3491,13 +3464,7 @@ mod tests {
             ("model_reasoning_effort".to_string(), string("high")),
             ("bypass_hook_trust".to_string(), true.into()),
         ]);
-        let mut expected_start_config = expected_config.clone();
-        expected_start_config.insert("model_reasoning_summary".to_string(), string("detailed"));
-        expected_start_config.insert(
-            "features".to_string(),
-            serde_json::json!({"concurrent_reasoning_summaries": false}),
-        );
-        assert_eq!(start.config, Some(expected_start_config));
+        assert_eq!(start.config, Some(expected_config.clone()));
         assert_eq!(resume.config, Some(expected_config.clone()));
         assert_eq!(fork.config, Some(expected_config));
     }

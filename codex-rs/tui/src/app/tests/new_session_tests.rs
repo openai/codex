@@ -138,6 +138,9 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
         (Some("medium"), "effort", "server-model", "low"),
         (None, "profile_model", "profile-model", "high"),
         (None, "profile_effort", "server-model", "low"),
+        (None, "profile_summary", "server-model", "high"),
+        (None, "profile_summary_off", "server-model", "high"),
+        (None, "profile_summary_cli", "server-model", "high"),
         (Some("medium"), "profile_model", "profile-model", "high"),
         (Some("medium"), "profile_effort", "server-model", "low"),
         (Some(""), "profile", "profile-model", "low"),
@@ -158,7 +161,7 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
         )?;
         std::fs::write(
             client_home.path().join("config.toml"),
-            "model = \"stale-client-model\"\nmodel_reasoning_effort = \"low\"\n",
+            "model = \"stale-client-model\"\nmodel_reasoning_effort = \"low\"\nmodel_reasoning_summary = \"detailed\"\nfeatures.concurrent_reasoning_summaries = true\n",
         )?;
         if let Some(effort) = managed_effort {
             let effort = if effort.is_empty() {
@@ -179,7 +182,11 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
             HistoryCapabilities::Current,
             /*blocked_thread_list*/ None,
             /*failed_thread_name*/ None,
-            crate::app_server_session::ThreadParamsMode::Remote,
+            if explicit.starts_with("profile_summary") {
+                crate::app_server_session::ThreadParamsMode::Embedded
+            } else {
+                crate::app_server_session::ThreadParamsMode::Remote
+            },
             LoaderOverrides {
                 user_config_path: Some(server_home.path().join("work.config.toml").abs()),
                 user_config_profile: Some("work".parse()?),
@@ -203,7 +210,13 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
                 "model_reasoning_effort".to_string(),
                 TomlValue::String("low".to_string()),
             )),
-            profile @ ("profile" | "profile_model" | "profile_effort" | "profile_unrelated") => {
+            profile @ ("profile"
+            | "profile_model"
+            | "profile_effort"
+            | "profile_unrelated"
+            | "profile_summary"
+            | "profile_summary_off"
+            | "profile_summary_cli") => {
                 let path = client_home.path().join("work.config.toml");
                 std::fs::write(
                     &path,
@@ -211,6 +224,12 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
                         "profile_model" => "model = \"profile-model\"\n",
                         "profile_effort" => "model_reasoning_effort = \"low\"\n",
                         "profile_unrelated" => "model_verbosity = \"low\"\n",
+                        "profile_summary" => {
+                            "model_reasoning_summary = \"detailed\"\nfeatures.concurrent_reasoning_summaries = true\n"
+                        }
+                        "profile_summary_off" | "profile_summary_cli" => {
+                            "model_reasoning_summary = \"detailed\"\nfeatures.concurrent_reasoning_summaries = false\n"
+                        }
                         _ => "model = \"profile-model\"\nmodel_reasoning_effort = \"low\"\n",
                     },
                 )?;
@@ -218,6 +237,21 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
                 app.loader_overrides.user_config_profile = Some("work".parse()?);
             }
             _ => {}
+        }
+        if explicit == "profile_summary_cli" {
+            app.cli_kv_overrides.push((
+                "features.concurrent_reasoning_summaries".into(),
+                true.into(),
+            ));
+        }
+        if explicit.starts_with("profile_summary") {
+            app.app_server_target = AppServerTarget::LocalDaemon {
+                allow_embedded_fallback: true,
+                endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                    socket_path: client_home.path().join("daemon.sock").abs(),
+                },
+            };
+            app.open_agents_overview(&server);
         }
         let mut tui = crate::tui::test_support::make_test_tui()?;
         app.start_fresh_session(
@@ -232,6 +266,21 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
         assert_eq!(starts.len(), 1);
         assert_eq!(
             (
+                starts[0]["config"].get("model_reasoning_summary"),
+                starts[0]["config"]["features"].get("concurrent_reasoning_summaries"),
+            ),
+            (
+                explicit
+                    .starts_with("profile_summary")
+                    .then_some(&serde_json::json!("detailed")),
+                explicit
+                    .starts_with("profile_summary")
+                    .then_some(&serde_json::json!(explicit != "profile_summary_off")),
+            ),
+            "{explicit}",
+        );
+        assert_eq!(
+            (
                 &starts[0]["model"],
                 &starts[0]["config"]["model_reasoning_effort"]
             ),
@@ -243,7 +292,11 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
         assert_eq!(
             recorded_params(&requests, "config/read"),
             vec![
-                serde_json::json!({"cwd": server_config.cwd.display().to_string(), "includeLayers": true})
+                serde_json::json!({"cwd": if explicit.starts_with("profile_summary") {
+                    client_home.path().display().to_string()
+                } else {
+                    server_config.cwd.display().to_string()
+                }, "includeLayers": true})
             ],
         );
         if explicit == "saved" {

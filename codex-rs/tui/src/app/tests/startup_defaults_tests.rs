@@ -427,11 +427,11 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
         let launch_cwd = tempdir()?;
         std::fs::write(
             client_home.path().join("config.toml"),
-            "model = \"stale-client-model\"\nmodel_reasoning_effort = \"low\"\n",
+            "model = \"stale-client-model\"\nmodel_reasoning_effort = \"low\"\nmodel_reasoning_summary = \"detailed\"\nfeatures.concurrent_reasoning_summaries = true\n",
         )?;
         std::fs::write(
             server_home.path().join("config.toml"),
-            "model_reasoning_effort = \"high\"\nsandbox_mode = \"read-only\"\n",
+            "model_reasoning_effort = \"high\"\nsandbox_mode = \"read-only\"\nmodel_reasoning_summary = \"concise\"\n",
         )?;
         let mut config = ConfigBuilder::default()
             .codex_home(client_home.path().to_path_buf())
@@ -464,6 +464,10 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
         .await?;
         if override_cwd {
             server = server.with_remote_cwd_override(Some(launch_cwd.path().to_path_buf()));
+        }
+        if !remote {
+            // Direct starts must inherit summaries even without a preceding defaults read.
+            server.start_thread(&config).await?;
         }
         assert!(config.config_layer_stack.is_projectless());
         let bootstrap = server.bootstrap(&config).await?;
@@ -503,9 +507,18 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
                 )
         );
         let starts = recorded_params(&requests, "thread/start");
-        assert_eq!(starts.len(), 1);
-        assert_eq!(starts[0]["model"], serde_json::Value::Null);
-        assert!(starts[0]["config"].get("model_reasoning_effort").is_none());
+        assert_eq!(starts.len(), if remote { 1 } else { 2 });
+        let latest = starts.last().unwrap();
+        assert_eq!(latest["model"], serde_json::Value::Null);
+        assert!(latest["config"].get("model_reasoning_effort").is_none());
+        for start in &starts {
+            assert!(start["config"].get("model_reasoning_summary").is_none());
+            assert!(
+                start["config"]["features"]
+                    .get("concurrent_reasoning_summaries")
+                    .is_none()
+            );
+        }
         let (mut app, _, _) = make_test_app_with_channels().await;
         app.chat_widget.handle_thread_session_quiet(started.session);
         if !remote {
