@@ -55,6 +55,7 @@ use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
 
 /// Verify that submitting `Op::Review` emits review item lifecycle,
 /// legacy review events, and TurnComplete when the model returns a structured review payload.
@@ -295,6 +296,51 @@ async fn review_op_emits_lifecycle_and_review_output() {
 
     let _codex_home_guard = codex_home;
     server.verify().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_overload_preserves_lifecycle_order() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    responses::mount_response_once(
+        &server,
+        ResponseTemplate::new(503)
+            .set_body_json(serde_json::json!({ "error": { "code": "server_is_overloaded" } })),
+    )
+    .await;
+    let codex = new_conversation_for_server(&server, Arc::new(TempDir::new().unwrap()), |config| {
+        config.model_provider.request_max_retries = Some(0);
+        config.model_provider.stream_max_retries = Some(0);
+    })
+    .await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::UncommittedChanges,
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let mut lifecycle = Vec::new();
+    loop {
+        let event = match wait_for_event(&codex, |_| true).await {
+            EventMsg::EnteredReviewMode(_) => "entered",
+            EventMsg::Error(_) => "error",
+            EventMsg::ExitedReviewMode(_) => "exited",
+            EventMsg::TurnComplete(_) => "complete",
+            _ => continue,
+        };
+        lifecycle.push(event);
+        if event == "complete" {
+            break;
+        }
+    }
+
+    assert_eq!(lifecycle, ["entered", "error", "exited", "complete"]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -360,6 +360,44 @@ async fn review_restores_context_window_indicator() {
 }
 
 #[tokio::test]
+async fn failed_turn_completion_preserves_queued_review_start() {
+    const ERROR: &str = "Selected model is at capacity. Please try a different model.";
+
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    handle_turn_started(&mut chat, "turn-1");
+    assert!(chat.queue_user_message_with_options(
+        UserMessage::from("/review check regressions"),
+        QueuedInputAction::ParseSlash,
+        Vec::new(),
+    ));
+    handle_error(&mut chat, ERROR, Some(CodexErrorInfo::ServerOverloaded));
+    assert_matches!(op_rx.try_recv(), Ok(Op::Review { .. }));
+    assert!(chat.input_queue.user_turn_pending_start);
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.handle_server_notification(
+        ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: chat.thread_id.map(|id| id.to_string()).unwrap_or_default(),
+            turn: app_server_turn(
+                "turn-1",
+                AppServerTurnStatus::Failed,
+                /*duration_ms*/ None,
+                Some(AppServerTurnError {
+                    message: ERROR.to_string(),
+                    codex_error_info: Some(CodexErrorInfo::ServerOverloaded),
+                    additional_details: None,
+                    misalignment: None,
+                }),
+            ),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert!(chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn restore_thread_input_state_restores_pending_steers_without_downgrading_them() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let expected_compare_key = PendingSteerCompareKey {
