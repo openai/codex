@@ -169,9 +169,10 @@ so the new setting takes effect immediately.
 
 Top-level `codex remote-control start` enables and persists remote control for
 the managed daemon, overriding a saved disabled value. It starts or bootstraps
-the daemon as needed. Plain `codex remote-control` runs a separate foreground
-server and does not change daemon settings; `codex remote-control stop` stops
-the managed daemon without clearing its saved remote-control preference.
+the daemon as needed. Plain `codex remote-control` uses the managed daemon when
+eligible; `codex remote-control --no-daemon` runs a separate foreground server.
+`codex remote-control stop` stops the managed daemon without clearing its saved
+remote-control preference.
 `daemon start` and `daemon restart` use that saved preference. `daemon bootstrap`
 sets it according to `--remote-control` (disabled when omitted).
 

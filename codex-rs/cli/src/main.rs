@@ -1429,7 +1429,8 @@ async fn cli_main(
                 }
             }
         }
-        Some(Subcommand::RemoteControl(remote_control_cli)) => {
+        Some(Subcommand::RemoteControl(mut remote_control_cli)) => {
+            remote_control_cli.no_daemon |= interactive.no_daemon;
             let subcommand_name = remote_control_cli.subcommand_name();
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),

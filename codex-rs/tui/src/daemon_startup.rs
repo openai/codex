@@ -17,7 +17,8 @@ const SERVER_FEATURES: [Feature; 4] = [
 pub(super) const FAILURE_HINT: &str = "To work without the background server, rerun the same command with --no-daemon (including resume or fork and its arguments).";
 pub(super) const WSL_DRVFS_EXCLUSION: &str = "a Windows-mounted WSL CODEX_HOME (DrvFS/9p)";
 
-pub(super) fn uses_wsl_drvfs(codex_home: &std::path::Path) -> bool {
+/// Returns whether `codex_home` is on a Windows-mounted WSL filesystem.
+pub fn uses_wsl_drvfs(codex_home: &std::path::Path) -> bool {
     // The managed daemon writes an executable and Unix-style state beneath CODEX_HOME.
     // DrvFS does not reliably support the required permission semantics, so starting it
     // there can fail before the TUI opens.
