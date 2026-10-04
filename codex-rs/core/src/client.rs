@@ -1244,6 +1244,9 @@ impl ModelClientSession {
         let Some(timing) = &self.turn_timing_state else {
             return;
         };
+        if !timing.is_sampling() {
+            return;
+        }
         let tools = match (&request.tools, request.input.first()) {
             (Some(tools), _) => InferenceTools::Responses(tools.clone()),
             (None, Some(ResponseItem::AdditionalTools { tools, .. })) => {

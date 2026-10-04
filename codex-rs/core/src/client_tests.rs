@@ -375,7 +375,24 @@ async fn inference_tools_changes_are_attributed_to_each_turn_profile() -> anyhow
                 /*service_tier*/ None,
                 &metadata,
             )?;
-            turn.record_inference_tools(&request);
+            {
+                let _sampling = timing.begin_sampling();
+                turn.record_inference_tools(&request);
+            }
+            // Remote compaction can reuse the same client with different/empty tools.
+            // It must not increment the count or change the next sampling baseline.
+            if index == 1 {
+                let _compaction = timing.begin_compaction();
+                let compact = turn.client.build_responses_request(
+                    &Prompt::default(),
+                    &model_info,
+                    /*effort*/ None,
+                    codex_protocol::config_types::ReasoningSummary::None,
+                    /*service_tier*/ None,
+                    &metadata,
+                )?;
+                turn.record_inference_tools(&compact);
+            }
         }
         let (_, _, profile) = timing.complete_profile_and_duration_ms().await;
         assert_eq!(

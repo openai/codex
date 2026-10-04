@@ -156,6 +156,13 @@ impl TurnTimingState {
         self.profile_state().record_sampling_retry();
     }
 
+    pub(crate) fn is_sampling(&self) -> bool {
+        matches!(
+            self.profile_state().active_phase,
+            Some(TurnProfilePhase::Sampling)
+        )
+    }
+
     pub(crate) fn record_tools_change(&self) {
         let mut profile = self.profile_state();
         if profile.completed_profile.is_none() && profile.started_at.is_some() {
