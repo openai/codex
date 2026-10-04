@@ -1,0 +1,19 @@
+---
+source: tui/src/bottom_pane/command_popup.rs
+expression: "format!(\"{buf:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 76, height: 2 },
+    content: [
+        "  /archive (disabled)  archive this session (disabled: not available in a   ",
+        "                       side conversation)                                   ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 3, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | DIM,
+        x: 7, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 73, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 41, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
