@@ -69,6 +69,7 @@ struct TurnProfileState {
     pending_idle_after_sampling: Duration,
     sampling_request_count: u32,
     sampling_retry_count: u32,
+    tools_change_count: u32,
     completed_profile: Option<TurnProfile>,
 }
 
@@ -153,6 +154,13 @@ impl TurnTimingState {
 
     pub(crate) fn record_sampling_retry(&self) {
         self.profile_state().record_sampling_retry();
+    }
+
+    pub(crate) fn record_tools_change(&self) {
+        let mut profile = self.profile_state();
+        if profile.completed_profile.is_none() && profile.started_at.is_some() {
+            profile.tools_change_count = profile.tools_change_count.saturating_add(1);
+        }
     }
 
     pub(crate) fn begin_compaction(self: &Arc<Self>) -> TurnProfileTimingGuard {
@@ -324,6 +332,7 @@ impl TurnProfileState {
             after_last_sampling_ms: duration_to_u64_ms(after_last_sampling),
             sampling_request_count: self.sampling_request_count,
             sampling_retry_count: self.sampling_retry_count,
+            tools_change_count: self.tools_change_count,
         };
         let total_ms = self
             .started_at

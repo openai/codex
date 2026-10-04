@@ -1140,6 +1140,7 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) after_last_sampling_ms: u64,
     pub(crate) sampling_request_count: u32,
     pub(crate) sampling_retry_count: u32,
+    pub(crate) tools_change_count: u32,
     pub(crate) duration_ms: Option<u64>,
     pub(crate) started_at: Option<u64>,
     pub(crate) completed_at: Option<u64>,

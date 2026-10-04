@@ -378,6 +378,7 @@ pub(super) fn sample_turn_profile() -> TurnProfile {
         after_last_sampling_ms: 94,
         sampling_request_count: 2,
         sampling_retry_count: 1,
+        tools_change_count: 2,
     }
 }
 

@@ -252,6 +252,7 @@ pub struct TurnProfile {
     pub after_last_sampling_ms: u64,
     pub sampling_request_count: u32,
     pub sampling_retry_count: u32,
+    pub tools_change_count: u32,
 }
 
 #[derive(Clone)]

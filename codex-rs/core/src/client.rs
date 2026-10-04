@@ -99,6 +99,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
+use codex_tools::ToolSpec;
 use codex_tools::create_tools_json_for_responses_lite;
 use codex_tools::create_tools_raw_json_for_responses_api;
 use eventsource_stream::Event;
@@ -217,6 +218,8 @@ struct ModelClientState {
     disable_websockets: AtomicBool,
     agent_identity_session_fallback: AgentIdentitySessionFallback,
     cached_websocket_session: StdMutex<WebsocketSession>,
+    /// Last full tool list used for sampling, retained across turns and connection resets.
+    last_inference_tools: StdMutex<Option<Arc<[ToolSpec]>>>,
 }
 
 enum ClientRouting {
@@ -533,6 +536,7 @@ impl ModelClient {
                 disable_websockets: AtomicBool::new(false),
                 agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
+                last_inference_tools: StdMutex::new(None),
             }),
             agent_identity_policy,
             prompt_cache_key_override: None,
@@ -1350,6 +1354,17 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    pub(crate) fn inference_tools_changed(&self, tools: &Arc<[ToolSpec]>) -> bool {
+        let previous = self
+            .client
+            .state
+            .last_inference_tools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .replace(Arc::clone(tools));
+        previous.is_some_and(|previous| previous != *tools)
+    }
+
     #[allow(clippy::too_many_arguments)]
     /// Builds shared Responses API transport options and request-body options.
     ///

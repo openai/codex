@@ -70,6 +70,9 @@ use codex_rollout_trace::RawTraceEventPayload;
 use codex_rollout_trace::RolloutTrace;
 use codex_rollout_trace::TraceWriter;
 use codex_rollout_trace::replay_bundle;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolSpec;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -2129,4 +2132,56 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
         serde_json::from_slice(&std::fs::read(temp.path().join(&payload.path))?)?;
     assert_eq!(recorded["output_items"], serde_json::to_value(&delivered)?);
     Ok(())
+}
+
+#[tokio::test]
+async fn inference_tools_changes_follow_full_specs_across_turns() {
+    let client = test_model_client(SessionSource::Cli);
+    let telemetry = test_session_telemetry();
+    let model_info = test_model_info();
+    let alpha = ResponsesApiTool {
+        name: "alpha".into(),
+        description: "Original".into(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::default(),
+        output_schema: None,
+    };
+    let beta = ResponsesApiTool {
+        name: "beta".into(),
+        ..alpha.clone()
+    };
+    let mut output_changed = alpha.clone();
+    output_changed.output_schema = Some(json!({"type": "object"}).into());
+    let mut params_changed = beta.clone();
+    params_changed.parameters = JsonSchema::string(Some("Changed parameters".into()));
+    let mut session = client.new_session();
+    for (index, (tools, expected)) in [
+        (vec![alpha.clone()], false),
+        (vec![output_changed.clone()], true),
+        (vec![output_changed.clone(), beta.clone()], true),
+        (vec![output_changed, beta.clone()], false),
+        (vec![beta, alpha.clone()], true),
+        (vec![params_changed, alpha], true),
+        (vec![], true),
+        (vec![], false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index == 4 {
+            session.try_switch_fallback_transport(&telemetry, &model_info);
+            drop(session);
+            session = client.new_session();
+        }
+        let specs = tools
+            .into_iter()
+            .map(ToolSpec::Function)
+            .collect::<Arc<[_]>>();
+        assert_eq!(
+            session.inference_tools_changed(&specs),
+            expected,
+            "step {index}"
+        );
+    }
 }
