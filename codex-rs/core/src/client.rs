@@ -289,6 +289,7 @@ pub struct ModelClient {
 /// contract and can cause routing bugs.
 pub struct ModelClientSession {
     client: ModelClient,
+    pub(crate) turn_timing_state: Option<Arc<crate::turn_timing::TurnTimingState>>,
     websocket_session: WebsocketSession,
     /// Turn state for sticky routing.
     ///
@@ -531,6 +532,7 @@ impl ModelClient {
     pub fn new_session(&self) -> ModelClientSession {
         ModelClientSession {
             client: self.clone(),
+            turn_timing_state: None,
             websocket_session: self.take_cached_websocket_session(),
             turn_state: Arc::new(OnceLock::new()),
         }
@@ -990,30 +992,6 @@ impl ModelClient {
         Ok(request)
     }
 
-    // Compare the model-visible representation (including order and schemas), so local-only
-    // ToolSpec fields and request retries do not count as cache-prefix changes.
-    fn record_inference_tools(&self, request: &ResponsesApiRequest, telemetry: &SessionTelemetry) {
-        let tools = match (&request.tools, request.input.first()) {
-            (Some(tools), _) => InferenceTools::Responses(tools.clone()),
-            (None, Some(ResponseItem::AdditionalTools { tools, .. })) => {
-                InferenceTools::ResponsesLite(tools.clone())
-            }
-            (None, _) => return,
-        };
-        let mut last_tools = self
-            .state
-            .last_inference_tools
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if last_tools
-            .as_ref()
-            .is_some_and(|previous| previous != &tools)
-        {
-            telemetry.counter("codex.responses.tools_changed", /*inc*/ 1, &[]);
-        }
-        *last_tools = Some(tools);
-    }
-
     fn prepare_response_items_for_request(&self, input: &mut [ResponseItem]) {
         for item in input {
             if item.id().is_some_and(|id| !id.is_prefixed()) {
@@ -1261,6 +1239,33 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    // Use the actual wire representation so local-only ToolSpec fields don't count.
+    fn record_inference_tools(&self, request: &ResponsesApiRequest) {
+        let Some(timing) = &self.turn_timing_state else {
+            return;
+        };
+        let tools = match (&request.tools, request.input.first()) {
+            (Some(tools), _) => InferenceTools::Responses(tools.clone()),
+            (None, Some(ResponseItem::AdditionalTools { tools, .. })) => {
+                InferenceTools::ResponsesLite(tools.clone())
+            }
+            (None, _) => return,
+        };
+        let mut last_tools = self
+            .client
+            .state
+            .last_inference_tools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if last_tools
+            .as_ref()
+            .is_some_and(|previous| previous != &tools)
+        {
+            timing.record_tools_change();
+        }
+        *last_tools = Some(tools);
+    }
+
     pub(crate) fn turn_state(&self) -> Arc<OnceLock<String>> {
         Arc::clone(&self.turn_state)
     }
@@ -1622,8 +1627,7 @@ impl ModelClientSession {
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);
-            self.client
-                .record_inference_tools(&request, &request_session_telemetry);
+            self.record_inference_tools(&request);
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
@@ -1808,8 +1812,7 @@ impl ModelClientSession {
             let (incremental_request, previous_response_id_from_untraced_warmup) =
                 self.prepare_websocket_request(&request);
             if !warmup {
-                self.client
-                    .record_inference_tools(&request, &request_session_telemetry);
+                self.record_inference_tools(&request);
             }
             let inference_trace_attempt = if warmup {
                 // Prewarm sends `generate=false`; it is connection setup, not a

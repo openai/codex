@@ -489,6 +489,7 @@ fn sample_turn_profile() -> TurnProfile {
         after_last_sampling_ms: 94,
         sampling_request_count: 2,
         sampling_retry_count: 1,
+        tools_change_count: 2,
     }
 }
 
@@ -4674,6 +4675,7 @@ fn turn_event_serializes_expected_shape() {
             after_last_sampling_ms: 94,
             sampling_request_count: 2,
             sampling_retry_count: 1,
+            tools_change_count: 2,
             duration_ms: Some(1234),
             started_at: Some(455),
             completed_at: Some(456),
@@ -4759,6 +4761,7 @@ fn turn_event_serializes_expected_shape() {
                 "after_last_sampling_ms": 94,
                 "sampling_request_count": 2,
                 "sampling_retry_count": 1,
+                "tools_change_count": 2,
                 "duration_ms": 1234,
                 "started_at": 455,
                 "completed_at": 456

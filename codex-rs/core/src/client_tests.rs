@@ -39,8 +39,6 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_models_manager::manager::SharedModelsManager;
-use codex_otel::MetricsClient;
-use codex_otel::MetricsConfig;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::auth::AuthMode;
@@ -67,9 +65,6 @@ use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolSpec;
 use futures::StreamExt;
-use opentelemetry_sdk::metrics::InMemoryMetricExporter;
-use opentelemetry_sdk::metrics::data::AggregatedMetrics;
-use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -308,20 +303,11 @@ fn test_session_telemetry() -> SessionTelemetry {
 }
 
 // The comparison must use the wire representation, not ToolSpec's local-only fields.
-#[test]
-fn inference_tools_counter_counts_only_cache_relevant_changes() -> anyhow::Result<()> {
+#[tokio::test]
+async fn inference_tools_changes_are_attributed_to_each_turn_profile() -> anyhow::Result<()> {
     for use_responses_lite in [false, true] {
         let client = test_model_client(SessionSource::Cli);
-        let metrics = MetricsClient::new(
-            MetricsConfig::in_memory(
-                "test",
-                "codex-core",
-                env!("CARGO_PKG_VERSION"),
-                InMemoryMetricExporter::default(),
-            )
-            .with_runtime_reader(),
-        )?;
-        let telemetry = test_session_telemetry().with_metrics(metrics.clone());
+        let telemetry = test_session_telemetry();
         let mut model_info = test_model_info();
         model_info.use_responses_lite = use_responses_lite;
         let metadata = test_responses_metadata_for_client(
@@ -348,6 +334,9 @@ fn inference_tools_counter_counts_only_cache_relevant_changes() -> anyhow::Resul
         let mut schema_change = b.clone();
         schema_change.parameters = JsonSchema::string(Some("Changed parameters".into()));
         let mut turn = client.new_session();
+        let mut timing = Arc::new(crate::turn_timing::TurnTimingState::default());
+        timing.mark_turn_started(std::time::Instant::now()).await;
+        turn.turn_timing_state = Some(Arc::clone(&timing));
         for (index, tools) in [
             vec![a.clone()],                       // baseline
             vec![local_change.clone()],            // same on the wire
@@ -362,9 +351,14 @@ fn inference_tools_counter_counts_only_cache_relevant_changes() -> anyhow::Resul
         .enumerate()
         {
             if index == 4 {
+                let (_, _, profile) = timing.complete_profile_and_duration_ms().await;
+                assert_eq!(profile.tools_change_count, 1);
                 turn.try_switch_fallback_transport(&telemetry, &model_info);
                 drop(turn);
                 turn = client.clone().new_session();
+                timing = Arc::new(crate::turn_timing::TurnTimingState::default());
+                timing.mark_turn_started(std::time::Instant::now()).await;
+                turn.turn_timing_state = Some(Arc::clone(&timing));
             }
             let request = turn.client.build_responses_request(
                 &Prompt {
@@ -381,22 +375,11 @@ fn inference_tools_counter_counts_only_cache_relevant_changes() -> anyhow::Resul
                 /*service_tier*/ None,
                 &metadata,
             )?;
-            turn.client.record_inference_tools(&request, &telemetry);
+            turn.record_inference_tools(&request);
         }
-        let snapshot = metrics.snapshot()?;
-        let recorded = snapshot
-            .scope_metrics()
-            .flat_map(|scope| scope.metrics())
-            .find(|metric| metric.name() == "codex.responses.tools_changed")
-            .expect("tools changes counter");
-        let AggregatedMetrics::U64(MetricData::Sum(sum)) = recorded.data() else {
-            panic!("expected unsigned counter");
-        };
+        let (_, _, profile) = timing.complete_profile_and_duration_ms().await;
         assert_eq!(
-            sum.data_points()
-                .map(|point| point.value())
-                .collect::<Vec<_>>(),
-            vec![4],
+            profile.tools_change_count, 3,
             "use_responses_lite={use_responses_lite}"
         );
     }
