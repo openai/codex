@@ -2468,23 +2468,29 @@ async fn ui_snapshots_small_heights_idle() {
     }
 }
 
-// Snapshot test: ChatWidget at very small heights (task running)
-// Validates how status + composer are presented within tight space.
+// Running state remains hidden when the terminal is too short to present it.
 #[tokio::test]
-async fn ui_snapshots_small_heights_task_running() {
+async fn ui_small_heights_hide_running_state() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    let (idle_chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    // Activate status line
     handle_turn_started(&mut chat, "turn-1");
     handle_agent_reasoning_delta(&mut chat, "**Thinking**");
     for h in [1u16, 2, 3] {
-        let name = format!("chat_small_running_h{h}");
+        let mut idle_terminal =
+            Terminal::new(TestBackend::new(40, h)).expect("create idle terminal");
+        idle_terminal
+            .draw(|f| idle_chat.render(f.area(), f.buffer_mut()))
+            .expect("draw idle chat");
         let mut terminal = Terminal::new(TestBackend::new(40, h)).expect("create terminal");
         terminal
             .draw(|f| chat.render(f.area(), f.buffer_mut()))
             .expect("draw chat running");
-        assert_chatwidget_snapshot!(name, normalized_backend_snapshot(terminal.backend()));
+        assert_eq!(
+            normalized_backend_snapshot(terminal.backend()),
+            normalized_backend_snapshot(idle_terminal.backend()),
+        );
     }
 }
 
@@ -5008,36 +5014,31 @@ async fn user_prompt_submit_app_server_hook_notifications_render_snapshot() {
 }
 
 #[tokio::test]
-async fn interrupt_hook_events_render_snapshot() {
-    assert_hook_events_snapshot(
-        codex_app_server_protocol::HookEventName::Interrupt,
-        "interrupt:0:/tmp/hooks.json",
-        "cleaning up the interrupted turn",
-        "interrupt_hook_events_render_snapshot",
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn pre_tool_use_hook_events_render_snapshot() {
-    assert_hook_events_snapshot(
-        codex_app_server_protocol::HookEventName::PreToolUse,
-        "pre-tool-use:0:/tmp/hooks.json",
-        "warming the shell",
-        "pre_tool_use_hook_events_render_snapshot",
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn post_tool_use_hook_events_render_snapshot() {
-    assert_hook_events_snapshot(
-        codex_app_server_protocol::HookEventName::PostToolUse,
-        "post-tool-use:0:/tmp/hooks.json",
-        "warming the shell",
-        "post_tool_use_hook_events_render_snapshot",
-    )
-    .await;
+async fn hook_events_render_consistently() {
+    for (event_name, run_id, status_message) in [
+        (
+            codex_app_server_protocol::HookEventName::Interrupt,
+            "interrupt:0:/tmp/hooks.json",
+            "cleaning up the interrupted turn",
+        ),
+        (
+            codex_app_server_protocol::HookEventName::PreToolUse,
+            "pre-tool-use:0:/tmp/hooks.json",
+            "warming the shell",
+        ),
+        (
+            codex_app_server_protocol::HookEventName::PostToolUse,
+            "post-tool-use:0:/tmp/hooks.json",
+            "warming the shell",
+        ),
+        (
+            codex_app_server_protocol::HookEventName::SessionStart,
+            "session-start:0:/tmp/hooks.json",
+            "warming the shell",
+        ),
+    ] {
+        assert_hook_events(event_name, run_id, status_message).await;
+    }
 }
 
 #[tokio::test]
@@ -5586,17 +5587,6 @@ async fn stopped_hook_hides_model_context_and_preserves_stop_reason_snapshot() {
         "stopped_hook_hides_model_context_and_preserves_stop_reason",
         history
     );
-}
-
-#[tokio::test]
-async fn session_start_hook_events_render_snapshot() {
-    assert_hook_events_snapshot(
-        codex_app_server_protocol::HookEventName::SessionStart,
-        "session-start:0:/tmp/hooks.json",
-        "warming the shell",
-        "session_start_hook_events_render_snapshot",
-    )
-    .await;
 }
 
 fn hook_started_run(

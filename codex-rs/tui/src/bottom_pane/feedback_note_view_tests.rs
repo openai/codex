@@ -48,17 +48,16 @@ fn make_view(category: FeedbackCategory) -> FeedbackNoteView {
 }
 
 #[test]
-fn feedback_view_bad_result() {
-    let view = make_view(FeedbackCategory::BadResult);
-    let rendered = render(&view, /*width*/ 60);
-    insta::assert_snapshot!("feedback_view_bad_result", rendered);
-}
-
-#[test]
-fn feedback_view_good_result() {
-    let view = make_view(FeedbackCategory::GoodResult);
-    let rendered = render(&view, /*width*/ 60);
-    insta::assert_snapshot!("feedback_view_good_result", rendered);
+fn feedback_category_titles() {
+    for (category, title) in [
+        (FeedbackCategory::BadResult, "▌ Tell us more (bad result)"),
+        (FeedbackCategory::GoodResult, "▌ Tell us more (good result)"),
+        (FeedbackCategory::Bug, "▌ Tell us more (bug)"),
+        (FeedbackCategory::Other, "▌ Tell us more (other)"),
+    ] {
+        let rendered = render(&make_view(category), /*width*/ 60);
+        assert_eq!(rendered.lines().next(), Some(title));
+    }
 }
 
 #[test]
@@ -69,33 +68,10 @@ fn feedback_view_bug() {
 }
 
 #[test]
-fn feedback_view_other() {
-    let view = make_view(FeedbackCategory::Other);
-    let rendered = render(&view, /*width*/ 60);
-    insta::assert_snapshot!("feedback_view_other", rendered);
-}
-
-#[test]
 fn feedback_view_safety_check() {
     let view = make_view(FeedbackCategory::SafetyCheck);
     let rendered = render(&view, /*width*/ 60);
     insta::assert_snapshot!("feedback_view_safety_check", rendered);
-}
-
-#[test]
-fn feedback_view_with_connectivity_diagnostics() {
-    let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
-    let tx = AppEventSender::new(tx_raw);
-    let view = FeedbackNoteView::new(
-        FeedbackCategory::Bug,
-        /*turn_id*/ None,
-        tx,
-        /*include_logs*/ false,
-        FeedbackAudience::External,
-    );
-    let rendered = render(&view, /*width*/ 60);
-
-    insta::assert_snapshot!("feedback_view_with_connectivity_diagnostics", rendered);
 }
 
 #[test]

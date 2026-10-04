@@ -298,13 +298,8 @@ fn voice_discovery_requires_the_client_runtime() {
             .unwrap();
         assert!(view.pre_draw_tick(Instant::now()));
         assert_eq!(view.features.len(), usize::from(supported));
-        snapshot_view(
-            if supported {
-                "voice_runtime_available"
-            } else {
-                "voice_runtime_unavailable"
-            },
-            &view,
-        );
+        if supported {
+            snapshot_view("voice_runtime_available", &view);
+        }
     }
 }

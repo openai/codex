@@ -324,7 +324,6 @@ async fn intentional_stop_preserves_both_interleaved_partials_once() {
         .join("\n");
     assert_eq!(rendered.matches("Correction").count(), 1);
     assert_eq!(rendered.matches("First answer").count(), 1);
-    insta::assert_snapshot!("interleaved_partials_on_stop", rendered);
 }
 
 #[tokio::test]

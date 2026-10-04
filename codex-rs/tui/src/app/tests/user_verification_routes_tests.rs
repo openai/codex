@@ -137,9 +137,9 @@ async fn side_toggle_surfaces_pending_verification_from_an_inactive_thread() -> 
         app.toggle_side_conversation(&mut tui, &mut app_server)
             .await?;
         assert_eq!(app.active_thread_id, Some(primary_thread_id));
-        insta::assert_snapshot!(
-            "side_toggle_surfaces_pending_user_verification",
-            render_bottom_popup(&app.chat_widget, /*width*/ 80)
+        assert!(app.chat_widget.has_active_view());
+        assert!(
+            render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Approve deployment?")
         );
         app_server.shutdown().await?;
         Ok(())

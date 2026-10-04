@@ -1,7 +1,0 @@
----
-source: tui/src/chatwidget/tests/slash_commands.rs
-expression: "render_bottom_popup(&chat, 40)"
----
-› Ask Codex to do anything
-
-  Copy unconfirmed; /export saves chat

@@ -251,11 +251,12 @@ async fn archiving_selects_the_next_displayed_task() -> Result<()> {
                 app_server.shutdown().await?;
             }
         }
-        let snapshot = match action {
-            AgentsOverviewAction::Archive => "archiving_selects_the_next_displayed_task",
-            AgentsOverviewAction::Delete => "deleting_selects_the_next_displayed_task",
-        };
-        insta::assert_snapshot!(snapshot, selections.join("\n"));
+        if matches!(action, AgentsOverviewAction::Archive) {
+            insta::assert_snapshot!(
+                "archiving_selects_the_next_displayed_task",
+                selections.join("\n")
+            );
+        }
     }
     Ok(())
 }

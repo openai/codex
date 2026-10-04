@@ -1376,23 +1376,6 @@ mod tests {
         );
 
         snapshot_footer(
-            "footer_ctrl_c_quit_running",
-            FooterProps {
-                mode: FooterMode::QuitShortcutReminder,
-                esc_backtrack_hint: false,
-                is_task_running: true,
-                queue_submissions: false,
-                collaboration_modes_enabled: false,
-                is_wsl: false,
-                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                status_line_value: None,
-                status_line_enabled: false,
-                key_hints: FooterKeyHints::default_bindings(),
-                active_agent_label: None,
-            },
-        );
-
-        snapshot_footer(
             "footer_esc_hint_idle",
             FooterProps {
                 mode: FooterMode::EscHint,

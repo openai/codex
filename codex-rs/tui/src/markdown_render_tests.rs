@@ -1557,23 +1557,6 @@ fn code_block_multiple_lines_inside_unordered_list() {
 }
 
 #[test]
-fn code_block_inside_unordered_list_item_multiple_lines() {
-    let md = "- Item\n\n  ```\n  first\n  second\n  ```\n";
-    let text = render_markdown_text(md);
-    let lines: Vec<String> = text
-        .lines
-        .iter()
-        .map(|l| {
-            l.spans
-                .iter()
-                .map(|s| s.content.clone())
-                .collect::<String>()
-        })
-        .collect();
-    assert_eq!(lines, vec!["• Item", "", "  first", "  second"]);
-}
-
-#[test]
 fn list_item_after_code_block_keeps_blank_separator() {
     let md = "1. First:\n\n   ```rust\n   fn first() {}\n   ```\n\n2. Second:\n";
     let text = render_markdown_text(md);

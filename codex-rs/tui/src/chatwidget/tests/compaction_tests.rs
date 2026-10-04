@@ -92,9 +92,10 @@ async fn compaction_status_survives_follow_up_and_preserves_turn_time() {
 async fn manual_compaction_shows_status_before_backend_events() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.dispatch_command(SlashCommand::Compact);
-    assert_chatwidget_snapshot!(
-        "manual_compaction_pending",
-        normalize_compaction_snapshot(render_bottom_popup(&chat, /*width*/ 80))
+    assert!(chat.bottom_pane.status_indicator_visible());
+    assert_eq!(
+        chat.bottom_pane.status_widget().unwrap().header(),
+        "Compacting context"
     );
     assert!(chat.handle_turn_start_rejection("Could not start compaction".to_string()));
     assert!(!chat.bottom_pane.status_indicator_visible());

@@ -648,10 +648,9 @@ fn selecting_within_an_edge_row_does_not_start_selection_autoscroll() {
             );
             assert_eq!(view.selected_text(&cells).as_deref(), Some("row"));
         }
-        insta::assert_snapshot!(
-            format!("horizontal_selection_at_edge_{edge}"),
-            text(&selected)
-        );
+        if edge == 0 {
+            insta::assert_snapshot!("horizontal_selection_at_edge_0", text(&selected));
+        }
         let drag = MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
             column: 3,

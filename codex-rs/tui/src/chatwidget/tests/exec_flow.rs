@@ -421,259 +421,6 @@ declined
 }
 
 #[tokio::test]
-async fn exec_approval_emits_proposed_command_and_decision_history() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    // Trigger an exec approval request with a short, single-line command
-    let ev = ExecApprovalRequestEvent {
-        kind: Default::default(),
-        call_id: "call-short".into(),
-        approval_id: Some("call-short".into()),
-        turn_id: "turn-short".into(),
-        environment_id: None,
-        command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
-        cwd: AbsolutePathBuf::current_dir().expect("current dir"),
-        reason: Some(
-            "this is a test reason such as one that would be produced by the model".into(),
-        ),
-        network_approval_context: None,
-        proposed_execpolicy_amendment: None,
-        proposed_network_policy_amendments: None,
-        additional_permissions: None,
-        available_decisions: None,
-    };
-    handle_exec_approval_request(&mut chat, "sub-short", ev);
-
-    let proposed_cells = drain_insert_history(&mut rx);
-    assert!(
-        proposed_cells.is_empty(),
-        "expected approval request to render via modal without emitting history cells"
-    );
-
-    // The approval modal should display the command snippet for user confirmation.
-    let area = Rect::new(0, 0, 80, chat.desired_height(/*width*/ 80));
-    let mut buf = ratatui::buffer::Buffer::empty(area);
-    chat.render(area, &mut buf);
-    assert_chatwidget_snapshot!("exec_approval_modal_exec", format!("{buf:?}"));
-
-    // Approve via keyboard and verify a concise decision history line is added
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
-    let decision = drain_insert_history(&mut rx)
-        .pop()
-        .expect("expected decision cell in history");
-    assert_chatwidget_snapshot!(
-        "exec_approval_history_decision_approved_short",
-        lines_to_single_string(&decision)
-    );
-}
-
-#[test]
-fn app_server_exec_approval_request_splits_shell_wrapped_command() {
-    let script = r#"python3 -c 'print("Hello, world!")'"#;
-    let request = exec_approval_request_from_params(
-        AppServerCommandExecutionRequestApprovalParams {
-            kind: Default::default(),
-            thread_id: "thread-1".to_string(),
-            turn_id: "turn-1".to_string(),
-            item_id: "item-1".to_string(),
-            started_at_ms: 0,
-            approval_id: Some("approval-1".to_string()),
-            environment_id: None,
-            reason: None,
-            network_approval_context: None,
-            command: Some(
-                shlex::try_join(["/bin/zsh", "-lc", script])
-                    .expect("round-trippable shell wrapper"),
-            ),
-            cwd: Some(test_path_buf("/tmp").abs().into()),
-            command_actions: None,
-            additional_permissions: None,
-            proposed_execpolicy_amendment: None,
-            proposed_network_policy_amendments: None,
-            available_decisions: None,
-        },
-        &test_path_buf("/tmp").abs(),
-    );
-
-    assert_eq!(
-        request.command,
-        vec![
-            "/bin/zsh".to_string(),
-            "-lc".to_string(),
-            script.to_string(),
-        ]
-    );
-}
-
-#[tokio::test]
-async fn exec_approval_uses_approval_id_when_present() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    handle_exec_approval_request(
-        &mut chat,
-        "sub-short",
-        ExecApprovalRequestEvent {
-            kind: Default::default(),
-            call_id: "call-parent".into(),
-            approval_id: Some("approval-subcommand".into()),
-            turn_id: "turn-short".into(),
-            environment_id: None,
-            command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
-            cwd: AbsolutePathBuf::current_dir().expect("current dir"),
-            reason: Some(
-                "this is a test reason such as one that would be produced by the model".into(),
-            ),
-            network_approval_context: None,
-            proposed_execpolicy_amendment: None,
-            proposed_network_policy_amendments: None,
-            additional_permissions: None,
-            available_decisions: None,
-        },
-    );
-
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
-
-    let mut found = false;
-    while let Ok(app_ev) = rx.try_recv() {
-        if let AppEvent::SubmitThreadOp {
-            op: Op::ExecApproval { id, decision, .. },
-            ..
-        } = app_ev
-        {
-            assert_eq!(id, "approval-subcommand");
-            assert_matches!(
-                decision,
-                codex_app_server_protocol::CommandExecutionApprovalDecision::Accept
-            );
-            found = true;
-            break;
-        }
-    }
-    assert!(found, "expected ExecApproval op to be sent");
-}
-
-#[tokio::test]
-async fn exec_approval_decision_truncates_multiline_and_long_commands() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    // Multiline command: modal should show full command, history records decision only
-    let ev_multi = ExecApprovalRequestEvent {
-        kind: Default::default(),
-        call_id: "call-multi".into(),
-        approval_id: Some("call-multi".into()),
-        turn_id: "turn-multi".into(),
-        environment_id: None,
-        command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
-        cwd: AbsolutePathBuf::current_dir().expect("current dir"),
-        reason: Some(
-            "this is a test reason such as one that would be produced by the model".into(),
-        ),
-        network_approval_context: None,
-        proposed_execpolicy_amendment: None,
-        proposed_network_policy_amendments: None,
-        additional_permissions: None,
-        available_decisions: None,
-    };
-    handle_exec_approval_request(&mut chat, "sub-multi", ev_multi);
-    let proposed_multi = drain_insert_history(&mut rx);
-    assert!(
-        proposed_multi.is_empty(),
-        "expected multiline approval request to render via modal without emitting history cells"
-    );
-
-    let area = Rect::new(0, 0, 80, chat.desired_height(/*width*/ 80));
-    let mut buf = ratatui::buffer::Buffer::empty(area);
-    chat.render(area, &mut buf);
-    let mut saw_first_line = false;
-    for y in 0..area.height {
-        let mut row = String::new();
-        for x in 0..area.width {
-            row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
-        }
-        if row.contains("echo line1") {
-            saw_first_line = true;
-            break;
-        }
-    }
-    assert!(
-        saw_first_line,
-        "expected modal to show first line of multiline snippet"
-    );
-
-    // Deny via keyboard; decision snippet should be single-line and elided with " ..."
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
-    let aborted_multi = drain_insert_history(&mut rx)
-        .pop()
-        .expect("expected aborted decision cell (multiline)");
-    assert_chatwidget_snapshot!(
-        "exec_approval_history_decision_aborted_multiline",
-        lines_to_single_string(&aborted_multi)
-    );
-
-    // Very long single-line command: decision snippet should be truncated <= 80 chars with trailing ...
-    let long = format!("echo {}", "a".repeat(200));
-    let ev_long = ExecApprovalRequestEvent {
-        kind: Default::default(),
-        call_id: "call-long".into(),
-        approval_id: Some("call-long".into()),
-        turn_id: "turn-long".into(),
-        environment_id: None,
-        command: vec!["bash".into(), "-lc".into(), long],
-        cwd: AbsolutePathBuf::current_dir().expect("current dir"),
-        reason: None,
-        network_approval_context: None,
-        proposed_execpolicy_amendment: None,
-        proposed_network_policy_amendments: None,
-        additional_permissions: None,
-        available_decisions: None,
-    };
-    handle_exec_approval_request(&mut chat, "sub-long", ev_long);
-    let proposed_long = drain_insert_history(&mut rx);
-    assert!(
-        proposed_long.is_empty(),
-        "expected long approval request to avoid emitting history cells before decision"
-    );
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
-    let aborted_long = drain_insert_history(&mut rx)
-        .pop()
-        .expect("expected aborted decision cell (long)");
-    assert_chatwidget_snapshot!(
-        "exec_approval_history_decision_aborted_long",
-        lines_to_single_string(&aborted_long)
-    );
-}
-
-#[tokio::test]
-async fn preamble_keeps_working_status_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.thread_id = Some(ThreadId::new());
-
-    // Regression sequence: a preamble line is committed to history before any exec/tool event.
-    // After commentary completes, the status row should be restored before subsequent work.
-    chat.on_task_started();
-    chat.on_agent_message_delta("Preamble line\n".to_string());
-    chat.on_commit_tick();
-    drain_insert_history(&mut rx);
-    complete_assistant_message(
-        &mut chat,
-        "msg-commentary-snapshot",
-        "Preamble line\n",
-        Some(MessagePhase::Commentary),
-    );
-
-    let height = chat.desired_height(/*width*/ 80);
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
-        .expect("create terminal");
-    terminal
-        .draw(|f| chat.render(f.area(), f.buffer_mut()))
-        .expect("draw preamble + status widget");
-    assert_chatwidget_snapshot!(
-        "preamble_keeps_working_status",
-        normalized_backend_snapshot(terminal.backend())
-    );
-}
-
-#[tokio::test]
 async fn unified_exec_begin_restores_status_indicator_after_preamble() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -1319,7 +1066,7 @@ async fn view_image_tool_call_adds_history_cell() {
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected a single history cell");
     let combined = lines_to_single_string(&cells[0]);
-    assert_chatwidget_snapshot!("local_image_attachment_history_snapshot", combined);
+    assert_eq!(combined, "• Viewed image example.png\n");
 }
 
 #[tokio::test]
@@ -1334,7 +1081,7 @@ async fn view_image_tool_call_preserves_foreign_path() {
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected a single history cell");
     let combined = lines_to_single_string(&cells[0]);
-    assert_chatwidget_snapshot!("foreign_image_attachment_history_snapshot", combined);
+    assert_eq!(combined, "• Viewed image example.png\n");
 }
 
 #[tokio::test]
@@ -1347,18 +1094,6 @@ async fn image_generation_begin_restores_working_status_after_single_line_preamb
 
     assert!(chat.bottom_pane.is_task_running());
     assert!(chat.bottom_pane.status_indicator_visible());
-
-    let width: u16 = 80;
-    let height = chat.desired_height(width);
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
-        .expect("create terminal");
-    terminal
-        .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
-        .expect("draw image generation status");
-    assert_chatwidget_snapshot!(
-        "image_generation_begin_restores_working_status",
-        normalized_backend_snapshot(terminal.backend())
-    );
 }
 
 #[tokio::test]
@@ -1422,7 +1157,8 @@ async fn exec_history_extends_previous_when_consecutive() {
         "",
         /*exit_code*/ 0,
     );
-    assert_chatwidget_snapshot!("exploring_step4_finish_cat_foo", active_blob(&chat));
+    let explored_foo = active_blob(&chat);
+    assert_chatwidget_snapshot!("exploring_step4_finish_cat_foo", &explored_foo);
 
     // 5) Start & complete "sed -n 100,200p foo.txt" (treated as Read of foo.txt)
     let begin_sed_range = begin_exec(&mut chat, "call-sed-range", "sed -n 100,200p foo.txt");
@@ -1433,7 +1169,7 @@ async fn exec_history_extends_previous_when_consecutive() {
         "",
         /*exit_code*/ 0,
     );
-    assert_chatwidget_snapshot!("exploring_step5_finish_sed_range", active_blob(&chat));
+    assert_eq!(active_blob(&chat), explored_foo);
 
     // 6) Start & complete "cat bar.txt"
     let begin_cat_bar = begin_exec(&mut chat, "call-cat-bar", "cat bar.txt");

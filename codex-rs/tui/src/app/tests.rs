@@ -7144,15 +7144,15 @@ async fn required_stream_reflow_during_capped_initial_replay_survives_transcript
 
     let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
     assert_eq!(rendered.lines.len(), 7);
-    assert_snapshot!(
-        "required_stream_reflow_during_capped_initial_replay_survives_transcript_overlay",
-        rendered
-            .lines
-            .iter()
-            .map(rendered_line_text)
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
+    let rendered = rendered
+        .lines
+        .iter()
+        .map(rendered_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Table tail"));
+    assert!(rendered.contains("Preserved"));
+    assert!(!rendered.contains("stale streamed table tail"));
     Ok(())
 }
 

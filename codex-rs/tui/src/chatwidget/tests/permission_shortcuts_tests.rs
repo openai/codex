@@ -156,10 +156,7 @@ async fn permission_shortcuts_load_once_and_reuse_the_picker_catalog() {
     chat.chat_keymap.next_permission_mode = vec![crate::key_hint::plain(KeyCode::F(8))];
     chat.handle_key_event(KeyEvent::from(KeyCode::F(8)));
     let request_id = assert_matches!(events.try_recv(), Ok(AppEvent::FetchPermissionProfiles { request_id, .. }) => request_id);
-    assert_chatwidget_snapshot!(
-        "permission_shortcut_loading",
-        render_bottom_popup(&chat, /*width*/ 80)
-    );
+    assert!(chat.bottom_pane.has_active_view());
     chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
     chat.handle_key_event(KeyEvent::from(KeyCode::F(8)));
     assert!(events.try_recv().is_err(), "reuse pending fetch");

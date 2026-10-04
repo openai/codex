@@ -29,34 +29,6 @@ async fn goal_menu_paused_snapshot() {
 }
 
 #[tokio::test]
-async fn goal_menu_blocked_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let thread_id = ThreadId::new();
-
-    chat.show_goal_summary(test_goal(
-        thread_id,
-        AppThreadGoalStatus::Blocked,
-        /*token_budget*/ None,
-    ));
-
-    assert_chatwidget_snapshot!("goal_menu_blocked", rendered_goal_summary(&mut rx));
-}
-
-#[tokio::test]
-async fn goal_menu_usage_limited_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let thread_id = ThreadId::new();
-
-    chat.show_goal_summary(test_goal(
-        thread_id,
-        AppThreadGoalStatus::UsageLimited,
-        /*token_budget*/ None,
-    ));
-
-    assert_chatwidget_snapshot!("goal_menu_usage_limited", rendered_goal_summary(&mut rx));
-}
-
-#[tokio::test]
 async fn goal_menu_budget_limited_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();

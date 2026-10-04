@@ -118,9 +118,9 @@ async fn mcp_login_retry_suppresses_old_completion_and_late_browser_open() {
     for event in snapshot.events {
         app.handle_thread_event_replay(event);
     }
-    assert_snapshot!(
-        "mcp_login_retry_completion",
-        next_history_message(&mut events)
+    assert_eq!(
+        next_history_message(&mut events),
+        "• Signed in to enterprise."
     );
     assert!(events.try_recv().is_err());
     // A cancellation delivered after the replacement response is stale as well.

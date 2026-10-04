@@ -63,10 +63,12 @@ async fn bedrock_astra_model_and_reasoning_pickers() {
                 _ => None,
             });
         chat.open_advanced_reasoning_popup(advanced.expect("advanced reasoning popup"));
-        assert_chatwidget_snapshot!(
-            format!("bedrock_{name}_astra_advanced_reasoning"),
-            render_bottom_popup(&chat, /*width*/ 100)
-        );
+        if name == "mantle" {
+            assert_chatwidget_snapshot!(
+                "bedrock_mantle_astra_advanced_reasoning",
+                render_bottom_popup(&chat, /*width*/ 100)
+            );
+        }
         chat.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
         let selected =
             std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| match event {

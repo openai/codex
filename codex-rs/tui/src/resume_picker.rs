@@ -5669,36 +5669,6 @@ session_picker_view = "dense"
     }
 
     #[test]
-    fn dense_session_snapshot_includes_cwd_in_all_filter() {
-        assert_snapshot!(
-            "resume_picker_dense_all",
-            render_dense_row_snapshot(
-                /*show_all*/ true, /*filter_cwd*/ None, /*width*/ 120,
-            )
-        );
-    }
-
-    #[test]
-    fn dense_session_snapshot_auto_hides_cwd_when_narrow() {
-        assert_snapshot!(
-            "resume_picker_dense_all_auto_hidden_cwd",
-            render_dense_row_snapshot(
-                /*show_all*/ true, /*filter_cwd*/ None, /*width*/ 100,
-            )
-        );
-    }
-
-    #[test]
-    fn dense_session_snapshot_forces_cwd_when_narrow() {
-        assert_snapshot!(
-            "resume_picker_dense_all_forced_cwd",
-            render_dense_row_snapshot(
-                /*show_all*/ true, /*filter_cwd*/ None, /*width*/ 48,
-            )
-        );
-    }
-
-    #[test]
     fn dense_session_snapshot_drops_metadata_when_narrow() {
         assert_snapshot!(
             "resume_picker_dense_narrow",

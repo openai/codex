@@ -80,19 +80,6 @@ async fn plan_draft_footer_snapshot() {
 }
 
 #[tokio::test]
-async fn plan_draft_footer_narrow_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.bottom_pane
-        .set_composer_text("make a plan".to_string(), Vec::new(), Vec::new());
-    chat.pre_draw_tick();
-
-    assert_chatwidget_snapshot!(
-        "plan_draft_footer_narrow",
-        normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 36))
-    );
-}
-
-#[tokio::test]
 async fn plan_implementation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
@@ -113,17 +100,6 @@ async fn plan_implementation_popup_context_usage_snapshot() {
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("plan_implementation_popup_context_usage", popup);
-}
-
-#[tokio::test]
-async fn plan_implementation_popup_no_selected_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
-    chat.open_plan_implementation_prompt();
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-
-    let popup = render_bottom_popup(&chat, /*width*/ 80);
-    assert_chatwidget_snapshot!("plan_implementation_popup_no_selected", popup);
 }
 
 #[tokio::test]

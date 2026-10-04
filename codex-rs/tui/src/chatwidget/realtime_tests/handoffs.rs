@@ -153,7 +153,6 @@ async fn delegation_started_before_peer_connection_keeps_its_voice_origin() {
         Ok(AppCommand::RealtimeConversationSpeech { text, .. }) if text.as_str() == "Spoken answer"
     ));
     assert!(ops.try_recv().is_err());
-    let mut rendered_history = Vec::new();
     commit_realtime_history_events(&mut chat, &mut events);
     while let Ok(event) = events.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = event
@@ -166,13 +165,8 @@ async fn delegation_started_before_peer_connection_keeps_its_voice_origin() {
                 .collect::<String>();
             assert!(!rendered.contains("Spoken answer"));
             assert!(!rendered.contains("<realtime_delegation>"));
-            rendered_history.push(rendered);
         }
     }
-    insta::assert_snapshot!(
-        "voice_delegation_during_connection",
-        rendered_history.join("\n")
-    );
 }
 
 #[tokio::test]

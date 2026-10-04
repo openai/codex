@@ -454,12 +454,7 @@ fn transcript_overlay_snapshots_paginated_history_states() {
         snapshots.push_str(&format!("--- {name} ---\n{}", buffer_to_text(&buf, area)));
     }
 
-    let snapshot_name = if cfg!(target_os = "macos") {
-        "transcript_overlay_paginated_history_states"
-    } else {
-        "transcript_overlay_paginated_history_states_non_macos"
-    };
-    assert_snapshot!(snapshot_name, snapshots);
+    assert_snapshot!("transcript_overlay_paginated_history_states", snapshots);
 }
 
 #[test]

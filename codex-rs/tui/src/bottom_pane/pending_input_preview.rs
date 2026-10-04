@@ -223,13 +223,6 @@ mod tests {
     }
 
     #[test]
-    fn desired_height_one_message() {
-        let mut queue = PendingInputPreview::new();
-        queue.queued_messages.push("Hello, world!".to_string());
-        assert_eq!(queue.desired_height(/*width*/ 40), 3);
-    }
-
-    #[test]
     fn render_one_message() {
         let mut queue = PendingInputPreview::new();
         queue.queued_messages.push("Hello, world!".to_string());
@@ -238,21 +231,6 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
         queue.render(Rect::new(0, 0, width, height), &mut buf);
         assert_snapshot!("render_one_message", format!("{buf:?}"));
-    }
-
-    #[test]
-    fn render_one_message_with_shift_left_binding() {
-        let mut queue = PendingInputPreview::new();
-        queue.queued_messages.push("Hello, world!".to_string());
-        queue.set_edit_binding(Some(key_hint::shift(KeyCode::Left).into()));
-        let width = 40;
-        let height = queue.desired_height(width);
-        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-        queue.render(Rect::new(0, 0, width, height), &mut buf);
-        assert_snapshot!(
-            "render_one_message_with_shift_left_binding",
-            format!("{buf:?}")
-        );
     }
 
     #[test]

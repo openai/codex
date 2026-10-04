@@ -868,9 +868,6 @@ mod tests {
         );
 
         let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 24);
-        #[cfg(windows)]
-        assert_snapshot!("external_agent_config_migration_prompt_windows", rendered);
-        #[cfg(not(windows))]
         assert_snapshot!("external_agent_config_migration_prompt", rendered);
     }
 
