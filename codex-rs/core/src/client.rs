@@ -1240,19 +1240,16 @@ impl ModelClientSession {
         if !timing.is_sampling() {
             return;
         }
-        let mut last_tools = self
+        let previous = self
             .client
             .state
             .last_inference_tools
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if last_tools
-            .as_ref()
-            .is_some_and(|previous| previous != &prompt.tools)
-        {
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .replace(Arc::clone(&prompt.tools));
+        if previous.is_some_and(|tools| tools != prompt.tools) {
             timing.record_tools_change();
         }
-        *last_tools = Some(Arc::clone(&prompt.tools));
     }
 
     pub(crate) fn turn_state(&self) -> Arc<OnceLock<String>> {
