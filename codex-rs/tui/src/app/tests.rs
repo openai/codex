@@ -5436,6 +5436,12 @@ async fn primary_thread_ignores_child_mcp_startup_notifications() {
     let child_thread_id = ThreadId::new();
     app.primary_thread_id = Some(parent_thread_id);
     app.active_thread_id = Some(parent_thread_id);
+    app.upsert_agent_picker_thread(
+        child_thread_id,
+        /*agent_nickname*/ None,
+        /*agent_role*/ None,
+        /*is_closed*/ false,
+    );
 
     app.handle_app_server_event(
         &app_server,

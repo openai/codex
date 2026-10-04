@@ -1394,14 +1394,35 @@ async fn startup_thread_started_does_not_replay_resolved_approval() -> Result<()
 }
 
 #[tokio::test]
-async fn owned_subagent_approval_before_thread_started_is_preserved() -> Result<()> {
+async fn subagent_approval_respects_root_ownership() -> Result<()> {
+    check_subagent_approval_routing(ApprovalRouting::OwnedApprovalFirst).await?;
+    check_subagent_approval_routing(ApprovalRouting::OwnedAfterMcp).await?;
+    check_subagent_approval_routing(ApprovalRouting::ForeignAfterMcp).await
+}
+
+enum ApprovalRouting {
+    OwnedApprovalFirst,
+    OwnedAfterMcp,
+    ForeignAfterMcp,
+}
+
+async fn check_subagent_approval_routing(routing: ApprovalRouting) -> Result<()> {
+    let owned_parent = !matches!(&routing, ApprovalRouting::ForeignAfterMcp);
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config.sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let parent = app_server.start_thread(&app.config).await?;
-    let parent_thread_id = parent.session.thread_id;
+    let parent_thread_id = if owned_parent {
+        parent.session.thread_id
+    } else {
+        app_server
+            .start_thread(&app.config)
+            .await?
+            .session
+            .thread_id
+    };
     app.enqueue_primary_thread_session(parent.session, parent.turns)
         .await?;
     let child_thread_id = ThreadId::from_string(
@@ -1439,18 +1460,52 @@ async fn owned_subagent_approval_before_thread_started_is_preserved() -> Result<
         /*approval_id*/ None,
     );
 
+    if matches!(&routing, ApprovalRouting::ForeignAfterMcp) {
+        send_failed_mcp_startup(&mut app, &app_server, parent_thread_id).await;
+    }
+    if !matches!(&routing, ApprovalRouting::OwnedApprovalFirst) {
+        send_failed_mcp_startup(&mut app, &app_server, child_thread_id).await;
+        let has_channel = app.thread_event_channels.contains_key(&child_thread_id);
+        assert_eq!(has_channel, owned_parent);
+    }
+
     app.handle_app_server_event(
         &app_server,
         codex_app_server_client::AppServerEvent::ServerRequest(Box::new(request.clone())),
     )
     .await;
 
-    assert!(
-        app.pending_app_server_requests
-            .contains_server_request(&request)
-    );
-    assert!(app.thread_event_channels.contains_key(&child_thread_id));
+    let requests = &app.pending_app_server_requests;
+    assert_eq!(requests.contains_server_request(&request), owned_parent);
+    assert_eq!(app.chat_widget.has_active_view(), owned_parent);
+    if !owned_parent {
+        let popup = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+        let approval = popup
+            .lines()
+            .find(|line| line.contains("Would you like to run"));
+        insta::assert_snapshot!(approval.unwrap_or_default(), @"");
+    }
     Ok(())
+}
+
+async fn send_failed_mcp_startup(
+    app: &mut App,
+    app_server: &AppServerSession,
+    thread_id: ThreadId,
+) {
+    app.handle_app_server_event(
+        app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+            ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                thread_id: Some(thread_id.to_string()),
+                name: "fixture".to_string(),
+                status: McpServerStartupState::Failed,
+                error: Some("fixture failed".to_string()),
+                failure_reason: None,
+            }),
+        )),
+    )
+    .await;
 }
 
 #[tokio::test]
