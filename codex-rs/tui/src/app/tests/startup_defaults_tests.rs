@@ -3,7 +3,17 @@
 use super::*;
 use crate::app::startup::prepare_fresh_startup_config;
 use crate::app::startup::startup_model;
+use crate::app::startup_bootstrap::bootstrap_server_owned_start;
 use pretty_assertions::assert_eq;
+
+fn remote_target() -> AppServerTarget {
+    AppServerTarget::Remote {
+        endpoint: crate::RemoteAppServerEndpoint::WebSocket {
+            websocket_url: "ws://127.0.0.1:1".into(),
+            auth_token: None,
+        },
+    }
+}
 
 async fn run_startup_for_test(
     tui: &mut crate::tui::Tui,
@@ -268,7 +278,7 @@ async fn fresh_startup_uses_server_defaults_with_explicit_and_managed_precedence
             Some("low"),
             None,
         ),
-        ("managed", true, None, None, None),
+        ("managed", true, Some("managed-model"), Some("medium"), None),
     ] {
         let client_home = tempdir()?;
         let server_home = tempdir()?;
@@ -287,7 +297,11 @@ requires_openai_auth = false
         )?;
         std::fs::write(
             server_home.path().join("config.toml"),
-            "model = \"server-model\"\nmodel_reasoning_effort = \"high\"\n",
+            if choice == "managed" {
+                ""
+            } else {
+                "model = \"server-model\"\nmodel_reasoning_effort = \"high\"\n"
+            },
         )?;
         if managed {
             std::fs::write(
@@ -341,6 +355,7 @@ requires_openai_auth = false
         let mut server_config = config.clone();
         server_config.codex_home = server_home.path().to_path_buf().abs();
         server_config.sqlite = SqliteConfig::new_for_testing(server_home.path().abs());
+        server_config.model_catalog = Some(Default::default());
         let (mut server, requests, proxy) = start_recording_app_server_with_history(
             &server_config,
             HistoryCapabilities::Current,
@@ -355,18 +370,28 @@ requires_openai_auth = false
         )
         .await?;
         server = server.with_remote_cwd_override(Some(server_config.cwd.to_path_buf()));
-        server.bootstrap(&config).await?;
+        let target = remote_target();
         assert!(
             prepare_fresh_startup_config(
                 &mut config,
                 &server,
+                &target,
                 &cli_kv_overrides,
                 &harness_overrides,
-                &EnvironmentManager::default_for_tests()
+                &EnvironmentManager::default_for_tests(),
             )
             .await?
             .server_defaults_read
         );
+        bootstrap_server_owned_start(
+            &mut server,
+            &mut config,
+            &mut launch_choices,
+            /*server_defaults_read*/ true,
+            &cli_kv_overrides,
+            &harness_overrides,
+        )
+        .await?;
         if choice == "migration" {
             let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
             apply_accepted_model_migration(
@@ -470,11 +495,17 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
             server.start_thread(&config).await?;
         }
         assert!(config.config_layer_stack.is_projectless());
+        let target = if remote {
+            remote_target()
+        } else {
+            AppServerTarget::Embedded
+        };
         let bootstrap = server.bootstrap(&config).await?;
         assert_eq!(bootstrap.default_model, "stale-client-model");
         let defaults_read = prepare_fresh_startup_config(
             &mut config,
             &server,
+            &target,
             &[],
             &ConfigOverrides::default(),
             &EnvironmentManager::default_for_tests(),

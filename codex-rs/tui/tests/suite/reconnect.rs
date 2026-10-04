@@ -24,7 +24,10 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
     let codex_home = tempfile::tempdir_in("/tmp")?;
     write_test_config(codex_home.path(), &workspace_path)?;
     let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
+    let config = std::fs::read_to_string(&config_path)?.replace(
+        "model = \"gpt-5.6-terra\"",
+        "model = \"stale-client-model\"",
+    );
     std::fs::write(
         config_path,
         format!("{config}\n[tui]\nstatus_line = [\"thread-id\"]\n"),
@@ -115,6 +118,8 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
                     }
                     "model/list" => json!({"data": [], "nextCursor": null}),
                     "config/read" => {
+                        let params = request.params.as_ref().unwrap();
+                        assert_eq!(params["cwd"], server_cwd.to_string_lossy().as_ref());
                         json!({"config": {"model": "gpt-5.6-terra", "model_provider": "openai",
                         "tui": {"status_line": ["thread-id"]}, "projects": {
                         server_cwd.to_string_lossy(): {"trust_level": "trusted"}

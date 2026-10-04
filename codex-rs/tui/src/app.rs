@@ -261,6 +261,7 @@ mod session_lifecycle;
 mod session_picker;
 mod side;
 mod startup;
+pub(crate) mod startup_bootstrap;
 mod startup_prompts;
 mod startup_warnings;
 mod thread_event_buffer;

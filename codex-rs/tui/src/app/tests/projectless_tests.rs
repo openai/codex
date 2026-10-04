@@ -328,6 +328,7 @@ async fn local_projectless_defaults_respect_trust_scope_and_explicit_settings() 
         let startup = crate::app::startup::prepare_fresh_startup_config(
             &mut config,
             &server,
+            &AppServerTarget::Embedded,
             &[],
             &overrides,
             &EnvironmentManager::default_for_tests(),

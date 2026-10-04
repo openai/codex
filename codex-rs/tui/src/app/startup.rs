@@ -6,6 +6,8 @@
 //! Explicit local launch permissions remain runtime overrides across new sessions and reconnects.
 
 use super::reconnect::ReconnectState;
+use super::startup_bootstrap::bootstrap_server_owned_start;
+use super::startup_bootstrap::uses_server_owned_fresh_bootstrap;
 use super::*;
 use crate::session_start::SessionStartAction;
 use crate::session_start::SessionStartConfig;
@@ -56,13 +58,14 @@ pub(super) struct FreshStartupDefaults {
 pub(super) async fn prepare_fresh_startup_config(
     config: &mut Config,
     app_server: &AppServerSession,
+    app_server_target: &AppServerTarget,
     cli_kv_overrides: &[(String, TomlValue)],
     harness_overrides: &ConfigOverrides,
     environments: &EnvironmentManager,
 ) -> Result<FreshStartupDefaults> {
-    let defaults_cwd = match app_server.thread_params_mode() {
-        crate::app_server_session::ThreadParamsMode::Embedded => config.cwd.as_path(),
-        crate::app_server_session::ThreadParamsMode::Remote => {
+    let defaults_cwd = match app_server_target {
+        AppServerTarget::Embedded | AppServerTarget::LocalDaemon { .. } => config.cwd.as_path(),
+        AppServerTarget::Remote { .. } => {
             app_server.remote_cwd_override().unwrap_or(Path::new("."))
         }
     };
@@ -106,8 +109,8 @@ pub(super) fn startup_model(
 ) -> String {
     config.model.clone().unwrap_or_else(|| {
         if server_defaults_read {
-            // Bootstrap was seeded with local config, which may differ from a cleared server
-            // model. Use the server's model catalog when config/read returned model: null.
+            // Legacy bootstrap paths may be seeded with local config, which can differ from a
+            // cleared server model. Use the server catalog when config/read returned model: null.
             bootstrap
                 .available_models
                 .iter()
@@ -269,22 +272,27 @@ impl App {
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
         app_server.model_provider_override = harness_overrides.model_provider.clone();
-        let bootstrap = match startup_bootstrap {
-            Some(bootstrap) => bootstrap,
-            None => match startup_draft
-                .run_until(tui, app_server.bootstrap(&config))
-                .await
-            {
-                Ok(bootstrap) => bootstrap?,
-                Err(err) => return shutdown_on_startup_error(app_server, err).await,
-            },
-        };
-        tracing::debug!(
-            has_platform_family = app_server.app_server_platform_family().is_some(),
-            has_platform_os = app_server.app_server_platform_os().is_some(),
-            "connected app-server platform"
+        let fresh_start = matches!(
+            &session_selection,
+            SessionSelection::StartFresh | SessionSelection::Exit
         );
-        let bootstrap_ms = bootstrap.duration.as_millis();
+        let server_owned_fresh_bootstrap = uses_server_owned_fresh_bootstrap(
+            &app_server_target,
+            &session_selection,
+            &loader_overrides,
+        );
+        let mut bootstrap = startup_bootstrap;
+        if bootstrap.is_none() && !server_owned_fresh_bootstrap {
+            bootstrap = Some(
+                match startup_draft
+                    .run_until(tui, app_server.bootstrap(&config))
+                    .await
+                {
+                    Ok(bootstrap) => bootstrap?,
+                    Err(err) => return shutdown_on_startup_error(app_server, err).await,
+                },
+            );
+        }
         if matches!(&session_selection, SessionSelection::Fork(_)) {
             // The app server resolves omitted overrides from the fork destination's config.
             if harness_overrides.model.is_none()
@@ -299,16 +307,14 @@ impl App {
                 config.model_reasoning_effort = None;
             }
         }
-        let startup_defaults = if matches!(
-            &session_selection,
-            SessionSelection::StartFresh | SessionSelection::Exit
-        ) {
+        let startup_defaults = if fresh_start {
             match startup_draft
                 .run_until(
                     tui,
                     prepare_fresh_startup_config(
                         &mut config,
                         &app_server,
+                        &app_server_target,
                         &cli_kv_overrides,
                         &harness_overrides,
                         &environment_manager,
@@ -323,7 +329,40 @@ impl App {
         } else {
             FreshStartupDefaults::default()
         };
-        if matches!(&session_selection, SessionSelection::AgentsOverview) {
+        let mut launch_choices = crate::app_server_session::StartupLaunchChoices::from_launch(
+            &cli_kv_overrides,
+            &harness_overrides,
+            &loader_overrides,
+        );
+        let bootstrap = match bootstrap {
+            Some(bootstrap) => bootstrap,
+            None => match startup_draft
+                .run_until(
+                    tui,
+                    bootstrap_server_owned_start(
+                        &mut app_server,
+                        &mut config,
+                        &mut launch_choices,
+                        startup_defaults.server_defaults_read,
+                        &cli_kv_overrides,
+                        &harness_overrides,
+                    ),
+                )
+                .await
+            {
+                Ok(bootstrap) => bootstrap?,
+                Err(err) => return shutdown_on_startup_error(app_server, err).await,
+            },
+        };
+        tracing::debug!(
+            has_platform_family = app_server.app_server_platform_family().is_some(),
+            has_platform_os = app_server.app_server_platform_os().is_some(),
+            "connected app-server platform"
+        );
+        let bootstrap_ms = bootstrap.duration.as_millis();
+        if !server_owned_fresh_bootstrap
+            && matches!(&session_selection, SessionSelection::AgentsOverview)
+        {
             apply_managed_new_thread_defaults(
                 &mut config,
                 app_server.managed_new_thread_defaults(),
@@ -331,11 +370,6 @@ impl App {
                 &harness_overrides,
             );
         }
-        let mut launch_choices = crate::app_server_session::StartupLaunchChoices::from_launch(
-            &cli_kv_overrides,
-            &harness_overrides,
-            &loader_overrides,
-        );
         let mut model = startup_model(&config, &bootstrap, startup_defaults.server_defaults_read);
         let available_models = bootstrap.available_models;
         let remote_connection = crate::status::remote_connection::remote_connection_status_value(
