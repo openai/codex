@@ -806,8 +806,9 @@ fn fresh_draft_replacement_ends_search_and_dismisses_sparkles() {
 fn arbitrary_commands_preserve_a_never_used_fresh_opportunity() {
     palette(|| {
         let now = Instant::now();
-        for completion in [false, true] {
+        for (completion, vim) in [(false, false), (true, false), (false, true), (true, true)] {
             let mut pane = pane();
+            pane.set_vim_enabled(vim);
             pane.mark_fresh_task_for_sparkle("gpt-5.5", &enabled());
             assert!(dots(&draw(&pane.composer, /*width*/ 80, now).0).is_empty());
             for command in ["/status", "/diff", "/pwd"] {

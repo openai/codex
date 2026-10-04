@@ -1185,10 +1185,30 @@ async fn slash_picker_overlays_history_without_moving_the_transcript_or_composer
     ))];
     let mut tui = crate::tui::test_support::make_test_tui()?;
     tui.set_owned_screen(/*owned*/ true)?;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     for (width, height) in [(80, 14), (32, 14), (80, 7), (80, 5)] {
         let size = Size::new(width, height);
         tui.terminal.resize(size)?;
-        app.chat_widget.apply_external_edit("/m".to_string());
+        app.chat_widget.apply_external_edit(String::new());
+        app.chat_widget.toggle_vim_mode_and_notify();
+        app.chat_widget.handle_key_event(KeyCode::Esc.into());
+        let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
+        assert!(!app.handle_owned_transcript_event(
+            &mut tui,
+            &mut app_server,
+            &TuiEvent::Key(slash),
+        )?);
+        tokio::time::pause();
+        for key in [slash, KeyCode::Char('m').into()] {
+            app.chat_widget.handle_key_event(key);
+            tokio::time::advance(crate::bottom_pane::ChatComposer::recommended_paste_flush_delay())
+                .await;
+            app.chat_widget
+                .handle_paste_burst_tick(tui.frame_requester());
+        }
+        tokio::time::resume();
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "/m");
+        app.chat_widget.toggle_vim_mode_and_notify();
         app.chat_widget
             .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         app.render_owned_transcript(&mut tui, size)?;
@@ -1260,6 +1280,7 @@ async fn slash_picker_overlays_history_without_moving_the_transcript_or_composer
         );
     }
     tui.set_owned_screen(/*owned*/ false)?;
+    app_server.shutdown().await?;
     Ok(())
 }
 

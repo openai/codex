@@ -2,6 +2,7 @@
 
 use super::super::InputResult;
 use super::super::tests::snapshot_composer_state_with_width;
+use super::super::tests::type_chars_humanlike;
 use crate::keymap::KeyChordMatch;
 use crate::keymap::KeyChordMatcher;
 use crate::keymap::RuntimeKeymap;
@@ -48,6 +49,9 @@ fn backspace_cancels_empty_vim_search() {
                 composer.set_vim_enabled(/*enabled*/ true);
                 let cursor = composer.cursor();
                 for prefix in ["/", "?", "d/", "d?", "c/", "c?", "y/", "y?"] {
+                    if text.is_empty() && prefix == "/" {
+                        continue;
+                    }
                     for ch in prefix.chars() {
                         composer
                             .handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
@@ -104,6 +108,21 @@ fn vim_search_query_edits_and_paste_preserve_the_draft() {
             composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
             composer.handle_paste("ह".into());
+        },
+    );
+}
+
+#[test]
+fn empty_vim_normal_slash_opens_commands() {
+    snapshot_composer_state_with_width(
+        "vim_empty_normal_slash",
+        /*width*/ 60,
+        /*enhanced_keys_supported*/ false,
+        |composer| {
+            composer.set_vim_enabled(/*enabled*/ true);
+            type_chars_humanlike(composer, &['/']);
+            assert_eq!(composer.current_text(), "/");
+            assert_eq!(composer.draft.textarea.vim_mode_label(), Some("Insert"));
         },
     );
 }
