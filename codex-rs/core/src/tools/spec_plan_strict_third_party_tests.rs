@@ -3,10 +3,22 @@ use super::*;
 use crate::tools::registry::ToolRegistry;
 use codex_extension_api::ToolPolicy;
 use pretty_assertions::assert_eq;
+use tracing_test::internal::MockWriter;
 
-#[tokio::test]
-#[tracing_test::traced_test]
+#[tokio::test(flavor = "current_thread")]
 async fn strict_defers_third_party_tools_despite_caller_settings_and_logs_overrides() {
+    let buffer: &'static std::sync::Mutex<Vec<u8>> =
+        Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .without_time()
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(MockWriter::new(buffer))
+        .finish();
+    // Keep callsite interest independent of untraced parallel test threads.
+    let _untraced = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    // The test runner may already own the global subscriber.
+    let _subscriber = tracing::subscriber::set_default(subscriber);
     for supports_search_tool in [false, true] {
         let plan = probe_with(
             |turn| {
@@ -92,10 +104,13 @@ async fn strict_defers_third_party_tools_despite_caller_settings_and_logs_overri
             "warnings must not enter the model prompt"
         );
     }
-    assert!(logs_contain(
-        "Deferring third-party tool because code_mode_only_strict_3p_tools is enabled"
-    ));
-    assert!(logs_contain("client_echo"));
+    let logs = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+    assert!(
+        logs.contains(
+            "Deferring third-party tool because code_mode_only_strict_3p_tools is enabled"
+        )
+    );
+    assert!(logs.contains("client_echo"));
 }
 
 #[tokio::test]
