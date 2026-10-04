@@ -11,6 +11,7 @@ async fn run_startup_for_test(
     config: Config,
     bootstrap: AppServerBootstrap,
     selection: SessionSelection,
+    app_server_target: AppServerTarget,
 ) -> Result<AppExitInfo> {
     App::run(
         tui,
@@ -27,7 +28,7 @@ async fn run_startup_for_test(
         codex_feedback::CodexFeedback::new(),
         /*is_first_run*/ false,
         /*should_prompt_windows_sandbox_nux_at_startup*/ false,
-        AppServerTarget::Embedded,
+        app_server_target,
         /*state_db*/ None,
         Arc::new(EnvironmentManager::default_for_tests()),
         Duration::ZERO,
@@ -39,6 +40,68 @@ async fn run_startup_for_test(
         /*daemon_cli_executable*/ None,
     )
     .await
+}
+
+#[tokio::test]
+async fn agents_overview_startup_restores_saved_grouping() -> Result<()> {
+    let home = tempdir()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        "[tui]\nagents_overview_grouping = \"status\"\nanimations = false\n",
+    )?;
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .build()
+        .await?;
+    let (mut server, requests, proxy) = start_recording_remote_app_server(&config).await?;
+    let bootstrap = server.bootstrap(&config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.pause_events();
+    let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:4500")?;
+    let mut run = Box::pin(run_startup_for_test(
+        &mut tui,
+        server,
+        config,
+        bootstrap,
+        SessionSelection::AgentsOverview,
+        AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: true,
+            endpoint,
+        },
+    ));
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 15), async {
+        loop {
+            if !recorded_params(&requests, "thread/list").is_empty() {
+                return Ok::<(), color_eyre::eyre::Report>(());
+            }
+            tokio::select! {
+                _ = &mut run => return Ok(()),
+                () = tokio::time::sleep(Duration::from_millis(/*millis*/ 20)) => {}
+            }
+        }
+    })
+    .await??;
+    drop(run);
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    let rendered = buffer
+        .content
+        .chunks(buffer.area.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let grouping_header = rendered
+        .lines()
+        .find(|line| line.contains("Group:"))
+        .expect("production startup renders Command Center grouping")
+        .trim();
+    insta::assert_snapshot!(grouping_header, @"Agent command center  Group: Status  g");
+    proxy.abort();
+    Ok(())
 }
 
 #[tokio::test]
@@ -113,6 +176,7 @@ async fn cli_fork_omits_implicit_model_and_effort() -> Result<()> {
             cwd: None,
             history_mode: None,
         }),
+        AppServerTarget::Embedded,
     ));
     tokio::time::timeout(Duration::from_secs(/*secs*/ 15), async {
         loop {
@@ -154,6 +218,7 @@ async fn run_until_thread_start(
         config,
         bootstrap,
         SessionSelection::StartFresh,
+        AppServerTarget::Embedded,
     ));
     tokio::time::timeout(Duration::from_secs(/*secs*/ 15), async {
         loop {
@@ -598,6 +663,7 @@ async fn startup_read_failure_exits_before_thread_creation() -> Result<()> {
         config,
         bootstrap,
         SessionSelection::StartFresh,
+        AppServerTarget::Embedded,
     )
     .await;
     insta::assert_snapshot!(result.expect_err("startup read must fail").to_string(), @"config/read failed in TUI");

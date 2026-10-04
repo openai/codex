@@ -7,7 +7,7 @@ pub(super) mod command_center;
 #[path = "agents_overview_grouping.rs"]
 mod grouping;
 
-pub(super) use grouping::AgentsOverviewGrouping;
+pub(super) use codex_config::types::AgentsOverviewGrouping;
 use grouping::model_name;
 
 use super::agents_overview::AGENTS_OVERVIEW_VIEW_ID;
@@ -678,6 +678,8 @@ impl BottomPaneView for AgentsOverviewView {
                 AgentsOverviewGrouping::Status => AgentsOverviewGrouping::Model,
                 AgentsOverviewGrouping::Model => AgentsOverviewGrouping::Project,
             };
+            self.app_event_tx
+                .send(AppEvent::PersistAgentsOverviewGrouping(state.grouping));
             return;
         }
         if self.agents_keymap.new_task.is_pressed(key) {

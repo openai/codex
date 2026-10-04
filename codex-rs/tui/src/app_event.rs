@@ -1595,6 +1595,9 @@ pub(crate) enum AppEvent {
     /// Dismiss the terminal-title setup UI without changing config.
     TerminalTitleSetupCancelled,
 
+    /// Remember the Command Center grouping across launches.
+    PersistAgentsOverviewGrouping(codex_config::types::AgentsOverviewGrouping),
+
     /// Save the transcript renderer preference for the next launch only.
     FullscreenTranscriptSelected {
         enabled: bool,

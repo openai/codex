@@ -3242,6 +3242,9 @@ impl App {
             AppEvent::TerminalTitleSetupCancelled => {
                 self.chat_widget.cancel_terminal_title_setup();
             }
+            AppEvent::PersistAgentsOverviewGrouping(grouping) => {
+                self.persist_agents_overview_grouping(grouping).await;
+            }
             AppEvent::SyntaxThemeSelected { name } => {
                 let edit = crate::legacy_core::config::edit::syntax_theme_edit(&name);
                 let apply_result = ConfigEditsBuilder::for_config_path(self.local_settings.user_config_path.as_path())

@@ -304,6 +304,7 @@ async fn new_config(
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         tui_keymap: TuiKeymap::default(),
         tui_session_picker_view: SessionPickerViewMode::Dense,
+        tui_agents_overview_grouping: Default::default(),
         tui_resume_cwd: None,
         tui_vim_mode_default: false,
         tui_question_esc_back: true,

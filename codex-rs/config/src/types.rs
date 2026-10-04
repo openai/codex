@@ -67,6 +67,26 @@ const fn default_enabled() -> bool {
     true
 }
 
+/// Last selected grouping in Agent Command Center.
+#[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentsOverviewGrouping {
+    #[default]
+    Project,
+    Status,
+    Model,
+}
+
+impl AgentsOverviewGrouping {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Status => "status",
+            Self::Model => "model",
+        }
+    }
+}
+
 /// Preferred layout for the resume/fork session picker.
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -931,6 +951,10 @@ pub struct Tui {
     /// Preferred layout for resume/fork session picker results.
     #[serde(default)]
     pub session_picker_view: Option<SessionPickerViewMode>,
+
+    /// Last selected grouping in Agent Command Center.
+    #[serde(default)]
+    pub agents_overview_grouping: AgentsOverviewGrouping,
 
     /// Working directory to use when resuming or forking a session.
     /// When unset, prompt if the current and session directories differ.

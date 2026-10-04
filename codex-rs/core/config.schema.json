@@ -31,6 +31,15 @@
       },
       "type": "object"
     },
+    "AgentsOverviewGrouping": {
+      "description": "Last selected grouping in Agent Command Center.",
+      "enum": [
+        "project",
+        "status",
+        "model"
+      ],
+      "type": "string"
+    },
     "AgentsToml": {
       "additionalProperties": {
         "$ref": "#/definitions/AgentRoleToml"
@@ -4487,6 +4496,15 @@
       "additionalProperties": false,
       "description": "Collection of settings that are specific to the TUI.",
       "properties": {
+        "agents_overview_grouping": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AgentsOverviewGrouping"
+            }
+          ],
+          "default": "project",
+          "description": "Last selected grouping in Agent Command Center."
+        },
         "alternate_screen": {
           "allOf": [
             {
