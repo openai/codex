@@ -49,7 +49,6 @@ use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseCreateWsRequest;
 use codex_api::ResponsesApiRequest;
-use codex_api::ResponsesApiTools;
 use codex_api::ResponsesClient as ApiResponsesClient;
 use codex_api::ResponsesEndpoint;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
@@ -89,6 +88,7 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
+use codex_tools::ToolSpec;
 use codex_tools::create_tools_json_for_responses_api;
 use codex_tools::create_tools_json_for_responses_lite;
 use codex_tools::create_tools_raw_json_for_responses_api;
@@ -222,14 +222,8 @@ struct ModelClientState {
     disable_websockets: AtomicBool,
     agent_identity_session_fallback: AgentIdentitySessionFallback,
     cached_websocket_session: StdMutex<WebsocketSession>,
-    /// Last tools actually sent for inference, independent of connection/turn lifetime.
-    last_inference_tools: StdMutex<Option<InferenceTools>>,
-}
-
-#[derive(Debug, PartialEq)]
-enum InferenceTools {
-    Responses(ResponsesApiTools),
-    ResponsesLite(Vec<serde_json::Value>),
+    /// Tools for the previous inference call, independent of connection/turn lifetime.
+    last_inference_tools: StdMutex<Option<Arc<[ToolSpec]>>>,
 }
 
 /// Resolved API client setup for a single request attempt.
@@ -1239,21 +1233,13 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
-    // Use the actual wire representation so local-only ToolSpec fields don't count.
-    fn record_inference_tools(&self, request: &ResponsesApiRequest) {
+    fn record_inference_tools(&self, prompt: &Prompt) {
         let Some(timing) = &self.turn_timing_state else {
             return;
         };
         if !timing.is_sampling() {
             return;
         }
-        let tools = match (&request.tools, request.input.first()) {
-            (Some(tools), _) => InferenceTools::Responses(tools.clone()),
-            (None, Some(ResponseItem::AdditionalTools { tools, .. })) => {
-                InferenceTools::ResponsesLite(tools.clone())
-            }
-            (None, _) => return,
-        };
         let mut last_tools = self
             .client
             .state
@@ -1262,11 +1248,11 @@ impl ModelClientSession {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if last_tools
             .as_ref()
-            .is_some_and(|previous| previous != &tools)
+            .is_some_and(|previous| previous != &prompt.tools)
         {
             timing.record_tools_change();
         }
-        *last_tools = Some(tools);
+        *last_tools = Some(Arc::clone(&prompt.tools));
     }
 
     pub(crate) fn turn_state(&self) -> Arc<OnceLock<String>> {
@@ -1630,7 +1616,6 @@ impl ModelClientSession {
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);
-            self.record_inference_tools(&request);
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
@@ -1814,9 +1799,6 @@ impl ModelClientSession {
 
             let (incremental_request, previous_response_id_from_untraced_warmup) =
                 self.prepare_websocket_request(&request);
-            if !warmup {
-                self.record_inference_tools(&request);
-            }
             let inference_trace_attempt = if warmup {
                 // Prewarm sends `generate=false`; it is connection setup, not a
                 // model inference attempt that should appear in rollout traces.
@@ -2014,6 +1996,7 @@ impl ModelClientSession {
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
+        self.record_inference_tools(prompt);
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
             WireApi::Responses => {

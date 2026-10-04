@@ -302,105 +302,74 @@ fn test_session_telemetry() -> SessionTelemetry {
     )
 }
 
-// The comparison must use the wire representation, not ToolSpec's local-only fields.
 #[tokio::test]
-async fn inference_tools_changes_are_attributed_to_each_turn_profile() -> anyhow::Result<()> {
-    for use_responses_lite in [false, true] {
-        let client = test_model_client(SessionSource::Cli);
-        let telemetry = test_session_telemetry();
-        let mut model_info = test_model_info();
-        model_info.use_responses_lite = use_responses_lite;
-        let metadata = test_responses_metadata_for_client(
-            &client,
-            Some("turn-1"),
-            format!("{}:0", client.state.thread_id),
-            /*parent_thread_id*/ None,
-            TestCodexResponsesRequestKind::Turn,
-        );
-        let a = ResponsesApiTool {
-            name: "alpha".into(),
-            description: "Original".into(),
-            strict: false,
-            defer_loading: None,
-            parameters: JsonSchema::default(),
-            output_schema: None,
-        };
-        let b = ResponsesApiTool {
-            name: "beta".into(),
-            ..a.clone()
-        };
-        let mut local_change = a.clone();
-        local_change.output_schema = Some(json!({"type": "object"}));
-        let mut schema_change = b.clone();
-        schema_change.parameters = JsonSchema::string(Some("Changed parameters".into()));
-        let mut turn = client.new_session();
-        let mut timing = Arc::new(crate::turn_timing::TurnTimingState::default());
-        timing.mark_turn_started(std::time::Instant::now()).await;
-        turn.turn_timing_state = Some(Arc::clone(&timing));
-        for (index, tools) in [
-            vec![a.clone()],                       // baseline
-            vec![local_change.clone()],            // same on the wire
-            vec![local_change.clone(), b.clone()], // add
-            vec![local_change.clone(), b.clone()], // unchanged/retry
-            vec![b, a.clone()],                    // reorder
-            vec![schema_change, a],                // schema
-            vec![],                                // remove all
-            vec![],                                // unchanged/retry
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            if index == 4 {
-                let (_, _, profile) = timing.complete_profile_and_duration_ms().await;
-                assert_eq!(profile.tools_change_count, 1);
-                turn.try_switch_fallback_transport(&telemetry, &model_info);
-                drop(turn);
-                turn = client.clone().new_session();
-                timing = Arc::new(crate::turn_timing::TurnTimingState::default());
-                timing.mark_turn_started(std::time::Instant::now()).await;
-                turn.turn_timing_state = Some(Arc::clone(&timing));
-            }
-            let request = turn.client.build_responses_request(
-                &Prompt {
-                    tools: tools
-                        .into_iter()
-                        .map(ToolSpec::Function)
-                        .collect::<Vec<_>>()
-                        .into(),
-                    ..Default::default()
-                },
-                &model_info,
-                /*effort*/ None,
-                codex_protocol::config_types::ReasoningSummary::None,
-                /*service_tier*/ None,
-                &metadata,
-            )?;
-            {
-                let _sampling = timing.begin_sampling();
-                turn.record_inference_tools(&request);
-            }
-            // Remote compaction can reuse the same client with different/empty tools.
-            // It must not increment the count or change the next sampling baseline.
-            if index == 1 {
-                let _compaction = timing.begin_compaction();
-                let compact = turn.client.build_responses_request(
-                    &Prompt::default(),
-                    &model_info,
-                    /*effort*/ None,
-                    codex_protocol::config_types::ReasoningSummary::None,
-                    /*service_tier*/ None,
-                    &metadata,
-                )?;
-                turn.record_inference_tools(&compact);
-            }
+async fn inference_tools_changes_are_attributed_to_each_turn_profile() {
+    let client = test_model_client(SessionSource::Cli);
+    let telemetry = test_session_telemetry();
+    let model_info = test_model_info();
+    let a = ResponsesApiTool {
+        name: "alpha".into(),
+        description: "Original".into(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::default(),
+        output_schema: None,
+    };
+    let b = ResponsesApiTool {
+        name: "beta".into(),
+        ..a.clone()
+    };
+    let mut local_change = a.clone();
+    local_change.output_schema = Some(json!({"type": "object"}));
+    let mut schema_change = b.clone();
+    schema_change.parameters = JsonSchema::string(Some("Changed parameters".into()));
+    let mut turn = client.new_session();
+    let mut timing = Arc::new(crate::turn_timing::TurnTimingState::default());
+    timing.mark_turn_started(std::time::Instant::now()).await;
+    turn.turn_timing_state = Some(Arc::clone(&timing));
+    for (index, tools) in [
+        vec![a.clone()],                       // baseline
+        vec![local_change.clone()],            // any tool definition change
+        vec![local_change.clone(), b.clone()], // add
+        vec![local_change.clone(), b.clone()], // unchanged/retry
+        vec![b, a.clone()],                    // reorder
+        vec![schema_change, a],                // schema
+        vec![],                                // remove all
+        vec![],                                // unchanged/retry
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index == 4 {
+            let (_, _, profile) = timing.complete_profile_and_duration_ms().await;
+            assert_eq!(profile.tools_change_count, 2);
+            turn.try_switch_fallback_transport(&telemetry, &model_info);
+            drop(turn);
+            turn = client.clone().new_session();
+            timing = Arc::new(crate::turn_timing::TurnTimingState::default());
+            timing.mark_turn_started(std::time::Instant::now()).await;
+            turn.turn_timing_state = Some(Arc::clone(&timing));
         }
-        let (_, _, profile) = timing.complete_profile_and_duration_ms().await;
-        assert_eq!(
-            profile.tools_change_count, 3,
-            "use_responses_lite={use_responses_lite}"
-        );
+        let prompt = Prompt {
+            tools: tools
+                .into_iter()
+                .map(ToolSpec::Function)
+                .collect::<Vec<_>>()
+                .into(),
+            ..Default::default()
+        };
+        {
+            let _sampling = timing.begin_sampling();
+            turn.record_inference_tools(&prompt);
+        }
+        // Compaction must not change the baseline for inference.
+        if index == 1 {
+            let _compaction = timing.begin_compaction();
+            turn.record_inference_tools(&Prompt::default());
+        }
     }
-    Ok(())
+    let (_, _, profile) = timing.complete_profile_and_duration_ms().await;
+    assert_eq!(profile.tools_change_count, 3);
 }
 
 #[test]
