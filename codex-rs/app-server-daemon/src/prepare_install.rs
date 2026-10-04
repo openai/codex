@@ -264,6 +264,9 @@ async fn prepare_from_package(
         if !stage.path().join("codex").exists() {
             std::os::unix::fs::symlink("bin/codex", stage.path().join("codex"))?;
         }
+        #[cfg(windows)]
+        windows::publish_release(stage.path(), &release).await?;
+        #[cfg(not(windows))]
         std::fs::rename(stage.path(), &release)?;
     }
     let standalone = home.join("packages/standalone");

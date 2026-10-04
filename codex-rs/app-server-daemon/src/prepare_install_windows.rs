@@ -1,18 +1,50 @@
-//! Selects a Windows managed release by creating or retargeting the installer junction.
+//! Publishes and selects Windows managed releases despite transient filesystem contention.
 
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::System::IO::DeviceIoControl;
+
+const PUBLISH_RELEASE_RETRY_INTERVAL: Duration = Duration::from_millis(50);
+const PUBLISH_RELEASE_RETRY_LIMIT: usize = 100;
+
+pub(super) async fn publish_release(stage: &Path, release: &Path) -> Result<()> {
+    let mut retries = 0;
+    loop {
+        match std::fs::rename(stage, release) {
+            Ok(()) => return Ok(()),
+            // Executable scanners can briefly hold newly staged files without delete sharing.
+            Err(error)
+                if retries < PUBLISH_RELEASE_RETRY_LIMIT
+                    && (error.kind() == std::io::ErrorKind::PermissionDenied
+                        || error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32)) =>
+            {
+                retries += 1;
+                tokio::time::sleep(PUBLISH_RELEASE_RETRY_INTERVAL).await;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to publish managed daemon release from {} to {}",
+                        stage.display(),
+                        release.display()
+                    )
+                });
+            }
+        }
+    }
+}
 
 pub(super) fn select_release(root: &Path, release: &Path) -> Result<()> {
     let release = release.canonicalize()?;
