@@ -346,8 +346,9 @@ impl ApplyPatchHandler {
 
         // Verify the parsed patch against the selected environment filesystem.
         let turn_environment = resolve_tool_environment(
-            &step_context.environments,
+            &step_context,
             selected_environment_id.as_deref(),
+            "apply_patch is unavailable in this session",
         )?;
         let fs = turn_environment.environment.get_filesystem();
         let sandbox = turn_environment.sandbox_context(/*additional_permissions*/ None);

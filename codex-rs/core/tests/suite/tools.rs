@@ -244,8 +244,12 @@ async fn strict_tool_collisions_do_not_duplicate_unrelated_compaction_errors() -
     Ok(())
 }
 
+#[test_case::test_case(false; "default_off")]
+#[test_case::test_case(true; "opted_in")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn empty_turn_environments_keeps_environment_backed_tools() -> Result<()> {
+async fn empty_turn_environments_gate_environment_backed_tools(
+    stable_environment_tools: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -259,7 +263,17 @@ async fn empty_turn_environments_keeps_environment_backed_tools() -> Result<()> 
     )
     .await;
 
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_config(move |config| {
+        if stable_environment_tools {
+            config
+                .features
+                .enable(Feature::StableEnvironmentTools)
+                .expect("enable stable environment tools");
+        }
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("enable permissions tool");
         config.update_plan_enabled = true;
         config
             .features
@@ -276,10 +290,17 @@ async fn empty_turn_environments_keeps_environment_backed_tools() -> Result<()> 
         tools.contains(&"update_plan".to_string()),
         "non-environment tool should remain available; got {tools:?}"
     );
-    for environment_tool in ["exec_command", "write_stdin", "apply_patch", "view_image"] {
-        assert!(
+    for environment_tool in [
+        "exec_command",
+        "write_stdin",
+        "apply_patch",
+        "view_image",
+        "request_permissions",
+    ] {
+        assert_eq!(
             tools.contains(&environment_tool.to_string()),
-            "{environment_tool} should remain available for explicit empty turn environments; got {tools:?}"
+            stable_environment_tools,
+            "unexpected {environment_tool} availability for empty environments; got {tools:?}"
         );
     }
 

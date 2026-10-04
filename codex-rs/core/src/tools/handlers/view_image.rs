@@ -142,8 +142,11 @@ impl ViewImageHandler {
             }
         };
 
-        let turn_environment =
-            resolve_tool_environment(&step_context.environments, environment_id.as_deref())?;
+        let turn_environment = resolve_tool_environment(
+            &step_context,
+            environment_id.as_deref(),
+            "view_image is unavailable in this session",
+        )?;
         let path_uri = turn_environment.cwd().join(&path).map_err(|err| {
             FunctionCallError::RespondToModel(format!(
                 "unable to resolve image path `{path}` against environment cwd `{}`: {err}",

@@ -1710,9 +1710,14 @@ async fn subagent_waits_for_its_inherited_environment_configuration() -> Result<
     use super::remote_env::spawn_tests::PendingSpawnCase;
     use super::remote_env::spawn_tests::pending_subagent_scenario;
 
-    let requests =
-        pending_subagent_scenario(PendingSpawnCase::TurnSettings, configure_scenario_catalog)
-            .await?;
+    let requests = pending_subagent_scenario(PendingSpawnCase::TurnSettings, |config| {
+        configure_scenario_catalog(config);
+        config
+            .features
+            .enable(Feature::StableEnvironmentTools)
+            .expect("enable stable environment tools");
+    })
+    .await?;
     let labels = [
         "parent delegates while the environment is starting",
         "parent waits for the worker",

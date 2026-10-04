@@ -3062,6 +3062,10 @@ async fn production_turn_keeps_rebalanced_catalogs_stable_after_compaction_and_r
             model_info.max_context_window = None;
         })
         .with_config(|config| {
+            config
+                .features
+                .enable(Feature::StableEnvironmentTools)
+                .expect("enable stable environment tools");
             configure_catalog_test(config);
             config.cloud_skill_enabled = true;
             config.model_provider.name = "Skills compaction test".to_string();

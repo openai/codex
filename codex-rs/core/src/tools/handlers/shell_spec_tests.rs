@@ -9,6 +9,7 @@ fn windows_shell_guidance_description() -> String {
 #[test]
 fn exec_command_tool_matches_expected_spec() {
     let tool = create_exec_command_tool(CommandToolOptions {
+        include_login_parameter: true,
         exec_permission_approvals_enabled: false,
     });
 

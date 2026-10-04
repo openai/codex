@@ -1907,6 +1907,10 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
     let mut builder = test_codex()
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
+            config
+                .features
+                .enable(Feature::StableEnvironmentTools)
+                .expect("enable stable environment tools");
             assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
             if cfg!(unix) {
                 assert!(config.features.enable(Feature::ShellZshFork).is_ok());
@@ -2830,7 +2834,6 @@ async fn ready_before_selection_resolves_resumed_thread_capability_root_after_wa
     // The first request may legally see either Starting or Ready; the wait makes step two ready.
     let first_tools = tool_names(&requests[0].body_json());
     assert!(first_tools.contains(&"wait_for_environment".to_string()));
-    assert!(first_tools.contains(&"exec_command".to_string()));
     let first_user_context = requests[0].message_input_texts("user");
     let first_environment_context = first_user_context
         .iter()
@@ -2839,8 +2842,13 @@ async fn ready_before_selection_resolves_resumed_thread_capability_root_after_wa
     let first_has_ready_root = first_user_context
         .iter()
         .any(|text| text.contains("<ready_capability_roots>ready-first-root"));
-    // Tool availability no longer distinguishes Starting from Ready.
-    if first_environment_context.contains("<status>starting</status>") {
+    let first_is_starting = first_environment_context.contains("<status>starting</status>");
+    assert_eq!(
+        first_tools.contains(&"exec_command".to_string()),
+        !first_is_starting,
+        "without stable_environment_tools, commands require a ready transport"
+    );
+    if first_is_starting {
         assert!(!first_has_ready_root);
     } else {
         assert!(first_environment_context.contains("<shell>"));

@@ -36,6 +36,7 @@ mod view_image;
 pub(crate) mod view_image_spec;
 mod wait_for_environment;
 
+use codex_features::Feature;
 use codex_file_system::FileSystemSandboxContext;
 use codex_sandboxing::policy_transforms::materialize_additional_permissions_with_context;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
@@ -47,7 +48,6 @@ use serde::Deserialize;
 use serde_json::Map;
 use serde_json::Value;
 
-use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::step_context::StepContext;
@@ -158,9 +158,17 @@ where
 }
 
 fn resolve_tool_environment<'a>(
-    environments: &'a TurnEnvironmentSnapshot,
+    step_context: &'a StepContext,
     environment_id: Option<&str>,
+    legacy_unavailable_message: &'static str,
 ) -> Result<&'a TurnEnvironment, FunctionCallError> {
+    let environments = &step_context.environments;
+    let stable_environment_tools = step_context
+        .turn
+        .config
+        .features
+        .get()
+        .enabled(Feature::StableEnvironmentTools);
     environment_id.map_or_else(
         || environments.primary(),
         |environment_id| {
@@ -170,19 +178,21 @@ fn resolve_tool_environment<'a>(
         },
     ).ok_or_else(|| {
         if let Some(environment_id) = environment_id
-            && !environments
-                .all_selections()
-                .iter()
-                .any(|selection| selection.environment_id == environment_id)
+            && (!stable_environment_tools
+                || !environments
+                    .all_selections()
+                    .iter()
+                    .any(|selection| selection.environment_id == environment_id))
         {
             return FunctionCallError::RespondToModel(format!(
                 "unknown turn environment id `{environment_id}`"
             ));
         }
-        FunctionCallError::RespondToModel(
-            "No usable execution environment is available. Wait for an environment to become available before using this tool."
-                .to_string(),
-        )
+        FunctionCallError::RespondToModel(if stable_environment_tools {
+            "No usable execution environment is available. Wait for an environment to become available before using this tool.".to_string()
+        } else {
+            legacy_unavailable_message.to_string()
+        })
     })
 }
 

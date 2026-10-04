@@ -116,6 +116,9 @@ pub enum Feature {
     DaemonAutoStart,
 
     // Experimental
+    /// Advertise enabled environment-backed tools and their shell parameters before the
+    /// executor is ready. Actual execution still requires a usable environment and its policy.
+    StableEnvironmentTools,
     /// Send per-content-entry classifications in internal Responses metadata.
     ContentItemKinds,
     /// Record model-attempted tool calls in internal Responses metadata.
@@ -1092,6 +1095,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ExecutedToolCallMetadata,
         key: "executed_tool_call_metadata",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::StableEnvironmentTools,
+        key: "stable_environment_tools",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
