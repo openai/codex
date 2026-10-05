@@ -34,8 +34,7 @@ use crate::session::turn_context::TurnContext;
 pub(crate) struct PendingReviewContext(pub ComposedContext);
 
 /// Requests one bounded restart from the captured parent checkpoint when
-/// reviewer compaction invalidates the pending input.
-#[derive(Clone, Default)]
+/// reviewer compaction invalidates the pending input. The flag belongs to this attempt.
 pub(super) struct CheckpointRecovery {
     pub(super) requested: Arc<AtomicBool>,
     pub(super) history_version: u64,
@@ -214,8 +213,8 @@ pub(crate) async fn finalize(
             usize::try_from(estimate_item_token_count(&framing)).unwrap_or(usize::MAX),
         ),
     };
-    // Recovery starts with the full current parent window. Keep its checkpoint
-    // and apply the existing final selection instead of compacting and restarting again.
+    // A fresh session starts with the full current parent window. Keep its checkpoint
+    // and apply the existing final selection instead of compacting and restarting.
     let history_truncation = if recovery
         .as_ref()
         .is_some_and(|recovery| recovery.fresh_parent_checkpoint)

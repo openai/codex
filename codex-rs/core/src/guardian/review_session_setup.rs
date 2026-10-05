@@ -1,10 +1,20 @@
 //! Captures action-time parent context and starts or recovers its Guardian reviewer.
 //! Checkpoint recovery allows one fresh attempt under the original review deadline.
+//! Both attempts share captured context and use separate recovery flags.
+
+use std::sync::atomic::AtomicBool;
 
 use super::*;
 use crate::guardian::input_budget::CheckpointRecovery;
 use codex_guardian_reviewer::ReviewerPool;
 use codex_guardian_reviewer::ReviewerRequest;
+
+/// Controls whether selection may reuse a session or must start from the parent checkpoint.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReviewerSelection {
+    ReuseIfAvailable,
+    FreshParentCheckpoint,
+}
 
 #[derive(Clone)]
 pub struct PreparedGuardianContext {
@@ -14,7 +24,7 @@ pub struct PreparedGuardianContext {
     context_policy: ReviewContextPolicy,
     key: GuardianReviewSessionReuseKey,
     parent_compaction: Option<ResponseItem>,
-    restart_from_parent_checkpoint: bool,
+    reviewer_selection: ReviewerSelection,
     pub history_reset: CancellationToken,
 }
 
@@ -54,7 +64,7 @@ impl PreparedGuardianContext {
             context_policy,
             key,
             parent_compaction,
-            restart_from_parent_checkpoint: false,
+            reviewer_selection: ReviewerSelection::ReuseIfAvailable,
             history_reset,
         })
     }
@@ -83,7 +93,8 @@ impl PreparedGuardianContext {
         &self,
         snapshot: Option<GuardianReviewForkSnapshot>,
     ) -> (crate::StartThreadOptions, GuardianReviewState) {
-        let snapshot = snapshot.filter(|_| !self.restart_from_parent_checkpoint);
+        let snapshot =
+            snapshot.filter(|_| self.reviewer_selection == ReviewerSelection::ReuseIfAvailable);
         let (mut conversation, mut history) = snapshot.map(ConversationState::fork).unzip();
         if self.parent_compaction.is_some()
             && conversation
@@ -200,7 +211,7 @@ impl PreparedGuardianContext {
 pub(super) struct PreparedReview {
     context: Arc<PreparedGuardianContext>,
     params: Arc<GuardianReviewSessionParams>,
-    recovery: CheckpointRecovery,
+    recovery_requested: Arc<AtomicBool>,
 }
 
 impl ReviewerRequest for PreparedReview {
@@ -213,7 +224,7 @@ impl ReviewerRequest for PreparedReview {
         self.context.reuse_key(previous)
     }
     fn requires_fresh_session(&self) -> bool {
-        self.context.restart_from_parent_checkpoint
+        self.context.reviewer_selection == ReviewerSelection::FreshParentCheckpoint
     }
     fn deadline(&self) -> tokio::time::Instant {
         self.params.deadline
@@ -237,9 +248,9 @@ impl ReviewerRequest for PreparedReview {
                 .services
                 .thread_extension_data
                 .insert(CheckpointRecovery {
+                    requested: Arc::clone(&self.recovery_requested),
                     history_version: session.session.clone_history().await.history_version(),
                     fresh_parent_checkpoint,
-                    ..self.recovery.clone()
                 });
         } else {
             session
@@ -255,11 +266,13 @@ impl ReviewerRequest for PreparedReview {
             self.params.deadline,
         ))
         .await;
-        let recovery_requested = self.recovery.requested.load(Ordering::Acquire);
+        let recovery_requested = self.recovery_requested.load(Ordering::Acquire);
         if recovery_requested {
             result.disposition = SessionDisposition::Discard;
         }
-        if self.context.restart_from_parent_checkpoint || !recovery_requested {
+        if self.context.reviewer_selection == ReviewerSelection::FreshParentCheckpoint
+            || !recovery_requested
+        {
             record_failed_review(&session.session, &self.params, &result.outcome).await;
         }
         result
@@ -279,14 +292,12 @@ pub(crate) async fn run_guardian_review_session(
     let (outcome, mut analytics) = match prepare_review(params).await {
         Ok(mut prepared) => {
             let result = pool.review(prepared.clone()).await;
-            if prepared
-                .recovery
-                .requested
-                .swap(/*val*/ false, Ordering::AcqRel)
-            {
+            if prepared.recovery_requested.load(Ordering::Acquire) {
                 // One restart only, under the original deadline. An oversized parent
                 // checkpoint must fail rather than repeatedly compact and recreate.
-                Arc::make_mut(&mut prepared.context).restart_from_parent_checkpoint = true;
+                Arc::make_mut(&mut prepared.context).reviewer_selection =
+                    ReviewerSelection::FreshParentCheckpoint;
+                prepared.recovery_requested = Arc::default();
                 pool.review(prepared).await
             } else {
                 result
@@ -316,7 +327,7 @@ pub(super) async fn prepare_review(
     Ok(PreparedReview {
         context: Arc::new(context),
         params: Arc::new(params),
-        recovery: CheckpointRecovery::default(),
+        recovery_requested: Arc::default(),
     })
 }
 
