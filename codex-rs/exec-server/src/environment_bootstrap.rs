@@ -33,7 +33,7 @@ impl PreparedEnvironmentManager {
                 EnvironmentDefault::EnvironmentId(default_id) => snapshot
                     .environments
                     .iter()
-                    .any(|(environment_id, _)| environment_id == default_id),
+                    .any(|entry| &entry.id == default_id),
             },
         }
     }

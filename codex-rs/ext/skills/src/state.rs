@@ -235,21 +235,29 @@ impl SkillsThreadState {
     /// Reads the last authorized turn-start catalog without discovery or retries.
     /// Same-auth failures may retain it; disabled or invalidated catalogs are empty.
     pub fn cloud_catalog_snapshot(&self) -> SkillCatalog {
+        self.with_cloud_catalog(|catalog| catalog.cloned().unwrap_or_default())
+    }
+
+    /// Borrows the authorized catalog under the cache lock. The reader must not re-enter this state.
+    pub(crate) fn with_cloud_catalog<T>(&self, read: impl FnOnce(Option<&SkillCatalog>) -> T) -> T {
         let config = self
             .config
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !config.cloud_skill_enabled || !self.cloud_skills_available {
-            return SkillCatalog::default();
+            return read(None);
         }
-        self.skills_extension_state
+        let state = self
+            .skills_extension_state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .cloud_cache
-            .as_ref()
-            .filter(|cache| cache.is_current())
-            .and_then(|cache| cache.catalog.clone())
-            .unwrap_or_default()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        read(
+            state
+                .cloud_cache
+                .as_ref()
+                .filter(|cache| cache.is_current())
+                .and_then(|cache| cache.catalog.as_ref()),
+        )
     }
 
     fn cloud_cache(&self, mcp_resources: Option<&McpResourceClient>) -> Arc<CloudSkillGeneration> {

@@ -1302,6 +1302,16 @@ class EnvironmentConnectionNotification(BaseModel):
     thread_id: Annotated[str, Field(alias="threadId")]
 
 
+class EnvironmentSkillsParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    required: Annotated[
+        list[str] | None,
+        Field(description="Exact catalog names that must be available from this environment."),
+    ] = None
+
+
 class ExperimentalFeatureEnablementSetParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,

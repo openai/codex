@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use codex_config::ScopedSkillsConfig;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use futures::SinkExt;
@@ -59,6 +60,7 @@ fn trusted_headers_require_tls_for_non_loopback_destinations() {
                     "customer-session".to_string(),
                 )]),
             },
+            ScopedSkillsConfig::default(),
         )
         .expect_err("trusted headers must not be sent over an insecure remote connection");
 
@@ -86,6 +88,7 @@ fn duplicate_case_insensitive_websocket_headers_fail_before_registration() {
                     ("x-session-id".to_string(), "second-session".to_string()),
                 ]),
             },
+            ScopedSkillsConfig::default(),
         )
         .expect_err("duplicate header names must fail regardless of case");
 
@@ -110,6 +113,7 @@ fn invalid_websocket_header_names_fail_before_registration() {
                 connect_timeout: None,
                 http_headers: HashMap::from([("bad header".to_string(), "value".to_string())]),
             },
+            ScopedSkillsConfig::default(),
         )
         .expect_err("invalid header name should fail");
 
@@ -137,6 +141,7 @@ fn invalid_websocket_header_values_fail_before_registration() {
                     "customer\nspoofed".to_string(),
                 )]),
             },
+            ScopedSkillsConfig::default(),
         )
         .expect_err("invalid header value should fail");
 
@@ -162,6 +167,7 @@ fn websocket_controlled_headers_fail_before_registration() {
                     connect_timeout: None,
                     http_headers: HashMap::from([(header.to_string(), "overridden".to_string())]),
                 },
+                ScopedSkillsConfig::default(),
             )
             .expect_err("connection-controlled header should fail");
 
@@ -228,6 +234,7 @@ async fn trusted_headers_are_sent_on_initial_websocket_and_session_reconnect() {
                     ),
                 ]),
             },
+            ScopedSkillsConfig::default(),
         )
         .expect("environment with routing headers should register");
 

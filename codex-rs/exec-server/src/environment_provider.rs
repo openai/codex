@@ -1,6 +1,8 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use codex_config::ScopedSkillsConfig;
+
 use crate::ExecServerError;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
 use crate::client_api::ExecServerTransportParams;
@@ -25,14 +27,22 @@ pub type EnvironmentProviderFuture<'a> =
 
 #[derive(Clone)]
 pub struct EnvironmentProviderSnapshot {
-    pub(crate) environments: Vec<(String, ExecServerTransportParams)>,
+    pub(crate) environments: Vec<EnvironmentProviderEntry>,
     pub default: EnvironmentDefault,
     pub include_local: bool,
 }
 
+/// Keeps each configured environment's requirements with its transport.
+#[derive(Clone, Debug)]
+pub(crate) struct EnvironmentProviderEntry {
+    pub(crate) id: String,
+    pub(crate) transport: ExecServerTransportParams,
+    pub(crate) skills: ScopedSkillsConfig,
+}
+
 impl std::fmt::Debug for EnvironmentProviderSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let environment_ids: Vec<_> = self.environments.iter().map(|(id, _)| id).collect();
+        let environment_ids: Vec<_> = self.environments.iter().map(|entry| &entry.id).collect();
         f.debug_struct("EnvironmentProviderSnapshot")
             .field("environments", &environment_ids)
             .field("default", &self.default)
@@ -69,18 +79,19 @@ impl DefaultEnvironmentProvider {
         let (exec_server_url, disabled) = normalize_exec_server_url(self.exec_server_url.clone());
 
         if let Some(exec_server_url) = exec_server_url {
-            environments.push((
-                REMOTE_ENVIRONMENT_ID.to_string(),
-                ExecServerTransportParams::websocket_url(
+            environments.push(EnvironmentProviderEntry {
+                id: REMOTE_ENVIRONMENT_ID.to_string(),
+                transport: ExecServerTransportParams::websocket_url(
                     exec_server_url,
                     DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
                 ),
-            ));
+                skills: ScopedSkillsConfig::default(),
+            });
         }
 
         let has_remote = environments
             .iter()
-            .any(|(id, _environment)| id == REMOTE_ENVIRONMENT_ID);
+            .any(|entry| entry.id == REMOTE_ENVIRONMENT_ID);
         let include_local = !disabled && !has_remote;
         let default = if disabled {
             EnvironmentDefault::Disabled
@@ -129,7 +140,10 @@ mod tests {
             default,
             include_local,
         } = snapshot;
-        let environments: HashMap<_, _> = environments.into_iter().collect();
+        let environments: HashMap<_, _> = environments
+            .into_iter()
+            .map(|entry| (entry.id, entry.transport))
+            .collect();
 
         assert!(include_local);
         assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));
@@ -149,7 +163,10 @@ mod tests {
             default,
             include_local,
         } = snapshot;
-        let environments: HashMap<_, _> = environments.into_iter().collect();
+        let environments: HashMap<_, _> = environments
+            .into_iter()
+            .map(|entry| (entry.id, entry.transport))
+            .collect();
 
         assert!(include_local);
         assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));
@@ -169,7 +186,10 @@ mod tests {
             default,
             include_local,
         } = snapshot;
-        let environments: HashMap<_, _> = environments.into_iter().collect();
+        let environments: HashMap<_, _> = environments
+            .into_iter()
+            .map(|entry| (entry.id, entry.transport))
+            .collect();
 
         assert!(!include_local);
         assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));
@@ -186,7 +206,10 @@ mod tests {
             default,
             include_local,
         } = snapshot;
-        let environments: HashMap<_, _> = environments.into_iter().collect();
+        let environments: HashMap<_, _> = environments
+            .into_iter()
+            .map(|entry| (entry.id, entry.transport))
+            .collect();
 
         assert!(!include_local);
         assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));

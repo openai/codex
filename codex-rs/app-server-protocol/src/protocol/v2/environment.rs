@@ -47,12 +47,24 @@ pub struct EnvironmentAddParams {
     #[ts(type = "number | null")]
     #[ts(optional = nullable)]
     pub connect_timeout_ms: Option<u64>,
+    /// Required skills supplied by this environment, checked before model inference.
+    #[ts(optional = nullable)]
+    pub skills: Option<EnvironmentSkillsParams>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct EnvironmentAddResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct EnvironmentSkillsParams {
+    /// Exact catalog names that must be available from this environment.
+    #[ts(optional = nullable)]
+    pub required: Option<Vec<String>>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

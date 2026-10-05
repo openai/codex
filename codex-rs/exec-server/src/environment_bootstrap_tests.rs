@@ -10,6 +10,7 @@ use crate::REMOTE_ENVIRONMENT_ID;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
 use crate::client_api::ExecServerTransportParams;
 use crate::environment_provider::EnvironmentDefault;
+use crate::environment_provider::EnvironmentProviderEntry;
 use crate::environment_provider::EnvironmentProviderSnapshot;
 use crate::remote::NoiseRendezvousEnvironmentConfig;
 
@@ -17,13 +18,14 @@ use crate::remote::NoiseRendezvousEnvironmentConfig;
 fn prepared_remote_environment_is_detected_without_constructing_a_connection() {
     let prepared = PreparedEnvironmentManager {
         source: PreparedEnvironmentSource::Snapshot(EnvironmentProviderSnapshot {
-            environments: vec![(
-                REMOTE_ENVIRONMENT_ID.to_string(),
-                ExecServerTransportParams::websocket_url(
+            environments: vec![EnvironmentProviderEntry {
+                id: REMOTE_ENVIRONMENT_ID.to_string(),
+                transport: ExecServerTransportParams::websocket_url(
                     "ws://username:password@executor.example/private?token=secret".to_string(),
                     DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
                 ),
-            )],
+                skills: Default::default(),
+            }],
             default: EnvironmentDefault::EnvironmentId(REMOTE_ENVIRONMENT_ID.to_string()),
             include_local: false,
         }),

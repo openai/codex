@@ -27,6 +27,7 @@ use codex_protocol::protocol::EnvironmentConnectionEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_skills_extension::EnvironmentSkillRequirements;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
@@ -982,6 +983,7 @@ pub(crate) enum TurnEnvironmentState {
     Failed {
         // Keep the input form so connection failure doesn't hide whether config comes from the thread.
         selection: TurnEnvironmentSelection,
+        required_skills: Vec<String>,
         error: String,
     },
 }
@@ -991,9 +993,11 @@ impl TurnEnvironmentState {
         starting: StartingTurnEnvironment,
         resolved: Option<TurnEnvironmentResult>,
     ) -> Self {
+        let required_skills = starting.environment.required_skills().to_vec();
         if let EnvironmentConfigState::Failed(error) = &starting.selection.config {
             let error = error.clone();
             return Self::Failed {
+                required_skills,
                 selection: starting
                     .config_origin
                     .into_input_selection(starting.selection),
@@ -1006,6 +1010,7 @@ impl TurnEnvironmentState {
                 if matches!(selection.config, EnvironmentConfigState::Pending) {
                     let Some(config) = environment.installed_config else {
                         return Self::Failed {
+                            required_skills,
                             selection: starting.config_origin.into_input_selection(selection),
                             error: "Environment configuration was not supplied.".to_string(),
                         };
@@ -1035,6 +1040,7 @@ impl TurnEnvironmentState {
                     "skipping failed turn environment: {err}"
                 );
                 Self::Failed {
+                    required_skills,
                     selection: starting
                         .config_origin
                         .into_input_selection(starting.selection),
@@ -1209,6 +1215,35 @@ impl TurnEnvironmentSnapshot {
         self.turn_environments()
             .map(TurnEnvironment::selection)
             .collect()
+    }
+
+    /// Captures requirements from the selected registration even when connection setup fails.
+    pub(crate) fn required_skills(&self) -> impl Iterator<Item = EnvironmentSkillRequirements<'_>> {
+        self.environments.iter().filter_map(|environment| {
+            let (selection, required) = match environment {
+                TurnEnvironmentState::Ready(environment) => (
+                    &environment.selection,
+                    environment.environment.required_skills(),
+                ),
+                TurnEnvironmentState::Starting(environment) => (
+                    &environment.selection,
+                    environment.environment.required_skills(),
+                ),
+                TurnEnvironmentState::Failed {
+                    selection,
+                    required_skills,
+                    ..
+                } => (selection, required_skills.as_slice()),
+            };
+            if required.is_empty() {
+                None
+            } else {
+                Some(EnvironmentSkillRequirements {
+                    environment_id: &selection.environment_id,
+                    skill_names: required,
+                })
+            }
+        })
     }
 
     /// Native children retain ready and starting attachments captured by their spawning step.

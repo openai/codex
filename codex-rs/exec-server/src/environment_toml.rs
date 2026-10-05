@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::RemoteEnvironmentOptions;
+use codex_config::ScopedSkillsConfig;
 use codex_utils_redacted_string::RedactedString;
 use serde::Deserialize;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -19,6 +20,7 @@ use crate::client_api::ExecServerTransportParams;
 use crate::client_api::StdioExecServerCommand;
 use crate::environment::LOCAL_ENVIRONMENT_ID;
 use crate::environment_provider::EnvironmentDefault;
+use crate::environment_provider::EnvironmentProviderEntry;
 use crate::environment_provider::EnvironmentProviderSnapshot;
 
 const ENVIRONMENTS_TOML_FILE: &str = "environments.toml";
@@ -38,6 +40,10 @@ struct EnvironmentsToml {
 #[serde(deny_unknown_fields)]
 struct EnvironmentToml {
     id: String,
+    // Requirements for this [[environments]] entry. environment/add sets the same
+    // per-environment value dynamically instead of loading it from this file.
+    #[serde(default)]
+    skills: ScopedSkillsConfig,
     url: Option<String>,
     auth_bearer_token: Option<RedactedString>,
     program: Option<String>,
@@ -54,7 +60,7 @@ struct EnvironmentToml {
 struct TomlEnvironmentProvider {
     default: EnvironmentDefault,
     include_local: bool,
-    environments: Vec<(String, ExecServerTransportParams)>,
+    environments: Vec<EnvironmentProviderEntry>,
 }
 
 impl TomlEnvironmentProvider {
@@ -79,13 +85,14 @@ impl TomlEnvironmentProvider {
         }
         let mut parsed_environments = Vec::with_capacity(environments.len());
         for item in environments {
-            let (id, transport) = parse_environment_toml(item, config_dir)?;
-            if !ids.insert(id.clone()) {
+            let entry = parse_environment_toml(item, config_dir)?;
+            if !ids.insert(entry.id.clone()) {
                 return Err(ExecServerError::Protocol(format!(
-                    "environment id `{id}` is duplicated"
+                    "environment id `{}` is duplicated",
+                    entry.id
                 )));
             }
-            parsed_environments.push((id, transport));
+            parsed_environments.push(entry);
         }
         let default = normalize_default_environment_id(default.as_deref(), include_local, &ids)?;
         Ok(Self {
@@ -113,9 +120,10 @@ impl EnvironmentProvider for TomlEnvironmentProvider {
 fn parse_environment_toml(
     item: EnvironmentToml,
     config_dir: Option<&Path>,
-) -> Result<(String, ExecServerTransportParams), ExecServerError> {
+) -> Result<EnvironmentProviderEntry, ExecServerError> {
     let EnvironmentToml {
         id,
+        skills,
         url,
         auth_bearer_token,
         program,
@@ -197,7 +205,11 @@ fn parse_environment_toml(
         }
     };
 
-    Ok((id, transport_params))
+    Ok(EnvironmentProviderEntry {
+        id,
+        transport: transport_params,
+        skills,
+    })
 }
 
 fn normalize_stdio_cwd(
@@ -357,6 +369,9 @@ mod option_duration_secs {
 
 #[cfg(test)]
 mod tests {
+    use crate::EnvironmentManager;
+    use codex_http_client::HttpClientFactory;
+    use codex_http_client::OutboundProxyPolicy;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
@@ -380,7 +395,7 @@ mod tests {
             http_headers,
             initialize_timeout,
             ..
-        } = &provider.environments[0].1
+        } = &provider.environments[0].transport
         else {
             panic!("expected websocket")
         };
@@ -437,12 +452,12 @@ mod tests {
             default,
             include_local,
         } = snapshot;
-        let environment_ids: Vec<_> = environments
-            .iter()
-            .map(|(id, _environment)| id.as_str())
-            .collect();
+        let environment_ids: Vec<_> = environments.iter().map(|entry| entry.id.as_str()).collect();
         assert_eq!(environment_ids, vec!["devbox", "ssh-dev"]);
-        let environments: HashMap<_, _> = environments.into_iter().collect();
+        let environments: HashMap<_, _> = environments
+            .into_iter()
+            .map(|entry| (entry.id, entry.transport))
+            .collect();
 
         assert!(include_local);
         assert!(!environments.contains_key(LOCAL_ENVIRONMENT_ID));
@@ -642,7 +657,7 @@ mod tests {
         let ExecServerTransportParams::StdioCommand {
             command,
             initialize_timeout,
-        } = &provider.environments[0].1
+        } = &provider.environments[0].transport
         else {
             panic!("expected stdio transport");
         };
@@ -689,7 +704,7 @@ mod tests {
             connect_timeout,
             initialize_timeout,
             ..
-        } = &provider.environments[0].1
+        } = &provider.environments[0].transport
         else {
             panic!("expected websocket transport");
         };
@@ -700,7 +715,7 @@ mod tests {
         let ExecServerTransportParams::StdioCommand {
             command,
             initialize_timeout,
-        } = &provider.environments[1].1
+        } = &provider.environments[1].transport
         else {
             panic!("expected stdio transport");
         };
@@ -797,6 +812,44 @@ mod tests {
             err.to_string(),
             "exec-server protocol error: default environment `missing` is not configured"
         );
+    }
+
+    /// Requirements from a TOML entry reach that environment without affecting other entries.
+    #[tokio::test]
+    async fn required_skills_from_toml_reach_their_environment() {
+        let codex_home = tempdir().expect("tempdir");
+        std::fs::write(
+            codex_home.path().join(ENVIRONMENTS_TOML_FILE),
+            r#"
+include_local = false
+[[environments]]
+id = "training"
+url = "ws://127.0.0.1:4512"
+[environments.skills]
+required = ["computer-use"]
+
+[[environments]]
+id = "other"
+url = "ws://127.0.0.1:4513"
+"#,
+        )
+        .expect("write environments.toml");
+        let provider =
+            environment_provider_from_codex_home(codex_home.path()).expect("environment provider");
+        let manager = EnvironmentManager::from_snapshot(
+            provider.snapshot().await.expect("environment snapshot"),
+            /*local_runtime_paths*/ None,
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        )
+        .expect("environment manager");
+        let requirements = ["training", "other"].map(|id| {
+            manager
+                .get_environment(id)
+                .expect("registered environment")
+                .required_skills()
+                .to_vec()
+        });
+        assert_eq!(requirements, [vec!["computer-use".to_string()], Vec::new()]);
     }
 
     #[test]
@@ -930,7 +983,7 @@ include_local = false
         let environment_ids: Vec<_> = snapshot
             .environments
             .into_iter()
-            .map(|(id, _environment)| id)
+            .map(|entry| entry.id)
             .collect();
 
         assert!(!snapshot.include_local);
@@ -949,7 +1002,7 @@ include_local = false
         let environment_ids: Vec<_> = snapshot
             .environments
             .into_iter()
-            .map(|(id, _environment)| id)
+            .map(|entry| entry.id)
             .collect();
 
         assert!(snapshot.include_local);

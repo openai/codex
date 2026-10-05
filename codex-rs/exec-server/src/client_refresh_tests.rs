@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use bytes::Bytes;
+use codex_config::ScopedSkillsConfig;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use tokio::net::TcpListener;
@@ -321,8 +322,11 @@ async fn registration_snapshot_changes_only_after_same_key_replacement_is_instal
     };
     let new = Executor::start_with_identity(validator.clone(), old.target.identity.clone()).await?;
     let (client, registry) = old.client()?;
-    let environment =
-        crate::Environment::remote_with_client(client.clone(), /*local_runtime_paths*/ None);
+    let environment = crate::Environment::remote_with_client(
+        client.clone(),
+        /*local_runtime_paths*/ None,
+        ScopedSkillsConfig::default(),
+    );
     assert_eq!(environment.cached_executor_registration_id(), None);
     let original = client.get().await?;
     assert_eq!(
@@ -364,8 +368,11 @@ async fn registration_renewal_recovers_the_session_and_running_process() -> Resu
     )
     .await?;
     let (client, registry) = old.client()?;
-    let environment =
-        crate::Environment::remote_with_client(client.clone(), /*local_runtime_paths*/ None);
+    let environment = crate::Environment::remote_with_client(
+        client.clone(),
+        /*local_runtime_paths*/ None,
+        ScopedSkillsConfig::default(),
+    );
     let original = client.get().await?;
     let session_id = original.session_id();
     let process =
@@ -450,8 +457,11 @@ async fn same_key_replacement_cannot_resume_a_missing_session() -> Result<()> {
     let replacement =
         Executor::start_with_identity(Validator::default(), old.target.identity.clone()).await?;
     let (client, registry) = old.client()?;
-    let environment =
-        crate::Environment::remote_with_client(client.clone(), /*local_runtime_paths*/ None);
+    let environment = crate::Environment::remote_with_client(
+        client.clone(),
+        /*local_runtime_paths*/ None,
+        ScopedSkillsConfig::default(),
+    );
     let original = client.get().await?;
     let process = original
         .register_session(&ProcessId::from("old-process"))
@@ -488,8 +498,11 @@ async fn stale_refresh_lookup_does_not_retire_a_renewed_session() -> Result<()> 
     )
     .await?;
     let (client, registry) = old.client()?;
-    let environment =
-        crate::Environment::remote_with_client(client.clone(), /*local_runtime_paths*/ None);
+    let environment = crate::Environment::remote_with_client(
+        client.clone(),
+        /*local_runtime_paths*/ None,
+        ScopedSkillsConfig::default(),
+    );
     let original = client.get().await?;
     let release = registry.block_next_lookup();
     let refreshing = client.refresh_connection();

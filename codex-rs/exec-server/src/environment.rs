@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 
 use arc_swap::ArcSwapOption;
+use codex_config::ScopedSkillsConfig;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_protocol::capabilities::CapabilityRootLocation;
@@ -33,6 +34,7 @@ use crate::environment_config::read_environment_config;
 use crate::environment_provider::DefaultEnvironmentProvider;
 use crate::environment_provider::EnvironmentDefault;
 use crate::environment_provider::EnvironmentProvider;
+use crate::environment_provider::EnvironmentProviderEntry;
 use crate::environment_provider::EnvironmentProviderSnapshot;
 use crate::environment_provider::normalize_exec_server_url;
 use crate::environment_toml::environment_provider_from_codex_home;
@@ -245,6 +247,7 @@ impl EnvironmentManager {
             },
             manager.local_runtime_paths.clone(),
             manager.http_client_factory.clone(),
+            ScopedSkillsConfig::default(),
         ));
         manager.insert_environment(REMOTE_ENVIRONMENT_ID.to_string(), environment)?;
         Ok(manager)
@@ -299,7 +302,12 @@ impl EnvironmentManager {
         } else {
             None
         };
-        for (id, transport) in environments {
+        for EnvironmentProviderEntry {
+            id,
+            transport,
+            skills,
+        } in environments
+        {
             if id.is_empty() {
                 return Err(ExecServerError::Protocol(
                     "environment id cannot be empty".to_string(),
@@ -314,6 +322,7 @@ impl EnvironmentManager {
                 transport,
                 /*local_runtime_paths*/ None,
                 http_client_factory.clone(),
+                skills,
             );
             if environment_map
                 .insert(id.clone(), Arc::new(environment))
@@ -477,6 +486,7 @@ impl EnvironmentManager {
                 connect_timeout,
                 http_headers: HashMap::new(),
             },
+            ScopedSkillsConfig::default(),
         )
     }
 
@@ -489,15 +499,17 @@ impl EnvironmentManager {
         &self,
         environment_id: String,
         options: RemoteEnvironmentOptions,
+        skills: ScopedSkillsConfig,
     ) -> Result<(), ExecServerError> {
         validate_environment_id(&environment_id)?;
         let transport = options.into_transport_params()?;
-        let environment = Arc::new(Environment::remote_with_transport(
+        let environment = Environment::remote_with_transport(
             transport,
             self.local_runtime_paths.clone(),
             self.http_client_factory.clone(),
-        ));
-        self.insert_environment(environment_id, environment)
+            skills,
+        );
+        self.insert_environment(environment_id, Arc::new(environment))
     }
 
     /// Returns the stable environment for an ID, creating it as pending when absent.
@@ -538,6 +550,7 @@ impl EnvironmentManager {
             })),
             self.local_runtime_paths.clone(),
             self.http_client_factory.clone(),
+            ScopedSkillsConfig::default(),
         );
         environment.provisioning_status_tx = Some(provisioning_status_tx);
         Ok(environment)
@@ -665,6 +678,7 @@ fn optional_environment_value(name: &str) -> Option<String> {
 /// paths used by filesystem helpers.
 #[derive(Clone)]
 pub struct Environment {
+    skills: ScopedSkillsConfig,
     remote_client: Option<LazyRemoteExecServerClient>,
     ready_info: Arc<ArcSwapOption<EnvironmentReadyInfo>>,
     // No sender means an ordinary environment. A provisioned environment retains a sender whose
@@ -683,6 +697,7 @@ impl Environment {
     pub fn default_for_tests() -> Self {
         Self {
             remote_client: None,
+            skills: ScopedSkillsConfig::default(),
             ready_info: Arc::new(ArcSwapOption::empty()),
             provisioning_status_tx: None,
             startup_task: Arc::new(Mutex::new(None)),
@@ -748,6 +763,7 @@ impl Environment {
                 ),
                 local_runtime_paths,
                 http_client_factory,
+                ScopedSkillsConfig::default(),
             ),
             None => match local_runtime_paths {
                 Some(local_runtime_paths) => Self::local(local_runtime_paths, http_client_factory),
@@ -762,6 +778,7 @@ impl Environment {
     ) -> Self {
         Self {
             remote_client: None,
+            skills: ScopedSkillsConfig::default(),
             ready_info: Arc::new(ArcSwapOption::empty()),
             provisioning_status_tx: None,
             startup_task: Arc::new(Mutex::new(None)),
@@ -780,14 +797,16 @@ impl Environment {
         remote_transport: ExecServerTransportParams,
         local_runtime_paths: Option<ExecServerRuntimeOptions>,
         http_client_factory: HttpClientFactory,
+        skills: ScopedSkillsConfig,
     ) -> Self {
         let client = LazyRemoteExecServerClient::new(remote_transport, http_client_factory);
-        Self::remote_with_client(client, local_runtime_paths)
+        Self::remote_with_client(client, local_runtime_paths, skills)
     }
 
     pub(crate) fn remote_with_client(
         client: LazyRemoteExecServerClient,
         local_runtime_paths: Option<ExecServerRuntimeOptions>,
+        skills: ScopedSkillsConfig,
     ) -> Self {
         let exec_backend: Arc<dyn ExecBackend> = Arc::new(RemoteProcess::new(client.clone()));
         let filesystem: Arc<dyn ExecutorFileSystem> =
@@ -795,6 +814,7 @@ impl Environment {
 
         Self {
             remote_client: Some(client.clone()),
+            skills,
             ready_info: Arc::new(ArcSwapOption::empty()),
             provisioning_status_tx: None,
             startup_task: Arc::new(Mutex::new(None)),
@@ -803,6 +823,11 @@ impl Environment {
             http_client: Arc::new(client),
             local_runtime_paths,
         }
+    }
+
+    /// Skill names required whenever this registration is selected by a turn.
+    pub fn required_skills(&self) -> &[String] {
+        &self.skills.required
     }
 
     pub fn is_remote(&self) -> bool {
@@ -1177,7 +1202,9 @@ mod tests {
     use crate::client_api::ExecServerTransportParams;
     use crate::client_api::StdioExecServerCommand;
     use crate::environment_provider::EnvironmentDefault;
+    use crate::environment_provider::EnvironmentProviderEntry;
     use crate::environment_provider::EnvironmentProviderSnapshot;
+    use codex_config::ScopedSkillsConfig;
     use codex_http_client::HttpClientFactory;
     use codex_http_client::OutboundProxyPolicy;
     use codex_utils_path_uri::PathUri;
@@ -1354,10 +1381,11 @@ mod tests {
     #[tokio::test]
     async fn environment_manager_builds_from_snapshot() {
         let snapshot = EnvironmentProviderSnapshot {
-            environments: vec![(
-                REMOTE_ENVIRONMENT_ID.to_string(),
-                prepared_websocket_environment(),
-            )],
+            environments: vec![EnvironmentProviderEntry {
+                id: REMOTE_ENVIRONMENT_ID.to_string(),
+                transport: prepared_websocket_environment(),
+                skills: Default::default(),
+            }],
             default: EnvironmentDefault::EnvironmentId(REMOTE_ENVIRONMENT_ID.to_string()),
             include_local: false,
         };
@@ -1385,7 +1413,11 @@ mod tests {
     #[tokio::test]
     async fn environment_manager_rejects_empty_environment_id() {
         let snapshot = EnvironmentProviderSnapshot {
-            environments: vec![("".to_string(), prepared_websocket_environment())],
+            environments: vec![EnvironmentProviderEntry {
+                id: "".to_string(),
+                transport: prepared_websocket_environment(),
+                skills: Default::default(),
+            }],
             default: EnvironmentDefault::Disabled,
             include_local: false,
         };
@@ -1405,10 +1437,11 @@ mod tests {
     #[tokio::test]
     async fn environment_manager_rejects_provider_supplied_local_environment() {
         let snapshot = EnvironmentProviderSnapshot {
-            environments: vec![(
-                LOCAL_ENVIRONMENT_ID.to_string(),
-                prepared_websocket_environment(),
-            )],
+            environments: vec![EnvironmentProviderEntry {
+                id: LOCAL_ENVIRONMENT_ID.to_string(),
+                transport: prepared_websocket_environment(),
+                skills: Default::default(),
+            }],
             default: EnvironmentDefault::Disabled,
             include_local: false,
         };
@@ -1428,7 +1461,11 @@ mod tests {
     #[tokio::test]
     async fn environment_manager_uses_explicit_provider_default() {
         let snapshot = EnvironmentProviderSnapshot {
-            environments: vec![("devbox".to_string(), prepared_websocket_environment())],
+            environments: vec![EnvironmentProviderEntry {
+                id: "devbox".to_string(),
+                transport: prepared_websocket_environment(),
+                skills: Default::default(),
+            }],
             default: EnvironmentDefault::EnvironmentId("devbox".to_string()),
             include_local: true,
         };
@@ -1450,7 +1487,11 @@ mod tests {
     #[tokio::test]
     async fn environment_manager_disables_provider_default() {
         let snapshot = EnvironmentProviderSnapshot {
-            environments: vec![("devbox".to_string(), prepared_websocket_environment())],
+            environments: vec![EnvironmentProviderEntry {
+                id: "devbox".to_string(),
+                transport: prepared_websocket_environment(),
+                skills: Default::default(),
+            }],
             default: EnvironmentDefault::Disabled,
             include_local: true,
         };
@@ -1474,7 +1515,11 @@ mod tests {
     #[tokio::test]
     async fn environment_manager_rejects_unknown_provider_default() {
         let snapshot = EnvironmentProviderSnapshot {
-            environments: vec![("devbox".to_string(), prepared_websocket_environment())],
+            environments: vec![EnvironmentProviderEntry {
+                id: "devbox".to_string(),
+                transport: prepared_websocket_environment(),
+                skills: Default::default(),
+            }],
             default: EnvironmentDefault::EnvironmentId("missing".to_string()),
             include_local: true,
         };
@@ -1650,6 +1695,7 @@ mod tests {
             },
             /*local_runtime_paths*/ None,
             legacy_http_client_factory(),
+            ScopedSkillsConfig::default(),
         );
 
         assert_eq!(
@@ -1672,7 +1718,11 @@ mod tests {
         };
         let manager = EnvironmentManager::from_snapshot(
             EnvironmentProviderSnapshot {
-                environments: vec![("stdio".to_string(), transport)],
+                environments: vec![EnvironmentProviderEntry {
+                    id: "stdio".to_string(),
+                    transport,
+                    skills: Default::default(),
+                }],
                 default: EnvironmentDefault::Disabled,
                 include_local: false,
             },
@@ -1703,7 +1753,11 @@ mod tests {
         };
         let manager = EnvironmentManager::from_snapshot(
             EnvironmentProviderSnapshot {
-                environments: vec![("stdio".to_string(), transport)],
+                environments: vec![EnvironmentProviderEntry {
+                    id: "stdio".to_string(),
+                    transport,
+                    skills: Default::default(),
+                }],
                 default: EnvironmentDefault::Disabled,
                 include_local: false,
             },
