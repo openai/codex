@@ -1,11 +1,13 @@
 //! Bounded Decisions transport for the optional Guardian comparison classifier.
 //! Admission retains the newest requests and cancels the oldest unfinished request at capacity.
 //! Unsupported evidence is rejected intact; errors never contain credentials or wire bodies.
+//! Only host-annotated trusted-tool evidence is appended to the developer-level rubric.
 //! The caller records measurements after baseline publication; dropping its task aborts Decisions work.
 
 use super::sampler::LunaSampler;
 use super::sampler::LunaSamplingRequest;
 use codex_context_fragments::RenderedFragment;
+use codex_guardian_context::TrustedTool;
 use codex_history::ResponseItemEnvelope;
 use codex_http_client::HttpClient;
 use codex_protocol::models::ContentItem;
@@ -218,14 +220,34 @@ fn request_body(
     let ContentItem::InputText { text: rubric } = instructions.annotated_content().content() else {
         return Err(DecisionsError::UnsupportedEvidence);
     };
+    let mut rubric = rubric.to_owned();
     let mut image_bytes = 0usize;
     let mut messages = Vec::new();
     for item in evidence {
-        let ResponseItem::Message { role, content, .. } = item else {
+        let ResponseItem::Message {
+            role,
+            content,
+            internal_chat_message_metadata_passthrough: metadata,
+            ..
+        } = item
+        else {
             return Err(DecisionsError::UnsupportedEvidence);
         };
-        if role != "user" {
-            return Err(DecisionsError::UnsupportedEvidence);
+        let kinds = metadata
+            .as_ref()
+            .and_then(|metadata| metadata.content_item_kinds.as_deref());
+        // Decisions only accepts user input, so keep Codex's trusted-tool note in the rubric.
+        // This preserves its developer role; other developer messages remain unsupported.
+        match (role.as_str(), content.as_slice(), kinds) {
+            ("developer", [ContentItem::InputText { text }], Some([kind]))
+                if kind.0 == TrustedTool::KIND =>
+            {
+                rubric.push_str("\n\n");
+                rubric.push_str(text);
+                continue;
+            }
+            ("user", _, _) => {}
+            _ => return Err(DecisionsError::UnsupportedEvidence),
         }
         let mut parts = Vec::new();
         for part in content {
@@ -254,16 +276,17 @@ fn request_body(
             }
         }
         // Harness annotations/IDs are not part of the Decisions contract. Preserve every
-        // model-visible content part and message boundary; never demote trusted developer text.
+        // user content part and message boundary.
         let mut message = json!({"role": "user"});
         message["content"] = Value::Array(parts);
         messages.push(message);
     }
     let mut body = json!({
         "model": MODEL,
-        "questions": [{"type": "choice", "name": "guardian_risk", "instructions": rubric,
+        "questions": [{"type": "choice", "name": "guardian_risk",
                        "choices": [{"value": "low"}, {"value": "high"}]}]
     });
+    body["questions"][0]["instructions"] = Value::String(rubric);
     body["input"] = Value::Array(messages);
     Ok(body)
 }

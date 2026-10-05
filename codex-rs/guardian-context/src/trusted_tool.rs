@@ -28,13 +28,18 @@ pub struct TrustedTool {
     pub source: String,
 }
 
+impl TrustedTool {
+    /// Classification attached to this fragment's rendered text.
+    pub const KIND: &str = "guardian.trusted_tool";
+}
+
 impl ContextualUserFragment for TrustedTool {
     fn role(&self) -> &'static str {
         "developer"
     }
 
     fn content_kind(&self) -> ContentItemKind {
-        ContentItemKind("guardian.trusted_tool".to_owned())
+        ContentItemKind(Self::KIND.to_owned())
     }
 
     fn markers(&self) -> (&'static str, &'static str) {
