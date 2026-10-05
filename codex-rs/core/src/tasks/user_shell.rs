@@ -167,7 +167,7 @@ pub(crate) async fn execute_user_shell_command(
     let shell_environment_policy = turn_environment.shell_environment_policy();
     let mut exec_env_map = create_env(shell_environment_policy, Some(session.thread_id));
     inject_session_env(&mut exec_env_map, session.session_id());
-    inject_apply_patch_env(&mut exec_env_map, &turn_context.config.features);
+    inject_apply_patch_env(&mut exec_env_map);
     if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
         strip_managed_proxy_env(&mut exec_env_map);
     }

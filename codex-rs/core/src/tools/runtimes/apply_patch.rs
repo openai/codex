@@ -179,7 +179,6 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
         let result = codex_apply_patch::apply_patch_with_options(
             &req.action.patch,
             ApplyPatchOptions {
-                update_file_mode: req.action.update_file_mode(),
                 // Only reject links when an otherwise-required sandbox was bypassed.
                 // Executor-managed sandboxes can have SandboxType::None.
                 follow_symlinks: attempt.sandbox_requested

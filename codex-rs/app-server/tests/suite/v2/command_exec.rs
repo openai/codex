@@ -199,42 +199,11 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-enum CommandExecApplyPatchRollout {
-    Enabled,
-    Disabled,
-}
-
 #[tokio::test]
-async fn command_exec_apply_patch_preserves_line_endings_despite_client_override() -> Result<()> {
-    assert_command_exec_apply_patch_rollout(
-        CommandExecApplyPatchRollout::Enabled,
-        "0",
-        b"after\r\n",
-    )
-    .await
-}
-
-#[tokio::test]
-async fn command_exec_apply_patch_normalizes_line_endings_despite_stale_overrides() -> Result<()> {
-    assert_command_exec_apply_patch_rollout(CommandExecApplyPatchRollout::Disabled, "1", b"after\n")
-        .await
-}
-
-async fn assert_command_exec_apply_patch_rollout(
-    rollout: CommandExecApplyPatchRollout,
-    client_override: &str,
-    expected_contents: &[u8],
-) -> Result<()> {
+async fn command_exec_apply_patch_preserves_line_endings_by_default() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
-
-    let feature_enabled = matches!(rollout, CommandExecApplyPatchRollout::Enabled);
-    insert_command_exec_config(
-        codex_home.path(),
-        &format!("[features]\napply_patch_preserve_line_endings = {feature_enabled}\n"),
-    )?;
 
     let workspace = TempDir::new()?;
     let file_path = workspace.path().join("crlf.txt");
@@ -262,7 +231,7 @@ async fn assert_command_exec_apply_patch_rollout(
             cwd: Some(workspace.path().to_path_buf()),
             env: Some(HashMap::from([(
                 CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
-                Some(client_override.to_string()),
+                Some("0".to_string()),
             )])),
             size: None,
             sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
@@ -279,7 +248,7 @@ async fn assert_command_exec_apply_patch_rollout(
             stderr: String::new(),
         }
     );
-    assert_eq!(std::fs::read(file_path)?, expected_contents);
+    assert_eq!(std::fs::read(file_path)?, b"after\r\n");
     Ok(())
 }
 

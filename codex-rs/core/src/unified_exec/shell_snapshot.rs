@@ -113,7 +113,7 @@ impl Session {
                     session.thread_id().to_string(),
                 );
                 inject_session_env(&mut env, session.session_id());
-                inject_apply_patch_env(&mut env, &config.features);
+                inject_apply_patch_env(&mut env);
                 inject_permission_profile_env(
                     &mut env,
                     environment.active_permission_profile().as_ref(),

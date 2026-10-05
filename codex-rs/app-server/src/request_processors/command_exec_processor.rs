@@ -168,7 +168,7 @@ impl CommandExecRequestProcessor {
             }
         }
         env.retain(|name, _| !is_non_inheritable_env_var(name));
-        inject_apply_patch_env(&mut env, &self.config.features);
+        inject_apply_patch_env(&mut env);
         let timeout_ms = match timeout_ms {
             Some(timeout_ms) => match u64::try_from(timeout_ms) {
                 Ok(timeout_ms) => Some(timeout_ms),

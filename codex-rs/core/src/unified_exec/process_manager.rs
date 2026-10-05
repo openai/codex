@@ -1440,7 +1440,6 @@ impl UnifiedExecProcessManager {
         cwd: PathUri,
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecAttempt, Option<DeferredNetworkApproval>), UnifiedExecError> {
-        let turn = &context.step_context.turn;
         let shell_environment_policy = request.turn_environment.shell_environment_policy();
         let local_policy_env = create_env(shell_environment_policy, /*thread_id*/ None);
         let mut env = local_policy_env.clone();
@@ -1449,7 +1448,7 @@ impl UnifiedExecProcessManager {
             context.session.thread_id.to_string(),
         );
         inject_session_env(&mut env, context.session.session_id());
-        inject_apply_patch_env(&mut env, &turn.config.features);
+        inject_apply_patch_env(&mut env);
         let active_permission_profile = request.turn_environment.active_permission_profile();
         inject_permission_profile_env(&mut env, active_permission_profile.as_ref());
         let mut env = apply_unified_exec_env(env);
