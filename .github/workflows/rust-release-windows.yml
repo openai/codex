@@ -384,11 +384,13 @@ jobs:
             ls -lh "$CARGO_TARGET_DIR/${{ matrix.target }}/release/${binary}.exe"
           done
 
-      - name: Sign Windows binaries with Azure Trusted Signing
+      - name: Sign Windows release files with Azure Trusted Signing
         uses: ./.github/actions/windows-code-sign
         with:
           target: ${{ matrix.target }}
           binaries: ${{ env.WINDOWS_BINARIES }}
+          # The installer is architecture-independent; sign it only in the x64 job.
+          additional-files: ${{ matrix.target == 'x86_64-pc-windows-msvc' && format('{0}/scripts/install/install.ps1', github.workspace) || '' }}
           client-id: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_ARTIFACT_SIGNING_SUBSCRIPTION_ID }}
@@ -616,6 +618,18 @@ jobs:
             # Keep raw executables and produce .zst alongside them.
             "${GITHUB_WORKSPACE}/.github/workflows/zstd" -T0 -19 "$dest/$base"
           ' _
+
+      - name: Verify and stage signed PowerShell installer
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: powershell
+        run: |
+          $installer = Join-Path $env:GITHUB_WORKSPACE 'scripts/install/install.ps1'
+          $signature = Get-AuthenticodeSignature $installer
+          if ($signature.Status -ne 'Valid' -or $null -eq $signature.TimeStamperCertificate) {
+            throw "Installer signature is invalid or missing a timestamp: $($signature.Status)"
+          }
+          # Stage after compression so the installer remains a plain script.
+          Copy-Item $installer 'dist/${{ matrix.target }}/install.ps1'
 
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
