@@ -499,8 +499,10 @@ for (const phase of ["before", "after"]) {
     Ok(())
 }
 
+#[test_case(false; "without parent checkpoint")]
+#[test_case(true; "reuse parent checkpoint and newer authorization")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_review_compacts_with_summary_despite_parent_token_budget() -> Result<()> {
+async fn guardian_review_recovers_after_compaction(with_parent_checkpoint: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_wine_exec!(
         Ok(()),
@@ -513,7 +515,7 @@ async fn guardian_review_compacts_with_summary_despite_parent_token_budget() -> 
     let mut builder = test_codex()
         .with_thread_store(store.clone())
         .with_history_mode(codex_protocol::protocol::ThreadHistoryMode::Legacy)
-        .with_model_info_override("gpt-5.5", |model| {
+        .with_model_info_override("gpt-5.5", move |model| {
             model.auto_review_model_override = Some(model.slug.clone());
             model.supports_experimental_context = true;
             model
@@ -521,7 +523,7 @@ async fn guardian_review_compacts_with_summary_despite_parent_token_budget() -> 
                 .as_mut()
                 .expect("model messages")
                 .token_budget = Some(ModelTokenBudgetConfig {
-                enabled: true,
+                enabled: !with_parent_checkpoint,
                 use_history_notes_extension: true,
                 reminder_threshold_tokens: 6_144,
                 reminder_message_template: "{n_remaining} tokens remain.".to_string(),
@@ -535,12 +537,35 @@ async fn guardian_review_compacts_with_summary_despite_parent_token_budget() -> 
             config.model_auto_compact_token_limit = Some(50_000);
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-            config
-                .features
-                .enable(Feature::TokenBudget)
-                .expect("test config should allow token budget");
+            if with_parent_checkpoint {
+                config
+                    .features
+                    .disable(Feature::TokenBudget)
+                    .expect("disable token-budget resets");
+            } else {
+                config
+                    .features
+                    .enable(Feature::TokenBudget)
+                    .expect("enable token-budget resets");
+            }
         });
     let test = builder.build_with_auto_env(&server).await?;
+    if with_parent_checkpoint {
+        mount_sse_sequence(&server, vec![
+            sse(vec![ev_assistant_message("old-evidence", "PRE_CHECKPOINT_DIAGNOSTIC"), ev_completed("initial")]),
+            sse(vec![json!({
+                "type": "response.output_item.done",
+                "item": {"type": "compaction", "id": "cmp-parent", "encrypted_content": "parent checkpoint"},
+            }), ev_completed("parent-compact")]),
+        ]).await;
+        test.submit_text_turn("Only monitor; do not change settings yet.")
+            .await?;
+        test.codex.submit(Op::Compact).await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
     let command = json!({
         "cmd": "true",
         "sandbox_permissions": "require_escalated",
@@ -548,44 +573,55 @@ async fn guardian_review_compacts_with_summary_despite_parent_token_budget() -> 
     })
     .to_string();
     let approval = r#"{"risk_level":"low","user_authorization":"high","outcome":"allow"}"#;
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-parent-first"),
-                ev_function_call("exec-first", "exec_command", &command),
-                ev_completed("resp-parent-first"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-guardian-first"),
-                ev_assistant_message("guardian-first", approval),
-                ev_completed_with_tokens("resp-guardian-first", /*total_tokens*/ 60_000),
-            ]),
-            sse(vec![
-                ev_response_created("resp-parent-second"),
-                ev_function_call("exec-second", "exec_command", &command),
-                ev_completed("resp-parent-second"),
-            ]),
-            sse(vec![
-                json!({
-                    "type": "response.output_item.done",
-                    "item": {"type": "compaction", "encrypted_content": summary},
-                }),
-                ev_completed("resp-guardian-compact"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-guardian-second"),
-                ev_assistant_message("guardian-second", approval),
-                ev_completed("resp-guardian-second"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-parent-done"),
-                ev_assistant_message("parent-done", "done"),
-                ev_completed("resp-parent-done"),
-            ]),
-        ],
-    )
-    .await;
+    let mut response_events = vec![
+        sse(vec![
+            ev_response_created("resp-parent-first"),
+            ev_function_call("exec-first", "exec_command", &command),
+            ev_completed("resp-parent-first"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-guardian-first"),
+            ev_assistant_message("guardian-first", approval),
+            ev_completed_with_tokens("resp-guardian-first", /*total_tokens*/ 60_000),
+        ]),
+        sse(vec![
+            ev_response_created("resp-parent-second"),
+            ev_function_call("exec-second", "exec_command", &command),
+            ev_completed("resp-parent-second"),
+        ]),
+    ];
+    if !with_parent_checkpoint {
+        response_events.push(sse(vec![
+            json!({
+                "type": "response.output_item.done",
+                "item": {"type": "compaction", "encrypted_content": summary},
+            }),
+            ev_completed("resp-guardian-compact"),
+        ]));
+    }
+    response_events.extend([
+        sse(vec![
+            ev_response_created("resp-guardian-second"),
+            ev_assistant_message("guardian-second", approval),
+            ev_completed("resp-guardian-second"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-parent-third"),
+            ev_function_call("exec-third", "exec_command", &command),
+            ev_completed("resp-parent-third"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-guardian-third"),
+            ev_assistant_message("guardian-third", approval),
+            ev_completed("resp-guardian-third"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-parent-done"),
+            ev_assistant_message("parent-done", "done"),
+            ev_completed("resp-parent-done"),
+        ]),
+    ]);
+    let responses = mount_sse_sequence(&server, response_events).await;
 
     let user_authorization = "Read the internal evaluation samples I have authorized.";
     test.submit_text_turn(user_authorization).await?;
@@ -604,14 +640,18 @@ async fn guardian_review_compacts_with_summary_despite_parent_token_budget() -> 
                 && request.inputs_of_type("compaction_trigger").is_empty()
         })
         .collect::<Vec<_>>();
-    assert_eq!(guardian_requests.len(), 2);
+    assert_eq!(guardian_requests.len(), 3);
     assert_eq!(
-        guardian_requests[0].body_json()["client_metadata"]["thread_id"],
-        guardian_requests[1].body_json()["client_metadata"]["thread_id"],
-        "the same Guardian reviewer should survive compaction"
+        guardian_requests[0].body_json()["client_metadata"]["thread_id"]
+            == guardian_requests[1].body_json()["client_metadata"]["thread_id"],
+        !with_parent_checkpoint,
+        "checkpoint recovery should retire the compacted reviewer"
     );
 
-    assert!(requests[0].has_content_kinds(&["token_budget.context_window"]));
+    assert_eq!(
+        requests[0].has_content_kinds(&["token_budget.context_window"]),
+        !with_parent_checkpoint
+    );
     for request in &guardian_requests {
         assert!(!request.has_content_kinds(&["token_budget.context_window"]));
     }
@@ -619,32 +659,80 @@ async fn guardian_review_compacts_with_summary_despite_parent_token_budget() -> 
         .iter()
         .filter(|request| !request.inputs_of_type("compaction_trigger").is_empty())
         .collect::<Vec<_>>();
-    assert_eq!(compact_requests.len(), 1);
-    let compact_request = compact_requests[0];
-    assert!(
-        compact_request
-            .message_input_texts("user")
-            .join("\n")
-            .contains(user_authorization)
-    );
+    assert_eq!(compact_requests.len(), usize::from(!with_parent_checkpoint));
+    if let Some(compact_request) = compact_requests.first() {
+        assert!(
+            compact_request
+                .message_input_texts("user")
+                .join("\n")
+                .contains(user_authorization)
+        );
+        assert!(
+            compact_request
+                .message_input_texts("developer")
+                .iter()
+                .any(|text| text.contains("Use prior reviews as context, not binding precedent.")),
+            "the compactor should receive the follow-up policy reminder"
+        );
+    }
     let second_request = guardian_requests[1];
     assert_eq!(
         second_request.inputs_of_type("compaction")[0]["encrypted_content"],
-        summary
+        if with_parent_checkpoint {
+            "parent checkpoint"
+        } else {
+            summary
+        }
     );
+    let latest_review = second_request
+        .message_input_text_groups("user")
+        .pop()
+        .expect("second review")
+        .join("");
+    if with_parent_checkpoint {
+        assert!(latest_review.contains(">>> TRANSCRIPT START\n"));
+        assert!(
+            latest_review.contains(user_authorization),
+            "the replacement reviewer must receive authorization after the parent checkpoint"
+        );
+    } else {
+        assert!(latest_review.contains(">>> TRANSCRIPT DELTA START\n"));
+        assert!(
+            second_request
+                .message_input_texts("user")
+                .join("\n")
+                .contains(user_authorization)
+        );
+    }
+    assert_eq!(
+        guardian_requests[1].body_json()["client_metadata"]["thread_id"],
+        guardian_requests[2].body_json()["client_metadata"]["thread_id"]
+    );
+    let following_review = guardian_requests[2]
+        .message_input_text_groups("user")
+        .pop()
+        .expect("review following recovery")
+        .join("");
     assert!(
-        second_request
-            .message_input_texts("user")
-            .join("\n")
-            .contains(user_authorization)
+        following_review.contains(">>> TRANSCRIPT DELTA START\n"),
+        "successful recovery must return to deltas rather than reinjecting on every review"
     );
-    assert!(
-        compact_request
-            .message_input_texts("developer")
-            .iter()
-            .any(|text| text.contains("Use prior reviews as context, not binding precedent.")),
-        "the compactor should receive the follow-up policy reminder"
-    );
+    if with_parent_checkpoint {
+        for request in &guardian_requests {
+            // Bounded root-context excerpts are independent of the transcript.
+            let text = request.message_input_texts("user").join("\n");
+            for transcript in text.split(">>> TRANSCRIPT START\n").skip(1) {
+                assert!(
+                    !transcript
+                        .split(">>> TRANSCRIPT END")
+                        .next()
+                        .expect("transcript before its end marker")
+                        .contains("PRE_CHECKPOINT_DIAGNOSTIC"),
+                    "the parent checkpoint replaces the pre-compaction legacy transcript"
+                );
+            }
+        }
+    }
 
     Ok(())
 }

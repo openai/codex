@@ -284,8 +284,12 @@ async fn guardian_history_preserves_reviewer_across_parent_compaction() -> Resul
     Ok(())
 }
 
+#[test_case(false; "legacy transcript")]
+#[test_case(true; "parent checkpoint")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_history_uses_deltas_between_eviction_batches() -> Result<()> {
+async fn guardian_history_uses_deltas_between_eviction_batches(
+    reuse_parent_checkpoint: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_wine_exec!(
         Ok(()),
@@ -293,8 +297,17 @@ async fn guardian_history_uses_deltas_between_eviction_batches() -> Result<()> {
     );
     let server = start_mock_server().await;
     let mut test = test_codex()
-        .with_config(|config| {
-            config.features.enable(Feature::TokenBudget).unwrap();
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("enable token-budget resets");
+            if !reuse_parent_checkpoint {
+                config
+                    .features
+                    .disable(Feature::GuardianReuseParentCompaction)
+                    .expect("exercise legacy transcript retention without checkpoint reuse");
+            }
 
             config.update_plan_enabled = true;
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
@@ -387,9 +400,28 @@ async fn guardian_history_uses_deltas_between_eviction_batches() -> Result<()> {
                 prompt.contains(">>> TRANSCRIPT DELTA START\n"),
             ))
             .collect::<Vec<_>>(),
-        vec![(true, false), (true, false), (false, true)]
+        // Evicting the legacy backup only invalidates a cursor that uses it.
+        vec![
+            (true, false),
+            (!reuse_parent_checkpoint, reuse_parent_checkpoint),
+            (false, true)
+        ]
     );
-    assert!(prompts[1].contains(restriction));
+    if reuse_parent_checkpoint {
+        // Earlier restrictions travel in the checkpoint, not a replayed backup.
+        for request in &guardian_requests {
+            assert_eq!(
+                request
+                    .inputs_of_type("compaction")
+                    .iter()
+                    .map(|item| item["encrypted_content"].clone())
+                    .collect::<Vec<_>>(),
+                vec![json!("opaque checkpoint")],
+            );
+        }
+    } else {
+        assert!(prompts[1].contains(restriction));
+    }
     assert!(prompts[2].contains("review-2"));
     assert_eq!(
         guardian_requests[1].body_json()["client_metadata"]["thread_id"],

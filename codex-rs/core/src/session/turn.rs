@@ -1443,6 +1443,12 @@ async fn run_auto_compact(
     phase: CompactionPhase,
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
+    if matches!(phase, CompactionPhase::PreTurn)
+        && crate::guardian::is_basic_session_source(&turn_context.session_source)
+        && !crate::guardian::should_compact_guardian_input(sess)?
+    {
+        return Ok(());
+    }
     let _profile_guard = turn_context.turn_timing_state.begin_compaction();
     let _compaction_span = trace_span!(
         "codex.compaction",
