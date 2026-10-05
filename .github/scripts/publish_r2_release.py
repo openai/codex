@@ -10,8 +10,9 @@ versioned prefix includes every release asset plus installer-facing
 objects are verified, the same metadata advances ``codex/channels/latest`` when
 the release is marked latest and ``codex/channels/prerelease`` for prereleases
 that are newer than its current version, or when that version is unreadable.
-Stable releases also update the mutable ``codex/install.sh`` and
+Latest stable releases also update the mutable ``codex/install.sh`` and
 ``codex/install.ps1`` bootstrap aliases from their verified versioned assets.
+An older stable release cannot move these aliases or the latest channel back.
 """
 
 import argparse
@@ -27,13 +28,16 @@ from pathlib import Path
 from typing import Any, NamedTuple, NoReturn
 from urllib.parse import quote
 
-from releases import is_valid_release_version, should_update_version
+from releases import (
+    is_valid_release_version,
+    is_valid_stable_release_version,
+    should_update_version,
+)
 
 BUCKET = "releases"
 PREFIX = "codex"
 REPOSITORY = "openai/codex"
 RELEASE_METADATA_NAME = "release.json"
-PRERELEASE_CHANNEL_KEY = f"{PREFIX}/channels/prerelease"
 INSTALLER_NAMES = ("install.sh", "install.ps1")
 MAX_UPLOAD_WORKERS = 8
 CRC64_RE = re.compile(r"^[A-Za-z0-9+/]{11}=$")
@@ -263,27 +267,39 @@ def verify_remote(
         )
 
 
-def should_update_prerelease(endpoint: str, version: str) -> bool:
+def should_update_channel(endpoint: str, version: str, channel: str) -> bool:
     # Read R2 directly: the public CDN may still serve an older version.
-    url = f"s3://{BUCKET}/{PRERELEASE_CHANNEL_KEY}"
+    key = f"{PREFIX}/channels/{channel}"
+    url = f"s3://{BUCKET}/{key}"
     try:
         raw = run_command(["aws", "s3", "cp", url, "-", "--endpoint-url", endpoint])
     except subprocess.CalledProcessError as error:
         if MISSING_OBJECT_RE.search(error.stderr or ""):
             return True
-        raise_s3("read", PRERELEASE_CHANNEL_KEY, error, (error.stderr or "").strip())
+        raise_s3("read", key, error, (error.stderr or "").strip())
     except OSError as error:
-        raise_s3("read", PRERELEASE_CHANNEL_KEY, error)
+        raise_s3("read", key, error)
 
     try:
         metadata = json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as error:
+        if channel == "latest":
+            raise PublishError(f"invalid channel metadata for {key}") from error
         return True
     tag = metadata.get("tag_name") if isinstance(metadata, dict) else None
     if not isinstance(tag, str) or not tag.startswith("rust-v"):
+        if channel == "latest":
+            raise PublishError(f"invalid channel metadata for {key}")
         return True
 
-    return should_update_version(version, tag.removeprefix("rust-v"))
+    current = tag.removeprefix("rust-v")
+    if channel == "latest":
+        if not is_valid_stable_release_version(current):
+            raise PublishError(f"invalid stable version in channel metadata for {key}")
+        # Reruns can repair installer writes interrupted before channel finalization.
+        if version == current:
+            return True
+    return should_update_version(version, current)
 
 
 def publish_installers(endpoint: str, tag: str, assets: list[ReleaseAsset]) -> None:
@@ -435,7 +451,7 @@ def main() -> int:
                 asset for asset in assets if asset.path.name not in previously_published
             ]
             required_downloads = list(remaining)
-            if args.prerelease == "false":
+            if args.prerelease == "false" and args.make_latest == "true":
                 required_downloads.extend(
                     asset
                     for asset in assets
@@ -497,15 +513,17 @@ def main() -> int:
                 f"size={metadata_size} sha256={metadata_sha256}",
                 file=sys.stderr,
             )
-            if args.prerelease == "false":
-                publish_installers(endpoint, args.tag, assets)
             channels = []
-            if args.make_latest == "true":
+            if args.make_latest == "true" and should_update_channel(
+                endpoint, version, "latest"
+            ):
                 channels.append("latest")
-            if args.prerelease == "true" and should_update_prerelease(
-                endpoint, version
+            if args.prerelease == "true" and should_update_channel(
+                endpoint, version, "prerelease"
             ):
                 channels.append("prerelease")
+            if "latest" in channels:
+                publish_installers(endpoint, args.tag, assets)
             for channel in channels:
                 channel_key = f"{PREFIX}/channels/{channel}"
                 put_object(

@@ -1639,7 +1639,10 @@ jobs:
 
       - name: Define release name
         id: release_name
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           # Extract the version from the tag name, which is in the format
           # "rust-v0.1.0".
           version="${GITHUB_REF_NAME#rust-v}"
@@ -1648,7 +1651,9 @@ jobs:
             echo "make_latest=false" >> $GITHUB_OUTPUT
             echo "prerelease=true" >> $GITHUB_OUTPUT
           else
-            echo "make_latest=true" >> $GITHUB_OUTPUT
+            make_latest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
+              | python3 .github/scripts/releases.py "$version" --check-github latest)"
+            echo "make_latest=${make_latest}" >> $GITHUB_OUTPUT
             echo "prerelease=false" >> $GITHUB_OUTPUT
           fi
 
@@ -1903,11 +1908,9 @@ jobs:
                 ;;
             esac
 
-            # The workflow concurrency group holds the lock from this lookup
-            # through publish, including concurrent alpha/hotfix release runs.
-            if [[ "${NPM_TAG}" == "alpha" ]]; then
-              tag="$(python3 .github/scripts/npm_alpha_tag.py "${tarball}" "${VERSION}" "${tag}")"
-            fi
+            # The publication workflow holds the lock from this lookup through
+            # publish, including concurrent releases from other version lines.
+            tag="$(python3 .github/scripts/npm_alpha_tag.py "${tarball}" "${VERSION}" "${tag:-latest}")"
 
             publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}")
             if [[ -n "${tag}" ]]; then
@@ -2059,7 +2062,7 @@ jobs:
           # is JSON metadata with the file contents encoded as base64.
           update="$(gh api "repos/$GITHUB_REPOSITORY/contents/codex-rs/Cargo.toml?ref=latest-alpha-cli" \
             -H 'Accept: application/vnd.github.raw+json' \
-            | python3 .github/scripts/check_github_canary.py "$RELEASE_VERSION")"
+            | python3 .github/scripts/releases.py "$RELEASE_VERSION" --check-github canary)"
           echo "update=$update" >> "$GITHUB_OUTPUT"
       - name: Update latest-alpha-cli branch
         if: success() && steps.github_canary.outputs.update == 'true'
