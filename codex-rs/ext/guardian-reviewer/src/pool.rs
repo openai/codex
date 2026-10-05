@@ -48,6 +48,10 @@ pub trait ReviewerRequest: Send + Sync {
         &self,
         previous: Option<&Self::Session>,
     ) -> <Self::Session as ReviewerSession>::Context;
+    /// Requires a newly spawned session without a cached snapshot for this attempt.
+    fn requires_fresh_session(&self) -> bool {
+        false
+    }
     fn deadline(&self) -> Instant;
     fn cancellation(&self) -> Option<&CancellationToken>;
     fn run(
@@ -90,7 +94,7 @@ type SpawnReviewer<S> = dyn Fn(
 
 struct Trunk<S: ReviewerSession> {
     session: Arc<S>,
-    review_lock: Semaphore,
+    review_lock: Arc<Semaphore>,
     cancellation: CancellationToken,
 }
 
@@ -150,7 +154,7 @@ impl<S: ReviewerSession> ReviewerPool<S> {
         if !cancellation.is_cancelled() && trunk.is_none() {
             *trunk = Some(Arc::new(Trunk {
                 session: Arc::new(session),
-                review_lock: Semaphore::new(/*permits*/ 1),
+                review_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
                 cancellation: guard.disarm(),
             }));
         }
@@ -177,8 +181,9 @@ impl<S: ReviewerSession> ReviewerPool<S> {
     where
         R: ReviewerRequest<Session = S>,
     {
+        let requires_fresh_session = request.requires_fresh_session();
         let mut spawned_trunk = false;
-        let (trunk, context) = match run_before_review_deadline(
+        let (trunk, context, reserved_permit) = match run_before_review_deadline(
             request.deadline(),
             request.cancellation(),
             self.trunk.lock(),
@@ -187,11 +192,19 @@ impl<S: ReviewerSession> ReviewerPool<S> {
         {
             Ok(mut state) => {
                 let context = request.context(state.as_ref().map(|trunk| trunk.session.as_ref()));
+                // Claim cached reviewers before validating them: retirement cancels
+                // the session before releasing its review permit.
+                let mut reserved_permit = state
+                    .as_ref()
+                    .and_then(|trunk| Arc::clone(&trunk.review_lock).try_acquire_owned().ok());
                 if let Some(trunk) = state.as_ref()
-                    && (trunk.cancellation.is_cancelled() || trunk.session.context() != &context)
-                    && trunk.review_lock.try_acquire().is_ok()
+                    && (requires_fresh_session
+                        || trunk.cancellation.is_cancelled()
+                        || trunk.session.context() != &context)
+                    && reserved_permit.is_some()
                 {
                     state.take();
+                    drop(reserved_permit.take());
                 }
                 if state.is_none() {
                     let cancellation = self.runtime.cancellation.child_token();
@@ -220,14 +233,25 @@ impl<S: ReviewerSession> ReviewerPool<S> {
                             return (outcome, GuardianReviewAnalyticsResult::without_session());
                         }
                     };
+                    let review_lock = Arc::new(Semaphore::new(/*permits*/ 1));
+                    // Reserve the first review before other requests can see this session.
+                    reserved_permit = match Arc::clone(&review_lock).try_acquire_owned() {
+                        Ok(permit) => Some(permit),
+                        Err(error) => {
+                            return (
+                                GuardianReviewSessionOutcome::PromptBuildFailed(error.into()),
+                                GuardianReviewAnalyticsResult::without_session(),
+                            );
+                        }
+                    };
                     *state = Some(Arc::new(Trunk {
                         session,
-                        review_lock: Semaphore::new(/*permits*/ 1),
+                        review_lock,
                         cancellation: lifetime.disarm(),
                     }));
                     spawned_trunk = true;
                 }
-                (state.as_ref().cloned(), context)
+                (state.as_ref().cloned(), context, reserved_permit)
             }
             Err(outcome) => return (outcome, GuardianReviewAnalyticsResult::without_session()),
         };
@@ -239,12 +263,12 @@ impl<S: ReviewerSession> ReviewerPool<S> {
                 GuardianReviewAnalyticsResult::without_session(),
             );
         };
-        if trunk.session.context() != &context {
+        if trunk.session.context() != &context || (requires_fresh_session && !spawned_trunk) {
             return Box::pin(self.review_ephemeral(&request, context, /*snapshot*/ None)).await;
         }
-        let guard = match trunk.review_lock.try_acquire() {
-            Ok(guard) => guard,
-            Err(_) => {
+        let guard = match reserved_permit {
+            Some(guard) => guard,
+            None => {
                 return Box::pin(self.review_ephemeral(
                     &request,
                     context,
@@ -329,3 +353,7 @@ impl<S: ReviewerSession> ReviewerPool<S> {
         (outcome, analytics)
     }
 }
+
+#[cfg(test)]
+#[path = "pool_tests.rs"]
+mod tests;

@@ -14,7 +14,7 @@ pub struct PreparedGuardianContext {
     context_policy: ReviewContextPolicy,
     key: GuardianReviewSessionReuseKey,
     parent_compaction: Option<ResponseItem>,
-    prefer_parent_checkpoint: bool,
+    restart_from_parent_checkpoint: bool,
     pub history_reset: CancellationToken,
 }
 
@@ -54,7 +54,7 @@ impl PreparedGuardianContext {
             context_policy,
             key,
             parent_compaction,
-            prefer_parent_checkpoint: false,
+            restart_from_parent_checkpoint: false,
             history_reset,
         })
     }
@@ -83,7 +83,7 @@ impl PreparedGuardianContext {
         &self,
         snapshot: Option<GuardianReviewForkSnapshot>,
     ) -> (crate::StartThreadOptions, GuardianReviewState) {
-        let snapshot = snapshot.filter(|_| !self.prefer_parent_checkpoint);
+        let snapshot = snapshot.filter(|_| !self.restart_from_parent_checkpoint);
         let (mut conversation, mut history) = snapshot.map(ConversationState::fork).unzip();
         if self.parent_compaction.is_some()
             && conversation
@@ -212,6 +212,9 @@ impl ReviewerRequest for PreparedReview {
     fn context(&self, previous: Option<&GuardianReviewSession>) -> GuardianReviewSessionReuseKey {
         self.context.reuse_key(previous)
     }
+    fn requires_fresh_session(&self) -> bool {
+        self.context.restart_from_parent_checkpoint
+    }
     fn deadline(&self) -> tokio::time::Instant {
         self.params.deadline
     }
@@ -256,7 +259,7 @@ impl ReviewerRequest for PreparedReview {
         if recovery_requested {
             result.disposition = SessionDisposition::Discard;
         }
-        if self.context.prefer_parent_checkpoint || !recovery_requested {
+        if self.context.restart_from_parent_checkpoint || !recovery_requested {
             record_failed_review(&session.session, &self.params, &result.outcome).await;
         }
         result
@@ -283,7 +286,7 @@ pub(crate) async fn run_guardian_review_session(
             {
                 // One restart only, under the original deadline. An oversized parent
                 // checkpoint must fail rather than repeatedly compact and recreate.
-                Arc::make_mut(&mut prepared.context).prefer_parent_checkpoint = true;
+                Arc::make_mut(&mut prepared.context).restart_from_parent_checkpoint = true;
                 pool.review(prepared).await
             } else {
                 result
