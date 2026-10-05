@@ -183,6 +183,7 @@ struct MockResponsesState {
     root_thread_id: Mutex<Option<String>>,
     allow_luna: Notify,
     allow_guardian_review: Notify,
+    gate_each_guardian_review: bool,
     classification_completed: Notify,
     truncation_recorded: Notify,
     context_metric_bounds: Mutex<BTreeMap<(String, String), Option<f64>>>,
@@ -422,7 +423,7 @@ async fn parent_response(
             .expect("Guardian request lock should not be poisoned")
             .push(request.clone());
         let review_number = state.guardian_reviews.fetch_add(1, Ordering::SeqCst);
-        if review_number == 0 {
+        if review_number == 0 || state.gate_each_guardian_review {
             state.allow_guardian_review.notified().await;
         }
         let review_outcome = if state.late_root_restriction && review_number > 0 {
@@ -743,6 +744,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         + usize::from(late_root_restriction);
     let responses_state = Arc::new(MockResponsesState {
         luna_score,
+        gate_each_guardian_review: review_continuations && matches!(risk, GuardianRisk::High),
         invalid_classification: matches!(risk, GuardianRisk::InvalidResponse),
         fail_after_classification,
         review_outcome,
@@ -1482,6 +1484,11 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         {
             wait_for_guardian_reviews(responses_state.as_ref(), expected_guardian_reviews).await?;
         }
+        if responses_state.gate_each_guardian_review {
+            // Snapshot classifiers can arrive out of order. Keep the next tool blocked until
+            // this tool's classifier request has been captured and checked.
+            responses_state.allow_guardian_review.notify_one();
+        }
         responses_state.allow_luna.notify_one();
         if review_continuations {
             let third_sample = wait_for_luna_request(responses_state.as_ref(), /*index*/ 2).await?;
@@ -1537,6 +1544,9 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                         .is_some_and(|id| id.starts_with("luna-score-message-"))),
                     "snapshot and failed-stream recovery must start with fresh history"
                 );
+            }
+            if responses_state.gate_each_guardian_review {
+                responses_state.allow_guardian_review.notify_one();
             }
             responses_state.allow_luna.notify_one();
         }
