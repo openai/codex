@@ -14,6 +14,7 @@ use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use codex_history::CodexHarnessMetadata;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::CompactionTraceContext;
@@ -42,7 +43,14 @@ pub(super) async fn run_remote_compact_v2_attempt(
     let turn_context = &step_context.turn;
     let mut history = sess.clone_history().await;
     let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
-    let base_instructions = sess.get_prompt_base_instructions().await;
+    let base_instructions = if step_context.uses_incremental_tools() {
+        BaseInstructions {
+            text: String::new(),
+            provenance: None,
+        }
+    } else {
+        sess.get_prompt_base_instructions().await
+    };
     let (rewritten_outputs, estimated_deleted_tokens) =
         trim_function_call_history_to_fit_context_window(
             &mut history,

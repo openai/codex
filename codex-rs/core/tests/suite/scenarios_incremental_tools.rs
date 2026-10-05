@@ -126,6 +126,16 @@ async fn incremental_tools_append_changed_catalog_without_rewriting_history(
             .iter()
             .all(|request| request.body_json().get("tools").is_none())
     );
+    for request in &requests {
+        let input = request.input();
+        assert_eq!(input[0]["type"], "additional_tools");
+        assert_eq!(input[1]["role"], "developer");
+        assert_eq!(
+            input[1]["content"][0]["text"],
+            "Use the available tools to help the user."
+        );
+        assert!(request.body_json().get("instructions").is_none());
+    }
     let initial = requests[0].inputs_of_type("additional_tools");
     assert_eq!(initial.len(), 1);
     assert_eq!(

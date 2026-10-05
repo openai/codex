@@ -7,9 +7,8 @@ use crate::client_common::ResponseEvent;
 use crate::compact::CompactedHistoryMetadata;
 use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::CompactionAnalyticsDetails;
-use crate::compact::build_compaction_initial_context;
+use crate::compact::build_compaction_replacement_history;
 use crate::compact::compaction_status_from_result;
-use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::compact_model_fallback::record_model_fallback;
 use crate::compact_model_fallback::should_retry_with_current_model;
 use crate::compact_remote_history::HistoryItemGroup;
@@ -313,11 +312,13 @@ async fn run_remote_compact_task_inner_impl(
     );
     analytics_details.retained_image_count = Some(retained_images);
     let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
-    let (initial_context, world_state_baseline) =
-        build_compaction_initial_context(sess.as_ref(), replacement_step_context, &world_state)
-            .await;
-    let new_history =
-        insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context);
+    let (new_history, world_state_baseline) = build_compaction_replacement_history(
+        sess.as_ref(),
+        replacement_step_context,
+        &world_state,
+        compacted_history,
+    )
+    .await;
 
     if let Some(trace_input_history) = trace_input_history.as_deref() {
         let replacement_history = new_history

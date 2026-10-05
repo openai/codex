@@ -16,9 +16,7 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:message/developer:
-    <MODEL_INSTRUCTIONS>
-01:additional_tools/developer (3; hash=7748a53142f449b7):
+00:additional_tools/developer (3; hash=7748a53142f449b7):
         - namespace/functions; hash=124fee69a69ed6b2
           - function/exec_command
           - function/write_stdin
@@ -37,6 +35,8 @@ Settings:
         - namespace/mcp__echo_service: Echo service instructions.; hash=a5144e5d70d01799
           - function/cwd
           - function/echo
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
 02:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 03:message/user:

@@ -1583,7 +1583,14 @@ pub(crate) fn build_prompt(
             step_context.tool_router.model_visible_specs()
         },
         parallel_tool_calls: true,
-        base_instructions,
+        base_instructions: if step_context.uses_incremental_tools() {
+            BaseInstructions {
+                text: String::new(),
+                provenance: None,
+            }
+        } else {
+            base_instructions
+        },
         output_schema: turn_context.final_output_json_schema.clone(),
         output_schema_strict: !crate::guardian::is_basic_session_source(
             &turn_context.session_source,

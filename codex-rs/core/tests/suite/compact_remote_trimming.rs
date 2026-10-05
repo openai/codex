@@ -3,6 +3,7 @@
 use super::*;
 use core_test_support::apps_test_server::configure_search_capable_model;
 use pretty_assertions::assert_eq;
+use test_case::test_case;
 
 fn compact_response() -> String {
     sse(vec![
@@ -141,15 +142,21 @@ async fn remote_compact_v2_trims_tool_search_output_to_empty_tools_array() -> Re
     Ok(())
 }
 
+#[test_case(false; "request_instructions")]
+#[test_case(true; "recorded_instructions")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_compact_v2_trim_estimate_uses_session_base_instructions() -> Result<()> {
+async fn remote_compact_v2_trim_estimate_uses_session_base_instructions(
+    incremental_tools: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let short_instructions = "session base instructions";
-    let long_instructions = format!("{short_instructions} {}", "x".repeat(24_000));
+    let medium_instructions = format!("{short_instructions} {}", "x".repeat(16_000));
+    let long_instructions = format!("{short_instructions} {}", "x".repeat(40_000));
     let trailing_output = "x".repeat(12_000);
     for (instructions, expected_output) in [
         (short_instructions, trailing_output.as_str()),
+        (medium_instructions.as_str(), trailing_output.as_str()),
         (
             long_instructions.as_str(),
             CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE,
@@ -158,11 +165,20 @@ async fn remote_compact_v2_trim_estimate_uses_session_base_instructions() -> Res
         let harness = TestCodexHarness::with_builder(
             test_codex()
                 .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+                .with_model_info_override("gpt-5.4", move |model| {
+                    model.use_responses_lite = incremental_tools;
+                })
                 .with_config({
                     let instructions = instructions.to_string();
                     move |config| {
-                        config.model_context_window = Some(8_000);
+                        config.model_context_window = Some(12_000);
                         config.base_instructions = Some(instructions);
+                        if incremental_tools {
+                            config
+                                .features
+                                .enable(Feature::IncrementalTools)
+                                .expect("enable incremental tools");
+                        }
                     }
                 }),
         )

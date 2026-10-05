@@ -6654,10 +6654,10 @@ async fn build_initial_context(
         .build_world_state_for_step(&step_context)
         .await
         .expect("world state should build");
-    session
+    let (updates, _) = session
         .build_initial_context_with_world_state(&step_context, &world_state)
-        .await
-        .0
+        .await;
+    crate::context_manager::updates::merge_world_state_updates(updates)
 }
 
 pub(crate) async fn build_world_state_from_turn_context(
@@ -10568,6 +10568,8 @@ async fn build_initial_context_reuses_in_flight_recommendation_prewarm() {
     assert!(futures::poll!(initial_context.as_mut()).is_pending());
 
     let (_, (initial_context, _)) = tokio::join!(prewarm, initial_context);
+    let initial_context =
+        crate::context_manager::updates::merge_world_state_updates(initial_context);
     assert_eq!(
         developer_input_texts(&initial_context)
             .into_iter()
@@ -11298,8 +11300,13 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         .await
         .unwrap();
     let world_a = Arc::new(session.build_world_state_for_step(&step_a).await.unwrap());
-    let (initial_a, _) =
-        crate::compact::build_compaction_initial_context(&session, &step_a, &world_a).await;
+    let (initial_a, _) = crate::compact::build_compaction_replacement_history(
+        &session,
+        &step_a,
+        &world_a,
+        Vec::new(),
+    )
+    .await;
 
     let mut selected_b = step_a.settings.selected().clone();
     selected_b.collaboration_mode.settings.model = "model-b".to_string();
@@ -11328,15 +11335,21 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         .build_initial_context_with_world_state(&step_b, &world_b)
         .await
         .0;
+    let initial_b = crate::context_manager::updates::merge_world_state_updates(initial_b);
     let turn_contributions_b = session.build_turn_context_contribution_items(&step_b).await;
-    let (restored_a, restored_snapshot) =
-        crate::compact::build_compaction_initial_context(&session, &step_a, &world_a).await;
+    let (restored_a, restored_snapshot) = crate::compact::build_compaction_replacement_history(
+        &session,
+        &step_a,
+        &world_a,
+        Vec::new(),
+    )
+    .await;
 
     assert_eq!(restored_a, initial_a);
     assert_eq!(restored_snapshot, world_a.render_full().0);
     let initial_a = initial_a
         .into_iter()
-        .map(ResponseItemEnvelope::into_item)
+        .map(|item| item.item)
         .collect::<Vec<_>>();
     let a_text = developer_input_texts(&initial_a).join("\n");
     let b_text = developer_input_texts(&initial_b).join("\n");

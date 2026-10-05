@@ -1499,6 +1499,24 @@ fn estimate_token_count_with_base_instructions_uses_provided_text() {
 }
 
 #[test]
+fn estimate_token_count_counts_recorded_base_instructions_once() {
+    use crate::context::ContextualUserFragment;
+
+    let base = BaseInstructions {
+        text: "base instructions ".repeat(100),
+        provenance: None,
+    };
+    let item =
+        ContextualUserFragment::into(crate::context::BaseInstructionsFragment(base.text.clone()));
+    let expected = estimate_item_token_count(&item);
+    let history = create_history_with_items(vec![item]);
+    assert_eq!(
+        history.estimate_token_count_with_base_instructions(&base),
+        Some(expected)
+    );
+}
+
+#[test]
 fn remove_first_item_removes_matching_output_for_function_call() {
     let items = vec![
         ResponseItem::FunctionCall {

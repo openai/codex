@@ -6,10 +6,13 @@ use std::time::Instant;
 use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
+use crate::context::BaseInstructionsFragment;
 use crate::context::CompactionSummary;
 use crate::context::ContextualUserFragment;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateSnapshot;
+use crate::context::world_state::split_prefix_updates;
+use crate::context_manager::updates::merge_world_state_updates;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
@@ -40,6 +43,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::AgentMessageInputContent;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ResponseInputItem;
@@ -72,21 +76,38 @@ pub(crate) struct CompactedHistoryMetadata {
     pub(crate) reviewer_compaction_hash: Option<String>,
 }
 
-/// Render replacement context and its comparison baseline from the same captured step.
-/// Initial context is installed only after compaction returns, above the last real user message
-/// (or the summary when no user message remains), keeping the compaction summary last.
-pub(crate) async fn build_compaction_initial_context(
+/// Renders the window prefix and ordinary context with their comparison baseline.
+pub(crate) async fn build_compaction_replacement_history(
     sess: &Session,
     step_context: &StepContext,
     world_state: &WorldState,
+    compacted_history: Vec<ResponseItemEnvelope>,
 ) -> (Vec<ResponseItemEnvelope>, WorldStateSnapshot) {
-    let (items, snapshot) = sess
+    let (updates, snapshot) = sess
         .build_initial_context_with_world_state(step_context, world_state)
         .await;
+    let (prefix, context) = split_prefix_updates(updates);
+    let context = merge_world_state_updates(context);
     (
-        items.into_iter().map(ResponseItemEnvelope::new).collect(),
+        assemble_compaction_history(compacted_history, prefix, context),
         snapshot,
     )
+}
+
+fn assemble_compaction_history(
+    compacted_history: Vec<ResponseItemEnvelope>,
+    prefix: Vec<ResponseItem>,
+    context: Vec<ResponseItem>,
+) -> Vec<ResponseItemEnvelope> {
+    let history = insert_initial_context_before_last_real_user_or_summary(
+        compacted_history,
+        context.into_iter().map(ResponseItemEnvelope::new).collect(),
+    );
+    prefix
+        .into_iter()
+        .map(ResponseItemEnvelope::new)
+        .chain(history)
+        .collect()
 }
 
 pub(crate) async fn run_inline_auto_compact_task(
@@ -269,9 +290,20 @@ async fn run_compact_task_inner_impl(
             .executed_tool_calls
             .attach_to_compaction_prompt(&mut turn_input);
         let turn_input_len = turn_input.len();
+        let base_instructions = if turn_input
+            .iter()
+            .any(BaseInstructionsFragment::matches_item)
+        {
+            BaseInstructions {
+                text: String::new(),
+                provenance: None,
+            }
+        } else {
+            sess.get_prompt_base_instructions().await
+        };
         let prompt = Prompt {
             input: turn_input,
-            base_instructions: sess.get_prompt_base_instructions().await,
+            base_instructions,
             cyber_access_program: turn_context.cyber_access_program,
             ..Default::default()
         };
@@ -359,11 +391,13 @@ async fn run_compact_task_inner_impl(
     }
     let (window_number, window_ids) = sess.advance_auto_compact_window().await;
 
-    let (initial_context, world_state_baseline) =
-        build_compaction_initial_context(sess.as_ref(), &replacement_step_context, &world_state)
-            .await;
-    new_history =
-        insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
+    let (new_history, world_state_baseline) = build_compaction_replacement_history(
+        sess.as_ref(),
+        &replacement_step_context,
+        &world_state,
+        new_history,
+    )
+    .await;
     sess.replace_compacted_history(
         new_history,
         replacement_step_context.to_turn_context_item(),

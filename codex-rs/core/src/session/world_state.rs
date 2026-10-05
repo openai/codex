@@ -6,6 +6,7 @@ use crate::connectors;
 use crate::context::TokenBudgetContext;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::AppsInstructionsState;
+use crate::context::world_state::BaseInstructionsState;
 use crate::context::world_state::CollaborationModeState;
 use crate::context::world_state::CompactPermissionsState;
 use crate::context::world_state::ContextWindowGuidanceState;
@@ -122,6 +123,7 @@ impl Session {
             let specs = step_context.tool_router.model_visible_specs();
             let definitions = codex_tools::create_tools_json_for_responses_lite(&specs)?;
             world_state.add_section(TopLevelToolsState::new(definitions)?);
+            world_state.add_section(BaseInstructionsState(base_instructions));
         }
         world_state.add_section(ModelInstructionsState::new(
             &model_info.slug,
