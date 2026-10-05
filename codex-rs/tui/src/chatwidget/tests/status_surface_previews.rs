@@ -446,6 +446,7 @@ async fn status_line_setup_popup_rate_limits_snapshot() {
 #[tokio::test]
 async fn status_line_setup_popup_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
     chat.status_line_branch = Some("feature/mixed-preview".to_string());
     chat.thread_name = Some("Mixed preview thread".to_string());
     chat.set_daybreak_enabled(/*enabled*/ true);
@@ -500,6 +501,7 @@ async fn terminal_title_setup_popup_hardcoded_only_snapshot() {
 #[tokio::test]
 async fn terminal_title_setup_popup_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
     chat.thread_name = Some("Mixed preview thread".to_string());
     chat.set_daybreak_enabled(/*enabled*/ true);
     chat.local_settings.tui.terminal_title = Some(vec![

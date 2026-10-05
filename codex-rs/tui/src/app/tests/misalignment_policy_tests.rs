@@ -39,12 +39,16 @@ fn error_notification(
 
 #[tokio::test]
 async fn misalignment_continuation_requires_current_review_and_submits_once() -> Result<()> {
-    for (reject, preserve, daybreak) in [
-        (false, false, false),
-        (false, true, true),
-        (true, false, false),
+    for (reject, preserve, daybreak, rollout_enabled) in [
+        (false, false, false, true),
+        (false, true, true, true),
+        (true, false, false, true),
+        (false, false, false, false),
+        (false, true, true, false),
     ] {
         let (mut app, mut rx, _) = make_test_app_with_channels().await;
+        app.chat_widget
+            .set_feature_enabled(Feature::CliDaybreak, rollout_enabled);
         let (mut server, requests, proxy) = start_recording_app_server(
             &app.config,
             /*blocked_thread_list*/ None,
@@ -226,7 +230,7 @@ async fn misalignment_continuation_requires_current_review_and_submits_once() ->
                 approval_policy: Some(AskForApproval::OnRequest),
                 approvals_reviewer: Some(config.approvals_reviewer.into()),
                 sandbox_policy: (!preserve).then(|| config.legacy_sandbox_policy().into()),
-                cyber_access_program: Some(if daybreak {
+                cyber_access_program: rollout_enabled.then_some(if daybreak {
                     CyberAccessProgram::DaybreakBlue.into()
                 } else {
                     CyberAccessProgram::Standard.into()

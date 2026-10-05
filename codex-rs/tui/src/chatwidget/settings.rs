@@ -6,14 +6,15 @@ use crate::chatwidget::rate_limits::RATE_LIMIT_SWITCH_PROMPT_VIEW_ID;
 
 impl ChatWidget {
     pub(crate) fn set_daybreak_enabled(&mut self, enabled: bool) {
-        self.daybreak_enabled = enabled;
+        self.daybreak_enabled = enabled && self.config.features.enabled(Feature::CliDaybreak);
         self.bottom_pane
             .set_daybreak_command_description(self.daybreak_command_description());
     }
 
     /// UI eligibility only; the catalog and server still determine model/program access.
     pub(crate) fn daybreak_account_eligible(&self) -> bool {
-        self.config.model_provider_id == "openai"
+        self.config.features.enabled(Feature::CliDaybreak)
+            && self.config.model_provider_id == "openai"
             && (self.has_chatgpt_account
                 || matches!(
                     self.status_account_display,
@@ -111,6 +112,10 @@ impl ChatWidget {
             );
         }
         let enabled = self.config.features.enabled(feature);
+        if feature == Feature::CliDaybreak {
+            self.set_daybreak_enabled(self.daybreak_enabled);
+            self.refresh_status_surfaces();
+        }
         if feature == Feature::FastMode {
             self.refresh_effective_service_tier();
             self.sync_service_tier_commands();

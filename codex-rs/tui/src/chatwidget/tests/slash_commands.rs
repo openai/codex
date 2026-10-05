@@ -2168,6 +2168,7 @@ async fn slash_copy_picker_remains_available_from_parent_owned_threads() {
 #[tokio::test]
 async fn slash_daybreak_offers_an_application_when_unavailable() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
     chat.has_chatgpt_account = true;
     chat.config.model_provider_id = "openai".into();
     let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
@@ -2250,6 +2251,12 @@ async fn slash_daybreak_offers_an_application_when_unavailable() {
                 .unwrap()
         );
     }
+    chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ false);
+    chat.set_daybreak_enabled(/*enabled*/ true);
+    assert!(!chat.daybreak_enabled);
+    assert!(chat.daybreak_command_description().is_none());
+    chat.dispatch_command(SlashCommand::Daybreak);
+    assert!(drain_insert_history(&mut rx).is_empty());
 }
 
 #[tokio::test]

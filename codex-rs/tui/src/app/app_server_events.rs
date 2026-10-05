@@ -622,11 +622,13 @@ impl App {
             app_server_client
                 .thread_tool_transport()
                 .configure(&mut thread_start_params);
+            let features = self.config.features.get().clone();
             let task = tokio::spawn(async move {
                 let response = crate::dynamic_tools::execute(
                     request_handle,
                     params,
                     thread_start_params,
+                    features,
                     status_updates,
                     Some(&app_event_tx),
                 )

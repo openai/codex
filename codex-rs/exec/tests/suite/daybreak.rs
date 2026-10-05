@@ -56,7 +56,10 @@ async fn exec_rejects_daybreak_for_api_keys_and_allows_an_override() -> anyhow::
 async fn exec_rejects_daybreak_for_non_openai_provider() -> anyhow::Result<()> {
     let test = test_codex_exec();
     let server = responses::start_mock_server().await;
-    std::fs::write(test.home_path().join("config.toml"), "daybreak = true\n")?;
+    std::fs::write(
+        test.home_path().join("config.toml"),
+        "daybreak = true\nfeatures.cli_daybreak = true\n",
+    )?;
     let response = responses::mount_sse_once(&server, responses::sse_completed("response")).await;
 
     test.cmd_with_server(&server)
@@ -110,7 +113,7 @@ async fn configured_daybreak_exec() -> anyhow::Result<(TestCodexExecBuilder, wir
     std::fs::write(
         test.home_path().join("config.toml"),
         format!(
-            "cli_auth_credentials_store = 'file'\nchatgpt_base_url = '{}/backend-api'\nmodel_catalog_json = '{}'\nmodel = 'gpt-test'\ndaybreak = true\n",
+            "cli_auth_credentials_store = 'file'\nchatgpt_base_url = '{}/backend-api'\nmodel_catalog_json = '{}'\nmodel = 'gpt-test'\ndaybreak = true\nfeatures.cli_daybreak = true\n",
             server.uri(),
             catalog.display()
         ),
@@ -154,7 +157,7 @@ async fn exec_resumes_and_forks_the_saved_daybreak_choice() -> anyhow::Result<()
     std::fs::write(
         test.home_path().join("config.toml"),
         format!(
-            "cli_auth_credentials_store = 'file'\nchatgpt_base_url = '{}/backend-api'\nmodel_catalog_json = '{}'\nmodel = 'gpt-test'\n",
+            "cli_auth_credentials_store = 'file'\nchatgpt_base_url = '{}/backend-api'\nmodel_catalog_json = '{}'\nmodel = 'gpt-test'\nfeatures.cli_daybreak = true\n",
             server.uri(),
             test.home_path().join("catalog.json").display()
         ),
@@ -168,19 +171,26 @@ async fn exec_resumes_and_forks_the_saved_daybreak_choice() -> anyhow::Result<()
                 thread_id.as_str(),
                 "continue",
             ],
-            "standard",
+            Some("standard"),
         ),
         (
             vec!["resume", thread_id.as_str(), "continue"],
-            "daybreak_blue",
+            Some("daybreak_blue"),
         ),
         (
             vec!["fork", thread_id.as_str(), "continue"],
-            "daybreak_blue",
+            Some("daybreak_blue"),
         ),
         (
-            vec!["--ephemeral", "fork", thread_id.as_str(), "continue"],
-            "daybreak_blue",
+            vec![
+                "-c",
+                "features.cli_daybreak=false",
+                "--ephemeral",
+                "fork",
+                thread_id.as_str(),
+                "continue",
+            ],
+            None,
         ),
         (
             vec![
@@ -191,7 +201,7 @@ async fn exec_resumes_and_forks_the_saved_daybreak_choice() -> anyhow::Result<()
                 thread_id.as_str(),
                 "continue",
             ],
-            "standard",
+            Some("standard"),
         ),
     ] {
         let response =
@@ -205,8 +215,8 @@ async fn exec_resumes_and_forks_the_saved_daybreak_choice() -> anyhow::Result<()
             .assert()
             .success();
         assert_eq!(
-            response.single_request().body_json()["access_programs"],
-            json!({"cyber": expected})
+            response.single_request().body_json().get("access_programs"),
+            expected.map(|program| json!({"cyber": program})).as_ref()
         );
     }
     Ok(())
@@ -225,6 +235,8 @@ async fn exec_explicit_cyber_program_overrides_daybreak_for_one_turn() -> anyhow
         .args([
             "--skip-git-repo-check",
             "--json",
+            "-c",
+            "features.cli_daybreak=false",
             "--cyber-access-program",
             "daybreak_red",
             "hello",
@@ -266,14 +278,16 @@ async fn exec_resume_override_does_not_change_a_standard_thread() -> anyhow::Res
             "--skip-git-repo-check",
             "--json",
             "-c",
+            "features.cli_daybreak=false",
+            "-c",
             "daybreak=false",
             "hello",
         ])
         .output()?;
     let thread_id = started_thread(output)?;
     assert_eq!(
-        response.single_request().body_json()["access_programs"],
-        json!({"cyber": "standard"})
+        response.single_request().body_json().get("access_programs"),
+        None
     );
     for (args, expected) in [
         (

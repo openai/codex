@@ -9,7 +9,13 @@ impl App {
         thread_id: ThreadId,
         enabled: bool,
     ) {
-        if self.active_thread_id != Some(thread_id) {
+        if !self
+            .chat_widget
+            .config_ref()
+            .features
+            .enabled(Feature::CliDaybreak)
+            || self.active_thread_id != Some(thread_id)
+        {
             return;
         }
         if enabled

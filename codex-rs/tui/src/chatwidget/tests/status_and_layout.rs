@@ -148,6 +148,7 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
         FrameRequester::test_dummy(),
     )
     .await;
+    chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
     let thread_id = ThreadId::new();
     chat.thread_id = Some(thread_id);
     let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();

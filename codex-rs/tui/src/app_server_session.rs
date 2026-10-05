@@ -547,6 +547,7 @@ impl AppServerSession {
             DynamicToolMcpServer::start(
                 self.request_handle(),
                 thread_start_params,
+                config.features.get().clone(),
                 app_event_tx,
                 status_updates,
                 managed_requirement,
