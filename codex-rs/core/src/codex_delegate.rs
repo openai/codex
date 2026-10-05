@@ -172,6 +172,7 @@ pub(crate) async fn run_codex_thread_interactive(
         Some(parent_session.thread_id),
         thread_config,
         subagent_source,
+        /*resumed_created_at*/ None,
     );
     let caller_io = forward_session_io(Arc::new(io), cancel_token);
     startup.release_membership();

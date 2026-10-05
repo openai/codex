@@ -59,12 +59,14 @@ use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
 use async_channel::Sender;
+use chrono::DateTime;
 use chrono::Local;
 use chrono::Utc;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::ImagePreparationFact;
 use codex_analytics::ImagePreparationMetadata;
 use codex_analytics::SubAgentThreadStartedInput;
+use codex_analytics::ThreadInitializationMode;
 use codex_analytics::TurnCodexErrorFact;
 use codex_async_utils::OrCancelExt;
 use codex_attachment_store::AttachmentStore;
@@ -5059,6 +5061,7 @@ fn apply_prepared_image_file_ids(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_subagent_session_started(
     analytics_events_client: &AnalyticsEventsClient,
     client_metadata: AppServerClientMetadata,
@@ -5067,7 +5070,15 @@ pub(crate) fn emit_subagent_session_started(
     parent_thread_id: Option<ThreadId>,
     thread_config: ThreadConfigSnapshot,
     subagent_source: SubAgentSource,
+    resumed_created_at: Option<DateTime<Utc>>,
 ) {
+    let initialization_mode = if resumed_created_at.is_some() {
+        ThreadInitializationMode::Resumed
+    } else {
+        ThreadInitializationMode::New
+    };
+    let created_at =
+        u64::try_from(resumed_created_at.unwrap_or_else(Utc::now).timestamp()).unwrap_or_default();
     let AppServerClientMetadata {
         client_name,
         client_version,
@@ -5078,11 +5089,7 @@ pub(crate) fn emit_subagent_session_started(
         tracing::warn!("skipping subagent thread analytics: missing inherited client metadata");
         return;
     }
-    let created_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    analytics_events_client.track_subagent_thread_started(SubAgentThreadStartedInput {
+    let input = SubAgentThreadStartedInput {
         session_id: session_id.to_string(),
         thread_id: thread_id.to_string(),
         parent_thread_id: parent_thread_id.map(|thread_id| thread_id.to_string()),
@@ -5096,8 +5103,10 @@ pub(crate) fn emit_subagent_session_started(
         ephemeral: thread_config.ephemeral,
         thread_source: thread_config.thread_source,
         subagent_source,
+        initialization_mode,
         created_at,
-    });
+    };
+    analytics_events_client.track_subagent_thread_started(input);
 }
 
 /// Builds hook configuration for one config snapshot, including any enabled plugin hooks.

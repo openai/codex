@@ -28,6 +28,7 @@ use crate::facts::CompactionStrategy;
 use crate::facts::CompactionTrigger;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::SubAgentThreadStartedInput;
+use crate::facts::ThreadInitializationMode;
 use crate::reducer::AnalyticsReducer;
 use crate::tests::support::ingest_complete_child_turn;
 use crate::tests::support::ingest_completed_command_execution_item;
@@ -857,6 +858,7 @@ async fn guardian_events_keep_thread_source_and_originator_with_explicit_turn_co
                     ephemeral: false,
                     thread_source: Some(ThreadSource::GuardianReview),
                     subagent_source: SubAgentSource::Other("guardian".to_string()),
+                    initialization_mode: ThreadInitializationMode::New,
                     created_at: 130,
                 },
             )),

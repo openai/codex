@@ -443,6 +443,7 @@ pub struct SubAgentThreadStartedInput {
     pub ephemeral: bool,
     pub thread_source: Option<ThreadSource>,
     pub subagent_source: SubAgentSource,
+    pub initialization_mode: ThreadInitializationMode,
     pub created_at: u64,
 }
 

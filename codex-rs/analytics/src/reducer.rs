@@ -1201,15 +1201,17 @@ impl AnalyticsReducer {
         thread_state
             .originator
             .get_or_insert_with(|| input.product_client_id.clone());
-        thread_state
-            .metadata
-            .get_or_insert_with(|| ThreadMetadataState {
+        if thread_state.metadata.is_none()
+            || matches!(input.initialization_mode, ThreadInitializationMode::Resumed)
+        {
+            thread_state.metadata = Some(ThreadMetadataState {
                 session_id: input.session_id.clone(),
                 thread_source: input.thread_source.clone(),
-                initialization_mode: ThreadInitializationMode::New,
+                initialization_mode: input.initialization_mode,
                 subagent_source: Some(subagent_source_name(&input.subagent_source)),
                 parent_thread_id,
             });
+        }
         if thread_state.connection_id.is_none() {
             thread_state.connection_id = parent_connection_id;
         }

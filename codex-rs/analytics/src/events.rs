@@ -1537,7 +1537,7 @@ pub(crate) fn subagent_thread_started_event_request(
         ephemeral: input.ephemeral,
         is_worktree: None,
         thread_source: input.thread_source,
-        initialization_mode: ThreadInitializationMode::New,
+        initialization_mode: input.initialization_mode,
         subagent_source: Some(subagent_source_name(&input.subagent_source)),
         parent_thread_id: input.parent_thread_id,
         forked_from_thread_id: input.forked_from_thread_id,

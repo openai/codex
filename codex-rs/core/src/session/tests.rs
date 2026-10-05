@@ -5243,6 +5243,7 @@ async fn emit_subagent_session_started_includes_fork_lineage_and_originator() {
         Some(parent_thread_id),
         session_configuration.thread_config_snapshot(Vec::new()),
         SubAgentSource::Other(crate::guardian::GUARDIAN_REVIEWER_NAME.to_string()),
+        /*resumed_created_at*/ None,
     );
 
     let event = timeout(Duration::from_secs(1), async {
@@ -5266,6 +5267,7 @@ async fn emit_subagent_session_started_includes_fork_lineage_and_originator() {
     .await
     .expect("subagent initialization analytics should be emitted");
 
+    assert_eq!(event["event_params"]["initialization_mode"], "new");
     assert_eq!(event["event_params"]["thread_source"], "guardian_review");
     assert_eq!(
         event["event_params"]["parent_thread_id"],
@@ -5292,6 +5294,7 @@ async fn emit_subagent_session_started_includes_fork_lineage_and_originator() {
         Some(parent_thread_id),
         session_configuration.thread_config_snapshot(Vec::new()),
         SubAgentSource::Other(crate::guardian::GUARDIAN_REVIEWER_NAME.to_string()),
+        /*resumed_created_at*/ None,
     );
     // Archive analytics exposes retained lineage even before a parent connection exists.
     analytics_events_client.track_notification(&ServerNotification::ThreadArchived(

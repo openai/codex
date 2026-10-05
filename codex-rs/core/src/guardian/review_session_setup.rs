@@ -196,6 +196,7 @@ impl PreparedGuardianContext {
             Some(self.parent.thread_id()),
             session.thread_config_snapshot().await,
             SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_owned()),
+            /*resumed_created_at*/ None,
         );
         GuardianReviewSession {
             session,

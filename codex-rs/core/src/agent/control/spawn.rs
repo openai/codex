@@ -588,8 +588,21 @@ impl LocalAgentControl {
                     ..Default::default()
                 })
         };
-        // Reserving a slot can evict an idle nested parent. Capture its instructions
-        // alongside its authority so the child does not depend on a later live lookup.
+        let subagent_analytics =
+            if let SessionSource::SubAgent(source @ SubAgentSource::ThreadSpawn { .. }) =
+                &session_source
+                && let Some(parent_thread_id) = parent_thread_id
+                && let Ok(parent) = state.get_thread(parent_thread_id).await
+            {
+                Some((
+                    parent.session.app_server_client_metadata().await,
+                    source.clone(),
+                ))
+            } else {
+                None
+            };
+        // Reserving a slot can evict an idle nested parent. Capture its instructions and
+        // analytics metadata alongside its authority before the live parent can disappear.
         let residency_slot = self
             .reserve_v2_residency_slot(&state, &config, &membership, Some(thread_id))
             .await?;
@@ -615,6 +628,24 @@ impl LocalAgentControl {
                 }
                 self.runtime.registry.clear_evicted_environments(thread_id);
                 residency_slot.commit(reloaded_thread.thread_id);
+                // Register before listeners can forward events from the resumed thread.
+                if let Some((client_metadata, source)) = subagent_analytics {
+                    let thread_config = reloaded_thread.thread.config_snapshot().await;
+                    emit_subagent_session_started(
+                        &reloaded_thread
+                            .thread
+                            .session
+                            .services
+                            .analytics_events_client,
+                        client_metadata,
+                        reloaded_thread.thread.session.session_id(),
+                        reloaded_thread.thread_id,
+                        thread_config.parent_thread_id,
+                        thread_config,
+                        source,
+                        /*resumed_created_at*/ Some(stored_thread.created_at),
+                    );
+                }
                 state.notify_thread_created(reloaded_thread.thread_id);
                 Ok(())
             }
@@ -831,6 +862,7 @@ impl LocalAgentControl {
                 parent_thread_id,
                 thread_config,
                 subagent_source.clone(),
+                /*resumed_created_at*/ None,
             );
         }
 
