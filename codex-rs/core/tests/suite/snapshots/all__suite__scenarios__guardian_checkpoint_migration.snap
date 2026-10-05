@@ -59,14 +59,14 @@ Settings: relative to window 1
     <MODEL_INSTRUCTIONS>
 02:message/user:
     Keep the working tree unchanged.
-03:message/user:
-    Confirm where publishing is allowed.
-04:compaction:encrypted=true; chars=39; hash=4010be12538dbedf
-05:message/developer[2]:
+03:message/developer[2]:
     [01] <MODEL_SWITCH>
     [02] <PERMISSIONS_INSTRUCTIONS>
-06:message/user:
+04:message/user:
     <ENVIRONMENT_CONTEXT>
+05:message/user:
+    Confirm where publishing is allowed.
+06:compaction:encrypted=true; chars=39; hash=4010be12538dbedf
 07:message/user:
     Continue with the new model.
 -- request 5 (turn) --
@@ -196,14 +196,14 @@ Settings: same as window 2
     <MODEL_INSTRUCTIONS>
 02:message/user:
     Keep the working tree unchanged.
-03:message/user:
-    Confirm where publishing is allowed.
-04:compaction:encrypted=true; chars=39; hash=4010be12538dbedf
-05:message/developer[2]:
+03:message/developer[2]:
     [01] <MODEL_SWITCH>
     [02] <PERMISSIONS_INSTRUCTIONS>
-06:message/user:
+04:message/user:
     <ENVIRONMENT_CONTEXT>
+05:message/user:
+    Confirm where publishing is allowed.
+06:compaction:encrypted=true; chars=39; hash=4010be12538dbedf
 07:message/user:
     Continue with the new model.
 08:message/user:
@@ -213,7 +213,7 @@ Settings: same as window 2
 -- request 8 (compaction) --
 11:compaction_trigger
 
-## Window 5 (after request 8: input diverged at item 04)
+## Window 5 (after request 8: input diverged at item 03)
 Settings: same as window 2
 -- request 9 (turn) --
 00:additional_tools/developer (1; hash=1ea3c73f7e3c8b33):
@@ -229,13 +229,13 @@ Settings: same as window 2
     Confirm where publishing is allowed.
 04:message/user:
     Continue with the new model.
-05:message/user:
-    Run another check after compaction.
-06:compaction:encrypted=true; chars=33; hash=5c07b4383c427607
-07:message/developer:
+05:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-08:message/user:
+06:message/user:
     <ENVIRONMENT_CONTEXT>
+07:message/user:
+    Run another check after compaction.
+08:compaction:encrypted=true; chars=33; hash=5c07b4383c427607
 09:message/user:
     Run another check after compaction.
 
@@ -353,13 +353,13 @@ Settings: same as window 2
     Confirm where publishing is allowed.
 04:message/user:
     Continue with the new model.
-05:message/user:
-    Run another check after compaction.
-06:compaction:encrypted=true; chars=33; hash=5c07b4383c427607
-07:message/developer:
+05:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-08:message/user:
+06:message/user:
     <ENVIRONMENT_CONTEXT>
+07:message/user:
+    Run another check after compaction.
+08:compaction:encrypted=true; chars=33; hash=5c07b4383c427607
 09:message/user:
     Run another check after compaction.
 10:function_call/exec_command:{"cmd":"exit 0","sandbox_permissions":"require_escalated"}

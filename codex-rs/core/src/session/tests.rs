@@ -15,7 +15,6 @@ use super::*;
 mod config_refresh_tests;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::agents_md_manager::SessionInstructions;
-use crate::compact::InitialContextInjection;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
 use crate::config::RuntimeConfigRefresh;
@@ -5854,7 +5853,7 @@ async fn session_configuration_apply_preserves_absolute_cwd_write_root_on_cwd_up
 
 #[tokio::test]
 async fn settings_checkpoint_waits_for_accepted_settings_persistence() {
-    let (mut session, _turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -5892,8 +5891,8 @@ async fn settings_checkpoint_waits_for_accepted_settings_persistence() {
     let mut checkpoint = Box::pin(tokio::task::unconstrained(
         session.replace_compacted_history(
             vec![ResponseItemEnvelope::new(user_message("compacted history"))],
-            /*reference_context_item*/ None,
-            /*world_state_baseline*/ None,
+            turn_context.to_turn_context_item(),
+            WorldStateSnapshot::default(),
             CompactedHistoryMetadata {
                 input_goal_ids: Default::default(),
                 message: "summary".to_string(),
@@ -6026,8 +6025,8 @@ async fn mcp_attribution_checkpoints_cover_batch_prefixes_compaction_and_restore
     session
         .replace_compacted_history(
             vec![ResponseItemEnvelope::new(user_message("compacted history"))],
-            /*reference_context_item*/ None,
-            /*world_state_baseline*/ None,
+            turn_context.to_turn_context_item(),
+            WorldStateSnapshot::default(),
             CompactedHistoryMetadata {
                 input_goal_ids: Default::default(),
                 message: "summary".to_string(),
@@ -6154,48 +6153,39 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
         thread_settings: session.thread_settings_snapshot().await,
     };
 
-    let mut first_live_history = None;
-    for with_baselines in [true, false] {
-        let input_goal_ids =
-            crate::context::UserGoalUpdate::message_ids(session.clone_history().await.raw_items());
-        // The goal edit is accepted after the compaction input was captured.
-        let accepted_goal = if with_baselines {
-            session
-                .record_user_goal_update(crate::context::UserGoalUpdate::Clear)
-                .await
-                .expect("record concurrent clear");
-            session
-                .clone_history()
-                .await
-                .annotated_items()
-                .last()
-                .cloned()
-        } else {
-            None
-        };
-        let (window_number, window_ids) = session.advance_auto_compact_window().await;
-        session
-            .replace_compacted_history(
-                vec![ResponseItemEnvelope::new(user_message("compacted context"))],
-                with_baselines.then_some(turn_context_baseline.clone()),
-                with_baselines.then(|| world_state.render_full().0),
-                CompactedHistoryMetadata {
-                    input_goal_ids,
-                    message: String::new(),
-                    window_number,
-                    window_ids,
-                    compaction_response_id: None,
-                    compaction_model_hash: None,
-                    reviewer_compaction_hash: None,
-                },
-            )
-            .await;
-        if let Some(accepted_goal) = accepted_goal {
-            let live_history = session.clone_history().await.annotated_items().to_vec();
-            assert_eq!(&live_history[1..], &[accepted_goal]);
-            first_live_history = Some(live_history);
-        }
-    }
+    let input_goal_ids =
+        crate::context::UserGoalUpdate::message_ids(session.clone_history().await.raw_items());
+    // The goal edit is accepted after the compaction input was captured.
+    session
+        .record_user_goal_update(crate::context::UserGoalUpdate::Clear)
+        .await
+        .expect("record concurrent clear");
+    let accepted_goal = session
+        .clone_history()
+        .await
+        .annotated_items()
+        .last()
+        .cloned()
+        .expect("accepted goal");
+    let (window_number, window_ids) = session.advance_auto_compact_window().await;
+    session
+        .replace_compacted_history(
+            vec![ResponseItemEnvelope::new(user_message("compacted context"))],
+            turn_context_baseline.clone(),
+            world_state.render_full().0,
+            CompactedHistoryMetadata {
+                input_goal_ids,
+                message: String::new(),
+                window_number,
+                window_ids,
+                compaction_response_id: None,
+                compaction_model_hash: None,
+                reviewer_compaction_hash: None,
+            },
+        )
+        .await;
+    let live_history = session.clone_history().await.annotated_items().to_vec();
+    assert_eq!(&live_history[1..], &[accepted_goal]);
 
     session.flush_rollout().await.expect("flush checkpoints");
     let (items, _, _) = RolloutRecorder::load_rollout_items(&rollout_path)
@@ -6206,26 +6196,22 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
         .skip_while(|item| !matches!(item, RolloutItem::Compacted(_)))
         .collect::<Vec<_>>();
     let [
-        RolloutItem::Compacted(first),
-        RolloutItem::WorldState(first_world_state),
-        RolloutItem::TurnContext(first_turn_context),
-        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(first_settings)),
-        RolloutItem::Compacted(second),
-        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(second_settings)),
+        RolloutItem::Compacted(compacted),
+        RolloutItem::WorldState(saved_world_state),
+        RolloutItem::TurnContext(saved_turn_context),
+        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(saved_settings)),
     ] = compaction_items.as_slice()
     else {
         panic!("unexpected compaction records: {compaction_items:#?}");
     };
-    assert_eq!(first.replacement_history, first_live_history);
-    assert_eq!(first.resume_metadata.as_ref(), Some(&expected));
-    assert_eq!(second.resume_metadata.as_ref(), Some(&expected));
+    assert_eq!(compacted.replacement_history, Some(live_history));
+    assert_eq!(compacted.resume_metadata.as_ref(), Some(&expected));
     assert_eq!(
-        first_world_state,
+        saved_world_state,
         &WorldStateItem::full(world_state.render_full().0.into_object())
     );
-    assert_eq!(first_turn_context, &turn_context_baseline);
-    assert_eq!(first_settings, &expected_settings);
-    assert_eq!(second_settings, &expected_settings);
+    assert_eq!(saved_turn_context, &turn_context_baseline);
+    assert_eq!(saved_settings, &expected_settings);
 }
 
 #[tokio::test]
@@ -11312,12 +11298,8 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         .await
         .unwrap();
     let world_a = Arc::new(session.build_world_state_for_step(&step_a).await.unwrap());
-    let retained = crate::compact::InitialContextInjection::BeforeLastUserMessage {
-        world_state: Arc::clone(&world_a),
-        step_context: Arc::clone(&step_a),
-    };
     let (initial_a, _) =
-        crate::compact::build_compaction_initial_context(&session, &retained).await;
+        crate::compact::build_compaction_initial_context(&session, &step_a, &world_a).await;
 
     let mut selected_b = step_a.settings.selected().clone();
     selected_b.collaboration_mode.settings.model = "model-b".to_string();
@@ -11348,10 +11330,10 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         .0;
     let turn_contributions_b = session.build_turn_context_contribution_items(&step_b).await;
     let (restored_a, restored_snapshot) =
-        crate::compact::build_compaction_initial_context(&session, &retained).await;
+        crate::compact::build_compaction_initial_context(&session, &step_a, &world_a).await;
 
     assert_eq!(restored_a, initial_a);
-    assert_eq!(restored_snapshot, Some(world_a.render_full().0));
+    assert_eq!(restored_snapshot, world_a.render_full().0);
     let initial_a = initial_a
         .into_iter()
         .map(ResponseItemEnvelope::into_item)
@@ -11943,9 +11925,9 @@ async fn remote_compaction_v2_retains_only_the_selected_step(first_attempt: Firs
     crate::compact_remote_v2::run_inline_remote_auto_compact_task(
         Arc::clone(&session),
         Arc::clone(&primary),
-        Some(Arc::clone(&fallback)),
+        Arc::clone(&fallback),
         &mut client_session,
-        InitialContextInjection::DoNotInject,
+        Arc::new(session.build_world_state_for_step(&fallback).await.unwrap()),
         CompactionReason::ModelDownshift,
         CompactionPhase::PreTurn,
     )

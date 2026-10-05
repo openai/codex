@@ -28,15 +28,15 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 
 ## Window 3 (after request 2: input diverged at item 00, settings changed (parallel_tool_calls, tools))
 -- request 3 (turn; Local Post-Compaction History Layout) --
-00:message/user:
-    BEFORE_SWITCH_USER
-01:message/user:
-    <COMPACTION_SUMMARY>
-    PRETURN_SWITCH_SUMMARY
-02:message/developer[2]:
+00:message/developer[2]:
     [01] <MODEL_SWITCH>
     [02] <PERMISSIONS_INSTRUCTIONS>
-03:message/user:
+01:message/user:
     <ENVIRONMENT_CONTEXT>
+02:message/user:
+    BEFORE_SWITCH_USER
+03:message/user:
+    <COMPACTION_SUMMARY>
+    PRETURN_SWITCH_SUMMARY
 04:message/user:
     AFTER_SWITCH_USER

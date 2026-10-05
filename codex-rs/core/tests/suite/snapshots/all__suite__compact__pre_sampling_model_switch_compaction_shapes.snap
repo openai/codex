@@ -28,15 +28,15 @@ Scenario: Pre-sampling compaction on model switch to a smaller context window: c
 
 ## Window 3 (after request 2: input diverged at item 00, settings changed (model, parallel_tool_calls, tools))
 -- request 3 (turn; Post-Compaction Follow-up Request (Next Model)) --
-00:message/user:
-    before switch
-01:message/user:
-    <COMPACTION_SUMMARY>
-    PRE_SAMPLING_SUMMARY
-02:message/developer[2]:
+00:message/developer[2]:
     [01] <MODEL_SWITCH>
     [02] <PERMISSIONS_INSTRUCTIONS>
-03:message/user:
+01:message/user:
     <ENVIRONMENT_CONTEXT>
+02:message/user:
+    before switch
+03:message/user:
+    <COMPACTION_SUMMARY>
+    PRE_SAMPLING_SUMMARY
 04:message/user:
     after switch

@@ -1,5 +1,4 @@
 use super::*;
-use crate::compact::InitialContextInjection;
 use crate::config::Constrained;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
@@ -1118,13 +1117,8 @@ async fn compaction_initial_context_preserves_separate_guardian_developer_messag
             .await
             .expect("world state should build"),
     );
-    let initial_context_injection = InitialContextInjection::BeforeLastUserMessage {
-        world_state,
-        step_context,
-    };
-
     let (refreshed, _) =
-        crate::compact::build_compaction_initial_context(&session, &initial_context_injection)
+        crate::compact::build_compaction_initial_context(&session, &step_context, &world_state)
             .await;
 
     let developer_messages = refreshed

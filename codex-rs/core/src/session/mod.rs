@@ -3993,8 +3993,8 @@ impl Session {
     pub(crate) async fn replace_compacted_history(
         &self,
         mut items: Vec<ResponseItemEnvelope>,
-        reference_context_item: Option<TurnContextItem>,
-        world_state_baseline: Option<WorldStateSnapshot>,
+        reference_context_item: TurnContextItem,
+        world_state_baseline: WorldStateSnapshot,
         metadata: CompactedHistoryMetadata,
     ) {
         for envelope in &mut items {
@@ -4024,20 +4024,9 @@ impl Session {
         // Wait for accepted updates to finish persisting, then keep later updates from
         // overtaking the current settings snapshot while its checkpoint is written.
         let _settings_guard = thread_settings::acquire_persistence_lock(self).await;
-        // A new history window needs a full checkpoint, even when it contains only
-        // extension metadata and model-visible context will be rebuilt on the next turn.
-        let mut world_state_item = None;
+        let world_state_item = WorldStateItem::full(world_state_baseline.clone().into_object());
         let compacted_item = {
             let mut state = self.state.lock().await;
-            let snapshot = world_state_baseline.or_else(|| {
-                let previous = state.history.world_state_checkpoint()?;
-                let mut retained = serde_json::Map::new();
-                for contributor in self.services.extensions.context_contributors() {
-                    retained
-                        .extend(contributor.retain_world_state_after_compaction(&previous.state));
-                }
-                (!retained.is_empty()).then(|| WorldStateSnapshot::from(&retained))
-            });
             // Goal edits are published outside the running task. Keep edits accepted after
             // the compaction input snapshot, in their original order, after its replacement.
             let replacement_goal_ids = crate::context::UserGoalUpdate::message_ids(
@@ -4060,16 +4049,13 @@ impl Session {
             let replacement_history = items.clone();
             state.replace_annotated_history(
                 items,
-                reference_context_item.clone(),
+                Some(reference_context_item.clone()),
                 HistoryReplacement::Compaction {
                     reviewer_compaction_hash: metadata.reviewer_compaction_hash,
                 },
             );
             state.reasoning_effort_pin = ReasoningEffortPin::Compacted;
-            if let Some(snapshot) = snapshot {
-                world_state_item = Some(WorldStateItem::full(snapshot.clone().into_object()));
-                state.history.set_world_state_baseline(snapshot);
-            }
+            state.history.set_world_state_baseline(world_state_baseline);
             CompactedItem {
                 message: metadata.message,
                 replacement_history: Some(replacement_history),
@@ -4093,18 +4079,13 @@ impl Session {
             }
         };
 
-        let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
-        // Persist the baseline after the replacement history that established it.
-        if let Some(world_state_item) = world_state_item {
-            rollout_items.push(RolloutItem::WorldState(world_state_item));
-        }
-        if let Some(turn_context_item) = reference_context_item {
-            rollout_items.push(RolloutItem::TurnContext(turn_context_item));
-        }
-        // The frozen turn context must not override current settings in persisted metadata.
-        rollout_items.push(RolloutItem::EventMsg(
-            thread_settings::applied_event(self).await,
-        ));
+        let rollout_items = [
+            RolloutItem::Compacted(compacted_item),
+            RolloutItem::WorldState(world_state_item),
+            RolloutItem::TurnContext(reference_context_item),
+            // The frozen turn context must not override current settings in persisted metadata.
+            RolloutItem::EventMsg(thread_settings::applied_event(self).await),
+        ];
         if self.persist_rollout_items(&rollout_items).await
             && let Some(revision) = mcp_revision
         {
@@ -4573,8 +4554,8 @@ impl Session {
         let turn_context_item = step_context.to_turn_context_item();
         self.replace_compacted_history(
             context_items,
-            Some(turn_context_item),
-            Some(world_state_snapshot),
+            turn_context_item,
+            world_state_snapshot,
             CompactedHistoryMetadata {
                 input_goal_ids,
                 message: String::new(),
@@ -4605,8 +4586,8 @@ impl Session {
     /// `<model_switch>` developer message so model-specific instructions are not lost.
     ///
     /// This is the normal runtime path that establishes a new `reference_context_item`.
-    /// Mid-turn compaction is the other path that can re-establish that reference when it
-    /// reinjects full initial context into replacement history. Live world-state changes may
+    /// Compaction also establishes that reference when it installs full initial context
+    /// into replacement history. Live world-state changes may
     /// independently advance their in-memory baseline within a turn.
     #[instrument(level = "trace", skip_all)]
     pub(crate) async fn record_context_updates_and_set_reference_context_item(

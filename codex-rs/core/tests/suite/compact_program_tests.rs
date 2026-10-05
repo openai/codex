@@ -17,7 +17,6 @@ enum History {
     Fork,
     Rollback,
     IncompleteRollback,
-    Checkpoint,
     ApiKeyResume,
     ApiKeyEnabledResume,
     ApiKeyCustomProviderResume,
@@ -71,7 +70,6 @@ async fn submit_pair(
 #[test_case(Compaction::RemoteHash, History::Fork, Some(CyberAccessProgram::DaybreakBlue); "fork")]
 #[test_case(Compaction::RemoteHash, History::Rollback, Some(CyberAccessProgram::DaybreakBlue); "rollback")]
 #[test_case(Compaction::RemoteHash, History::IncompleteRollback, Some(CyberAccessProgram::DaybreakBlue); "incomplete rollback")]
-#[test_case(Compaction::RemoteHash, History::Checkpoint, Some(CyberAccessProgram::DaybreakBlue); "checkpoint")]
 #[test_case(Compaction::RemoteHash, History::Resume, None; "missing program")]
 #[test_case(Compaction::RemoteHash, History::Resume, Some(CyberAccessProgram::Standard); "standard")]
 #[test_case(Compaction::LocalHash, History::Live, None; "local missing program")]
@@ -165,30 +163,6 @@ async fn model_switch_program_pair(
             discarded_model
         );
     }
-    if matches!(history, History::Checkpoint) {
-        let compact = mount_sse_once(
-            &server,
-            sse(vec![
-                json!({"type": "response.output_item.done", "item": {
-                    "type": "compaction", "encrypted_content": "CHECKPOINT"
-                }}),
-                ev_completed("checkpoint"),
-            ]),
-        )
-        .await;
-        initial.codex.submit(Op::Compact).await?;
-        wait_for_event(&initial.codex, |event| {
-            matches!(event, EventMsg::TurnComplete(_))
-        })
-        .await;
-        assert_eq!(
-            compact
-                .single_request()
-                .inputs_of_type("compaction_trigger")
-                .len(),
-            1
-        );
-    }
 
     let resumed;
     let thread = match history {
@@ -210,7 +184,6 @@ async fn model_switch_program_pair(
         History::Resume
         | History::Rollback
         | History::IncompleteRollback
-        | History::Checkpoint
         | History::ApiKeyResume
         | History::ApiKeyEnabledResume
         | History::ApiKeyCustomProviderResume => {
@@ -368,6 +341,39 @@ async fn model_switch_program_pair(
     if !local {
         assert_eq!(requests[0].inputs_of_type("compaction_trigger").len(), 1);
     }
+
+    // Even when the previous model summarizes, the replacement belongs to the current model.
+    let rollout = fs::read_to_string(thread.rollout_path().expect("rollout"))?
+        .lines()
+        .map(codex_rollout::parse_rollout_line)
+        .collect::<Result<Vec<_>, _>>()?;
+    let checkpoint = rollout
+        .iter()
+        .rposition(|line| matches!(&line.item, RolloutItem::Compacted(_)))
+        .expect("model-switch compaction");
+    let replacement = &rollout[checkpoint + 1..];
+    let world_state = replacement
+        .iter()
+        .find_map(|line| match &line.item {
+            RolloutItem::WorldState(state) => Some(state),
+            _ => None,
+        })
+        .expect("replacement world state");
+    let turn_context = replacement
+        .iter()
+        .find_map(|line| match &line.item {
+            RolloutItem::TurnContext(context) => Some(context),
+            _ => None,
+        })
+        .expect("replacement turn context");
+    assert_eq!(
+        (
+            world_state.full,
+            world_state.state.get("model"),
+            turn_context.model.as_str(),
+        ),
+        (true, Some(&json!(next_model)), next_model),
+    );
     Ok(())
 }
 

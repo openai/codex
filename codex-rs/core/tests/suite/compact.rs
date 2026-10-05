@@ -735,7 +735,7 @@ async fn summarize_context_three_requests_and_instructions(
     // Verify rollout contains user-turn TurnContext entries and a Compacted entry.
     println!("rollout path: {}", rollout_path.display());
     let text = std::fs::read_to_string(&rollout_path).expect("failed to read rollout file");
-    let mut regular_turn_context_count = 0usize;
+    let mut turn_context_count = 0usize;
     let mut saw_compacted_summary = false;
     for line in text.lines() {
         let trimmed = line.trim();
@@ -747,7 +747,7 @@ async fn summarize_context_three_requests_and_instructions(
         };
         match entry.item {
             RolloutItem::TurnContext(_) => {
-                regular_turn_context_count += 1;
+                turn_context_count += 1;
             }
             RolloutItem::Compacted(ci) if ci.message == expected_summary_message => {
                 let summary_item = ci
@@ -780,8 +780,8 @@ async fn summarize_context_three_requests_and_instructions(
     }
 
     assert_eq!(
-        regular_turn_context_count, 2,
-        "rollout should contain one TurnContext entry per real user turn"
+        turn_context_count, 3,
+        "rollout should contain two user-turn contexts and the compaction baseline"
     );
     assert!(
         saw_compacted_summary,
@@ -4463,15 +4463,10 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         final_request_last_user_text, final_user_message,
         "final turn request should end with the submitted user message"
     );
-    let history_before_seeded_prefix = final_request_before_last_user
-        .strip_suffix(initial_seeded_user_prefix)
-        .expect("final request should end with the seeded user prefix from the first request");
-    let expected_history = vec![
-        first_user_message.to_string(),
-        second_user_message.to_string(),
-        expected_second_summary,
-    ];
-    assert_eq!(history_before_seeded_prefix, expected_history.as_slice());
+    let mut expected_history = vec![first_user_message.to_string()];
+    expected_history.extend_from_slice(initial_seeded_user_prefix);
+    expected_history.extend([second_user_message.to_string(), expected_second_summary]);
+    assert_eq!(final_request_before_last_user, expected_history.as_slice());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -5825,8 +5820,8 @@ async fn remote_v2_compaction_refreshes_instructions_and_preserves_them_on_cold_
     let replacement_history = replacement_history_from_rollout(&rollout_path)?;
     assert_eq!(
         instruction_fragments_in_items(&replacement_history),
-        Vec::<String>::new(),
-        "remote-v2 replacement history currently omits the global-instruction fragment"
+        vec![new_fragment.clone()],
+        "remote-v2 replacement history includes refreshed global instructions"
     );
     assert_eq!(
         test.codex.instruction_sources().await,

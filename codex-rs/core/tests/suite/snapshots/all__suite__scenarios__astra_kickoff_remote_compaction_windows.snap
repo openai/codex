@@ -222,10 +222,7 @@ Settings: same as window 1
 
 02:message/user:
     Plan a team kickoff for Friday using $outline and $calendar:agenda.
-03:message/user:
-    Summarize the kickoff notes with $notes:summarize.
-04:compaction:encrypted=true; chars=26; hash=ec5e2724e6f5f641
-05:message/developer[3]:
+03:message/developer[3]:
     [01] <skills_instructions>
         ## Skills
         A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
@@ -271,7 +268,7 @@ Settings: same as window 1
 
         Never use the `request_user_input` tool for permission requests or permission-related escalations.
         </collaboration_mode>
-06:message/developer:
+04:message/developer:
     <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
 
     At the start of your turn, you are the active agent.
@@ -289,9 +286,9 @@ Settings: same as window 1
     There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
 
     Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d...ne"` or a positive integer string.</multi_agent_role> [hash=c7f52e90688299ce]
-07:message/developer:
+05:message/developer:
     <multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. D...elegation, or parallel agent work.</multi_agent_mode> [hash=2b6e037067b4390c]
-08:message/user[2]:
+06:message/user[2]:
     [01] # AGENTS.md instructions for <AGENTS_DIRECTORY>
 
         <INSTRUCTIONS>
@@ -304,6 +301,9 @@ Settings: same as window 1
           <timezone><HOST_TIMEZONE></timezone>
           <filesystem><workspace_roots><root><WORKSPACE_ROOT 1></root></workspace_roots><permission_profile type...ntry></file_system></permission_profile></filesystem> [hash=911722cc43b4c3b8]
         </environment_context>
+07:message/user:
+    Summarize the kickoff notes with $notes:summarize.
+08:compaction:encrypted=true; chars=26; hash=ec5e2724e6f5f641
 09:message/user[2]:
     [01] Check the final kickoff brief and attached sketch with $final-check and $calendar:agenda.
     [02] <input_image:image_url>

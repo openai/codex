@@ -7,7 +7,6 @@ use crate::client_common::ResponseEvent;
 use crate::compact::CompactedHistoryMetadata;
 use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::CompactionAnalyticsDetails;
-use crate::compact::InitialContextInjection;
 use crate::compact::build_compaction_initial_context;
 use crate::compact::compaction_status_from_result;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
@@ -15,6 +14,7 @@ use crate::compact_model_fallback::record_model_fallback;
 use crate::compact_model_fallback::should_retry_with_current_model;
 use crate::compact_remote_history::HistoryItemGroup;
 use crate::compact_remote_history::history_item_groups;
+use crate::context::world_state::WorldState;
 use crate::context_manager::estimate_item_token_count;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
@@ -56,7 +56,6 @@ use codex_rollout_trace::InferenceTraceContext;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::truncate_text;
 use futures::StreamExt;
-use tokio_util::sync::CancellationToken;
 
 #[path = "compact_remote_v2_attempt.rs"]
 mod attempt;
@@ -81,9 +80,9 @@ const MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES: u64 = 2;
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
-    fallback_step_context: Option<Arc<StepContext>>,
+    replacement_step_context: Arc<StepContext>,
     client_session: &mut ModelClientSession,
-    initial_context_injection: InitialContextInjection,
+    world_state: Arc<WorldState>,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
@@ -96,9 +95,9 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     run_remote_compact_task_inner(
         &sess,
         &step_context,
-        fallback_step_context.as_ref(),
+        &replacement_step_context,
         Some(client_session),
-        initial_context_injection,
+        world_state,
         compaction_metadata,
     )
     .await
@@ -106,14 +105,9 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
 
 pub(crate) async fn run_remote_compact_task(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
+    world_state: Arc<WorldState>,
 ) -> CodexResult<()> {
-    // Standalone compaction is its own request boundary, so it captures a fresh step.
-    let step_context = sess
-        .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())
-        .await?;
-    sess.emit_turn_started(&turn_context).await;
-
     let compaction_metadata = CompactionTurnMetadata::new(
         CompactionTrigger::Manual,
         CompactionReason::UserRequested,
@@ -123,9 +117,9 @@ pub(crate) async fn run_remote_compact_task(
     run_remote_compact_task_inner(
         &sess,
         &step_context,
-        /*fallback_step_context*/ None,
+        &step_context,
         /*client_session*/ None,
-        InitialContextInjection::DoNotInject,
+        world_state,
         compaction_metadata,
     )
     .await
@@ -134,9 +128,9 @@ pub(crate) async fn run_remote_compact_task(
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     step_context: &Arc<StepContext>,
-    fallback_step_context: Option<&Arc<StepContext>>,
+    replacement_step_context: &Arc<StepContext>,
     client_session: Option<&mut ModelClientSession>,
-    initial_context_injection: InitialContextInjection,
+    world_state: Arc<WorldState>,
     compaction_metadata: CompactionTurnMetadata,
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
@@ -176,9 +170,9 @@ async fn run_remote_compact_task_inner(
     let result = run_remote_compact_task_inner_impl(
         sess,
         step_context,
-        fallback_step_context,
+        replacement_step_context,
         client_session,
-        initial_context_injection,
+        world_state,
         compaction_metadata,
         &mut analytics_details,
     )
@@ -222,9 +216,9 @@ async fn run_remote_compact_task_inner(
 async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     step_context: &Arc<StepContext>,
-    fallback_step_context: Option<&Arc<StepContext>>,
+    replacement_step_context: &Arc<StepContext>,
     mut client_session: Option<&mut ModelClientSession>,
-    initial_context_injection: InitialContextInjection,
+    world_state: Arc<WorldState>,
     compaction_metadata: CompactionTurnMetadata,
     analytics_details: &mut CompactionAnalyticsDetails,
 ) -> CodexResult<()> {
@@ -253,15 +247,12 @@ async fn run_remote_compact_task_inner_impl(
     let (attempt, compaction_turn_context) = match attempt {
         Ok(attempt) => (attempt, turn_context),
         Err(error) => {
-            let Some(fallback_step_context) = fallback_step_context else {
-                return Err(error);
-            };
-            if !should_retry_with_current_model(&error) {
+            let fallback_turn_context = &replacement_step_context.turn;
+            if !should_retry_with_current_model(&error, turn_context, fallback_turn_context) {
                 return Err(error);
             }
-            sess.set_last_known_step_context(fallback_step_context)
+            sess.set_last_known_step_context(replacement_step_context)
                 .await;
-            let fallback_turn_context = &fallback_step_context.turn;
             let fallback_compaction_trace =
                 sess.services.rollout_thread_trace.compaction_trace_context(
                     fallback_turn_context.sub_id.as_str(),
@@ -271,7 +262,7 @@ async fn run_remote_compact_task_inner_impl(
                 );
             let fallback_result = run_remote_compact_v2_attempt(
                 sess,
-                fallback_step_context,
+                replacement_step_context,
                 client_session,
                 &fallback_compaction_trace,
                 compaction_metadata,
@@ -323,16 +314,11 @@ async fn run_remote_compact_task_inner_impl(
     analytics_details.retained_image_count = Some(retained_images);
     let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
     let (initial_context, world_state_baseline) =
-        build_compaction_initial_context(sess.as_ref(), &initial_context_injection).await;
+        build_compaction_initial_context(sess.as_ref(), replacement_step_context, &world_state)
+            .await;
     let new_history =
         insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context);
 
-    let reference_context_item = match initial_context_injection {
-        InitialContextInjection::DoNotInject => None,
-        InitialContextInjection::BeforeLastUserMessage { step_context, .. } => {
-            Some(step_context.to_turn_context_item())
-        }
-    };
     if let Some(trace_input_history) = trace_input_history.as_deref() {
         let replacement_history = new_history
             .iter()
@@ -359,7 +345,7 @@ async fn run_remote_compact_task_inner_impl(
     };
     sess.replace_compacted_history(
         new_history,
-        reference_context_item,
+        replacement_step_context.to_turn_context_item(),
         world_state_baseline,
         CompactedHistoryMetadata {
             input_goal_ids,
@@ -372,7 +358,8 @@ async fn run_remote_compact_task_inner_impl(
         },
     )
     .await;
-    sess.recompute_token_usage(compaction_turn_context).await;
+    sess.recompute_token_usage(&replacement_step_context.turn)
+        .await;
 
     sess.emit_turn_item_completed(compaction_turn_context, compaction_item)
         .await;

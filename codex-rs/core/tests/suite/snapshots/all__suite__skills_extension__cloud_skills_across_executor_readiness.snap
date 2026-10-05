@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/skills_extension.rs
-expression: "context_snapshot::format_request_history_snapshot(\"Cloud skills rebalance once to retain every executor skill. Post-turn compaction and resume restore the same cloud allocation before the executor reconnects; both catalogs are fully reinjected once into the new history.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+expression: "context_snapshot::format_request_history_snapshot(\"Cloud skills rebalance once to retain every executor skill. Post-turn compaction installs both catalogs and their allocation before resume; the saved catalogs remain visible while the executor reconnects.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
-Scenario: Cloud skills rebalance once to retain every executor skill. Post-turn compaction and resume restore the same cloud allocation before the executor reconnects; both catalogs are fully reinjected once into the new history.
+Scenario: Cloud skills rebalance once to retain every executor skill. Post-turn compaction installs both catalogs and their allocation before resume; the saved catalogs remain visible while the executor reconnects.
 
 ## Window 1
 Settings:
@@ -102,12 +102,7 @@ Settings: same as window 1
 -- request 5 (turn) --
 00:message/user:
     Inspect the available skills.
-01:message/user:
-    Inspect the available skills again.
-02:message/user:
-    <COMPACTION_SUMMARY>
-    The available skills were inspected.
-03:message/developer[3]:
+01:message/developer[4]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <environments_instructions>
         ## Execution environments
@@ -118,14 +113,24 @@ Settings: same as window 1
         Wait only when the current task needs that environment. Continue using tools that are already available for unrelated work.
         </environments_instructions>
     [03] <SKILLS_INSTRUCTIONS>
-04:message/user:
+    [04] <SKILLS_INSTRUCTIONS>
+02:message/user:
     <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Inspect the available skills again.
+04:message/user:
+    <COMPACTION_SUMMARY>
+    The available skills were inspected.
 05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/developer:
+    <SKILLS_INSTRUCTIONS>
+07:message/user:
     Inspect the skills after resuming.
 -- request 6 (turn) --
-06:function_call/wait_for_environment:{"environment_id":"skills-executor"}
-07:function_call_output:{"environment_id":"skills-executor","status":"ready"}
-08:message/user:
+08:function_call/wait_for_environment:{"environment_id":"skills-executor"}
+09:function_call_output:{"environment_id":"skills-executor","status":"ready"}
+10:message/user:
     <ENVIRONMENT_CONTEXT>
-09:message/developer:
+11:message/developer:
     <SKILLS_INSTRUCTIONS>

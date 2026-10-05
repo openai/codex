@@ -58,23 +58,6 @@ pub use codex_prompts::SUMMARIZATION_PROMPT;
 pub use codex_prompts::SUMMARY_PREFIX;
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
-/// Controls whether compaction replacement history must include initial context.
-///
-/// Pre-turn/manual compaction variants use `DoNotInject`: they replace history with a summary and
-/// clear `reference_context_item`, so the next regular turn will fully reinject initial context
-/// after compaction.
-///
-/// Mid-turn compaction must use `BeforeLastUserMessage` because the model is trained to see the
-/// compaction summary as the last item in history after mid-turn compaction; we therefore inject
-/// initial context into the replacement history just above the last real user message.
-pub(crate) enum InitialContextInjection {
-    BeforeLastUserMessage {
-        world_state: Arc<WorldState>,
-        step_context: Arc<StepContext>,
-    },
-    DoNotInject,
-}
-
 /// Metadata for a new compaction checkpoint, kept separate from its replacement history.
 ///
 /// `Session::replace_compacted_history` assigns missing item IDs before constructing the persisted
@@ -89,32 +72,28 @@ pub(crate) struct CompactedHistoryMetadata {
     pub(crate) reviewer_compaction_hash: Option<String>,
 }
 
+/// Render replacement context and its comparison baseline from the same captured step.
+/// Initial context is installed only after compaction returns, above the last real user message
+/// (or the summary when no user message remains), keeping the compaction summary last.
 pub(crate) async fn build_compaction_initial_context(
     sess: &Session,
-    initial_context_injection: &InitialContextInjection,
-) -> (Vec<ResponseItemEnvelope>, Option<WorldStateSnapshot>) {
-    // Return the rendered state with its items so history and its baseline stay identical.
-    match initial_context_injection {
-        InitialContextInjection::BeforeLastUserMessage {
-            world_state,
-            step_context,
-        } => {
-            let (items, snapshot) = sess
-                .build_initial_context_with_world_state(step_context, world_state.as_ref())
-                .await;
-            (
-                items.into_iter().map(ResponseItemEnvelope::new).collect(),
-                Some(snapshot),
-            )
-        }
-        InitialContextInjection::DoNotInject => (Vec::new(), None),
-    }
+    step_context: &StepContext,
+    world_state: &WorldState,
+) -> (Vec<ResponseItemEnvelope>, WorldStateSnapshot) {
+    let (items, snapshot) = sess
+        .build_initial_context_with_world_state(step_context, world_state)
+        .await;
+    (
+        items.into_iter().map(ResponseItemEnvelope::new).collect(),
+        snapshot,
+    )
 }
 
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    initial_context_injection: InitialContextInjection,
+    replacement_step_context: Arc<StepContext>,
+    world_state: Arc<WorldState>,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
@@ -133,11 +112,15 @@ pub(crate) async fn run_inline_auto_compact_task(
     run_compact_task_inner(
         sess,
         turn_context,
+        replacement_step_context,
         input,
-        initial_context_injection,
-        CompactionTrigger::Auto,
-        reason,
-        phase,
+        world_state,
+        CompactionTurnMetadata::new(
+            CompactionTrigger::Auto,
+            reason,
+            CompactionImplementation::Responses,
+            phase,
+        ),
     )
     .await?;
     Ok(())
@@ -145,18 +128,22 @@ pub(crate) async fn run_inline_auto_compact_task(
 
 pub(crate) async fn run_compact_task(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
+    world_state: Arc<WorldState>,
     input: Vec<UserInput>,
 ) -> CodexResult<()> {
-    sess.emit_turn_started(&turn_context).await;
     run_compact_task_inner(
         sess.clone(),
-        turn_context,
+        Arc::clone(&step_context.turn),
+        step_context,
         input,
-        InitialContextInjection::DoNotInject,
-        CompactionTrigger::Manual,
-        CompactionReason::UserRequested,
-        CompactionPhase::StandaloneTurn,
+        world_state,
+        CompactionTurnMetadata::new(
+            CompactionTrigger::Manual,
+            CompactionReason::UserRequested,
+            CompactionImplementation::Responses,
+            CompactionPhase::StandaloneTurn,
+        ),
     )
     .await?;
     Ok(())
@@ -165,14 +152,14 @@ pub(crate) async fn run_compact_task(
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    replacement_step_context: Arc<StepContext>,
     input: Vec<UserInput>,
-    initial_context_injection: InitialContextInjection,
-    trigger: CompactionTrigger,
-    reason: CompactionReason,
-    phase: CompactionPhase,
+    world_state: Arc<WorldState>,
+    compaction_metadata: CompactionTurnMetadata,
 ) -> CodexResult<()> {
-    let compaction_metadata =
-        CompactionTurnMetadata::new(trigger, reason, CompactionImplementation::Responses, phase);
+    let trigger = compaction_metadata.trigger();
+    let reason = compaction_metadata.reason();
+    let phase = compaction_metadata.phase();
     let attempt = CompactionAnalyticsAttempt::begin(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -201,8 +188,9 @@ async fn run_compact_task_inner(
     let result = run_compact_task_inner_impl(
         Arc::clone(&sess),
         Arc::clone(&turn_context),
+        replacement_step_context,
         input,
-        initial_context_injection,
+        world_state,
         compaction_metadata,
     )
     .await;
@@ -250,8 +238,9 @@ async fn run_compact_task_inner(
 async fn run_compact_task_inner_impl(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    replacement_step_context: Arc<StepContext>,
     input: Vec<UserInput>,
-    initial_context_injection: InitialContextInjection,
+    world_state: Arc<WorldState>,
     compaction_metadata: CompactionTurnMetadata,
 ) -> CodexResult<String> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
@@ -371,20 +360,13 @@ async fn run_compact_task_inner_impl(
     let (window_number, window_ids) = sess.advance_auto_compact_window().await;
 
     let (initial_context, world_state_baseline) =
-        build_compaction_initial_context(sess.as_ref(), &initial_context_injection).await;
-    if !initial_context.is_empty() {
-        new_history =
-            insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
-    }
-    let reference_context_item = match initial_context_injection {
-        InitialContextInjection::DoNotInject => None,
-        InitialContextInjection::BeforeLastUserMessage { step_context, .. } => {
-            Some(step_context.to_turn_context_item())
-        }
-    };
+        build_compaction_initial_context(sess.as_ref(), &replacement_step_context, &world_state)
+            .await;
+    new_history =
+        insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
     sess.replace_compacted_history(
         new_history,
-        reference_context_item,
+        replacement_step_context.to_turn_context_item(),
         world_state_baseline,
         CompactedHistoryMetadata {
             input_goal_ids,
@@ -397,7 +379,8 @@ async fn run_compact_task_inner_impl(
         },
     )
     .await;
-    sess.recompute_token_usage(&turn_context).await;
+    sess.recompute_token_usage(&replacement_step_context.turn)
+        .await;
 
     sess.emit_turn_item_completed(&turn_context, compaction_item)
         .await;

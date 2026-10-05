@@ -26,31 +26,31 @@ Scenario: Manual /compact with prior user history compacts existing history and 
 04:message/user:
     <SUMMARIZATION_PROMPT>
 
-## Window 3 (after request 2: input diverged at item 00, settings changed (parallel_tool_calls, tools))
+## Window 3 (after request 2: input diverged at item 03, settings changed (parallel_tool_calls, tools))
 -- request 3 (turn) --
-00:message/user:
-    first manual turn
+00:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
+    <ENVIRONMENT_CONTEXT>
+02:message/user:
+    first manual turn
+03:message/user:
     <COMPACTION_SUMMARY>
     FIRST_MANUAL_SUMMARY
-02:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
-03:message/user:
-    <ENVIRONMENT_CONTEXT>
 04:message/user:
     second manual turn
 
 ## Window 4 (after request 3: settings changed (parallel_tool_calls, tools))
 -- request 4 (compaction) --
-00:message/user:
-    first manual turn
+00:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
 01:message/user:
+    <ENVIRONMENT_CONTEXT>
+02:message/user:
+    first manual turn
+03:message/user:
     <COMPACTION_SUMMARY>
     FIRST_MANUAL_SUMMARY
-02:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
-03:message/user:
-    <ENVIRONMENT_CONTEXT>
 04:message/user:
     second manual turn
 05:message/assistant:
@@ -58,18 +58,18 @@ Scenario: Manual /compact with prior user history compacts existing history and 
 06:message/user:
     <SUMMARIZATION_PROMPT>
 
-## Window 5 (after request 4: input diverged at item 01, settings changed (parallel_tool_calls, tools))
+## Window 5 (after request 4: input diverged at item 00, settings changed (parallel_tool_calls, tools))
 -- request 5 (turn) --
 00:message/user:
     first manual turn
-01:message/user:
-    second manual turn
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    second manual turn
+04:message/user:
     <COMPACTION_SUMMARY>
     SECOND_MANUAL_SUMMARY
-03:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
-04:message/user:
-    <ENVIRONMENT_CONTEXT>
 05:message/user:
     post compact follow-up

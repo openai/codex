@@ -157,10 +157,15 @@ async fn local_compaction_respects_tool_metadata_state(
         ]),
     )
     .await;
+    let step = session
+        .capture_step_context(turn, &tokio_util::sync::CancellationToken::new())
+        .await?;
+    let world_state = Arc::new(session.build_world_state_for_step(&step).await?);
     // OpenAI identity keeps the client from removing passthrough for compatibility.
     run_compact_task(
         Arc::clone(&session),
-        turn,
+        step,
+        world_state,
         vec![UserInput::Text {
             text: "Summarize the conversation.".to_string(),
             text_elements: Vec::new(),

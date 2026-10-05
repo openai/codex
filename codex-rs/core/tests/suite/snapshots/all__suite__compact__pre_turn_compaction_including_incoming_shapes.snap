@@ -39,15 +39,15 @@ Scenario: Pre-turn auto-compaction uses the prior context without the incoming u
 -- request 4 (turn) --
 00:message/user:
     USER_ONE
-01:message/user:
-    USER_TWO
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    USER_TWO
+04:message/user:
     <COMPACTION_SUMMARY>
     PRE_TURN_SUMMARY
-03:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
-04:message/user:
-    <ENVIRONMENT_CONTEXT>
 05:message/user[2]:
     [01] <input_image:detail,image_url>
     [02] USER_THREE

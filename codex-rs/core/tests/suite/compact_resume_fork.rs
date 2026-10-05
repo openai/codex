@@ -277,18 +277,16 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     let summary_after_compact = extract_summary_user_text(&requests[2], SUMMARY_TEXT);
     let summary_after_resume = extract_summary_user_text(&requests[3], SUMMARY_TEXT);
     let summary_after_fork = extract_summary_user_text(&requests[4], SUMMARY_TEXT);
-    let mut expected_after_compact_user_texts =
-        vec!["hello world".to_string(), summary_after_compact];
-    expected_after_compact_user_texts.extend_from_slice(seeded_user_prefix);
+    let mut expected_after_compact_user_texts = seeded_user_prefix.to_vec();
+    expected_after_compact_user_texts.extend(["hello world".to_string(), summary_after_compact]);
     expected_after_compact_user_texts.push("AFTER_COMPACT".to_string());
     assert_eq!(
         json_message_input_texts(&requests[2], "user"),
         expected_after_compact_user_texts
     );
 
-    let mut expected_after_resume_user_texts =
-        vec!["hello world".to_string(), summary_after_resume];
-    expected_after_resume_user_texts.extend_from_slice(seeded_user_prefix);
+    let mut expected_after_resume_user_texts = seeded_user_prefix.to_vec();
+    expected_after_resume_user_texts.extend(["hello world".to_string(), summary_after_resume]);
     expected_after_resume_user_texts.push("AFTER_COMPACT".to_string());
     let after_resume_user_texts = json_message_input_texts(&requests[3], "user");
     let (after_resume_last, after_resume_prefix) = after_resume_user_texts
@@ -317,9 +315,8 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     }
 
     let after_fork_user_texts = json_message_input_texts(&requests[4], "user");
-    let mut expected_after_fork_history_prefix =
-        vec!["hello world".to_string(), summary_after_fork];
-    expected_after_fork_history_prefix.extend_from_slice(seeded_user_prefix);
+    let mut expected_after_fork_history_prefix = seeded_user_prefix.to_vec();
+    expected_after_fork_history_prefix.extend(["hello world".to_string(), summary_after_fork]);
     expected_after_fork_history_prefix.push("AFTER_COMPACT".to_string());
     let (after_fork_last, after_fork_prefix) = after_fork_user_texts
         .split_last()
@@ -450,15 +447,19 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         "hello world".to_string(),
         "AFTER_COMPACT".to_string(),
         "AFTER_RESUME".to_string(),
-        "AFTER_FORK".to_string(),
-        summary_after_second_compact.clone(),
     ];
     expected_after_second_compact_user_texts.extend_from_slice(seeded_user_prefix);
-    expected_after_second_compact_user_texts.push("AFTER_COMPACT_2".to_string());
-    let mut expected_fork_local_user_texts =
-        vec!["AFTER_FORK".to_string(), summary_after_second_compact];
-    expected_fork_local_user_texts.extend_from_slice(seeded_user_prefix);
-    expected_fork_local_user_texts.push("AFTER_COMPACT_2".to_string());
+    expected_after_second_compact_user_texts.extend([
+        "AFTER_FORK".to_string(),
+        summary_after_second_compact.clone(),
+        "AFTER_COMPACT_2".to_string(),
+    ]);
+    let mut expected_fork_local_user_texts = seeded_user_prefix.to_vec();
+    expected_fork_local_user_texts.extend([
+        "AFTER_FORK".to_string(),
+        summary_after_second_compact,
+        "AFTER_COMPACT_2".to_string(),
+    ]);
     let final_user_texts = json_message_input_texts(&requests[requests.len() - 1], "user");
     let (final_last, final_prefix) = final_user_texts
         .split_last()
