@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/scenarios_incremental_tools.rs
-expression: "context_snapshot::format_request_history_snapshot(\"An MCP configuration refresh removes one tool while preserving its namespace and other member. A standalone removal notice preserves earlier declarations and is not repeated on the next turn.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+expression: "context_snapshot::format_request_history_snapshot(\"MCP refreshes remove one tool, then its whole namespace, before restoring both tools. Standalone removal notices and the restored namespace append to history; unchanged turns do not repeat updates.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
-Scenario: An MCP configuration refresh removes one tool while preserving its namespace and other member. A standalone removal notice preserves earlier declarations and is not repeated on the next turn.
+Scenario: MCP refreshes remove one tool, then its whole namespace, before restoring both tools. Standalone removal notices and the restored namespace append to history; unchanged turns do not repeat updates.
 
 ## Window 1
 Settings:
@@ -52,3 +52,31 @@ Settings:
 -- request 3 (turn) --
 07:message/user:
     Continue with the remaining echo tool.
+-- request 4 (turn) --
+08:message/developer:
+    The following namespaces are no longer available. Do not call tools in them unless those tools are declared in a later update:
+    - mcp__echo_service
+
+    The following tools are no longer available. Do not call them:
+    - functions.list_mcp_resource_templates
+    - functions.list_mcp_resources
+    - functions.read_mcp_resource
+09:message/user:
+    Continue after removing the echo service.
+-- request 5 (turn) --
+10:message/user:
+    Continue without the echo service.
+-- request 6 (turn) --
+11:additional_tools/developer (2; hash=817ef381d2e3ba83):
+        - namespace/functions: This is an incremental namespace update. Previously declared tools remain available for direct ca...; hash=b54767a7496e2119
+          - function/list_mcp_resources
+          - function/list_mcp_resource_templates
+          - function/read_mcp_resource
+        - namespace/mcp__echo_service: Echo service instructions.; hash=a5144e5d70d01799
+          - function/cwd
+          - function/echo
+12:message/user:
+    Continue with the restored echo service.
+-- request 7 (turn) --
+13:message/user:
+    Continue with the same restored tools.

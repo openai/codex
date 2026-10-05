@@ -1,6 +1,6 @@
 ---
 source: core/src/context/world_state/top_level_tools_tests.rs
-expression: "render_section_cases(&[(Absent, Known(&original)),\n(Known(&original), Known(&original)), (Known(&original), Known(&updated)),\n(Known(&updated), Known(&only_other)),\n(Known(&only_other), Known(&original)),])"
+expression: "render_section_cases(&[(Absent, Known(&original)),\n(Known(&original), Known(&original)), (Known(&original), Known(&updated)),\n(Known(&updated), Known(&only_other)), (Known(&only_other), Known(&original)),\n(Known(&updated), Known(&only_functions)), (Known(&updated), Known(&empty)),\n(Known(&empty), Known(&empty)), (Known(&empty), Known(&restored)),])"
 ---
 Absent -> {"functions":"d0971b2901a1d91cd0773dd3014aacad18939724","functions.changed":"201818ec534c933aaf3e31e180ad44845f90de52","functions.removed":"ec12b15fd139075230b516c8cd7cbd0d656b9a38","functions.unchanged":"4d234d07035e05b331e0ca66127362f678bed9ce","other":"d3ba1afd5b23158d1baec4aba38ba2b8d376141b","other.lookup":"957791c1122ca973a75db93abc14a5ae32514005"} (item - prefix)
 {
@@ -104,11 +104,8 @@ The following tools are no longer available. Do not call them:
 - functions.removed
 
 {"functions":"d0971b2901a1d91cd0773dd3014aacad18939724","functions.added":"5fc75ad4d08cd0b73ef983d58fed9272072e5ce7","functions.changed":"ebe9005f973a60ba4ee93b024d7021d21dc27826","functions.unchanged":"4d234d07035e05b331e0ca66127362f678bed9ce","other":"d3ba1afd5b23158d1baec4aba38ba2b8d376141b","other.lookup":"957791c1122ca973a75db93abc14a5ae32514005"} -> {"other":"d3ba1afd5b23158d1baec4aba38ba2b8d376141b","other.lookup":"957791c1122ca973a75db93abc14a5ae32514005"} (role - developer)
-The following tools are no longer available. Do not call them:
+The following namespaces are no longer available. Do not call tools in them unless those tools are declared in a later update:
 - functions
-- functions.added
-- functions.changed
-- functions.unchanged
 
 {"other":"d3ba1afd5b23158d1baec4aba38ba2b8d376141b","other.lookup":"957791c1122ca973a75db93abc14a5ae32514005"} -> {"functions":"d0971b2901a1d91cd0773dd3014aacad18939724","functions.changed":"201818ec534c933aaf3e31e180ad44845f90de52","functions.removed":"ec12b15fd139075230b516c8cd7cbd0d656b9a38","functions.unchanged":"4d234d07035e05b331e0ca66127362f678bed9ce","other":"d3ba1afd5b23158d1baec4aba38ba2b8d376141b","other.lookup":"957791c1122ca973a75db93abc14a5ae32514005"} (item - prefix)
 {
@@ -139,6 +136,55 @@ The following tools are no longer available. Do not call them:
         {
           "description": "Look up a value.",
           "name": "changed",
+          "parameters": {
+            "properties": {},
+            "type": "object"
+          },
+          "type": "function"
+        }
+      ],
+      "type": "namespace"
+    }
+  ],
+  "type": "additional_tools"
+}
+
+{"functions":"d0971b2901a1d91cd0773dd3014aacad18939724","functions.added":"5fc75ad4d08cd0b73ef983d58fed9272072e5ce7","functions.changed":"ebe9005f973a60ba4ee93b024d7021d21dc27826","functions.unchanged":"4d234d07035e05b331e0ca66127362f678bed9ce","other":"d3ba1afd5b23158d1baec4aba38ba2b8d376141b","other.lookup":"957791c1122ca973a75db93abc14a5ae32514005"} -> {"functions":"d0971b2901a1d91cd0773dd3014aacad18939724","functions.unchanged":"4d234d07035e05b331e0ca66127362f678bed9ce"} (role - developer)
+The following namespaces are no longer available. Do not call tools in them unless those tools are declared in a later update:
+- other
+
+The following tools are no longer available. Do not call them:
+- functions.added
+- functions.changed
+
+{"functions":"d0971b2901a1d91cd0773dd3014aacad18939724","functions.added":"5fc75ad4d08cd0b73ef983d58fed9272072e5ce7","functions.changed":"ebe9005f973a60ba4ee93b024d7021d21dc27826","functions.unchanged":"4d234d07035e05b331e0ca66127362f678bed9ce","other":"d3ba1afd5b23158d1baec4aba38ba2b8d376141b","other.lookup":"957791c1122ca973a75db93abc14a5ae32514005"} -> {} (role - developer)
+The following namespaces are no longer available. Do not call tools in them unless those tools are declared in a later update:
+- functions
+- other
+
+{} -> {}
+None
+
+{} -> {"functions":"d0971b2901a1d91cd0773dd3014aacad18939724","functions.restored":"56fbc7d43a57aab411e5352bfbb88a6df939fd4e","functions.unchanged":"4d234d07035e05b331e0ca66127362f678bed9ce"} (item - prefix)
+{
+  "role": "developer",
+  "tools": [
+    {
+      "description": "Tools.",
+      "name": "functions",
+      "tools": [
+        {
+          "description": "Look up a value.",
+          "name": "unchanged",
+          "parameters": {
+            "properties": {},
+            "type": "object"
+          },
+          "type": "function"
+        },
+        {
+          "description": "Look up a value.",
+          "name": "restored",
           "parameters": {
             "properties": {},
             "type": "object"

@@ -78,6 +78,15 @@ fn snapshots_namespace_transitions() {
     .unwrap();
     let only_other =
         TopLevelToolsState::new(vec![namespace("other", vec![declaration("lookup")])]).unwrap();
+    let only_functions =
+        TopLevelToolsState::new(vec![namespace("functions", vec![declaration("unchanged")])])
+            .unwrap();
+    let empty = TopLevelToolsState::new(Vec::new()).unwrap();
+    let restored = TopLevelToolsState::new(vec![namespace(
+        "functions",
+        vec![declaration("unchanged"), declaration("restored")],
+    )])
+    .unwrap();
 
     insta::assert_snapshot!(render_section_cases(&[
         (Absent, Known(&original)),
@@ -85,6 +94,13 @@ fn snapshots_namespace_transitions() {
         (Known(&original), Known(&updated)),
         (Known(&updated), Known(&only_other)),
         (Known(&only_other), Known(&original)),
+        // A whole namespace and individual members can disappear in the same update.
+        (Known(&updated), Known(&only_functions)),
+        (Known(&updated), Known(&empty)),
+        // An empty catalog is known state; do not repeat its removal notice.
+        (Known(&empty), Known(&empty)),
+        // Restoration declares both an old member and one that has never been available.
+        (Known(&empty), Known(&restored)),
     ]));
 }
 
@@ -125,10 +141,10 @@ fn empty_catalog_is_persisted_and_can_add_tools_again() {
     assert_eq!(snapshot, Some(BTreeMap::new()));
     assert_eq!(
         merge_world_state_updates(updates),
-        vec![ContextualUserFragment::into(RemovedTools(vec![
-            "functions".to_string(),
-            "functions.lookup".to_string(),
-        ]))]
+        vec![ContextualUserFragment::into(RemovedTools {
+            namespaces: vec!["functions".to_string()],
+            ..Default::default()
+        })]
     );
     let (_, updates) = original.render_diff(PreviousSectionState::Known(&snapshot.unwrap()));
     assert_eq!(merge_world_state_updates(updates), vec![item(definitions)]);
@@ -170,7 +186,10 @@ fn namespace_diff_contains_only_changed_and_added_tools() {
         merge_world_state_updates(updates),
         vec![
             item(vec![expected]),
-            ContextualUserFragment::into(RemovedTools(vec!["functions.removed".to_string()])),
+            ContextualUserFragment::into(RemovedTools {
+                tools: vec!["functions.removed".to_string()],
+                ..Default::default()
+            }),
         ]
     );
     assert!(
@@ -228,21 +247,29 @@ fn tool_type_change_keeps_the_callable_name_available() {
         merge_world_state_updates(updates),
         vec![
             item(vec![updated]),
-            ContextualUserFragment::into(RemovedTools(vec!["functions.removed".to_string()])),
+            ContextualUserFragment::into(RemovedTools {
+                tools: vec!["functions.removed".to_string()],
+                ..Default::default()
+            }),
         ]
     );
 }
 
 #[test]
 fn namespace_removals_emit_one_notice() {
-    let original = TopLevelToolsState::new(vec![namespace(
-        "functions",
-        vec![
-            declaration("lookup"),
-            declaration("removed"),
-            declaration("also_removed"),
-        ],
-    )])
+    let original = TopLevelToolsState::new(vec![
+        namespace(
+            "functions",
+            vec![
+                declaration("lookup"),
+                declaration("removed"),
+                declaration("also_removed"),
+            ],
+        ),
+        namespace("function", vec![declaration("lookup")]),
+        namespace("other", vec![declaration("lookup")]),
+        json!({"type": "web_search"}),
+    ])
     .unwrap();
     let snapshot = original
         .render_diff(PreviousSectionState::Absent)
@@ -253,9 +280,37 @@ fn namespace_removals_emit_one_notice() {
     let (_, updates) = current.render_diff(PreviousSectionState::Known(&snapshot));
     assert_eq!(
         merge_world_state_updates(updates),
-        vec![ContextualUserFragment::into(RemovedTools(vec![
-            "functions.also_removed".to_string(),
-            "functions.removed".to_string(),
-        ]))]
+        vec![ContextualUserFragment::into(RemovedTools {
+            namespaces: vec!["function".to_string(), "other".to_string()],
+            tools: vec![
+                "functions.also_removed".to_string(),
+                "functions.removed".to_string(),
+                "web_search".to_string(),
+            ],
+        })]
+    );
+}
+
+#[test]
+fn namespace_replaced_by_builtin_keeps_the_replacement_available() {
+    let original =
+        TopLevelToolsState::new(vec![namespace("web_search", vec![declaration("lookup")])])
+            .unwrap();
+    let snapshot = original
+        .render_diff(PreviousSectionState::Absent)
+        .0
+        .unwrap();
+    let replacement = json!({"type": "web_search"});
+    let current = TopLevelToolsState::new(vec![replacement.clone()]).unwrap();
+    let (_, updates) = current.render_diff(PreviousSectionState::Known(&snapshot));
+    assert_eq!(
+        merge_world_state_updates(updates),
+        vec![
+            item(vec![replacement]),
+            ContextualUserFragment::into(RemovedTools {
+                tools: vec!["web_search.lookup".to_string()],
+                ..Default::default()
+            }),
+        ],
     );
 }

@@ -1,6 +1,7 @@
 //! Diffs the one-level Responses Lite catalog: namespaces of callable tools and built-ins.
 //! Missing state starts a fresh catalog; this section does not migrate legacy history.
 //! Incremental hints decorate emitted declarations only, leaving catalog hashes unchanged.
+//! Whole namespace removals subsume their members in the removal notice.
 
 use super::PreviousSectionState;
 use super::SectionTransition;
@@ -15,8 +16,11 @@ use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ResponseItem;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 const NAMESPACE_UPDATE_HINT: &str = "This is an incremental namespace update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one.";
+const REMOVED_TOOLS_HEADER: &str = "The following tools are no longer available. Do not call them:";
+const REMOVED_NAMESPACES_HEADER: &str = "The following namespaces are no longer available. Do not call tools in them unless those tools are declared in a later update:";
 
 /// The exact serialized Responses Lite declarations visible in one captured step.
 pub(crate) struct TopLevelToolsState {
@@ -137,13 +141,34 @@ impl WorldStateSection for TopLevelToolsState {
         }
         updates.extend(namespace_updates);
         if let Some(previous) = previous {
-            let removed = previous
+            // Namespace and member names cannot contain dots. A qualified key identifies
+            // its old namespace without changing the persisted header/member hash format.
+            let namespaces = previous
+                .keys()
+                .filter_map(|key| key.split_once('.').map(|(namespace, _)| namespace))
+                .filter(|namespace| {
+                    previous.contains_key(*namespace) && !self.hashes.contains_key(*namespace)
+                })
+                .collect::<BTreeSet<_>>();
+            let tools = previous
                 .keys()
                 .filter(|key| !self.hashes.contains_key(*key))
+                .filter(|key| {
+                    !namespaces.contains(key.as_str())
+                        && !key
+                            .split_once('.')
+                            .is_some_and(|(namespace, _)| namespaces.contains(namespace))
+                })
                 .cloned()
                 .collect::<Vec<_>>();
-            if !removed.is_empty() {
-                updates.push(WorldStateUpdate::fragment(RemovedTools(removed)).standalone());
+            if !namespaces.is_empty() || !tools.is_empty() {
+                updates.push(
+                    WorldStateUpdate::fragment(RemovedTools {
+                        namespaces: namespaces.into_iter().map(str::to_string).collect(),
+                        tools,
+                    })
+                    .standalone(),
+                );
             }
         }
         // Persist the empty map too: it is a known empty catalog, not missing state.
@@ -151,7 +176,11 @@ impl WorldStateSection for TopLevelToolsState {
     }
 }
 
-struct RemovedTools(Vec<String>);
+#[derive(Default)]
+struct RemovedTools {
+    namespaces: Vec<String>,
+    tools: Vec<String>,
+}
 
 impl ContextualUserFragment for RemovedTools {
     fn role(&self) -> &'static str {
@@ -170,9 +199,27 @@ impl ContextualUserFragment for RemovedTools {
         ("", "")
     }
 
+    /// Lists removed namespaces and individual tools in separate sections of one notice.
     fn body(&self) -> String {
-        let names = self.0.join("\n- ");
-        format!("The following tools are no longer available. Do not call them:\n- {names}")
+        let sections = [
+            (REMOVED_NAMESPACES_HEADER, &self.namespaces),
+            (REMOVED_TOOLS_HEADER, &self.tools),
+        ];
+        let mut body = String::new();
+        for (header, names) in sections {
+            if names.is_empty() {
+                continue;
+            }
+            if !body.is_empty() {
+                body.push_str("\n\n");
+            }
+            body.push_str(header);
+            for name in names {
+                body.push_str("\n- ");
+                body.push_str(name);
+            }
+        }
+        body
     }
 }
 
