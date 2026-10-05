@@ -67,6 +67,10 @@ pub(crate) async fn run_codex_thread_interactive(
             "Codex delegates require approval policy `never`".to_string(),
         ));
     }
+    // Do not let admission or a ready startup error win over prior cancellation.
+    if cancel_token.is_cancelled() {
+        return Err(CodexErr::TurnAborted);
+    }
     config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     config.model_provider.supports_websockets &= parent_session
         .services
