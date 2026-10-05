@@ -1,0 +1,54 @@
+---
+source: core/tests/suite/scenarios_incremental_tools.rs
+expression: "context_snapshot::format_request_history_snapshot(\"An MCP configuration refresh removes one tool while preserving its namespace and other member. A standalone removal notice preserves earlier declarations and is not repeated on the next turn.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: An MCP configuration refresh removes one tool while preserving its namespace and other member. A standalone removal notice preserves earlier declarations and is not repeated on the next turn.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-5.5"
+  parallel_tool_calls: false
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"context":"all_turns","effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:additional_tools/developer (3; hash=7748a53142f449b7):
+        - namespace/functions; hash=124fee69a69ed6b2
+          - function/exec_command
+          - function/write_stdin
+          - function/list_mcp_resources
+          - function/list_mcp_resource_templates
+          - function/read_mcp_resource
+          - function/request_user_input
+          - custom/apply_patch
+          - function/view_image
+        - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=2327142bda177c50
+          - function/close_agent
+          - function/resume_agent
+          - function/send_input
+          - function/spawn_agent
+          - function/wait_agent
+        - namespace/mcp__echo_service: Echo service instructions.; hash=a5144e5d70d01799
+          - function/cwd
+          - function/echo
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
+    Begin with the echo service.
+-- request 2 (turn) --
+05:message/developer:
+    The following tools are no longer available. Do not call them:
+    - mcp__echo_service.cwd
+06:message/user:
+    Continue after disabling the cwd tool.
+-- request 3 (turn) --
+07:message/user:
+    Continue with the remaining echo tool.

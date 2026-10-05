@@ -96,6 +96,11 @@ fn initial_catalog_preserves_order_and_unchanged_catalog_emits_nothing() {
     ];
     let state = TopLevelToolsState::new(definitions.clone()).unwrap();
     let (snapshot, updates) = state.render_diff(PreviousSectionState::Absent);
+    assert_eq!(
+        merge_world_state_updates(updates),
+        vec![item(definitions.clone())]
+    );
+    let (_, updates) = state.render_diff(PreviousSectionState::Unknown);
     assert_eq!(merge_world_state_updates(updates), vec![item(definitions)]);
     let snapshot = snapshot.unwrap();
     assert_eq!(
@@ -159,10 +164,12 @@ fn namespace_diff_contains_only_changed_and_added_tools() {
     ])
     .unwrap();
     let (snapshot, updates) = current.render_diff(PreviousSectionState::Known(&snapshot));
+    let mut expected = namespace("functions", vec![changed, added]);
+    expected["description"] = json!(format!("Tools.\n{NAMESPACE_UPDATE_HINT}"));
     assert_eq!(
         merge_world_state_updates(updates),
         vec![
-            item(vec![namespace("functions", vec![changed, added])]),
+            item(vec![expected]),
             ContextualUserFragment::into(RemovedTools(vec!["functions.removed".to_string()])),
         ]
     );
@@ -213,9 +220,10 @@ fn tool_type_change_keeps_the_callable_name_available() {
         .unwrap();
     let custom = json!({"type": "custom", "name": "lookup", "description": "Look up a value.",
         "format": {"type": "text"}});
-    let updated = namespace("functions", vec![custom]);
+    let mut updated = namespace("functions", vec![custom]);
     let current = TopLevelToolsState::new(vec![updated.clone()]).unwrap();
     let (_, updates) = current.render_diff(PreviousSectionState::Known(&snapshot));
+    updated["description"] = json!(format!("Tools.\n{NAMESPACE_UPDATE_HINT}"));
     assert_eq!(
         merge_world_state_updates(updates),
         vec![

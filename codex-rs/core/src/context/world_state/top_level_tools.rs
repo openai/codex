@@ -1,5 +1,6 @@
 //! Diffs the one-level Responses Lite catalog: namespaces of callable tools and built-ins.
 //! Missing state starts a fresh catalog; this section does not migrate legacy history.
+//! Incremental hints decorate emitted declarations only, leaving catalog hashes unchanged.
 
 use super::PreviousSectionState;
 use super::SectionTransition;
@@ -14,6 +15,8 @@ use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ResponseItem;
 use serde_json::Value;
 use std::collections::BTreeMap;
+
+const NAMESPACE_UPDATE_HINT: &str = "This is an incremental namespace update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one.";
 
 /// The exact serialized Responses Lite declarations visible in one captured step.
 pub(crate) struct TopLevelToolsState {
@@ -100,6 +103,14 @@ impl WorldStateSection for TopLevelToolsState {
             if !members.is_empty() {
                 let mut namespace = definition.clone();
                 namespace["tools"] = Value::Array(members);
+                if previous.is_some_and(|previous| previous.contains_key(name)) {
+                    let description = definition["description"].as_str().unwrap_or_default();
+                    namespace["description"] = Value::String(if description.is_empty() {
+                        NAMESPACE_UPDATE_HINT.to_string()
+                    } else {
+                        format!("{description}\n{NAMESPACE_UPDATE_HINT}")
+                    });
+                }
                 tools.push(namespace);
             } else if changed(name) {
                 // Namespace declarations require a member. Update metadata as text without
