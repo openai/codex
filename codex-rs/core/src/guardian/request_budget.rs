@@ -52,13 +52,11 @@ pub(super) fn estimate_request_tokens(request: &ResponsesApiRequest) -> usize {
         .iter()
         .map(estimate_item_token_count)
         .fold(0i64, i64::saturating_add);
-    let instructions = TruncationPolicy::Bytes(request.instructions.len()).token_budget();
     let metadata = serde_json::to_vec(&(&request.tools, &request.text))
         .map(|bytes| TruncationPolicy::Bytes(bytes.len()).token_budget())
         .unwrap_or(usize::MAX);
     usize::try_from(input)
         .unwrap_or(usize::MAX)
-        .saturating_add(instructions)
         .saturating_add(metadata)
 }
 

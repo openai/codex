@@ -7,47 +7,53 @@ Scenario: Pre-turn auto-compaction uses the prior context without the incoming u
 ## Window 1
 -- request 1 (turn) --
 00:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
-02:message/user:
-    USER_ONE
--- request 2 (turn) --
-03:message/assistant:
-    FIRST_REPLY
-04:message/user:
-    USER_TWO
-
-## Window 2 (after request 2: settings changed (parallel_tool_calls, tools))
--- request 3 (compaction) --
-00:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
-02:message/user:
-    USER_ONE
-03:message/assistant:
-    FIRST_REPLY
-04:message/user:
-    USER_TWO
-05:message/assistant:
-    SECOND_REPLY
-06:message/user:
-    <SUMMARIZATION_PROMPT>
-
-## Window 3 (after request 3: input diverged at item 00, settings changed (parallel_tool_calls, tools))
--- request 4 (turn) --
-00:message/user:
-    USER_ONE
+    <MODEL_INSTRUCTIONS>
 01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
 02:message/user:
     <ENVIRONMENT_CONTEXT>
 03:message/user:
+    USER_ONE
+-- request 2 (turn) --
+04:message/assistant:
+    FIRST_REPLY
+05:message/user:
     USER_TWO
+
+## Window 2 (after request 2: settings changed (parallel_tool_calls, tools))
+-- request 3 (compaction) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    USER_ONE
+04:message/assistant:
+    FIRST_REPLY
+05:message/user:
+    USER_TWO
+06:message/assistant:
+    SECOND_REPLY
+07:message/user:
+    <SUMMARIZATION_PROMPT>
+
+## Window 3 (after request 3: input diverged at item 01, settings changed (parallel_tool_calls, tools))
+-- request 4 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/user:
+    USER_ONE
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
 04:message/user:
+    USER_TWO
+05:message/user:
     <COMPACTION_SUMMARY>
     PRE_TURN_SUMMARY
-05:message/user[2]:
+06:message/user[2]:
     [01] <input_image:detail,image_url>
     [02] USER_THREE

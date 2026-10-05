@@ -6,19 +6,21 @@ Scenario: Second turn changes cwd and approval policy while keeping model consta
 
 ## Window 1
 -- request 1 (turn; First Request (Baseline)) --
-00:message/developer[2]:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     first turn
 -- request 2 (turn; Second Request (Turn Overrides)) --
-03:message/assistant:
+04:message/assistant:
     turn one complete
-04:message/developer:
+05:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-05:message/user:
-    <ENVIRONMENT_CONTEXT>
 06:message/user:
+    <ENVIRONMENT_CONTEXT>
+07:message/user:
     second turn with context updates

@@ -7,13 +7,15 @@ Scenario: First request after fork when startup preserves the parent baseline, t
 ## Window 1
 -- request 1 (turn; First Forked Turn Request) --
 00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     fork seed
-03:message/developer[2]:
+04:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <COLLABORATION_MODE>
-04:message/user:
+05:message/user:
     after fork

@@ -7,13 +7,15 @@ Scenario: Worker messages arrive during a response. Deferred mailbox preemption 
 ## Window 1
 -- request 1 (request) --
 00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     Plan the next action while the worker finishes.
 -- request 2 (request) --
-03:message/assistant:
+04:message/assistant:
     I will update the plan.
-04:agent_message
 05:agent_message
+06:agent_message

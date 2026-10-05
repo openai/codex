@@ -6,17 +6,19 @@ Scenario: First post-resume turn where pre-turn override sets model to rollout m
 
 ## Window 1
 -- request 1 (turn; Last Request Before Resume) --
-00:message/developer[2]:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     seed resume history
 -- request 2 (turn; First Request After Resume + Override) --
-03:message/assistant:
+04:message/assistant:
     recorded before resume
-04:message/user:
-    <ENVIRONMENT_CONTEXT>
 05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user:
     first resumed turn after model override

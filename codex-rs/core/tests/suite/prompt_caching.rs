@@ -279,11 +279,11 @@ async fn prompt_tools_are_consistent_across_requests(
     ]);
     let body0 = req1.single_request().body_json();
 
-    assert_eq!(body0["instructions"], serde_json::json!(base_instructions),);
+    assert_eq!(req1.single_request().instructions_text(), base_instructions);
     assert_tool_names(&body0, &expected_tools_names);
 
     let body1 = req2.single_request().body_json();
-    assert_eq!(body1["instructions"], serde_json::json!(base_instructions),);
+    assert_eq!(req2.single_request().instructions_text(), base_instructions);
     assert_tool_names(&body1, &expected_tools_names);
 
     for request in [&req1, &req2] {
@@ -359,22 +359,16 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let body0 = req1.single_request().body_json();
-    let instructions0 = body0["instructions"]
-        .as_str()
-        .expect("instructions should be a string");
+    let instructions0 = req1.single_request().instructions_text();
     assert!(
         instructions0.contains("You are"),
         "expected non-empty instructions"
     );
 
-    let body1 = req2.single_request().body_json();
-    let instructions1 = body1["instructions"]
-        .as_str()
-        .expect("instructions should be a string");
+    let instructions1 = req2.single_request().instructions_text();
     assert_eq!(
-        normalize_newlines(instructions1),
-        normalize_newlines(instructions0)
+        normalize_newlines(&instructions1),
+        normalize_newlines(&instructions0)
     );
 
     Ok(())
@@ -434,11 +428,11 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let input1 = body1["input"].as_array().expect("input array");
     assert_eq!(
         input1.len(),
-        3,
-        "expected permissions + cached contextual user prefix + user msg"
+        4,
+        "expected base instructions + permissions + cached contextual user prefix + user msg"
     );
 
-    let ui_text = input1[1]["content"][0]["text"]
+    let ui_text = input1[2]["content"][0]["text"]
         .as_str()
         .expect("ui message text");
     assert!(
@@ -447,17 +441,17 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     );
 
     let cwd_str = config.cwd.to_string_lossy();
-    let env_text = input1[1]["content"][1]["text"]
+    let env_text = input1[2]["content"][1]["text"]
         .as_str()
         .expect("environment context text");
     assert_default_env_context(env_text, &cwd_str);
     assert_eq!(
-        input1[1]["content"][1]["type"].as_str(),
+        input1[2]["content"][1]["type"].as_str(),
         Some("input_text"),
         "expected environment context bundled after UI message in cached contextual message"
     );
     assert_eq_without_metadata_or_item_ids(
-        input1[2].clone(),
+        input1[3].clone(),
         text_user_input("hello 1".to_string()),
     );
 
@@ -973,8 +967,9 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let body1 = request1.body_json();
     let body2 = request2.body_json();
 
-    let expected_permissions_msg = body1["input"][0].clone();
-    let expected_ui_msg = body1["input"][1].clone();
+    let expected_base_instructions = body1["input"][0].clone();
+    let expected_permissions_msg = body1["input"][1].clone();
+    let expected_ui_msg = body1["input"][2].clone();
 
     let default_cwd_lossy = default_cwd.to_string_lossy();
     let expected_env_text_1 = expected_ui_msg["content"][1]["text"]
@@ -993,6 +988,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let expected_user_message_1 = text_user_input("hello 1".to_string());
 
     let expected_input_1 = serde_json::Value::Array(vec![
+        expected_base_instructions.clone(),
         expected_permissions_msg.clone(),
         expected_contextual_user_msg_1.clone(),
         expected_user_message_1.clone(),
@@ -1001,6 +997,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
 
     let expected_user_message_2 = text_user_input("hello 2".to_string());
     let expected_input_2 = serde_json::Value::Array(vec![
+        expected_base_instructions,
         expected_permissions_msg,
         expected_contextual_user_msg_1,
         expected_user_message_1,
@@ -1110,8 +1107,9 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let body1 = request1.body_json();
     let body2 = request2.body_json();
 
-    let expected_permissions_msg = body1["input"][0].clone();
-    let expected_ui_msg = body1["input"][1].clone();
+    let expected_base_instructions = body1["input"][0].clone();
+    let expected_permissions_msg = body1["input"][1].clone();
+    let expected_ui_msg = body1["input"][2].clone();
 
     let expected_env_text_1 = expected_ui_msg["content"][1]["text"]
         .as_str()
@@ -1127,6 +1125,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     ]);
     let expected_user_message_1 = text_user_input("hello 1".to_string());
     let expected_input_1 = serde_json::Value::Array(vec![
+        expected_base_instructions.clone(),
         expected_permissions_msg.clone(),
         expected_contextual_user_msg_1.clone(),
         expected_user_message_1.clone(),
@@ -1168,6 +1167,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     );
     let expected_user_message_2 = text_user_input("hello 2".to_string());
     let expected_input_2 = serde_json::Value::Array(vec![
+        expected_base_instructions,
         expected_permissions_msg,
         expected_contextual_user_msg_1,
         expected_user_message_1,

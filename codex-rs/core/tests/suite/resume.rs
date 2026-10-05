@@ -148,12 +148,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
         }]))
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
-    let initial_body = initial_mock.single_request().body_json();
-    let initial_instructions = initial_body
-        .get("instructions")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
+    let initial_instructions = initial_mock.single_request().instructions_text();
 
     let resumed_mock = mount_sse_sequence(
         &server,

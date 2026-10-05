@@ -237,7 +237,9 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     // input after compact is a prefix of input after resume/fork
     let input_after_compact = json!(requests[requests.len() - 3]["input"]);
     let input_after_resume = json!(requests[requests.len() - 2]["input"]);
-    let input_after_fork = json!(requests[requests.len() - 1]["input"]);
+    let mut input_after_fork = json!(requests[requests.len() - 1]["input"]);
+    // The request prefix has a thread-scoped ID; retained history IDs stay unchanged.
+    input_after_fork[0]["id"] = input_after_compact[0]["id"].clone();
 
     let compact_arr = input_after_compact
         .as_array()

@@ -6,47 +6,51 @@ Scenario: Initially available deferred tools remain unchanged until disabling Ca
 
 ## Window 1
 -- request 1 (turn; Initially available) --
-00:message/developer[3]:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[3]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <APPS_INSTRUCTIONS>
     [03] <tools>
         Deferred tool namespaces:
         - mcp__codex_apps__calendar: Plan events and manage your calendar.
         </tools>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     inspect initially available deferred tools
 -- request 2 (turn; Unchanged follow-up) --
-03:message/assistant:
+04:message/assistant:
     done
-04:message/user:
+05:message/user:
     inspect unchanged deferred tools
 
 ## Window 2 (after request 2: settings changed (tools))
 -- request 3 (turn; Removed and empty) --
-00:message/developer[3]:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[3]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <APPS_INSTRUCTIONS>
     [03] <tools>
         Deferred tool namespaces:
         - mcp__codex_apps__calendar: Plan events and manage your calendar.
         </tools>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     inspect initially available deferred tools
-03:message/assistant:
+04:message/assistant:
     done
-04:message/user:
+05:message/user:
     inspect unchanged deferred tools
-05:message/assistant:
+06:message/assistant:
     done
-06:message/developer:
+07:message/developer:
     <tools>
     Removed deferred tool namespaces:
     - mcp__codex_apps__calendar: Plan events and manage your calendar.
     No deferred tool namespaces remain.
     </tools>
-07:message/user:
+08:message/user:
     inspect removed deferred tools

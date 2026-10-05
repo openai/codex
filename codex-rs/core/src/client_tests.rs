@@ -767,6 +767,10 @@ fn responses_request_preserves_result_metadata_above_previous_aggregate_budget()
         crate::tools::ExecutedToolCalls::new(&features, &codex_history::InitialHistory::New);
     let mut prompt = Prompt {
         input: history.clone(),
+        base_instructions: BaseInstructions {
+            text: String::new(),
+            ..Default::default()
+        },
         ..Default::default()
     };
     // Follow the sampling path: budget the request copy before client serialization.
@@ -976,6 +980,10 @@ async fn responses_http_preserves_raw_tool_metadata_for_openai_custom_endpoint()
     })));
     let prompt = Prompt {
         input: vec![output.clone()],
+        base_instructions: BaseInstructions {
+            text: String::new(),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let responses_metadata = test_responses_metadata_for_client(
@@ -1014,12 +1022,14 @@ async fn responses_http_preserves_raw_tool_metadata_for_openai_custom_endpoint()
     Ok(())
 }
 
-#[test]
-fn responses_lite_prefix_ids_track_thread_and_payload() -> anyhow::Result<()> {
+#[test_case::test_case(false; "standard")]
+#[test_case::test_case(true; "responses_lite")]
+fn prefix_ids_track_thread_and_payload(responses_lite: bool) -> anyhow::Result<()> {
     let thread_id = ThreadId::new();
     let client = test_model_client_with_thread_id(thread_id, SessionSource::Cli);
     let mut model = test_model_info();
-    model.use_responses_lite = true;
+    model.use_responses_lite = responses_lite;
+    let instructions_index = usize::from(responses_lite);
     let mut tool = codex_tools::FreeformTool {
         name: "exec".to_string(),
         description: "Execute JavaScript.".to_string(),
@@ -1061,25 +1071,38 @@ fn responses_lite_prefix_ids_track_thread_and_payload() -> anyhow::Result<()> {
 
     prompt.base_instructions.text.push_str(" with an update");
     let changed_instructions = build(&client, &prompt)?;
-    assert_eq!(changed_instructions.input[0], original.input[0]);
-    assert_ne!(changed_instructions.input[1].id(), original.input[1].id());
+    assert_ne!(
+        changed_instructions.input[instructions_index].id(),
+        original.input[instructions_index].id()
+    );
 
     tool.description
         .push_str(" Updated execution instructions.");
     prompt.tools = vec![codex_tools::ToolSpec::Freeform(tool)].into();
     let changed_tools = build(&client, &prompt)?;
-    assert_ne!(
-        changed_tools.input[0].id(),
-        changed_instructions.input[0].id()
+    assert_eq!(
+        changed_tools.input[instructions_index],
+        changed_instructions.input[instructions_index]
     );
-    assert_eq!(changed_tools.input[1], changed_instructions.input[1]);
+    if responses_lite {
+        assert_eq!(changed_instructions.input[0], original.input[0]);
+        assert_ne!(
+            changed_tools.input[0].id(),
+            changed_instructions.input[0].id()
+        );
+    }
 
     let independent = build(
         &test_model_client_with_thread_id(ThreadId::new(), SessionSource::Cli),
         &prompt,
     )?;
-    assert_ne!(independent.input[0].id(), changed_tools.input[0].id());
-    assert_ne!(independent.input[1].id(), changed_tools.input[1].id());
+    assert_ne!(
+        independent.input[instructions_index].id(),
+        changed_tools.input[instructions_index].id()
+    );
+    if responses_lite {
+        assert_ne!(independent.input[0].id(), changed_tools.input[0].id());
+    }
     Ok(())
 }
 

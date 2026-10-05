@@ -1476,21 +1476,10 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                     return None;
                 }
 
-                let texts = value
-                    .get("content")
-                    .and_then(|content| content.as_array())
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|item| item.get("text").and_then(|text| text.as_str()));
-
-                // Ignore cached prefix messages (project docs + permissions) since they are not
-                // relevant to compaction behavior and can change as bundled prompts evolve.
+                // Ignore instruction prefixes since they are not relevant to the history
+                // being compacted and can change as bundled prompts evolve.
                 let role = value.get("role").and_then(|role| role.as_str());
-                if role == Some("developer")
-                    && texts
-                        .into_iter()
-                        .any(|text| text.contains("`sandbox_mode`"))
-                {
+                if role == Some("developer") {
                     return None;
                 }
                 if role == Some("user") {
@@ -1964,18 +1953,10 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .expect("follow-up request missing");
     assert_eq!(follow_up_index, 3, "follow-up request should be last");
 
-    let body_first = requests[0].body_json();
     let body_auto = requests[auto_compact_index].body_json();
     let body_follow_up = requests[follow_up_index].body_json();
-    let instructions = body_auto
-        .get("instructions")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    let baseline_instructions = body_first
-        .get("instructions")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
+    let instructions = requests[auto_compact_index].instructions_text();
+    let baseline_instructions = requests[0].instructions_text();
     assert_eq!(
         instructions, baseline_instructions,
         "auto compact should keep the standard developer instructions",
@@ -4160,7 +4141,8 @@ async fn manual_compact_retries_after_context_window_error() {
         compact_input.len(),
         retry_input.len()
     );
-    if let (Some(first_before), Some(first_after)) = (compact_input.first(), retry_input.first()) {
+    assert_eq!(compact_input.first(), retry_input.first());
+    if let (Some(first_before), Some(first_after)) = (compact_input.get(1), retry_input.get(1)) {
         assert_ne!(
             first_before, first_after,
             "retry should drop the oldest conversation item"
@@ -5858,7 +5840,7 @@ async fn remote_v2_compaction_refreshes_instructions_and_preserves_them_on_cold_
     assert_single_instruction_fragment(&requests[3], &new_fragment);
     let resumed_input = requests[3].input();
     assert_eq!(
-        resumed_input.get(..replacement_history.len()),
+        resumed_input.get(1..=replacement_history.len()),
         Some(replacement_history.as_slice()),
         "remote-v2 cold resume should replay persisted replacement history verbatim"
     );

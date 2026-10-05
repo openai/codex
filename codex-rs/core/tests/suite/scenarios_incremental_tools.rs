@@ -100,7 +100,7 @@ async fn incremental_tools_append_changed_catalog_without_rewriting_history(
                     .is_some_and(|tools| !tools.is_empty())
             );
             assert_eq!(
-                body["instructions"],
+                request.instructions_text(),
                 "Use the available tools to help the user."
             );
         }

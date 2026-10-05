@@ -1261,8 +1261,8 @@ async fn review_input_isolated_from_parent_history() {
         "user message should only contain the raw review prompt"
     );
 
-    // Ensure the REVIEW_PROMPT rubric is sent via instructions.
-    let instructions = body["instructions"].as_str().expect("instructions string");
+    // Ensure the REVIEW_PROMPT rubric is sent as the base instructions.
+    let instructions = request.instructions_text();
     assert_eq!(instructions, REVIEW_PROMPT);
 
     // Also verify that a user interruption note was recorded in the rollout.

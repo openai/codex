@@ -4,6 +4,7 @@ use anyhow::Result;
 use codex_core::ForkSnapshot;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
+use codex_core::TurnStartOptions;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_model_provider::RemoteCompactionSupport;
@@ -69,10 +70,10 @@ async fn message_budget_sheds_inventory_without_changing_tool_results_or_history
     assert!(arguments.to_string().len() < 8 * 1024);
     assert!(call_count * arguments.to_string().len() < 1024 * 1024);
     let next_arguments = json!({"plan": [{"step": "done", "status": "completed"}]});
-    let instruction_bytes = message_limit - if websocket { 64 * 1024 } else { 192 * 1024 };
-    let instructions = "padding ".repeat(instruction_bytes / 8);
+    // An output schema stays in every wire request, including WebSocket deltas.
+    let padding_bytes = message_limit - if websocket { 64 * 1024 } else { 192 * 1024 };
+    let schema_description = "padding ".repeat(padding_bytes / 8);
     let mut builder = test_codex().with_config(move |config| {
-        config.base_instructions = Some(instructions);
         config.model_context_window = Some(20_000_000);
         config.model_auto_compact_token_limit = Some(20_000_000);
         config
@@ -142,7 +143,27 @@ async fn message_budget_sheds_inventory_without_changing_tool_results_or_history
             .build_with_auto_env(http_server.as_ref().expect("HTTP test server"))
             .await?
     };
-    test.submit_turn("Update the plan, then finish it").await?;
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Update the plan, then finish it".to_string(),
+                text_elements: Vec::new(),
+            }])
+            .on_start(TurnStartOptions {
+                final_output_json_schema: Some(json!({
+                    "type": "object",
+                    "description": schema_description,
+                    "properties": {},
+                    "additionalProperties": false,
+                })),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     let requests = if let Some(server) = &websocket_server {
         let connection = server.single_connection();
         assert_eq!(connection.len(), 4);
@@ -167,11 +188,11 @@ async fn message_budget_sheds_inventory_without_changing_tool_results_or_history
     }
     for (index, request) in requests.iter().enumerate() {
         assert_eq!(
-            request["instructions"]
+            request["text"]["format"]["schema"]["description"]
                 .as_str()
-                .expect("request instructions")
+                .expect("request schema description")
                 .len(),
-            instruction_bytes
+            padding_bytes
         );
         let request_bytes = serde_json::to_vec(request)?.len();
         assert!(

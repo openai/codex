@@ -7,7 +7,6 @@ Scenario: A subagent waits for an MCP browser sign-in prompt, then receives the 
 ## Window 1
 Settings:
   include: ["reasoning.encrypted_content"]
-  instructions: <MODEL_INSTRUCTIONS>
   model: "gpt-5.5"
   parallel_tool_calls: true
   prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
@@ -29,12 +28,14 @@ Settings:
     - web_search; hash=f103e327c6870a46
 -- request 1 (turn) --
 00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     Run the input tool.
 -- request 2 (turn) --
-03:function_call/mcp__elicitation.request_input:{}
-04:function_call_output:Wall time: <DURATION> seconds
+04:function_call/mcp__elicitation.request_input:{}
+05:function_call_output:Wall time: <DURATION> seconds
     Output: | {"action": "accept", "content": {}}

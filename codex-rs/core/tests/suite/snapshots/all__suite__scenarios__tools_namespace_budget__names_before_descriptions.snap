@@ -6,7 +6,9 @@ Scenario: A crowded tool catalog retains every namespace, discovers a late names
 
 ## Window 1
 -- request 1 (turn) --
-00:message/developer[2]:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <tools>
         Deferred tool namespaces:
@@ -31,15 +33,15 @@ Scenario: A crowded tool catalog retains every namespace, discovers a late names
         - service_18: Find records & retrieve <details> from this service. Search by project, owner, date, or st...r questions with its title, summary, source link, ... [hash=ef78c2b1fa9afde2]
         - zulu_travel: Find records & retrieve <details> from this service. Search by project, owner, date, or s...r questions with its title, summary, source link, ... [hash=8f37122c26e42e38]
         </tools>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     Find the record search tool for Zulu Travel.
 -- request 2 (turn) --
-03:tool_search_call
-04:tool_search_output
+04:tool_search_call
+05:tool_search_output
 -- request 3 (turn) --
-05:message/assistant:
+06:message/assistant:
     Zulu Travel provides a record search tool.
-06:message/user:
+07:message/user:
     Are the same services still available?

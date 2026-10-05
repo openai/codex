@@ -7,7 +7,6 @@ Scenario: An old checkpoint retains a user restriction, assistant questions, and
 ## Window 1
 Settings:
   include: ["reasoning.encrypted_content"]
-  instructions: <MODEL_INSTRUCTIONS>
   model: "gpt-5.5"
   parallel_tool_calls: true
   prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
@@ -25,26 +24,27 @@ Settings:
     - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
     - web_search; hash=f103e327c6870a46
 -- request 1 (turn) --
-00:compaction:encrypted=true; chars=17; hash=3733598f92aa081a
-01:message/user:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:compaction:encrypted=true; chars=17; hash=3733598f92aa081a
+02:message/user:
     Keep the working tree unchanged.
-02:message/developer:
+03:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-03:message/user:
-    <ENVIRONMENT_CONTEXT>
 04:message/user:
+    <ENVIRONMENT_CONTEXT>
+05:message/user:
     Confirm where publishing is allowed.
 -- request 2 (turn) --
-05:message/assistant:
+06:message/assistant:
     May I publish after these checks?
-06:function_call/request_user_input:{"questions":[{"header":"Publish","id":"publish","options":[{"description":"Private repository only.","l...bel":"Nowhere"}],"question":"Where may I publish?"}]} [hash=3668d88e1035f1e3]
-07:function_call_output:{"answers":{"publish":{"answers":["Private"]}}}
+07:function_call/request_user_input:{"questions":[{"header":"Publish","id":"publish","options":[{"description":"Private repository only.","l...bel":"Nowhere"}],"question":"Where may I publish?"}]} [hash=3668d88e1035f1e3]
+08:function_call_output:{"answers":{"publish":{"answers":["Private"]}}}
 -- request 3 (compaction) --
-08:compaction_trigger
+09:compaction_trigger
 
 ## Window 2 (after request 3: input diverged at item 00)
 Settings: relative to window 1
-  instructions: <removed>
   model: "gpt-5.6-luna"
   parallel_tool_calls: false
   reasoning: {"context":"all_turns","effort":"medium"}

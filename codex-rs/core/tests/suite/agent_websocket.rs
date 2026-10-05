@@ -328,9 +328,9 @@ async fn websocket_first_turn_uses_startup_prewarm_and_create(
         .expect("missing warmup request")
         .body_json();
     let turn = connection.get(1).expect("missing turn request").body_json();
-    assert_eq!(warmup["instructions"], turn["instructions"]);
+    assert_eq!(turn["previous_response_id"], "warm-1");
     assert_eq!(
-        warmup["instructions"]
+        warmup["input"][0]["content"][0]["text"]
             .as_str()
             .expect("warmup base instructions")
             .contains("update_plan"),

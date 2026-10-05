@@ -6,19 +6,21 @@ Scenario: Second turn changes cwd to a directory with different AGENTS.md and re
 
 ## Window 1
 -- request 1 (turn; First Request (agents_one)) --
-00:message/developer[2]:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
-01:message/user[2]:
+02:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT>
-02:message/user:
+03:message/user:
     first turn in agents_one
 -- request 2 (turn; Second Request (agents_two cwd)) --
-03:message/assistant:
+04:message/assistant:
     turn one complete
-04:message/user[2]:
+05:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT>
-05:message/user:
+06:message/user:
     second turn in agents_two

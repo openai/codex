@@ -7,12 +7,14 @@ Scenario: /responses POST bodies with pending input
 ## Window 1
 -- request 1 (request; First request) --
 00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     first prompt
 -- request 2 (request; Second request) --
-03:message/assistant:
+04:message/assistant:
     first answer
-04:agent_message
+05:agent_message

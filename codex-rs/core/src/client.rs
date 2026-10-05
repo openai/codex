@@ -344,7 +344,6 @@ fn responses_request_properties_match(
 ) -> bool {
     let ResponsesApiRequest {
         model: previous_model,
-        instructions: previous_instructions,
         input: _,
         tools: previous_tools,
         tool_choice: previous_tool_choice,
@@ -362,7 +361,6 @@ fn responses_request_properties_match(
     } = previous;
     let ResponsesApiRequest {
         model: current_model,
-        instructions: current_instructions,
         input: _,
         tools: current_tools,
         tool_choice: current_tool_choice,
@@ -380,7 +378,6 @@ fn responses_request_properties_match(
     } = current;
 
     previous_model == current_model
-        && previous_instructions == current_instructions
         && previous_tools == current_tools
         && previous_tool_choice == current_tool_choice
         && previous_parallel_tool_calls == current_parallel_tool_calls
@@ -908,14 +905,14 @@ impl ModelClient {
             input.retain(|item| !matches!(item, ResponseItem::ConfigurationUpdate { .. }));
         }
         let is_openai = self.state.provider.info().is_openai();
-        let (instructions, tools) = if model_info.use_responses_lite {
-            // These prompt-only items are rebuilt on every request. Hash their visible payloads
-            // within the thread so retries and resumed sessions preserve their identity.
-            let prefix_namespace = Uuid::new_v5(
-                &Uuid::NAMESPACE_OID,
-                self.state.thread_id.to_string().as_bytes(),
-            );
-            let mut prefix = Vec::new();
+        // These prompt-only items are rebuilt on every request. Hash their visible payloads
+        // within the thread so retries and resumed sessions preserve their identity.
+        let prefix_namespace = Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            self.state.thread_id.to_string().as_bytes(),
+        );
+        let mut prefix = Vec::new();
+        let tools = if model_info.use_responses_lite {
             if !prompt.tools.is_empty() {
                 let tools = create_tools_json_for_responses_lite(&prompt.tools)?;
                 prefix.push(ResponseItem::AdditionalTools {
@@ -927,24 +924,21 @@ impl ModelClient {
                     tools,
                 });
             }
-            if !prompt.base_instructions.text.is_empty() {
-                let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
-                    prompt.base_instructions.text.clone(),
-                ));
-                instructions.set_id(Some(ResponseItemId::with_suffix(
-                    "msg",
-                    Uuid::new_v5(&prefix_namespace, prompt.base_instructions.text.as_bytes()),
-                )));
-                prefix.push(instructions);
-            }
-            input.splice(0..0, prefix);
-            (String::new(), None)
+            None
         } else {
-            (
-                prompt.base_instructions.text.clone(),
-                Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into()),
-            )
+            Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into())
         };
+        if !prompt.base_instructions.text.is_empty() {
+            let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
+                prompt.base_instructions.text.clone(),
+            ));
+            instructions.set_id(Some(ResponseItemId::with_suffix(
+                "msg",
+                Uuid::new_v5(&prefix_namespace, prompt.base_instructions.text.as_bytes()),
+            )));
+            prefix.push(instructions);
+        }
+        input.splice(0..0, prefix);
         if !is_openai {
             for item in &mut input {
                 item.clear_internal_chat_message_metadata_passthrough();
@@ -1001,7 +995,6 @@ impl ModelClient {
         let client_metadata = responses_metadata.client_metadata(include_internal);
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
-            instructions,
             input,
             tools,
             tool_choice: "auto".to_string(),

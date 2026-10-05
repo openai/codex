@@ -7,7 +7,6 @@ Scenario: Cloud skills rebalance once to retain every executor skill. Post-turn 
 ## Window 1
 Settings:
   include: ["reasoning.encrypted_content"]
-  instructions: <MODEL_INSTRUCTIONS>
   model: "gpt-5.5"
   parallel_tool_calls: true
   prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
@@ -29,7 +28,9 @@ Settings:
     - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
     - web_search; hash=f103e327c6870a46
 -- request 1 (turn) --
-00:message/developer[3]:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[3]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <environments_instructions>
         ## Execution environments
@@ -40,20 +41,20 @@ Settings:
         Wait only when the current task needs that environment. Continue using tools that are already available for unrelated work.
         </environments_instructions>
     [03] <SKILLS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     Inspect the available skills.
 -- request 2 (turn) --
-03:function_call/wait_for_environment:{"environment_id":"skills-executor"}
-04:function_call_output:{"environment_id":"skills-executor","status":"ready"}
-05:message/user:
+04:function_call/wait_for_environment:{"environment_id":"skills-executor"}
+05:function_call_output:{"environment_id":"skills-executor","status":"ready"}
+06:message/user:
     <ENVIRONMENT_CONTEXT>
-06:message/developer[2]:
+07:message/developer[2]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <SKILLS_INSTRUCTIONS>
 -- request 3 (turn) --
-07:message/user:
+08:message/user:
     Inspect the available skills again.
 
 ## Window 2 (after request 3)
@@ -70,7 +71,9 @@ Settings: relative to window 1
     - removed tool_search
     - removed web_search
 -- request 4 (compaction) --
-00:message/developer[3]:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[3]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <environments_instructions>
         ## Execution environments
@@ -81,28 +84,30 @@ Settings: relative to window 1
         Wait only when the current task needs that environment. Continue using tools that are already available for unrelated work.
         </environments_instructions>
     [03] <SKILLS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
-    Inspect the available skills.
-03:function_call/wait_for_environment:{"environment_id":"skills-executor"}
-04:function_call_output:{"environment_id":"skills-executor","status":"ready"}
-05:message/user:
     <ENVIRONMENT_CONTEXT>
-06:message/developer[2]:
+03:message/user:
+    Inspect the available skills.
+04:function_call/wait_for_environment:{"environment_id":"skills-executor"}
+05:function_call_output:{"environment_id":"skills-executor","status":"ready"}
+06:message/user:
+    <ENVIRONMENT_CONTEXT>
+07:message/developer[2]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <SKILLS_INSTRUCTIONS>
-07:message/user:
-    Inspect the available skills again.
 08:message/user:
+    Inspect the available skills again.
+09:message/user:
     <SUMMARIZATION_PROMPT>
 
-## Window 3 (after request 4: input diverged at item 00)
+## Window 3 (after request 4: input diverged at item 01)
 Settings: same as window 1
 -- request 5 (turn) --
-00:message/user:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/user:
     Inspect the available skills.
-01:message/developer[4]:
+02:message/developer[4]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <environments_instructions>
         ## Execution environments
@@ -114,23 +119,23 @@ Settings: same as window 1
         </environments_instructions>
     [03] <SKILLS_INSTRUCTIONS>
     [04] <SKILLS_INSTRUCTIONS>
-02:message/user:
-    <ENVIRONMENT_CONTEXT>
 03:message/user:
-    Inspect the available skills again.
+    <ENVIRONMENT_CONTEXT>
 04:message/user:
+    Inspect the available skills again.
+05:message/user:
     <COMPACTION_SUMMARY>
     The available skills were inspected.
-05:message/user:
+06:message/user:
     <ENVIRONMENT_CONTEXT>
-06:message/developer:
+07:message/developer:
     <SKILLS_INSTRUCTIONS>
-07:message/user:
+08:message/user:
     Inspect the skills after resuming.
 -- request 6 (turn) --
-08:function_call/wait_for_environment:{"environment_id":"skills-executor"}
-09:function_call_output:{"environment_id":"skills-executor","status":"ready"}
-10:message/user:
+09:function_call/wait_for_environment:{"environment_id":"skills-executor"}
+10:function_call_output:{"environment_id":"skills-executor","status":"ready"}
+11:message/user:
     <ENVIRONMENT_CONTEXT>
-11:message/developer:
+12:message/developer:
     <SKILLS_INSTRUCTIONS>

@@ -330,7 +330,7 @@ async fn openai_stateless_responses_requests_preserve_item_turn_metadata_across_
     let first_input = first["input"].as_array().expect("first input");
     let second_input = second["input"].as_array().expect("second input");
     assert_eq!(&second_input[..first_input.len()], first_input.as_slice());
-    for item in first_input {
+    for item in &first_input[1..] {
         assert_eq!(
             item["internal_chat_message_metadata_passthrough"]["turn_id"].as_str(),
             Some(first_turn_id)
@@ -1778,14 +1778,7 @@ async fn includes_base_instructions_override_in_request() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
-    let request_body = request.body_json();
-
-    assert!(
-        request_body["instructions"]
-            .as_str()
-            .unwrap()
-            .contains("test instructions")
-    );
+    assert_eq!(request.instructions_text(), "test instructions");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1998,12 +1991,7 @@ async fn includes_user_instructions_message_in_request() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
 
-    assert!(
-        !request_body["instructions"]
-            .as_str()
-            .unwrap()
-            .contains("be nice")
-    );
+    assert!(!request.instructions_text().contains("be nice"));
     assert_message_role(&request_body["input"][0], "developer");
     let developer_texts = request_body["input"]
         .as_array()
@@ -2019,8 +2007,8 @@ async fn includes_user_instructions_message_in_request() {
         "expected permissions message to mention sandbox_mode, got {developer_texts:?}"
     );
 
-    assert_message_role(&request_body["input"][1], "user");
-    let user_context_texts = message_input_texts(&request_body["input"][1]);
+    assert_message_role(&request_body["input"][2], "user");
+    let user_context_texts = message_input_texts(&request_body["input"][2]);
     assert!(
         user_context_texts
             .iter()
@@ -3038,12 +3026,7 @@ async fn includes_developer_instructions_message_in_request() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
 
-    assert!(
-        !request_body["instructions"]
-            .as_str()
-            .unwrap()
-            .contains("be nice")
-    );
+    assert!(!request.instructions_text().contains("be nice"));
     assert_message_role(&request_body["input"][0], "developer");
     let developer_texts = request_body["input"]
         .as_array()
@@ -3063,8 +3046,8 @@ async fn includes_developer_instructions_message_in_request() {
         "expected developer instructions in a developer message, got {developer_texts:?}"
     );
 
-    assert_message_role(&request_body["input"][1], "user");
-    let user_context_texts = message_input_texts(&request_body["input"][1]);
+    assert_message_role(&request_body["input"][2], "user");
+    let user_context_texts = message_input_texts(&request_body["input"][2]);
     assert!(
         user_context_texts
             .iter()
@@ -3336,23 +3319,20 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
 
     assert_eq!(body["store"], serde_json::Value::Bool(false));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
-    assert_eq!(body["input"].as_array().map(Vec::len), Some(10));
-    assert_eq!(body["input"][0]["id"].as_str(), Some("rs_reasoning-id"));
-    assert_eq!(body["input"][1]["id"].as_str(), Some("msg_message-id"));
-    assert_eq!(body["input"][2]["id"].as_str(), Some("ws_web-search-id"));
-    assert_eq!(body["input"][3]["id"].as_str(), Some("fc_function-id"));
-    assert_eq!(
-        body["input"][4]["call_id"].as_str(),
-        Some("function-call-id")
-    );
-    assert_eq!(body["input"][5]["id"].as_str(), Some("lsh_local-shell-id"));
-    assert_eq!(body["input"][6]["id"].as_str(), Some("ctc_custom-tool-id"));
-    assert_eq!(
-        body["input"][7]["call_id"].as_str(),
-        Some("custom-tool-call-id")
-    );
-    assert_eq!(body["input"][8].get("id"), None);
-    assert_eq!(body["input"][9].get("id"), None);
+    let input = body["input"].as_array().expect("request input");
+    assert_eq!(input[0]["role"], "developer");
+    let input = &input[1..];
+    assert_eq!(input.len(), 10);
+    assert_eq!(input[0]["id"].as_str(), Some("rs_reasoning-id"));
+    assert_eq!(input[1]["id"].as_str(), Some("msg_message-id"));
+    assert_eq!(input[2]["id"].as_str(), Some("ws_web-search-id"));
+    assert_eq!(input[3]["id"].as_str(), Some("fc_function-id"));
+    assert_eq!(input[4]["call_id"].as_str(), Some("function-call-id"));
+    assert_eq!(input[5]["id"].as_str(), Some("lsh_local-shell-id"));
+    assert_eq!(input[6]["id"].as_str(), Some("ctc_custom-tool-id"));
+    assert_eq!(input[7]["call_id"].as_str(), Some("custom-tool-call-id"));
+    assert_eq!(input[8].get("id"), None);
+    assert_eq!(input[9].get("id"), None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

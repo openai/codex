@@ -6,34 +6,38 @@ Scenario: Persisted deferred tools remain unchanged after resuming the thread.
 
 ## Window 1
 -- request 1 (items; Before resume) --
-00:message/developer[3]:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[3]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <APPS_INSTRUCTIONS>
     [03] <tools>
         Deferred tool namespaces:
         - mcp__codex_apps__calendar: Plan events and manage your calendar.
         </tools>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     inspect deferred tools before resume
 
 ## Window 2 (after request 1: settings unavailable)
 -- request 2 (items; After resume) --
-00:message/developer[3]:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[3]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <APPS_INSTRUCTIONS>
     [03] <tools>
         Deferred tool namespaces:
         - mcp__codex_apps__calendar: Plan events and manage your calendar.
         </tools>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
-    inspect deferred tools before resume
-03:message/assistant:
-    done
-04:message/user:
     <ENVIRONMENT_CONTEXT>
+03:message/user:
+    inspect deferred tools before resume
+04:message/assistant:
+    done
 05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user:
     inspect unchanged deferred tools after resume

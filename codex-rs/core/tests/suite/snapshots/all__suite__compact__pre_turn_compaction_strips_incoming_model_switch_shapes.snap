@@ -7,36 +7,42 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 ## Window 1
 -- request 1 (turn; Initial Request (Previous Model)) --
 00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     BEFORE_SWITCH_USER
 
 ## Window 2 (after request 1: settings changed (model, parallel_tool_calls, reasoning, text, tools))
 -- request 2 (compaction; Local Compaction Request) --
 00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     BEFORE_SWITCH_USER
-03:message/assistant:
+04:message/assistant:
     BEFORE_SWITCH_REPLY
-04:message/user:
+05:message/user:
     <SUMMARIZATION_PROMPT>
 
-## Window 3 (after request 2: input diverged at item 00, settings changed (parallel_tool_calls, tools))
+## Window 3 (after request 2: input diverged at item 01, settings changed (parallel_tool_calls, tools))
 -- request 3 (turn; Local Post-Compaction History Layout) --
-00:message/developer[2]:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
     [01] <MODEL_SWITCH>
     [02] <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
-    BEFORE_SWITCH_USER
+    <ENVIRONMENT_CONTEXT>
 03:message/user:
+    BEFORE_SWITCH_USER
+04:message/user:
     <COMPACTION_SUMMARY>
     PRETURN_SWITCH_SUMMARY
-04:message/user:
+05:message/user:
     AFTER_SWITCH_USER

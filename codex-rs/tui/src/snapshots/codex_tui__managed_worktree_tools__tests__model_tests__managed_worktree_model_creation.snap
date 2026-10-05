@@ -1,6 +1,5 @@
 ---
 source: tui/src/managed_worktree_model_tests.rs
-assertion_line: 245
 expression: "context_snapshot::format_context_snapshot(\"Model request history for creating, polling and listing a task-attached checkout through MCP, without a separate creation confirmation. Separate assertions verify retained cwd/environment roots, not sandbox enforcement.\",\n&entries,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
 Scenario: Model request history for creating, polling and listing a task-attached checkout through MCP, without a separate creation confirmation. Separate assertions verify retained cwd/environment roots, not sandbox enforcement.
@@ -8,7 +7,6 @@ Scenario: Model request history for creating, polling and listing a task-attache
 ## Window 1
 Settings:
   include: ["reasoning.encrypted_content"]
-  instructions: <MODEL_INSTRUCTIONS>
   model: "mock-model"
   parallel_tool_calls: true
   prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
@@ -22,32 +20,50 @@ Settings:
       - function/get_worktree_creation_status
       - function/list_worktrees
 -- request 1 (request) --
-00:message/developer[2]:
+00:message/developer:
+    You are a coding agent running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open...I. You are expected to be precise, safe, and helpful. [hash=5125daec1ed78d99]
+
+    Your capabilities:
+
+    - Receive user prompts and other context provided by the harness, such as files in the workspace.
+    - Communicate with the user by streaming thinking & responses, and by making & updating plans.
+    - Emit function calls to run terminal commands and apply patches. Depending on how this specific run is ... More on this in the "Sandbox and approvals" section. [hash=31cf026fa7b25d6d]
+
+    <OMITTED 180 LINES; ~3987 TOKENS; hash=dd34d4527287c62a>
+    ## Shell commands
+
+    When using the shell, you must adhere to the following guidelines:
+
+    - When searching for text or files, prefer using `rg` or `rg --files` respectively because `rg` is much ...he `rg` command is not found, then use alternatives.) [hash=67af3ff3b546e946]
+    - Do not use python scripts to attempt to output larger chunks of a file.
+
+
+01:message/developer[2]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     Run create_worktree.
 -- request 2 (request) --
-03:function_call/mcp__codex_worktrees.create_worktree:{"allowAsync":true}
-04:function_call_output:Wall time: <DURATION> seconds
+04:function_call/mcp__codex_worktrees.create_worktree:{"allowAsync":true}
+05:function_call_output:Wall time: <DURATION> seconds
     Output: | {"type":"pending","operationId":"<UUID 1>","message":"Creation is running. Poll status; do not repeat creation. Work on independent tasks while waiting."}
 -- request 3 (request) --
-05:message/assistant:
+06:message/assistant:
     Done.
-06:message/user:
+07:message/user:
     Run get_worktree_creation_status.
 -- request 4 (request) --
-07:function_call/mcp__codex_worktrees.get_worktree_creation_status:{"operationId":"<UUID 1>"}
-08:function_call_output:Wall time: <DURATION> seconds
+08:function_call/mcp__codex_worktrees.get_worktree_creation_status:{"operationId":"<UUID 1>"}
+09:function_call_output:Wall time: <DURATION> seconds
     Output: | {"type":"created","worktree":{"root":"<WORKTREE>","workspaceRoot":"<WORKTREE>/","sourceCwd":"<SOURCE>"},...citly and request filesystem permissions if needed."} [hash=b855a2f161fd3a36]
 -- request 5 (request) --
-09:message/assistant:
+10:message/assistant:
     Done.
-10:message/user:
+11:message/user:
     Run list_worktrees.
 -- request 6 (request) --
-11:function_call/mcp__codex_worktrees.list_worktrees:{}
-12:function_call_output:Wall time: <DURATION> seconds
+12:function_call/mcp__codex_worktrees.list_worktrees:{}
+13:function_call_output:Wall time: <DURATION> seconds
     Output: | {"data":[{"id":"<UUID 2>","type":"worktree","root":"<WORKTREE>","workspaceRoot":"<WORKTREE>/","sourceCwd":"<SOURCE>"}],"nextCursor":null}

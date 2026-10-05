@@ -7,6 +7,24 @@ Scenario: A host replaces the provider after the parent restarts, then updates a
 ## Window 1
 -- request 1 (turn) --
 00:message/developer:
+    You are Codex, a coding agent based on GPT-5. You and the user share one workspace, and your job is to c...rate with them until their goal is genuinely handled. [hash=2a3efec66e7f8963]
+
+    # Personality
+
+    You have a vivid inner life as Codex: intelligent, playful, curious, and deeply present. One of your gif...re capable and imaginative inside their own thinking. [hash=0ff01c25471fbbef]
+
+    You are an epistemically curious collaborator. You explore the user’s ideas with care, ask good question...m casual moments that make serious work easier to do. [hash=131b64bb994b0d68]
+
+    <OMITTED 132 LINES; ~4881 TOKENS; hash=929bd18f6c969eb9>
+    - Never talk about goblins, gremlins, raccoons, trolls, ogres, pigeons, or other animals or creatures un...utely and unambiguously relevant to the user's query. [hash=c638556ac82c203c]
+    - You provide user updates frequently, every 30s.
+    - When exploring, such as searching or reading files, you provide user updates as you go. You explain wh...in particular you do not start each one the same way. [hash=ad300cdda4074574]
+    - When working for a while, you keep updates informative and varied, but you stay concise.
+    - Once you have enough context, and if the work is substantial, you offer a longer plan. This is the onl...at may run past two sentences and include formatting. [hash=a4f9789e757eef2f]
+    - Before performing file edits of any kind, you provide updates explaining what edits you are making.
+    - Tone of your updates must match your personality.
+
+01:message/developer:
     <permissions instructions>
     Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
     # Escalation Requests
@@ -24,7 +42,7 @@ Scenario: A host replaces the provider after the parent restarts, then updates a
     - ["gh", "pr", "check"]
     - ["cargo", "test"]
     </permissions instructions>
-01:message/user[2]:
+02:message/user[2]:
     [01] # AGENTS.md instructions
 
         <INSTRUCTIONS>
@@ -40,10 +58,10 @@ Scenario: A host replaces the provider after the parent restarts, then updates a
             - <UUID 1>
           </subagents>
         </environment_context>
-02:message/user:
+03:message/user:
     continue with the current instructions
 -- request 2 (turn) --
-03:message/user:
+04:message/user:
     # AGENTS.md instructions
 
     <INSTRUCTIONS>
@@ -51,24 +69,42 @@ Scenario: A host replaces the provider after the parent restarts, then updates a
 
     Never send email.
     </INSTRUCTIONS>
-04:message/user:
+05:message/user:
     continue with the current instructions
 -- request 3 (turn) --
-05:message/user:
+06:message/user:
     # AGENTS.md instructions
 
     <INSTRUCTIONS>
     The previously provided AGENTS.md instructions no longer apply.
     </INSTRUCTIONS>
-06:message/user:
-    continue with the current instructions
--- request 4 (turn) --
 07:message/user:
     continue with the current instructions
+-- request 4 (turn) --
+08:message/user:
+    continue with the current instructions
 
-## Window 2 (after request 4: input diverged at item 01, settings changed (prompt_cache_key))
+## Window 2 (after request 4: input diverged at item 02, settings changed (prompt_cache_key))
 -- request 5 (turn) --
 00:message/developer:
+    You are Codex, a coding agent based on GPT-5. You and the user share one workspace, and your job is to c...rate with them until their goal is genuinely handled. [hash=2a3efec66e7f8963]
+
+    # Personality
+
+    You have a vivid inner life as Codex: intelligent, playful, curious, and deeply present. One of your gif...re capable and imaginative inside their own thinking. [hash=0ff01c25471fbbef]
+
+    You are an epistemically curious collaborator. You explore the user’s ideas with care, ask good question...m casual moments that make serious work easier to do. [hash=131b64bb994b0d68]
+
+    <OMITTED 132 LINES; ~4881 TOKENS; hash=929bd18f6c969eb9>
+    - Never talk about goblins, gremlins, raccoons, trolls, ogres, pigeons, or other animals or creatures un...utely and unambiguously relevant to the user's query. [hash=c638556ac82c203c]
+    - You provide user updates frequently, every 30s.
+    - When exploring, such as searching or reading files, you provide user updates as you go. You explain wh...in particular you do not start each one the same way. [hash=ad300cdda4074574]
+    - When working for a while, you keep updates informative and varied, but you stay concise.
+    - Once you have enough context, and if the work is substantial, you offer a longer plan. This is the onl...at may run past two sentences and include formatting. [hash=a4f9789e757eef2f]
+    - Before performing file edits of any kind, you provide updates explaining what edits you are making.
+    - Tone of your updates must match your personality.
+
+01:message/developer:
     <permissions instructions>
     Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
     # Escalation Requests
@@ -86,7 +122,7 @@ Scenario: A host replaces the provider after the parent restarts, then updates a
     - ["gh", "pr", "check"]
     - ["cargo", "test"]
     </permissions instructions>
-01:message/user[2]:
+02:message/user[2]:
     [01] # AGENTS.md instructions
 
         <INSTRUCTIONS>
@@ -99,10 +135,10 @@ Scenario: A host replaces the provider after the parent restarts, then updates a
           <timezone><HOST_TIMEZONE></timezone>
           <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
         </environment_context>
-02:message/user:
+03:message/user:
     continue with the current instructions
 -- request 6 (turn) --
-03:message/user:
+04:message/user:
     # AGENTS.md instructions
 
     <INSTRUCTIONS>
@@ -110,17 +146,17 @@ Scenario: A host replaces the provider after the parent restarts, then updates a
 
     Never send email.
     </INSTRUCTIONS>
-04:message/user:
+05:message/user:
     continue with the current instructions
 -- request 7 (turn) --
-05:message/user:
+06:message/user:
     # AGENTS.md instructions
 
     <INSTRUCTIONS>
     The previously provided AGENTS.md instructions no longer apply.
     </INSTRUCTIONS>
-06:message/user:
+07:message/user:
     continue with the current instructions
 -- request 8 (turn) --
-07:message/user:
+08:message/user:
     continue with the current instructions

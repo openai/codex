@@ -7,33 +7,39 @@ Scenario: True mid-turn continuation compaction after tool output: compact reque
 ## Window 1
 -- request 1 (turn) --
 00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     function call limit push
 
 ## Window 2 (after request 1: settings changed (parallel_tool_calls, tools))
 -- request 2 (compaction) --
 00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     function call limit push
-03:function_call/test_tool:{}
-04:function_call_output:unsupported call: test_tool
-05:message/user:
+04:function_call/test_tool:{}
+05:function_call_output:unsupported call: test_tool
+06:message/user:
     <SUMMARIZATION_PROMPT>
 
-## Window 3 (after request 2: input diverged at item 03, settings changed (parallel_tool_calls, tools))
+## Window 3 (after request 2: input diverged at item 04, settings changed (parallel_tool_calls, tools))
 -- request 3 (turn) --
 00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
-    function call limit push
+    <ENVIRONMENT_CONTEXT>
 03:message/user:
+    function call limit push
+04:message/user:
     <COMPACTION_SUMMARY>
     AUTO_SUMMARY

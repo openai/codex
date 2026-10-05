@@ -227,10 +227,10 @@ impl ResponsesRequest {
     }
 
     pub fn instructions_text(&self) -> String {
-        self.body_json()["instructions"]
-            .as_str()
-            .unwrap()
-            .to_string()
+        self.message_input_texts("developer")
+            .into_iter()
+            .next()
+            .expect("base instructions developer message")
     }
 
     /// Returns all `input_text` spans from `message` inputs for the provided role.

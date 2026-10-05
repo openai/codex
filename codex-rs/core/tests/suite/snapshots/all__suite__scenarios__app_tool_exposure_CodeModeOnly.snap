@@ -7,7 +7,6 @@ Scenario: A non-deferred connector is called through code mode while another con
 ## Window 1
 Settings:
   include: ["reasoning.encrypted_content"]
-  instructions: <MODEL_INSTRUCTIONS>
   model: "gpt-5.5"
   parallel_tool_calls: true
   prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
@@ -22,16 +21,18 @@ Settings:
     - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
     - web_search; hash=e214d4db1bc49e89
 -- request 1 (turn) --
-00:message/developer[2]:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <APPS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     Look up my calendar.
 -- request 2 (turn) --
-03:custom_tool_call/exec:text((await tools.mcp__codex_apps__calendar__lookup({})).content[0].text);
-04:custom_tool_call_output:Script completed
+04:custom_tool_call/exec:text((await tools.mcp__codex_apps__calendar__lookup({})).content[0].text);
+05:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | calendar-lookup-ok

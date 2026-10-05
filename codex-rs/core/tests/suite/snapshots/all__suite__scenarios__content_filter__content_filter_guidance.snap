@@ -7,20 +7,22 @@ Scenario: Repeated content-filter blocks append catalog guidance and retain deli
 ## Window 1
 -- request 1 (turn) --
 00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     Help me with this topic.
 -- request 2 (turn) --
-03:message/assistant:
+04:message/assistant:
     I can help with this topic.
-04:message/developer:
+05:message/developer:
     <content_filter_guidance>
     Your previous response was blocked. Offer a permitted alternative.
     </content_filter_guidance>
 -- request 3 (turn) --
-05:message/developer:
+06:message/developer:
     <content_filter_guidance>
     Your previous response was blocked. Offer a permitted alternative.
     </content_filter_guidance>

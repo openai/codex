@@ -10,6 +10,7 @@ use codex_protocol::models::ToolResultSource;
 use codex_protocol::models::ToolResultSources;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::HashMap;
 
 fn request() -> ResponsesApiRequest {
     request_with_metadata(&json!({
@@ -43,7 +44,6 @@ fn request_with_metadata_and_source(
     output.mark_tool_calls_complete();
     ResponsesApiRequest {
         model: "test".to_string(),
-        instructions: "x".to_string(),
         input: vec![output],
         tools: None,
         tool_choice: "auto".to_string(),
@@ -56,9 +56,13 @@ fn request_with_metadata_and_source(
         service_tier: None,
         prompt_cache_key: None,
         text: None,
-        client_metadata: None,
+        client_metadata: Some(HashMap::from([("padding".to_string(), "x".to_string())])),
         access_programs: None,
     }
+}
+
+fn set_padding(request: &mut ResponsesApiRequest, padding: String) {
+    request.client_metadata = Some(HashMap::from([("padding".to_string(), padding)]));
 }
 
 #[test]
@@ -66,8 +70,8 @@ fn http_message_budget_preserves_resources_until_the_message_still_exceeds_limit
     for overage in [0, 4 * 1024, 20 * 1024, 40 * 1024] {
         let mut request = request();
         let target_bytes = MAX_RESPONSE_MESSAGE_BYTES + overage;
-        request.instructions =
-            "x".repeat(target_bytes - serialized_json_bytes(&request).unwrap() + 1);
+        let padding = "x".repeat(target_bytes - serialized_json_bytes(&request).unwrap() + 1);
+        set_padding(&mut request, padding);
         assert_eq!(serialized_json_bytes(&request).unwrap(), target_bytes);
         assert!(metadata_metrics::metadata_bytes(&request.input) < 32 * 1024);
         let original_input = request.input.clone();
@@ -158,10 +162,11 @@ fn message_budget_removes_residual_values_and_markers_when_ordinary_input_fits()
             } else {
                 serialized_json_bytes(&ordinary).unwrap()
             };
-            // The original instructions contain one byte, so leave exactly one
+            // The original padding contains one byte, so leave exactly one
             // byte below the limit after removing only result metadata.
-            ordinary.instructions = "x".repeat(MAX_RESPONSE_MESSAGE_BYTES - ordinary_bytes);
-            request.instructions = ordinary.instructions.clone();
+            let padding = "x".repeat(MAX_RESPONSE_MESSAGE_BYTES - ordinary_bytes);
+            set_padding(&mut ordinary, padding.clone());
+            set_padding(&mut request, padding);
             let original_input = request.input.clone();
             let mut expected = ordinary.clone();
             if metadata.get("openai/resource_access").is_some() {
@@ -235,9 +240,10 @@ fn residual_marker_removal_preserves_earlier_resources_and_stops_when_message_fi
     }
     let mut expected = request.clone();
     expected.input[1].clear_tool_result_metadata();
-    expected.instructions =
+    let padding =
         "x".repeat(MAX_RESPONSE_MESSAGE_BYTES - serialized_json_bytes(&expected).unwrap() + 1);
-    request.instructions = expected.instructions.clone();
+    set_padding(&mut expected, padding.clone());
+    set_padding(&mut request, padding);
     assert_eq!(
         serialized_json_bytes(&expected).unwrap(),
         MAX_RESPONSE_MESSAGE_BYTES
@@ -303,8 +309,9 @@ fn inventory_only_message_budget_counts_the_complete_encoded_envelope() {
         } else {
             serialized_json_bytes(&ordinary).unwrap()
         };
-        request.instructions = "x".repeat(MAX_RESPONSE_MESSAGE_BYTES - ordinary_bytes + 1);
-        ordinary.instructions = request.instructions.clone();
+        let padding = "x".repeat(MAX_RESPONSE_MESSAGE_BYTES - ordinary_bytes + 1);
+        set_padding(&mut request, padding.clone());
+        set_padding(&mut ordinary, padding);
         if websocket {
             let mut message =
                 ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest::from(&request));

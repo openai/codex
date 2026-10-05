@@ -7,7 +7,6 @@ Scenario: Custom provider overrides keep unrestricted search cached and enable V
 ## Window 1
 Settings:
   include: ["reasoning.encrypted_content"]
-  instructions: <MODEL_INSTRUCTIONS>
   model: "gpt-5.5"
   parallel_tool_calls: true
   prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
@@ -31,8 +30,10 @@ Settings:
     - web_search; hash=f103e327c6870a46
 -- request 1 (turn) --
 00:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+    <MODEL_INSTRUCTIONS>
 01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/developer:
     You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
 
     At the start of your turn, you are the active agent.
@@ -50,11 +51,11 @@ Settings:
     When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
 
     There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
-02:message/developer:
+03:message/developer:
     <MULTI_AGENT_MODE>
-03:message/user:
-    <ENVIRONMENT_CONTEXT>
 04:message/user:
+    <ENVIRONMENT_CONTEXT>
+05:message/user:
     Check the configuration.
 -- request 2 (compaction) --
-05:compaction_trigger
+06:compaction_trigger

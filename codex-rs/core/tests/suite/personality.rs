@@ -182,10 +182,16 @@ async fn config_personality_none_preserves_explicit_base_instructions(
 
     let request = resp_mock.single_request();
     let body = request.body_json();
-    // Responses requests omit the instructions field for an explicit empty override.
-    let expected_instructions = (!custom_instructions.is_empty())
-        .then(|| serde_json::Value::String(custom_instructions.to_string()));
-    assert_eq!(body.get("instructions"), expected_instructions.as_ref());
+    assert!(body.get("instructions").is_none());
+    if !custom_instructions.is_empty() {
+        assert_eq!(request.instructions_text(), custom_instructions);
+    }
+    assert!(
+        request
+            .message_input_texts("developer")
+            .iter()
+            .all(|text| !text.is_empty())
+    );
     assert!(!request.body_contains_text(BUNDLED_FRIENDLY_TEMPLATE));
 
     Ok(())

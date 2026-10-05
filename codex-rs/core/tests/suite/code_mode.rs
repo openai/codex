@@ -9022,10 +9022,32 @@ async fn code_mode_oversized_websocket_yield_keeps_later_wait_incomplete() -> Re
     const LIMIT: usize = 15 * 1024 * 1024;
     const PROMPT: &str = "Record a call, yield, then stop";
 
+    // Keep padding outside input so it remains on incremental requests too.
+    // Base instructions are cached after the first request.
+    #[derive(Debug)]
+    struct RequestPadding(String);
+    impl codex_extension_api::ModelRequestContributor for RequestPadding {
+        fn request(
+            &self,
+            input: codex_extension_api::ModelRequestInput<'_>,
+        ) -> Option<Box<dyn codex_extension_api::ModelResponseInterceptor>> {
+            input
+                .client_metadata
+                .get_or_insert_default()
+                .insert("test-padding".to_string(), self.0.clone());
+            None
+        }
+    }
+    let extensions = |padding| {
+        let mut registry = ExtensionRegistryBuilder::new();
+        registry.model_request_contributor(Arc::new(RequestPadding(padding)));
+        Arc::new(registry.build())
+    };
+
     // Calibrate a first request with the same tools/features/turn prompt; its
     // exact serialized overhead varies with the model catalog and headers.
-    let configure = |config: &mut Config, instructions: String| {
-        config.base_instructions = Some(instructions);
+    let configure = |config: &mut Config| {
+        config.base_instructions = Some(String::new());
         config.model_context_window = Some(20_000_000);
         config.model_auto_compact_token_limit = Some(20_000_000);
         config.features.disable(Feature::TokenBudget).unwrap();
@@ -9049,7 +9071,8 @@ async fn code_mode_oversized_websocket_yield_keeps_later_wait_incomplete() -> Re
     .await;
     let mut probe_builder = test_codex()
         .with_model("test-gpt-5.1-codex")
-        .with_config(move |config| configure(config, String::new()));
+        .with_extensions(extensions(String::new()))
+        .with_config(configure);
     let probe = probe_builder
         .build_with_websocket_server(&probe_server)
         .await?;
@@ -9063,7 +9086,7 @@ async fn code_mode_oversized_websocket_yield_keeps_later_wait_incomplete() -> Re
 
     // One 7 KiB invocation stays under the recorder's per-output argument
     // budget. It pushes the yielded delta over the message budget only.
-    let instructions = "x".repeat(LIMIT - base_bytes - 4 * 1024);
+    let padding = "x".repeat(LIMIT - base_bytes - 4 * 1024);
     let code = r#"
 await tools.test_sync_tool({ barrier: { id: "x".repeat(7000), participants: 1 } });
 text("yielded");
@@ -9084,7 +9107,8 @@ await new Promise(() => {});
     .await;
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
-        .with_config(move |config| configure(config, instructions));
+        .with_extensions(extensions(padding))
+        .with_config(configure);
     let test = builder.build_with_websocket_server(&server).await?;
     test.submit_turn(PROMPT).await?;
     let connection = server.single_connection();

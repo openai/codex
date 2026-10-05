@@ -7,7 +7,6 @@ Scenario: Catalog refreshes append the updated listing once while preserving too
 ## Window 1
 Settings:
   include: ["reasoning.encrypted_content"]
-  instructions: Test model instructions.
   model: "visible-model"
   parallel_tool_calls: true
   prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
@@ -28,7 +27,9 @@ Settings:
       - function/wait_agent
     - web_search; hash=8586237e354ee5ed
 -- request 1 (turn) --
-00:message/developer[2]:
+00:message/developer:
+    Test model instructions.
+01:message/developer[2]:
     [01] <permissions instructions>
         Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
         Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
@@ -36,15 +37,15 @@ Settings:
     [02] <model_catalog>
         - `visible-model`: Fast and capable Reasoning efforts: low, medium (default), high. Service tiers: priority.
         </model_catalog>
-01:message/user:
+02:message/user:
     hello
 -- request 2 (turn) --
-02:message/developer:
+03:message/developer:
     <model_catalog>
     - `visible-model`: Updated picker copy Reasoning efforts: low, medium (default), high. Service tiers: priority.
     </model_catalog>
-03:message/user:
+04:message/user:
     after catalog refresh
 -- request 3 (turn) --
-04:message/user:
+05:message/user:
     without another catalog change

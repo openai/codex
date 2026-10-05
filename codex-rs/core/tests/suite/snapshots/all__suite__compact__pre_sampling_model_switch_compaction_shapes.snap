@@ -7,36 +7,42 @@ Scenario: Pre-sampling compaction on model switch to a smaller context window: c
 ## Window 1
 -- request 1 (turn; Initial Request (Previous Model)) --
 00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     before switch
 
 ## Window 2 (after request 1: settings changed (parallel_tool_calls, tools))
 -- request 2 (compaction; Pre-sampling Compaction Request) --
 00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     before switch
-03:message/assistant:
+04:message/assistant:
     before switch
-04:message/user:
+05:message/user:
     <SUMMARIZATION_PROMPT>
 
-## Window 3 (after request 2: input diverged at item 00, settings changed (model, parallel_tool_calls, tools))
+## Window 3 (after request 2: input diverged at item 01, settings changed (model, parallel_tool_calls, tools))
 -- request 3 (turn; Post-Compaction Follow-up Request (Next Model)) --
-00:message/developer[2]:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
     [01] <MODEL_SWITCH>
     [02] <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
-    before switch
+    <ENVIRONMENT_CONTEXT>
 03:message/user:
+    before switch
+04:message/user:
     <COMPACTION_SUMMARY>
     PRE_SAMPLING_SUMMARY
-04:message/user:
+05:message/user:
     after switch

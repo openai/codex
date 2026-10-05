@@ -1022,7 +1022,7 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
             .as_str()
             .expect("Responses Lite Guardian developer instructions")
     } else {
-        guardian_prewarm["instructions"]
+        guardian_prewarm["input"][0]["content"][0]["text"]
             .as_str()
             .expect("Guardian instructions")
     };

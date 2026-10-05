@@ -6,17 +6,21 @@ Scenario: Manual /compact with no prior user turn currently still issues a compa
 
 ## Window 1
 -- request 1 (compaction; Local Compaction Request) --
-00:message/user:
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/user:
     <SUMMARIZATION_PROMPT>
 
-## Window 2 (after request 1: input diverged at item 00, settings changed (parallel_tool_calls, tools))
+## Window 2 (after request 1: input diverged at item 01, settings changed (parallel_tool_calls, tools))
 -- request 2 (turn; Local Post-Compaction History Layout) --
 00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-01:message/user:
-    <ENVIRONMENT_CONTEXT>
 02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
     <COMPACTION_SUMMARY>
     MANUAL_EMPTY_SUMMARY
-03:message/user:
+04:message/user:
     AFTER_MANUAL_EMPTY_COMPACT

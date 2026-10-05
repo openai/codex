@@ -227,7 +227,6 @@ impl LunaSampler {
     ) -> execution::SamplingExecution {
         let api_request = ResponsesApiRequest {
             model: MODEL.to_owned(),
-            instructions: String::new(),
             input,
             tools: None,
             tool_choice: "none".to_owned(),
