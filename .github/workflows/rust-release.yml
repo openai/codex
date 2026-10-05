@@ -19,8 +19,10 @@ env:
   CODEX_ZSH_RELEASE_TAG: codex-zsh-v0.1.0
   CODEX_ZSH_MANIFEST_SHA256: c534eab89dcea7e3d8a5e5b3f49c025c7c64cd4e4d9814ee24871de58a9359a1
 
+# The launcher uses this per-tag group as the migration boundary. Keep shared
+# publication jobs on the original queued group below when changing this.
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -1531,6 +1533,12 @@ jobs:
           if-no-files-found: error
 
   release:
+    # Each job checks its channel under this lock; out-of-order builds cannot
+    # roll back GitHub, npm, R2, or the canary branch.
+    concurrency: &release-publication
+      group: rust-release
+      queue: max
+      cancel-in-progress: false
     needs:
       - tag-check
       - build
@@ -1714,6 +1722,7 @@ jobs:
       stage: assets
 
   publish-r2:
+    concurrency: *release-publication
     name: publish-r2
     needs: [release, publish-dotslash, publish-r2-assets]
     if: >-
@@ -1768,6 +1777,7 @@ jobs:
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
+    concurrency: *release-publication
     # Publish to npm for stable releases, numbered alphas, and alpha hotfixes.
     if: >-
       ${{
@@ -1966,6 +1976,7 @@ jobs:
           fi
 
   winget:
+    concurrency: *release-publication
     name: winget
     needs: release
     # Only publish stable/mainline releases to WinGet; pre-releases include a
@@ -2027,6 +2038,7 @@ jobs:
           komac cleanup --only-merged
 
   update-branch:
+    concurrency: *release-publication
     name: Update latest-alpha-cli branch
     if: >-
       ${{
