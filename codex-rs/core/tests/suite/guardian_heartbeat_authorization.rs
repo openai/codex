@@ -183,20 +183,23 @@ async fn heartbeat_keeps_user_restriction_after_status_questions(
     Ok(())
 }
 
-#[test_case::test_case(Feature::GuardianThreadContext, 1; "existing_projection_first")]
-#[test_case::test_case(Feature::GuardianThreadContext, 3; "existing_projection_repeated")]
-#[test_case::test_case(Feature::GuardianRootHandoffContext, 1; "handoff_filter_first")]
-#[test_case::test_case(Feature::GuardianRootHandoffContext, 3; "handoff_filter_repeated")]
+#[test_case::test_case(&[], 1; "existing_projection_first")]
+#[test_case::test_case(&[], 3; "existing_projection_repeated")]
+#[test_case::test_case(&[Feature::GuardianRootHandoffContext], 1; "handoff_filter_first")]
+#[test_case::test_case(&[Feature::GuardianRootHandoffContext], 3; "handoff_filter_repeated")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn heartbeat_root_projection_uses_latest_turn_skills(
-    feature: Feature,
+    enabled_features: &'static [Feature],
     heartbeat_count: usize,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let test = test_codex()
         .with_config(move |config| {
-            for feature in [Feature::Collab, Feature::MultiAgentV2, feature] {
+            for feature in [Feature::Collab, Feature::MultiAgentV2]
+                .into_iter()
+                .chain(enabled_features.iter().copied())
+            {
                 config.features.enable(feature).expect("enable feature");
             }
         })

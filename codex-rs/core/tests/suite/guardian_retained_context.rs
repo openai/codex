@@ -295,10 +295,6 @@ async fn streamed_question_precedes_reply_across_resume(
         .with_history_mode(ThreadHistoryMode::Paginated)
         .with_config(|config| {
             config.experimental_thread_store = ThreadStoreConfig::Local;
-            config
-                .features
-                .enable(Feature::GuardianThreadContext)
-                .expect("enable retained context");
         })
         .build_with_streaming_server(&server)
         .await?;

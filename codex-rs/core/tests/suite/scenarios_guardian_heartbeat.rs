@@ -58,10 +58,6 @@ async fn heartbeat_repetitions_keep_later_human_authorization() -> anyhow::Resul
                 .features
                 .disable(Feature::EnableRequestCompression)
                 .unwrap();
-            config
-                .features
-                .enable(Feature::GuardianThreadContext)
-                .unwrap();
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config
