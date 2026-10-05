@@ -49,6 +49,9 @@ async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {
     use codex_protocol::turn_input::CyberAccessProgram;
 
     let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
+    app.config.features.enable(Feature::CliDaybreak)?;
+    app.chat_widget
+        .set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
     let (mut server, requests, proxy) = start_recording_app_server(
         &app.config,
         /*blocked_thread_list*/ None,
@@ -168,13 +171,24 @@ async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {
         background_thread_id,
         crate::app::side::SideThreadState::new(thread_id),
     );
-    app.submit_thread_op(&mut server, background_thread_id, turn)
+    app.submit_thread_op(&mut server, background_thread_id, turn.clone())
         .await?;
     let turns = recorded_params(&requests, "turn/start");
     assert_eq!(turns.len(), 3);
     assert_eq!(turns[0]["cyberAccessProgram"], "standard");
     assert_eq!(turns[1]["cyberAccessProgram"], "daybreakBlue");
     assert_eq!(turns[2]["cyberAccessProgram"], "standard");
+    app.chat_widget
+        .set_feature_enabled(Feature::CliDaybreak, /*enabled*/ false);
+    for target in [thread_id, background_thread_id] {
+        app.submit_thread_op(&mut server, target, turn.clone())
+            .await?;
+    }
+    let turns = recorded_params(&requests, "turn/start");
+    assert!(turns[3]["cyberAccessProgram"].is_null());
+    assert!(turns[4]["cyberAccessProgram"].is_null());
+    app.chat_widget
+        .set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
     app.chat_widget.set_daybreak_enabled(/*enabled*/ false);
     while events.try_recv().is_ok() {}
 
@@ -988,11 +1002,13 @@ fn spawn_approved_task_tool_call(
     app_server
         .thread_tool_transport()
         .configure(&mut thread_start_params);
+    let features = app.config.features.get().clone();
     tokio::spawn(async move {
         let response = crate::dynamic_tools::execute(
             request_handle,
             params,
             thread_start_params,
+            features,
             status_updates,
             Some(&app_event_tx),
         )
@@ -1754,7 +1770,15 @@ async fn embedded_server_rejects_unowned_dynamic_tool_calls() -> Result<()> {
 
 #[tokio::test]
 async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespace() -> Result<()> {
+    check_dynamic_tool_requests(/*rollout_enabled*/ true).await?;
+    check_dynamic_tool_requests(/*rollout_enabled*/ false).await
+}
+
+async fn check_dynamic_tool_requests(rollout_enabled: bool) -> Result<()> {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    app.config
+        .features
+        .set_enabled(Feature::CliDaybreak, rollout_enabled)?;
     let codex_home = tempdir()?;
     let backend = wiremock::MockServer::start().await;
     let backend_url = format!("{}/backend-api", backend.uri());
@@ -2067,7 +2091,7 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
     );
     assert_eq!(
         recorded_params(&requests, "thread/start").last().unwrap()["daybreakEnabled"],
-        true
+        serde_json::json!(rollout_enabled.then_some(true))
     );
     assert_eq!(
         recorded_params(&requests, "thread/start")
@@ -2082,7 +2106,10 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
     let turn = recorded_params(&requests, "turn/start")
         .pop()
         .expect("background task turn request");
-    assert_eq!(turn["cyberAccessProgram"], "daybreakBlue");
+    assert_eq!(
+        turn["cyberAccessProgram"],
+        serde_json::json!(rollout_enabled.then_some("daybreakBlue"))
+    );
     assert_eq!(turn["input"], serde_json::json!([]));
     assert_eq!(
         turn["toolOutput"],
@@ -2164,7 +2191,10 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
     };
     assert!(response.success, "{response:?}");
     let turn = &recorded_params(&requests, "turn/start")[1];
-    assert_eq!(turn["cyberAccessProgram"], "daybreakBlue");
+    assert_eq!(
+        turn["cyberAccessProgram"],
+        serde_json::json!(rollout_enabled.then_some("daybreakBlue"))
+    );
     assert_eq!(turn["input"], serde_json::json!([]));
     assert_eq!(
         turn["toolOutput"],
@@ -2668,6 +2698,7 @@ async fn remote_legacy_history_start_negotiates_once_for_resume_and_fork() -> Re
             }),
         },
         codex_app_server_protocol::ThreadStartParams::default(),
+        app.config.features.get().clone(),
         status_updates,
         /*app_event_tx*/ None,
     )

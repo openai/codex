@@ -19,7 +19,7 @@ async fn resumed_initial_messages_render_history() {
 
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = crate::session_state::ThreadSessionState {
+    let mut configured = crate::session_state::ThreadSessionState {
         daybreak_enabled: true,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -43,6 +43,18 @@ async fn resumed_initial_messages_render_history() {
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
 
+    chat.handle_thread_session(configured.clone());
+    assert!(!chat.daybreak_enabled);
+    insta::assert_snapshot!(
+        drain_insert_history(&mut rx).into_iter().flatten()
+            .map(|line| line.to_string())
+            .filter(|line| line.contains("Daybreak"))
+            .collect::<Vec<_>>().join("\n"),
+        @""
+    );
+
+    chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
+    configured.thread_id = ThreadId::new();
     chat.handle_thread_session(configured);
     assert!(chat.daybreak_enabled);
     replay_user_message_text(

@@ -189,6 +189,9 @@ impl ChatWidget {
 
         match cmd {
             SlashCommand::Daybreak => {
+                if !self.config.features.enabled(Feature::CliDaybreak) {
+                    return;
+                }
                 if !self.daybreak_enabled {
                     if !self.has_chatgpt_account || self.config.model_provider_id != "openai" {
                         self.add_error_message("Daybreak requires a signed-in ChatGPT account and the OpenAI provider.".into());

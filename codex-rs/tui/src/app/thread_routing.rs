@@ -825,7 +825,12 @@ impl App {
                     }
                 }
                 if should_start_turn {
-                    let eligible_account = self.chat_widget.has_chatgpt_account()
+                    let eligible_account = self
+                        .chat_widget
+                        .config_ref()
+                        .features
+                        .enabled(Feature::CliDaybreak)
+                        && self.chat_widget.has_chatgpt_account()
                         && self.chat_widget.config_ref().model_provider_id == "openai";
                     let enabled = self.chat_widget.daybreak_enabled
                         && !self.chat_widget.side_conversation_active()

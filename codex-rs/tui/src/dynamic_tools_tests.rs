@@ -125,6 +125,7 @@ async fn call_tool(
             ephemeral: Some(true),
             ..ThreadStartParams::default()
         },
+        Features::with_defaults(),
         status_receiver,
         /*app_event_tx*/ None,
     )

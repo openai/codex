@@ -98,6 +98,8 @@ pub enum Feature {
     ApiKeyModelDiscovery,
     /// Forward explicit programs with builtin OpenAI API keys.
     ApiKeyCyberAccessPrograms,
+    /// Enable Daybreak controls and automatic access-program selection in CLI clients.
+    CliDaybreak,
     /// Deprecated no-op; use `tui.fullscreen_transcript` instead.
     TranscriptV2,
     // Stable.
@@ -1313,6 +1315,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "api_key_model_discovery",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::CliDaybreak,
+        key: "cli_daybreak",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ApiKeyCyberAccessPrograms,

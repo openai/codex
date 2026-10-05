@@ -54,6 +54,8 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnToolOutput;
 use codex_app_server_protocol::UserInput;
+use codex_features::Feature;
+use codex_features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use serde::Deserialize;
@@ -290,6 +292,7 @@ pub(crate) async fn execute(
     request_handle: AppServerRequestHandle,
     params: DynamicToolCallParams,
     thread_start_params: ThreadStartParams,
+    features: Features,
     status_updates: broadcast::Receiver<ThreadStatusChangedNotification>,
     app_event_tx: Option<&AppEventSender>,
 ) -> DynamicToolCallResponse {
@@ -297,6 +300,7 @@ pub(crate) async fn execute(
         request_handle,
         params,
         thread_start_params,
+        features,
         status_updates,
         app_event_tx,
     )
@@ -320,6 +324,7 @@ async fn execute_inner(
     handle: AppServerRequestHandle,
     params: DynamicToolCallParams,
     mut thread_start_params: ThreadStartParams,
+    features: Features,
     mut status_updates: broadcast::Receiver<ThreadStatusChangedNotification>,
     app_event_tx: Option<&AppEventSender>,
 ) -> Result<Value, String> {
@@ -485,7 +490,9 @@ async fn execute_inner(
             thread_start_params.cwd = Some(source_thread.cwd.to_string_lossy().into_owned());
             thread_start_params.project_id = source_thread.project_id.clone();
             thread_start_params.ephemeral = Some(source_thread.ephemeral);
-            if thread_start_params.daybreak_enabled.is_none() {
+            if features.enabled(Feature::CliDaybreak)
+                && thread_start_params.daybreak_enabled.is_none()
+            {
                 let defaults = crate::config_update::read_effective_config(
                     handle.clone(),
                     source_thread.cwd.to_string_lossy().into_owned(),
@@ -554,6 +561,7 @@ async fn execute_inner(
             let daybreak_enabled = started.thread.daybreak_enabled.unwrap_or(false);
             register_background_thread(app_event_tx, started.thread, task_tools_available).await?;
             let cyber_access_program = background_turn_program(
+                &features,
                 &handle,
                 &started.model,
                 &started.model_provider,
@@ -704,6 +712,7 @@ async fn execute_inner(
             )
             .await?;
             let cyber_access_program = background_turn_program(
+                &features,
                 &handle,
                 arguments.model.as_deref().unwrap_or(&resumed.model),
                 &resumed.model_provider,
@@ -1247,11 +1256,15 @@ async fn start_turn(
 }
 
 async fn background_turn_program(
+    features: &Features,
     handle: &AppServerRequestHandle,
     model: &str,
     provider: &str,
     enabled: bool,
 ) -> Result<Option<codex_app_server_protocol::CyberAccessProgram>, String> {
+    if !features.enabled(Feature::CliDaybreak) {
+        return Ok(None);
+    }
     let (account, models) = tokio::join!(
         request::<GetAccountResponse>(handle, |request_id| ClientRequest::GetAccount {
             request_id,

@@ -85,7 +85,12 @@ impl App {
                 .add_error_message(format!("Failed to retry with a faster model: {err}"));
             return;
         }
-        let eligible_account = self.chat_widget.has_chatgpt_account()
+        let eligible_account = self
+            .chat_widget
+            .config_ref()
+            .features
+            .enabled(Feature::CliDaybreak)
+            && self.chat_widget.has_chatgpt_account()
             && self.chat_widget.config_ref().model_provider_id == "openai";
         let daybreak_enabled = self.chat_widget.daybreak_enabled
             && !self.chat_widget.side_conversation_active()

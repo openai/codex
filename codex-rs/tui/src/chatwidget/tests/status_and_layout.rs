@@ -157,6 +157,26 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
     });
     chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![model]));
 
+    for explicitly_disabled in [false, true] {
+        if explicitly_disabled {
+            chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ false);
+        }
+        chat.on_cyber_policy_error();
+        let cells = drain_insert_history(&mut events);
+        assert!(lines_to_single_string(&cells[0]).contains("Apply for Daybreak"));
+        assert!(chat.bottom_pane.no_modal_or_popup_active());
+        assert!(ops.try_recv().is_err());
+        assert!(
+            !std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
+                event,
+                AppEvent::PersistDaybreakSelection { enabled: true, .. }
+            ))
+        );
+        chat.set_daybreak_enabled(/*enabled*/ true);
+        assert!(!chat.daybreak_enabled);
+    }
+    chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
+
     chat.thread_usage.replaying_turn_completion = true;
     chat.on_cyber_policy_error();
     let cells = drain_insert_history(&mut events);

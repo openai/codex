@@ -784,6 +784,8 @@ goals = true
             /*status_account_display*/ None, /*plan_type*/ None,
             /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ false,
         );
+        app.chat_widget
+            .set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
         app.chat_widget.set_daybreak_enabled(/*enabled*/ true);
         Box::pin(app.retry_safety_buffered_turn(
             &mut tui,

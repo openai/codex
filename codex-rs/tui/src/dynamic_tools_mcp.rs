@@ -21,6 +21,7 @@ use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_config::McpServerConfig;
 use codex_config::McpServerRequirement;
 use codex_config::RawMcpServerConfig;
+use codex_features::Features;
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::CallToolRequestParams;
@@ -107,6 +108,7 @@ impl DynamicToolMcpServer {
     pub(crate) async fn start(
         request_handle: AppServerRequestHandle,
         mut thread_start_params: ThreadStartParams,
+        features: Features,
         app_event_tx: AppEventSender,
         status_updates: broadcast::Sender<ThreadStatusChangedNotification>,
         managed_requirement: Option<&McpServerRequirement>,
@@ -145,6 +147,7 @@ impl DynamicToolMcpServer {
         let handler = DynamicToolMcpHandler {
             connection: Arc::clone(&connection),
             thread_start_params,
+            features,
             status_updates,
             server_config: server_config.clone(),
         };
@@ -199,6 +202,7 @@ async fn require_authorization(
 struct DynamicToolMcpHandler {
     connection: ToolConnection,
     thread_start_params: ThreadStartParams,
+    features: Features,
     status_updates: broadcast::Sender<ThreadStatusChangedNotification>,
     server_config: Value,
 }
@@ -297,6 +301,7 @@ impl ServerHandler for DynamicToolMcpHandler {
             request_handle,
             params,
             thread_start_params,
+            self.features.clone(),
             self.status_updates.subscribe(),
             Some(&app_event_tx),
         )
