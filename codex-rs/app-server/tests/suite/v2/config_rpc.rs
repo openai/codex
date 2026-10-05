@@ -245,6 +245,9 @@ allow_history_access = false
 disable_auto_review = true
 allow_global_persistent_approval = false
 
+[browser_use.extension]
+request_headers = [{ name = "x-browser-agent", value = "ChatGPT/{{session_id}}" }]
+
 [browser_use.default_origin_policy]
 access = "deny"
 downloads = "allow"
@@ -298,6 +301,12 @@ access = "deny"
     assert_eq!(
         requirements.browser_use,
         Some(BrowserUseRequirements {
+            extension: Some(codex_app_server_protocol::BrowserUseExtensionRequirements {
+                request_headers: Some(vec![codex_app_server_protocol::RequestHeader {
+                    name: "x-browser-agent".to_string(),
+                    value: "ChatGPT/{{session_id}}".to_string(),
+                }]),
+            }),
             allow_webmcp: None,
             allow_history_access: Some(false),
             disable_auto_review: Some(true),
@@ -824,6 +833,7 @@ access = "deny"
     assert_eq!(
         requirements.browser_use,
         Some(BrowserUseRequirements {
+            extension: None,
             allow_webmcp: None,
             allow_history_access: Some(false),
             disable_auto_review: None,

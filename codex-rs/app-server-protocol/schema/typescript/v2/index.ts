@@ -52,6 +52,7 @@ export type { AutoReviewDecisionSource } from "./AutoReviewDecisionSource";
 export type { AutoReviewRequirements } from "./AutoReviewRequirements";
 export type { BrowserUseAccessApprovalLifetime } from "./BrowserUseAccessApprovalLifetime";
 export type { BrowserUseConfig } from "./BrowserUseConfig";
+export type { BrowserUseExtensionRequirements } from "./BrowserUseExtensionRequirements";
 export type { BrowserUseOriginPolicy } from "./BrowserUseOriginPolicy";
 export type { BrowserUseOriginPolicyConfig } from "./BrowserUseOriginPolicyConfig";
 export type { BrowserUseRequirements } from "./BrowserUseRequirements";
@@ -427,6 +428,7 @@ export type { RemoteControlConnectionStatus } from "./RemoteControlConnectionSta
 export type { RemoteControlDisableParams } from "./RemoteControlDisableParams";
 export type { RemoteControlEnableParams } from "./RemoteControlEnableParams";
 export type { RemoteControlStatusChangedNotification } from "./RemoteControlStatusChangedNotification";
+export type { RequestHeader } from "./RequestHeader";
 export type { RequestPermissionProfile } from "./RequestPermissionProfile";
 export type { ResidencyRequirement } from "./ResidencyRequirement";
 export type { ResponseUsageMetadata } from "./ResponseUsageMetadata";

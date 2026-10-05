@@ -1471,6 +1471,20 @@
       },
       "type": "object"
     },
+    "BrowserUseExtensionRequirements": {
+      "properties": {
+        "requestHeaders": {
+          "items": {
+            "$ref": "#/definitions/RequestHeader"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "BrowserUseOriginPolicy": {
       "properties": {
         "access": {
@@ -1621,6 +1635,16 @@
           "type": [
             "boolean",
             "null"
+          ]
+        },
+        "extension": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BrowserUseExtensionRequirements"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "origins": {
@@ -14531,6 +14555,21 @@
         "status"
       ],
       "title": "RemoteControlStatusChangedNotification",
+      "type": "object"
+    },
+    "RequestHeader": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
       "type": "object"
     },
     "RequestId": {

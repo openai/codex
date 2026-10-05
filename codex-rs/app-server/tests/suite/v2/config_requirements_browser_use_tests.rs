@@ -57,6 +57,7 @@ async fn config_requirements_read_preserves_webmcp_policy() -> Result<()> {
                 json!({
                     "allowWebmcp": allow_webmcp,
                     "allowHistoryAccess": allow_history_access,
+                    "extension": null,
                     "disableAutoReview": null,
                     "allowGlobalPersistentApproval": null,
                     "defaultOriginPolicy": null,

@@ -424,7 +424,11 @@ impl ManagedClientStartup {
             startup_complete.store(true, Ordering::Release);
             outcome
         };
-        originator.scope(startup).in_current_span().boxed().shared()
+        originator
+            .scope(Box::pin(startup))
+            .in_current_span()
+            .boxed()
+            .shared()
     }
 }
 

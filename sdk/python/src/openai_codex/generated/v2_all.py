@@ -465,22 +465,6 @@ class BrowserUseOriginPolicyConfig(BaseModel):
     uploads: AllowDenyRequirement | None = None
 
 
-class BrowserUseRequirements(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    allow_global_persistent_approval: Annotated[
-        bool | None, Field(alias="allowGlobalPersistentApproval")
-    ] = None
-    allow_history_access: Annotated[bool | None, Field(alias="allowHistoryAccess")] = None
-    allow_webmcp: Annotated[bool | None, Field(alias="allowWebmcp")] = None
-    default_origin_policy: Annotated[
-        BrowserUseOriginPolicy | None, Field(alias="defaultOriginPolicy")
-    ] = None
-    disable_auto_review: Annotated[bool | None, Field(alias="disableAutoReview")] = None
-    origins: dict[str, Any] | None = None
-
-
 class ByteRange(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -3872,6 +3856,14 @@ class RemoteControlStatusChangedNotification(BaseModel):
     status: RemoteControlConnectionStatus
 
 
+class RequestHeader(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    name: str
+    value: str
+
+
 class RequestId(RootModel[str | int]):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6857,6 +6849,30 @@ class BrowserUseConfig(BaseModel):
     )
     allow_history_access: bool | None = None
     default_origin_policy: BrowserUseOriginPolicyConfig | None = None
+    origins: dict[str, Any] | None = None
+
+
+class BrowserUseExtensionRequirements(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    request_headers: Annotated[list[RequestHeader] | None, Field(alias="requestHeaders")] = None
+
+
+class BrowserUseRequirements(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    allow_global_persistent_approval: Annotated[
+        bool | None, Field(alias="allowGlobalPersistentApproval")
+    ] = None
+    allow_history_access: Annotated[bool | None, Field(alias="allowHistoryAccess")] = None
+    allow_webmcp: Annotated[bool | None, Field(alias="allowWebmcp")] = None
+    default_origin_policy: Annotated[
+        BrowserUseOriginPolicy | None, Field(alias="defaultOriginPolicy")
+    ] = None
+    disable_auto_review: Annotated[bool | None, Field(alias="disableAutoReview")] = None
+    extension: BrowserUseExtensionRequirements | None = None
     origins: dict[str, Any] | None = None
 
 

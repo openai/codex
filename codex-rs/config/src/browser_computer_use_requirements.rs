@@ -42,6 +42,7 @@ pub enum BrowserUseAccessApprovalLifetimeToml {
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct BrowserUseRequirementsToml {
+    pub extension: Option<BrowserUseExtensionRequirementsToml>,
     pub allow_webmcp: Option<bool>,
     pub allow_history_access: Option<bool>,
     pub disable_auto_review: Option<bool>,
@@ -52,7 +53,10 @@ pub struct BrowserUseRequirementsToml {
 
 impl BrowserUseRequirementsToml {
     pub fn is_empty(&self) -> bool {
-        self.allow_webmcp.is_none()
+        self.extension
+            .as_ref()
+            .is_none_or(|extension| extension.request_headers.is_none())
+            && self.allow_webmcp.is_none()
             && self.allow_history_access.is_none()
             && self.disable_auto_review.is_none()
             && self.allow_global_persistent_approval.is_none()
@@ -64,6 +68,27 @@ impl BrowserUseRequirementsToml {
                 .origins
                 .as_ref()
                 .is_none_or(|origins| origins.values().all(BrowserUseOriginPolicyToml::is_empty))
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct BrowserUseExtensionRequirementsToml {
+    pub request_headers: Option<Vec<RequestHeaderToml>>,
+}
+
+#[derive(Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RequestHeaderToml {
+    pub name: String,
+    pub value: String,
+}
+
+impl std::fmt::Debug for RequestHeaderToml {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RequestHeaderToml")
+            .field("name", &self.name)
+            .field("value", &"[REDACTED]")
+            .finish()
     }
 }
 

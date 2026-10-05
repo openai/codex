@@ -1588,3 +1588,26 @@ path = "../plugins"
         )
     );
 }
+
+#[test]
+fn extension_headers_replace_lower_priority_lists_including_explicit_empty() {
+    for higher in [
+        r#"[browser_use.extension]
+request_headers = []"#,
+        r#"[browser_use.extension]
+request_headers = [{ name = "x-managed", value = "{{session_id}}" }]"#,
+    ] {
+        let composed = compose(vec![
+            layer(
+                "low",
+                "Lower priority",
+                r#"[browser_use.extension]
+request_headers = [{ name = "x-old", value = "old" }]"#,
+            ),
+            layer("high", "Higher priority", higher),
+        ])
+        .expect("compose requirements")
+        .expect("requirements present");
+        assert_eq!(composed, expected_requirements(higher));
+    }
+}

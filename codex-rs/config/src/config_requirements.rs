@@ -2577,6 +2577,7 @@ mod tests {
         assert_eq!(
             requirements.browser_use,
             Some(BrowserUseRequirementsToml {
+                extension: None,
                 allow_webmcp: None,
                 allow_history_access: Some(false),
                 disable_auto_review: Some(true),
@@ -2810,6 +2811,7 @@ mod tests {
             entries: BTreeMap::from([("personality".to_string(), true)]),
         };
         let browser_use = BrowserUseRequirementsToml {
+            extension: None,
             allow_webmcp: None,
             allow_history_access: Some(false),
             disable_auto_review: Some(true),

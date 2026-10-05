@@ -130,6 +130,20 @@
       ],
       "type": "string"
     },
+    "BrowserUseExtensionRequirements": {
+      "properties": {
+        "requestHeaders": {
+          "items": {
+            "$ref": "#/definitions/RequestHeader"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "BrowserUseOriginPolicy": {
       "properties": {
         "access": {
@@ -235,6 +249,16 @@
           "type": [
             "boolean",
             "null"
+          ]
+        },
+        "extension": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BrowserUseExtensionRequirements"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "origins": {
@@ -1055,6 +1079,21 @@
       "description": "A non-empty reasoning effort value advertised by the model.",
       "minLength": 1,
       "type": "string"
+    },
+    "RequestHeader": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
     },
     "ResidencyRequirement": {
       "enum": [
