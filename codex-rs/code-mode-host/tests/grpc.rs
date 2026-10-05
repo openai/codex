@@ -42,6 +42,8 @@ use tonic::Code;
 #[cfg(unix)]
 use tonic::transport::Server;
 
+#[path = "grpc/admission_tests.rs"]
+mod admission_tests;
 #[path = "support/host.rs"]
 mod host;
 #[path = "support/large_tool_delegate.rs"]

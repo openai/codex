@@ -112,21 +112,38 @@ impl GrpcCodeModeSessionProvider {
             || limits.max_heap_size_bytes.is_some())
         .then_some(limits);
         let open_session_span = tracing::info_span!("code_mode.grpc.open_session");
-        let mut open_session_request = tonic::Request::new(grpc::OpenSessionRequest {
-            cell_execution_limits,
-        });
-        inject_span_traceparent(&mut open_session_request, &open_session_span);
-        let (lease, first) = async {
-            let mut lease =
-                deadline::startup("session opening", client.open_session(open_session_request))
-                    .await?
-                    .into_inner();
-            let first = deadline::startup("session lease opening", lease.message())
-                .await?
-                .ok_or_else(|| "gRPC code-mode session lease ended before opening".to_string())?;
-            Ok::<_, String>((lease, first))
-        }
-        .instrument(open_session_span)
+        let (lease, first) = deadline::startup("session opening", async {
+            let mut retries = 0;
+            loop {
+                let mut request = tonic::Request::new(grpc::OpenSessionRequest {
+                    cell_execution_limits,
+                });
+                inject_span_traceparent(&mut request, &open_session_span);
+                let result = async {
+                    let mut lease = client.open_session(request).await?.into_inner();
+                    let first = lease.message().await?.ok_or_else(|| {
+                        tonic::Status::unavailable("session lease ended before opening")
+                    })?;
+                    Ok::<_, tonic::Status>((lease, first))
+                }
+                .await;
+                let Err(error) = &result else { return result };
+                if retries == 2
+                    || !matches!(
+                        error.code(),
+                        tonic::Code::Unavailable | tonic::Code::ResourceExhausted
+                    )
+                {
+                    return result;
+                }
+                // No execution has started, and dropping a failed lease releases
+                // any partial admission. Never apply these retries to Execute.
+                retries += 1;
+                tracing::warn!(%error, retries, "retrying code-mode session admission");
+                tokio::time::sleep(Duration::from_millis(100 * retries)).await;
+            }
+        })
+        .instrument(open_session_span.clone())
         .await?;
         let Some(grpc::session_event::Event::Opened(opened)) = first.event else {
             return Err("gRPC code-mode session lease omitted its opening event".to_string());

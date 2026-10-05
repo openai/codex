@@ -1,10 +1,11 @@
-use std::io;
+use std::sync::Arc;
 
 use codex_code_mode_protocol::grpc::code_mode_host_client::CodeModeHostClient;
 use codex_code_mode_protocol::host::MAX_FRAME_BYTES;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
 use http_body_util::BodyExt;
+use tonic::Status;
 use tonic::body::Body;
 use tonic::codegen::http::Request;
 use tonic::codegen::http::Response;
@@ -17,7 +18,7 @@ use tower::util::BoxCloneSyncService;
 
 use super::GrpcClient;
 
-pub(super) type GrpcTransport = BoxCloneSyncService<Request<Body>, Response<Body>, io::Error>;
+pub(super) type GrpcTransport = BoxCloneSyncService<Request<Body>, Response<Body>, Status>;
 
 pub(super) enum SharedTransport {
     Url {
@@ -38,7 +39,7 @@ impl SharedTransport {
     }
 
     pub(super) fn with_channel(channel: Channel) -> Self {
-        let transport = channel.map_err(io::Error::other);
+        let transport = channel.map_err(|error| Status::from_error(Box::new(error)));
         Self::Connected(
             CodeModeHostClient::new(BoxCloneSyncService::new(transport))
                 .max_decoding_message_size(MAX_FRAME_BYTES)
@@ -71,7 +72,7 @@ impl SharedTransport {
             let channel = Endpoint::from_shared(endpoint.clone())
                 .map_err(|error| format!("invalid gRPC code-mode Unix socket endpoint: {error}"))?
                 .connect_lazy();
-            let transport = channel.map_err(io::Error::other);
+            let transport = channel.map_err(|error| Status::from_error(Box::new(error)));
             CodeModeHostClient::new(BoxCloneSyncService::new(transport))
         } else {
             let target = reqwest::Url::parse(endpoint)
@@ -104,13 +105,28 @@ impl SharedTransport {
                 async move {
                     let request =
                         request.map(|body| reqwest::Body::wrap_stream(body.into_data_stream()));
-                    let request = reqwest::Request::try_from(request).map_err(io::Error::other)?;
+                    let request = reqwest::Request::try_from(request)
+                        .map_err(|error| Status::invalid_argument(error.to_string()))?;
                     let response = client
                         .execute(request)
                         .await
-                        .map_err(io::Error::other)?
+                        .map_err(|error| {
+                            // Sending can fail on DNS or a reset connection before
+                            // headers arrive. Keep these distinct from RPC errors.
+                            let mut status = if matches!(
+                                &error,
+                                codex_http_client::HttpError::Request(error)
+                                    if error.is_connect() || error.is_request()
+                            ) {
+                                Status::unavailable(error.to_string())
+                            } else {
+                                Status::unknown(error.to_string())
+                            };
+                            status.set_source(Arc::new(error));
+                            status
+                        })?
                         .into_http_response();
-                    Ok::<_, io::Error>(response.map(Body::new))
+                    Ok::<_, Status>(response.map(Body::new))
                 }
             });
             CodeModeHostClient::with_origin(BoxCloneSyncService::new(transport), origin)
