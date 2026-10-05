@@ -46,6 +46,12 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
     set_global(scope, global, "notify", notify.into())?;
     set_global(scope, global, "yield_control", yield_control.into())?;
     set_global(scope, global, "exit", exit.into())?;
+
+    let source = v8::String::new(scope, include_str!("settled.js"))
+        .ok_or_else(|| "failed to allocate settlement helpers".to_string())?;
+    v8::Script::compile(scope, source, /*origin*/ None)
+        .and_then(|script| script.run(scope))
+        .ok_or_else(|| "failed to initialize settlement helpers".to_string())?;
     Ok(())
 }
 
