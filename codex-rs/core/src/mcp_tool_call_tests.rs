@@ -3454,7 +3454,8 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
 
 #[tokio::test]
 async fn approval_metadata_is_released_when_the_invocation_future_is_dropped() {
-    let (session, _) = crate::session::tests::make_session_and_context().await;
+    let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+    let review_context = GuardianReviewContext::from(Arc::new(turn_context));
     let invocation = McpInvocation {
         server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
         tool: "write_record".to_string(),
@@ -3468,17 +3469,25 @@ async fn approval_metadata_is_released_when_the_invocation_future_is_dropped() {
         /*tool_description*/ None,
     );
     let mut call = Box::pin(async {
-        let _approval_metadata =
-            session.register_mcp_tool_approval_metadata("call", &invocation, metadata.clone());
+        let _approval_metadata = session.register_mcp_tool_approval_metadata(
+            "call",
+            &invocation,
+            metadata.clone(),
+            review_context.clone(),
+        );
         std::future::pending::<()>().await;
     });
     assert!(futures::poll!(call.as_mut()).is_pending());
-    let _other_metadata =
-        session.register_mcp_tool_approval_metadata("other-call", &invocation, metadata.clone());
+    let _other_metadata = session.register_mcp_tool_approval_metadata(
+        "other-call",
+        &invocation,
+        metadata.clone(),
+        review_context.clone(),
+    );
     assert_eq!(
         session
             .mcp_tool_approval_metadata(CODEX_APPS_MCP_SERVER_NAME, "call")
-            .map(|(invocation, metadata)| (invocation, metadata.connector_id)),
+            .map(|context| (context.invocation, context.metadata.connector_id)),
         Some((Some(invocation.clone()), Some("connector".to_string()))),
     );
     assert!(
@@ -3492,8 +3501,12 @@ async fn approval_metadata_is_released_when_the_invocation_future_is_dropped() {
             .mcp_tool_approval_metadata(CODEX_APPS_MCP_SERVER_NAME, "call")
             .is_none()
     );
-    let _next_metadata =
-        session.register_mcp_tool_approval_metadata("next-call", &invocation, metadata);
+    let _next_metadata = session.register_mcp_tool_approval_metadata(
+        "next-call",
+        &invocation,
+        metadata,
+        review_context,
+    );
     let registry = session.mcp_tool_approval_metadata.lock().unwrap();
     let mut keys = registry.keys().cloned().collect::<Vec<_>>();
     keys.sort();

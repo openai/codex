@@ -2,6 +2,7 @@ use super::mcp_refresh::McpRefreshInvalidationGuard;
 use super::*;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::combine_selected_capability_roots;
+use crate::mcp_tool_call::McpToolApprovalContext;
 use codex_exec_server::ExecutorCapabilityDiscoveryCache;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::MAX_SELECTED_CAPABILITY_ROOTS;
@@ -824,9 +825,14 @@ async fn review_guardian_mcp_elicitation(
             _ => meta.get("callId"),
         })
         .and_then(Value::as_str);
+    let approval_context = call_id
+        .and_then(|call_id| session.mcp_tool_approval_metadata(&request.server_name, call_id));
     let (originating_call_id, guardian_scope) = if let Some(call_id) = call_id
-        && let Some((Some(invocation), metadata)) =
-            session.mcp_tool_approval_metadata(&request.server_name, call_id)
+        && let Some(McpToolApprovalContext {
+            invocation: Some(invocation),
+            metadata,
+            ..
+        }) = approval_context.as_ref()
         && invocation.server == request.server_name
         && is_node_repl_backed_connector(&invocation.server, metadata.connector_id.as_deref())
     {
@@ -843,7 +849,12 @@ async fn review_guardian_mcp_elicitation(
         Some(Value::Bool(true))
     );
 
-    let mut review_context = crate::guardian::GuardianReviewContext::from(&turn_context);
+    // Bind the review to the issuing step, which may include environments that
+    // became ready after the turn started. Do not refresh an in-flight action.
+    let mut review_context = approval_context
+        .as_ref()
+        .map(|context| context.review_context.clone())
+        .unwrap_or_else(|| crate::guardian::GuardianReviewContext::from(&turn_context));
     let strict_auto_review = matches!(
         request
             .elicitation
@@ -858,18 +869,14 @@ async fn review_guardian_mcp_elicitation(
         let review_outer_invocation =
             request.server_name == CODEX_APPS_MCP_SERVER_NAME && originating_call_id.is_none();
         let trusted_guardian_request = if review_outer_invocation {
-            let Some(call_id) = request
-                .elicitation
-                .meta()
-                .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
-                .and_then(Value::as_object)
-                .and_then(|meta| meta.get("call_id"))
-                .and_then(Value::as_str)
-            else {
+            let Some(call_id) = call_id else {
                 return Ok(None);
             };
-            let Some((Some(invocation), metadata)) =
-                session.mcp_tool_approval_metadata(&request.server_name, call_id)
+            let Some(McpToolApprovalContext {
+                invocation: Some(invocation),
+                metadata,
+                ..
+            }) = approval_context.as_ref()
             else {
                 return Ok(None);
             };
@@ -886,8 +893,8 @@ async fn review_guardian_mcp_elicitation(
             Some(
                 crate::mcp_tool_call::build_guardian_mcp_tool_review_request(
                     call_id,
-                    &invocation,
-                    Some(&metadata),
+                    invocation,
+                    Some(metadata),
                 ),
             )
         } else {

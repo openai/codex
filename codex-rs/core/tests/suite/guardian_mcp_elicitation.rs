@@ -37,7 +37,7 @@ use wiremock::matchers::body_partial_json;
 
 // The tool itself needs no approval. Its server requests a separate Guardian
 // review after tools/call, exercising the ordinary MCP elicitation path.
-const ELICITATION_SERVER: &str = r#"
+pub(super) const ELICITATION_SERVER: &str = r#"
 import json
 import sys
 

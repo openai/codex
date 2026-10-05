@@ -78,7 +78,7 @@ pub(crate) const GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS: usize = 6_000;
 /// Background network approvals and Unix interception use the active task's resolved settings.
 /// Startup reviewer prewarming intentionally uses turn-only inputs because it has no issuing step.
 ///
-/// MCP elicitation reviews continue to use turn-only inputs.
+/// MCP elicitations use their live invocation's issuing step when available, otherwise turn inputs.
 #[derive(Clone)]
 pub(crate) struct GuardianReviewContext {
     /// The latest response ID received in this turn when review was requested.
