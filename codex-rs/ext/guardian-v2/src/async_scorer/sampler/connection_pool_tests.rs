@@ -1,6 +1,8 @@
 //! Exercises classifier fallback, cooldown, and cancellation against local servers.
 
 use super::super::LunaSampler;
+use super::super::tests::ProxyPrewarmLimit;
+use super::super::tests::proxy_websocket_servers_with_http;
 use super::super::tests::sample_request;
 use super::super::tests::sampler_config;
 use super::*;
@@ -83,6 +85,99 @@ impl Drop for Gateway {
 }
 
 #[tokio::test]
+async fn stalled_handshake_does_not_delay_other_warm_sockets() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let stalled = responses::start_websocket_server_with_headers(vec![
+        responses::WebSocketConnectionConfig {
+            requests: Vec::new(),
+            response_headers: Vec::new(),
+            accept_delay: Some(Duration::from_secs(/*secs*/ 10)),
+            close_after_requests: false,
+        },
+    ])
+    .await;
+    let healthy = responses::start_websocket_server(vec![vec![vec![
+        responses::ev_output_text_delta("low"),
+        responses::ev_completed("score"),
+    ]]])
+    .await;
+    let url = proxy_websocket_servers_with_http(
+        &[&stalled, &healthy],
+        ProxyPrewarmLimit::AllConnections,
+        /*http_url*/ None,
+    )
+    .await?;
+    let sampler = LunaSampler::new(sampler_config(url));
+    let opener = sampler.connections.replenish().unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while sampler
+            .connections
+            .idle_connections
+            .lock()
+            .unwrap()
+            .is_empty()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert!(!opener.is_finished());
+    assert_eq!(
+        sampler.sample(sample_request("healthy-socket")).await?,
+        "low"
+    );
+    assert_eq!(healthy.single_connection().len(), 1);
+    opener.abort();
+    let _ = opener.await;
+    drop(stalled);
+    healthy.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn replenishes_before_last_idle_socket_is_leased() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let mut servers = Vec::new();
+    for _ in 0..INITIAL_WEBSOCKET_CONNECTIONS + 1 {
+        servers.push(
+            responses::start_websocket_server_with_headers(vec![
+                responses::WebSocketConnectionConfig {
+                    requests: Vec::new(),
+                    response_headers: Vec::new(),
+                    accept_delay: None,
+                    close_after_requests: false,
+                },
+            ])
+            .await,
+        );
+    }
+    let url = proxy_websocket_servers_with_http(
+        &servers.iter().collect::<Vec<_>>(),
+        ProxyPrewarmLimit::AllConnections,
+        /*http_url*/ None,
+    )
+    .await?;
+    let sampler = LunaSampler::new(sampler_config(url));
+    sampler.prewarm().await;
+    let held = sampler.connections.lease().await?;
+    assert!(matches!(held.connection, Connection::Websocket(_)));
+    // A healthy socket remains available, but the next burst needs the reserve restored.
+    sampler.wait_for_prewarm(Duration::from_secs(2)).await?;
+    let mut burst = Vec::new();
+    for _ in 0..INITIAL_WEBSOCKET_CONNECTIONS {
+        let lease = sampler.connections.lease().await?;
+        assert!(matches!(lease.connection, Connection::Websocket(_)));
+        burst.push(lease);
+    }
+    drop(burst);
+    drop(held);
+    for server in servers {
+        server.shutdown().await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn cold_pool_uses_http_during_open_timeout_then_recovers_after_cooldown() -> Result<()> {
     skip_if_no_network!(Ok(()));
     for uses_codex_backend in [false, true] {
@@ -131,7 +226,10 @@ async fn cold_pool_uses_http_during_open_timeout_then_recovers_after_cooldown() 
             sampler.sample(sample_request("parent-turn-2")).await?,
             "low"
         );
-        assert_eq!(gateway.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            gateway.opens.load(Ordering::SeqCst),
+            INITIAL_WEBSOCKET_CONNECTIONS
+        );
         assert!(!opener.is_finished());
         assert!(sampler.connections.replenish().is_none());
 
@@ -144,7 +242,10 @@ async fn cold_pool_uses_http_during_open_timeout_then_recovers_after_cooldown() 
             sampler.sample(sample_request("during-cooldown")).await?,
             "low"
         );
-        assert_eq!(gateway.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            gateway.opens.load(Ordering::SeqCst),
+            INITIAL_WEBSOCKET_CONNECTIONS
+        );
 
         let requests = http_mock.requests();
         let first = &requests[0];
@@ -179,14 +280,14 @@ async fn cold_pool_uses_http_during_open_timeout_then_recovers_after_cooldown() 
         tokio::time::resume();
         sampler.connections.replenish().unwrap().await?;
         assert_eq!(
+            gateway.opens.load(Ordering::SeqCst),
+            2 * INITIAL_WEBSOCKET_CONNECTIONS
+        );
+        assert_eq!(
             sampler.sample(sample_request("after-cooldown")).await?,
             "low"
         );
         assert_eq!(http_mock.requests().len(), 3);
-        assert_eq!(
-            gateway.opens.load(Ordering::SeqCst),
-            1 + INITIAL_WEBSOCKET_CONNECTIONS
-        );
     }
     Ok(())
 }
@@ -209,7 +310,14 @@ async fn cooldown_preserves_healthy_sockets_and_both_transports_share_capacity()
     let sampler = LunaSampler::new(sampler_config(format!("{}/v1", gateway.url)));
     let opener = sampler.connections.replenish().unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
-        while gateway.opens.load(Ordering::SeqCst) < 2 {
+        while gateway.opens.load(Ordering::SeqCst) < 2
+            || sampler
+                .connections
+                .idle_connections
+                .lock()
+                .unwrap()
+                .is_empty()
+        {
             tokio::task::yield_now().await;
         }
     })

@@ -172,7 +172,6 @@ pub(in crate::async_scorer) async fn proxy_websocket_servers_with_http(
             }
             let target = if &method == b"GET " {
                 if let ProxyPrewarmLimit::StopAfter { ready_connections } = prewarm_limit
-                    && ready_connections < INITIAL_WEBSOCKET_CONNECTIONS
                     && index == ready_connections
                     && !failed_prewarm
                 {
@@ -599,6 +598,8 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
         }
     })
     .await?;
+    // Finish the opportunistic refill (rejected by the proxy) before rotating auth.
+    sampler.prewarm().await;
     manager.refresh_token_from_authority().await?;
     sampler.connections.clear();
     sampler.prewarm().await;
@@ -621,7 +622,13 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
     assert_eq!(second, "high");
     // Reuse the same socket after a nested owner, now with unknown root lineage.
     assert_eq!(sampler.sample(sample_request("turn-3")).await?, "low");
-    let mut requests = server.single_connection();
+    // Concurrent handshakes may finish in either order.
+    let (used, unused) = if server.single_connection().is_empty() {
+        (&idle_server, &server)
+    } else {
+        (&server, &idle_server)
+    };
+    let mut requests = used.single_connection();
     assert_eq!(requests.len(), 1);
     assert_eq!(
         refreshed.single_handshake().header("authorization"),
@@ -629,7 +636,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
     );
     requests.extend(refreshed.single_connection());
     assert_eq!(requests.len(), 3);
-    let thread_id = assert_connection_metadata(&server, &[("turn-1", Some("turn-1"))])?;
+    let thread_id = assert_connection_metadata(used, &[("turn-1", Some("turn-1"))])?;
     assert_connection_metadata(&refreshed, &[("turn-2", Some("root-2")), ("turn-3", None)])?;
     assert_ne!(
         requests[1].body_json()["client_metadata"]["turn_id"],
@@ -637,7 +644,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
     );
     assert_ne!(
         Some(thread_id),
-        idle_server.single_handshake().header("thread-id")
+        unused.single_handshake().header("thread-id")
     );
     assert_eq!(
         requests[0].body_json()["input"][2]["content"],
@@ -910,6 +917,15 @@ async fn sampler_replaces_scored_drains_before_unfinished_classifications() -> R
         .await?,
     );
 
+    // Select the stalled socket first independently of handshake completion order.
+    let stalled_id = servers[1].single_handshake().header("thread-id").unwrap();
+    sampler
+        .connections
+        .idle_connections
+        .lock()
+        .unwrap()
+        .sort_by_key(|connection| connection.thread_id == stalled_id);
+
     let oldest_sampler = Arc::clone(&sampler);
     let oldest = tokio::spawn(async move { oldest_sampler.sample(sample_request("oldest")).await });
     tokio::time::timeout(
@@ -918,6 +934,15 @@ async fn sampler_replaces_scored_drains_before_unfinished_classifications() -> R
     )
     .await?;
 
+    // Finish the refill before selecting a socket; it must not append after sorting.
+    sampler.prewarm().await;
+    let scored_id = servers[0].single_handshake().header("thread-id").unwrap();
+    sampler
+        .connections
+        .idle_connections
+        .lock()
+        .unwrap()
+        .sort_by_key(|connection| connection.thread_id == scored_id);
     let scored_sampler = Arc::clone(&sampler);
     let scored_request =
         tokio::spawn(async move { scored_sampler.sample(sample_request("scored")).await });
@@ -993,6 +1018,15 @@ async fn sampler_retries_expired_websockets_on_another_warm_connection() -> Resu
         proxy_websocket_servers(&[&healthy, &expired]).await?,
     ))
     .await?;
+
+    // Start on the expired socket so this exercises recovery in either open order.
+    let expired_id = expired.single_handshake().header("thread-id").unwrap();
+    sampler
+        .connections
+        .idle_connections
+        .lock()
+        .unwrap()
+        .sort_by_key(|connection| connection.thread_id == expired_id);
 
     let mut request = sample_request("turn-1");
     request.input.insert(
@@ -1082,15 +1116,20 @@ async fn sampler_uses_http_with_a_fresh_identity_when_warm_connections_expire() 
         .header("thread-id")
         .expect("HTTP classifier thread ID");
     ThreadId::from_string(&http_thread_id)?;
+    let (used, unused) = if first.single_connection().is_empty() {
+        (&second, &first)
+    } else {
+        (&first, &second)
+    };
     let thread_ids = HashSet::from([
-        assert_connection_metadata(&first, &[])?,
-        assert_connection_metadata(&second, &[("turn-1", None)])?,
+        assert_connection_metadata(unused, &[])?,
+        assert_connection_metadata(used, &[("turn-1", None)])?,
         http_thread_id,
     ]);
     assert_eq!(thread_ids.len(), 3);
     responses::assert_parent_turn(&request.body_json(), Some("turn-2"))?;
     assert_classifier_instructions(&request.body_json());
-    assert_eq!(second.single_connection().len(), 1);
+    assert_eq!(used.single_connection().len(), 1);
     Ok(())
 }
 
@@ -1232,6 +1271,13 @@ async fn parent_response_id_survives_classifier_transport_retry() -> Result<()> 
             );
         }
         let sampler = connect_sampler(config).await?;
+        let expired_id = expired.single_handshake().header("thread-id").unwrap();
+        sampler
+            .connections
+            .idle_connections
+            .lock()
+            .unwrap()
+            .sort_by_key(|connection| connection.thread_id == expired_id);
         let parent_response_id = "resp-parent";
         let mut request = sample_request("turn-1");
         request.parent_response_id = Some(parent_response_id.to_owned());

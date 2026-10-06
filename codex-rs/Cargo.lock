@@ -3610,6 +3610,7 @@ dependencies = [
  "codex-prompts",
  "codex-protocol",
  "codex-utils-cargo-bin",
+ "codex-websocket-client",
  "core_test_support",
  "dirs",
  "http 1.4.0",

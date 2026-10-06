@@ -152,9 +152,7 @@ impl LunaSampler {
     }
 
     pub(super) async fn prewarm(&self) {
-        if let Some(refill) = self.connections.replenish() {
-            let _ = refill.await;
-        }
+        self.connections.prewarm().await;
     }
 
     fn auth_owner_generation(&self) -> Option<u64> {

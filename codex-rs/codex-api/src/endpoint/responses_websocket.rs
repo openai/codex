@@ -349,6 +349,8 @@ impl ResponsesWebsocketConnection {
     }
 }
 
+mod connector;
+
 /// Client for connecting to the Responses WebSocket endpoint for one provider.
 pub struct ResponsesWebsocketClient {
     provider: Provider,
@@ -385,12 +387,6 @@ impl ResponsesWebsocketClient {
         Self { provider, auth }
     }
 
-    #[instrument(
-        name = "responses_websocket.connect",
-        level = "info",
-        skip_all,
-        fields(transport = "responses_websocket", api.path = "/responses")
-    )]
     pub async fn connect(
         &self,
         http_client_factory: &HttpClientFactory,
@@ -399,24 +395,16 @@ impl ResponsesWebsocketClient {
         turn_state: Option<Arc<OnceLock<String>>>,
         telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     ) -> Result<ResponsesWebsocketConnection, ApiError> {
-        let ws_url = self
-            .provider
-            .websocket_url_for_path("/responses")
-            .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
-
-        let mut headers =
-            merge_request_headers(&self.provider.headers, extra_headers, default_headers);
-        self.auth.add_auth_headers(&mut headers);
-
-        let (stream, _status, server_reasoning_included, server_model) =
-            connect_websocket(ws_url, headers, http_client_factory, turn_state.clone()).await?;
-        Ok(ResponsesWebsocketConnection::new(
-            stream,
-            self.provider.stream_idle_timeout,
-            server_reasoning_included,
-            server_model,
+        let connector = WebSocketConnector::new(http_client_factory)
+            .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?;
+        self.connect_with_connector(
+            &connector,
+            extra_headers,
+            default_headers,
+            turn_state,
             telemetry,
-        ))
+        )
+        .await
     }
 
     /// Opens a WebSocket connection long enough to validate the upgrade response.
@@ -442,10 +430,12 @@ impl ResponsesWebsocketClient {
             merge_request_headers(&self.provider.headers, extra_headers, default_headers);
         self.auth.add_auth_headers(&mut headers);
 
+        let connector = WebSocketConnector::new(http_client_factory)
+            .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?;
         let (mut stream, status, reasoning_included, server_model) = connect_websocket(
             ws_url.clone(),
             headers,
-            http_client_factory,
+            &connector,
             /*turn_state*/ None,
         )
         .await?;
@@ -499,7 +489,7 @@ fn merge_request_headers(
 async fn connect_websocket(
     url: Url,
     headers: HeaderMap,
-    http_client_factory: &HttpClientFactory,
+    connector: &WebSocketConnector,
     turn_state: Option<Arc<OnceLock<String>>>,
 ) -> Result<(WsStream, StatusCode, bool, Option<String>), ApiError> {
     info!("connecting to websocket: {url}");
@@ -510,8 +500,6 @@ async fn connect_websocket(
         .map_err(|err| ApiError::Stream(format!("failed to build websocket request: {err}")))?;
     request.headers_mut().extend(headers);
 
-    let connector = WebSocketConnector::new(http_client_factory)
-        .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?;
     let response = connector.connect(request, websocket_config()).await;
 
     let (stream, response) = match response {

@@ -1,8 +1,10 @@
 //! Keeps WebSocket establishment off the classification path.
-//! One background worker fills the pool. Opening timeouts pause replenishment;
+//! One background worker fills the pool with bounded concurrent opens before it empties.
+//! Opening timeouts pause replenishment without discarding healthy in-flight opens;
 //! requests with no healthy idle socket use HTTP under the same concurrency limit.
 //! Each lease resolves workspace routing before reusing a socket or starting HTTP.
 //! Constrained HTTP clients reject redirects, including after a cache policy change.
+//! TLS roots are loaded once per sampler, like the pooled HTTP transport configuration.
 
 use super::super::metrics::sampler_failure_reason;
 use super::INITIAL_WEBSOCKET_CONNECTIONS;
@@ -34,19 +36,24 @@ use codex_model_provider::ProviderAuthScope;
 use codex_model_provider::ResolvedResponsesProvider;
 use codex_model_provider::ResponsesConnectionKey;
 use codex_protocol::ThreadId;
+use codex_websocket_client::WebSocketConnector;
 use http::HeaderMap;
 use http::HeaderValue;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::OnceCell;
+use tokio::sync::OwnedMutexGuard;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 use tokio::time::Instant;
 
 const CONNECT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 const MAX_WEBSOCKET_AGE: Duration = Duration::from_secs(55 * 60);
+const MAX_CONCURRENT_OPENS: usize = 4;
+const REFILL_LOW_WATERMARK: usize = INITIAL_WEBSOCKET_CONNECTIONS / 2;
 const RESPONSES_WEBSOCKETS_BETA: &str = "responses_websockets=2026-02-06";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -64,6 +71,7 @@ pub(super) struct ConnectionPool {
     replenishing: Arc<tokio::sync::Mutex<()>>,
     retry_after: Mutex<Option<Instant>>,
     http_transport: Mutex<Option<Arc<HttpTransport>>>,
+    websocket_connector: OnceCell<WebSocketConnector>,
 }
 
 struct HttpTransport {
@@ -76,7 +84,7 @@ pub(super) struct PooledConnection {
     connection: ResponsesWebsocketConnection,
     request_kind: RequestMode,
     // The bridge routes by thread ID, so each socket needs its own identity.
-    thread_id: String,
+    pub(super) thread_id: String,
     pub(super) expires_at: Instant,
     auth_changes: Option<tokio::sync::watch::Receiver<u64>>,
     key: ResponsesConnectionKey,
@@ -114,6 +122,7 @@ impl ConnectionPool {
             replenishing: Arc::new(tokio::sync::Mutex::new(())),
             retry_after: Mutex::new(None),
             http_transport: Mutex::new(None),
+            websocket_connector: OnceCell::new(),
         })
     }
 
@@ -127,42 +136,64 @@ impl ConnectionPool {
     /// Never waits for another opener or sleeps through the cooldown.
     pub(super) fn replenish(self: &Arc<Self>) -> Option<JoinHandle<()>> {
         let guard = Arc::clone(&self.replenishing).try_lock_owned().ok()?;
-        if self
+        self.start_refill(guard)
+    }
+
+    pub(super) async fn prewarm(self: &Arc<Self>) {
+        // Explicit prewarming waits for any existing refill before checking readiness.
+        let guard = Arc::clone(&self.replenishing).lock_owned().await;
+        if let Some(refill) = self.start_refill(guard) {
+            let _ = refill.await;
+        }
+    }
+
+    fn start_refill(self: &Arc<Self>, guard: OwnedMutexGuard<()>) -> Option<JoinHandle<()>> {
+        let mut retry_after = self
             .retry_after
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_some_and(|deadline| Instant::now() < deadline)
-        {
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if retry_after.is_some_and(|deadline| Instant::now() < deadline) {
             return None;
         }
+        *retry_after = None;
+        drop(retry_after);
         let pool = Arc::clone(self);
         Some(tokio::spawn(async move {
             let _guard = guard;
+            let mut opening = JoinSet::new();
+            let mut failed = false;
             loop {
-                if pool
+                let idle = pool
                     .idle_connections
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .len()
-                    >= INITIAL_WEBSOCKET_CONNECTIONS
+                    .len();
+                while !failed
+                    && idle + opening.len() < INITIAL_WEBSOCKET_CONNECTIONS
+                    && opening.len() < MAX_CONCURRENT_OPENS
                 {
-                    break;
+                    let Ok(permit) = Arc::clone(&pool.sockets).try_acquire_owned() else {
+                        break;
+                    };
+                    let pool = Arc::clone(&pool);
+                    opening.spawn(async move { pool.open_connection(permit).await });
                 }
-                let Ok(permit) = Arc::clone(&pool.sockets).try_acquire_owned() else {
+                let Some(result) = opening.join_next().await else {
                     break;
                 };
-                match pool.open_connection(permit).await {
-                    Ok(connection) => {
-                        *pool
-                            .retry_after
+                match result {
+                    Ok(Ok(connection)) => {
+                        let mut idle = pool
+                            .idle_connections
                             .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-                        pool.idle_connections
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .push(connection);
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        // Returned leases may have refilled the pool while we opened.
+                        if idle.len() < INITIAL_WEBSOCKET_CONNECTIONS {
+                            idle.push(connection);
+                        }
                     }
-                    Err(error) => {
+                    Ok(Err(error)) => {
+                        failed = true;
                         if matches!(error, LunaSamplerError::ConnectionTimeout) {
                             *pool
                                 .retry_after
@@ -170,18 +201,20 @@ impl ConnectionPool {
                                 .unwrap_or_else(std::sync::PoisonError::into_inner) =
                                 Some(Instant::now() + CONNECT_COOLDOWN);
                         }
-                        break;
                     }
+                    Err(_) => failed = true,
                 }
             }
         }))
     }
 
     pub(super) async fn lease(self: &Arc<Self>) -> Result<ConnectionLease, LunaSamplerError> {
+        let started = Instant::now();
         let permit = Arc::clone(&self.classifications)
             .acquire_owned()
             .await
             .map_err(|error| LunaSamplerError::Api(ApiError::Stream(error.to_string())))?;
+        let admitted = Instant::now();
         let ClientSetup {
             mut provider,
             auth,
@@ -189,6 +222,7 @@ impl ConnectionPool {
             key,
             auth_changes,
         } = self.client_setup().await?;
+        let setup_finished = Instant::now();
         let connection = loop {
             let idle = self
                 .idle_connections
@@ -213,6 +247,15 @@ impl ConnectionPool {
         };
         let (connection, thread_id, request_kind) = match connection {
             Some(connection) => {
+                if self
+                    .idle_connections
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .len()
+                    <= REFILL_LOW_WATERMARK
+                {
+                    self.replenish();
+                }
                 let thread_id = connection.thread_id.clone();
                 let request_kind = connection.request_kind;
                 (Connection::Websocket(connection), thread_id, request_kind)
@@ -282,6 +325,23 @@ impl ConnectionPool {
             return Err(LunaSamplerError::Api(ApiError::Stream(
                 "authentication changed while leasing".into(),
             )));
+        }
+        if let Some(metrics) = self.config.metrics.as_deref() {
+            let transport = match &connection {
+                Connection::Websocket(_) => "websocket",
+                Connection::Http(_) => "http",
+            };
+            for (stage, duration) in [
+                ("admission", admitted.duration_since(started)),
+                ("setup", setup_finished.duration_since(admitted)),
+                ("total", started.elapsed()),
+            ] {
+                metrics.histogram(
+                    "codex.guardian_v2.connection.lease.duration_ms",
+                    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+                    &[("stage", stage), ("transport", transport)],
+                );
+            }
         }
         Ok(ConnectionLease {
             thread_id,
@@ -413,13 +473,31 @@ impl ConnectionPool {
 
         let provider_info = self.config.provider.info();
         let client = ResponsesWebsocketClient::new(provider, auth);
-        let connect = client.connect(
-            &self.config.http_client_factory,
-            headers,
-            default_headers(),
-            /*turn_state*/ None,
-            /*telemetry*/ None,
-        );
+        let connect = async {
+            let connector = self
+                .websocket_connector
+                .get_or_try_init(|| async {
+                    let factory = self.config.http_client_factory.clone();
+                    tokio::task::spawn_blocking(move || WebSocketConnector::new(&factory))
+                        .await
+                        .map_err(|error| {
+                            ApiError::Stream(format!("websocket TLS setup task failed: {error}"))
+                        })?
+                        .map_err(|error| {
+                            ApiError::Stream(format!("failed to configure websocket TLS: {error}"))
+                        })
+                })
+                .await?;
+            client
+                .connect_with_connector(
+                    connector,
+                    headers,
+                    default_headers(),
+                    /*turn_state*/ None,
+                    /*telemetry*/ None,
+                )
+                .await
+        };
         let started_at = Instant::now();
         let result = tokio::time::timeout(provider_info.websocket_connect_timeout(), connect)
             .await

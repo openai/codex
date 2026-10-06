@@ -380,7 +380,7 @@ struct RecordingMetrics(Mutex<Vec<RecordedMetric>>);
 impl RecordingMetrics {
     fn classification_samples(&self) -> Vec<RecordedMetric> {
         self.0.lock().unwrap().iter().filter(|sample| {
-            !matches!(sample, RecordedMetric::Histogram(name, _, _) if name == codex_guardian_context::SECTION_COST_METRIC || name == codex_guardian_context::REQUEST_TOKENS_METRIC)
+            !matches!(sample, RecordedMetric::Histogram(name, _, _) if name == codex_guardian_context::SECTION_COST_METRIC || name == codex_guardian_context::REQUEST_TOKENS_METRIC || name.starts_with("codex.guardian_v2.connection."))
         }).cloned().collect()
     }
 }
