@@ -214,8 +214,11 @@ impl App {
                 task.abort();
             }
             self.agents_overview.request_id = None;
+            self.agents_overview.refresh_show_more = false;
+            self.agents_overview.active_refresh_thread_ids.clear();
             self.agents_overview.refresh_pending = false;
             self.agents_overview.refresh_notifications.clear();
+            self.agents_overview.pending_pin_change = None;
             self.agents_overview.pending_usage = None;
             self.agents_overview.usage_disabled = false;
             self.agents_overview.usage.clear();
@@ -357,6 +360,8 @@ impl App {
         self.sync_thread_title_progress();
         self.agents_overview.dispatched_requests.clear();
         self.agents_overview.request_id = None;
+        self.agents_overview.refresh_show_more = false;
+        self.agents_overview.active_refresh_thread_ids.clear();
         self.agents_overview.refresh_pending = false;
         for input in self.agents_overview.input_states.values_mut() {
             input.reconnect_pending = true;

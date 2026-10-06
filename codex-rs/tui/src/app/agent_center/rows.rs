@@ -140,15 +140,19 @@ impl AgentsOverviewView {
             let task = &self.rows[index];
             let rect = row(viewport, offset as u16, /*height*/ 1);
             if matches!(entry, CenterRow::Group(_)) {
-                let group = match state.grouping {
-                    AgentsOverviewGrouping::Project => {
-                        format_directory_display(
-                            &self.project_groups[index].heading,
-                            /*max_width*/ None,
-                        )
+                let group = if self.is_pinned(index) {
+                    "Pinned".to_owned()
+                } else {
+                    match state.grouping {
+                        AgentsOverviewGrouping::Project => {
+                            format_directory_display(
+                                &self.project_groups[index].heading,
+                                /*max_width*/ None,
+                            )
+                        }
+                        AgentsOverviewGrouping::Status => task.group.label().to_owned(),
+                        AgentsOverviewGrouping::Model => model_name(&task.thread).to_owned(),
                     }
-                    AgentsOverviewGrouping::Status => task.group.label().to_owned(),
-                    AgentsOverviewGrouping::Model => model_name(&task.thread).to_owned(),
                 };
                 let count = indices
                     .iter()
@@ -164,7 +168,9 @@ impl AgentsOverviewView {
                 } else {
                     format!("{count} of {total}")
                 };
-                let group = if state.grouping == AgentsOverviewGrouping::Project {
+                let group = if state.grouping == AgentsOverviewGrouping::Project
+                    && !self.is_pinned(index)
+                {
                     crate::text_formatting::center_truncate_path(
                         &group,
                         usize::from(rect.width)

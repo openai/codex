@@ -428,6 +428,7 @@ define_runtime_action_bindings! {
         archive,
         delete,
         hide,
+        toggle_pin,
         toggle_grouping,
     ],
     "approval" => Approval, approval, approval [

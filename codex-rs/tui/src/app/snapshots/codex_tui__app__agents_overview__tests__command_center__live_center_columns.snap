@@ -6,15 +6,15 @@ expression: "screen(&view, 160, 22)"
    All 6   Needs you 2   Working 1   Ready 2   Inactive 1                                                                                      tab/⇧tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
       Tasks                                                                                   Status         Updated  │ Task details
-  /tmp/project  6                                                                                                     │
+  Pinned  2                                                                                                           │
   › ○ Current task                                                                            Ready              now  │ Current task
-    ○ A longer task title that uses the available column                              voice   Ready           5m ago  │ ○ Ready
+    ● Needs an answer                                                                         Needs input     2h ago  │ ○ Ready
+                                                                                                                      │
+  /tmp/project  4                                                                                                     │ Model: Unknown
+    ○ A longer task title that uses the available column                              voice   Ready           5m ago  │ Reasoning: Unknown
     ! Failed task                                                                             Error           1h ago  │
-    ● Needs an answer                                                                         Needs input     2h ago  │ Model: Unknown
-    ● Working task                                                                            Working         1d ago  │ Reasoning: Unknown
-    ○ Unloaded task                                                                           Inactive        2d ago  │
-                                                                                                                      │ Project
-                                                                                                                      │ /tmp/project
+    ● Working task                                                                            Working         1d ago  │ Project
+    ○ Unloaded task                                                                           Inactive        2d ago  │ /tmp/project
                                                                                                                       │
                                                                                                                       │ Prompt
                                                                                                                       │ Current task

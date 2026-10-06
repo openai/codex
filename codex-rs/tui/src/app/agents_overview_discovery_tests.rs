@@ -7,6 +7,9 @@ use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -47,12 +50,21 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
             )
         })
         .collect();
+    let reopened_pin = overview_thread(
+        ThreadId::new(),
+        /*parent_thread_id*/ None,
+        "Pinned after reopen",
+        ThreadStatus::NotLoaded,
+    );
+    let reopened_pin_id = ThreadId::from_string(&reopened_pin.id).unwrap();
+    let show_reopened_pin = Arc::new(AtomicBool::new(false));
     let expected_first_twenty: HashSet<_> = rows[1..21]
         .iter()
         .map(|row| ThreadId::from_string(&row.id).unwrap())
         .collect();
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let endpoint = crate::resolve_remote_addr(&format!("ws://{}", listener.local_addr()?))?;
+    let server_show_reopened_pin = Arc::clone(&show_reopened_pin);
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await?;
         let mut socket = tokio_tungstenite::accept_async(stream).await?;
@@ -66,6 +78,34 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
                 "initialize" => json!({"userAgent": "overview-test/1.0"}),
                 "thread/loaded/list" => json!({"data": [], "nextCursor": null}),
                 "thread/list" => {
+                    if params["sortKey"] == "section_position" {
+                        assert_eq!(params["sectionId"], codex_state::PINNED_THREAD_SECTION_ID);
+                        let interactive = params["sourceKinds"] == json!([]);
+                        let cursor = params["cursor"].as_str();
+                        let reopened = server_show_reopened_pin.load(Ordering::SeqCst);
+                        let data = if reopened && interactive && cursor.is_none() {
+                            vec![reopened_pin.clone()]
+                        } else if interactive && cursor == Some("pinned-page-2") {
+                            vec![rows[1].clone()]
+                        } else {
+                            Vec::new()
+                        };
+                        socket
+                            .send(Message::Text(
+                                json!({
+                                    "id": request.id,
+                                    "result": {
+                                        "data": data,
+                                        "nextCursor": (!reopened && interactive && cursor.is_none())
+                                            .then_some("pinned-page-2"),
+                                    }
+                                })
+                                .to_string()
+                                .into(),
+                            ))
+                            .await?;
+                        continue;
+                    }
                     assert_eq!(params["sortKey"], "recency_at");
                     assert_eq!(params["limit"], 10);
                     {
@@ -113,6 +153,7 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
     app.refresh_agents_overview_threads(&session);
     finish_overview_refresh(&mut app, &session, &mut rx).await;
     assert_eq!(app.agents_overview.threads.len(), 10);
+    assert_eq!(app.agents_overview.pinned_thread_ids, Some(vec![ids[1]]));
     assert!(app.agents_overview.discovery.has_more());
     app.track_agents_overview_notification(&ServerNotification::ThreadArchived(
         ThreadArchivedNotification {
@@ -162,6 +203,17 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
     finish_overview_refresh(&mut app, &session, &mut rx).await;
     assert_eq!(app.agents_overview.threads, expected);
     assert!(!app.agents_overview.discovery.has_more());
+    app.agents_overview.threads.clear();
+    app.agents_overview.pinned_thread_ids = Some(Vec::new());
+    app.agents_overview.refill_count = 0;
+    show_reopened_pin.store(true, Ordering::SeqCst);
+    app.refresh_agents_overview_threads(&session);
+    finish_overview_refresh(&mut app, &session, &mut rx).await;
+    assert_eq!(
+        app.agents_overview.pinned_thread_ids,
+        Some(vec![reopened_pin_id])
+    );
+    assert!(app.agents_overview.threads.contains_key(&reopened_pin_id));
     session.shutdown().await?;
     assert_eq!(
         server.await??,

@@ -503,6 +503,8 @@ pub struct TuiAgentsKeymap {
     pub delete: Option<KeybindingsSpec>,
     /// Hide the selected task until explicitly resumed or the TUI restarts.
     pub hide: Option<KeybindingsSpec>,
+    /// Pin or unpin the selected task in the shared sidebar section.
+    pub toggle_pin: Option<KeybindingsSpec>,
     /// Toggle grouping tasks by status or project.
     pub toggle_grouping: Option<KeybindingsSpec>,
 }

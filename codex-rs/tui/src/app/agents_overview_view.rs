@@ -12,6 +12,7 @@ use grouping::model_name;
 
 use super::agents_overview::AGENTS_OVERVIEW_VIEW_ID;
 use super::agents_overview_details::AgentsOverviewDetails;
+use super::agents_overview_discovery::supports_shared_pinning;
 use crate::app_event::AgentsOverviewAction;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -54,6 +55,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -181,6 +183,8 @@ pub(super) struct AgentsOverviewView {
     use_theme_colors: bool,
     pub(super) rows: Vec<AgentsOverviewRow>,
     project_groups: Vec<AgentsOverviewProjectGroup>,
+    pub(super) pinned_thread_ranks: Option<HashMap<ThreadId, usize>>,
+    pub(super) pin_action_pending: bool,
     selected: usize,
     state: Arc<Mutex<AgentsOverviewViewState>>,
     app_event_tx: AppEventSender,
@@ -251,6 +255,8 @@ impl AgentsOverviewView {
             use_theme_colors,
             rows,
             project_groups,
+            pinned_thread_ranks: None,
+            pin_action_pending: false,
             selected,
             state,
             app_event_tx,
@@ -302,44 +308,12 @@ impl AgentsOverviewView {
             .filter(|_| self.visible_indices().contains(&self.selected))
     }
 
-    fn visible_indices(&self) -> Vec<usize> {
-        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let search = state.search.to_lowercase();
-        let (_, status_group) = command_center::TASK_FILTERS[state.status_filter];
-        let mut visible = self
-            .rows
-            .iter()
-            .enumerate()
-            .filter_map(|(index, row)| {
-                let searchable = format!(
-                    "{} {} {}",
-                    row.thread.name.as_deref().unwrap_or_default(),
-                    row.thread.preview,
-                    row.thread.cwd.display(),
-                )
-                .to_lowercase();
-                ((search.is_empty() || searchable.contains(&search))
-                    && (state.rename_target == Some(row.thread_id)
-                        || status_group.is_none_or(|group| group == row.group)))
-                .then_some(index)
-            })
-            .collect::<Vec<_>>();
-        match state.grouping {
-            AgentsOverviewGrouping::Project => visible.sort_by_key(|index| {
-                (
-                    &self.project_groups[*index].key,
-                    std::cmp::Reverse(self.rows[*index].thread.updated_at),
-                )
-            }),
-            AgentsOverviewGrouping::Status => {}
-            AgentsOverviewGrouping::Model => visible.sort_by_key(|index| {
-                (
-                    model_name(&self.rows[*index].thread),
-                    std::cmp::Reverse(self.rows[*index].thread.updated_at),
-                )
-            }),
-        }
-        visible
+    fn can_toggle_selected_pin(&self) -> bool {
+        !self.pin_action_pending
+            && self.pinned_thread_ranks.is_some()
+            && self
+                .selected_row()
+                .is_some_and(|row| supports_shared_pinning(&row.thread.source))
     }
 
     fn move_selection(&mut self, forward: bool) {
@@ -680,6 +654,18 @@ impl BottomPaneView for AgentsOverviewView {
             };
             self.app_event_tx
                 .send(AppEvent::PersistAgentsOverviewGrouping(state.grouping));
+            return;
+        }
+        if self.agents_keymap.toggle_pin.is_pressed(key) {
+            if self.can_toggle_selected_pin()
+                && let (Some(ranks), Some(row)) = (&self.pinned_thread_ranks, self.selected_row())
+            {
+                let thread_id = row.thread_id;
+                let pinned = !ranks.contains_key(&thread_id);
+                self.pin_action_pending = true;
+                self.app_event_tx
+                    .send(AppEvent::ToggleAgentsOverviewPin { thread_id, pinned });
+            }
             return;
         }
         if self.agents_keymap.new_task.is_pressed(key) {

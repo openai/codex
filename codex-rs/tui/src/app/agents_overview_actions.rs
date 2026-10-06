@@ -12,10 +12,15 @@ use crate::chatwidget::ChatWidget;
 use crate::render::renderable::Renderable;
 use crate::tui;
 use crate::wrapping::word_wrap_lines;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadSectionMoveParams;
+use codex_app_server_protocol::ThreadSectionMoveResponse;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SubAgentSource;
+use codex_state::PINNED_THREAD_SECTION_ID;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -25,6 +30,7 @@ use std::collections::HashSet;
 use std::future::Future;
 use tokio_stream::Stream;
 use tokio_stream::StreamExt;
+use uuid::Uuid;
 
 struct LifecycleHeader(Vec<Line<'static>>);
 
@@ -104,6 +110,90 @@ async fn run_lifecycle_modal<T>(
 }
 
 impl App {
+    pub(super) fn toggle_agents_overview_pin(
+        &mut self,
+        app_server: &AppServerSession,
+        thread_id: ThreadId,
+        pinned: bool,
+    ) {
+        if self.agents_overview.pending_pin_change.is_some() {
+            return;
+        }
+        let request_id = Uuid::new_v4();
+        self.agents_overview.pending_pin_change = Some(request_id);
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = request_handle
+                .request_typed::<ThreadSectionMoveResponse>(ClientRequest::ThreadSectionMove {
+                    request_id: RequestId::String(Uuid::new_v4().to_string()),
+                    params: ThreadSectionMoveParams {
+                        thread_id: thread_id.to_string(),
+                        section_id: pinned.then(|| PINNED_THREAD_SECTION_ID.to_string()),
+                        before_thread_id: None,
+                    },
+                })
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string());
+            app_event_tx.send(AppEvent::AgentsOverviewPinToggled {
+                request_id,
+                thread_id,
+                pinned,
+                result,
+            });
+        });
+    }
+
+    pub(super) fn complete_agents_overview_pin(
+        &mut self,
+        app_server: &AppServerSession,
+        request_id: Uuid,
+        thread_id: ThreadId,
+        pinned: bool,
+        result: Result<(), String>,
+    ) {
+        if self.agents_overview.pending_pin_change != Some(request_id) {
+            return;
+        }
+        self.agents_overview.pending_pin_change = None;
+        match result {
+            Ok(()) => {
+                if let Some(pinned_thread_ids) = self.agents_overview.pinned_thread_ids.as_mut() {
+                    if pinned {
+                        if !pinned_thread_ids.contains(&thread_id) {
+                            pinned_thread_ids.push(thread_id);
+                        }
+                    } else {
+                        pinned_thread_ids.retain(|id| *id != thread_id);
+                    }
+                }
+            }
+            Err(error) => {
+                self.add_agents_overview_error(format!(
+                    "Failed to {} task: {error}",
+                    if pinned { "pin" } else { "unpin" }
+                ));
+            }
+        }
+        let restore_show_more = self.agents_overview.refresh_show_more;
+        if let Some(refresh) = self.agents_overview.refresh_task.take() {
+            refresh.abort();
+        }
+        self.agents_overview.request_id = None;
+        self.agents_overview.refresh_show_more = false;
+        self.agents_overview.refresh_notifications.clear();
+        let refresh_thread_ids =
+            std::mem::take(&mut self.agents_overview.active_refresh_thread_ids);
+        self.agents_overview
+            .refresh_thread_ids
+            .extend(refresh_thread_ids);
+        self.agents_overview.refresh_pending = false;
+        self.agents_overview.show_more_requested |= restore_show_more;
+        self.refresh_agents_overview_threads(app_server);
+        self.repaint_agents_overview();
+    }
+
     pub(super) fn confirm_agents_overview_action(
         &mut self,
         thread_id: ThreadId,
@@ -227,6 +317,8 @@ impl App {
                 refresh.abort();
             }
             self.agents_overview.request_id = None;
+            self.agents_overview.refresh_show_more = false;
+            self.agents_overview.active_refresh_thread_ids.clear();
             self.agents_overview
                 .view_state
                 .lock()

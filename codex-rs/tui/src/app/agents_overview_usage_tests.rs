@@ -103,6 +103,7 @@ async fn selected_usage_is_cached_and_account_changes_discard_old_results() -> R
             last_messages: HashMap::new(),
             recent_seed_complete: true,
             discovery: None,
+            pinned_thread_ids: None,
         }),
     );
     assert_eq!(

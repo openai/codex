@@ -634,6 +634,7 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                             },
                         })
                     } else if request.method == "thread/list"
+                        && params.is_some_and(|params| params["sortKey"] == "recency_at")
                         && std::mem::take(&mut reject_thread_list)
                     {
                         JSONRPCMessage::Error(JSONRPCError {
@@ -3297,6 +3298,7 @@ async fn agents_overview_seeds_loaded_threads_when_recent_listing_is_unavailable
         let mut sort_keys = list_requests
             .iter()
             .map(|params| params["sortKey"].as_str().unwrap())
+            .filter(|sort_key| *sort_key != "section_position")
             .collect::<Vec<_>>();
         sort_keys.sort_unstable();
         assert_eq!(sort_keys, expected_sort_keys);

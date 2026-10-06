@@ -4615,7 +4615,8 @@
               "resume": null,
               "search": null,
               "stop": null,
-              "toggle_grouping": null
+              "toggle_grouping": null,
+              "toggle_pin": null
             },
             "approval": {
               "approve": null,
@@ -5040,6 +5041,14 @@
             }
           ],
           "description": "Toggle grouping tasks by status or project."
+        },
+        "toggle_pin": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Pin or unpin the selected task in the shared sidebar section."
         }
       },
       "type": "object"
@@ -5569,7 +5578,8 @@
             "resume": null,
             "search": null,
             "stop": null,
-            "toggle_grouping": null
+            "toggle_grouping": null,
+            "toggle_pin": null
           }
         },
         "approval": {

@@ -284,6 +284,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
                 threads: HashMap::new(),
                 recent_seed_complete: false,
                 discovery: None,
+                pinned_thread_ids: None,
             }),
         );
         assert_eq!(app.agents_overview.visible_thread_ids.len(), 2);
@@ -436,6 +437,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
                 threads: stale_threads,
                 recent_seed_complete: true,
                 discovery: None,
+                pinned_thread_ids: None,
             }),
         );
         assert!(!app.agents_overview.visible_thread_ids.contains(&vanished));

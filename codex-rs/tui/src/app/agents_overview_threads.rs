@@ -5,6 +5,7 @@
 use super::App;
 use super::agents_overview::AGENTS_OVERVIEW_VIEW_ID;
 use super::agents_overview_details::preview_agent_message;
+use super::agents_overview_discovery::list_pinned_threads;
 use super::app_server_event_targets::ServerNotificationThreadTarget;
 use super::app_server_event_targets::server_notification_thread_target;
 use crate::AppServerTarget;
@@ -218,6 +219,7 @@ impl App {
     }
 
     pub(super) fn refresh_agents_overview_threads(&mut self, app_server: &AppServerSession) {
+        self.agents_overview.pin_refresh_requested = true;
         self.agents_overview.refresh_thread_ids.extend(
             self.agents_overview
                 .threads
@@ -266,16 +268,19 @@ impl App {
             && self.agents_overview.refresh_thread_ids.is_empty()
             && !self.agents_overview.show_more_requested
             && !(self.agents_overview.refill_count > 0 && self.agents_overview.discovery.has_more())
+            && !self.agents_overview.pin_refresh_requested
         {
             return;
         }
 
+        self.agents_overview.pin_refresh_requested = false;
         let request_id = Uuid::new_v4();
         self.agents_overview.request_id = Some(request_id);
         let initialized = self.agents_overview.initialized;
         let refill = self.agents_overview.refill_count;
         let show_more =
             refill == 0 && std::mem::take(&mut self.agents_overview.show_more_requested);
+        self.agents_overview.refresh_show_more = show_more;
         let discover =
             !initialized || show_more || (refill > 0 && self.agents_overview.discovery.has_more());
         let limit = if initialized && refill > 0 {
@@ -292,6 +297,7 @@ impl App {
             }
         });
         let mut thread_ids = std::mem::take(&mut self.agents_overview.refresh_thread_ids);
+        self.agents_overview.active_refresh_thread_ids = thread_ids.clone();
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         self.agents_overview
@@ -304,6 +310,23 @@ impl App {
                 let mut threads = HashMap::new();
                 let mut last_messages = HashMap::new();
                 let mut recent_seed_complete = true;
+                let pinned_thread_ids = match list_pinned_threads(&request_handle).await {
+                    Ok(Some(pinned_threads)) => {
+                        let mut ids = Vec::with_capacity(pinned_threads.len());
+                        for thread in pinned_threads {
+                            if let Ok(thread_id) = ThreadId::from_string(&thread.id) {
+                                ids.push(thread_id);
+                                threads.insert(thread_id, Some(thread));
+                            }
+                        }
+                        Some(Some(ids))
+                    }
+                    Ok(None) => Some(None),
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to list pinned agent threads");
+                        None
+                    }
+                };
                 if let Some(discovery) = &mut discovery {
                     let loaded = async {
                         if initialized {
@@ -423,6 +446,7 @@ impl App {
                     last_messages,
                     recent_seed_complete,
                     discovery,
+                    pinned_thread_ids,
                 })
             }
             .await;

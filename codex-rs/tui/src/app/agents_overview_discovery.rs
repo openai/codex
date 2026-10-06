@@ -12,10 +12,81 @@ use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_protocol::protocol::SubAgentSource;
+use codex_state::PINNED_THREAD_SECTION_ID;
 use std::collections::VecDeque;
 use uuid::Uuid;
 
 const PAGE_SIZE: u32 = 10;
+
+pub(crate) async fn list_pinned_threads(
+    handle: &AppServerRequestHandle,
+) -> Result<Option<Vec<Thread>>, String> {
+    let mut threads = Vec::new();
+    for source_kinds in [
+        Vec::new(),
+        vec![ThreadSourceKind::Exec, ThreadSourceKind::AppServer],
+    ] {
+        let mut cursor = None;
+        loop {
+            let result = handle
+                .request_typed::<ThreadListResponse>(ClientRequest::ThreadList {
+                    request_id: RequestId::String(Uuid::new_v4().to_string()),
+                    params: ThreadListParams {
+                        originators: None,
+                        cursor: cursor.clone(),
+                        limit: Some(100),
+                        sort_key: Some(ThreadSortKey::SectionPosition),
+                        sort_direction: None,
+                        model_providers: Some(Vec::new()),
+                        source_kinds: Some(source_kinds.clone()),
+                        archived: Some(false),
+                        section_id: Some(Some(PINNED_THREAD_SECTION_ID.to_string())),
+                        project_id: None,
+                        parent_thread_id: None,
+                        ancestor_thread_id: None,
+                        cwd: None,
+                        use_state_db_only: true,
+                        search_term: None,
+                    },
+                })
+                .await;
+            match result {
+                Ok(page) => {
+                    threads.extend(page.data.into_iter().filter(|thread| {
+                        is_overview_thread(thread) && supports_shared_pinning(&thread.source)
+                    }));
+                    let Some(next_cursor) = page.next_cursor else {
+                        break;
+                    };
+                    cursor = Some(next_cursor);
+                }
+                Err(TypedRequestError::Server { source, .. })
+                    if matches!(source.code, -32602..=-32600) =>
+                {
+                    return Ok(None);
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+    }
+    Ok(Some(threads))
+}
+
+fn is_overview_thread(thread: &Thread) -> bool {
+    !thread.ephemeral
+        && thread.parent_thread_id.is_none()
+        && !matches!(
+            thread.source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        )
+}
+
+pub(super) fn supports_shared_pinning(source: &SessionSource) -> bool {
+    matches!(
+        source,
+        SessionSource::Cli | SessionSource::VsCode | SessionSource::Exec | SessionSource::AppServer
+    ) || matches!(source, SessionSource::Custom(source) if matches!(source.as_str(), "atlas" | "chatgpt"))
+}
 
 #[derive(Clone, Debug)]
 struct SourcePage {
@@ -128,14 +199,8 @@ impl SourcePage {
                 Ok(page) => {
                     self.exhausted = page.next_cursor.is_none();
                     self.cursor = page.next_cursor;
-                    self.rows.extend(page.data.into_iter().filter(|thread| {
-                        !thread.ephemeral
-                            && thread.parent_thread_id.is_none()
-                            && !matches!(
-                                thread.source,
-                                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
-                            )
-                    }));
+                    self.rows
+                        .extend(page.data.into_iter().filter(is_overview_thread));
                     return true;
                 }
                 Err(error) => {

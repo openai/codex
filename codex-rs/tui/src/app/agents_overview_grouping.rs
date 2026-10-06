@@ -18,12 +18,65 @@ pub(super) fn model_name(thread: &Thread) -> &str {
 }
 
 impl AgentsOverviewView {
+    pub(super) fn is_pinned(&self, index: usize) -> bool {
+        self.pinned_thread_ranks
+            .as_ref()
+            .is_some_and(|ranks| ranks.contains_key(&self.rows[index].thread_id))
+    }
+
+    pub(super) fn visible_indices(&self) -> Vec<usize> {
+        let state = self.state();
+        let search = state.search.to_lowercase();
+        let (_, status_group) = super::command_center::TASK_FILTERS[state.status_filter];
+        let (mut pinned, mut visible): (Vec<_>, Vec<_>) = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                let searchable = format!(
+                    "{} {} {}",
+                    row.thread.name.as_deref().unwrap_or_default(),
+                    row.thread.preview,
+                    row.thread.cwd.display(),
+                )
+                .to_lowercase();
+                ((search.is_empty() || searchable.contains(&search))
+                    && (state.rename_target == Some(row.thread_id)
+                        || status_group.is_none_or(|group| group == row.group)))
+                .then_some(index)
+            })
+            .partition(|index| self.is_pinned(*index));
+        if let Some(ranks) = &self.pinned_thread_ranks {
+            pinned.sort_by_key(|index| ranks.get(&self.rows[*index].thread_id).copied());
+        }
+        match state.grouping {
+            AgentsOverviewGrouping::Project => visible.sort_by_key(|index| {
+                (
+                    &self.project_groups[*index].key,
+                    std::cmp::Reverse(self.rows[*index].thread.updated_at),
+                )
+            }),
+            AgentsOverviewGrouping::Status => {}
+            AgentsOverviewGrouping::Model => visible.sort_by_key(|index| {
+                (
+                    model_name(&self.rows[*index].thread),
+                    std::cmp::Reverse(self.rows[*index].thread.updated_at),
+                )
+            }),
+        }
+        pinned.extend(visible);
+        pinned
+    }
+
     pub(super) fn same_group(
         &self,
         grouping: AgentsOverviewGrouping,
         left: usize,
         right: usize,
     ) -> bool {
+        if self.is_pinned(left) || self.is_pinned(right) {
+            return self.is_pinned(left) && self.is_pinned(right);
+        }
         match grouping {
             AgentsOverviewGrouping::Project => {
                 self.project_groups[left].key == self.project_groups[right].key
