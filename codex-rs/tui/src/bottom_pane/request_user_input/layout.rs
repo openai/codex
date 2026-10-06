@@ -7,7 +7,7 @@ pub(super) struct LayoutSections {
     pub(super) progress_area: Rect,
     pub(super) question_area: Rect,
     // Wrapped question text lines to render in the question area.
-    pub(super) question_lines: Vec<String>,
+    pub(super) question_lines: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     pub(super) options_area: Rect,
     pub(super) notes_area: Rect,
     // Number of footer rows (status + hints).
@@ -63,7 +63,7 @@ impl RequestUserInputOverlay {
     fn layout_with_options(
         &self,
         args: OptionsLayoutArgs,
-        question_lines: &mut Vec<String>,
+        question_lines: &mut Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     ) -> LayoutPlan {
         let OptionsLayoutArgs {
             available_height,
@@ -206,7 +206,7 @@ impl RequestUserInputOverlay {
         question_height: u16,
         notes_pref_height: u16,
         footer_pref: u16,
-        question_lines: &mut Vec<String>,
+        question_lines: &mut Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     ) -> LayoutPlan {
         let required = question_height;
         if required > available_height {
@@ -226,7 +226,7 @@ impl RequestUserInputOverlay {
         &self,
         available_height: u16,
         question_height: u16,
-        question_lines: &mut Vec<String>,
+        question_lines: &mut Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     ) -> LayoutPlan {
         let max_question_height = available_height;
         let adjusted_question_height = question_height.min(max_question_height);

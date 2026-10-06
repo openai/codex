@@ -276,30 +276,15 @@ impl RequestUserInputOverlay {
         Paragraph::new(progress_line).render(sections.progress_area, buf);
 
         // Question prompt text.
-        let question_y = sections.question_area.y;
         let answered =
             self.is_question_answered(self.current_index(), &self.composer.current_text());
-        for (offset, line) in sections.question_lines.iter().enumerate() {
-            if question_y.saturating_add(offset as u16)
-                >= sections.question_area.y + sections.question_area.height
-            {
-                break;
-            }
-            let question_line = if answered {
-                Line::from(line.clone())
-            } else {
-                Line::from(line.clone()).fg(crate::style::accent_color())
-            };
-            Paragraph::new(question_line).render(
-                Rect {
-                    x: sections.question_area.x,
-                    y: question_y.saturating_add(offset as u16),
-                    width: sections.question_area.width,
-                    height: 1,
-                },
-                buf,
-            );
-        }
+        let style = if answered {
+            ratatui::style::Style::default()
+        } else {
+            ratatui::style::Style::default().fg(crate::style::accent_color())
+        };
+        crate::terminal_hyperlinks::HyperlinkParagraph::new(&sections.question_lines, style)
+            .render(sections.question_area, buf);
 
         // Build rows with selection markers for the shared selection renderer.
         let option_rows = self.option_rows();
