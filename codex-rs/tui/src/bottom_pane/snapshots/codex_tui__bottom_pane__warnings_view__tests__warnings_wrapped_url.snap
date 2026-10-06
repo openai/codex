@@ -1,0 +1,13 @@
+---
+source: tui/src/bottom_pane/warnings_view_tests.rs
+expression: "draw(&view, 32, 9)"
+---
+  Warnings · 1 of 2 · MCP · ex
+
+  Review https://github.com/
+  openai/codex/pull/12345?
+  diff=split before
+  continuing.
+
+
+  k keep & next · ⌃o copy

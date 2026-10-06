@@ -46,24 +46,31 @@ impl Renderable for WarningsView {
         }
         let lines: Vec<_> = details
             .lines()
-            .flat_map(|line| textwrap::wrap(line, usize::from(body.width.max(/*other*/ 1))))
+            .flat_map(|text| {
+                let source =
+                    crate::terminal_hyperlinks::annotate_web_urls_in_line(text.to_owned().into());
+                let wrapped =
+                    crate::wrapping::wrap_ranges_trim(text, usize::from(body.width.max(1)))
+                        .into_iter()
+                        .map(|range| crate::wrapping::WrappedLine {
+                            line: (&text[range.clone()]).into(),
+                            range,
+                            prefix_bytes: 0,
+                        })
+                        .collect();
+                crate::terminal_hyperlinks::remap_source_wrapped_line(&source, wrapped)
+            })
             .collect();
         let page_size = usize::from(body.height.max(/*other*/ 1));
         self.page_size.set(page_size);
         self.max_offset.set(lines.len().saturating_sub(page_size));
         let offset = self.offset.get().min(self.max_offset.get());
         self.offset.set(offset);
-        for (row, line) in lines
-            .iter()
-            .skip(offset)
-            .take(usize::from(body.height))
-            .enumerate()
-        {
-            Line::from(line.as_ref()).render(
-                Rect::new(body.x, body.y + row as u16, body.width, /*height*/ 1),
-                buf,
-            );
-        }
+        crate::terminal_hyperlinks::HyperlinkParagraph::new(
+            &lines[offset..],
+            ratatui::style::Style::default(),
+        )
+        .render(body, buf);
         // Plain k belongs to this viewer, including when configured as a chord prefix.
         let hint = |context, action| {
             self.keymap.primary_hint(context, action).filter(|hint| {
