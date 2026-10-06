@@ -10,6 +10,7 @@ use pretty_assertions::assert_eq;
 #[test]
 fn section_costs_keep_multimodal_payloads_separate() {
     let context = ComposedContext {
+        transcript_format: crate::TranscriptFormat::Line,
         sections: vec![
             SectionOutput {
                 id: "transcript",
@@ -94,6 +95,7 @@ fn section_estimate_bounds_the_delivered_message() {
     for text in ["x", "quoted \"text\"", "évidence"] {
         for count in 1..=40 {
             let context = ComposedContext {
+                transcript_format: crate::TranscriptFormat::Line,
                 sections: vec![SectionOutput {
                     id: "transcript",
                     delivery: SectionDelivery::UserContent(vec![

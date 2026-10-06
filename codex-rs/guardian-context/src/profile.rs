@@ -3,6 +3,7 @@
 //! in cacheable chunks. Hosts still own history snapshots and delivery cursors.
 //! User messages and manual approvals stay complete until whole-request admission.
 //! They may be shortened with explicit markers only during budget recovery.
+//! The host selects line or JSON rendering; JSON keeps embedded headers inside text.
 
 use codex_protocol::protocol::TruncationPolicy;
 
@@ -18,6 +19,7 @@ use crate::RenderedTranscript;
 use crate::Retention;
 use crate::TranscriptContent;
 use crate::TranscriptEntryLimits;
+use crate::TranscriptFormat;
 use crate::TranscriptRetentionConfig;
 use crate::TruncationObservation;
 
@@ -31,6 +33,7 @@ const MIN_RECENT_TOOL_ENTRIES: usize = 5;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContextProfile {
     pub target: ContextTarget,
+    pub transcript_format: TranscriptFormat,
     pub transcript: ConversationTranscriptConfig,
     pub retention: TranscriptRetentionConfig,
     pub include_images: bool,
@@ -59,6 +62,7 @@ impl ContextProfile {
     pub const fn synchronous() -> Self {
         Self {
             target: ContextTarget::Sync,
+            transcript_format: TranscriptFormat::Line,
             transcript: ConversationTranscriptConfig {
                 options: ConversationTranscriptOptions {
                     include_tool_calls: true,
@@ -84,6 +88,7 @@ impl ContextProfile {
     pub const fn asynchronous() -> Self {
         Self {
             target: ContextTarget::Async,
+            transcript_format: TranscriptFormat::Line,
             transcript: ConversationTranscriptConfig {
                 options: ConversationTranscriptOptions {
                     include_tool_calls: true,
@@ -145,15 +150,48 @@ impl ContextProfile {
                     .filter(|_| entry.kind == ConversationTranscriptEntryKind::User);
                 let (content, tokens, retained_bytes) = match &entry.content {
                     TranscriptContent::Text(text) => {
-                        let rendered = if let Some(retained) = retained_source {
-                            let order = &retained.order;
-                            let message = GuardianRootMessage::User(text.clone());
-                            format!(
-                                "[{number}] Retained source order: {order}\n{}{suffix}",
-                                message.render()
-                            )
-                        } else {
-                            format!("[{number}] {role}: {text}{suffix}")
+                        let rendered = match self.transcript_format {
+                            TranscriptFormat::Line => {
+                                if let Some(retained) = retained_source {
+                                    let order = &retained.order;
+                                    let message = GuardianRootMessage::User(text.clone());
+                                    format!(
+                                        "[{number}] Retained source order: {order}\n{}{suffix}",
+                                        message.render()
+                                    )
+                                } else {
+                                    format!("[{number}] {role}: {text}{suffix}")
+                                }
+                            }
+                            TranscriptFormat::Json => {
+                                let author = match &entry.kind {
+                                    ConversationTranscriptEntryKind::User => "user",
+                                    ConversationTranscriptEntryKind::Developer => "developer",
+                                    ConversationTranscriptEntryKind::Assistant
+                                    | ConversationTranscriptEntryKind::ProtectedAssistant
+                                    | ConversationTranscriptEntryKind::ToolCall(_)
+                                    | ConversationTranscriptEntryKind::Reasoning => "assistant",
+                                    ConversationTranscriptEntryKind::ToolOutput(_)
+                                    | ConversationTranscriptEntryKind::NodeReplToolOutput(_) => {
+                                        "tool"
+                                    }
+                                };
+                                let mut record = serde_json::json!({
+                                    "author": author,
+                                    "index": number,
+                                    "text": text,
+                                });
+                                if role != author {
+                                    record["label"] = role.into();
+                                }
+                                if let Some(retained) = retained_source {
+                                    record["retained_source_order"] =
+                                        retained.order.as_str().into();
+                                }
+                                // Keep the wire text stable when serde_json/preserve_order is enabled.
+                                record.sort_all_objects();
+                                format!("{record}{suffix}")
+                            }
                         };
                         let tokens = TruncationPolicy::Bytes(rendered.len()).token_budget();
                         (TranscriptContent::Text(rendered), tokens, text.len())
@@ -288,6 +326,7 @@ impl ContextProfile {
             item.retention = Retention::Required;
         }
         RenderedTranscript {
+            format: self.transcript_format,
             items,
             omission_note,
             truncations,

@@ -2,6 +2,7 @@
 //! Required action evidence is never truncated. Optional evidence leaves first;
 //! hosts may shorten historical instructions after compaction cannot make room.
 //! Every reduction reserves an omission notice and preserves source order.
+//! Historical JSON transcript records are reserialized after truncating their text.
 
 use std::collections::HashSet;
 
@@ -186,10 +187,19 @@ impl ComposedContext {
                     let target = original_tokens.saturating_sub(required_tokens - remaining);
                     let mut upper = TruncationPolicy::Bytes(text.len()).token_budget();
                     let mut lower = 32.min(upper);
-                    let mut shortened = crate::truncate_text(text, lower);
+                    let truncate = |limit| {
+                        if section.id == "conversation_transcript"
+                            && self.transcript_format == crate::TranscriptFormat::Json
+                        {
+                            crate::transcript_json::truncate_record(text, limit)
+                        } else {
+                            Ok(crate::truncate_text(text, limit))
+                        }
+                    };
+                    let mut shortened = truncate(lower)?;
                     while lower < upper {
                         let mid = lower + (upper - lower).div_ceil(2);
-                        let candidate = crate::truncate_text(text, mid);
+                        let candidate = truncate(mid)?;
                         if content_tokens(&ContentItem::InputText {
                             text: candidate.clone(),
                         }) <= target

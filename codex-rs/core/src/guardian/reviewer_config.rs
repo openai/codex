@@ -39,6 +39,7 @@ pub fn build_guardian_review_session_config(
         .as_deref()
         .unwrap_or(auto_review.policy_template);
     let mut instructions = GuardianPolicyInstructions::new(
+        guardian_config.guardian_transcript_mode,
         tenant_policy_config,
         extra_policy,
         policy_template,

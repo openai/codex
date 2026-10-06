@@ -149,6 +149,9 @@ pub struct GuardianV2ReviewScopeConfigToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GuardianV2ConfigToml {
+    /// Transcript encoding for synchronous Guardian review and asynchronous scoring. Defaults to line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript_mode: Option<codex_protocol::TranscriptFormat>,
     /// Classifier experiment override. Otherwise use the model default, then snapshots.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub async_classifier_mode: Option<codex_protocol::openai_models::AsyncClassifierMode>,

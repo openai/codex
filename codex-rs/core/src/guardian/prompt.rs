@@ -222,7 +222,11 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
             },
         ),
     };
-    let profile = ContextProfile::synchronous();
+    let mut profile = ContextProfile::synchronous();
+    profile.transcript_format = match parent_context {
+        Some(context) => context.turn().config.guardian_transcript_mode,
+        None => session.get_config().await.guardian_transcript_mode,
+    };
     let mut transcript = profile.render_transcript(transcript_entries, offset);
     if transcript_entries.is_empty() {
         transcript.items.push(Budgeted::required(

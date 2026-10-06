@@ -10,6 +10,7 @@ use codex_history::ResponseItemEnvelope;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_prompts::GuardianPolicyInstructions;
 use codex_prompts::ResolvedModelMessages;
+use codex_protocol::TranscriptFormat;
 use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::protocol::AgentStatus;
@@ -656,6 +657,7 @@ async fn guardian_review_session_config_resolves_policy_and_template(
         guardian_config.base_instructions,
         Some(
             GuardianPolicyInstructions::new(
+                TranscriptFormat::Line,
                 expected_policy,
                 "",
                 expected_template,

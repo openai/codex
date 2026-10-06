@@ -962,12 +962,7 @@ approvals_reviewer = "auto_review"
     let guardian_request = responses
         .requests()
         .into_iter()
-        .find(|request| {
-            request
-                .message_input_texts("developer")
-                .iter()
-                .any(|text| text.starts_with("You are judging one planned coding-agent action."))
-        })
+        .find(|request| request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian")
         .expect("expected a Guardian request for the app MCP approval");
     assert!(guardian_request.body_contains_text("calendar_create_event"));
     assert!(guardian_request.body_contains_text("Lunch"));

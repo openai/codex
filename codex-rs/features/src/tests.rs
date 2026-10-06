@@ -15,6 +15,16 @@ use toml::Table;
 use toml::Value as TomlValue;
 
 #[test]
+fn guardian_transcript_mode_rejects_invalid_values() {
+    for input in [
+        "[guardianv2]\ntranscript_mode = 'xml'",
+        "[guardianv2]\ntranscript_mode = true",
+    ] {
+        assert!(toml::from_str::<FeaturesToml>(input).is_err());
+    }
+}
+
+#[test]
 fn sleep_tool_config_rejects_unknown_mode() {
     assert!(toml::from_str::<FeaturesToml>("[sleep_tool]\nmode = 'off'").is_err());
 }
@@ -258,6 +268,7 @@ max_recent_non_user_entries = 12
     assert_eq!(
         features.guardianv2,
         Some(FeatureToml::Config(crate::GuardianV2ConfigToml {
+            transcript_mode: None,
             async_classifier_mode: None,
             async_classifier_conversation_token_limit: Some(120_000),
             enabled: Some(true),

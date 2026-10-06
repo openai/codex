@@ -175,6 +175,7 @@ impl ComposedContext {
     /// Keeps the bounded originals available to restore after reviewer compaction.
     pub fn retained_instructions(&self) -> Self {
         Self {
+            transcript_format: self.transcript_format,
             sections: self
                 .sections
                 .iter()

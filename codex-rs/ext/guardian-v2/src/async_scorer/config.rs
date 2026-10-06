@@ -41,6 +41,7 @@ pub(crate) struct GuardianV2Config {
     pub(crate) async_classifier_conversation_token_limit: usize,
     pub(crate) reasoning_effort: ReasoningEffort,
     pub(crate) max_action_tokens: usize,
+    /// Caps the configured prompt, excluding fixed transcript provenance instructions.
     /// No truncation limit is applied unless local or model configuration supplies one.
     pub(crate) max_classifier_instruction_tokens: Option<usize>,
     pub(crate) reuse_parent_compaction: bool,
@@ -62,7 +63,7 @@ impl GuardianV2Config {
 
     pub(crate) fn resolve(config: &Config) -> Result<Self, String> {
         let effective_config = config.config_layer_stack.effective_config();
-        let configured = match effective_config
+        let mut configured = match effective_config
             .get("features")
             .and_then(|features| features.get("guardianv2"))
             .cloned()
@@ -79,6 +80,7 @@ impl GuardianV2Config {
             None => GuardianV2ConfigToml::default(),
         };
 
+        configured.transcript_mode = Some(config.guardian_transcript_mode);
         let mut resolved = Self::from_overrides(configured.clone())?;
         // Config.features can be changed after loading, including for reviewer threads.
         let legacy = FeatureToml::Config(GuardianV2ConfigToml {
@@ -294,6 +296,7 @@ impl GuardianV2Config {
             max_parent_compaction_tokens,
             policy,
             transcript: TranscriptConfig {
+                format: configured.transcript_mode.unwrap_or_default(),
                 sources: transcript_config
                     .and_then(|transcript| transcript.sources.clone())
                     .unwrap_or_else(|| {
@@ -322,6 +325,7 @@ impl GuardianV2Config {
             extra_policy => Cow::Owned(format!("{policy}\n\n{extra_policy}")),
         };
         GuardianClassifierInstructions::new(
+            self.transcript.format,
             &self.classifier_instructions,
             &policy,
             CLASSIFICATION_OUTPUT_INSTRUCTIONS,

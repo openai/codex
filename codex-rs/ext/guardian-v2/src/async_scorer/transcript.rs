@@ -18,6 +18,7 @@ use codex_guardian_context::SectionHistory;
 use codex_guardian_context::SectionInput;
 use codex_guardian_context::TranscriptCursor;
 use codex_guardian_context::TranscriptEntryLimits;
+use codex_guardian_context::TranscriptFormat;
 use codex_guardian_context::TranscriptImageInput;
 use codex_guardian_context::TranscriptMode;
 use codex_guardian_context::TranscriptRetentionConfig;
@@ -60,6 +61,7 @@ pub(crate) type RenderedContext = ComposedContext;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TranscriptConfig {
+    pub(crate) format: TranscriptFormat,
     pub(crate) sources: Vec<TranscriptSource>,
     pub(crate) include_images: bool,
     pub(crate) max_message_entry_tokens: usize,
@@ -72,6 +74,7 @@ pub(crate) struct TranscriptConfig {
 impl Default for TranscriptConfig {
     fn default() -> Self {
         Self {
+            format: TranscriptFormat::Line,
             sources: vec![TranscriptSource::ToolCalls, TranscriptSource::ToolOutputs],
             include_images: ContextProfile::asynchronous().include_images,
             max_message_entry_tokens: MAX_MESSAGE_ENTRY_TOKENS,
@@ -113,6 +116,7 @@ impl TranscriptConfig {
         let history = SnapshotHistory(history);
         let profile = ContextProfile {
             target: ContextTarget::Async,
+            transcript_format: self.format,
             include_images: self.include_images,
             retention: TranscriptRetentionConfig {
                 max_message_transcript_tokens: self.max_message_transcript_tokens,

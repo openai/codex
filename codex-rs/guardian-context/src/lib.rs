@@ -72,6 +72,7 @@ pub use cursor::TranscriptCursor;
 pub use cursor::TranscriptMode;
 pub use cursor::TranscriptSelection;
 mod profile;
+pub use codex_protocol::TranscriptFormat;
 pub use composition::CollectedContext;
 pub use composition::ComposedContext;
 pub use composition::ContextPresentation;
@@ -104,6 +105,8 @@ pub use truncation::TruncationObservation;
 mod section;
 pub use permissions::PermissionContext;
 mod transcript;
+mod transcript_json;
+pub use transcript_json::TRANSCRIPT_JSON_INSTRUCTIONS;
 mod truncation;
 
 /// Consumer for which a Guardian context is composed.

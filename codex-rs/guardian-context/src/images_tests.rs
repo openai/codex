@@ -202,6 +202,7 @@ fn file_images_are_selected_from_history_sources() {
     .compose(
         ContextPresentation::Async,
         RenderedTranscript {
+            format: crate::TranscriptFormat::Line,
             items: Vec::new(),
             omission_note: None,
             truncations: Vec::new(),

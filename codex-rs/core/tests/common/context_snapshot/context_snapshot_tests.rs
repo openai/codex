@@ -660,6 +660,10 @@ fn rewritten_segments_share_one_tag_format_and_keep_compaction_data() {
             "You are judging one planned coding-agent action.\nRoutine guidance.",
         ),
         message(
+            "developer",
+            "# Transcript provenance\nRoutine guidance.\n\nYou are judging one planned coding-agent action.",
+        ),
+        message(
             "user",
             "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\nProject rules\n</INSTRUCTIONS>",
         ),
@@ -682,6 +686,7 @@ fn rewritten_segments_share_one_tag_format_and_keep_compaction_data() {
         [
             "<APPS_INSTRUCTIONS>",
             "<PLUGINS_INSTRUCTIONS>",
+            "<GUARDIAN_INSTRUCTIONS>",
             "<GUARDIAN_INSTRUCTIONS>",
             "<AGENTS_MD>",
             "<SUMMARIZATION_PROMPT>",

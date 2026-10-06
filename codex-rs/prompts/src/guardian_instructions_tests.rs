@@ -1,7 +1,9 @@
 //! Covers policy substitution, terminal output contracts, truncation, and rejection-text overrides.
 
 use codex_context_fragments::ContextualUserFragment;
+use codex_guardian_context::TRANSCRIPT_JSON_INSTRUCTIONS;
 use codex_guardian_context::truncate_text;
+use codex_protocol::TranscriptFormat;
 use pretty_assertions::assert_eq;
 
 use super::GuardianClassifierInstructions;
@@ -29,8 +31,15 @@ fn reviewer_policy_substitution_preserves_template_layout_and_appends_contract()
         ("", "Tenant policy.", "\n\nReview contract.\n"),
     ] {
         assert_eq!(
-            GuardianPolicyInstructions::new(policy, "", template, "Review contract.").render(),
-            expected,
+            GuardianPolicyInstructions::new(
+                TranscriptFormat::Json,
+                policy,
+                "",
+                template,
+                "Review contract."
+            )
+            .render(),
+            format!("{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{expected}"),
         );
     }
 }
@@ -56,13 +65,14 @@ fn reviewer_extra_policy_substitution_preserves_tenant_policy() {
     ] {
         assert_eq!(
             GuardianPolicyInstructions::new(
+                TranscriptFormat::Json,
                 "Tenant policy.",
                 extra_policy,
                 template,
                 "Review contract.",
             )
             .render(),
-            expected,
+            format!("{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{expected}"),
         );
     }
 }
@@ -71,13 +81,16 @@ fn reviewer_extra_policy_substitution_preserves_tenant_policy() {
 fn reviewer_policy_substitution_keeps_inserted_policy_text_literal() {
     assert_eq!(
         GuardianPolicyInstructions::new(
+            TranscriptFormat::Json,
             "Tenant says {{ tenant_policy_config }} and {{ extra_policy }}.",
             "Additional says {{ tenant_policy_config }} and {{ extra_policy }}.",
             "Tenant: {{ tenant_policy_config }}\nAdditional: {{ extra_policy }}",
             "Review contract.",
         )
         .render(),
-        "Tenant: Tenant says {{ tenant_policy_config }} and {{ extra_policy }}.\nAdditional: Additional says {{ tenant_policy_config }} and {{ extra_policy }}.\n\nReview contract.\n",
+        format!(
+            "{TRANSCRIPT_JSON_INSTRUCTIONS}\n\nTenant: Tenant says {{{{ tenant_policy_config }}}} and {{{{ extra_policy }}}}.\nAdditional: Additional says {{{{ tenant_policy_config }}}} and {{{{ extra_policy }}}}.\n\nReview contract.\n"
+        ),
     );
 }
 
@@ -101,18 +114,20 @@ fn classifier_policy_substitution_and_legacy_append_keep_one_terminal_contract_b
         ),
     ] {
         for max_tokens in [None, Some(20)] {
+            let expected = match max_tokens {
+                Some(max_tokens) => truncate_text(expected, max_tokens),
+                None => expected.to_owned(),
+            };
             assert_eq!(
                 GuardianClassifierInstructions::new(
+                    TranscriptFormat::Json,
                     instructions,
                     policy,
                     "Classifier contract.",
                     max_tokens,
                 )
                 .render(),
-                match max_tokens {
-                    Some(max_tokens) => truncate_text(expected, max_tokens),
-                    None => expected.to_owned(),
-                },
+                format!("{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{expected}"),
             );
         }
     }

@@ -112,6 +112,7 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
         .compose(
             presentation,
             crate::RenderedTranscript {
+                format: crate::TranscriptFormat::Line,
                 items: vec![],
                 omission_note: None,
                 truncations: vec![],

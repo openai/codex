@@ -8418,10 +8418,17 @@ experimental_policy_template = "Configured template: {{ tenant_policy_config }}"
     );
 }
 
+#[test_case::test_case("", codex_protocol::TranscriptFormat::Line; "default_line")]
+#[test_case::test_case("[guardianv2]\ntranscript_mode = 'line'", codex_protocol::TranscriptFormat::Line; "explicit_line")]
+#[test_case::test_case("[guardianv2]\ntranscript_mode = 'json'", codex_protocol::TranscriptFormat::Json; "explicit_json")]
 #[tokio::test]
-async fn load_config_uses_auto_review_guardian_policy_config_and_template() -> std::io::Result<()> {
+async fn load_config_uses_auto_review_guardian_policy_config_and_template(
+    features: &str,
+    expected_mode: codex_protocol::TranscriptFormat,
+) -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {
+        features: Some(toml::from_str(features).unwrap()),
         auto_review: Some(AutoReviewToml {
             circuit_break_action: None,
             policy: Some("  Use the user-configured guardian policy.  ".to_string()),
@@ -8447,11 +8454,13 @@ async fn load_config_uses_auto_review_guardian_policy_config_and_template() -> s
 
     assert_eq!(
         (
+            config.guardian_transcript_mode,
             config.guardian_policy_config.as_deref(),
             config.guardian_extra_policy.as_deref(),
             config.guardian_policy_template.as_deref(),
         ),
         (
+            expected_mode,
             Some("Use the user-configured guardian policy."),
             Some("Use the user-configured additional policy."),
             Some("Configured template: {{ tenant_policy_config }}"),

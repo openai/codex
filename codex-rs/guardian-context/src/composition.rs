@@ -24,6 +24,7 @@ use crate::ContextSection;
 use crate::ConversationTranscriptEntry;
 use crate::SectionError;
 use crate::TranscriptContent;
+use crate::TranscriptFormat;
 use crate::TruncationObservation;
 
 /// Consumer framing after the host has selected a full or delta transcript.
@@ -36,6 +37,7 @@ pub enum ContextPresentation<'a> {
 
 /// Host-selected transcript entries and omission notice, before request admission.
 pub struct RenderedTranscript {
+    pub format: TranscriptFormat,
     pub items: Vec<Budgeted<TranscriptContent>>,
     pub omission_note: Option<String>,
     pub truncations: Vec<TruncationObservation>,
@@ -64,6 +66,7 @@ pub(crate) struct SectionOutput {
 /// Ordered sections ready for a consumer's transport adapter.
 #[derive(Clone)]
 pub struct ComposedContext {
+    pub(crate) transcript_format: TranscriptFormat,
     pub(crate) sections: Vec<SectionOutput>,
     pub truncations: Vec<TruncationObservation>,
 }
@@ -123,6 +126,7 @@ impl CollectedContext {
             ),
         };
         let mut sections = Vec::new();
+        let transcript_format = transcript.format;
         let mut truncations = std::mem::take(&mut transcript.truncations);
         if let Some(intro) = intro {
             sections.push((
@@ -333,6 +337,7 @@ impl CollectedContext {
         }
         sections.sort_by_key(|(position, _)| *position);
         Ok(ComposedContext {
+            transcript_format,
             sections: sections.into_iter().map(|(_, section)| section).collect(),
             truncations,
         })
