@@ -6,6 +6,8 @@
 //! Sections preserve source-specific evidence and share prompt framing, while
 //! profiles retain the consumer-specific transcript policy. Shared full/delta selection
 //! proposes cursors; hosts own their admission, compaction and request lifecycles.
+//! JSON records cache their rendering and shared-estimator cost through admission.
+//! Line mode admits rendered text to preserve its existing whole-entry truncation.
 //! Registered contributors declare their scope once and are collected only for
 //! matching context consumers. History and collection settings are borrowed for
 //! each request so the default registry can be reused without retaining state.
@@ -76,7 +78,7 @@ pub use codex_protocol::TranscriptFormat;
 pub use composition::CollectedContext;
 pub use composition::ComposedContext;
 pub use composition::ContextPresentation;
-pub use composition::RenderedTranscript;
+pub use composition::PreparedTranscript;
 pub use profile::ContextProfile;
 mod authorization;
 mod entry;
@@ -105,8 +107,9 @@ pub use truncation::TruncationObservation;
 mod section;
 pub use permissions::PermissionContext;
 mod transcript;
-mod transcript_json;
-pub use transcript_json::TRANSCRIPT_JSON_INSTRUCTIONS;
+mod transcript_record;
+pub use transcript_record::TRANSCRIPT_JSON_INSTRUCTIONS;
+pub use transcript_record::TranscriptRecord;
 mod truncation;
 
 /// Consumer for which a Guardian context is composed.

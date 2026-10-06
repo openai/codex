@@ -4,7 +4,7 @@ use super::TranscriptImages;
 use crate::CollectedContext;
 use crate::ContextPresentation;
 use crate::ContextSection;
-use crate::RenderedTranscript;
+use crate::PreparedTranscript;
 use crate::composition::user_message;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -201,8 +201,7 @@ fn file_images_are_selected_from_history_sources() {
     }
     .compose(
         ContextPresentation::Async,
-        RenderedTranscript {
-            format: crate::TranscriptFormat::Line,
+        PreparedTranscript {
             items: Vec::new(),
             omission_note: None,
             truncations: Vec::new(),

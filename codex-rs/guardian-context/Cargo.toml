@@ -16,6 +16,7 @@ workspace = true
 codex-context-fragments = { workspace = true }
 codex-history = { workspace = true }
 codex-protocol = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]

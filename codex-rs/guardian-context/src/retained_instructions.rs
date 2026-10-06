@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use crate::BudgetPriority;
 use crate::Budgeted;
 use crate::ComposedContext;
+use crate::composition::SectionContent;
 use crate::composition::SectionDelivery;
 use codex_history::GuardianRetainedOmissions;
 use codex_history::ResponseItemEnvelope;
@@ -175,7 +176,6 @@ impl ComposedContext {
     /// Keeps the bounded originals available to restore after reviewer compaction.
     pub fn retained_instructions(&self) -> Self {
         Self {
-            transcript_format: self.transcript_format,
             sections: self
                 .sections
                 .iter()
@@ -217,19 +217,15 @@ impl ComposedContext {
                     || (previous.assistant_context && !notices.assistant_context)
                 {
                     if items.is_empty() {
-                        items.extend([START, END].map(|text| Budgeted::required(ContentItem::InputText {
-                            text: format!("{text}\n"),
-                        })));
+                        items.extend([START, END].map(|text| Budgeted::required(ContentItem::InputText { text: format!("{text}\n") }.into())));
                     }
-                    items.insert(/*index*/ 1.min(items.len()), Budgeted::required(ContentItem::InputText {
-                        text: format!("{AVAILABILITY_CHANGED}\n"),
-                    }));
+                    items.insert(/*index*/ 1.min(items.len()), Budgeted::required(ContentItem::InputText { text: format!("{AVAILABILITY_CHANGED}\n") }.into()));
                 }
                 return true;
             }
             !items.iter().all(|item| {
                 is_omission_notice(&item.content)
-                    || matches!(&item.content, ContentItem::InputText { text }
+                    || matches!(&item.content, SectionContent::Other(ContentItem::InputText { text })
                         if text.strip_suffix('\n').is_some_and(|text| text == START || text == LEGACY_START || text == END))
             })
         });
@@ -273,10 +269,10 @@ impl ComposedContext {
 }
 
 /// Call only with the retained section, before it is coalesced with untrusted evidence.
-pub(crate) fn omission_state(items: &[Budgeted<ContentItem>]) -> GuardianRetainedOmissions {
+pub(crate) fn omission_state(items: &[Budgeted<SectionContent>]) -> GuardianRetainedOmissions {
     let has_notice = |notice: &str| {
         items.iter().any(|item| {
-            let ContentItem::InputText { text } = &item.content else {
+            let SectionContent::Other(ContentItem::InputText { text }) = &item.content else {
                 return false;
             };
             text.strip_suffix('\n') == Some(notice)
@@ -289,8 +285,8 @@ pub(crate) fn omission_state(items: &[Budgeted<ContentItem>]) -> GuardianRetaine
 }
 
 // Only exact host-generated notice parts qualify within the retained section.
-fn is_omission_notice(item: &ContentItem) -> bool {
-    matches!(item, ContentItem::InputText { text }
+fn is_omission_notice(item: &SectionContent) -> bool {
+    matches!(item, SectionContent::Other(ContentItem::InputText { text })
         if text.strip_suffix('\n').is_some_and(|text|
             text == USER_OMISSION || text == GuardianRootMessage::IncompleteAssistantContext.render()))
 }

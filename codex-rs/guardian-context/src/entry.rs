@@ -40,10 +40,12 @@ impl ConversationTranscriptEntryKind {
     }
 }
 
-/// Text or an opaque native message that only the backend can decode.
+/// Collected text, a host-attributed record, or an opaque backend-native message.
 #[derive(Clone, PartialEq)]
 pub enum TranscriptContent {
     Text(String),
+    /// Host-attributed text prepared by the profile, rendered at delivery.
+    Record(crate::TranscriptRecord),
     AgentMessage(Box<codex_protocol::models::ResponseItem>),
 }
 
@@ -51,6 +53,7 @@ impl std::fmt::Debug for TranscriptContent {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Text(_) => "Text(..)",
+            Self::Record(_) => "Record(..)",
             Self::AgentMessage(_) => "AgentMessage(..)",
         })
     }

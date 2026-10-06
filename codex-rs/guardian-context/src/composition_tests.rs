@@ -31,7 +31,6 @@ fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
     };
     assert_eq!(
         ComposedContext {
-            transcript_format: crate::TranscriptFormat::Line,
             sections: sections(),
             truncations: Vec::new()
         }
@@ -53,7 +52,6 @@ fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
     );
     assert_eq!(
         ComposedContext {
-            transcript_format: crate::TranscriptFormat::Line,
             sections: sections(),
             truncations: Vec::new()
         }
@@ -71,10 +69,9 @@ fn long_text_and_file_image_delivery_is_lossless_bounded_and_fully_budgeted() {
         file_id: "file_123".to_owned(),
     };
     let context = ComposedContext {
-        transcript_format: crate::TranscriptFormat::Line,
         sections: vec![SectionOutput {
             id: "planned_action",
-            delivery: SectionDelivery::UserContent(vec![
+            delivery: SectionDelivery::user_content(vec![
                 Budgeted::required(ContentItem::InputText { text: text.clone() }),
                 Budgeted::required(ContentItem::InputImage {
                     image: file_image.clone(),
@@ -147,8 +144,7 @@ fn sender_restrictions_survive_budget_trimming_for_both_reviewers() {
         }
         .compose(
             presentation,
-            RenderedTranscript {
-                format: crate::TranscriptFormat::Line,
+            PreparedTranscript {
                 items: vec![Budgeted::optional(
                     crate::TranscriptContent::Text("old tool output ".repeat(/*n*/ 2_000)),
                     BudgetPriority::Tool,
@@ -181,9 +177,11 @@ fn sender_restrictions_survive_budget_trimming_for_both_reviewers() {
         };
         assert_eq!(
             items,
-            vec![Budgeted::required(ContentItem::InputText {
-                text: sender[0].clone()
-            })]
+            vec![Budgeted::required(SectionContent::Other(
+                ContentItem::InputText {
+                    text: sender[0].clone()
+                }
+            ))]
         );
         assert!(matches!(
             context.enforce_budget(

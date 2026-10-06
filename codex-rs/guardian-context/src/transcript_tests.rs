@@ -549,7 +549,7 @@ fn encrypted_messages_preserve_order_and_budget_for_both_reviewers() {
             ContextPresentation::SyncFull {
                 session_id: "worker",
             },
-            profile.render_transcript(&entries, /*entry_number_offset*/ 0),
+            profile.prepare_transcript(&entries, /*entry_number_offset*/ 0),
         )
         .unwrap();
         assert_eq!(

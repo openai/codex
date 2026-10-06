@@ -194,7 +194,7 @@ impl CollectedTranscript {
                 (entries, offset, ContextPresentation::AsyncDelta)
             }
         };
-        let transcript = self.profile.render_transcript(entries, offset);
+        let transcript = self.profile.prepare_transcript(entries, offset);
         let context = self.context.compose(presentation, transcript)?;
         Ok((context, next))
     }

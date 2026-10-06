@@ -92,8 +92,7 @@ fn review_delivery_requires_complete_host_metadata_and_preserves_distinct_comple
         let delivered = context
             .compose(
                 crate::ContextPresentation::Async,
-                crate::RenderedTranscript {
-                    format: crate::TranscriptFormat::Line,
+                crate::PreparedTranscript {
                     items: Vec::new(),
                     omission_note: None,
                     truncations: Vec::new(),

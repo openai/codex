@@ -28,7 +28,7 @@ fn required_context(text: String) -> ComposedContext {
     )
     .expect("collect required context");
     let transcript = ContextProfile::synchronous()
-        .render_transcript(context.transcript_entries(), /*entry_number_offset*/ 0);
+        .prepare_transcript(context.transcript_entries(), /*entry_number_offset*/ 0);
     context
         .compose(
             ContextPresentation::SyncFull {

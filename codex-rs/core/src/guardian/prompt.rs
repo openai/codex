@@ -227,7 +227,7 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         Some(context) => context.turn().config.guardian_transcript_mode,
         None => session.get_config().await.guardian_transcript_mode,
     };
-    let mut transcript = profile.render_transcript(transcript_entries, offset);
+    let mut transcript = profile.prepare_transcript(transcript_entries, offset);
     if transcript_entries.is_empty() {
         transcript.items.push(Budgeted::required(
             codex_guardian_context::TranscriptContent::Text(placeholder.to_owned()),
@@ -247,7 +247,7 @@ pub(crate) fn render_guardian_transcript_entries(
     entries: &[ConversationTranscriptEntry],
 ) -> (Vec<String>, Option<String>) {
     let mut transcript =
-        ContextProfile::synchronous().render_transcript(entries, /*entry_number_offset*/ 0);
+        ContextProfile::synchronous().prepare_transcript(entries, /*entry_number_offset*/ 0);
     if entries.is_empty() {
         transcript.items.push(Budgeted::required(
             codex_guardian_context::TranscriptContent::Text(
@@ -261,6 +261,7 @@ pub(crate) fn render_guardian_transcript_entries(
             .into_iter()
             .map(|item| match item.content {
                 codex_guardian_context::TranscriptContent::Text(text) => text,
+                codex_guardian_context::TranscriptContent::Record(record) => record.to_string(),
                 codex_guardian_context::TranscriptContent::AgentMessage(_) => {
                     panic!("expected text transcript")
                 }

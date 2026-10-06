@@ -24,12 +24,16 @@ fn delta_cursor_tracks_collected_entries_across_sliding_window_retention() {
     let TranscriptSelection::Full(initial) = selection else {
         panic!("first request must select a full transcript");
     };
-    let initial = profile.render_transcript(initial, /*entry_number_offset*/ 0);
+    let initial = profile.prepare_transcript(initial, /*entry_number_offset*/ 0);
     assert_eq!(
         initial
             .items
             .into_iter()
-            .map(|item| item.content)
+            .map(|item| match item.content {
+                crate::TranscriptContent::Record(record) =>
+                    crate::TranscriptContent::Text(record.to_string()),
+                content => content,
+            })
             .collect::<Vec<_>>(),
         vec![crate::TranscriptContent::Text(
             "[3] assistant: third\n".to_owned()
@@ -45,13 +49,17 @@ fn delta_cursor_tracks_collected_entries_across_sliding_window_retention() {
     else {
         panic!("an append must select only the new entry");
     };
-    let delta = profile.render_transcript(delta, offset);
+    let delta = profile.prepare_transcript(delta, offset);
     assert_eq!(
         (
             delta
                 .items
                 .into_iter()
-                .map(|item| item.content)
+                .map(|item| match item.content {
+                    crate::TranscriptContent::Record(record) =>
+                        crate::TranscriptContent::Text(record.to_string()),
+                    content => content,
+                })
                 .collect::<Vec<_>>(),
             next_cursor,
         ),

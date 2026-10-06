@@ -10,6 +10,7 @@ use codex_guardian_context::PlannedActionKind;
 use codex_guardian_context::PreviousReviews;
 use codex_guardian_context::SectionHistory;
 use codex_guardian_context::SectionInput;
+use codex_guardian_context::TranscriptFormat;
 use codex_guardian_context::TrustedSkills;
 use codex_guardian_context::TrustedTool;
 use codex_guardian_context::default_registry;
@@ -66,12 +67,20 @@ fn changing_retained_context_and_attestations_preserves_history_before_the_curre
     );
     // Legacy review history and Felix's retained, thread-owned history use the
     // same composer. Retained assistant growth and eviction must also preserve its prefix.
-    for retained in [None, Some(retained)] {
+    for (format, retained) in [TranscriptFormat::Line, TranscriptFormat::Json]
+        .into_iter()
+        .flat_map(|format| {
+            [None, Some(retained.clone())]
+                .into_iter()
+                .map(move |retained| (format, retained))
+        })
+    {
         let mut history = History {
             items: vec![user_message(vec![instruction.to_owned()])],
             retained,
         };
-        let profile = ContextProfile::asynchronous();
+        let mut profile = ContextProfile::asynchronous();
+        profile.transcript_format = format;
         let mut previous_prefix = None;
         for generation in 0..10 {
             let assistant_text = format!("Assistant progress {generation}.");
@@ -124,7 +133,7 @@ fn changing_retained_context_and_attestations_preserves_history_before_the_curre
                     node_repl: None,
                 })
                 .unwrap();
-            let transcript = profile.render_transcript(
+            let transcript = profile.prepare_transcript(
                 collected.transcript_entries(),
                 /*entry_number_offset*/ 0,
             );
