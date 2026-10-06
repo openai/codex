@@ -186,22 +186,32 @@ async fn reconnect_reuses_registration_until_url_is_rejected() -> Result<()> {
         static_registry_auth_provider(),
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     )?;
-    let environment_task = tokio::spawn(run_remote_environment(
-        config,
-        ExecServerRuntimeOptions::new(
-            std::env::current_exe()?,
-            /*codex_linux_sandbox_exe*/ None,
-        )?,
-    ));
+    let environment_task =
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(run_remote_environment(
+            config,
+            ExecServerRuntimeOptions::new(
+                std::env::current_exe()?,
+                /*codex_linux_sandbox_exe*/ None,
+            )?,
+        )));
 
     let (first_socket, _peer_addr) = timeout(Duration::from_secs(5), listener.accept()).await??;
     let mut first_websocket = accept_async(first_socket).await?;
     first_websocket.close(None).await?;
 
-    // An ordinary disconnect retries the same URL without registering again.
-    let (mut rejected_socket, _peer_addr) =
+    // An ordinary disconnect and a stalled upgrade both retry without registering again.
+    let (mut stalled_socket, _peer_addr) =
         timeout(Duration::from_secs(5), listener.accept()).await??;
     let mut request = [0u8; 4096];
+    assert!(stalled_socket.read(&mut request).await? > 0);
+    tokio::time::pause();
+    tokio::time::advance(DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT).await;
+    tokio::time::resume();
+
+    // Keep the stalled socket open until the executor starts its next attempt.
+    let (mut rejected_socket, _peer_addr) =
+        timeout(Duration::from_secs(5), listener.accept()).await??;
+    drop(stalled_socket);
     let _ = rejected_socket.read(&mut request).await?;
     rejected_socket
         .write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
@@ -209,8 +219,8 @@ async fn reconnect_reuses_registration_until_url_is_rejected() -> Result<()> {
     rejected_socket.shutdown().await?;
 
     // The 4xx response discards the old registration before this attempt.
-    let (third_socket, _peer_addr) = timeout(Duration::from_secs(5), listener.accept()).await??;
-    let _third_websocket = accept_async(third_socket).await?;
+    let (final_socket, _peer_addr) = timeout(Duration::from_secs(5), listener.accept()).await??;
+    let _final_websocket = accept_async(final_socket).await?;
     registry.verify().await;
 
     environment_task.abort();

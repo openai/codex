@@ -4,6 +4,8 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 
+use super::ReconnectBackoff;
+use super::STABLE_CONNECTION_DURATION;
 use super::reconnect_delay;
 
 #[test]
@@ -22,4 +24,25 @@ fn reconnect_jitter_stays_within_each_backoff_window() {
             reconnect_delay(backoff, /*random_sample*/ 2)
         );
     }
+}
+
+#[test]
+fn flapping_connections_retain_backoff_until_a_stable_session() {
+    let mut backoff = ReconnectBackoff::new();
+    for seconds in [1, 2, 4, 8, 16, 30, 30] {
+        backoff.connection_closed(STABLE_CONNECTION_DURATION - Duration::from_millis(1));
+        assert_eq!(
+            backoff.next_delay(/*random_sample*/ 0),
+            Duration::from_millis(seconds * 500)
+        );
+    }
+    backoff.connection_closed(STABLE_CONNECTION_DURATION);
+    assert_eq!(
+        backoff.next_delay(/*random_sample*/ 0),
+        Duration::from_millis(500)
+    );
+    assert_eq!(
+        backoff.next_delay(/*random_sample*/ 0),
+        Duration::from_secs(1)
+    );
 }

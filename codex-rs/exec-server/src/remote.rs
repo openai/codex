@@ -709,7 +709,7 @@ async fn run_remote_environment_connections<H: NoiseStreamHandler>(
     let identity = NoiseChannelIdentity::generate().map_err(|error| {
         ExecServerError::Protocol(format!("failed to generate Noise relay identity: {error}"))
     })?;
-    let mut backoff = Duration::from_secs(1);
+    let mut backoff = reconnect_backoff::ReconnectBackoff::new();
     let mut response = client
         .register_environment_with_retry(&config.environment_id, &identity.public_key())
         .await?;
@@ -727,7 +727,7 @@ async fn run_remote_environment_connections<H: NoiseStreamHandler>(
         .await
         {
             Ok(websocket) => {
-                backoff = Duration::from_secs(1);
+                let connected_at = tokio::time::Instant::now();
                 let executor_registration_id = response.executor_registration_id.clone();
                 info!(
                     noise_event = "rendezvous_connection",
@@ -749,6 +749,7 @@ async fn run_remote_environment_connections<H: NoiseStreamHandler>(
                     },
                 )
                 .await;
+                backoff.connection_closed(connected_at.elapsed());
                 info!(
                     noise_event = "rendezvous_connection",
                     noise_outcome = "disconnected",
@@ -794,12 +795,7 @@ async fn run_remote_environment_connections<H: NoiseStreamHandler>(
             }
         }
 
-        sleep(reconnect_backoff::reconnect_delay(
-            backoff,
-            uuid::Uuid::new_v4().as_u64_pair().1,
-        ))
-        .await;
-        backoff = (backoff * 2).min(Duration::from_secs(30));
+        sleep(backoff.next_delay(uuid::Uuid::new_v4().as_u64_pair().1)).await;
     }
 }
 
@@ -820,7 +816,7 @@ async fn connect_rendezvous(
     http_client_factory: &HttpClientFactory,
 ) -> Result<WebSocketConnection, tokio_tungstenite::tungstenite::Error> {
     let started_at = Instant::now();
-    let result = async {
+    let result = tokio::time::timeout(DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT, async {
         let mut request = url.into_client_request()?;
         request.headers_mut().extend(current_rendezvous_headers());
         request
@@ -836,8 +832,16 @@ async fn connect_rendezvous(
             .connect(request, noise_relay_websocket_config())
             .await
             .map(|(websocket, _)| websocket)
-    }
-    .await;
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(tokio_tungstenite::tungstenite::Error::Io(
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "rendezvous websocket connection timed out",
+            ),
+        ))
+    });
     let result_name = if result.is_ok() { "success" } else { "error" };
     tracing::Span::current().record("result", result_name);
     telemetry.remote_rendezvous_completed(result_name, started_at.elapsed());

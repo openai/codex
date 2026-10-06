@@ -15,6 +15,7 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_util::task::AbortOnDropHandle;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -46,9 +47,10 @@ use crate::relay_proto::relay_message_frame;
 #[cfg(test)]
 use crate::server::ConnectionProcessor;
 use crate::telemetry::ExecutorRegistration;
-use crate::websocket_pong_watchdog::WEBSOCKET_PONG_TIMEOUT;
 use crate::websocket_pong_watchdog::WEBSOCKET_PONG_TIMEOUT_REASON;
-use crate::websocket_pong_watchdog::WebSocketPongWatchdog;
+
+#[path = "relay_writer.rs"]
+mod writer;
 
 const RELAY_MESSAGE_FRAME_VERSION: u32 = 1;
 const MAX_ACTIVE_NOISE_RELAY_STREAMS: usize = 128;
@@ -526,77 +528,17 @@ where
     let executor_registration =
         ExecutorRegistration::new(environment_id.clone(), executor_registration_id.clone())
             .map(Arc::new);
-    let (mut websocket_sink, mut websocket_stream) = stream.split();
-    let (physical_outgoing_tx, mut physical_outgoing_rx) =
-        mpsc::channel::<Vec<u8>>(CHANNEL_CAPACITY);
+    let (websocket_sink, mut websocket_stream) = stream.split();
+    let (physical_outgoing_tx, physical_outgoing_rx) = mpsc::channel::<Vec<u8>>(CHANNEL_CAPACITY);
     let (closed_stream_tx, mut closed_stream_rx) =
         mpsc::channel::<ClosedNoiseVirtualStream>(MAX_ACTIVE_NOISE_RELAY_STREAMS);
-    let (pong_tx, mut pong_rx) = mpsc::channel(1);
+    let (pong_tx, pong_rx) = mpsc::channel(1);
     // Use a separate writer so this loop never waits on the channel it drains.
-    let mut physical_writer_task = tokio::spawn(async move {
-        let mut keepalive = tokio::time::interval_at(
-            tokio::time::Instant::now() + WEBSOCKET_KEEPALIVE_INTERVAL,
-            WEBSOCKET_KEEPALIVE_INTERVAL,
-        );
-        keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut pong_watchdog = WebSocketPongWatchdog::new(WEBSOCKET_PONG_TIMEOUT);
-        let pong_deadline = tokio::time::sleep(WEBSOCKET_PONG_TIMEOUT);
-        tokio::pin!(pong_deadline);
-        loop {
-            let message = tokio::select! {
-                pong = pong_rx.recv() => {
-                    let Some(()) = pong else {
-                        break RendezvousDisconnectReason::LocalShutdown;
-                    };
-                    pong_watchdog.received_pong();
-                    continue;
-                }
-                _ = &mut pong_deadline, if pong_watchdog.deadline().is_some() => {
-                    match pong_rx.try_recv() {
-                        Ok(()) => {
-                            pong_watchdog.received_pong();
-                            continue;
-                        }
-                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                            break RendezvousDisconnectReason::PongTimeout;
-                        }
-                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                            break RendezvousDisconnectReason::LocalShutdown;
-                        }
-                    }
-                }
-                _ = keepalive.tick(), if pong_watchdog.deadline().is_none() => {
-                    Message::Ping(Vec::new().into())
-                }
-                encoded = physical_outgoing_rx.recv() => {
-                    let Some(encoded) = encoded else {
-                        break RendezvousDisconnectReason::LocalShutdown;
-                    };
-                    Message::Binary(encoded.into())
-                }
-            };
-            let is_keepalive_ping = matches!(message, Message::Ping(_));
-            let write_deadline = pong_watchdog.write_deadline(tokio::time::Instant::now());
-            match tokio::time::timeout_at(write_deadline, websocket_sink.send(message)).await {
-                Ok(Ok(())) => {
-                    if is_keepalive_ping {
-                        pong_watchdog.ping_sent(tokio::time::Instant::now());
-                        if let Some(deadline) = pong_watchdog.deadline() {
-                            pong_deadline.as_mut().reset(deadline);
-                        }
-                    }
-                }
-                Ok(Err(error)) => {
-                    warn!("Noise multiplexed environment websocket write failed: {error}");
-                    break RendezvousDisconnectReason::WriteError;
-                }
-                Err(_) => {
-                    warn!("Noise multiplexed environment websocket write timed out");
-                    break RendezvousDisconnectReason::WriteError;
-                }
-            }
-        }
-    });
+    let mut physical_writer_task = AbortOnDropHandle::new(tokio::spawn(writer::run(
+        websocket_sink,
+        physical_outgoing_rx,
+        pong_rx,
+    )));
     let mut streams: HashMap<String, NoiseVirtualStream<H>> = HashMap::new();
     let mut pending_handshakes: HashMap<String, PendingHandshake> = HashMap::new();
     let mut validation_tasks: JoinSet<HarnessKeyValidationResult> = JoinSet::new();
@@ -1113,9 +1055,11 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn multiplexed_environment_sends_keepalive() -> anyhow::Result<()> {
-        let (client_websocket, mut server_websocket) = websocket_pair().await?;
+    #[tokio::test(start_paused = true)]
+    async fn multiplexed_environment_sends_keepalive_and_cancels_blocked_writer()
+    -> anyhow::Result<()> {
+        let (client_websocket, control, mut outbound_rx) =
+            ControlledWebSocket::new(/*write_ready*/ true);
         let runtime_paths = crate::ExecServerRuntimeOptions::new(
             std::env::current_exe()?,
             /*codex_linux_sandbox_exe*/ None,
@@ -1130,10 +1074,17 @@ mod tests {
             AllowHarnessKeyValidator,
         ));
 
-        read_keepalive_ping(&mut server_websocket).await?;
+        assert!(matches!(outbound_rx.next().await, Some(Message::Ping(_))));
+        control.set_write_blocked();
+        control.send_inbound(Message::Pong(Vec::new().into()))?;
+        control.wait_for_blocked_write().await?;
 
         environment_task.abort();
         let _ = environment_task.await;
+        assert_eq!(
+            timeout(Duration::from_millis(1), outbound_rx.next()).await?,
+            None
+        );
         Ok(())
     }
 
