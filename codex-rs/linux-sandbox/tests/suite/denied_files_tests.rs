@@ -13,15 +13,20 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_cargo_bin::write_executable;
 use pretty_assertions::assert_eq;
 
 enum DeniedFileRules {
     ExactPaths,
     Globs,
+    GlobsWithProtectedRg,
+    GlobsWithNativeFallback,
 }
 
 #[test_case::test_case(DeniedFileRules::ExactPaths; "exact_paths")]
 #[test_case::test_case(DeniedFileRules::Globs; "globs")]
+#[test_case::test_case(DeniedFileRules::GlobsWithProtectedRg; "globs_with_protected_rg")]
+#[test_case::test_case(DeniedFileRules::GlobsWithNativeFallback; "globs_with_native_fallback")]
 #[tokio::test]
 async fn sandbox_starts_with_multiple_denied_files(rules: DeniedFileRules) {
     if should_skip_bwrap_tests().await {
@@ -29,7 +34,18 @@ async fn sandbox_starts_with_multiple_denied_files(rules: DeniedFileRules) {
         return;
     }
 
-    let temp = tempfile::tempdir().expect("tempdir");
+    let use_controlled_rg_path = matches!(
+        rules,
+        DeniedFileRules::GlobsWithProtectedRg | DeniedFileRules::GlobsWithNativeFallback
+    );
+    let temp = if use_controlled_rg_path {
+        // Bazel can mount the default temp directory noexec.
+        tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+            .or_else(|_| tempfile::tempdir())
+    } else {
+        tempfile::tempdir()
+    }
+    .expect("tempdir");
     let workspace = AbsolutePathBuf::try_from(temp.path()).expect("absolute workspace");
     std::fs::create_dir(workspace.join("nested")).expect("create nested directory");
     std::fs::write(workspace.join("AGENTS.md"), "project instructions\n")
@@ -56,13 +72,71 @@ async fn sandbox_starts_with_multiple_denied_files(rules: DeniedFileRules) {
         FileSystemSandboxEntry::new(helper_dir.into(), FileSystemAccessMode::Read),
         FileSystemSandboxEntry::new(workspace.clone().into(), FileSystemAccessMode::Write),
     ];
+    let mut env = create_env_from_core_vars();
+    let rg_fixture = if use_controlled_rg_path {
+        let fixture = tempfile::tempdir_in(temp.path().parent().expect("workspace parent"))
+            .expect("rg fixture");
+        write_executable(
+            workspace.join("rg").as_path(),
+            "#!/bin/sh\n: > \"$CODEX_TEST_REJECTED_RG_MARKER\"\nexit 0\n",
+        )
+        .expect("write workspace rg fixture");
+        if matches!(rules, DeniedFileRules::GlobsWithProtectedRg) {
+            write_executable(
+                &fixture.path().join("rg"),
+                r#"#!/bin/sh
+: > "$CODEX_TEST_PROTECTED_RG_MARKER"
+printf '%s\000' "$CODEX_TEST_DENIED_PATH_0" "$CODEX_TEST_DENIED_PATH_1" "$CODEX_TEST_DENIED_PATH_2"
+"#,
+            )
+            .expect("write protected rg fixture");
+        }
+        // Keep bubblewrap available without adding an unrelated rg to the test PATH.
+        if let Some(bwrap) = codex_sandboxing::find_system_bwrap_in_path(
+            &PermissionProfile::read_only().file_system_sandbox_policy(),
+            &std::env::current_dir().expect("current directory"),
+        ) {
+            std::os::unix::fs::symlink(bwrap, fixture.path().join("bwrap"))
+                .expect("link system bubblewrap");
+        }
+        env.insert(
+            "PATH".to_string(),
+            std::env::join_paths([workspace.as_path(), fixture.path()])
+                .expect("join PATH")
+                .into_string()
+                .expect("UTF-8 PATH"),
+        );
+        for (name, path) in [
+            (
+                "CODEX_TEST_REJECTED_RG_MARKER",
+                fixture.path().join("rejected-rg-ran"),
+            ),
+            (
+                "CODEX_TEST_PROTECTED_RG_MARKER",
+                fixture.path().join("protected-rg-ran"),
+            ),
+            ("CODEX_TEST_DENIED_PATH_0", denied_files[0].0.to_path_buf()),
+            ("CODEX_TEST_DENIED_PATH_1", denied_files[1].0.to_path_buf()),
+            ("CODEX_TEST_DENIED_PATH_2", denied_files[2].0.to_path_buf()),
+        ] {
+            env.insert(
+                name.to_string(),
+                path.to_str().expect("UTF-8 fixture path").to_string(),
+            );
+        }
+        Some(fixture)
+    } else {
+        None
+    };
     match rules {
         DeniedFileRules::ExactPaths => {
             entries.extend(denied_files.iter().map(|(path, _)| {
                 FileSystemSandboxEntry::new(path.clone().into(), FileSystemAccessMode::Deny)
             }));
         }
-        DeniedFileRules::Globs => {
+        DeniedFileRules::Globs
+        | DeniedFileRules::GlobsWithProtectedRg
+        | DeniedFileRules::GlobsWithNativeFallback => {
             for suffix in ["**/*.key", "**/.env.local"] {
                 entries.push(FileSystemSandboxEntry::new(
                     FileSystemPath::GlobPattern {
@@ -82,7 +156,7 @@ async fn sandbox_starts_with_multiple_denied_files(rules: DeniedFileRules) {
             "/bin/sh",
             "-c",
             r#"set -eu
-cat AGENTS.md
+/bin/cat AGENTS.md
 for blocked in one.key nested/two.key .env.local; do
     if (: < "$blocked") 2>/dev/null; then
         printf 'read unexpectedly allowed: %s\n' "$blocked" >&2
@@ -94,12 +168,12 @@ for blocked in one.key nested/two.key .env.local; do
     fi
 done
 printf 'allowed\n' > allowed.txt
-cat allowed.txt
+/bin/cat allowed.txt
 "#,
         ],
         workspace.clone(),
         permission_profile,
-        create_env_from_core_vars(),
+        env,
         LONG_TIMEOUT_MS,
         /*use_legacy_landlock*/ false,
     )
@@ -122,6 +196,16 @@ cat allowed.txt
         assert_eq!(
             std::fs::read_to_string(path).expect("read host dummy file"),
             *contents
+        );
+    }
+    if let Some(fixture) = rg_fixture {
+        assert!(
+            !fixture.path().join("rejected-rg-ran").exists(),
+            "writable rg ran before confinement"
+        );
+        assert_eq!(
+            fixture.path().join("protected-rg-ran").exists(),
+            matches!(rules, DeniedFileRules::GlobsWithProtectedRg),
         );
     }
 }
