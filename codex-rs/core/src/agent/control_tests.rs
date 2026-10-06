@@ -50,6 +50,8 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
+use codex_protocol::error::AgentErrorContext;
+use codex_protocol::error::CodexErrKind;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
@@ -94,7 +96,10 @@ use codex_thread_store::ThreadStore;
 use codex_utils_path_uri::PathUri;
 use core_test_support::responses::strip_response_item_ids;
 use pretty_assertions::assert_eq;
+use std::future::Future;
 use std::sync::RwLock;
+use std::task::Context;
+use std::task::Waker;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::sleep;
@@ -627,6 +632,165 @@ async fn on_event_updates_status_from_turn_aborted() {
 async fn on_event_updates_status_from_shutdown_complete() {
     let status = agent_status_from_event(&EventMsg::ShutdownComplete);
     assert_eq!(status, Some(AgentStatus::Shutdown));
+}
+
+#[tokio::test]
+async fn spawn_failure_context_distinguishes_execution_and_residency_capacity() {
+    let mut harness = AgentControlHarness::new().await;
+    harness
+        .config
+        .multi_agent_v2
+        .max_concurrent_threads_per_session = 2;
+    harness
+        .control
+        .runtime
+        .agent_execution_limiter
+        .initialize(/*max_threads*/ 1);
+    let source = SessionSource::SubAgent(SubAgentSource::Other("worker".to_string()));
+    let running = harness
+        .control
+        .execution_guard(MultiAgentVersion::V2, &source);
+    let execution_error = harness
+        .control
+        .ensure_execution_capacity(MultiAgentVersion::V2, &source)
+        .expect_err("running turn fills execution capacity");
+    drop(running);
+    harness
+        .control
+        .ensure_execution_capacity(MultiAgentVersion::V2, &source)
+        .expect("execution capacity released");
+
+    let state = harness.control.runtime.upgrade().unwrap();
+    let membership = harness.control.runtime.admit_start().unwrap();
+    let _resident = harness
+        .control
+        .reserve_v2_residency_slot(
+            &state,
+            &harness.config,
+            &membership,
+            /*protected_thread_id*/ None,
+        )
+        .await
+        .expect("first pending resident fits");
+    let residency_error = match harness
+        .control
+        .reserve_v2_residency_slot(
+            &state,
+            &harness.config,
+            &membership,
+            /*protected_thread_id*/ None,
+        )
+        .await
+    {
+        Ok(_) => panic!("pending resident fills residency capacity"),
+        Err(err) => err,
+    };
+    assert_eq!(
+        [execution_error, residency_error].map(|err| (
+            err.agent_context(),
+            CodexErrKind::from(&err),
+            err.to_string(),
+        )),
+        [
+            (
+                Some(AgentErrorContext::ExecutionCapacity),
+                CodexErrKind::AgentLimitReached,
+                "agent thread limit reached".to_string()
+            ),
+            (
+                Some(AgentErrorContext::ResidencyCapacity),
+                CodexErrKind::AgentLimitReached,
+                "agent thread limit reached".to_string()
+            ),
+        ],
+    );
+}
+
+#[tokio::test]
+async fn spawn_failure_context_survives_manager_and_fork_errors() {
+    let harness = AgentControlHarness::new().await;
+    let manager_error = LocalAgentControl::default()
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello"),
+            /*session_source*/ None,
+        )
+        .await
+        .expect_err("missing manager");
+    let fork_error = harness
+        .control
+        .spawn_agent_internal(
+            harness.config.clone(),
+            spawn::SpawnInitialInput::UserInput(text_input("hello")),
+            Some(SessionSource::SubAgent(SubAgentSource::Other(
+                "worker".to_string(),
+            ))),
+            SpawnAgentOptions {
+                fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("fork requires a parent spawn call id");
+    assert_eq!(
+        [manager_error, fork_error].map(|err| (err.agent_context(), CodexErrKind::from(&err))),
+        [
+            (
+                Some(AgentErrorContext::ManagerUnavailable),
+                CodexErrKind::UnsupportedOperation
+            ),
+            (Some(AgentErrorContext::ForkHistory), CodexErrKind::Fatal),
+        ],
+    );
+}
+
+#[tokio::test]
+async fn spawn_failure_context_preserves_shutdown_during_child_startup() {
+    let harness = AgentControlHarness::new().await;
+    let state = harness.control.runtime.upgrade().expect("live manager");
+    let spawn = harness.control.spawn_agent(
+        harness.config.clone(),
+        text_input("hello"),
+        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::new(),
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        })),
+    );
+    tokio::pin!(spawn);
+    let shutdown = {
+        // Block parent lookup after outer admission. Poll synchronously so the guard
+        // never crosses an await, including the one hidden inside futures::poll!.
+        let _threads = state.threads.write().await;
+        assert!(
+            spawn
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        harness.control.runtime.request_shutdown()
+    };
+    let error = spawn
+        .await
+        .expect_err("child admission must reject shutdown");
+    assert_eq!(
+        (
+            error.agent_context(),
+            CodexErrKind::from(&error),
+            error.to_string(),
+        ),
+        (
+            Some(AgentErrorContext::RuntimeShutdown),
+            CodexErrKind::InvalidRequest,
+            "agent runtime is shutting down".to_string(),
+        ),
+    );
+    shutdown
+        .wait()
+        .await
+        .expect("spawn releases its membership");
 }
 
 #[tokio::test]

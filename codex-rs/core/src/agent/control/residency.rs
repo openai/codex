@@ -6,6 +6,7 @@ use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
+use codex_protocol::error::AgentErrorContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -119,7 +120,8 @@ impl V2Residency {
             {
                 return Err(CodexErr::new(CodexErrorDetails::AgentLimitReached {
                     max_threads: capacity,
-                }));
+                })
+                .with_agent_context(AgentErrorContext::ResidencyCapacity));
             }
         }
     }

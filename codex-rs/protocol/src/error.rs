@@ -30,6 +30,10 @@ use strum_macros::EnumDiscriminants;
 use thiserror::Error;
 use tokio::task::JoinError;
 
+#[path = "agent_error.rs"]
+mod agent;
+pub use agent::AgentErrorContext;
+
 pub type Result<T> = std::result::Result<T, CodexErr>;
 
 /// Limit UI error messages to a reasonable size while keeping useful context.
@@ -73,12 +77,14 @@ pub enum SandboxErr {
 pub struct CodexErr {
     details: CodexErrorDetails,
     retry_after: Option<RetryAfter>,
+    agent_context: Option<AgentErrorContext>,
 }
 
 /// The semantic category and diagnostic payload for a [`CodexErr`].
 #[derive(Error, Debug, EnumDiscriminants)]
 #[strum_discriminants(name(CodexErrKind))]
-#[strum_discriminants(derive(serde::Serialize))]
+#[strum_discriminants(derive(serde::Serialize, strum_macros::IntoStaticStr))]
+#[strum_discriminants(strum(serialize_all = "snake_case"))]
 #[strum_discriminants(serde(rename_all = "snake_case"))]
 #[strum_discriminants(doc = "The payload-free semantic category used for analytics.")]
 pub enum CodexErrorDetails {
@@ -239,6 +245,7 @@ impl From<CodexErrorDetails> for CodexErr {
         Self {
             details,
             retry_after: None,
+            agent_context: None,
         }
     }
 }
@@ -303,6 +310,7 @@ macro_rules! codex_err_unit_constructors {
             pub const $variant: Self = Self {
                 details: CodexErrorDetails::$variant,
                 retry_after: None,
+                agent_context: None,
             };
         )*
     };

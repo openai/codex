@@ -27,6 +27,7 @@ use codex_extension_api::ExtensionDataInit;
 use codex_features::Feature;
 use codex_history::ResponseItemEnvelope;
 use codex_prompts::ResolvedModelMessages;
+use codex_protocol::error::AgentErrorContext;
 use codex_protocol::intersect_effective_permission_profiles;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_thread_store::PersistContext;
@@ -764,17 +765,16 @@ impl LocalAgentControl {
             fork_context,
             child_create,
         } = match (session_source, options.fork_mode.as_ref(), inheritance) {
-            (Some(session_source), Some(_), inheritance) => {
-                Box::pin(self.spawn_forked_thread(
-                    &state,
-                    config,
-                    session_source,
-                    &options,
-                    inheritance,
-                    multi_agent_version,
-                ))
-                .await?
-            }
+            (Some(session_source), Some(_), inheritance) => Box::pin(self.spawn_forked_thread(
+                &state,
+                config,
+                session_source,
+                &options,
+                inheritance,
+                multi_agent_version,
+            ))
+            .await
+            .map_err(|err| err.with_agent_context(AgentErrorContext::ForkHistory))?,
             (Some(session_source), None, inheritance) => {
                 let (history_mode, dynamic_tools) = if let Some(parent_thread_id) =
                     options.parent_thread_id
@@ -815,7 +815,8 @@ impl LocalAgentControl {
                     inheritance.exec_policy,
                     environments,
                 ))
-                .await?;
+                .await
+                .map_err(|err| err.with_agent_context(AgentErrorContext::ChildStartup))?;
                 SpawnedThreadResult {
                     new_thread,
                     fork_context: None,
@@ -824,8 +825,9 @@ impl LocalAgentControl {
             }
             (None, _, _) => {
                 let child_create_started_at = Instant::now();
-                let new_thread =
-                    Box::pin(state.spawn_new_thread(config.clone(), self.clone())).await?;
+                let new_thread = Box::pin(state.spawn_new_thread(config.clone(), self.clone()))
+                    .await
+                    .map_err(|err| err.with_agent_context(AgentErrorContext::ChildStartup))?;
                 SpawnedThreadResult {
                     new_thread,
                     fork_context: None,
@@ -909,7 +911,8 @@ impl LocalAgentControl {
         match initial_input {
             SpawnInitialInput::UserInput(input) => {
                 self.send_input(new_thread.thread_id, input, start_options)
-                    .await?;
+                    .await
+                    .map_err(|err| err.with_agent_context(AgentErrorContext::InputAdmission))?;
             }
             SpawnInitialInput::InterAgentCommunication(communication, context) => {
                 self.send_inter_agent_communication_after_capacity_check(
@@ -919,7 +922,8 @@ impl LocalAgentControl {
                     context,
                     start_options,
                 )
-                .await?;
+                .await
+                .map_err(|err| err.with_agent_context(AgentErrorContext::InputAdmission))?;
             }
         }
         let input_admission = input_admission_started_at.elapsed();
@@ -1295,7 +1299,8 @@ impl LocalAgentControl {
                 /*environments*/ None,
                 thread_extension_init,
             )
-            .await?;
+            .await
+            .map_err(|err| err.with_agent_context(AgentErrorContext::ChildStartup))?;
         let child_create = child_create_started_at.elapsed();
         Ok(SpawnedThreadResult {
             new_thread,

@@ -1,6 +1,7 @@
 use crate::agent::types::AgentMetadata;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::error::AgentErrorContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
@@ -92,9 +93,10 @@ impl AgentRegistry {
     ) -> Result<SpawnReservation> {
         if let Some(max_threads) = max_threads {
             if !self.try_increment_spawned(max_threads) {
-                return Err(CodexErr::new(CodexErrorDetails::AgentLimitReached {
-                    max_threads,
-                }));
+                return Err(
+                    CodexErr::new(CodexErrorDetails::AgentLimitReached { max_threads })
+                        .with_agent_context(AgentErrorContext::RegistryCapacity),
+                );
             }
         } else {
             self.total_count.fetch_add(1, Ordering::AcqRel);
@@ -302,7 +304,8 @@ impl AgentRegistry {
         match active_agents.agent_tree.entry(agent_path.to_string()) {
             Entry::Occupied(_) => Err(CodexErr::UnsupportedOperation(format!(
                 "agent path `{agent_path}` already exists"
-            ))),
+            ))
+            .with_agent_context(AgentErrorContext::DuplicatePath)),
             Entry::Vacant(entry) => {
                 entry.insert(AgentMetadata {
                     agent_path: Some(agent_path.clone()),
@@ -364,6 +367,7 @@ impl SpawnReservation {
             .reserve_agent_nickname(names, preferred)
             .ok_or_else(|| {
                 CodexErr::UnsupportedOperation("no available agent nicknames".to_string())
+                    .with_agent_context(AgentErrorContext::NicknameUnavailable)
             })?;
         self.reserved_agent_nickname = Some(agent_nickname.clone());
         Ok(agent_nickname)

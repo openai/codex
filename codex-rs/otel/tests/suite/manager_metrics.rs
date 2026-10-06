@@ -3,6 +3,7 @@ use crate::harness::build_metrics_with_defaults;
 use crate::harness::find_metric;
 use crate::harness::histogram_data;
 use crate::harness::latest_metrics;
+use codex_otel::MULTI_AGENT_SPAWN_FAILURE_METRIC;
 use codex_otel::PLUGIN_INSTALL_ELICITATION_SENT_METRIC;
 use codex_otel::PLUGIN_INSTALL_SUGGESTION_METRIC;
 use codex_otel::Result;
@@ -12,6 +13,8 @@ use codex_otel::TOOL_CALL_DURATION_METRIC;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::ToolName;
+use codex_protocol::error::AgentErrorContext;
+use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::SessionSource;
 use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::MetricData;
@@ -360,5 +363,65 @@ fn manager_records_plugin_install_elicitation_sent_metric() -> Result<()> {
         BTreeMap::from([("tool_type".to_string(), "plugin".to_string())])
     );
 
+    Ok(())
+}
+
+#[test]
+fn spawn_failure_metrics_preserve_reason_and_bound_diagnostic_labels() -> Result<()> {
+    let (metrics, exporter) = build_metrics_with_defaults(&[])?;
+    let telemetry = SessionTelemetry::new(
+        ThreadId::new(),
+        "gpt-5.1",
+        "gpt-5.1",
+        /*account_id*/ None,
+        /*account_email*/ None,
+        /*auth_mode*/ None,
+        "test_originator".to_string(),
+        /*log_user_prompts*/ false,
+        "tty".to_string(),
+        SessionSource::Cli,
+    )
+    .with_metrics_without_metadata_tags(metrics)
+    .with_product_sku(Some("codex"));
+    let mut expected = BTreeMap::new();
+    for (context, detail) in [
+        (Some(AgentErrorContext::ChildStartup), "child_startup"),
+        (None, "unknown"),
+    ] {
+        // Distinct messages and correlation IDs must aggregate into the same bounded series.
+        for id in ["private-first", "private-second"] {
+            let mut err = CodexErr::from(std::io::Error::other(id));
+            if let Some(context) = context {
+                err = err
+                    .with_agent_context(context)
+                    .with_agent_context(AgentErrorContext::ForkHistory);
+            }
+            telemetry.record_multi_agent_spawn_failure("internal", &err, id, id, "all", "v2");
+        }
+        expected.insert(
+            BTreeMap::from([
+                ("reason".to_string(), "internal".to_string()),
+                ("detail".to_string(), detail.to_string()),
+                ("error_kind".to_string(), "io".to_string()),
+                ("fork_mode".to_string(), "all".to_string()),
+                ("multi_agent_version".to_string(), "v2".to_string()),
+                ("product_sku".to_string(), "codex".to_string()),
+            ]),
+            2,
+        );
+    }
+    telemetry.shutdown_metrics()?;
+    let resource_metrics = latest_metrics(&exporter);
+    let counter = find_metric(&resource_metrics, MULTI_AGENT_SPAWN_FAILURE_METRIC)
+        .expect("spawn failure counter");
+    let AggregatedMetrics::U64(MetricData::Sum(sum)) = counter.data() else {
+        panic!("expected spawn failure counter");
+    };
+    assert_eq!(
+        sum.data_points()
+            .map(|point| (attributes_to_map(point.attributes()), point.value()))
+            .collect::<BTreeMap<_, _>>(),
+        expected,
+    );
     Ok(())
 }

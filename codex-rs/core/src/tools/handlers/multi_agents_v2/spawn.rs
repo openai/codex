@@ -211,6 +211,8 @@ async fn handle_spawn_agent(
                 &turn.session_telemetry,
                 turn.config.apps_mcp_product_sku.as_deref(),
                 &err,
+                &call_id,
+                &turn.sub_id,
                 fork_mode.as_ref(),
                 MultiAgentVersion::V2,
             );

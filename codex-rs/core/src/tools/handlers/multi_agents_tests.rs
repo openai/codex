@@ -361,6 +361,8 @@ async fn spawn_agent_limit_failure_emits_bounded_metric() {
             ))
             .collect::<BTreeMap<_, _>>(),
         BTreeMap::from([
+            ("detail".to_string(), "registry_capacity".to_string()),
+            ("error_kind".to_string(), "agent_limit_reached".to_string()),
             ("fork_mode".to_string(), "none".to_string()),
             ("multi_agent_version".to_string(), "v1".to_string()),
             ("product_sku".to_string(), "codex".to_string()),

@@ -3,6 +3,7 @@
 
 use super::LocalAgentControl;
 use crate::agent::types::AgentExecutionGuard;
+use codex_protocol::error::AgentErrorContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -42,9 +43,10 @@ impl LocalAgentControl {
         if self.runtime.agent_execution_limiter.has_capacity() {
             Ok(())
         } else {
-            Err(CodexErr::new(CodexErrorDetails::AgentLimitReached {
-                max_threads,
-            }))
+            Err(
+                CodexErr::new(CodexErrorDetails::AgentLimitReached { max_threads })
+                    .with_agent_context(AgentErrorContext::ExecutionCapacity),
+            )
         }
     }
 

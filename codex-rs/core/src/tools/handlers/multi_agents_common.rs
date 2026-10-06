@@ -79,6 +79,8 @@ pub(crate) fn record_collab_spawn_failure(
     telemetry: &SessionTelemetry,
     product_sku: Option<&str>,
     err: &CodexErr,
+    call_id: &str,
+    turn_id: &str,
     fork_mode: Option<&SpawnAgentForkMode>,
     multi_agent_version: MultiAgentVersion,
 ) {
@@ -101,7 +103,14 @@ pub(crate) fn record_collab_spawn_failure(
     telemetry
         .clone()
         .with_product_sku(product_sku)
-        .record_multi_agent_spawn_failure(reason, fork_mode, multi_agent_version);
+        .record_multi_agent_spawn_failure(
+            reason,
+            err,
+            call_id,
+            turn_id,
+            fork_mode,
+            multi_agent_version,
+        );
 }
 
 pub(crate) fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionCallError {

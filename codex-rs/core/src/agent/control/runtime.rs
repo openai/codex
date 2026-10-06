@@ -14,6 +14,7 @@ use arc_swap::ArcSwapOption;
 use codex_extension_api::ThreadInstructionsProvider;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::error::AgentErrorContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use std::sync::Arc;
@@ -185,9 +186,10 @@ impl AgentControlInit {
 impl LocalAgentRuntime {
     pub(crate) fn admit_start(&self) -> CodexResult<AgentTreeMembership> {
         if self.shutdown_state.members.is_closed() {
-            return Err(CodexErr::InvalidRequest(
-                "agent runtime is shutting down".to_owned(),
-            ));
+            return Err(
+                CodexErr::InvalidRequest("agent runtime is shutting down".to_owned())
+                    .with_agent_context(AgentErrorContext::RuntimeShutdown),
+            );
         }
         let membership = AgentTreeMembership {
             state: Arc::clone(&self.shutdown_state),
@@ -196,9 +198,10 @@ impl LocalAgentRuntime {
         // Closing a TaskTracker does not reject new tokens. Recheck so a start racing with
         // shutdown is either admitted before the fence or rejected after it.
         if self.shutdown_state.members.is_closed() {
-            return Err(CodexErr::InvalidRequest(
-                "agent runtime is shutting down".to_owned(),
-            ));
+            return Err(
+                CodexErr::InvalidRequest("agent runtime is shutting down".to_owned())
+                    .with_agent_context(AgentErrorContext::RuntimeShutdown),
+            );
         }
         Ok(membership)
     }
