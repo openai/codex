@@ -443,8 +443,24 @@ pub(super) async fn unload_thread_without_subscribers(
     thread_state_manager.remove_thread_state(thread_id).await;
 
     tokio::spawn(async move {
-        match wait_for_thread_shutdown(&thread).await {
-            ThreadShutdownResult::Complete => {
+        // The deadline bounds our warning, not background cleanup. Keep polling the
+        // same future so even delayed shutdown submission can eventually finish.
+        let shutdown = thread.shutdown_and_wait();
+        tokio::pin!(shutdown);
+        let result = match tokio::time::timeout(Duration::from_secs(/*secs*/ 10), &mut shutdown)
+            .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                warn!(
+                    event.name = "codex.app_server.thread_shutdown_slow",
+                    "thread {thread_id} shutdown is taking longer than expected; continuing to wait"
+                );
+                shutdown.await
+            }
+        };
+        match result {
+            Ok(()) => {
                 // A delayed unload can finish after thread/revert replaces this runtime under
                 // the same thread ID. Only the runtime that scheduled this unload may remove it.
                 if thread_manager
@@ -467,13 +483,9 @@ pub(super) async fn unload_thread_without_subscribers(
                     .await;
                 pending_thread_unloads.lock().await.remove(&thread_id);
             }
-            ThreadShutdownResult::SubmitFailed => {
+            Err(_) => {
                 pending_thread_unloads.lock().await.remove(&thread_id);
                 warn!("failed to submit Shutdown to thread {thread_id}");
-            }
-            ThreadShutdownResult::TimedOut => {
-                pending_thread_unloads.lock().await.remove(&thread_id);
-                warn!("thread {thread_id} shutdown timed out; leaving thread loaded");
             }
         }
     });

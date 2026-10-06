@@ -149,7 +149,10 @@ async fn code_mode_model_output_uses_structured_host_timing(
         .await?;
     let _: TurnStartResponse = app_server.read_response(start_id).await?;
     let host_timing = app_server
-        .wait_for_json_log_event("codex.code_mode.host_timing")
+        .wait_for_json_log_event(
+            "codex.code_mode.host_timing",
+            Duration::from_secs(/*secs*/ 10),
+        )
         .await?;
     // Hold only the app-server after the host outcome, so local elapsed time
     // cannot round to the same displayed duration as the host measurement.
@@ -179,7 +182,7 @@ async fn code_mode_model_output_uses_structured_host_timing(
     assert_eq!(host_fields["call_id"], "timed-call");
     assert_eq!(host_fields["tool_name"], tool_name);
     let handler_timing = app_server
-        .wait_for_json_log_event("codex.tool_call")
+        .wait_for_json_log_event("codex.tool_call", Duration::from_secs(/*secs*/ 10))
         .await?;
     let handler_fields = &handler_timing["fields"];
     let handler_duration_ms = handler_fields["handler_duration_ms"]

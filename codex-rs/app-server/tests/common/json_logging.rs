@@ -26,8 +26,14 @@ impl JsonLogCapture {
         self.updated.notify_one();
     }
 
-    pub(crate) async fn wait_for_event(&self, event_name: &str) -> Result<Value> {
-        let mut events = self.wait_for_events(event_name, /*count*/ 1).await?;
+    pub(crate) async fn wait_for_event(
+        &self,
+        event_name: &str,
+        timeout: Duration,
+    ) -> Result<Value> {
+        let mut events = self
+            .wait_for_events(event_name, /*count*/ 1, timeout)
+            .await?;
         Ok(events.remove(0))
     }
 
@@ -35,8 +41,9 @@ impl JsonLogCapture {
         &self,
         event_name: &str,
         count: usize,
+        timeout: Duration,
     ) -> Result<Vec<Value>> {
-        let result = tokio::time::timeout(Duration::from_secs(10), async {
+        let result = tokio::time::timeout(timeout, async {
             loop {
                 let updated = self.updated.notified();
                 let events = self

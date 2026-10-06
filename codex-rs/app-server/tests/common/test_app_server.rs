@@ -243,12 +243,13 @@ impl TestAppServer {
         })
     }
 
-    /// Waits for a JSON stderr event whose structured `event.name` field matches.
+    /// Waits up to `timeout` for a JSON stderr event whose structured `event.name` field matches.
     pub async fn wait_for_json_log_event(
         &self,
         event_name: &str,
+        timeout: Duration,
     ) -> anyhow::Result<serde_json::Value> {
-        self.json_logs.wait_for_event(event_name).await
+        self.json_logs.wait_for_event(event_name, timeout).await
     }
 
     async fn new_with_program_env_and_args(

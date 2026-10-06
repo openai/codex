@@ -625,7 +625,7 @@ async fn app_server_emits_structured_tool_call_timing_event() -> Result<()> {
     .await??;
 
     let mut tool_call = app_server
-        .wait_for_json_log_event("codex.tool_call")
+        .wait_for_json_log_event("codex.tool_call", Duration::from_secs(/*secs*/ 10))
         .await?;
     let tool_call_object = tool_call
         .as_object_mut()

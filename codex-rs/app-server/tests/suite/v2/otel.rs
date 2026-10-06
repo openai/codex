@@ -101,7 +101,10 @@ async fn account_switch_reloads_telemetry_collectors_and_preserves_trace_context
     assert_eq!(response, LoginAccountResponse::ChatgptAuthTokens {});
     timeout(
         TEST_TIMEOUT,
-        app_server.wait_for_json_log_event("codex.app_server.otel_reloaded"),
+        app_server.wait_for_json_log_event(
+            "codex.app_server.otel_reloaded",
+            Duration::from_secs(/*secs*/ 10),
+        ),
     )
     .await??;
     timeout(TEST_TIMEOUT, async {
