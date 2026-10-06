@@ -27,7 +27,7 @@ Scenario: An active agent posts a shared decision and fetches the text without a
 
     There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
 
-    Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d...fork_turns` to `"none"` or a positive integer string. [hash=db3545796947884f]
+    Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d...uctions; when doing so, set `fork_turns` to `"none"`. [hash=18ccf7e93ecabab9]
 03:message/developer:
     <MULTI_AGENT_MODE>
 04:message/user:

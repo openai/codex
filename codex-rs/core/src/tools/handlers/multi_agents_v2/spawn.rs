@@ -20,6 +20,7 @@ use codex_prompts::ResolvedModelMessages;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::ToolSpec;
+use std::num::NonZeroUsize;
 
 #[derive(Default)]
 pub(crate) struct Handler {
@@ -288,22 +289,14 @@ impl SpawnAgentArgs {
         if fork_turns.eq_ignore_ascii_case("none") {
             return Ok(None);
         }
-        if fork_turns.eq_ignore_ascii_case("all") {
+        // Accept legacy turn counts without limiting the inherited history.
+        if fork_turns.eq_ignore_ascii_case("all") || fork_turns.parse::<NonZeroUsize>().is_ok() {
             return Ok(Some(SpawnAgentForkMode::FullHistory));
         }
 
-        let last_n_turns = fork_turns.parse::<usize>().map_err(|_| {
-            FunctionCallError::RespondToModel(
-                "fork_turns must be `none`, `all`, or a positive integer string".to_string(),
-            )
-        })?;
-        if last_n_turns == 0 {
-            return Err(FunctionCallError::RespondToModel(
-                "fork_turns must be `none`, `all`, or a positive integer string".to_string(),
-            ));
-        }
-
-        Ok(Some(SpawnAgentForkMode::LastNTurns(last_n_turns)))
+        Err(FunctionCallError::RespondToModel(
+            "fork_turns must be `none` or `all`".to_string(),
+        ))
     }
 }
 

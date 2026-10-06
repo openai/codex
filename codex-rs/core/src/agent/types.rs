@@ -21,7 +21,6 @@ pub struct AgentMetadata {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SpawnAgentForkMode {
     FullHistory,
-    LastNTurns(usize),
 }
 
 #[derive(Clone, Debug, Default)]

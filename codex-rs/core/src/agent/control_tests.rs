@@ -31,7 +31,6 @@ use crate::thread_manager::ForkSnapshot;
 use crate::thread_manager::StartThreadOptions;
 use crate::tools::handlers::multi_agents_common::thread_spawn_source;
 use assert_matches::assert_matches;
-use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::Instructions;
 use codex_extension_api::LoadInstructionsFuture;
 use codex_extension_api::LoadedUserInstructions;
@@ -46,8 +45,6 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
 use codex_protocol::ResponseItemId;
-use codex_protocol::capabilities::CapabilityRootLocation;
-use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -2244,88 +2241,6 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata() {
 }
 
 #[tokio::test]
-async fn spawn_agent_numeric_fork_from_compacted_paginated_parent_clamps_to_provable_turns() {
-    let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, parent_thread) = harness.start_paginated_thread().await;
-    let parent_spawn_call_id = "spawn-call-paginated-numeric".to_string();
-    parent_thread
-        .session
-        .persist_rollout_items(&[
-            RolloutItem::Compacted(CompactedItem {
-                message: String::new(),
-                replacement_history: Some(vec![
-                    ResponseItem::Message {
-                        id: None,
-                        role: "user".to_string(),
-                        content: vec![ContentItem::InputText {
-                            text: "compacted summary".to_string(),
-                        }],
-                        phase: None,
-                        internal_chat_message_metadata_passthrough: None,
-                    }
-                    .into(),
-                ]),
-                retained_context: None,
-                guardian_history: None,
-                mcp_resource_origins: None,
-                window_number: None,
-                first_window_id: None,
-                previous_window_id: None,
-                window_id: None,
-                compaction_response_id: None,
-                latest_token_usage_record: None,
-                resume_metadata: None,
-            }),
-            rollout_response_item(ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "recent parent turn".to_string(),
-                }],
-                phase: None,
-                internal_chat_message_metadata_passthrough: None,
-            }),
-            rollout_response_item(spawn_agent_call(&parent_spawn_call_id)),
-        ])
-        .await;
-
-    let clamped_child_thread_id = harness
-        .spawn_anonymous_child(
-            parent_thread_id,
-            SpawnAgentOptions {
-                fork_parent_spawn_call_id: Some(parent_spawn_call_id),
-                fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
-                ..Default::default()
-            },
-        )
-        .await;
-    let clamped_child_thread = harness
-        .manager
-        .get_thread(clamped_child_thread_id)
-        .await
-        .expect("clamped child thread should be registered");
-    let clamped_history = clamped_child_thread.session.clone_history().await;
-    assert!(
-        history_contains_text(clamped_history.raw_items(), "recent parent turn"),
-        "clamped numeric fork should keep the provable recent turn"
-    );
-    assert!(
-        !history_contains_text(clamped_history.raw_items(), "compacted summary"),
-        "clamped numeric fork should not expand into compacted parent context"
-    );
-
-    let _ = harness
-        .control
-        .shutdown_live_agent(clamped_child_thread_id)
-        .await
-        .expect("clamped child shutdown should submit");
-    let _ = parent_thread
-        .submit(Op::Shutdown {})
-        .await
-        .expect("parent shutdown should submit");
-}
-
-#[tokio::test]
 async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let managed_fragment = "<managed_developer_instructions>\nParent developer instructions.\n</managed_developer_instructions>";
     let persistent_fragment =
@@ -2708,8 +2623,10 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .expect("parent shutdown should submit");
 }
 
+#[test_case::test_case(true; "marked catalog hints")]
+#[test_case::test_case(false; "unmarked bundled hints")]
 #[tokio::test]
-async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
+async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(marked: bool) {
     let harness = AgentControlHarness::new().await;
     let mut parent_config = harness.config.clone();
     let _ = parent_config.features.enable(Feature::MultiAgentV2);
@@ -2738,7 +2655,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
     let parent_spawn_call_id = "spawn-call-compacted-usage-hints".to_string();
     let catalog_role = |base: &str| MultiAgentRoleInstructions::Composed {
         base: base.to_string(),
-        marked: true,
+        marked,
         omit_update_plan_instructions: false,
         max_concurrency: 2,
         wait_agent_enabled: false,
@@ -2768,10 +2685,15 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
-                text: "Parent root guidance.".to_string(),
+                text: "Previous parent root guidance.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: None,
+            internal_chat_message_metadata_passthrough: Some(
+                InternalChatMessageMetadataPassthrough {
+                    content_item_kinds: Some(vec![ContentItemKind("multi_agent.usage_hint".to_string())]),
+                    ..Default::default()
+                },
+            ),
         },
         ResponseItem::Message {
             id: None,
@@ -2922,7 +2844,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
         "forked child history should not inherit compacted parent agent messages"
     );
     assert!(
-        !history_contains_text(history.raw_items(), "Parent root guidance."),
+        !history_contains_text(history.raw_items(), "Previous parent root guidance."),
         "forked child history should strip stale parent hints from compacted replacement history"
     );
     assert!(
@@ -3530,443 +3452,6 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
 }
 
 #[tokio::test]
-async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
-    let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, parent_thread) = harness.start_thread().await;
-    let old_turn_context = parent_thread.session.new_default_turn().await;
-    parent_thread
-        .session
-        .record_conversation_items(
-            old_turn_context.as_ref(),
-            old_turn_context.model_info(),
-            &[user_message("old parent context")],
-        )
-        .await;
-    let source = McpAttributionSource {
-        connector_id: None,
-        plugin_id: None,
-        server_name: "example".to_string(),
-        tool_name: "search".to_string(),
-        first_turn_id: old_turn_context.sub_id.clone(),
-    };
-    parent_thread
-        .session
-        .services
-        .executed_tool_calls
-        .record_mcp_source(source.clone());
-    parent_thread
-        .session
-        .record_conversation_items(
-            old_turn_context.as_ref(),
-            old_turn_context.model_info(),
-            &[assistant_message("old MCP result", /*phase*/ None)],
-        )
-        .await;
-    let queued_communication = InterAgentCommunication::new(
-        AgentPath::root(),
-        AgentPath::try_from("/root/worker").expect("agent path"),
-        Vec::new(),
-        "queued message".to_string(),
-        /*trigger_turn*/ false,
-    );
-    let queued_turn_context = parent_thread.session.new_default_turn().await;
-    parent_thread
-        .session
-        .record_conversation_items(
-            queued_turn_context.as_ref(),
-            queued_turn_context.model_info(),
-            &[queued_communication.to_response_input_item().into()],
-        )
-        .await;
-
-    let triggered_communication = InterAgentCommunication::new(
-        AgentPath::root(),
-        AgentPath::try_from("/root/worker").expect("agent path"),
-        Vec::new(),
-        "triggered context".to_string(),
-        /*trigger_turn*/ true,
-    );
-    let triggered_turn_context = parent_thread.session.new_default_turn().await;
-    parent_thread
-        .session
-        .record_conversation_items(
-            triggered_turn_context.as_ref(),
-            triggered_turn_context.model_info(),
-            &[triggered_communication.to_response_input_item().into()],
-        )
-        .await;
-    parent_thread
-        .inject_response_items(vec![user_message("current parent task")])
-        .await
-        .expect("inject current parent task");
-    let spawn_turn_context = parent_thread.session.new_default_turn().await;
-    let parent_spawn_call_id = "spawn-call-last-n".to_string();
-    parent_thread
-        .session
-        .record_conversation_items(
-            spawn_turn_context.as_ref(),
-            spawn_turn_context.model_info(),
-            &[spawn_agent_call(&parent_spawn_call_id)],
-        )
-        .await;
-    parent_thread
-        .session
-        .persist_rollout_items(&[RolloutItem::TurnContext(
-            spawn_turn_context.to_turn_context_item(),
-        )])
-        .await;
-    parent_thread
-        .session
-        .ensure_rollout_materialized(PersistContext::Standard)
-        .await;
-    parent_thread
-        .session
-        .flush_rollout()
-        .await
-        .expect("parent rollout should flush");
-
-    let child_thread_id = harness
-        .control
-        .spawn_agent_with_metadata(
-            harness.config.clone(),
-            text_input("child task"),
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth: 1,
-                agent_path: None,
-                agent_nickname: None,
-                agent_role: None,
-            }),
-            SpawnAgentOptions {
-                fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
-                fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("forked spawn should keep only the last two turns")
-        .thread_id;
-
-    let child_thread = harness
-        .manager
-        .get_thread(child_thread_id)
-        .await
-        .expect("child thread should be registered");
-    let history = child_thread.session.clone_history().await;
-
-    assert!(
-        !history_contains_text(history.raw_items(), "old parent context"),
-        "forked child history should drop parent context outside the requested last-N turn window"
-    );
-    assert!(
-        !history_contains_text(history.raw_items(), "old MCP result"),
-        "forked child history should drop the old result while retaining its attribution"
-    );
-    assert!(
-        !history_contains_text(history.raw_items(), "queued message"),
-        "forked child history should drop queued inter-agent messages outside the requested last-N turn window"
-    );
-    assert!(
-        !history_contains_text(history.raw_items(), "triggered context"),
-        "forked child history should filter assistant inter-agent messages even when they fall inside the requested last-N turn window"
-    );
-    assert!(
-        history_contains_text(history.raw_items(), "current parent task"),
-        "forked child history should keep the parent user message from the requested last-N turn window"
-    );
-    assert!(
-        child_thread
-            .session
-            .reference_context_item()
-            .await
-            .is_none(),
-        "last-N forked child should rebuild context after truncating the cached prefix"
-    );
-    assert_eq!(
-        mcp_attribution_in_constructed_request(&child_thread).await,
-        McpAttribution {
-            status: McpAttributionStatus::Complete,
-            error_reason: None,
-            sources: vec![source],
-        }
-    );
-
-    let _ = harness
-        .control
-        .shutdown_live_agent(child_thread_id)
-        .await
-        .expect("child shutdown should submit");
-    let _ = parent_thread
-        .submit(Op::Shutdown {})
-        .await
-        .expect("parent shutdown should submit");
-}
-
-#[tokio::test]
-async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_limit() {
-    let harness = AgentControlHarness::new().await;
-    let selected_capability_roots = vec![SelectedCapabilityRoot {
-        id: "demo@1".to_string(),
-        location: CapabilityRootLocation::Environment {
-            environment_id: "build".to_string(),
-            path: PathUri::parse("file:///plugins/demo").expect("plugin root URI"),
-        },
-    }];
-    let mut thread_extension_init = ExtensionDataInit::new();
-    thread_extension_init.insert(selected_capability_roots.clone());
-    let parent = harness
-        .manager
-        .start_thread(StartThreadOptions {
-            environments: Some(Vec::new()),
-            thread_extension_init,
-            ..StartThreadOptions::new(harness.config.clone())
-        })
-        .await
-        .expect("start parent thread");
-    let parent_thread_id = parent.thread_id;
-    let parent_thread = parent.thread;
-    let startup_turn_context = parent_thread.session.new_default_turn().await;
-    parent_thread
-        .session
-        .record_conversation_items(
-            startup_turn_context.as_ref(),
-            startup_turn_context.model_info(),
-            &[ResponseItem::Message {
-                id: None,
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "parent startup developer context".to_string(),
-                }],
-                phase: None,
-                internal_chat_message_metadata_passthrough: None,
-            }],
-        )
-        .await;
-    parent_thread
-        .inject_response_items(vec![user_message("current parent task")])
-        .await
-        .expect("inject current parent task");
-    let spawn_turn_context = parent_thread.session.new_default_turn().await;
-    let parent_spawn_call_id = "spawn-call-last-n-under-limit".to_string();
-    parent_thread
-        .session
-        .record_conversation_items(
-            spawn_turn_context.as_ref(),
-            spawn_turn_context.model_info(),
-            &[spawn_agent_call(&parent_spawn_call_id)],
-        )
-        .await;
-    parent_thread
-        .session
-        .ensure_rollout_materialized(PersistContext::Standard)
-        .await;
-    parent_thread
-        .session
-        .flush_rollout()
-        .await
-        .expect("parent rollout should flush");
-
-    let child_thread_id = harness
-        .control
-        .spawn_agent_with_metadata(
-            harness.config.clone(),
-            text_input("child task"),
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth: 1,
-                agent_path: None,
-                agent_nickname: None,
-                agent_role: None,
-            }),
-            SpawnAgentOptions {
-                fork_parent_spawn_call_id: Some(parent_spawn_call_id),
-                fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("bounded forked spawn should drop startup prefix")
-        .thread_id;
-
-    let child_thread = harness
-        .manager
-        .get_thread(child_thread_id)
-        .await
-        .expect("child thread should be registered");
-    let history = child_thread.session.clone_history().await;
-    assert!(
-        history_contains_text(history.raw_items(), "current parent task"),
-        "bounded fork should retain the requested recent parent turn"
-    );
-    assert!(
-        !history_contains_text(history.raw_items(), "parent startup developer context"),
-        "bounded fork should drop parent startup context even when fewer turns exist than requested"
-    );
-    assert_eq!(
-        &child_thread.session.services.selected_capability_roots,
-        &selected_capability_roots
-    );
-    assert!(
-        child_thread
-            .session
-            .reference_context_item()
-            .await
-            .is_none(),
-        "bounded forked child should still rebuild context after truncating the cached prefix"
-    );
-
-    let _ = harness
-        .control
-        .shutdown_live_agent(child_thread_id)
-        .await
-        .expect("child shutdown should submit");
-    let _ = parent_thread
-        .submit(Op::Shutdown {})
-        .await
-        .expect("parent shutdown should submit");
-}
-
-#[tokio::test]
-async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
-    let persistent_fragment =
-        "<persistent_mode>\nParent persistent instructions.\n</persistent_mode>";
-    let harness = AgentControlHarness::new().await;
-    let mut parent_config = harness.config.clone();
-    let _ = parent_config.features.enable(Feature::MultiAgentV2);
-    parent_config.developer_instructions = Some("Parent developer instructions.".to_string());
-    parent_config.multi_agent_v2.root_agent_usage_hint_text =
-        Some("Parent root guidance.".to_string());
-    let mut child_config = harness.config.clone();
-    let _ = child_config.features.enable(Feature::MultiAgentV2);
-    child_config.developer_instructions = Some("Child developer instructions.".to_string());
-    child_config.multi_agent_v2.subagent_developer_instructions =
-        Some("Child developer instructions.".to_string());
-    child_config.multi_agent_v2.subagent_usage_hint_text =
-        Some("Child subagent guidance.".to_string());
-    let new_thread = harness
-        .manager
-        .start_thread(StartThreadOptions::new(parent_config))
-        .await
-        .expect("start parent thread");
-    let parent_thread_id = new_thread.thread_id;
-    let parent_thread = new_thread.thread;
-    parent_thread
-        .inject_response_items(vec![user_message("parent task")])
-        .await
-        .expect("inject parent task");
-    let turn_context = parent_thread.session.new_default_turn().await;
-    let parent_spawn_call_id = "spawn-call-last-n-usage-hints".to_string();
-    parent_thread
-        .session
-        .record_conversation_items(
-            turn_context.as_ref(),
-            turn_context.model_info(),
-            &[
-                ResponseItem::Message {
-                    id: None,
-                    role: "developer".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: "Parent root guidance.".to_string(),
-                    }],
-                    phase: None,
-                    internal_chat_message_metadata_passthrough: None,
-                },
-                ResponseItem::Message {
-                    id: None,
-                    role: "developer".to_string(),
-                    content: vec![
-                        ContentItem::InputText {
-                            text: "Parent developer instructions.".to_string(),
-                        },
-                        ContentItem::InputText {
-                            text: "Preserved bounded developer context.".to_string(),
-                        },
-                        ContentItem::InputText {
-                            text: persistent_fragment.to_string(),
-                        },
-                    ],
-                    phase: None,
-                    internal_chat_message_metadata_passthrough: None,
-                },
-                spawn_agent_call(&parent_spawn_call_id),
-            ],
-        )
-        .await;
-    parent_thread
-        .session
-        .ensure_rollout_materialized(PersistContext::Standard)
-        .await;
-    parent_thread
-        .session
-        .flush_rollout()
-        .await
-        .expect("parent rollout should flush");
-
-    let child_thread_id = harness
-        .control
-        .spawn_agent_with_metadata(
-            child_config,
-            text_input("child task"),
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth: 1,
-                agent_path: None,
-                agent_nickname: None,
-                agent_role: None,
-            }),
-            SpawnAgentOptions {
-                fork_parent_spawn_call_id: Some(parent_spawn_call_id),
-                fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("bounded forked spawn should sanitize parent usage hints")
-        .thread_id;
-
-    let child_thread = harness
-        .manager
-        .get_thread(child_thread_id)
-        .await
-        .expect("child thread should be registered");
-    let history = child_thread.session.clone_history().await;
-    assert!(
-        history_contains_text(history.raw_items(), "parent task"),
-        "bounded fork should retain the requested recent parent turn"
-    );
-    assert!(
-        !history_contains_text(history.raw_items(), "Parent root guidance."),
-        "bounded fork should strip stale parent root hints before the child rebuilds startup context"
-    );
-    assert!(
-        !history_contains_text(history.raw_items(), "Parent developer instructions."),
-        "bounded fork should remove parent instructions before the child rebuilds startup context"
-    );
-    assert!(
-        !history_contains_text(history.raw_items(), "Child developer instructions."),
-        "bounded fork should not inject child instructions before its canonical context rebuild"
-    );
-    assert!(
-        !history_contains_text(history.raw_items(), persistent_fragment),
-        "bounded fork should remove persistent instructions before rebuilding context for the child's effort"
-    );
-    assert!(
-        history_contains_text(history.raw_items(), "Preserved bounded developer context."),
-        "bounded fork should preserve unrelated developer fragments"
-    );
-
-    let _ = harness
-        .control
-        .shutdown_live_agent(child_thread_id)
-        .await
-        .expect("child shutdown should submit");
-    let _ = parent_thread
-        .submit(Op::Shutdown {})
-        .await
-        .expect("parent shutdown should submit");
-}
-
-#[tokio::test]
 async fn spawn_agent_respects_legacy_max_threads_alias() {
     let max_threads = 1usize;
     let (_home, config) = test_config_with_cli_overrides(vec![(
@@ -4537,7 +4022,7 @@ async fn spawn_thread_subagent_gets_random_nickname_in_session_source() {
 }
 
 #[tokio::test]
-async fn spawn_thread_subagents_persist_parent_originator_across_new_and_truncated_fork() {
+async fn spawn_thread_subagents_persist_parent_originator_across_new_and_full_fork() {
     let harness = AgentControlHarness::new().await;
     let parent = harness
         .manager
@@ -4588,8 +4073,8 @@ async fn spawn_thread_subagents_persist_parent_originator_across_new_and_truncat
                 agent_role: Some("explorer".to_string()),
             }),
             SpawnAgentOptions {
-                fork_parent_spawn_call_id: Some("spawn-call-last-n".to_string()),
-                fork_mode: Some(SpawnAgentForkMode::LastNTurns(1)),
+                fork_parent_spawn_call_id: Some("spawn-call-full-history".to_string()),
+                fork_mode: Some(SpawnAgentForkMode::FullHistory),
                 ..Default::default()
             },
         )

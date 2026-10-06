@@ -6,7 +6,7 @@ Scenario: Astra receives new user input after its unfinished response is interru
 
 ## Window 1
 -- request 1 (request) --
-00:additional_tools/developer (3; hash=2c5a5b48dbcfce9b):
+00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
         - namespace/functions; hash=fada4a476a3754dd
           - custom/exec
           - function/wait
@@ -14,7 +14,7 @@ Scenario: Astra receives new user input after its unfinished response is interru
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=b263e3c84ad07c37
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents

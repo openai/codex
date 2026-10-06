@@ -39,7 +39,7 @@ fn records_bounded_spawn_phase_metrics() {
 
     record_spawn_success(
         &telemetry,
-        Some(&SpawnAgentForkMode::LastNTurns(3)),
+        Some(&SpawnAgentForkMode::FullHistory),
         MultiAgentVersion::V2,
         SpawnMeasurements {
             history_mode: ThreadHistoryMode::Paginated,
@@ -74,7 +74,7 @@ fn records_bounded_spawn_phase_metrics() {
                 })
                 .collect::<BTreeMap<_, _>>();
             assert_eq!(attributes.len(), 5);
-            assert_eq!(attributes["fork_mode"], "last_n");
+            assert_eq!(attributes["fork_mode"], "all");
             assert_eq!(attributes["history_mode"], "paginated");
             assert_eq!(attributes["multi_agent_version"], "v2");
             assert_eq!(attributes["product_sku"], "codex");

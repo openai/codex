@@ -7,7 +7,6 @@ use crate::agent::child_config::build_agent_resume_config;
 use crate::agent::role::apply_role_to_config;
 use crate::agent::types::AgentMetadata;
 use crate::agent::types::LiveAgent;
-use crate::agent::types::SpawnAgentForkMode;
 use crate::agent::types::SpawnAgentOptions;
 use crate::agents_md_manager::SessionInstructions;
 use crate::codex_thread::CodexThread;
@@ -122,8 +121,7 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_context_baselines: bool
         | RolloutItem::RetainedContext(_)
         | RolloutItem::SecurityRiskScore(_) => false,
         // Full-history forks preserve the cached prompt prefix and can keep diffing
-        // from the parent's durable baseline. Truncated forks drop part of that prompt,
-        // so they must rebuild context on their first child turn.
+        // from the parent's durable baseline unless legacy compaction requires rebuilding it.
         RolloutItem::TurnContext(_) | RolloutItem::WorldState(_) => preserve_context_baselines,
         // Child threads inherit model context, not the parent's cumulative usage state.
         RolloutItem::TokenUsageRecord(_) => false,
@@ -140,7 +138,11 @@ fn retain_forked_developer_message(item: &mut ResponseItem, usage_hint_texts: &[
         return false;
     };
     content.retain(|content_item| {
-        if content_item.kind().0 == "guardian.approved_action" {
+        // Persisted role hints can predate the current bundled wording and lack markers.
+        if matches!(
+            content_item.kind().0.as_str(),
+            "guardian.approved_action" | "multi_agent.role_instructions" | "multi_agent.usage_hint"
+        ) {
             return false;
         }
         let ContentItem::InputText { text } = content_item.content() else {
@@ -990,11 +992,11 @@ impl LocalAgentControl {
                 "spawn_agent fork requires a parent spawn call id".to_string(),
             ));
         }
-        let Some(fork_mode) = options.fork_mode.as_ref() else {
+        if options.fork_mode.is_none() {
             return Err(CodexErr::Fatal(
                 "spawn_agent fork requires a fork mode".to_string(),
             ));
-        };
+        }
         let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
         }) = &session_source
@@ -1062,10 +1064,6 @@ impl LocalAgentControl {
                 Some(meta_line.meta.selected_capability_roots.clone())
             })
             .unwrap_or_default();
-        if let SpawnAgentForkMode::LastNTurns(last_n_turns) = fork_mode {
-            forked_rollout_items =
-                truncate_rollout_to_last_n_fork_turns(forked_rollout_items, *last_n_turns);
-        }
         let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
             if multi_agent_version == MultiAgentVersion::V2 {
                 let parent_config = parent_thread.session.get_config().await;
@@ -1082,19 +1080,17 @@ impl LocalAgentControl {
             } else {
                 Vec::new()
             };
-        let mut preserve_context_baselines = matches!(fork_mode, SpawnAgentForkMode::FullHistory);
-        if preserve_context_baselines {
-            for item in forked_rollout_items.iter().rev() {
-                let RolloutItem::Compacted(compacted) = item else {
-                    continue;
-                };
-                // Legacy checkpoints force the child to rebuild context regardless of the
-                // live parent's reference baseline; an older superseded checkpoint does not.
-                if compacted.replacement_history.is_none() {
-                    preserve_context_baselines = false;
-                }
-                break;
+        let mut preserve_context_baselines = true;
+        for item in forked_rollout_items.iter().rev() {
+            let RolloutItem::Compacted(compacted) = item else {
+                continue;
+            };
+            // Legacy checkpoints force the child to rebuild context regardless of the
+            // live parent's reference baseline; an older superseded checkpoint does not.
+            if compacted.replacement_history.is_none() {
+                preserve_context_baselines = false;
             }
+            break;
         }
         let mut replaced_parent_developer_instructions = false;
         // Scrub inherited hints and replace only the parent's developer-instruction fragment.

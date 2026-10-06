@@ -924,7 +924,7 @@ async fn multi_agent_v2_full_history_fork_inherits_root_service_tier() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
+async fn multi_agent_v2_spawn_without_history_allows_agent_type_override() {
     let (mut session, mut turn) = make_session_and_context().await;
     let role_name = install_role_with_model_override(&mut turn).await;
     let manager = thread_manager();
@@ -951,17 +951,17 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect this repo",
-                "task_name": "partial_fork",
+                "task_name": "fresh_agent",
                 "agent_type": role_name,
-                "fork_turns": "1"
+                "fork_turns": "none"
             })),
         ))
         .await
-        .expect("partial fork should allow agent_type overrides");
+        .expect("fresh agent should allow agent_type overrides");
     let (content, _) = expect_text_output(output);
     let result: serde_json::Value =
         serde_json::from_str(&content).expect("spawn_agent result should be json");
-    assert_eq!(result["task_name"], "/root/partial_fork");
+    assert_eq!(result["task_name"], "/root/fresh_agent");
     let agent_id = manager
         .captured_ops()
         .into_iter()
@@ -1254,8 +1254,10 @@ async fn multi_agent_v2_spawn_rejects_legacy_fork_context() {
     );
 }
 
+#[test_case::test_case("banana"; "invalid string")]
+#[test_case::test_case("0"; "zero turns")]
 #[tokio::test]
-async fn multi_agent_v2_spawn_rejects_invalid_fork_turns_string() {
+async fn multi_agent_v2_spawn_rejects_invalid_fork_turns_string(fork_turns: &str) {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -1279,7 +1281,7 @@ async fn multi_agent_v2_spawn_rejects_invalid_fork_turns_string() {
             function_payload(json!({
                 "message": "inspect this repo",
                 "task_name": "worker",
-                "fork_turns": "banana"
+                "fork_turns": fork_turns
             })),
         ))
         .await
@@ -1288,49 +1290,7 @@ async fn multi_agent_v2_spawn_rejects_invalid_fork_turns_string() {
 
     assert_eq!(
         err,
-        FunctionCallError::RespondToModel(
-            "fork_turns must be `none`, `all`, or a positive integer string".to_string()
-        )
-    );
-}
-
-#[tokio::test]
-async fn multi_agent_v2_spawn_rejects_zero_fork_turns() {
-    let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager();
-    let root = manager
-        .start_thread(StartThreadOptions::new((*turn.config).clone()))
-        .await
-        .expect("root thread should start");
-    set_agent_control(&mut session, manager.agent_control());
-    session.thread_id = root.thread_id;
-    let mut config = (*turn.config).clone();
-    config
-        .features
-        .enable(Feature::MultiAgentV2)
-        .expect("test config should allow feature update");
-    set_turn_config(&mut turn, config);
-
-    let err = SpawnAgentHandlerV2::default()
-        .handle(invocation(
-            Arc::new(session),
-            Arc::new(turn),
-            "spawn_agent",
-            function_payload(json!({
-                "message": "inspect this repo",
-                "task_name": "worker",
-                "fork_turns": "0"
-            })),
-        ))
-        .await
-        .err()
-        .expect("zero turn count should be rejected");
-
-    assert_eq!(
-        err,
-        FunctionCallError::RespondToModel(
-            "fork_turns must be `none`, `all`, or a positive integer string".to_string()
-        )
+        FunctionCallError::RespondToModel("fork_turns must be `none` or `all`".to_string())
     );
 }
 

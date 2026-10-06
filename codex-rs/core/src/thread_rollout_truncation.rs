@@ -14,7 +14,6 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::InterAgentCommunication;
 
 pub(crate) fn initial_history_has_prior_user_turns(conversation_history: &InitialHistory) -> bool {
     conversation_history.scan_rollout_items(rollout_item_is_user_turn_boundary)
@@ -63,72 +62,6 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
         }
     }
     user_positions
-}
-
-/// Return the indices of fork-turn boundaries in a rollout.
-///
-/// A fork-turn boundary is either:
-/// - a real user message boundary, or
-/// - an inter-agent communication whose `trigger_turn` is `true`, or
-/// - a legacy assistant inter-agent envelope with the same flag.
-///
-/// Like `user_message_positions_in_rollout`, this applies `ThreadRolledBack` markers so indexing
-/// reflects the effective post-rollback history. Rollback counts instruction turns, so a rollback
-/// removes the stale suffix starting at the earliest rolled-back instruction-turn boundary instead
-/// of simply truncating the mixed fork-boundary list.
-pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize> {
-    let mut rollback_turn_positions = Vec::new();
-    let mut fork_turn_positions = Vec::new();
-    for (idx, item) in items.iter().enumerate() {
-        match item {
-            RolloutItem::ResponseItem(item) => {
-                let has_delivery_metadata = matches!(&item.item, ResponseItem::AgentMessage { .. })
-                    && idx.checked_sub(1).is_some_and(|previous_idx| {
-                        matches!(
-                            items.get(previous_idx),
-                            Some(RolloutItem::InterAgentCommunicationMetadata { .. })
-                        )
-                    });
-                if is_user_turn_boundary(item) && !has_delivery_metadata {
-                    rollback_turn_positions.push(idx);
-                }
-                if is_real_user_message_boundary(item) || is_trigger_turn_boundary(item) {
-                    fork_turn_positions.push(idx);
-                }
-            }
-            RolloutItem::InterAgentCommunication(communication) => {
-                rollback_turn_positions.push(idx);
-                if communication.trigger_turn {
-                    fork_turn_positions.push(idx);
-                }
-            }
-            RolloutItem::InterAgentCommunicationMetadata { trigger_turn } => {
-                rollback_turn_positions.push(idx);
-                if *trigger_turn {
-                    fork_turn_positions.push(idx);
-                }
-            }
-            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
-                let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
-                if num_turns == 0 {
-                    continue;
-                }
-                let Some(rollback_start_idx) = rollback_turn_positions
-                    .len()
-                    .checked_sub(num_turns)
-                    .map(|rollback_start| rollback_turn_positions[rollback_start])
-                    .or_else(|| rollback_turn_positions.first().copied())
-                else {
-                    continue;
-                };
-                let new_rollback_len = rollback_turn_positions.len().saturating_sub(num_turns);
-                rollback_turn_positions.truncate(new_rollback_len);
-                fork_turn_positions.retain(|position| *position < rollback_start_idx);
-            }
-            _ => {}
-        }
-    }
-    fork_turn_positions
 }
 
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message.
@@ -257,47 +190,6 @@ pub fn truncate_rollout_before_turn_id(
 
     items.truncate(cut_index);
     Ok(items)
-}
-
-/// Return a suffix of `items` that keeps the last `n_from_end` fork turns.
-///
-/// If fewer than or equal to `n_from_end` fork turns exist, this keeps from the first fork-turn
-/// boundary and still drops pre-turn startup context.
-pub(crate) fn truncate_rollout_to_last_n_fork_turns(
-    mut items: Vec<RolloutItem>,
-    n_from_end: usize,
-) -> Vec<RolloutItem> {
-    if n_from_end == 0 {
-        return Vec::new();
-    }
-
-    let fork_turn_positions = fork_turn_positions_in_rollout(&items);
-    let Some(keep_idx) = fork_turn_positions
-        .len()
-        .checked_sub(n_from_end)
-        .map(|position| fork_turn_positions[position])
-        .or_else(|| fork_turn_positions.first().copied())
-    else {
-        return Vec::new();
-    };
-    items.split_off(keep_idx)
-}
-
-fn is_real_user_message_boundary(item: &ResponseItem) -> bool {
-    matches!(
-        event_mapping::parse_turn_item(item),
-        Some(TurnItem::UserMessage(_))
-    )
-}
-
-fn is_trigger_turn_boundary(item: &ResponseItem) -> bool {
-    let ResponseItem::Message { role, content, .. } = item else {
-        return false;
-    };
-
-    role == "assistant"
-        && InterAgentCommunication::from_message_content(content)
-            .is_some_and(|communication| communication.trigger_turn)
 }
 
 #[cfg(test)]

@@ -1200,16 +1200,13 @@ async fn submit_turn_with_trigger(test: &TestCodex, prompt: &str, trigger: &str)
 #[derive(Clone, Copy, Debug)]
 enum GrandchildParentContext {
     FullHistory,
-    LastTurn,
     NoHistory,
     Compacted,
 }
 
 #[test_case(GrandchildParentContext::FullHistory, ThreadHistoryMode::Legacy; "legacy full history")]
-#[test_case(GrandchildParentContext::LastTurn, ThreadHistoryMode::Legacy; "legacy last turn")]
 #[test_case(GrandchildParentContext::NoHistory, ThreadHistoryMode::Legacy; "legacy no history")]
 #[test_case(GrandchildParentContext::FullHistory, ThreadHistoryMode::Paginated; "paginated full history")]
-#[test_case(GrandchildParentContext::LastTurn, ThreadHistoryMode::Paginated; "paginated last turn")]
 #[test_case(GrandchildParentContext::NoHistory, ThreadHistoryMode::Paginated; "paginated no history")]
 #[test_case(GrandchildParentContext::Compacted, ThreadHistoryMode::Legacy; "legacy full history after compaction")]
 #[test_case(GrandchildParentContext::Compacted, ThreadHistoryMode::Paginated; "paginated full history after compaction")]
@@ -1233,7 +1230,6 @@ async fn grandchild_full_fork_preserves_context_baseline(
     let server = start_mock_server().await;
     let (parent_fork_turns, compact_parent) = match parent_context {
         GrandchildParentContext::FullHistory => ("all", false),
-        GrandchildParentContext::LastTurn => ("1", false),
         GrandchildParentContext::NoHistory => ("none", false),
         GrandchildParentContext::Compacted => ("all", true),
     };
@@ -1457,7 +1453,7 @@ async fn grandchild_full_fork_preserves_context_baseline(
 #[derive(Clone, Copy)]
 enum FullHistoryV2ModelSelection {
     ConfiguredDefault,
-    ExplicitOverride,
+    ExplicitOverride(&'static str),
     WorldStateIdentity,
     CurrentTimeReminders,
     MultiAgentModeInstructions,
@@ -1465,7 +1461,9 @@ enum FullHistoryV2ModelSelection {
 }
 
 #[test_case(FullHistoryV2ModelSelection::ConfiguredDefault; "configured default with omitted fork_turns")]
-#[test_case(FullHistoryV2ModelSelection::ExplicitOverride; "explicit override with fork_turns all")]
+#[test_case(FullHistoryV2ModelSelection::ExplicitOverride("all"); "explicit override with fork_turns all")]
+#[test_case(FullHistoryV2ModelSelection::ExplicitOverride("1"); "legacy one turn forks full history with explicit override")]
+#[test_case(FullHistoryV2ModelSelection::ExplicitOverride("3"); "legacy three turns forks full history with explicit override")]
 #[test_case(FullHistoryV2ModelSelection::WorldStateIdentity; "world state appends context window when agent identity changes")]
 #[test_case(FullHistoryV2ModelSelection::CurrentTimeReminders; "full fork drops inherited current-time reminders")]
 #[test_case(FullHistoryV2ModelSelection::MultiAgentModeInstructions; "full fork drops inherited multi-agent mode instructions")]
@@ -1500,11 +1498,11 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
             V2_DEFAULT_MODEL,
             V2_DEFAULT_REASONING_EFFORT,
         ),
-        FullHistoryV2ModelSelection::ExplicitOverride => (
+        FullHistoryV2ModelSelection::ExplicitOverride(fork_turns) => (
             json!({
                 "message": CHILD_PROMPT,
                 "task_name": "worker",
-                "fork_turns": "all",
+                "fork_turns": fork_turns,
                 "model": V2_REQUESTED_MODEL,
                 "reasoning_effort": V2_REQUESTED_REASONING_EFFORT,
             }),
@@ -1700,7 +1698,7 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
         builder =
             builder.with_external_time_provider(std::sync::Arc::new(FailFirstClockRead::default()));
     }
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     if matches!(selection, FullHistoryV2ModelSelection::WorldStateIdentity) {
         test.codex.submit(Op::Compact).await?;
         wait_for_event(&test.codex, |event| {
