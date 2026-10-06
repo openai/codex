@@ -558,8 +558,7 @@ async fn executor_browser_and_computer_use_cleanup_hooks_use_separate_mcp_routes
                     agent_role: None,
                 })),
                 thread_source: Some(ThreadSource::Subagent),
-                environments: Some(fixture.test.codex.environment_selections().await),
-                ..StartThreadOptions::new(fixture.test.config.clone())
+                ..fixture.test.start_thread_options().await
             })
             .await?;
         fixture.test.codex = child.thread;

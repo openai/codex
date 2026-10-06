@@ -840,7 +840,7 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context() ->
     let thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            environments: Some(vec![first_environment]),
+            environments: Some(vec![first_environment.into_request()]),
             thread_extension_init,
             disabled_plugin_ids: Some(vec!["plugin-skills".to_string()]),
             ..StartThreadOptions::new(test.config.clone())

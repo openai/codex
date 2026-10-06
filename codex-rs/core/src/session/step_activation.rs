@@ -266,7 +266,7 @@ impl Session {
         };
         let TurnSettingsUpdate {
             approvals_reviewer,
-            environments,
+            environments: environment_requests,
             model,
             effort,
             summary,
@@ -286,7 +286,9 @@ impl Session {
         // progress, finish, or be cancelled while this awaits; we don't hold the update locks here.
         let prepared = if updates_step_settings {
             let current_environments = self.services.turn_environments.selections();
-            let proposed = environments.as_deref().unwrap_or(&current_environments);
+            let proposed = environment_requests
+                .as_deref()
+                .unwrap_or(&current_environments);
             self.prepare_step_settings_activation(&turn_context, &current, &update, proposed)
                 .await
                 .map(Some)
@@ -295,8 +297,9 @@ impl Session {
         };
 
         // Validate the environment configuration supplied in the update.
-        let environment_config_validation =
-            environments.as_deref().map(validate_environment_configs);
+        let environment_config_validation = environment_requests
+            .as_deref()
+            .map(validate_environment_configs);
 
         // Confirm the task we originally targeted is still running.
         let active = self.active_turn.lock().await;
@@ -326,12 +329,16 @@ impl Session {
         // Environment configuration can arrive before its executor connects. If this update
         // omits environments, use what the running turn's manager knows now.
         let current_environments = self.services.turn_environments.selections();
-        let proposed = environments.as_deref().unwrap_or(&current_environments);
+        let proposed = environment_requests
+            .as_deref()
+            .unwrap_or(&current_environments);
         let validation = (|| {
             if let Some(configs) = environment_config_validation {
                 validate_environment_ids_and_cwds(
                     &self.services.turn_environments.environment_manager(),
-                    proposed,
+                    proposed
+                        .iter()
+                        .map(|selection| (selection.environment_id.as_str(), &selection.cwd)),
                 )
                 .map_err(|error| error.to_string())?;
                 ensure_configs_stay_owner_provided(&current_environments, proposed)
@@ -367,7 +374,7 @@ impl Session {
                 .next_step_settings
                 .store(Arc::new(settings));
         }
-        if environments.is_some() {
+        if environment_requests.is_some() {
             self.services.turn_environments.update_selections(proposed);
         }
         TurnSettingsUpdateOutcome::Applied

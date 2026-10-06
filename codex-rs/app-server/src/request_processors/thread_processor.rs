@@ -1195,8 +1195,8 @@ impl ThreadRequestProcessor {
             }
         }
         let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
-        let environments =
-            resolve_turn_environment_selections(self.thread_manager.as_ref(), environments)?;
+        let environment_requests =
+            resolve_turn_environment_requests(self.thread_manager.as_ref(), environments)?;
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -1247,7 +1247,7 @@ impl ThreadRequestProcessor {
                 thread_source.map(Into::into),
                 project_id,
                 daybreak_enabled,
-                environments,
+                environment_requests,
                 service_name,
                 allow_provider_model_fallback,
                 experimental_raw_events,
@@ -1329,7 +1329,7 @@ impl ThreadRequestProcessor {
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
         project_id: Option<String>,
         daybreak_enabled: Option<bool>,
-        environment_selections: Option<Vec<TurnEnvironmentSelection>>,
+        environment_requests: Option<Vec<TurnEnvironmentRequest>>,
         service_name: Option<String>,
         allow_provider_model_fallback: bool,
         experimental_raw_events: bool,
@@ -1442,10 +1442,10 @@ impl ThreadRequestProcessor {
             }
         }
 
-        let environments = environment_selections.unwrap_or_else(|| {
+        let environment_requests = environment_requests.unwrap_or_else(|| {
             listener_task_context
                 .thread_manager
-                .default_environment_selections(&config.cwd, &config.workspace_roots)
+                .default_environment_requests(&config.cwd, &config.workspace_roots)
         });
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         if !dynamic_tools.is_empty() {
@@ -1508,7 +1508,7 @@ impl ThreadRequestProcessor {
                 dynamic_tools,
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
-                environments: Some(environments),
+                environments: Some(environment_requests),
                 thread_extension_init,
                 client_mcp_extensions,
                 ..start_options

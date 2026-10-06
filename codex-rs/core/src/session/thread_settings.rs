@@ -50,7 +50,7 @@ pub(super) fn prepare_update(
         turn_extension_init,
     } = overrides.into();
     let ThreadSettingsOverrides {
-        environments,
+        environments: environment_requests,
         runtime_workspace_roots,
         profile_workspace_roots,
         approval_policy,
@@ -79,7 +79,7 @@ pub(super) fn prepare_update(
             approval_policy,
             approvals_reviewer,
         },
-        environments,
+        environments: environment_requests,
         runtime_workspace_roots,
         profile_workspace_roots,
         sandbox_policy,

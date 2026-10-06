@@ -4,6 +4,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
@@ -185,7 +186,14 @@ async fn ephemeral_fork_shares_cache_routing_but_keeps_session_identity() -> Res
         .fork_legacy_thread(
             ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
             StartThreadOptions {
-                environments: Some(test.codex.environment_selections().await),
+                environments: Some(
+                    test.codex
+                        .environment_selections()
+                        .await
+                        .into_iter()
+                        .map(TurnEnvironmentSelection::into_request)
+                        .collect(),
+                ),
                 ..StartThreadOptions::new(config)
             },
             test.codex.rollout_path().expect("parent rollout"),

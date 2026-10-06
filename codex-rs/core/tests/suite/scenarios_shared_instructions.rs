@@ -34,7 +34,7 @@ async fn running_descendants_refresh_only_shared_thread_instructions(shared: boo
     let root = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            environments: Some(vec![test.executor_environment().selection().clone()]),
+            environments: Some(vec![test.executor_environment().request()]),
             thread_instructions_provider: Some(provider.clone()),
             ..StartThreadOptions::new(test.config.clone())
         })
@@ -45,7 +45,7 @@ async fn running_descendants_refresh_only_shared_thread_instructions(shared: boo
         let child = test
             .thread_manager
             .start_thread(StartThreadOptions {
-                environments: Some(vec![test.executor_environment().selection().clone()]),
+                environments: Some(vec![test.executor_environment().request()]),
                 session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id: parent_id,
                     depth,
@@ -64,7 +64,7 @@ async fn running_descendants_refresh_only_shared_thread_instructions(shared: boo
     let other_root = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            environments: Some(vec![test.executor_environment().selection().clone()]),
+            environments: Some(vec![test.executor_environment().request()]),
             thread_instructions_provider: Some(other_provider),
             ..StartThreadOptions::new(test.config.clone())
         })
@@ -94,7 +94,7 @@ async fn running_descendants_refresh_only_shared_thread_instructions(shared: boo
         .thread_manager
         .start_thread(StartThreadOptions {
             initial_history: history,
-            environments: Some(vec![test.executor_environment().selection().clone()]),
+            environments: Some(vec![test.executor_environment().request()]),
             thread_instructions_provider: Some(provider.clone()),
             ..StartThreadOptions::new(test.config.clone())
         })
@@ -202,7 +202,7 @@ async fn guardian_tracks_shared_instruction_updates_in_running_descendants() -> 
     let root = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            environments: Some(vec![test.executor_environment().selection().clone()]),
+            environments: Some(vec![test.executor_environment().request()]),
             thread_instructions_provider: Some(provider),
             ..StartThreadOptions::new(test.config.clone())
         })
@@ -212,7 +212,7 @@ async fn guardian_tracks_shared_instruction_updates_in_running_descendants() -> 
         descendant = test
             .thread_manager
             .start_thread(StartThreadOptions {
-                environments: Some(vec![test.executor_environment().selection().clone()]),
+                environments: Some(vec![test.executor_environment().request()]),
                 session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id: descendant.thread_id,
                     depth,

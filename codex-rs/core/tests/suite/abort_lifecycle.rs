@@ -75,7 +75,7 @@ async fn abort_lifecycle_finishes_before_terminal_event(
     let thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            environments: Some(vec![test.executor_environment().selection().clone()]),
+            environments: Some(vec![test.executor_environment().request()]),
             dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: "gate".to_string(),
                 description: "Wait for the host.".to_string(),

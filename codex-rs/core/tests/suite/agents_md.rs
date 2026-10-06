@@ -29,7 +29,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
-use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentRequest;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -1143,7 +1143,7 @@ impl ThreadInstructionsFixture {
         let thread = test
             .thread_manager
             .start_thread(StartThreadOptions {
-                environments: Some(vec![test.executor_environment().selection().clone()]),
+                environments: Some(vec![test.executor_environment().request()]),
                 thread_instructions_provider: Some(provider.clone()),
                 ..StartThreadOptions::new(test.config.clone())
             })
@@ -1337,9 +1337,8 @@ async fn isolated_guardian_keeps_applied_thread_instructions() -> Result<()> {
     let parent = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            environments: Some(test.codex.environment_selections().await),
             thread_instructions_provider: Some(provider.clone()),
-            ..StartThreadOptions::new(test.config.clone())
+            ..test.start_thread_options().await
         })
         .await?;
     // Publish an update after the parent captured its instructions, before it starts Guardian.
@@ -1408,9 +1407,7 @@ async fn thread_provider_enforces_its_own_limit_before_startup_and_sampling() ->
         .test
         .thread_manager
         .start_thread(StartThreadOptions {
-            environments: Some(vec![
-                fixture.test.executor_environment().selection().clone(),
-            ]),
+            environments: Some(vec![fixture.test.executor_environment().request()]),
             thread_instructions_provider: Some(Arc::new(RecordingThreadInstructionsProvider::new(
                 Some(oversized.clone()),
             ))),
@@ -1892,13 +1889,13 @@ async fn multi_environment_project_instructions_share_one_byte_budget() -> Resul
         .thread_manager
         .start_thread(StartThreadOptions {
             environments: Some(vec![
-                TurnEnvironmentSelection {
+                TurnEnvironmentRequest {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                     cwd: test.executor_environment().selection().cwd.clone(),
                     workspace_roots: vec![test.executor_environment().selection().cwd.clone()],
                     config: EnvironmentConfigState::FromThread,
                 },
-                TurnEnvironmentSelection {
+                TurnEnvironmentRequest {
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                     cwd: PathUri::from_host_native_path(local_root.path())?,
                     workspace_roots: vec![PathUri::from_host_native_path(local_root.path())?],
@@ -1976,13 +1973,13 @@ async fn multi_environment_thread_refreshes_global_and_keeps_repository_snapshot
         .thread_manager
         .start_thread(StartThreadOptions {
             environments: Some(vec![
-                TurnEnvironmentSelection {
+                TurnEnvironmentRequest {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                     cwd: test.executor_environment().selection().cwd.clone(),
                     workspace_roots: vec![test.executor_environment().selection().cwd.clone()],
                     config: EnvironmentConfigState::FromThread,
                 },
-                TurnEnvironmentSelection {
+                TurnEnvironmentRequest {
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                     cwd: PathUri::from_host_native_path(local_root.path())?,
                     workspace_roots: vec![PathUri::from_host_native_path(local_root.path())?],

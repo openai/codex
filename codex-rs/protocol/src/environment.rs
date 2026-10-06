@@ -1,4 +1,5 @@
-//! Environment attachment authority, including the shared Full Access decision.
+//! Environment requests, thread selections, and attachment authority.
+//! Input APIs accept requests; runtime code uses selections constructed by the thread.
 
 use crate::capabilities::SelectedCapabilityRoot;
 use crate::config_types::ShellEnvironmentPolicy;
@@ -10,7 +11,73 @@ use crate::protocol::AskForApproval;
 use crate::sandbox::SandboxType;
 use codex_execpolicy::RequirementsExecPolicy;
 use codex_network_proxy::EnvironmentNetworkPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+
+/// An environment requested by a caller, before construction of thread-owned state.
+///
+/// Input APIs accept requests so the receiving thread has a construction boundary for
+/// attaching its state before passing a selection to runtime code.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TurnEnvironmentRequest {
+    pub environment_id: String,
+    pub cwd: PathUri,
+    pub workspace_roots: Vec<PathUri>,
+    pub config: EnvironmentConfigState,
+}
+
+/// An environment selected by a thread for runtime use.
+/// Constructed from caller input at the receiving thread's startup or settings boundary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TurnEnvironmentSelection {
+    pub environment_id: String,
+    pub cwd: PathUri,
+    pub workspace_roots: Vec<PathUri>,
+    pub config: EnvironmentConfigState,
+}
+
+impl TurnEnvironmentSelection {
+    /// Constructs runtime state at the receiving thread boundary.
+    pub fn new(request: TurnEnvironmentRequest) -> Self {
+        Self {
+            environment_id: request.environment_id,
+            cwd: request.cwd,
+            workspace_roots: request.workspace_roots,
+            config: request.config,
+        }
+    }
+
+    /// Requests this environment again; the receiving thread supplies its own roots.
+    /// This explicit conversion discards thread-owned state. Test inputs should instead
+    /// construct requests directly so they do not depend on runtime selection fields.
+    pub fn into_request(self) -> TurnEnvironmentRequest {
+        TurnEnvironmentRequest {
+            environment_id: self.environment_id,
+            cwd: self.cwd,
+            workspace_roots: self.workspace_roots,
+            config: self.config,
+        }
+    }
+}
+
+/// The environments captured by a thread and its fallback working directory.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TurnEnvironmentSelections {
+    pub legacy_fallback_cwd: AbsolutePathBuf,
+    pub environments: Vec<TurnEnvironmentSelection>,
+}
+
+impl TurnEnvironmentSelections {
+    pub fn new(
+        legacy_fallback_cwd: AbsolutePathBuf,
+        environments: Vec<TurnEnvironmentSelection>,
+    ) -> Self {
+        Self {
+            legacy_fallback_cwd,
+            environments,
+        }
+    }
+}
 
 /// Configuration supplied for a thread's selected environment.
 #[allow(clippy::large_enum_variant)]

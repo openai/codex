@@ -71,7 +71,7 @@ async fn stale_roots_do_not_connect_unselected_executors(
     let thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            environments: Some(vec![selection.clone()]),
+            environments: Some(vec![selection.clone().into_request()]),
             thread_extension_init,
             ..StartThreadOptions::new(test.config.clone())
         })

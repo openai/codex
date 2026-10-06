@@ -713,7 +713,7 @@ impl CodexThread {
     fn thread_settings_update(overrides: CodexThreadSettingsOverrides) -> SessionSettingsUpdate {
         let CodexThreadSettingsOverrides {
             turn_extension_init,
-            environments,
+            environments: environment_requests,
             runtime_workspace_roots,
             profile_workspace_roots,
             approval_policy,
@@ -742,7 +742,7 @@ impl CodexThread {
                 approval_policy,
                 approvals_reviewer,
             },
-            environments,
+            environments: environment_requests,
             runtime_workspace_roots,
             profile_workspace_roots,
             sandbox_policy,

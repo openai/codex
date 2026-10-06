@@ -1,6 +1,7 @@
 //! Checkpoint replay preserves retained evidence across migration and independent review rollback.
 //! A retired managed opt-out cannot disable capture or later checkpoint promotion.
 
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -73,7 +74,12 @@ pub(super) async fn resume(
     Ok(test
         .thread_manager
         .start_thread(StartThreadOptions {
-            environments: Some(environments),
+            environments: Some(
+                environments
+                    .into_iter()
+                    .map(TurnEnvironmentSelection::into_request)
+                    .collect(),
+            ),
             initial_history: InitialHistory::Resumed(ResumedHistory {
                 history_revision: None,
                 conversation_id: thread_id,

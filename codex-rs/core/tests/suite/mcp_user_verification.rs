@@ -96,7 +96,7 @@ async fn mcp_user_verification_rejects_configured_servers(source: CapabilitySour
         .thread_manager
         .start_thread(StartThreadOptions {
             client_mcp_extensions,
-            environments: Some(vec![test.executor_environment().selection().clone()]),
+            environments: Some(vec![test.executor_environment().request()]),
             ..StartThreadOptions::new(config)
         })
         .await?

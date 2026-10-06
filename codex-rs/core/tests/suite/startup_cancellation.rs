@@ -1,5 +1,6 @@
 //! Cancelling partially initialized sessions must release their persistent writers.
 
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -80,7 +81,13 @@ async fn cancelled_resume_releases_writer_while_mcp_startup_is_pending() -> Resu
         .context("local thread store")?;
     let resume_options = || StartThreadOptions {
         initial_history: history.clone(),
-        environments: Some(environments.clone()),
+        environments: Some(
+            environments
+                .clone()
+                .into_iter()
+                .map(TurnEnvironmentSelection::into_request)
+                .collect(),
+        ),
         ..StartThreadOptions::new(test.config.clone())
     };
 
@@ -149,7 +156,13 @@ async fn failed_resume_releases_writer_before_returning() -> Result<()> {
     config.mcp_servers.set(servers)?;
     let resume_options = || StartThreadOptions {
         initial_history: history.clone(),
-        environments: Some(environments.clone()),
+        environments: Some(
+            environments
+                .clone()
+                .into_iter()
+                .map(TurnEnvironmentSelection::into_request)
+                .collect(),
+        ),
         ..StartThreadOptions::new(config.clone())
     };
 

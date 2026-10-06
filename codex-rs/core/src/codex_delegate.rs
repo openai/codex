@@ -11,6 +11,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 use std::time::Duration;
@@ -135,7 +136,11 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         parent_trace: None,
-        environment_selections: parent_environments.to_selections(),
+        environment_requests: parent_environments
+            .to_selections()
+            .into_iter()
+            .map(TurnEnvironmentSelection::into_request)
+            .collect(),
         thread_extension_init,
         turn_extension_init: Default::default(),
         client_mcp_extensions: parent_session.services.client_mcp_extensions.clone(),

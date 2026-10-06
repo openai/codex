@@ -1122,7 +1122,7 @@ async fn opted_in_executor_provider_skips_host_discovery_but_injects_discovered_
             // Keep the trace fixture's legacy mode: paginated SQLite workers can close
             // spans through a different subscriber than this test's scoped collector.
             history_mode: Some(codex_protocol::protocol::ThreadHistoryMode::Legacy),
-            environments: Some(vec![environment.clone()]),
+            environments: Some(vec![environment.clone().into_request()]),
             thread_extension_init,
             ..StartThreadOptions::new(executor_config)
         })
@@ -1584,7 +1584,7 @@ async fn executor_skill_tool_reads_references_under_current_permissions(
     let thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            environments: Some(vec![selection]),
+            environments: Some(vec![selection.into_request()]),
             thread_extension_init,
             ..StartThreadOptions::new(config)
         })
@@ -3125,7 +3125,7 @@ async fn production_turn_keeps_rebalanced_catalogs_stable_after_compaction_and_r
     let cloud_thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            environments: Some(vec![pending_selection.clone()]),
+            environments: Some(vec![pending_selection.clone().into_request()]),
             thread_extension_init: thread_extension_init.clone(),
             ..StartThreadOptions::new(test.config.clone())
         })
@@ -3247,7 +3247,7 @@ async fn production_turn_keeps_rebalanced_catalogs_stable_after_compaction_and_r
                 history: Arc::new(history.items),
                 rollout_path: cloud_thread.session_configured.rollout_path.clone(),
             }),
-            environments: Some(vec![pending_selection.clone()]),
+            environments: Some(vec![pending_selection.clone().into_request()]),
             thread_extension_init,
             ..StartThreadOptions::new(test.config.clone())
         })

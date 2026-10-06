@@ -244,7 +244,7 @@ async fn hosted_apps_protocol_override_preserves_native_verification() -> anyhow
                 OPENAI_ELICITATION_EXTENSION_ID.to_string(),
                 json!({"userVerification": {}}),
             )]),
-            environments: Some(vec![fixture.executor_environment().selection().clone()]),
+            environments: Some(vec![fixture.executor_environment().request()]),
             ..StartThreadOptions::new(fixture.config.clone())
         })
         .await?

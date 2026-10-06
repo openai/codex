@@ -1387,7 +1387,12 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
                 initial_history: InitialHistory::Forked(vec![RolloutItem::ResponseItem(
                     user_msg("parent history must not be inherited").into(),
                 )]),
-                environments: Some(reviewer_environments),
+                environments: Some(
+                    reviewer_environments
+                        .into_iter()
+                        .map(TurnEnvironmentSelection::into_request)
+                        .collect(),
+                ),
                 ..StartThreadOptions::new(config)
             },
         )
@@ -1990,7 +1995,13 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     let source = manager
         .start_thread(StartThreadOptions {
             history_mode: Some(ThreadHistoryMode::Legacy),
-            environments: Some(environments.clone()),
+            environments: Some(
+                environments
+                    .clone()
+                    .into_iter()
+                    .map(TurnEnvironmentSelection::into_request)
+                    .collect(),
+            ),
             ..StartThreadOptions::new(source_config)
         })
         .await

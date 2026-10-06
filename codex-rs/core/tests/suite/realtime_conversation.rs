@@ -696,8 +696,7 @@ async fn conversation_websocket_transports_send_codex_headers_without_creating_a
         .thread_manager
         .start_thread(StartThreadOptions {
             thread_source: thread_source.clone(),
-            environments: Some(test.codex.config_snapshot().await.environments.environments),
-            ..StartThreadOptions::new(test.config.clone())
+            ..test.start_thread_options().await
         })
         .await?;
     let codex = &conversation.thread;
@@ -848,8 +847,7 @@ async fn conversation_webrtc_frameless_chatgpt_sends_codex_headers_to_backend(
 
     let mut options = StartThreadOptions {
         thread_source: thread_source.clone(),
-        environments: Some(test.codex.config_snapshot().await.environments.environments),
-        ..StartThreadOptions::new(test.config.clone())
+        ..test.start_thread_options().await
     };
     let conversation = if thread_source == Some(ThreadSource::GuardianReview) {
         options.session_source = Some(SessionSource::Internal(InternalSessionSource::Guardian));

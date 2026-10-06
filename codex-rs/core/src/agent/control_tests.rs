@@ -1722,7 +1722,7 @@ async fn pending_environment_failure_reaches_child_and_grandchild() {
     let root = harness
         .manager
         .start_thread(StartThreadOptions {
-            environments: Some(vec![pending.clone()]),
+            environments: Some(vec![pending.clone().into_request()]),
             ..StartThreadOptions::new(harness.config.clone())
         })
         .await

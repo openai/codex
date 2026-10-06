@@ -99,6 +99,9 @@ pub use crate::approvals::NetworkPolicyAmendment;
 pub use crate::approvals::NetworkPolicyRuleAction;
 pub use crate::environment::EnvironmentConfig;
 pub use crate::environment::EnvironmentConfigState;
+pub use crate::environment::TurnEnvironmentRequest;
+pub use crate::environment::TurnEnvironmentSelection;
+pub use crate::environment::TurnEnvironmentSelections;
 pub use crate::environment::has_full_access;
 pub use crate::legacy_events::HasLegacyEvent;
 pub use crate::permissions::FileSystemAccessMode;
@@ -146,34 +149,6 @@ pub fn strip_user_message_prefix(text: &str) -> &str {
     match text.find(USER_MESSAGE_BEGIN) {
         Some(idx) => text[idx + USER_MESSAGE_BEGIN.len()..].trim(),
         None => text.trim(),
-    }
-}
-
-// TODO(anp): Replace `TurnEnvironmentSelection` with `PathUri` once path URIs carry environment
-// identifiers.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TurnEnvironmentSelection {
-    pub environment_id: String,
-    pub cwd: PathUri,
-    pub workspace_roots: Vec<PathUri>,
-    pub config: EnvironmentConfigState,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TurnEnvironmentSelections {
-    pub legacy_fallback_cwd: AbsolutePathBuf,
-    pub environments: Vec<TurnEnvironmentSelection>,
-}
-
-impl TurnEnvironmentSelections {
-    pub fn new(
-        legacy_fallback_cwd: AbsolutePathBuf,
-        environments: Vec<TurnEnvironmentSelection>,
-    ) -> Self {
-        Self {
-            legacy_fallback_cwd,
-            environments,
-        }
     }
 }
 
@@ -513,7 +488,7 @@ pub struct ThreadSettingsOverrides {
     pub environments: Option<TurnEnvironmentSelections>,
 
     /// Updated top-level runtime workspace roots for default environments.
-    /// Explicit environment selections own their roots separately.
+    /// Explicit environment requests own their workspace roots separately.
     pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
 
     /// Updated profile-defined workspace roots for status summaries and

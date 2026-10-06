@@ -461,6 +461,7 @@ use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::SessionConfiguredEvent;
 #[cfg(test)]
 use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::TurnEnvironmentRequest;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::W3cTraceContext;
@@ -637,14 +638,14 @@ fn resolve_request_cwd(cwd: Option<PathBuf>) -> Result<Option<AbsolutePathBuf>, 
     .transpose()
 }
 
-fn resolve_turn_environment_selections(
+fn resolve_turn_environment_requests(
     thread_manager: &ThreadManager,
     environments: Option<Vec<TurnEnvironmentParams>>,
-) -> Result<Option<Vec<TurnEnvironmentSelection>>, JSONRPCErrorError> {
+) -> Result<Option<Vec<TurnEnvironmentRequest>>, JSONRPCErrorError> {
     let Some(environments) = environments else {
         return Ok(None);
     };
-    let mut selections = Vec::with_capacity(environments.len());
+    let mut requests = Vec::with_capacity(environments.len());
     for environment in environments {
         let environment_id = environment.environment_id;
         let cwd = environment
@@ -674,16 +675,21 @@ fn resolve_turn_environment_selections(
             })
             .transpose()?
             .unwrap_or_else(|| vec![cwd.clone()]);
-        selections.push(TurnEnvironmentSelection {
+        requests.push(TurnEnvironmentRequest {
             environment_id,
             cwd,
             workspace_roots,
             config: EnvironmentConfigState::FromThread,
         });
     }
-    validate_environment_ids_and_cwds(&thread_manager.environment_manager(), &selections)
-        .map_err(environment_selection_error)?;
-    Ok(Some(selections))
+    validate_environment_ids_and_cwds(
+        &thread_manager.environment_manager(),
+        requests
+            .iter()
+            .map(|request| (request.environment_id.as_str(), &request.cwd)),
+    )
+    .map_err(environment_selection_error)?;
+    Ok(Some(requests))
 }
 
 fn resolve_runtime_workspace_roots(workspace_roots: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
