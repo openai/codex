@@ -1,4 +1,5 @@
-//! Responsive hook browsing presentation; trust and toggle policies stay in the view.
+//! Responsive hook browsing presentation, including URL-preserving wrapped details.
+//! Trust and toggle policies stay in the view; truncation ellipses stay outside links.
 
 use super::*;
 use crate::bottom_pane::picker_style;
@@ -6,6 +7,7 @@ use crate::bottom_pane::selection_popup_common::RenderedRows;
 use crate::render::Insets;
 use crate::render::RectExt;
 use ratatui::widgets::Wrap;
+use unicode_width::UnicodeWidthStr;
 
 impl HooksBrowserView {
     // Keep the existing yellow warning treatment for hooks awaiting review.
@@ -151,13 +153,92 @@ impl Renderable for HooksBrowserView {
                         Layout::vertical([Constraint::Length(list_height), Constraint::Fill(1)])
                             .areas(body);
                     render_line_rows(list, buf, rows, self.state);
-                    Paragraph::new(self.detail_lines(event, usize::from(content.width)))
-                        .render(details.inset(Insets::vh(/*v*/ 0, /*h*/ 2)), buf);
+                    crate::terminal_hyperlinks::HyperlinkParagraph::new(
+                        &self.detail_lines(event, usize::from(content.width)),
+                        ratatui::style::Style::default(),
+                    )
+                    .render(details.inset(Insets::vh(/*v*/ 0, /*h*/ 2)), buf);
                 }
             }
         }
         self.render_footer(footer, buf);
     }
+}
+
+pub(super) fn detail_line(label: &str, value: &str) -> crate::terminal_hyperlinks::HyperlinkLine {
+    crate::terminal_hyperlinks::annotate_web_urls_in_line(Line::from(vec![
+        format!("{label:<10}").into(),
+        value.to_string().dim(),
+    ]))
+}
+
+pub(super) fn detail_wrapped_lines(
+    label: &str,
+    value: &str,
+    width: usize,
+    max_lines: Option<usize>,
+) -> Vec<crate::terminal_hyperlinks::HyperlinkLine> {
+    let label_width = label.width().saturating_add(1).max(10);
+    let available = width.saturating_sub(label_width).max(1);
+    let mut first = true;
+    let mut lines = value
+        .split('\n')
+        .flat_map(|text| {
+            let source =
+                crate::terminal_hyperlinks::annotate_web_urls_in_line(text.to_owned().dim().into());
+            let wrapped = crate::wrapping::wrap_ranges_trim(text, available)
+                .into_iter()
+                .map(|range| {
+                    let prefix = if first {
+                        first = false;
+                        format!("{label:<label_width$}")
+                    } else {
+                        " ".repeat(label_width)
+                    };
+                    crate::wrapping::WrappedLine {
+                        line: vec![prefix.into(), text[range.clone()].to_owned().dim()].into(),
+                        range,
+                        prefix_bytes: label_width,
+                    }
+                })
+                .collect();
+            crate::terminal_hyperlinks::remap_source_wrapped_line(&source, wrapped)
+        })
+        .collect::<Vec<_>>();
+    let Some(max_lines) = max_lines else {
+        return lines;
+    };
+    if lines.len() <= max_lines {
+        return lines;
+    }
+
+    lines.truncate(max_lines);
+    if let Some(last_line) = lines.last_mut() {
+        let prefix_width = last_line.line.spans[..last_line.line.spans.len().saturating_sub(1)]
+            .iter()
+            .map(ratatui::prelude::Span::width)
+            .sum::<usize>();
+        let max_width = width.saturating_sub(prefix_width);
+        let Some(last_span) = last_line.line.spans.last_mut() else {
+            return lines;
+        };
+        let truncated = truncate_line_with_ellipsis_if_overflow(
+            Line::from(format!("{}…", last_span.content)),
+            max_width,
+        );
+        let content = truncated
+            .spans
+            .into_iter()
+            .map(|span| span.content.into_owned())
+            .collect::<String>();
+        let visible_end = prefix_width + crate::width::display_width(content.trim_end_matches('…'));
+        last_span.content = content.into();
+        last_line.hyperlinks.retain_mut(|link| {
+            link.columns.end = link.columns.end.min(visible_end);
+            !link.columns.is_empty()
+        });
+    }
+    lines
 }
 
 #[cfg(test)]

@@ -1,0 +1,23 @@
+---
+source: tui/src/bottom_pane/hooks_browser_render_tests.rs
+expression: "render_lines(&view, 44)"
+---
+                                            
+  PreToolUse hooks                          
+  Turn hooks on or off. Your changes are    
+  saved automatically.                      
+                                            
+› [x]  1  Unnamed hook                      
+                                            
+  Event     PreToolUse                      
+  Matcher   Bash                            
+  Source    User config - /tmp/h.json       
+  Command   curl https://github.com/        
+            openai/codex/pull/12345?        
+            diff=split&review=complete-…    
+  Mode      Sync                            
+  Timeout   30s                             
+  Trust     Trusted                         
+                                            
+                                            
+  space/enter toggle · esc back

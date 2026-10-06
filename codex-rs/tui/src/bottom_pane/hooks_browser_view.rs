@@ -18,8 +18,9 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use strum::IntoEnumIterator;
-use unicode_width::UnicodeWidthStr;
 
+use self::render::detail_line;
+use self::render::detail_wrapped_lines;
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 use super::picker_style::selection_style;
@@ -487,9 +488,15 @@ impl HooksBrowserView {
             .collect()
     }
 
-    fn detail_lines(&self, event_name: HookEventName, width: usize) -> Vec<Line<'static>> {
+    fn detail_lines(
+        &self,
+        event_name: HookEventName,
+        width: usize,
+    ) -> Vec<crate::terminal_hyperlinks::HyperlinkLine> {
         let Some(hook) = self.selected_hook(event_name) else {
-            return vec!["No hooks installed for this event.".dim().into()];
+            return crate::terminal_hyperlinks::plain_hyperlink_lines(vec![
+                "No hooks installed for this event.".dim().into(),
+            ]);
         };
 
         let mut lines = vec![detail_line("Event", event_label(event_name))];
@@ -775,59 +782,6 @@ fn config_source_label(source: HookSource) -> &'static str {
     }
 }
 
-fn detail_line(label: &str, value: &str) -> Line<'static> {
-    Line::from(vec![format!("{label:<10}").into(), value.to_string().dim()])
-}
-
-fn detail_wrapped_lines(
-    label: &str,
-    value: &str,
-    width: usize,
-    max_lines: Option<usize>,
-) -> Vec<Line<'static>> {
-    let label_width = label.width().saturating_add(1).max(10);
-    let prefix = format!("{label:<label_width$}");
-    let available = width.saturating_sub(prefix.width()).max(1);
-    let mut wrapped = textwrap::wrap(value, available).into_iter();
-    let first = wrapped.next().unwrap_or_default().into_owned();
-    let mut lines = vec![Line::from(vec![prefix.into(), first.dim()])];
-    lines.extend(wrapped.map(|line| {
-        Line::from(vec![
-            " ".repeat(label_width).into(),
-            line.into_owned().dim(),
-        ])
-    }));
-    let Some(max_lines) = max_lines else {
-        return lines;
-    };
-    if lines.len() <= max_lines {
-        return lines;
-    }
-
-    lines.truncate(max_lines);
-    if let Some(last_line) = lines.last_mut() {
-        let prefix_width = last_line.spans[..last_line.spans.len().saturating_sub(1)]
-            .iter()
-            .map(ratatui::prelude::Span::width)
-            .sum::<usize>();
-        let max_width = width.saturating_sub(prefix_width);
-        let Some(last_span) = last_line.spans.last_mut() else {
-            return lines;
-        };
-        let truncated = truncate_line_with_ellipsis_if_overflow(
-            Line::from(format!("{}…", last_span.content)),
-            max_width,
-        );
-        let content = truncated
-            .spans
-            .into_iter()
-            .map(|span| span.content.into_owned())
-            .collect::<String>();
-        last_span.content = content.into();
-    }
-    lines
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -854,7 +808,7 @@ mod tests {
     use ratatui::style::Modifier;
     use tokio::sync::mpsc::unbounded_channel;
 
-    fn render_lines(view: &HooksBrowserView, width: u16) -> String {
+    pub(super) fn render_lines(view: &HooksBrowserView, width: u16) -> String {
         let height = view.desired_height(width);
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
@@ -868,7 +822,7 @@ mod tests {
                         if symbol.is_empty() {
                             " ".to_string()
                         } else {
-                            symbol.to_string()
+                            crate::terminal_hyperlinks::strip_osc8(symbol)
                         }
                     })
                     .collect::<String>();
@@ -881,7 +835,7 @@ mod tests {
             .join("\n")
     }
 
-    fn render_buffer(view: &HooksBrowserView, width: u16) -> Buffer {
+    pub(super) fn render_buffer(view: &HooksBrowserView, width: u16) -> Buffer {
         let height = view.desired_height(width);
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
@@ -890,7 +844,7 @@ mod tests {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn hook(
+    pub(super) fn hook(
         key: &str,
         event_name: HookEventName,
         source: HookSource,
