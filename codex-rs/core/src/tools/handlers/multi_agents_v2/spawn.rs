@@ -228,6 +228,8 @@ async fn handle_spawn_agent(
         &session,
         turn,
         SubAgentActivityItem {
+            model: Some(agent_snapshot.model.clone()),
+            reasoning_effort: agent_snapshot.reasoning_effort.clone(),
             id: call_id,
             agent_thread_id: new_thread_id,
             agent_path: new_agent_path.clone(),

@@ -359,6 +359,10 @@ pub struct CollabAgentToolCallItem {
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
 pub struct SubAgentActivityItem {
+    /// Resolved model at sub-agent creation; absent from older records and other activities.
+    pub model: Option<String>,
+    /// Resolved reasoning effort at sub-agent creation, when known.
+    pub reasoning_effort: Option<ReasoningEffortConfig>,
     pub id: String,
     pub kind: SubAgentActivityKind,
     pub agent_thread_id: ThreadId,

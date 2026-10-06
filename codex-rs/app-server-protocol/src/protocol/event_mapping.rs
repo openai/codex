@@ -183,6 +183,8 @@ pub fn item_event_to_server_notification(
         }
         EventMsg::SubAgentActivity(activity) => {
             let item = ThreadItem::SubAgentActivity {
+                model: activity.model,
+                reasoning_effort: activity.reasoning_effort,
                 id: activity.event_id,
                 kind: activity.kind.into(),
                 agent_thread_id: activity.agent_thread_id.to_string(),

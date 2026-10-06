@@ -53,6 +53,8 @@ pub trait AgentControl: Send + Sync {
     ) -> BoxFuture<'a, Result<ThreadId>>;
 
     /// Start a child and accept its initial input, returning its effective settings.
+    /// V2 snapshots resolve effort against captured startup metadata without changing the
+    /// child's configured effort (for example, Ultra still enables proactive behavior).
     fn spawn(
         &self,
         request: SpawnRequest,

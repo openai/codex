@@ -3252,6 +3252,8 @@ mod tests {
                     thread_id: conversation_id,
                     turn_id: "turn-1".to_string(),
                     item: CoreTurnItem::SubAgentActivity(SubAgentActivityItem {
+                        model: None,
+                        reasoning_effort: None,
                         id: "activity-1".to_string(),
                         kind: SubAgentActivityKind::Interrupted,
                         agent_thread_id: child_thread_id,
@@ -3286,6 +3288,8 @@ mod tests {
             payload,
             ItemCompletedNotification {
                 item: ThreadItem::SubAgentActivity {
+                    model: None,
+                    reasoning_effort: None,
                     id: "activity-1".to_string(),
                     kind: codex_app_server_protocol::SubAgentActivityKind::Interrupted,
                     agent_thread_id: child_thread_id_string,

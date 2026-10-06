@@ -73,6 +73,8 @@ impl LocalAgentControl {
                         initiating_thread_id,
                         parent_turn_id,
                         SubAgentActivityItem {
+                            model: None,
+                            reasoning_effort: None,
                             id: format!("subagent-completed-{}", outcome.turn_id),
                             kind: SubAgentActivityKind::Completed,
                             agent_thread_id: outcome.thread_id,

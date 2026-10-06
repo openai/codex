@@ -15,6 +15,8 @@ enum FinalizedEvent {
 
 fn complete_subagent(chat: &mut ChatWidget, id: &str) {
     let item = AppServerThreadItem::SubAgentActivity {
+        model: None,
+        reasoning_effort: None,
         id: id.to_string(),
         kind: codex_app_server_protocol::SubAgentActivityKind::Completed,
         agent_thread_id: ThreadId::new().to_string(),

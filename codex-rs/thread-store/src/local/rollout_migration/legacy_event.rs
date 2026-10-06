@@ -258,6 +258,8 @@ pub(super) fn completed_item(
         )),
         EventMsg::SubAgentActivity(event) => Some((
             TurnItem::SubAgentActivity(SubAgentActivityItem {
+                model: event.model.clone(),
+                reasoning_effort: event.reasoning_effort.clone(),
                 id: event.event_id.clone(),
                 kind: event.kind,
                 agent_thread_id: event.agent_thread_id,

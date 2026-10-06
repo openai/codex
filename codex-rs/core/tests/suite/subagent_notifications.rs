@@ -2211,14 +2211,20 @@ async fn spawned_multi_agent_v2_child_inherits_parent_developer_context() -> Res
     Ok(())
 }
 
-#[test_case(None, false; "encrypted")]
-#[test_case(None, true; "plaintext")]
-#[test_case(Some("gpt-5.6-luna"), false; "luna encrypted leaf")]
-#[test_case(Some("gpt-5.5"), false; "legacy encrypted leaf")]
+#[test_case(None, None, Some(ReasoningEffort::Ultra), Some("medium"), false, ThreadHistoryMode::Legacy; "encrypted")]
+#[test_case(None, None, Some(ReasoningEffort::Ultra), Some("medium"), true, ThreadHistoryMode::Paginated; "plaintext")]
+#[test_case(Some("gpt-5.6-luna"), None, Some(ReasoningEffort::Ultra), Some("medium"), false, ThreadHistoryMode::Legacy; "luna encrypted leaf")]
+#[test_case(Some("gpt-5.5"), Some(ReasoningEffort::High), Some(ReasoningEffort::Ultra), Some("high"), false, ThreadHistoryMode::Paginated; "legacy encrypted leaf")]
+#[test_case(None, None, Some(ReasoningEffort::Persistent), Some("disabled"), false, ThreadHistoryMode::Paginated; "inherited persistent effort")]
+#[test_case(None, None, None, None, false, ThreadHistoryMode::Legacy; "unknown model without effort default")]
 #[tokio::test]
 async fn multi_agent_v2_spawn_sends_agent_message_to_child(
     model: Option<&str>,
+    reasoning_effort: Option<ReasoningEffort>,
+    parent_reasoning_effort: Option<ReasoningEffort>,
+    expected_reasoning_effort: Option<&str>,
     plaintext: bool,
+    history_mode: ThreadHistoryMode,
 ) -> Result<()> {
     let output: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
     let subscriber = tracing_subscriber::fmt()
@@ -2248,6 +2254,9 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
         if model == "gpt-5.5" {
             spawn_args["fork_turns"] = json!("none");
         }
+    }
+    if let Some(reasoning_effort) = reasoning_effort {
+        spawn_args["reasoning_effort"] = json!(reasoning_effort);
     }
     let spawn_args = serde_json::to_string(&spawn_args)?;
     let mut spawn_event = ev_function_call_with_namespace(
@@ -2297,8 +2306,10 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
         "koffing"
     };
     let mut builder = test_codex()
+        .with_history_mode(history_mode)
         .with_model(parent_model)
         .with_config(move |config| {
+            config.model_reasoning_effort = parent_reasoning_effort;
             config
                 .features
                 .enable(Feature::Collab)
@@ -2317,8 +2328,31 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
     let test = builder.build(&server).await?;
     let root_thread_id = test.session_configured.thread_id;
 
-    test.submit_turn(TURN_1_PROMPT).await?;
-
+    test.submit_text_turn(TURN_1_PROMPT).await?;
+    test.codex.ensure_rollout_materialized().await;
+    test.codex.flush_rollout().await?;
+    let rollout = codex_rollout::RolloutRecorder::get_rollout_history(
+        &test.codex.rollout_path().expect("parent rollout path"),
+    )
+    .await?;
+    let settings = rollout
+        .get_rollout_items()
+        .iter()
+        .find_map(|item| match item {
+            RolloutItem::EventMsg(EventMsg::ItemCompleted(completed)) => match &completed.item {
+                TurnItem::SubAgentActivity(activity) if activity.id == SPAWN_CALL_ID => {
+                    Some((activity.model.clone(), activity.reasoning_effort.clone()))
+                }
+                _ => None,
+            },
+            RolloutItem::EventMsg(EventMsg::SubAgentActivity(activity))
+                if activity.event_id == SPAWN_CALL_ID =>
+            {
+                Some((activity.model.clone(), activity.reasoning_effort.clone()))
+            }
+            _ => None,
+        })
+        .expect("persisted spawn activity");
     // The response mock records candidate requests before its request matcher runs, so wait for
     // the child request instead of assuming the latest recorded request is already it.
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -2335,6 +2369,25 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
         }
         sleep(Duration::from_millis(10)).await;
     };
+    let child_body = child_request.body_json();
+    let expected_settings = (
+        Some(model.unwrap_or(parent_model)),
+        expected_reasoning_effort,
+    );
+    assert_eq!(
+        (
+            settings.0.as_deref(),
+            settings.1.as_ref().map(ReasoningEffort::as_str),
+        ),
+        expected_settings,
+    );
+    assert_eq!(
+        (
+            child_body["model"].as_str(),
+            child_body["reasoning"]["effort"].as_str(),
+        ),
+        expected_settings,
+    );
     let content = if plaintext {
         vec![json!({
             "type": "input_text",
@@ -2365,8 +2418,7 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
             "content": content,
         })])
     );
-    if let Some(model) = model {
-        assert_eq!(child_request.body_json()["model"], json!(model));
+    if model.is_some() {
         assert!(
             !child_request
                 .body_json()
@@ -2778,6 +2830,8 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
         assert_eq!(
             completed_item,
             &SubAgentActivityItem {
+                model: None,
+                reasoning_effort: None,
                 id: format!("subagent-completed-{child_turn_id}"),
                 kind: SubAgentActivityKind::Completed,
                 agent_thread_id: child_thread_id,
@@ -3094,6 +3148,8 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn(
             requester_thread_id,
             requester_turn_id,
             SubAgentActivityItem {
+                model: None,
+                reasoning_effort: None,
                 id: format!("subagent-completed-{worker_followup_turn_id}"),
                 kind: SubAgentActivityKind::Completed,
                 agent_thread_id: worker_thread_id,

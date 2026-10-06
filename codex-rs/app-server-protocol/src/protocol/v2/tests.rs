@@ -33,6 +33,7 @@ use codex_protocol::models::ImageReference as CoreImageReference;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemAccessMode as CoreFileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath as CoreFileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry as CoreFileSystemSandboxEntry;
@@ -3446,8 +3447,10 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     );
 
     let sub_agent_activity_item = TurnItem::SubAgentActivity(SubAgentActivityItem {
+        model: Some("gpt-5".into()),
+        reasoning_effort: Some(ReasoningEffort::High),
         id: "activity-1".to_string(),
-        kind: CoreSubAgentActivityKind::Completed,
+        kind: CoreSubAgentActivityKind::Started,
         agent_thread_id: receiver_thread_id,
         agent_path: codex_protocol::AgentPath::root()
             .join("worker")
@@ -3457,11 +3460,33 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     assert_eq!(
         ThreadItem::from(sub_agent_activity_item),
         ThreadItem::SubAgentActivity {
+            model: Some("gpt-5".into()),
+            reasoning_effort: Some(ReasoningEffort::High),
             id: "activity-1".to_string(),
-            kind: SubAgentActivityKind::Completed,
+            kind: SubAgentActivityKind::Started,
             agent_thread_id: receiver_thread_id.to_string(),
             agent_path: "/root/worker".to_string(),
         }
+    );
+
+    let old_activity: SubAgentActivityItem = serde_json::from_value(json!({
+        "id": "old-activity",
+        "kind": "started",
+        "agent_thread_id": receiver_thread_id,
+        "agent_path": "/root/worker",
+    }))
+    .unwrap();
+    let old_wire_activity: ThreadItem = serde_json::from_value(json!({
+        "type": "subAgentActivity",
+        "id": "old-activity",
+        "kind": "started",
+        "agentThreadId": receiver_thread_id,
+        "agentPath": "/root/worker",
+    }))
+    .unwrap();
+    assert_eq!(
+        ThreadItem::from(TurnItem::SubAgentActivity(old_activity)),
+        old_wire_activity
     );
 
     let search_item = TurnItem::WebSearch(CoreWebSearchItem {

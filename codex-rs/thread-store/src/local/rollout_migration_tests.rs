@@ -431,6 +431,22 @@ async fn migration_projects_explicit_and_implicit_legacy_completed_items() {
         "payload": {"type": "agent_reasoning_raw_content", "text": "raw"}
     }))
     .expect("build legacy reasoning content");
+    let child_id = ThreadId::new();
+    let [old_activity, activity] = [None, Some("gpt-5")].map(|model| {
+        let mut payload = json!({
+            "type": "sub_agent_activity",
+            "event_id": if model.is_some() { "spawn" } else { "old-spawn" },
+            "kind": "started",
+            "agent_thread_id": child_id,
+            "agent_path": "/root/worker",
+        });
+        if let Some(model) = model {
+            payload["model"] = json!(model);
+            payload["reasoning_effort"] = json!("high");
+        }
+        serde_json::from_value(json!({"type": "event_msg", "payload": payload}))
+            .expect("build legacy activity")
+    });
     write_rollout(
         home.path(),
         thread_id,
@@ -438,6 +454,8 @@ async fn migration_projects_explicit_and_implicit_legacy_completed_items() {
         vec![
             started("explicit"),
             exec,
+            old_activity,
+            activity,
             completed("explicit"),
             reasoning,
             raw_reasoning,
@@ -466,13 +484,13 @@ async fn migration_projects_explicit_and_implicit_legacy_completed_items() {
         })
         .await
         .expect("read projected items");
-    assert_eq!(items.items.len(), 2);
+    assert_eq!(items.items.len(), 4);
     assert_eq!(items.items[0].turn_id, "explicit");
-    assert_eq!(items.items[1].turn_id, turns.turns[1].turn_id);
+    assert_eq!(items.items[3].turn_id, turns.turns[1].turn_id);
     let command: serde_json::Value =
         serde_json::from_slice(&items.items[0].item_json).expect("parse projected command");
     let reasoning: serde_json::Value =
-        serde_json::from_slice(&items.items[1].item_json).expect("parse projected reasoning");
+        serde_json::from_slice(&items.items[3].item_json).expect("parse projected reasoning");
     assert_eq!(command["type"], "commandExecution");
     let aggregated_output = command["aggregatedOutput"]
         .as_str()
@@ -484,6 +502,21 @@ async fn migration_projects_explicit_and_implicit_legacy_completed_items() {
     assert_eq!(reasoning["type"], "reasoning");
     assert_eq!(reasoning["summary"], json!(["summary"]));
     assert_eq!(reasoning["content"], json!(["raw"]));
+    for (item, model) in items.items[1..3].iter().zip([None, Some("gpt-5")]) {
+        assert_eq!(item.turn_id, "explicit");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&item.item_json).unwrap(),
+            json!({
+                "type": "subAgentActivity",
+                "id": if model.is_some() { "spawn" } else { "old-spawn" },
+                "kind": "started",
+                "agentThreadId": child_id,
+                "agentPath": "/root/worker",
+                "model": model,
+                "reasoningEffort": model.map(|_| "high"),
+            })
+        );
+    }
 }
 
 #[tokio::test]

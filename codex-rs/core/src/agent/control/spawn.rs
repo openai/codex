@@ -900,6 +900,25 @@ impl LocalAgentControl {
         }
         let durability_wait = durability_wait_started_at.elapsed();
 
+        // Capture startup settings before the child can publish metadata for a later turn.
+        let spawn_config = if multi_agent_version == MultiAgentVersion::V2 {
+            let mut config = new_thread.thread.config_snapshot().await;
+            let model_info = new_thread
+                .thread
+                .thread_extension_data()
+                .get::<codex_protocol::openai_models::ModelInfo>()
+                .ok_or_else(|| {
+                    CodexErr::Fatal("spawned thread is missing model metadata".to_string())
+                })?;
+            config.reasoning_effort = config
+                .reasoning_effort
+                .or_else(|| model_info.default_reasoning_level.clone())
+                .map(|effort| model_info.resolve_reasoning_effort(effort));
+            Some(config)
+        } else {
+            None
+        };
+
         let start_options = TurnStartOptions {
             parent_turn_id: options.parent_turn_id,
             turn_trigger: options.turn_trigger,
@@ -956,7 +975,10 @@ impl LocalAgentControl {
             metadata: agent_metadata,
             status: self.get_status(new_thread.thread_id).await,
         };
-        let config = new_thread.thread.config_snapshot().await;
+        let config = match spawn_config {
+            Some(config) => config,
+            None => new_thread.thread.config_snapshot().await,
+        };
         let session_telemetry = new_thread
             .thread
             .session_telemetry()

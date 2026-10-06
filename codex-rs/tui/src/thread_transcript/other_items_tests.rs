@@ -155,6 +155,8 @@ fn tool_and_notice_projection_uses_normal_transcript_presentation() {
             ..image
         }),
         ThreadItem::SubAgentActivity {
+            model: None,
+            reasoning_effort: None,
             id: "agent-1".to_string(),
             kind: SubAgentActivityKind::Completed,
             agent_thread_id: "01912345-1234-7123-8123-123456789abc".to_string(),

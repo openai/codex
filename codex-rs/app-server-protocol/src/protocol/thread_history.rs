@@ -1022,6 +1022,8 @@ impl ThreadHistoryBuilder {
         payload: &codex_protocol::protocol::SubAgentActivityEvent,
     ) {
         self.upsert_item_in_current_turn(ThreadItem::SubAgentActivity {
+            model: payload.model.clone(),
+            reasoning_effort: payload.reasoning_effort.clone(),
             id: payload.event_id.clone(),
             kind: payload.kind.into(),
             agent_thread_id: payload.agent_thread_id.to_string(),
@@ -5125,56 +5127,96 @@ mod tests {
 
     #[test]
     fn completed_sub_agent_activity_updates_completed_parent_turn() {
+        use codex_protocol::protocol::HasLegacyEvent;
+
         let child_thread_id = ThreadId::new();
         let child_path = codex_protocol::AgentPath::root()
             .join("worker")
             .expect("worker path");
-        let items = vec![
-            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
-                turn_attribution: None,
-                turn_id: "turn-a".into(),
-                root_turn_id: None,
-                trace_id: None,
-                started_at: None,
-                model_context_window: None,
-                collaboration_mode_kind: Default::default(),
-            })),
-            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
-                root_turn_id: None,
-                turn_id: "turn-a".into(),
-                started_at: None,
-                last_agent_message: None,
-                error: None,
-                completed_at: None,
-                duration_ms: None,
-                time_to_first_token_ms: None,
-            })),
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
-                thread_id: ThreadId::new(),
-                turn_id: "turn-a".into(),
-                item: CoreTurnItem::SubAgentActivity(CoreSubAgentActivityItem {
-                    id: "child-turn-completed".into(),
-                    kind: CoreSubAgentActivityKind::Completed,
-                    agent_thread_id: child_thread_id,
-                    agent_path: child_path,
-                }),
-                started_at_ms: None,
-                completed_at_ms: 0,
-            })),
-        ];
-
-        let turns = build_turns_from_rollout_items(&items);
-
-        assert_eq!(turns.len(), 1);
+        let spawn = ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-a".into(),
+            item: CoreTurnItem::SubAgentActivity(CoreSubAgentActivityItem {
+                model: Some("gpt-5".into()),
+                reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
+                id: "spawn-child".into(),
+                kind: CoreSubAgentActivityKind::Started,
+                agent_thread_id: child_thread_id,
+                agent_path: child_path.clone(),
+            }),
+            started_at_ms: Some(1),
+            completed_at_ms: 2,
+        };
+        let expected_spawn = ThreadItem::from(spawn.item.clone());
+        let legacy_spawn = spawn
+            .as_legacy_events(/*show_raw_agent_reasoning*/ false)
+            .pop()
+            .expect("legacy spawn activity");
+        let crate::ServerNotification::ItemCompleted(notification) =
+            crate::item_event_to_server_notification(legacy_spawn.clone(), "parent", "turn-a")
+        else {
+            panic!("expected item completed");
+        };
         assert_eq!(
-            turns[0].items,
-            vec![ThreadItem::SubAgentActivity {
-                id: "child-turn-completed".into(),
-                kind: crate::protocol::v2::SubAgentActivityKind::Completed,
-                agent_thread_id: child_thread_id.to_string(),
-                agent_path: "/root/worker".into(),
-            }]
+            (notification.item, notification.completed_at_ms),
+            (expected_spawn.clone(), 2)
         );
+        for spawn in [EventMsg::ItemCompleted(spawn), legacy_spawn] {
+            let items = vec![
+                RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                    turn_attribution: None,
+                    turn_id: "turn-a".into(),
+                    root_turn_id: None,
+                    trace_id: None,
+                    started_at: None,
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                })),
+                RolloutItem::EventMsg(spawn),
+                RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                    root_turn_id: None,
+                    turn_id: "turn-a".into(),
+                    started_at: None,
+                    last_agent_message: None,
+                    error: None,
+                    completed_at: None,
+                    duration_ms: None,
+                    time_to_first_token_ms: None,
+                })),
+                RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+                    thread_id: ThreadId::new(),
+                    turn_id: "turn-a".into(),
+                    item: CoreTurnItem::SubAgentActivity(CoreSubAgentActivityItem {
+                        model: None,
+                        reasoning_effort: None,
+                        id: "child-turn-completed".into(),
+                        kind: CoreSubAgentActivityKind::Completed,
+                        agent_thread_id: child_thread_id,
+                        agent_path: child_path.clone(),
+                    }),
+                    started_at_ms: None,
+                    completed_at_ms: 0,
+                })),
+            ];
+
+            let turns = build_turns_from_rollout_items(&items);
+
+            assert_eq!(turns.len(), 1);
+            assert_eq!(
+                turns[0].items,
+                vec![
+                    expected_spawn.clone(),
+                    ThreadItem::SubAgentActivity {
+                        model: None,
+                        reasoning_effort: None,
+                        id: "child-turn-completed".into(),
+                        kind: crate::protocol::v2::SubAgentActivityKind::Completed,
+                        agent_thread_id: child_thread_id.to_string(),
+                        agent_path: "/root/worker".into(),
+                    },
+                ]
+            );
+        }
     }
 
     #[test]

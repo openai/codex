@@ -19,6 +19,8 @@ use crate::ExecutionStatus;
 fn sub_agent_activity_is_a_terminal_tool_runtime_event() -> anyhow::Result<()> {
     let agent_thread_id = ThreadId::new();
     let event = EventMsg::SubAgentActivity(SubAgentActivityEvent {
+        model: Some("gpt-5".into()),
+        reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
         event_id: "call-spawn".to_string(),
         occurred_at_ms: 1234,
         agent_thread_id,
@@ -44,7 +46,9 @@ fn sub_agent_activity_is_a_terminal_tool_runtime_event() -> anyhow::Result<()> {
             "occurred_at_ms": 1234,
             "agent_thread_id": agent_thread_id,
             "agent_path": "/root/reviewer",
-            "kind": "started"
+            "kind": "started",
+            "model": "gpt-5",
+            "reasoning_effort": "high"
         })
     );
     Ok(())
@@ -53,6 +57,8 @@ fn sub_agent_activity_is_a_terminal_tool_runtime_event() -> anyhow::Result<()> {
 #[test]
 fn completed_sub_agent_activity_is_not_a_tool_runtime_event() -> anyhow::Result<()> {
     let event = EventMsg::SubAgentActivity(SubAgentActivityEvent {
+        model: None,
+        reasoning_effort: None,
         event_id: "child-turn-completed".to_string(),
         occurred_at_ms: 1234,
         agent_thread_id: ThreadId::new(),

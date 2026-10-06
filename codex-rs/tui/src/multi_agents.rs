@@ -681,6 +681,8 @@ mod tests {
     #[test]
     fn interacted_sub_agent_activity_does_not_change_liveness() {
         let item = ThreadItem::SubAgentActivity {
+            model: None,
+            reasoning_effort: None,
             id: "activity-1".to_string(),
             kind: SubAgentActivityKind::Interacted,
             agent_thread_id: ThreadId::new().to_string(),
@@ -694,6 +696,8 @@ mod tests {
     fn completed_sub_agent_activity_stops_running_liveness() {
         let thread_id = ThreadId::new();
         let item = ThreadItem::SubAgentActivity {
+            model: None,
+            reasoning_effort: None,
             id: "activity-1".to_string(),
             kind: SubAgentActivityKind::Completed,
             agent_thread_id: thread_id.to_string(),
