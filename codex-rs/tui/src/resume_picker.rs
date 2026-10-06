@@ -80,6 +80,10 @@ mod page_loading;
 #[path = "resume_picker_color_tests.rs"]
 mod color_tests;
 
+#[cfg(test)]
+#[path = "resume_picker_pagination_error_tests.rs"]
+mod pagination_error_tests;
+
 use page_loading::PageCwdFilter;
 use page_loading::PageLoadMode;
 use page_loading::PaginationState;
@@ -1526,7 +1530,19 @@ impl PickerState {
                     }));
                     return Ok(None);
                 }
-                let page = page.map_err(color_eyre::Report::from)?;
+                let page = match page {
+                    Ok(page) => page,
+                    Err(_) if !self.all_rows.is_empty() => {
+                        self.pagination.next_cursor = None;
+                        self.pending_page_down_target = None;
+                        self.frozen_footer_percent = None;
+                        self.search_state = SearchState::Idle;
+                        self.inline_error = Some("Could not load more sessions".to_string());
+                        self.request_frame();
+                        return Ok(None);
+                    }
+                    Err(err) => return Err(err.into()),
+                };
                 self.ingest_page(page);
                 self.complete_pending_page_down();
                 let completed_token = pending.search_token.or(search_token);

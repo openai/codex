@@ -280,7 +280,7 @@ async fn rejects_duplicate_labels_across_server_pages() -> color_eyre::Result<()
     let runtime = state_runtime(&config).await?;
     let mut relevant_ids = Vec::new();
     for index in 0..102 {
-        let thread_id = ThreadId::new();
+        let thread_id = ThreadId::from_string(&format!("00000000-0000-0000-0000-{index:012}"))?;
         if matches!(index, 0 | 1 | 101) {
             relevant_ids.push(thread_id);
         }
@@ -319,7 +319,7 @@ async fn rejects_duplicate_labels_across_server_pages() -> color_eyre::Result<()
     )
     .await
     .expect_err("duplicate labels should require an ID");
-    let unverified = lookup(
+    let unique = lookup(
         &mut app_server,
         config.codex_home.as_path(),
         "other-1",
@@ -327,8 +327,7 @@ async fn rejects_duplicate_labels_across_server_pages() -> color_eyre::Result<()
         &[resume_source_kinds(/*include_non_interactive*/ false)],
         Some(&config.model_provider_id),
     )
-    .await
-    .expect_err("paginated listings cannot prove uniqueness on older servers");
+    .await?;
     app_server.shutdown().await?;
     assert_eq!(
         error.to_string(),
@@ -338,11 +337,8 @@ async fn rejects_duplicate_labels_across_server_pages() -> color_eyre::Result<()
         )
     );
     assert_eq!(
-        unverified.to_string(),
-        format!(
-            "Cannot verify a unique session label across server pages; matching session UUID: {}. Use it only if this is the session you want.",
-            relevant_ids[1]
-        )
+        unique.map(|thread| thread.id),
+        Some(relevant_ids[1].to_string())
     );
     Ok(())
 }
@@ -447,10 +443,25 @@ async fn uses_listed_thread_when_older_server_cannot_read_it() -> color_eyre::Re
         .await?;
     embedded.shutdown().await?;
 
-    for mode in [ThreadParamsMode::Remote, ThreadParamsMode::Embedded] {
+    for (mode, next_cursor) in [
+        (ThreadParamsMode::Remote, None),
+        (ThreadParamsMode::Embedded, None),
+        (
+            ThreadParamsMode::Remote,
+            Some("2025-02-01T10:00:00Z".to_string()),
+        ),
+        (
+            ThreadParamsMode::Remote,
+            Some(format!("2025-02-01T10:00:00Z|{thread_id}")),
+        ),
+    ] {
+        let unverified_pagination = next_cursor
+            .as_ref()
+            .is_some_and(|cursor| !cursor.contains('|'));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("ws://{}", listener.local_addr()?);
         let listed_for_server = listed.clone();
+        let paginated = next_cursor.is_some();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
@@ -458,14 +469,32 @@ async fn uses_listed_thread_when_older_server_cannot_read_it() -> color_eyre::Re
                 let JSONRPCMessage::Request(request) = serde_json::from_str(&text).unwrap() else {
                     continue;
                 };
+                let last_page = request.method == "thread/list"
+                    && request
+                        .params
+                        .as_ref()
+                        .is_some_and(|params| params["cursor"].is_string());
                 let response = match request.method.as_str() {
                     "initialize" => {
                         json!({"id": request.id, "result": {"userAgent": "legacy-test"}})
                     }
-                    "thread/list" => json!({
-                        "id": request.id,
-                        "result": {"data": [listed_for_server.clone()], "nextCursor": null}
-                    }),
+                    "thread/list" => {
+                        assert_eq!(
+                            request.params.as_ref().unwrap()["sortKey"],
+                            json!(codex_app_server_protocol::ThreadSortKey::CreatedAt)
+                        );
+                        assert_eq!(
+                            request.params.as_ref().unwrap()["useStateDbOnly"],
+                            json!(true)
+                        );
+                        let data = if last_page {
+                            Vec::new()
+                        } else {
+                            vec![listed_for_server.clone()]
+                        };
+                        let cursor = if last_page { None } else { next_cursor.clone() };
+                        json!({"id": request.id, "result": {"data": data, "nextCursor": cursor}})
+                    }
                     "thread/read" => json!({
                         "id": request.id,
                         "error": {
@@ -479,7 +508,7 @@ async fn uses_listed_thread_when_older_server_cannot_read_it() -> color_eyre::Re
                     .send(Message::Text(response.to_string().into()))
                     .await
                     .unwrap();
-                if request.method == "thread/read" {
+                if last_page || (!paginated && request.method == "thread/read") {
                     break;
                 }
             }
@@ -509,8 +538,19 @@ async fn uses_listed_thread_when_older_server_cannot_read_it() -> color_eyre::Re
             &[resume_source_kinds(/*include_non_interactive*/ false)],
             /*model_provider*/ None,
         )
-        .await?;
-        assert_eq!(found, Some(listed.clone()));
+        .await;
+        if unverified_pagination {
+            assert_eq!(
+                found
+                    .expect_err("timestamp-only cursors cannot prove uniqueness")
+                    .to_string(),
+                format!(
+                    "Cannot verify a unique session label across server pages; matching session UUID: {thread_id}. Use it only if this is the session you want."
+                )
+            );
+        } else {
+            assert_eq!(found?, Some(listed.clone()));
+        }
         server.await?;
     }
     Ok(())

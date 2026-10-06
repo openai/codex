@@ -706,7 +706,10 @@ pub(crate) fn anchor_from_item(
     Some(Anchor {
         ts,
         id: (include_thread_id_tiebreaker
-            || matches!(sort_key, SortKey::RecencyAt | SortKey::SectionPosition))
+            || matches!(
+                sort_key,
+                SortKey::CreatedAt | SortKey::RecencyAt | SortKey::SectionPosition
+            ))
         .then_some(item.id),
     })
 }

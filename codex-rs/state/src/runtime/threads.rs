@@ -578,7 +578,9 @@ ON CONFLICT(child_thread_id) DO NOTHING
             },
             matches!(
                 sort_key,
-                crate::SortKey::RecencyAt | crate::SortKey::SectionPosition
+                crate::SortKey::CreatedAt
+                    | crate::SortKey::RecencyAt
+                    | crate::SortKey::SectionPosition
             ),
         );
         push_thread_order_and_limit(
@@ -588,7 +590,9 @@ ON CONFLICT(child_thread_id) DO NOTHING
             OrderByIndex::Enabled,
             matches!(
                 sort_key,
-                crate::SortKey::RecencyAt | crate::SortKey::SectionPosition
+                crate::SortKey::CreatedAt
+                    | crate::SortKey::RecencyAt
+                    | crate::SortKey::SectionPosition
             ),
             limit,
         );
@@ -1267,7 +1271,7 @@ WITH RECURSIVE subtree(child_thread_id, parent_thread_id) AS (
     let include_thread_id_tiebreaker = relation_filter.is_some()
         || matches!(
             filters.sort_key,
-            SortKey::RecencyAt | SortKey::SectionPosition
+            SortKey::CreatedAt | SortKey::RecencyAt | SortKey::SectionPosition
         );
     push_thread_filters_with_preview(
         builder,
@@ -1509,6 +1513,11 @@ fn push_thread_filters_with_preview<'a>(
             SortDirection::Asc => ">",
             SortDirection::Desc => "<",
         };
+        if include_thread_id_tiebreaker && anchor.id.is_some() {
+            // Keep the timestamp index range despite the UUID tie-breaker's OR predicate.
+            builder.push(format!(" AND {column} {operator}= "));
+            builder.push_bind(anchor_ts);
+        }
         builder.push(" AND (");
         builder.push(column);
         builder.push(" ");
@@ -2250,6 +2259,8 @@ mod tests {
             (other_id, other_cwd, 1_700_000_500),
         ] {
             let mut metadata = test_thread_metadata(&codex_home, thread_id, cwd);
+            metadata.created_at =
+                DateTime::<Utc>::from_timestamp(1_700_000_300, 0).expect("valid timestamp");
             metadata.updated_at =
                 DateTime::<Utc>::from_timestamp(updated_at, 0).expect("valid timestamp");
             runtime
@@ -2340,6 +2351,43 @@ mod tests {
             .expect("list with empty cwd filters should succeed");
 
         assert_eq!(page.items, Vec::new());
+
+        let anchor = Anchor {
+            ts: DateTime::<Utc>::from_timestamp(1_700_000_300, 0).expect("valid timestamp"),
+            id: Some(second_id),
+        };
+        // Activity must not move the unread thread ahead of the creation cursor.
+        runtime
+            .touch_thread_updated_at(first_id, Utc::now())
+            .await
+            .unwrap();
+        runtime
+            .touch_thread_recency_at(first_id, Utc::now())
+            .await
+            .unwrap();
+        let page = runtime
+            .list_threads(
+                /*page_size*/ 1,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: None,
+                    cwd_filters: Some(cwd_filters.as_slice()),
+                    section: None,
+                    project_id: None,
+                    anchor: Some(&anchor),
+                    sort_key: SortKey::CreatedAt,
+                    sort_direction: SortDirection::Desc,
+                    search_term: None,
+                },
+            )
+            .await
+            .expect("creation-time continuation should succeed");
+        assert_eq!(
+            page.items.iter().map(|item| item.id).collect::<Vec<_>>(),
+            vec![first_id]
+        );
+        assert_eq!(page.next_anchor, None);
     }
 
     #[tokio::test]
@@ -2359,7 +2407,7 @@ mod tests {
         ];
         let anchor = Anchor {
             ts: DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("valid timestamp"),
-            id: None,
+            id: Some(ThreadId::new()),
         };
         for (sort_key, visible_index, cwd_index) in [
             (
@@ -2380,6 +2428,7 @@ mod tests {
         ] {
             for (cwd_filters, anchor, expected_index, expect_temp_sort) in [
                 (None, None, visible_index, false),
+                (None, Some(&anchor), visible_index, false),
                 (Some(&cwd_filters[..1]), None, cwd_index, false),
                 (
                     Some(&cwd_filters[..]),
@@ -2422,11 +2471,35 @@ mod tests {
                         .any(|detail| detail.contains(expected_index)),
                     "query plan did not use {expected_index}: {plan_details:?}"
                 );
+                if anchor.is_some() && cwd_filters.is_none() {
+                    let timestamp_column = match sort_key {
+                        SortKey::CreatedAt => "created_at_ms",
+                        SortKey::UpdatedAt => "updated_at_ms",
+                        SortKey::RecencyAt => "recency_at_ms",
+                        SortKey::SectionPosition => unreachable!(),
+                    };
+                    assert!(
+                        plan_details
+                            .iter()
+                            .any(|detail| { detail.contains(&format!("{timestamp_column}<?")) }),
+                        "cursor query lost its timestamp index range: {plan_details:?}"
+                    );
+                }
+                // The visible creation-time index covers timestamps, so only ties need sorting.
+                let expect_tie_sort = sort_key == SortKey::CreatedAt && cwd_filters.is_none();
+                if expect_tie_sort {
+                    assert!(
+                        plan_details.iter().any(|detail| {
+                            detail.contains("TEMP B-TREE FOR LAST TERM OF ORDER BY")
+                        }),
+                        "unexpected tie sorting plan: {plan_details:?}"
+                    );
+                }
                 assert_eq!(
                     plan_details
                         .iter()
                         .any(|detail| detail.contains("TEMP B-TREE")),
-                    expect_temp_sort,
+                    expect_temp_sort || expect_tie_sort,
                     "unexpected sorting plan: {plan_details:?}"
                 );
             }

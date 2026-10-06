@@ -57,22 +57,18 @@ pub(super) async fn lookup(
         return Ok(None);
     }
     let mut matched: Option<Thread> = None;
-    let mut paginated = false;
+    let mut unverified_pagination = false;
     for collection in collections {
         for source_kinds in source_kind_filters {
             let mut cursor = None;
-            let sort_key = if app_server.uses_embedded_app_server() {
-                ThreadSortKey::RecencyAt
-            } else {
-                ThreadSortKey::UpdatedAt
-            };
             loop {
                 let response = app_server
                     .thread_list(ThreadListParams {
                         originators: None,
                         cursor,
                         limit: Some(100),
-                        sort_key: Some(sort_key),
+                        // Activity must not move an unread thread ahead of the cursor.
+                        sort_key: Some(ThreadSortKey::CreatedAt),
                         sort_direction: None,
                         model_providers: model_provider.map(|provider| vec![provider.to_string()]),
                         source_kinds: Some(source_kinds.clone()),
@@ -82,12 +78,14 @@ pub(super) async fn lookup(
                         parent_thread_id: None,
                         ancestor_thread_id: None,
                         cwd: None,
-                        use_state_db_only: false,
+                        use_state_db_only: true,
                         search_term: None,
                     })
                     .await
                     .wrap_err("failed to list sessions while resolving session label")?;
-                paginated |= response.next_cursor.is_some();
+                unverified_pagination |= response.next_cursor.as_deref().is_some_and(|cursor| {
+                    !cursor.contains('|') || codex_rollout::parse_cursor(cursor).is_none()
+                });
                 for thread in response.data {
                     if display_label(&thread) != name {
                         continue;
@@ -165,7 +163,7 @@ pub(super) async fn lookup(
     }
     // Older server cursors can skip equal timestamps at a page boundary.
     if let Some(thread) = matched.as_ref()
-        && paginated
+        && unverified_pagination
     {
         return Err(AmbiguousSessionName::Paginated(thread.id.clone()).into());
     }

@@ -846,7 +846,11 @@ async fn lookup_latest_session_target_with_app_server(
                 include_non_interactive,
                 lookup_mode,
             ))
-            .await?;
+            .await;
+        let response = match response {
+            Err(_) if lookup_mode == LatestSessionLookupMode::StateDbOnly => continue,
+            response => response?,
+        };
         let target = response
             .data
             .into_iter()

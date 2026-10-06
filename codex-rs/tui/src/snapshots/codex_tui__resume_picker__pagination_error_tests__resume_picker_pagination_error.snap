@@ -1,0 +1,5 @@
+---
+source: tui/src/resume_picker_pagination_error_tests.rs
+expression: "search_line(&state, 80).to_string()"
+---
+Could not load more sessions
