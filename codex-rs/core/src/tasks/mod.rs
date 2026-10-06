@@ -457,20 +457,12 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
-        if !self.input_queue.has_pending_mailbox_items().await
-            || (!self.input_queue.has_trigger_turn_mailbox_items().await
-                && !self.has_outstanding_durable_sleep())
-        {
+        if !self.input_queue.has_pending_mailbox_items().await {
             return;
         }
 
-        let turn_state = {
-            let mut active_turn = self.active_turn.lock().await;
-            if active_turn.is_some() {
-                return;
-            }
-            let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
-            Arc::clone(&active_turn.turn_state)
+        let Some((turn_state, previous_options)) = self.reserve_pending_work_turn().await else {
+            return;
         };
 
         self.services
@@ -493,6 +485,7 @@ impl Session {
             |item| matches!(item, TurnInput::InterAgentCommunication(mail) if mail.trigger_turn),
         ) {
             // Queue-only mail wakes durable sleep without selecting a new task's settings.
+            start_options = previous_options;
             start_options.cyber_access_program = self
                 .reference_context_item()
                 .await
@@ -511,14 +504,18 @@ impl Session {
             turn_context.turn_metadata_state.set_turn_trigger(trigger);
         }
         if let Some(id) = start_options.parent_turn_id {
-            if let Some(initiating_agent_path) = input.iter().find_map(|item| {
-                let TurnInput::InterAgentCommunication(communication) = item else {
-                    return None;
-                };
-                communication
-                    .trigger_turn
-                    .then(|| communication.author.clone())
-            }) {
+            if let Some(initiating_agent_path) = input
+                .iter()
+                .find_map(|item| {
+                    let TurnInput::InterAgentCommunication(communication) = item else {
+                        return None;
+                    };
+                    communication
+                        .trigger_turn
+                        .then(|| communication.author.clone())
+                })
+                .or(start_options.initiating_agent_path)
+            {
                 turn_context
                     .turn_metadata_state
                     .set_initiating_agent_path(initiating_agent_path);

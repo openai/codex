@@ -27,6 +27,7 @@ use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
@@ -518,14 +519,25 @@ impl codex_extension_api::ThreadLifecycleContributor<codex_core::config::Config>
     }
 }
 
+#[test_case(false, Some("automation"), None, false; "live_root")]
+#[test_case(true, Some("automation"), None, false; "reloaded_root")]
+#[test_case(true, Some("automation"), Some("original-parent"), false; "reloaded_delegated")]
+#[test_case(true, None, None, false; "reloaded_unknown")]
+#[test_case(false, Some("automation"), Some("original-parent"), true; "settings_while_asleep")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn queue_only_agent_mail_wakes_sleeping_root_with_previous_turn_context() {
+async fn queue_only_agent_mail_wakes_sleeping_root_with_previous_turn_context(
+    reload: bool,
+    trigger: Option<&str>,
+    parent: Option<&str>,
+    update_settings: bool,
+) -> anyhow::Result<()> {
     const CHILD_MESSAGE: &str = "worker completed";
 
     let server = responses::start_mock_server().await;
     let requests = responses::mount_sse_sequence(
         &server,
         vec![
+            responses::sse_completed("resp-earlier-human"),
             responses::sse_completed("resp-initial"),
             responses::sse_completed("resp-wake"),
         ],
@@ -534,41 +546,98 @@ async fn queue_only_agent_mail_wakes_sleeping_root_with_previous_turn_context() 
     let mut extensions =
         codex_extension_api::ExtensionRegistryBuilder::<codex_core::config::Config>::new();
     extensions.thread_lifecycle_contributor(Arc::new(SleepingRootExtension));
-    let codex = test_codex()
+    let mut builder = test_codex()
         .with_model("gpt-5.4")
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_extensions(Arc::new(extensions.build()))
-        .build_with_auto_env(&server)
-        .await
-        .expect("build Codex test session")
-        .codex;
+        .with_extensions(Arc::new(extensions.build()));
+    let mut test = builder.build_with_auto_env(&server).await?;
 
-    codex
+    test.codex
         .start_or_steer_turn(
             TurnInputRequest::user_input(vec![UserInput::Text {
-                text: "wait for the worker".to_string(),
+                text: "establish an earlier human context".to_string(),
                 text_elements: Vec::new(),
             }])
             .on_start(TurnStartOptions {
+                turn_trigger: Some("composer".to_string()),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_turn_complete(&test.codex).await;
+    // Automatic turns need not replace the model-context baseline on replay.
+    let TurnInputSubmission::Started { turn_id } = test
+        .codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(Vec::new()).on_start(TurnStartOptions {
+                turn_trigger: trigger.map(str::to_owned),
+                parent_turn_id: parent.map(str::to_owned),
+                root_turn_id: parent.map(|_| "original-root".to_string()),
                 cyber_access_program: Some(CyberAccessProgram::Standard),
                 ..Default::default()
             }),
         )
-        .await
-        .expect("start initial turn");
-    wait_for_turn_complete(&codex).await;
-    enqueue_queue_only_agent_mail(&codex, CHILD_MESSAGE).await;
-    wait_for_turn_complete(&codex).await;
+        .await?
+    else {
+        panic!("expected an automatic turn");
+    };
+    wait_for_turn_complete(&test.codex).await;
+    if reload {
+        if let Some(url) = test.executor_environment().exec_server_url() {
+            builder = builder.with_exec_server_url(url);
+        }
+        test = builder.restart(&server, &test).await?;
+    }
+    if update_settings {
+        core_test_support::submit_thread_settings(
+            &test.codex,
+            ThreadSettingsOverrides {
+                effort: Some(Some(ReasoningEffort::Low)),
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
+    enqueue_queue_only_agent_mail(&test.codex, CHILD_MESSAGE).await;
+    wait_for_turn_complete(&test.codex).await;
 
+    let captured = requests.requests();
+    let metadata = captured
+        .iter()
+        .skip(1)
+        .map(|request| {
+            serde_json::from_str::<Value>(
+                &request.header("x-codex-turn-metadata").expect("metadata"),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let root = parent.map_or(turn_id.as_str(), |_| "original-root");
     assert_eq!(
-        requests
-            .requests()
+        metadata
             .iter()
-            .map(|request| request.body_json()["access_programs"].clone())
+            .map(|value| (
+                value["turn_trigger"].as_str(),
+                value["parent_turn_id"].as_str(),
+                value["root_turn_id"].as_str(),
+            ))
             .collect::<Vec<_>>(),
-        vec![json!({"cyber": "standard"}); 2],
+        vec![(trigger, parent, Some(root)); 2],
     );
-    let history = codex
+    assert_ne!(metadata[0]["turn_id"], metadata[1]["turn_id"]);
+    // Live wake keeps the existing execution-setting behavior. Attribution after
+    // reload must use the automatic turn, not the earlier human context baseline.
+    if !reload {
+        assert_eq!(
+            captured
+                .iter()
+                .skip(1)
+                .map(|request| request.body_json()["access_programs"].clone())
+                .collect::<Vec<_>>(),
+            vec![json!({"cyber": "standard"}); 2],
+        );
+    }
+    let history = test
+        .codex
         .load_history(/*include_archived*/ true)
         .await
         .expect("load persisted thread history");
@@ -587,6 +656,45 @@ async fn queue_only_agent_mail_wakes_sleeping_root_with_previous_turn_context() 
                 )
         )
     }));
+
+    if parent.is_none() {
+        return Ok(());
+    }
+    let followup =
+        responses::mount_sse_once(&server, responses::sse_completed("resp-followup")).await;
+    test.codex
+        .submit(Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                AgentPath::try_from("/root/worker").expect("worker path should parse"),
+                AgentPath::root(),
+                Vec::new(),
+                "start different work".to_string(),
+                /*trigger_turn*/ true,
+            ),
+            start_options: TurnStartOptions {
+                turn_trigger: Some("composer".to_string()),
+                parent_turn_id: Some("new-parent".to_string()),
+                root_turn_id: Some("new-root".to_string()),
+                ..Default::default()
+            },
+        })
+        .await?;
+    wait_for_turn_complete(&test.codex).await;
+    let followup: Value = serde_json::from_str(
+        &followup
+            .single_request()
+            .header("x-codex-turn-metadata")
+            .expect("metadata"),
+    )?;
+    assert_eq!(
+        (
+            followup["turn_trigger"].as_str(),
+            followup["parent_turn_id"].as_str(),
+            followup["root_turn_id"].as_str(),
+        ),
+        (Some("composer"), Some("new-parent"), Some("new-root")),
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

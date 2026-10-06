@@ -2794,8 +2794,12 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
     Ok(())
 }
 
+#[test_case(false; "live")]
+#[test_case(true; "reloaded_sleep")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> Result<()> {
+async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn(
+    reload_sleeping_worker: bool,
+) -> Result<()> {
     const SPAWN_WORKER_PROMPT: &str = "spawn the completion-routing worker";
     const SPAWN_REQUESTER_PROMPT: &str = "spawn the completion-routing requester";
     const READ_RESULT_PROMPT: &str = "read the completion-routing worker result";
@@ -2877,7 +2881,7 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
 
     submit_turn_with_trigger(&test, SPAWN_WORKER_PROMPT, "automation_cron_scheduled").await?;
     let worker_thread_id = created_threads.recv().await?;
-    let worker_thread = test.thread_manager.get_thread(worker_thread_id).await?;
+    let mut worker_thread = test.thread_manager.get_thread(worker_thread_id).await?;
     wait_for_event(worker_thread.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
@@ -2995,7 +2999,7 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
     })
     .await;
 
-    let worker_followup_turn_id = worker_followup_request
+    let mut worker_followup_turn_id = worker_followup_request
         .requests()
         .into_iter()
         .find_map(|request| {
@@ -3017,6 +3021,52 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
             })
         })
         .expect("worker follow-up model request");
+    if reload_sleeping_worker {
+        worker_thread.shutdown_and_wait().await?;
+        test.thread_manager.remove_thread(&worker_thread_id).await;
+        test.thread_manager
+            .ensure_multi_agent_v2_child_loaded(worker_thread_id)
+            .await?;
+        worker_thread = test.thread_manager.get_thread(worker_thread_id).await?;
+        // Simulate the extension restoring durable sleep; Core owns the
+        // queue-only wake and completion routing exercised below.
+        worker_thread
+            .thread_extension_data()
+            .insert(codex_extension_items::sleep::SleepItem {
+                id: "peer-worker-sleep".to_string(),
+                duration_ms: 60_000,
+            });
+        let wake_request = mount_sse_once_match(
+            &server,
+            |request: &wiremock::Request| body_contains(request, "wake sleeping peer work"),
+            sse(vec![
+                ev_response_created("resp-peer-worker-wake"),
+                ev_assistant_message("msg-peer-worker-wake", "peer follow-up finished"),
+                ev_completed("resp-peer-worker-wake"),
+            ]),
+        )
+        .await;
+        worker_thread
+            .submit(Op::InterAgentCommunication {
+                communication: codex_protocol::protocol::InterAgentCommunication::new(
+                    codex_protocol::AgentPath::root(),
+                    codex_protocol::AgentPath::try_from("/root/worker").expect("worker path"),
+                    Vec::new(),
+                    "wake sleeping peer work".to_string(),
+                    /*trigger_turn*/ false,
+                ),
+                start_options: TurnStartOptions::default(),
+            })
+            .await?;
+        worker_followup_turn_id =
+            wait_for_event_match(worker_thread.as_ref(), |event| match event {
+                EventMsg::TurnComplete(completed) => Some(completed.turn_id.clone()),
+                _ => None,
+            })
+            .await;
+        let request = wake_request.single_request();
+        assert_parent_turn(&request.body_json(), Some(&requester_turn_id))?;
+    }
     let completed = timeout(
         Duration::from_secs(5),
         wait_for_event_match(requester_thread.as_ref(), |event| match event {
@@ -3026,6 +3076,7 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
                     TurnItem::SubAgentActivity(activity)
                         if activity.kind == SubAgentActivityKind::Completed
                             && activity.agent_thread_id == worker_thread_id
+                            && activity.id == format!("subagent-completed-{worker_followup_turn_id}")
                 ) =>
             {
                 Some(completed.clone())
