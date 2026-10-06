@@ -1619,6 +1619,11 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::SelectedPlugin<'a>>>
         {
             Box::pin(async move {
+                assert_eq!(
+                    context.selected_environments(),
+                    Some([].as_slice()),
+                    "thread MCP projection must preserve explicitly empty selections"
+                );
                 let thread_init = context
                     .thread_init()
                     .expect("initial MCP resolution should be thread-scoped");

@@ -165,17 +165,21 @@ impl McpManager {
         ready_selected_capability_roots: &[SelectedCapabilityRoot],
         executor_capability_discovery: Option<&ExecutorCapabilityDiscoverySnapshot>,
     ) -> McpRuntimeProjection {
+        let mut context = McpServerContributionContext::for_step(
+            config,
+            thread_init,
+            thread_store,
+            identity.originator,
+            ready_selected_capability_roots,
+            executor_capability_discovery,
+        )
+        .with_session_source(identity.session_source)
+        .with_auth_changed(identity.auth_changed);
+        if let McpEnvironmentScope::Selected(environments) = &identity.environments {
+            context = context.with_selected_environments(environments);
+        }
         self.runtime_config_with_context(
-            McpServerContributionContext::for_step(
-                config,
-                thread_init,
-                thread_store,
-                identity.originator,
-                ready_selected_capability_roots,
-                executor_capability_discovery,
-            )
-            .with_session_source(identity.session_source)
-            .with_auth_changed(identity.auth_changed),
+            context,
             Some(identity.originator),
             identity.environments,
             identity.disabled_plugin_ids,

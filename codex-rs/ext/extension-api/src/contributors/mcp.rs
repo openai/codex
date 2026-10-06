@@ -2,6 +2,7 @@ use codex_config::McpServerConfig;
 use codex_exec_server_protocol::ExecutorCapabilityDiscoverySnapshot;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 
 use crate::ExtensionData;
 use crate::ExtensionDataInit;
@@ -25,6 +26,8 @@ pub struct McpServerContributionContext<'a, C> {
     session_source: Option<&'a SessionSource>,
     /// Effective request originator for the active thread, when resolution is thread-scoped.
     originator: Option<&'a str>,
+    /// All selected environments captured for this projection, in priority order.
+    selected_environments: Option<&'a [TurnEnvironmentSelection]>,
     /// Selected roots resolved against ready environments for this exact step.
     ready_selected_capability_roots: Option<&'a [SelectedCapabilityRoot]>,
     /// Executor-materialized capability files shared by all consumers in this exact step.
@@ -49,6 +52,7 @@ impl<'a, C> McpServerContributionContext<'a, C> {
             thread_init: None,
             session_source: None,
             originator: None,
+            selected_environments: None,
             ready_selected_capability_roots: None,
             executor_capability_discovery: None,
         }
@@ -70,9 +74,28 @@ impl<'a, C> McpServerContributionContext<'a, C> {
             thread_init: Some(thread_init),
             session_source: None,
             originator: Some(originator),
+            selected_environments: None,
             ready_selected_capability_roots: Some(ready_selected_capability_roots),
             executor_capability_discovery,
         }
+    }
+
+    /// Attaches the same environment snapshot used to project MCP authority.
+    ///
+    /// Preserve pending and failed selections: an unavailable primary executor
+    /// must not silently select a different ready executor for hosted tools.
+    pub fn with_selected_environments(
+        mut self,
+        environments: &'a [TurnEnvironmentSelection],
+    ) -> Self {
+        self.selected_environments = Some(environments);
+        self
+    }
+
+    /// Returns the selected executor snapshot, or `None` for threadless discovery.
+    /// An empty slice means the thread explicitly has no selected environments.
+    pub fn selected_environments(&self) -> Option<&'a [TurnEnvironmentSelection]> {
+        self.selected_environments
     }
 
     /// Marks whether this projection replaces the published MCP authentication.
