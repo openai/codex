@@ -11,6 +11,7 @@ use codex_otel::Result;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::protocol::W3cTraceContext;
+use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::Read as _;
@@ -143,7 +144,34 @@ fn write_http_response(stream: &mut TcpStream, status: &str) -> std::io::Result<
 }
 
 #[test]
-fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
+fn otlp_http_exporter_honors_cumulative_temporality_env() -> Result<()> {
+    // Isolate the environment setting from other tests, including under Bazel/libtest.
+    const CHILD_ENV: &str = "CODEX_OTEL_TEMPORALITY_TEST_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let current_thread = thread::current();
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                current_thread.name().expect("test name"),
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .env(
+                "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE",
+                "cumulative",
+            )
+            .env("OTEL_METRIC_EXPORT_INTERVAL", "60000")
+            .output()
+            .expect("run test with cumulative temporality configured");
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return Ok(());
+    }
+
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("local_addr");
     listener.set_nonblocking(true).expect("set_nonblocking");
@@ -250,6 +278,18 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     assert!(
         content_type.starts_with("application/json"),
         "unexpected content-type: {content_type}"
+    );
+
+    let payload: serde_json::Value = serde_json::from_slice(&request.body).expect("OTLP JSON");
+    let counter = payload["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+        .as_array()
+        .expect("exported metrics")
+        .iter()
+        .find(|metric| metric["name"] == "codex.turns")
+        .expect("exported counter");
+    assert_eq!(
+        counter["sum"]["aggregationTemporality"],
+        serde_json::json!(2)
     );
 
     let body = String::from_utf8_lossy(&request.body);

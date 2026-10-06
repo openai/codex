@@ -363,10 +363,16 @@ impl MetricsClient {
                 build_provider(resource, exporter, export_interval, runtime_reader.clone())
             }
             MetricsExporter::Otlp(exporter) => {
+                let temporality = otlp_metrics_temporality(
+                    &exporter,
+                    std::env::var("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE")
+                        .ok()
+                        .as_deref(),
+                );
                 let exporter = crate::network_policy::PolicyExporter {
                     exporter: build_otlp_metric_exporter(
                         exporter,
-                        Temporality::Delta,
+                        temporality,
                         &http_client_factory,
                     )?,
                     policy: http_client_factory.network_policy().clone(),
@@ -587,6 +593,19 @@ where
     let provider = provider_builder.with_reader(reader).build();
     let meter = provider.meter(METER_NAME);
     (provider, meter)
+}
+
+fn otlp_metrics_temporality(exporter: &OtelExporter, preference: Option<&str>) -> Temporality {
+    // Select before resolving Statsig to OTLP so its built-in route stays Delta.
+    match exporter {
+        OtelExporter::None | OtelExporter::Statsig => Temporality::Delta,
+        OtelExporter::OtlpGrpc { .. } | OtelExporter::OtlpHttp { .. } => match preference {
+            Some(value) if value.eq_ignore_ascii_case("cumulative") => Temporality::Cumulative,
+            Some(value) if value.eq_ignore_ascii_case("lowmemory") => Temporality::LowMemory,
+            // Preserve Codex's existing default for unset, empty, or unknown values.
+            _ => Temporality::Delta,
+        },
+    }
 }
 
 fn build_otlp_metric_exporter(
