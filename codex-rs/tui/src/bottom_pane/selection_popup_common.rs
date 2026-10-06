@@ -17,12 +17,16 @@ use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::style::accent_style;
 use crate::style::user_message_style;
-use crate::width::display_width;
 
 use super::scroll_state::ScrollState;
 use super::selection_row_layout::SelectionDescriptionLayout;
 use super::selection_row_layout::build_full_line;
-use super::selection_row_layout::line_to_owned;
+#[path = "selection_row_links.rs"]
+mod hyperlinks;
+use hyperlinks::full_hyperlink_row;
+use hyperlinks::wrap_row_lines;
+#[cfg(test)]
+use hyperlinks::wrap_two_column_row;
 
 /// Render-ready representation of one row in a selection popup.
 ///
@@ -205,104 +209,6 @@ fn should_wrap_name_in_column(row: &GenericDisplayRow) -> bool {
         && row.display_shortcut.is_none()
         && row.category_tag.is_none()
         && row.name_prefix_spans.is_empty()
-}
-
-fn wrap_two_column_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<Line<'static>> {
-    use crate::wrapping::RtOptions;
-    use crate::wrapping::word_wrap_lines;
-
-    let Some(description) = row.description.as_deref() else {
-        return Vec::new();
-    };
-
-    let width = width.max(1);
-    let max_desc_col = width.saturating_sub(1) as usize;
-    if max_desc_col == 0 {
-        // No valid description column exists at this width; let callers fall
-        // back to single-line wrapping path.
-        return Vec::new();
-    }
-
-    let desc_col = desc_col.clamp(1, max_desc_col);
-    let left_width = desc_col.saturating_sub(2).max(1);
-    let right_width = width.saturating_sub(desc_col as u16).max(1) as usize;
-    let name_wrap_indent = row
-        .wrap_indent
-        .unwrap_or(0)
-        .min(left_width.saturating_sub(1));
-
-    let name_options = RtOptions::new(left_width)
-        .initial_indent(Line::from(""))
-        .subsequent_indent(Line::from(" ".repeat(name_wrap_indent)));
-    let name_lines = word_wrap_lines(row.name.lines(), name_options);
-
-    let desc_options = RtOptions::new(right_width).initial_indent(Line::from(""));
-    let desc_lines = word_wrap_lines(description.lines(), desc_options);
-
-    let rows = name_lines.len().max(desc_lines.len()).max(1);
-    let mut out = Vec::with_capacity(rows);
-    for idx in 0..rows {
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        if let Some(name) = name_lines.get(idx) {
-            spans.push(name.to_string().into());
-        }
-
-        if let Some(desc) = desc_lines.get(idx) {
-            let left_used = spans
-                .iter()
-                .map(|span| display_width(span.content.as_ref()))
-                .sum::<usize>();
-            let gap = if left_used == 0 {
-                desc_col
-            } else {
-                desc_col.saturating_sub(left_used).max(2)
-            };
-            if gap > 0 {
-                spans.push(" ".repeat(gap).into());
-            }
-            spans.push(desc.to_string().dim());
-        }
-
-        out.push(Line::from(spans));
-    }
-
-    out
-}
-
-fn wrap_standard_row(
-    row: &GenericDisplayRow,
-    desc_col: usize,
-    width: u16,
-    description_layout: SelectionDescriptionLayout,
-) -> Vec<Line<'static>> {
-    use crate::wrapping::RtOptions;
-    use crate::wrapping::word_wrap_line;
-
-    let full_line = build_full_line(row, desc_col, width, description_layout);
-    let continuation_indent = wrap_indent(row, desc_col, width);
-    let options = RtOptions::new(width.max(1) as usize)
-        .initial_indent(Line::from(""))
-        .subsequent_indent(Line::from(" ".repeat(continuation_indent)));
-    word_wrap_line(&full_line, options)
-        .into_iter()
-        .map(line_to_owned)
-        .collect()
-}
-
-fn wrap_row_lines(
-    row: &GenericDisplayRow,
-    desc_col: usize,
-    width: u16,
-    description_layout: SelectionDescriptionLayout,
-) -> Vec<Line<'static>> {
-    if desc_col > 0 && should_wrap_name_in_column(row) {
-        let wrapped = wrap_two_column_row(row, desc_col, width);
-        if !wrapped.is_empty() {
-            return wrapped;
-        }
-    }
-
-    wrap_standard_row(row, desc_col, width, description_layout)
 }
 
 fn apply_row_state_style(
@@ -524,12 +430,14 @@ fn render_rows_inner(
         let mut wrapped =
             wrap_row_lines(row, desc_col, area.width, column_width.description_layout);
         clipped |= wrapped.len() > usize::from(area.bottom().saturating_sub(cur_y));
-        apply_row_state_style(
-            &mut wrapped,
-            Some(i) == state.selected_idx && !row.is_disabled,
-            row.is_disabled,
-            row.selection_style,
-        );
+        for line in &mut wrapped {
+            apply_row_state_style(
+                std::slice::from_mut(&mut line.line),
+                Some(i) == state.selected_idx && !row.is_disabled,
+                row.is_disabled,
+                row.selection_style,
+            );
+        }
 
         // Render the wrapped lines.
         let mut rendered_item = false;
@@ -537,7 +445,7 @@ fn render_rows_inner(
             if cur_y >= area.y + area.height {
                 break;
             }
-            line.render(
+            (&line).render(
                 Rect {
                     x: area.x,
                     y: cur_y,
@@ -680,8 +588,16 @@ pub(crate) fn render_rows_single_line_with_col_width_mode(
             row.selection_style,
         );
 
-        let full_line = truncate_line_with_ellipsis_if_overflow(full_line, area.width as usize);
-        full_line.render(
+        let mut full_line = full_hyperlink_row(row, full_line);
+        let clipped = line_width(&full_line.line) > usize::from(area.width);
+        full_line.line =
+            truncate_line_with_ellipsis_if_overflow(full_line.line, area.width as usize);
+        let visible_width = line_width(&full_line.line).saturating_sub(usize::from(clipped));
+        full_line.hyperlinks.retain_mut(|link| {
+            link.columns.end = link.columns.end.min(visible_width);
+            !link.columns.is_empty()
+        });
+        (&full_line).render(
             Rect {
                 x: area.x,
                 y: cur_y,
@@ -1036,7 +952,7 @@ mod tests {
 
         let rendered = wrap_two_column_row(&row, /*desc_col*/ 8, /*width*/ 24)
             .into_iter()
-            .map(|line| line.to_string())
+            .map(|line| line.line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
 

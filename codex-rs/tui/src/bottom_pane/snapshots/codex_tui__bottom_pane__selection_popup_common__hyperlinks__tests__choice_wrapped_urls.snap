@@ -1,0 +1,71 @@
+---
+source: tui/src/bottom_pane/selection_row_links_tests.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+prefix label: false, wrapped label: true, single line: false
+日 本 語  https://github.com/       https://
+openai/codex/pull/12345?         example.com/
+diff=split                       releases/
+                                 review/
+                                 complete-
+                                 destination
+
+
+
+
+
+
+
+prefix label: false, wrapped label: true, single line: true
+日 本 語  https://github.com/opena… https://exampl…
+
+prefix label: false, wrapped label: false, single line: false
+日 本 語  https://github.com/opena… https://
+                                 example.com/
+                                 releases/
+                                 review/
+                                 complete-
+                                 destination
+
+
+
+
+
+
+
+prefix label: false, wrapped label: false, single line: true
+日 本 語  https://github.com/opena… https://exampl…
+
+prefix label: true, wrapped label: true, single line: false
+1. 日 本 語  https://github.com/openai/codex/
+pull/12345?diff=split
+
+
+
+
+
+
+
+
+
+
+
+prefix label: true, wrapped label: true, single line: true
+1. 日 本 語  https://github.com/openai/codex/pull/…
+
+prefix label: true, wrapped label: false, single line: false
+1. 日 本 語  https://github.com/openai/codex/
+pull/12345?diff=split
+
+
+
+
+
+
+
+
+
+
+
+prefix label: true, wrapped label: false, single line: true
+1. 日 本 語  https://github.com/openai/codex/pull/…

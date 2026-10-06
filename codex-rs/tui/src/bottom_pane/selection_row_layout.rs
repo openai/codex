@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -29,21 +27,6 @@ impl SelectionDescriptionLayout {
         };
         let desc_col = desc_col.min(width as usize) as u16;
         width.saturating_sub(desc_col) < min_description_width
-    }
-}
-
-pub(super) fn line_to_owned(line: Line<'_>) -> Line<'static> {
-    Line {
-        style: line.style,
-        alignment: line.alignment,
-        spans: line
-            .spans
-            .into_iter()
-            .map(|span| Span {
-                style: span.style,
-                content: Cow::Owned(span.content.into_owned()),
-            })
-            .collect(),
     }
 }
 
