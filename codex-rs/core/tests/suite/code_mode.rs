@@ -3611,38 +3611,101 @@ async fn code_mode_complete_call_survives_unrelated_truncation() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_only_guides_all_tools_search_and_calls_deferred_app_tools() -> Result<()> {
+#[test_case(false, None; "control")]
+#[test_case(true, None; "ranked_search")]
+#[test_case(true, Some(30_000); "ranked_search_expanded_schema")]
+async fn code_mode_only_searches_and_calls_deferred_app_tools(
+    ranked_search: bool,
+    schema_max_bytes: Option<usize>,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    // Repeated refs keep the MCP schema small while its declaration exceeds the default budget.
+    let properties = (0..8)
+        .map(|index| {
+            (
+                format!("option{index}"),
+                serde_json::json!({"$ref": "#/$defs/option"}),
+            )
+        })
+        .chain(std::iter::once((
+            "timezone".to_string(),
+            serde_json::json!({"type": "string"}),
+        )))
+        .collect::<serde_json::Map<_, _>>();
+    let input_schema = serde_json::json!({
+        "type": "object",
+        "properties": properties,
+        "$defs": {"option": {"type": "object", "properties": {"term": {"type": "string", "description": format!("{}schema_budget_marker", "reference guidance ".repeat(120))}}}},
+    });
+    let tools = (0..100).map(|index| serde_json::json!({
+        "name": format!("calendar_timezone_option_{index}"),
+        "description": format!("Read timezone option {index}."),
+        "annotations": {"readOnlyHint": true},
+        "inputSchema": if index == 99 { input_schema.clone() } else { serde_json::json!({"type": "object"}) },
+        "_meta": {"connector_id": "calendar", "connector_name": "Calendar", "connector_description": "Plan events and manage your calendar."},
+    })).collect();
+    let apps_server =
+        AppsTestServer::mount_with_tools(&server, Arc::new(Mutex::new(tools))).await?;
     let originating_item_id = "ctc_code_mode_origin";
-    let mut exec_call = ev_custom_tool_call(
-        "call-1",
-        "exec",
+    let lookup = if ranked_search {
+        r#"
+const { tools: matches } = await tools.tool_search({
+  query: "calendar_timezone_option_99", limit: 1,
+});
+const tool = matches[0];
+"#
+    } else {
         r#"
 const tool = ALL_TOOLS.find(
   ({ name }) => name === "mcp__codex_apps__calendar_timezone_option_99"
 );
+"#
+    };
+    let call = r#"
 if (!tool) {
   text(JSON.stringify({ found: false }));
 } else {
   const result = await tools[tool.name]({ timezone: "UTC" });
   text(JSON.stringify({
     found: true,
+    rankedSearchAvailable: typeof tools.tool_search === "function",
+    name: tool.name,
+    hasDeclaration: tool.description.includes("mcp__codex_apps__calendar_timezone_option_99(args:"),
+    hasSchemaDescription: tool.description.includes("schema_budget_marker"),
+    hasNamespacePrefix: tool.description.startsWith("Calendar search context.\n\n"),
+    matchesCatalog: tool.description === ALL_TOOLS.find(({ name }) => name === tool.name)?.description,
     isError: Boolean(result.isError),
     text: result.content?.[0]?.text ?? "",
   }));
 }
-"#,
+"#;
+    let mut exec_call = ev_custom_tool_call(
+        "call-1",
+        "exec",
+        &format!("const tool = load(\"deferredAppTool\");\n{call}"),
     );
     exec_call["item"]["id"] = serde_json::json!(originating_item_id);
     let resp_mock = responses::mount_sse_once(
         &server,
         sse(vec![
             ev_response_created("resp-1"),
-            exec_call,
+            ev_custom_tool_call(
+                "search-1",
+                "exec",
+                &format!("{lookup}\nstore(\"deferredAppTool\", tool ?? null);"),
+            ),
             ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let call_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-2"),
+            exec_call,
+            ev_completed("resp-2"),
         ]),
     )
     .await;
@@ -3650,7 +3713,7 @@ if (!tool) {
         &server,
         sse(vec![
             ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
+            ev_completed("resp-3"),
         ]),
     )
     .await;
@@ -3671,6 +3734,13 @@ if (!tool) {
                 .features
                 .enable(Feature::CodeModeOnly)
                 .expect("test config should allow feature update");
+            config.code_mode.tool_input_schema_max_bytes = schema_max_bytes;
+            if ranked_search {
+                config
+                    .features
+                    .enable(Feature::CodeModeToolSearch)
+                    .expect("ranked Code Mode search should be enabled");
+            }
             let mut model_catalog =
                 bundled_models_response().expect("bundled models.json should parse");
             let model = model_catalog
@@ -3681,9 +3751,21 @@ if (!tool) {
             config.chatgpt_base_url = apps_base_url;
             config.model = Some("gpt-5.5".to_string());
             model.supports_search_tool = true;
+            model
+                .model_messages
+                .as_mut()
+                .expect("model messages")
+                .tools
+                .get_or_insert_with(Default::default)
+                .indirect_description_prefixes = Some(
+                serde_json::from_value(serde_json::json!({
+                    "mcp_servers": {"codex_apps": "  Calendar search context.  "},
+                }))
+                .expect("indirect namespace prefixes"),
+            );
             config.model_catalog = Some(model_catalog);
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     test.submit_turn("inspect tools in code mode only").await?;
 
     let first_body = resp_mock.single_request().body_json();
@@ -3716,6 +3798,8 @@ if (!tool) {
         })
         .expect("exec description should be present");
     assert!(exec_description.contains("filter `ALL_TOOLS` by `name` and `description`"));
+    let has_ranked_search = exec_description.contains("await tools.tool_search(");
+    assert_eq!(has_ranked_search, ranked_search);
     assert!(exec_description.contains("Shared MCP Types:"));
     assert!(!exec_description.contains("calendar_timezone_option_99"));
 
@@ -3726,15 +3810,26 @@ if (!tool) {
         Some(false),
         "code_mode_only deferred app tool call failed unexpectedly: {output}"
     );
-    let parsed: Value = serde_json::from_str(&output)?;
+    let parsed: Value = serde_json::from_str(&output).unwrap_or_else(|error| {
+        panic!("deferred app call-1 output was not JSON: {error}\n{output}")
+    });
     assert_eq!(
         parsed,
         serde_json::json!({
             "found": true,
+            "rankedSearchAvailable": ranked_search,
+            "name": "mcp__codex_apps__calendar_timezone_option_99",
+            "hasDeclaration": true,
+            "hasSchemaDescription": schema_max_bytes.is_some(),
+            "hasNamespacePrefix": true,
+            "matchesCatalog": true,
             "isError": false,
             "text": "called calendar_timezone_option_99 for  at  with ",
         })
     );
+    assert!(request.inputs_of_type("tool_search_output").is_empty());
+    assert!(request.inputs_of_type("tool_search_call").is_empty());
+    let call_body = call_mock.single_request().body_json();
     let apps_tool_calls = recorded_apps_tool_calls(&server).await;
     assert!(
         apps_tool_calls.iter().any(|call| {
@@ -3742,7 +3837,7 @@ if (!tool) {
                 && call.pointer("/params/_meta/sessionId")
                     == Some(&serde_json::json!(test.session_configured.session_id))
                 && call.pointer("/params/_meta/windowId")
-                    == Some(&first_body["client_metadata"]["x-codex-window-id"])
+                    == Some(&call_body["client_metadata"]["x-codex-window-id"])
         }),
         "the nested MCP call should inherit its code cell's originating Responses item"
     );
@@ -3761,6 +3856,7 @@ async fn app_only_tools_are_not_visible_or_runnable_by_code_mode_model() -> Resu
         r#"
 const visibleTool = ALL_TOOLS.find(({{ name }}) => name === {visible_tool_name:?});
 const tool = ALL_TOOLS.find(({{ name }}) => name === {tool_name:?});
+const search = await tools.tool_search({{ query: {tool_name:?} }});
 let error = null;
 try {{
   await tools[{tool_name:?}]({{}});
@@ -3770,6 +3866,7 @@ try {{
 text(JSON.stringify({{
   visibleListed: visibleTool !== undefined,
   listed: tool !== undefined,
+  searchListed: search.tools.some(({{ name }}) => name === {tool_name:?}),
   callable: typeof tools[{tool_name:?}] === "function",
   error,
 }}));
@@ -3800,6 +3897,10 @@ text(JSON.stringify({{
         .with_config(|config| {
             config
                 .features
+                .enable(Feature::CodeModeToolSearch)
+                .expect("ranked Code Mode search should be enabled");
+            config
+                .features
                 .enable(Feature::CodeMode)
                 .expect("test config should allow feature update");
             config
@@ -3821,6 +3922,7 @@ text(JSON.stringify({{
     let parsed: Value = serde_json::from_str(&output)?;
     assert_eq!(parsed["visibleListed"], true);
     assert_eq!(parsed["listed"], false);
+    assert_eq!(parsed["searchListed"], false);
     assert_eq!(parsed["callable"], false);
     assert!(
         parsed["error"]
@@ -8250,36 +8352,57 @@ async fn code_mode_renders_local_refs_in_outbound_exec_description() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
+async fn code_mode_search_normalizes_and_calls_deferred_dynamic_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let mut builder = test_codex().with_config(move |config| {
-        let _ = config.features.enable(Feature::CodeMode);
-    });
-    let base_test = builder.build(&server).await?;
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.5", |model_info| {
+            model_info.supports_search_tool = true;
+            model_info.tool_mode = Some(ToolMode::CodeMode);
+        })
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::CodeMode);
+            let _ = config.features.enable(Feature::CodeModeToolSearch);
+            config.code_mode.excluded_tool_namespaces = vec!["blocked".to_string()];
+        });
+    let base_test = builder.build_with_auto_env(&server).await?;
     let new_thread = base_test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
-                name: "codex_app".to_string(),
-                description: "Codex app tools.".to_string(),
-                tools: vec![DynamicToolNamespaceTool::Function(
-                    DynamicToolFunctionSpec {
-                        name: "hidden_dynamic_tool".to_string(),
-                        description: "A hidden dynamic tool.".to_string(),
-                        input_schema: serde_json::json!({
-                                "type": "object",
-                                "properties": {
-                                    "city": { "type": "string" }
-                                },
-                            "required": ["city"],
-                            "additionalProperties": false,
-                        }),
-                        defer_loading: true,
-                    },
-                )],
-            })],
+            dynamic_tools: vec![
+                DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+                    name: "blocked".to_string(),
+                    description: "Blocked hidden dynamic tools.".to_string(),
+                    tools: vec![DynamicToolNamespaceTool::Function(
+                        DynamicToolFunctionSpec {
+                            name: "hidden-dynamic-tool".to_string(),
+                            description: "A blocked hidden dynamic tool.".to_string(),
+                            input_schema: serde_json::json!({ "type": "object" }),
+                            defer_loading: true,
+                        },
+                    )],
+                }),
+                DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+                    name: "codex_app".to_string(),
+                    description: "Codex app tools.".to_string(),
+                    tools: vec![DynamicToolNamespaceTool::Function(
+                        DynamicToolFunctionSpec {
+                            name: "hidden-dynamic-tool".to_string(),
+                            description: "A hidden dynamic tool.".to_string(),
+                            input_schema: serde_json::json!({
+                                    "type": "object",
+                                    "properties": {
+                                        "city": { "type": "string" }
+                                    },
+                                "required": ["city"],
+                                "additionalProperties": false,
+                            }),
+                            defer_loading: true,
+                        },
+                    )],
+                }),
+            ],
             ..StartThreadOptions::new(base_test.config.clone())
         })
         .await?;
@@ -8288,13 +8411,21 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
     test.session_configured = new_thread.session_configured;
 
     let code = r#"
-const tool = ALL_TOOLS.find(({ name }) => name === "codex_app__hidden_dynamic_tool");
-const out = await tools.codex_app__hidden_dynamic_tool({ city: "Paris" });
+const errors = [];
+for (const args of [
+  { query: " " }, { query: "hidden", limit: 0 },
+]) {
+  try { await tools.tool_search(args); } catch (error) { errors.push(String(error)); }
+}
+const { tools: matches } = await tools.tool_search({ query: "blocked hidden-dynamic-tool", limit: 1 });
+const tool = matches[0];
+const out = await tools[tool.name]({ city: "Paris" });
 text(
   JSON.stringify({
     name: tool?.name ?? null,
     description: tool?.description ?? null,
     out,
+    recoveredFromInvalidArguments: errors.length === 2,
   })
 );
 "#;
@@ -8360,7 +8491,7 @@ text(
     })
     .await;
     assert_eq!(request.namespace.as_deref(), Some("codex_app"));
-    assert_eq!(request.tool, "hidden_dynamic_tool");
+    assert_eq!(request.tool, "hidden-dynamic-tool");
     assert_eq!(request.arguments, serde_json::json!({ "city": "Paris" }));
     test.codex
         .submit(Op::DynamicToolResponse {
@@ -8399,6 +8530,7 @@ text(
         parsed.get("out"),
         Some(&Value::String("hidden-ok".to_string()))
     );
+    assert_eq!(parsed["recoveredFromInvalidArguments"], true);
     assert!(
         parsed
             .get("description")

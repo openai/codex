@@ -2,9 +2,11 @@
 
 use super::CodeModeToolKind;
 use super::DEFERRED_NESTED_TOOLS_GUIDANCE;
+use super::DeferredToolDiscovery;
 use super::ImageDetailVisibility;
 use super::LEGACY_IMAGE_HELPER_DESCRIPTION;
 use super::MCP_TYPESCRIPT_PREAMBLE;
+use super::TOOL_SEARCH_GUIDANCE;
 use super::ToolDefinition;
 use super::UNIFIED_IMAGE_HELPER_DESCRIPTION;
 use super::build_exec_tool_description;
@@ -34,6 +36,7 @@ fn exec_override_renders_only_known_literal_placeholders() {
             /*default_exec_yield_time_ms*/ 4567,
             /*code_mode_only*/ false,
             image_detail_visibility,
+            DeferredToolDiscovery::Catalog,
             Some(&CodeModeToolMessages {
                 exec: Some(ToolMessage {
                     description: Some(" \nDefaults to 10000 ms. {{ default_exec_yield_time_ms }} ms.\n{{ image_helper }}\n{{ unknown }} {{default_exec_yield_time_ms}}\t ".to_string()),
@@ -63,6 +66,7 @@ fn exec_override_preserves_empty_and_whitespace_only_text() {
                 crate::DEFAULT_EXEC_YIELD_TIME_MS,
                 /*code_mode_only*/ true,
                 ImageDetailVisibility::Visible,
+                DeferredToolDiscovery::Catalog,
                 Some(&CodeModeToolMessages {
                     exec: Some(ToolMessage {
                         description: Some(description_override.to_string()),
@@ -153,6 +157,7 @@ fn exec_override_preserves_runtime_sections() {
                 crate::DEFAULT_EXEC_YIELD_TIME_MS,
                 code_mode_only,
                 ImageDetailVisibility::Visible,
+                DeferredToolDiscovery::Catalog,
                 Some(&CodeModeToolMessages {
                     exec: Some(ToolMessage {
                         description: Some(String::new()),
@@ -165,6 +170,53 @@ fn exec_override_preserves_runtime_sections() {
             ),
             expected,
         );
+    }
+}
+
+#[test]
+fn ranked_search_guidance_honors_overrides() {
+    let deferred_tools = [ToolDefinition {
+        name: "deferred_tool".to_string(),
+        tool_name: ToolName::plain("deferred_tool"),
+        description: "Deferred tool".to_string(),
+        kind: CodeModeToolKind::Function,
+        input_schema: None,
+        input_schema_max_bytes: None,
+        output_schema: None,
+    }];
+    for code_mode_only in [false, true] {
+        for (guidance, expected) in [
+            (
+                None,
+                if code_mode_only {
+                    DEFERRED_NESTED_TOOLS_GUIDANCE.to_string()
+                } else {
+                    format!("{DEFERRED_NESTED_TOOLS_GUIDANCE}\n\n{TOOL_SEARCH_GUIDANCE}")
+                },
+            ),
+            (Some(""), String::new()),
+            (Some("Catalog discovery."), "Catalog discovery.".to_string()),
+        ] {
+            let description = build_exec_tool_description(
+                &[],
+                &deferred_tools,
+                &BTreeMap::new(),
+                crate::DEFAULT_EXEC_YIELD_TIME_MS,
+                code_mode_only,
+                ImageDetailVisibility::Visible,
+                DeferredToolDiscovery::RankedSearch,
+                Some(&CodeModeToolMessages {
+                    exec: Some(ToolMessage {
+                        description: Some(String::new()),
+                        ..Default::default()
+                    }),
+                    deferred_nested_tools_guidance: guidance.map(str::to_string),
+                    mcp_typescript_preamble: Some(String::new()),
+                    ..Default::default()
+                }),
+            );
+            assert_eq!(description, expected);
+        }
     }
 }
 
@@ -187,6 +239,7 @@ fn mcp_types_stay_stable_when_a_deferred_tool_changes_its_output_schema() {
             crate::DEFAULT_EXEC_YIELD_TIME_MS,
             /*code_mode_only*/ true,
             ImageDetailVisibility::Visible,
+            DeferredToolDiscovery::Catalog,
             Some(&CodeModeToolMessages {
                 mcp_typescript_preamble: preamble.map(str::to_string),
                 ..Default::default()
@@ -229,6 +282,7 @@ fn nested_guidance_survives_catalog_changes_and_respects_overrides() {
             crate::DEFAULT_EXEC_YIELD_TIME_MS,
             code_mode_only,
             ImageDetailVisibility::Visible,
+            DeferredToolDiscovery::Catalog,
             Some(&CodeModeToolMessages {
                 exec: Some(ToolMessage {
                     description: Some(String::new()),

@@ -815,6 +815,9 @@
             "code_mode_prewarm": {
               "type": "boolean"
             },
+            "code_mode_tool_search": {
+              "type": "boolean"
+            },
             "codex_apps_mcp_2026_07_28": {
               "type": "boolean"
             },
@@ -6986,6 +6989,9 @@
           "type": "boolean"
         },
         "code_mode_prewarm": {
+          "type": "boolean"
+        },
+        "code_mode_tool_search": {
           "type": "boolean"
         },
         "codex_apps_mcp_2026_07_28": {

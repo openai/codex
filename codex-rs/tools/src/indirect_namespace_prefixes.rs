@@ -83,9 +83,14 @@ impl<'a> IndirectNamespacePrefixes<'a> {
             return;
         }
         for tool in tools {
-            if let Some(prefix) = self.prefix(namespace_name(&tool.tool_name)) {
-                prepend(prefix, &mut tool.description);
-            }
+            self.apply_code_mode_description(&tool.tool_name, &mut tool.description);
+        }
+    }
+
+    /// Adds guidance to one owned description without copying the tool's schemas.
+    pub fn apply_code_mode_description(&self, tool_name: &ToolName, description: &mut String) {
+        if let Some(prefix) = self.prefix(namespace_name(tool_name)) {
+            prepend(prefix, description);
         }
     }
 

@@ -148,8 +148,6 @@ impl ToolRouter {
     }
 
     /// The normalized nested identities chosen after exclusions and collisions.
-    // Consumed by the follow-up cell-origin migration.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn code_mode_tool_names(&self) -> &BTreeMap<String, ToolName> {
         &self.code_mode_tool_names
     }

@@ -1415,8 +1415,10 @@ async fn astra_continues_after_input_yields_a_code_mode_cell() -> Result<()> {
     Ok(())
 }
 
+#[test_case::test_case(false; "catalog")]
+#[test_case::test_case(true; "ranked_search")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_catalog_messages() -> Result<()> {
+async fn code_mode_catalog_messages(ranked_search: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let apps =
@@ -1428,6 +1430,8 @@ async fn code_mode_catalog_messages() -> Result<()> {
             configure_scenario_catalog(config);
             config.chatgpt_base_url = apps.chatgpt_base_url;
             config.features.enable(Feature::Apps).expect("enable apps");
+            config.features.set_enabled(Feature::CodeModeToolSearch, ranked_search)
+                .expect("set ranked tool search");
             config.workspace_roots = vec![config.cwd.clone()];
             config.code_mode.disable_in_process_fallback = true;
             config.code_mode.default_exec_yield_time_ms = 1234;
@@ -1464,44 +1468,86 @@ async fn code_mode_catalog_messages() -> Result<()> {
         })
         .build_with_auto_env(&server)
         .await?;
-    let mock = mount_sse_sequence(
-        &server,
-        vec![
+    let exec_code = if ranked_search {
+        r#"const name = load("calendarToolName");
+text((await tools[name]({ timezone: "UTC" })).content[0].text);
+text('started'); yield_control(); text('finished');"#
+    } else {
+        "text('started'); yield_control(); text('finished');"
+    };
+    let mut events = vec![
+        sse(vec![
+            ev_response_created("exec-response"),
+            ev_custom_tool_call("exec-call", "exec", exec_code),
+            ev_completed("exec-response"),
+        ]),
+        sse(vec![
+            ev_response_created("wait-response"),
+            ev_function_call_with_namespace(
+                "wait-call",
+                "functions",
+                "wait",
+                if ranked_search {
+                    r#"{"cell_id":"2"}"#
+                } else {
+                    r#"{"cell_id":"1"}"#
+                },
+            ),
+            ev_completed("wait-response"),
+        ]),
+        sse(vec![
+            ev_assistant_message("final", "The cell started, yielded, and finished."),
+            ev_completed("final-response"),
+        ]),
+    ];
+    if ranked_search {
+        events.insert(
+            0,
             sse(vec![
-                ev_response_created("exec-response"),
+                ev_response_created("search-response"),
                 ev_custom_tool_call(
-                    "exec-call",
+                    "search-call",
                     "exec",
-                    "text('started'); yield_control(); text('finished');",
+                    r#"const result = await tools.tool_search({query: "calendar_timezone_option_99", limit: 1});
+store("calendarToolName", result.tools[0].name);
+text(result.tools[0].name);
+text(result.tools[0].description);"#,
                 ),
-                ev_completed("exec-response"),
+                ev_completed("search-response"),
             ]),
-            sse(vec![
-                ev_response_created("wait-response"),
-                ev_function_call_with_namespace(
-                    "wait-call",
-                    "functions",
-                    "wait",
-                    r#"{"cell_id":"1"}"#,
-                ),
-                ev_completed("wait-response"),
-            ]),
-            sse(vec![
-                ev_assistant_message("final", "The cell started, yielded, and finished."),
-                ev_completed("final-response"),
-            ]),
-        ],
-    )
-    .await;
-    test.submit_turn("Start a code cell, yield its initial output, then wait for its completion.")
-        .await?;
+        );
+    }
+    let mock = mount_sse_sequence(&server, events).await;
+    let prompt = if ranked_search {
+        "Find calendar timezone option 99, call it with UTC, then yield and wait for completion."
+    } else {
+        "Start a code cell, yield its initial output, then wait for its completion."
+    };
+    test.submit_turn(prompt).await?;
     let requests = mock.requests();
+    assert_eq!(requests.len(), if ranked_search { 4 } else { 3 });
+    if ranked_search {
+        assert!(requests[0].body_contains_text("await tools.tool_search("));
+        assert!(requests[1].body_contains_text("calendar_timezone_option_99(args:"));
+        assert!(requests[2].body_contains_text("called calendar_timezone_option_99"));
+    }
     assert!(requests[0].body_contains_text("Catalog discovery: find nested tools"));
     assert!(requests[0].body_contains_text("type CallToolResult<T = unknown>"));
-    insta::assert_snapshot!(
-        "code_mode_catalog_messages",
-        context_snapshot::format_request_history_snapshot(
+    let (snapshot_name, scenario) = if ranked_search {
+        (
+            "code_mode_catalog_messages_ranked_search",
+            "Ranked search prints a deferred tool declaration before a later code cell invokes it, yields, and completes through wait.",
+        )
+    } else {
+        (
+            "code_mode_catalog_messages",
             "Catalog Code Mode instructions and wait parameter descriptions accompany a yielded cell through completion.",
+        )
+    };
+    insta::assert_snapshot!(
+        snapshot_name,
+        context_snapshot::format_request_history_snapshot(
+            scenario,
             &requests,
             &ContextSnapshotOptions::default().include_request_settings(),
         )

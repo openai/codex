@@ -4,6 +4,7 @@ pub(crate) mod execute_spec;
 mod output;
 mod response_adapter;
 mod telemetry;
+mod tool_definitions;
 mod wait_handler;
 pub(crate) mod wait_spec;
 
@@ -54,6 +55,7 @@ use delegate::CodeModeDispatchWorker;
 pub(crate) use execute_handler::CodeModeExecuteHandler;
 use output::CodeModeToolOutput;
 use response_adapter::into_function_call_output_content_items;
+pub(crate) use tool_definitions::prepare_code_mode_tool_definitions;
 pub(crate) use wait_handler::CodeModeWaitHandler;
 
 pub(crate) const PUBLIC_TOOL_NAME: &str = codex_code_mode::PUBLIC_TOOL_NAME;

@@ -127,6 +127,8 @@ pub enum Feature {
     ExecutedToolCallMetadata,
     /// Enable JavaScript code mode backed by the standalone host process.
     CodeMode,
+    /// Expose ranked tool discovery inside JavaScript code mode.
+    CodeModeToolSearch,
     /// Removed compatibility flag for the configurable code-mode exec yield timeout.
     CodeModeBufferedExec,
     /// Run JavaScript code mode in the standalone host process.
@@ -1109,6 +1111,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CodeMode,
         key: "code_mode",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CodeModeToolSearch,
+        key: "code_mode_tool_search",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

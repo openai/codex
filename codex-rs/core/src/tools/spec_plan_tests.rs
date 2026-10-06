@@ -1382,6 +1382,226 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
 }
 
 #[tokio::test]
+async fn code_mode_tool_search_requires_experiment_and_model_capability() {
+    for tool_mode in [ToolMode::Direct, ToolMode::CodeMode, ToolMode::CodeModeOnly] {
+        for experiment_enabled in [false, true] {
+            for supports_search_tool in [false, true] {
+                let plan = probe_with(
+                    |turn| {
+                        set_feature(turn, Feature::Collab, /*enabled*/ false);
+                        set_feature(turn, Feature::CodeModeToolSearch, experiment_enabled);
+                        set_feature(turn, Feature::CodeMode, tool_mode != ToolMode::Direct);
+                        set_feature(
+                            turn,
+                            Feature::CodeModeOnly,
+                            tool_mode == ToolMode::CodeModeOnly,
+                        );
+                        update_turn_settings_for_test(turn, |settings| {
+                            Arc::make_mut(&mut settings.model_info).supports_search_tool =
+                                supports_search_tool;
+                        });
+                    },
+                    ToolPlanInputs {
+                        tool_runtimes: vec![mcp_runtime(
+                            "searchable",
+                            "mcp__searchable",
+                            "lookup",
+                            ToolExposure::Deferred,
+                        )],
+                        ..ToolPlanInputs::default()
+                    },
+                )
+                .await;
+
+                let nested_search_enabled =
+                    experiment_enabled && supports_search_tool && tool_mode != ToolMode::Direct;
+                assert_eq!(
+                    (
+                        plan.tool_mode,
+                        plan.registered_names
+                            .iter()
+                            .any(|name| name == "tool_search"),
+                        plan.visible_names.iter().any(|name| name == "tool_search"),
+                        plan.code_mode_tool_names.get("tool_search").cloned(),
+                    ),
+                    (
+                        tool_mode,
+                        supports_search_tool,
+                        supports_search_tool && tool_mode != ToolMode::CodeModeOnly,
+                        nested_search_enabled.then(|| ToolName::plain("tool_search")),
+                    ),
+                    "tool mode {tool_mode:?}, experiment {experiment_enabled}, model capability {supports_search_tool}",
+                );
+                if tool_mode != ToolMode::Direct {
+                    let ToolSpec::Freeform(exec) =
+                        plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME)
+                    else {
+                        panic!("expected code mode exec tool");
+                    };
+                    assert_eq!(
+                        exec.description.contains("await tools.tool_search("),
+                        nested_search_enabled,
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn code_mode_tool_search_respects_direct_only_functions() {
+    for (code_mode_only, nested_search_enabled) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let plan = probe_with(
+            |turn| {
+                set_feature(turn, Feature::Collab, /*enabled*/ false);
+                set_feature(turn, Feature::CodeMode, /*enabled*/ true);
+                set_feature(turn, Feature::CodeModeOnly, code_mode_only);
+                set_feature(turn, Feature::CodeModeToolSearch, nested_search_enabled);
+                update_turn_settings_for_test(turn, |settings| {
+                    Arc::make_mut(&mut settings.model_info).supports_search_tool = true;
+                });
+                update_config(turn, |config| {
+                    config.code_mode.direct_only_tool_namespaces = vec!["functions".to_string()];
+                });
+            },
+            ToolPlanInputs {
+                tool_runtimes: vec![mcp_runtime(
+                    "searchable",
+                    "mcp__searchable",
+                    "lookup",
+                    ToolExposure::Deferred,
+                )],
+                ..ToolPlanInputs::default()
+            },
+        )
+        .await;
+
+        assert_eq!(
+            plan.visible_names.iter().any(|name| name == "tool_search"),
+            !code_mode_only || nested_search_enabled,
+        );
+        assert_eq!(
+            plan.exposure("tool_search"),
+            if nested_search_enabled {
+                ToolExposure::DirectModelOnly
+            } else {
+                ToolExposure::Direct
+            },
+        );
+        assert_eq!(plan.code_mode_tool_names.get("tool_search"), None);
+        let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+            panic!("expected code mode exec tool");
+        };
+        assert!(!exec.description.contains("await tools.tool_search("));
+    }
+}
+
+#[tokio::test]
+async fn dynamic_tool_search_does_not_enable_ranked_search_guidance() {
+    for (experiment_enabled, supports_search_tool, has_deferred_tools) in [
+        (false, false, true),
+        (true, false, true),
+        (true, true, false),
+    ] {
+        let plan = probe_with(
+            |turn| {
+                set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
+                set_feature(turn, Feature::Collab, /*enabled*/ false);
+                set_feature(turn, Feature::CodeModeToolSearch, experiment_enabled);
+                update_turn_settings_for_test(turn, |settings| {
+                    Arc::make_mut(&mut settings.model_info).supports_search_tool =
+                        supports_search_tool;
+                });
+            },
+            ToolPlanInputs {
+                dynamic_tools: vec![dynamic_tool(
+                    /*namespace*/ None,
+                    "tool_search",
+                    /*defer_loading*/ false,
+                )],
+                tool_runtimes: if has_deferred_tools {
+                    vec![mcp_runtime(
+                        "searchable",
+                        "mcp__searchable",
+                        "lookup",
+                        ToolExposure::Deferred,
+                    )]
+                } else {
+                    Vec::new()
+                },
+                ..ToolPlanInputs::default()
+            },
+        )
+        .await;
+
+        assert_eq!(
+            plan.code_mode_tool_names.get("tool_search"),
+            Some(&ToolName::plain("tool_search")),
+        );
+        let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+            panic!("expected code mode exec tool");
+        };
+        assert!(exec.description.contains("tool_search dynamic tool"));
+        assert!(!exec.description.contains("await tools.tool_search("));
+    }
+}
+
+#[tokio::test]
+async fn code_mode_tool_search_respects_exclusions_and_requires_deferred_tools() {
+    for (exclude_functions, has_deferred_tools) in [(true, true), (false, false)] {
+        let plan = probe_with(
+            |turn| {
+                set_features(
+                    turn,
+                    &[
+                        Feature::CodeMode,
+                        Feature::CodeModeOnly,
+                        Feature::CodeModeToolSearch,
+                    ],
+                );
+                set_feature(turn, Feature::Collab, /*enabled*/ false);
+                update_turn_settings_for_test(turn, |settings| {
+                    Arc::make_mut(&mut settings.model_info).supports_search_tool = true;
+                });
+                if exclude_functions {
+                    update_config(turn, |config| {
+                        config.code_mode.excluded_tool_namespaces = vec!["functions".to_string()];
+                    });
+                }
+            },
+            ToolPlanInputs {
+                tool_runtimes: if has_deferred_tools {
+                    vec![mcp_runtime(
+                        "searchable",
+                        "mcp__searchable",
+                        "lookup",
+                        ToolExposure::Deferred,
+                    )]
+                } else {
+                    Vec::new()
+                },
+                ..ToolPlanInputs::default()
+            },
+        )
+        .await;
+
+        assert_eq!(plan.code_mode_tool_names.get("tool_search"), None);
+        assert_eq!(
+            plan.registered_names
+                .iter()
+                .any(|name| name == "tool_search"),
+            has_deferred_tools,
+        );
+        let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+            panic!("expected code mode exec tool");
+        };
+        assert!(!exec.description.contains("await tools.tool_search("));
+    }
+}
+
+#[tokio::test]
 async fn tool_namespaces_info_is_opt_in_and_tracks_mcp_exposure() {
     for (enabled, use_responses_lite) in [(false, true), (true, false), (true, true)] {
         let plan = probe_with(
