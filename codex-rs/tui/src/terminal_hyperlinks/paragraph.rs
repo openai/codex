@@ -1,15 +1,37 @@
 //! Paragraph rendering that keeps visible text and hyperlink annotations aligned.
 
 use super::HyperlinkLine;
+use super::annotate_web_urls;
 use super::mark_buffer_hyperlinks;
 use super::visible_lines_ref;
+use crate::render::renderable::Renderable;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
+use ratatui::text::Line;
 use ratatui::text::Text;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
+
+/// Owns a word-wrapped paragraph whose web destinations survive clipping and wrapping.
+pub(crate) struct HyperlinkText(Vec<HyperlinkLine>);
+
+impl HyperlinkText {
+    pub(crate) fn new(lines: Vec<Line<'static>>) -> Self {
+        Self(annotate_web_urls(lines))
+    }
+}
+
+impl Renderable for HyperlinkText {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        HyperlinkParagraph::new(&self.0, Style::default()).render(area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        HyperlinkParagraph::new(&self.0, Style::default()).line_count(width) as u16
+    }
+}
 
 /// Word-wraps without trimming and applies the same vertical scroll to text and links.
 pub(crate) struct HyperlinkParagraph<'a> {

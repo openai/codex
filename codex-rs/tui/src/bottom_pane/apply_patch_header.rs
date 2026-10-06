@@ -3,11 +3,10 @@
 use super::approval_overlay::ApplyPatchApprovalRequest;
 use crate::diff_model::FileChange;
 use crate::render::renderable::Renderable;
+use crate::terminal_hyperlinks::HyperlinkText;
 use codex_utils_path_uri::LegacyAppPathString;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Wrap;
 
 pub(super) fn build_header(request: &ApplyPatchApprovalRequest) -> Box<dyn Renderable> {
     let mut header = Vec::new();
@@ -70,5 +69,5 @@ pub(super) fn build_header(request: &ApplyPatchApprovalRequest) -> Box<dyn Rende
             destination.bold(),
         ]));
     }
-    Box::new(Paragraph::new(header).wrap(Wrap { trim: false }))
+    Box::new(HyperlinkText::new(header))
 }
