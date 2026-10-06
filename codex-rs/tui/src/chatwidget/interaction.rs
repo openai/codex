@@ -161,12 +161,23 @@ impl ChatWidget {
             } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
                 && c.eq_ignore_ascii_case(&'v') =>
             {
+                if Instant::now() < self.suppress_image_paste_until {
+                    self.suppress_image_paste_until =
+                        Instant::now() + clipboard::IMAGE_PASTE_REPEAT_WINDOW;
+                    return KeyEventAction::None;
+                }
+                self.suppress_image_paste_until =
+                    Instant::now() + clipboard::IMAGE_PASTE_REPEAT_WINDOW;
                 return KeyEventAction::PasteImage;
             }
             other if other.kind == KeyEventKind::Press => {
+                self.suppress_image_paste_until = Instant::now();
                 self.bottom_pane.clear_quit_shortcut_hint();
                 self.quit_shortcut_expires_at = None;
                 self.quit_shortcut_key = None;
+            }
+            other if other.kind == KeyEventKind::Release => {
+                self.suppress_image_paste_until = Instant::now();
             }
             _ => {}
         }
