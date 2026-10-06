@@ -25,6 +25,7 @@ pub(super) struct GuardianV2ScoreProgress {
 #[derive(Default)]
 struct ScoreState {
     score: Option<SecurityRiskScore>,
+    score_index: usize,
     wrapper_lag: WrapperLag,
     latest_tool_call: usize,
     js_executions: usize,
@@ -38,6 +39,7 @@ struct ScoreState {
 #[derive(Debug, PartialEq)]
 pub(super) struct CachedScore {
     pub(super) lag: usize,
+    pub(super) score_at_or_before_action: bool,
     pub(super) has_unscored_failure: bool,
     pub(super) js_executions: usize,
     pub(super) oversized: bool,
@@ -115,6 +117,7 @@ impl GuardianV2ScoreProgress {
             .is_none_or(|previous| previous.sampled_at < score.sampled_at);
         if accepted {
             state.score = Some(score);
+            state.score_index = index;
             state.authorization = Some(authorization);
             state.latest_scored_tool_call = state.latest_scored_tool_call.max(index);
             self.updates.send_replace(());
@@ -156,6 +159,11 @@ impl GuardianV2ScoreProgress {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         CachedScore {
+            // Use the accepted score's source, not the coverage high-water mark.
+            score_at_or_before_action: state
+                .wrapper_lag
+                .get(call_id)
+                .is_some_and(|start| state.score_index <= start.index),
             lag: state
                 .latest_tool_call
                 .saturating_sub(state.latest_scored_tool_call)

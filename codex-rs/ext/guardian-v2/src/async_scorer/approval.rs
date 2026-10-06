@@ -105,7 +105,7 @@ impl GuardianApprovalReviewer {
                     match cached_evidence(thread, input, config, &policy, input.metrics.as_deref())
                         .await
                     {
-                        Ok(()) => return ApprovalDecision::Allow,
+                        Ok(_) => return ApprovalDecision::Allow,
                         Err(reason) => reason,
                     }
                 }
@@ -133,9 +133,8 @@ impl GuardianApprovalReviewer {
                 // Subscribe before checking so a concurrently published score is not lost.
                 let mut updates = progress.updates.subscribe();
                 loop {
-                    if cached_evidence(thread, input, config, &policy, /*metrics*/ None)
-                        .await
-                        .is_ok()
+                    if let Ok(true) =
+                        cached_evidence(thread, input, config, &policy, /*metrics*/ None).await
                     {
                         return;
                     }
@@ -157,13 +156,14 @@ impl GuardianApprovalReviewer {
     }
 }
 
+/// Checks score reuse; the success value says whether it can also release a pending review.
 async fn cached_evidence(
     thread: &CodexThread,
     input: &ApprovalDecisionInput<'_>,
     config: &GuardianV2Config,
     policy: &GuardianModelPolicy,
     metrics: Option<&dyn ExtensionMetrics>,
-) -> Result<(), GuardianReviewReason> {
+) -> Result<bool, GuardianReviewReason> {
     let store = input.thread_store;
     let Some(progress) = store.get::<GuardianV2ScoreProgress>() else {
         record_fast_decision(metrics, "deferred", "missing_score");
@@ -217,7 +217,7 @@ async fn cached_evidence(
         && cached.js_executions == 1
     {
         record_fast_decision(metrics, "approved", "initial_cua_call");
-        return Ok(());
+        return Ok(false);
     }
     let Some(permissions) = input.permissions else {
         record_fast_decision(metrics, "deferred", "permission_resolution_error");
@@ -268,7 +268,7 @@ async fn cached_evidence(
                 )
             } else {
                 record_fast_decision(metrics, "approved", "low_risk");
-                return Ok(());
+                return Ok(cached.score_at_or_before_action);
             }
         }
         Some(score) if score >= config.review_threshold => {

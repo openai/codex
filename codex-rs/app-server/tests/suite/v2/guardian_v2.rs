@@ -96,6 +96,9 @@ mod code_mode;
 #[path = "guardian_action_budget_tests.rs"]
 mod action_budget;
 
+#[path = "guardian_pending_score_tests.rs"]
+mod pending_scores;
+
 const TIMEOUT: Duration = Duration::from_secs(30);
 const MODEL: &str = "mock-model";
 const REQUIRED_MODEL: &str = "protected-model";
@@ -182,6 +185,7 @@ struct MockResponsesState {
     luna_completions: AtomicUsize,
     root_thread_id: Mutex<Option<String>>,
     allow_luna: Notify,
+    luna_gates: Vec<Notify>,
     allow_guardian_review: Notify,
     gate_each_guardian_review: bool,
     gate_second_tool_on_classification: bool,
@@ -615,12 +619,18 @@ async fn luna_response(state: &MockResponsesState, request: Value) -> Vec<Value>
                 request["prompt_cache_key"] == format!("guardian-v2:{thread_id}")
             });
     if !is_root_sample {
+        let index = {
+            let mut requests = state.luna_requests.lock().expect("Luna request lock");
+            let index = requests.len();
+            requests.push(request);
+            index
+        };
         state
-            .luna_requests
-            .lock()
-            .expect("Luna request lock should not be poisoned")
-            .push(request);
-        state.allow_luna.notified().await;
+            .luna_gates
+            .get(index)
+            .unwrap_or(&state.allow_luna)
+            .notified()
+            .await;
     }
     let classification = if state.invalid_classification {
         "invalid"
@@ -2374,23 +2384,16 @@ async fn guardian_v2_computer_use_only_scopes_classification_and_fast_reviews(
     .await
 }
 
-enum ApprovalCompletion {
-    Sync,
-    AsyncLow,
-}
-
-#[test_case("cua_repl", &["js", "js"], ApprovalCompletion::AsyncLow; "late low cancels review")]
-#[test_case("node_repl", &["js", "js"], ApprovalCompletion::Sync; "browser startup")]
-#[test_case("cua_repl", &["js", "js"], ApprovalCompletion::Sync; "computer use startup")]
-#[test_case("node_repl", &["js_reset", "js", "js"], ApprovalCompletion::Sync; "browser reset before execution")]
-#[test_case("cua_repl", &["js_reset", "js", "js"], ApprovalCompletion::Sync; "computer use reset before execution")]
-#[test_case("node_repl", &["js_add_node_module_dir", "js", "js"], ApprovalCompletion::Sync; "browser setup before execution")]
-#[test_case("cua_repl", &["js_add_node_module_dir", "js", "js"], ApprovalCompletion::Sync; "computer use setup before execution")]
+#[test_case("node_repl", &["js", "js"]; "browser startup")]
+#[test_case("cua_repl", &["js", "js"]; "computer use startup")]
+#[test_case("node_repl", &["js_reset", "js", "js"]; "browser reset before execution")]
+#[test_case("cua_repl", &["js_reset", "js", "js"]; "computer use reset before execution")]
+#[test_case("node_repl", &["js_add_node_module_dir", "js", "js"]; "browser setup before execution")]
+#[test_case("cua_repl", &["js_add_node_module_dir", "js", "js"]; "computer use setup before execution")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn first_cua_review_does_not_wait_for_initial_score(
     server_name: &'static str,
     tool_sequence: &'static [&'static str],
-    completion: ApprovalCompletion,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let state = Arc::new(MockResponsesState {
@@ -2467,24 +2470,7 @@ async fn first_cua_review_does_not_wait_for_initial_score(
         state.parent_requests.load(Ordering::SeqCst),
         tool_sequence.len()
     );
-    if !matches!(completion, ApprovalCompletion::Sync) {
-        state.allow_luna.notify_one();
-        let review: codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification =
-            timeout(
-                TIMEOUT,
-                app_server.read_notification("item/autoApprovalReview/completed"),
-            )
-            .await??;
-        assert_eq!(
-            (review.review.status, review.review.risk_level),
-            (
-                codex_app_server_protocol::GuardianApprovalReviewStatus::Approved,
-                None
-            )
-        );
-    } else {
-        state.allow_guardian_review.notify_one();
-    }
+    state.allow_guardian_review.notify_one();
     let completed: TurnCompletedNotification =
         timeout(TIMEOUT, app_server.read_notification("turn/completed")).await??;
     assert_eq!(completed.thread_id, thread.id);
