@@ -1,4 +1,4 @@
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use std::sync::Arc;
 
 use codex_core::CodexThread;
@@ -357,7 +357,7 @@ async fn submit_danger_full_access_user_turn(test: &TestCodex, text: &str) {
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(test.config.cwd.clone())),
+                environments: Some(local_requests(test.config.cwd.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

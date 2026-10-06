@@ -10,7 +10,7 @@ use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
-use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
@@ -463,9 +463,9 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
     submit_thread_settings(
         &test.codex,
         ThreadSettingsOverrides {
-            environments: Some(TurnEnvironmentSelections::new(
+            environments: Some(TurnEnvironmentRequests::new(
                 test.config.cwd.clone(),
-                vec![child_environment.clone()],
+                vec![child_environment.clone().into_request()],
             )),
             ..Default::default()
         },
@@ -492,9 +492,9 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
         submit_thread_settings(
             &test.codex,
             ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![parent_environment.clone()],
+                    vec![parent_environment.clone().into_request()],
                 )),
                 ..Default::default()
             },
@@ -522,9 +522,9 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
         submit_thread_settings(
             &test.codex,
             ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![parent_environment.clone()],
+                    vec![parent_environment.clone().into_request()],
                 )),
                 ..Default::default()
             },

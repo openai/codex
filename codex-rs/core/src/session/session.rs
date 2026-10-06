@@ -42,6 +42,7 @@ use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_sandboxing::SandboxType;
 use codex_skills::SkillError;
@@ -340,9 +341,12 @@ impl SessionConfiguration {
         environment_selections: Vec<TurnEnvironmentSelection>,
     ) -> CodexThreadSettingsOverrides {
         CodexThreadSettingsOverrides {
-            environments: Some(TurnEnvironmentSelections::new(
+            environments: Some(TurnEnvironmentRequests::new(
                 self.legacy_fallback_cwd.clone(),
-                environment_selections,
+                environment_selections
+                    .into_iter()
+                    .map(TurnEnvironmentSelection::into_request)
+                    .collect(),
             )),
             runtime_workspace_roots: Some(self.runtime_workspace_roots.clone()),
             profile_workspace_roots: Some(

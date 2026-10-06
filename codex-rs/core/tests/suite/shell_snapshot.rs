@@ -55,7 +55,7 @@ use core_test_support::skip_if_remote;
 #[cfg(unix)]
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -201,7 +201,7 @@ async fn run_snapshot_command_with_options(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(cwd)),
+                environments: Some(local_requests(cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -277,7 +277,7 @@ async fn run_tool_turn_on_harness(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(cwd)),
+                environments: Some(local_requests(cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -695,10 +695,10 @@ async fn shell_snapshot_v2_guardian_uses_its_resolved_permissions_and_tools(
         ],
     )
     .await;
-    let mut environments = local_selections(test.config.cwd.clone());
-    environments.environments[0].config = EnvironmentConfigState::Ready(EnvironmentConfig {
+    let mut requests = local_requests(test.config.cwd.clone());
+    requests.environment_requests[0].config = EnvironmentConfigState::Ready(EnvironmentConfig {
         allow_login_shell: true,
-        workspace_roots: environments.environments[0].workspace_roots.clone(),
+        workspace_roots: requests.environment_requests[0].workspace_roots.clone(),
         permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),
         shell_environment_policy: test.config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
@@ -716,7 +716,7 @@ async fn shell_snapshot_v2_guardian_uses_its_resolved_permissions_and_tools(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(environments),
+                environments: Some(requests),
                 ..Default::default()
             }),
         )
@@ -1077,7 +1077,7 @@ async fn unified_exec_snapshot_still_intercepts_apply_patch() -> Result<()> {
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(cwd.clone())),
+                environments: Some(local_requests(cwd.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

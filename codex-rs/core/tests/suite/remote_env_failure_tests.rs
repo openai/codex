@@ -1,5 +1,7 @@
 //! Provisioning failures reach the model without terminating its turn.
 use super::*;
+use codex_protocol::protocol::TurnEnvironmentRequest;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
 
@@ -60,9 +62,9 @@ async fn provisioning_failure_reaches_model_and_turn_continues(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![TurnEnvironmentSelection {
+                    vec![TurnEnvironmentRequest {
                         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                         cwd: PathUri::from_abs_path(&test.config.cwd),
                         workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],

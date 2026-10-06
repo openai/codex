@@ -35,7 +35,7 @@ use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::ThreadSettingsOverrides;
-use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::review_format::render_review_output_text;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
@@ -44,7 +44,7 @@ use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -720,9 +720,9 @@ async fn review_uses_updated_turn_permissions_and_approval_policy() {
     core_test_support::submit_thread_settings(
         &codex,
         ThreadSettingsOverrides {
-            environments: Some(TurnEnvironmentSelections::new(
+            environments: Some(TurnEnvironmentRequests::new(
                 updated_cwd.clone(),
-                vec![selection],
+                vec![selection.into_request()],
             )),
             approval_policy: Some(AskForApproval::Never),
             approvals_reviewer: Some(ApprovalsReviewer::User),
@@ -1453,7 +1453,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     core_test_support::submit_thread_settings(
         &codex,
         ThreadSettingsOverrides {
-            environments: Some(local_selections(repo_path.to_path_buf().abs())),
+            environments: Some(local_requests(repo_path.to_path_buf().abs())),
             ..Default::default()
         },
     )

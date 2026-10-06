@@ -8124,7 +8124,7 @@ text(JSON.stringify({
                     text_elements: Vec::new(),
                 }])
                 .with_thread_settings(ThreadSettingsOverrides {
-                    environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
+                    environments: Some(codex_protocol::protocol::TurnEnvironmentRequests::new(
                         cwd,
                         Vec::new(),
                     )),
@@ -8460,7 +8460,7 @@ text(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
+                environments: Some(codex_protocol::protocol::TurnEnvironmentRequests::new(
                     cwd,
                     Vec::new(),
                 )),

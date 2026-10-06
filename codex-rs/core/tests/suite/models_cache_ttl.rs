@@ -1,5 +1,5 @@
 use codex_core::TurnInputRequest;
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -214,7 +214,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(test.config.cwd.clone())),
+                environments: Some(local_requests(test.config.cwd.clone())),
                 approval_policy: Some(codex_protocol::protocol::AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

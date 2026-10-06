@@ -78,7 +78,7 @@ impl ReviewerTurn {
         }
         TurnInputRequest::user_input(self.items)
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(self.environments),
+                environments: Some(self.environments.into_requests()),
                 approval_policy: Some(AskForApproval::Never),
                 permission_profile: Some(self.permission_profile),
                 summary: Some(self.reasoning_summary),

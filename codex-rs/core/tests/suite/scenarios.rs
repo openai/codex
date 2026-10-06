@@ -536,7 +536,7 @@ async fn astra_switches_environments_for_the_rest_of_the_active_turn() -> Result
         .submit(Op::TurnSettings {
             turn_id: request.turn_id.clone(),
             update: TurnSettingsUpdate {
-                environments: Some(vec![other.clone()]),
+                environments: Some(vec![other.clone().into_request()]),
                 ..Default::default()
             },
             reply,
@@ -861,7 +861,7 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context() ->
         .submit(Op::TurnSettings {
             turn_id,
             update: TurnSettingsUpdate {
-                environments: Some(vec![next_environment]),
+                environments: Some(vec![next_environment.into_request()]),
                 ..Default::default()
             },
             reply,

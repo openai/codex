@@ -12,6 +12,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageReference as CoreImageReference;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_skills::system_cache_root_dir;
@@ -118,7 +119,7 @@ fn map_additional_context(
 
 #[derive(Default)]
 struct ThreadEnvironmentOverride {
-    environment_requests: Option<TurnEnvironmentSelections>,
+    environment_requests: Option<TurnEnvironmentRequests>,
     // Only default-environment updates replace the task's separately persisted root selection.
     runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
 }
@@ -750,12 +751,9 @@ impl TurnRequestProcessor {
                 },
             };
             return ThreadEnvironmentOverride {
-                environment_requests: Some(TurnEnvironmentSelections::new(
+                environment_requests: Some(TurnEnvironmentRequests::new(
                     legacy_fallback_cwd,
-                    environment_requests
-                        .into_iter()
-                        .map(TurnEnvironmentSelection::new)
-                        .collect(),
+                    environment_requests,
                 )),
                 ..Default::default()
             };
@@ -777,12 +775,9 @@ impl TurnRequestProcessor {
             .thread_manager
             .default_environment_requests(&legacy_fallback_cwd, &workspace_roots);
         ThreadEnvironmentOverride {
-            environment_requests: Some(TurnEnvironmentSelections::new(
+            environment_requests: Some(TurnEnvironmentRequests::new(
                 legacy_fallback_cwd,
-                environment_requests
-                    .into_iter()
-                    .map(TurnEnvironmentSelection::new)
-                    .collect(),
+                environment_requests,
             )),
             runtime_workspace_roots: Some(workspace_roots),
         }

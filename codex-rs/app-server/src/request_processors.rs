@@ -462,8 +462,6 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 #[cfg(test)]
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::TurnEnvironmentRequest;
-use codex_protocol::protocol::TurnEnvironmentSelection;
-use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::protocol::strip_user_message_prefix;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;

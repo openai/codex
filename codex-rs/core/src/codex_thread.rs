@@ -51,6 +51,7 @@ use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::W3cTraceContext;
@@ -149,7 +150,7 @@ impl ThreadConfigSnapshot {
 pub struct CodexThreadSettingsOverrides {
     /// Replaces the data captured by future turns. Omission preserves it.
     pub turn_extension_init: Option<codex_extension_api::ExtensionDataInit>,
-    pub environments: Option<TurnEnvironmentSelections>,
+    pub environments: Option<TurnEnvironmentRequests>,
     pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub profile_workspace_roots: Option<Vec<ProfileWorkspaceRoot>>,
     pub approval_policy: Option<AskForApproval>,
@@ -667,7 +668,7 @@ impl CodexThread {
         &self,
         overrides: CodexThreadSettingsOverrides,
     ) -> ConstraintResult<ThreadConfigSnapshot> {
-        let updates = Self::thread_settings_update(overrides);
+        let updates = self.thread_settings_update(overrides);
         self.session.preview_settings(&updates).await
     }
 
@@ -702,7 +703,7 @@ impl CodexThread {
         &self,
         settings: CodexThreadSettingsOverrides,
     ) -> ConstraintResult<()> {
-        let updates = Self::thread_settings_update(settings);
+        let updates = self.thread_settings_update(settings);
         self.session.update_settings(updates).await.map(|_| ())
     }
 
@@ -713,7 +714,10 @@ impl CodexThread {
         self.session.checkpoint_thread_settings().await
     }
 
-    fn thread_settings_update(overrides: CodexThreadSettingsOverrides) -> SessionSettingsUpdate {
+    fn thread_settings_update(
+        &self,
+        overrides: CodexThreadSettingsOverrides,
+    ) -> SessionSettingsUpdate {
         let CodexThreadSettingsOverrides {
             turn_extension_init,
             environments: environment_requests,
@@ -745,7 +749,7 @@ impl CodexThread {
                 approval_policy,
                 approvals_reviewer,
             },
-            environments: environment_requests,
+            environments: environment_requests.map(TurnEnvironmentRequests::select),
             runtime_workspace_roots,
             profile_workspace_roots,
             sandbox_policy,

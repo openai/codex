@@ -1,4 +1,5 @@
 use codex_protocol::protocol::TurnEnvironmentRequest;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use std::future::Future;
 use std::io::ErrorKind;
 use std::mem::swap;
@@ -189,6 +190,11 @@ pub fn executor_path_uri(path: impl AsRef<Path>) -> Result<PathUri> {
 
 pub fn local_selections(cwd: AbsolutePathBuf) -> TurnEnvironmentSelections {
     TurnEnvironmentSelections::new(cwd.clone(), vec![local(cwd)])
+}
+
+/// Builds thread-settings input using the local test environment.
+pub fn local_requests(cwd: AbsolutePathBuf) -> TurnEnvironmentRequests {
+    TurnEnvironmentRequests::new(cwd.clone(), vec![local_request(cwd)])
 }
 
 #[derive(Debug)]
@@ -1227,7 +1233,8 @@ impl TestCodex {
                     text_elements: Vec::new(),
                 }])
                 .with_thread_settings(ThreadSettingsOverrides {
-                    environments: turn_environment_selections,
+                    environments: turn_environment_selections
+                        .map(TurnEnvironmentSelections::into_requests),
                     approval_policy: Some(approval_policy),
                     sandbox_policy: Some(sandbox_policy),
                     permission_profile,

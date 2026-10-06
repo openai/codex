@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use core_test_support::test_codex::local_requests;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -62,7 +63,6 @@ use core_test_support::skip_if_target_windows;
 use core_test_support::stdio_server_bin;
 use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -545,7 +545,7 @@ async fn persisted_remote_plugin_command_attribution_flows_through_turn_context(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(cwd)),
+                environments: Some(local_requests(cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

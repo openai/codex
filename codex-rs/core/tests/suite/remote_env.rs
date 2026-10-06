@@ -78,6 +78,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentRequest;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::TurnSettingsUpdate;
@@ -115,6 +116,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::environment_config_for_selection;
 use core_test_support::test_codex::local;
+use core_test_support::test_codex::local_request;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::test_env;
 use core_test_support::test_codex::turn_permission_fields;
@@ -243,7 +245,7 @@ async fn submit_turn_with_approval_and_environments(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(turn_environment_selections),
+                environments: Some(turn_environment_selections.into_requests()),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: Some(SandboxPolicy::new_read_only_policy()),
@@ -604,9 +606,9 @@ async fn environment_permissions_follow_configuration_ownership() -> Result<()> 
     submit_thread_settings(
         &test.codex,
         ThreadSettingsOverrides {
-            environments: Some(TurnEnvironmentSelections::new(
+            environments: Some(TurnEnvironmentRequests::new(
                 test.config.cwd.clone(),
-                vec![TurnEnvironmentSelection {
+                vec![TurnEnvironmentRequest {
                     config: EnvironmentConfigState::Ready(EnvironmentConfig {
                         allow_login_shell: test.config.permissions.allow_login_shell,
                         workspace_roots: selection.workspace_roots.clone(),
@@ -620,7 +622,7 @@ async fn environment_permissions_follow_configuration_ownership() -> Result<()> 
                         network_policy: None,
                         selected_capability_roots: Vec::new(),
                     }),
-                    ..selection.clone()
+                    ..selection.clone().into_request()
                 }],
             )),
             ..Default::default()
@@ -943,7 +945,7 @@ async fn settings_update_does_not_retarget_active_turn_environment() -> Result<(
     let preview = test
         .codex
         .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
-            environments: Some(next_environments.clone()),
+            environments: Some(next_environments.clone().into_requests()),
             ..Default::default()
         })
         .await?;
@@ -961,7 +963,7 @@ async fn settings_update_does_not_retarget_active_turn_environment() -> Result<(
     submit_thread_settings(
         &test.codex,
         ThreadSettingsOverrides {
-            environments: Some(next_environments.clone()),
+            environments: Some(next_environments.clone().into_requests()),
             ..Default::default()
         },
     )
@@ -1103,7 +1105,7 @@ async fn active_environment_update_waits_for_a_configured_executor_to_connect(
         .submit(Op::TurnSettings {
             turn_id: request.turn_id.clone(),
             update: TurnSettingsUpdate {
-                environments: Some(vec![remote_selection.clone()]),
+                environments: Some(vec![remote_selection.clone().into_request()]),
                 ..Default::default()
             },
             reply,
@@ -1251,9 +1253,12 @@ async fn deferred_executor_promotes_primary_environment_when_startup_completes()
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![remote_selection, local_selection],
+                    vec![
+                        remote_selection.into_request(),
+                        local_selection.into_request(),
+                    ],
                 )),
                 ..Default::default()
             }),
@@ -1674,9 +1679,9 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
         let preview = test
             .codex
             .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![selection_override],
+                    vec![selection_override.into_request()],
                 )),
                 ..Default::default()
             })
@@ -1717,9 +1722,9 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
     submit_thread_settings(
         &test.codex,
         ThreadSettingsOverrides {
-            environments: Some(TurnEnvironmentSelections::new(
+            environments: Some(TurnEnvironmentRequests::new(
                 test.config.cwd.clone(),
-                vec![TurnEnvironmentSelection {
+                vec![TurnEnvironmentRequest {
                     config: EnvironmentConfigState::Ready(EnvironmentConfig {
                         allow_login_shell: false,
                         workspace_roots: selection.workspace_roots.clone(),
@@ -1733,7 +1738,7 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
                         network_policy: None,
                         selected_capability_roots: vec![root("first-root")],
                     }),
-                    ..selection.clone()
+                    ..selection.clone().into_request()
                 }],
             )),
             ..Default::default()
@@ -1778,9 +1783,9 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
         }]);
         if index == 2 {
             request = request.with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![TurnEnvironmentSelection {
+                    vec![TurnEnvironmentRequest {
                         config: EnvironmentConfigState::Ready(EnvironmentConfig {
                             allow_login_shell: false,
                             workspace_roots: selection.workspace_roots.clone(),
@@ -1794,7 +1799,7 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
                             network_policy: None,
                             selected_capability_roots: vec![root("first-updated-root")],
                         }),
-                        ..selection.clone()
+                        ..selection.clone().into_request()
                     }],
                 )),
                 ..Default::default()
@@ -1860,11 +1865,11 @@ async fn owner_network_policy_rejects_unsupported_environment_authority() -> Res
     let preview_error = test
         .codex
         .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
-            environments: Some(TurnEnvironmentSelections::new(
+            environments: Some(TurnEnvironmentRequests::new(
                 test.config.cwd.clone(),
-                vec![TurnEnvironmentSelection {
+                vec![TurnEnvironmentRequest {
                     config: EnvironmentConfigState::Ready(owner_config.clone()),
-                    ..selection.clone()
+                    ..selection.clone().into_request()
                 }],
             )),
             ..Default::default()
@@ -2176,7 +2181,7 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
     for thread in [&waiting.thread, &independent.thread, &failed.thread] {
         let error = thread
             .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
-                environments: Some(downgraded_environments.clone()),
+                environments: Some(downgraded_environments.clone().into_requests()),
                 ..Default::default()
             })
             .await
@@ -2191,7 +2196,7 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(downgraded_environments),
+                environments: Some(downgraded_environments.into_requests()),
                 ..Default::default()
             }),
         )
@@ -2309,9 +2314,9 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
     submit_thread_settings(
         &failed.thread,
         ThreadSettingsOverrides {
-            environments: Some(TurnEnvironmentSelections::new(
+            environments: Some(TurnEnvironmentRequests::new(
                 test.config.cwd.clone(),
-                vec![recovered_selection.clone()],
+                vec![recovered_selection.clone().into_request()],
             )),
             ..Default::default()
         },
@@ -2451,10 +2456,13 @@ async fn future_pending_environment_can_finish_without_retargeting_the_active_tu
             .start_or_steer_turn(
                 request("use the other environment next turn").with_thread_settings(
                     ThreadSettingsOverrides {
-                        environments: Some(TurnEnvironmentSelections::new(
-                            test.config.cwd.clone(),
-                            vec![future.clone()],
-                        )),
+                        environments: Some(
+                            TurnEnvironmentSelections::new(
+                                test.config.cwd.clone(),
+                                vec![future.clone()],
+                            )
+                            .into_requests()
+                        ),
                         ..Default::default()
                     },
                 )
@@ -2571,7 +2579,7 @@ async fn active_environment_update_wakes_the_old_wait_with_the_new_selection() -
         .submit(Op::TurnSettings {
             turn_id,
             update: TurnSettingsUpdate {
-                environments: Some(vec![switched.clone()]),
+                environments: Some(vec![switched.clone().into_request()]),
                 ..Default::default()
             },
             reply,
@@ -2789,12 +2797,12 @@ async fn ready_before_selection_resolves_resumed_thread_capability_root_after_wa
         anyhow::Ok(())
     });
 
-    let selection = TurnEnvironmentSelection {
+    let selection = TurnEnvironmentSelection::new(TurnEnvironmentRequest {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
         cwd: PathUri::from_abs_path(&test.config.cwd),
         workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
         config: EnvironmentConfigState::FromThread,
-    };
+    });
     let mut thread_extension_init = ExtensionDataInit::new();
     thread_extension_init.insert(vec![stale_root]);
     let resumed = test
@@ -2930,9 +2938,9 @@ async fn deferred_executor_stays_pending_after_materialization() -> Result<()> {
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![TurnEnvironmentSelection {
+                    vec![TurnEnvironmentRequest {
                         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                         cwd: PathUri::from_abs_path(&test.config.cwd),
                         workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
@@ -3100,9 +3108,13 @@ async fn deferred_executor_spawn_agent_inherits_ready_step_environments(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    expected_environments.clone(),
+                    expected_environments
+                        .clone()
+                        .into_iter()
+                        .map(TurnEnvironmentSelection::into_request)
+                        .collect(),
                 )),
                 ..Default::default()
             }),
@@ -3289,9 +3301,12 @@ async fn deferred_executor_guardian_uses_newly_ready_step_environment(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![remote_selection, local(local_cwd.clone())],
+                    vec![
+                        remote_selection.into_request(),
+                        local_request(local_cwd.clone()),
+                    ],
                 )),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -3897,16 +3912,16 @@ async fn remote_exec_materializes_target_roots_before_sandbox_selection() -> Res
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
                     vec![
-                        TurnEnvironmentSelection {
+                        TurnEnvironmentRequest {
                             environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                             cwd: PathUri::from_abs_path(&local_cwd.path().abs()),
                             workspace_roots: Vec::new(),
                             config: EnvironmentConfigState::FromThread,
                         },
-                        TurnEnvironmentSelection {
+                        TurnEnvironmentRequest {
                             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                             cwd: remote_cwd_uri.clone(),
                             workspace_roots: vec![remote_cwd_uri.clone()],

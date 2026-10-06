@@ -118,7 +118,7 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
                         text: "run the Windows smoke command".to_string(),
                         text_elements: Vec::new(),
                     }]).with_thread_settings(ThreadSettingsOverrides {
-                        environments: Some(environments),
+                        environments: Some(environments.into_requests()),
                         approval_policy: Some(AskForApproval::Never),
                         sandbox_policy: Some(sandbox_policy),
                         permission_profile,

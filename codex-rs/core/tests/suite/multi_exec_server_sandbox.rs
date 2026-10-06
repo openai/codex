@@ -1,4 +1,5 @@
 use codex_core::TurnInputRequest;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -12,7 +13,6 @@ use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelection;
-use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::responses::ev_assistant_message;
@@ -208,9 +208,12 @@ async fn two_exec_servers_isolate_workspace_write_roots() -> Result<()> {
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    environments,
+                    environments
+                        .into_iter()
+                        .map(TurnEnvironmentSelection::into_request)
+                        .collect(),
                 )),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),

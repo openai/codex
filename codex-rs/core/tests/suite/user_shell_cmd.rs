@@ -14,7 +14,8 @@ use codex_protocol::protocol::ExecOutputStream;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnAbortReason;
-use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::protocol::TurnEnvironmentRequests;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
@@ -30,7 +31,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::local;
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -124,7 +125,7 @@ async fn user_shell_command_without_local_environment_emits_error() -> anyhow::R
     submit_thread_settings(
         &test.codex,
         ThreadSettingsOverrides {
-            environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
+            environments: Some(codex_protocol::protocol::TurnEnvironmentRequests::new(
                 test.config.cwd.clone(),
                 vec![],
             )),
@@ -211,7 +212,13 @@ async fn user_shell_command_honors_default_and_extended_deadlines() -> anyhow::R
         submit_thread_settings(
             &fixture.codex,
             ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(local_cwd, environments)),
+                environments: Some(TurnEnvironmentRequests::new(
+                    local_cwd,
+                    environments
+                        .into_iter()
+                        .map(TurnEnvironmentSelection::into_request)
+                        .collect(),
+                )),
                 ..Default::default()
             },
         )
@@ -314,7 +321,7 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(cwd)),
+                environments: Some(local_requests(cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

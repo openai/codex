@@ -27,6 +27,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::turn_input::TurnAttribution;
 use codex_protocol::user_input::UserInput;
@@ -37,6 +38,7 @@ use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::local;
+use core_test_support::test_codex::local_request;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
@@ -1269,7 +1271,7 @@ async fn turn_input_submission_applies_thread_settings_only_after_accepted_input
             user_message_request("steer active turn").with_thread_settings(
                 ThreadSettingsOverrides {
                     approval_policy: Some(AskForApproval::Never),
-                    environments: Some(steered_environments.clone()),
+                    environments: Some(steered_environments.clone().into_requests()),
                     ..Default::default()
                 },
             ),
@@ -1302,9 +1304,9 @@ async fn turn_input_submission_applies_thread_settings_only_after_accepted_input
         .steer_turn(
             user_message_request("no active turn").with_thread_settings(ThreadSettingsOverrides {
                 approval_policy: Some(AskForApproval::OnRequest),
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     rejected_cwd.clone(),
-                    vec![local(rejected_cwd)],
+                    vec![local_request(rejected_cwd)],
                 )),
                 ..Default::default()
             }),
@@ -1533,9 +1535,9 @@ async fn daemon_recovery_includes_local_environment_that_finished_starting() -> 
         .start_turn_if_idle(
             user_message_request("wait for the environment").with_thread_settings(
                 ThreadSettingsOverrides {
-                    environments: Some(TurnEnvironmentSelections::new(
+                    environments: Some(TurnEnvironmentRequests::new(
                         cwd,
-                        vec![selection.clone()],
+                        vec![selection.clone().into_request()],
                     )),
                     ..Default::default()
                 },

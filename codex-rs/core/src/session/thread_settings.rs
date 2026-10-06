@@ -79,7 +79,8 @@ pub(super) fn prepare_update(
             approval_policy,
             approvals_reviewer,
         },
-        environments: environment_requests,
+        environments: environment_requests
+            .map(codex_protocol::protocol::TurnEnvironmentRequests::select),
         runtime_workspace_roots,
         profile_workspace_roots,
         sandbox_policy,

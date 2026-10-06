@@ -25,7 +25,7 @@ use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -49,7 +49,7 @@ fn disabled_text_turn(test: &TestCodex, text: &str) -> TurnInputRequest {
         text_elements: Vec::new(),
     }])
     .with_thread_settings(ThreadSettingsOverrides {
-        environments: Some(local_selections(test.config.cwd.clone())),
+        environments: Some(local_requests(test.config.cwd.clone())),
         approval_policy: Some(AskForApproval::Never),
         sandbox_policy: Some(sandbox_policy),
         permission_profile,

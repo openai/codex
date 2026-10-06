@@ -77,6 +77,50 @@ impl TurnEnvironmentSelections {
             environments,
         }
     }
+
+    /// Requests these environments again, leaving root choices to the receiving thread.
+    pub fn into_requests(self) -> TurnEnvironmentRequests {
+        TurnEnvironmentRequests {
+            legacy_fallback_cwd: self.legacy_fallback_cwd,
+            environment_requests: self
+                .environments
+                .into_iter()
+                .map(TurnEnvironmentSelection::into_request)
+                .collect(),
+        }
+    }
+}
+
+/// Environment input supplied together with its fallback working directory.
+/// The receiving thread constructs selections before capturing these environments.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TurnEnvironmentRequests {
+    pub legacy_fallback_cwd: AbsolutePathBuf,
+    pub environment_requests: Vec<TurnEnvironmentRequest>,
+}
+
+impl TurnEnvironmentRequests {
+    pub fn new(
+        legacy_fallback_cwd: AbsolutePathBuf,
+        environment_requests: Vec<TurnEnvironmentRequest>,
+    ) -> Self {
+        Self {
+            legacy_fallback_cwd,
+            environment_requests,
+        }
+    }
+
+    /// Constructs the selections captured by the receiving thread.
+    pub fn select(self) -> TurnEnvironmentSelections {
+        TurnEnvironmentSelections {
+            legacy_fallback_cwd: self.legacy_fallback_cwd,
+            environments: self
+                .environment_requests
+                .into_iter()
+                .map(TurnEnvironmentSelection::new)
+                .collect(),
+        }
+    }
 }
 
 /// Configuration supplied for a thread's selected environment.

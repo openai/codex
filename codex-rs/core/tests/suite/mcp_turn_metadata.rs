@@ -30,7 +30,7 @@ use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
-use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_protocol::request_permissions::PermissionGrantScope;
@@ -456,9 +456,9 @@ async fn submit_user_turn(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![test.executor_environment().selection().clone()],
+                    vec![test.executor_environment().request()],
                 )),
                 approval_policy: Some(approval_policy),
                 sandbox_policy: Some(sandbox_policy),

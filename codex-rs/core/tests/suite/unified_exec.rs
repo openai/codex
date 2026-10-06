@@ -6,7 +6,7 @@ use codex_features::Feature;
 use codex_protocol::approvals::ExecApprovalKind;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
@@ -599,7 +599,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(cwd)),
+                environments: Some(local_requests(cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -2884,7 +2884,7 @@ async fn unified_exec_keeps_long_running_session_after_turn_end() -> Result<()> 
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(turn_cwd)),
+                environments: Some(local_requests(turn_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -2978,7 +2978,7 @@ async fn unified_exec_interrupt_preserves_long_running_session() -> Result<()> {
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(turn_cwd)),
+                environments: Some(local_requests(turn_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -3579,7 +3579,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(turn_cwd)),
+                environments: Some(local_requests(turn_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -3695,7 +3695,7 @@ async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(turn_cwd)),
+                environments: Some(local_requests(turn_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -3824,7 +3824,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(turn_cwd)),
+                environments: Some(local_requests(turn_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

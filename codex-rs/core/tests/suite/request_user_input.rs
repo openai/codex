@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_core::TurnInputRequest;
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use std::collections::HashMap;
 
 use codex_features::Feature;
@@ -138,7 +138,7 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(cwd.abs())),
+                environments: Some(local_requests(cwd.abs())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -280,7 +280,7 @@ async fn request_user_input_interrupt_emits_deferred_token_count() -> anyhow::Re
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(cwd.abs())),
+                environments: Some(local_requests(cwd.abs())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -381,7 +381,7 @@ where
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(cwd.abs())),
+                environments: Some(local_requests(cwd.abs())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

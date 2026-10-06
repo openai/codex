@@ -3,6 +3,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_apply_patch_exec_command_call_via_heredoc;
 use core_test_support::responses::ev_exec_command_call;
@@ -43,7 +44,6 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelection;
-use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::user_input::UserInput;
 #[cfg(target_os = "linux")]
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
@@ -1059,9 +1059,9 @@ async fn intercepted_apply_patch_updates_absolute_target_after_turn_cwd_is_remov
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![selection],
+                    vec![selection.into_request()],
                 )),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -2350,9 +2350,12 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
+                environments: Some(codex_protocol::protocol::TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    environments,
+                    environments
+                        .into_iter()
+                        .map(TurnEnvironmentSelection::into_request)
+                        .collect(),
                 )),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),

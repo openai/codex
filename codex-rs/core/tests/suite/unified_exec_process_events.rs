@@ -26,8 +26,8 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ThreadSettingsOverrides;
-use codex_protocol::protocol::TurnEnvironmentSelection;
-use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::protocol::TurnEnvironmentRequest;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::managed_network_requirements_loader;
@@ -955,9 +955,9 @@ timeout = 900
                                 .expect("valid Windows workspace root"),
                         );
                     }
-                    TurnEnvironmentSelections::new(
+                    TurnEnvironmentRequests::new(
                         test.config.cwd.clone(),
-                        vec![TurnEnvironmentSelection {
+                        vec![TurnEnvironmentRequest {
                             environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
                             cwd,
                             workspace_roots,

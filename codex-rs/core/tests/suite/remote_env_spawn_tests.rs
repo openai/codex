@@ -202,7 +202,7 @@ pub(crate) async fn pending_subagent_scenario(
                 .submit(Op::TurnSettings {
                     turn_id,
                     update: TurnSettingsUpdate {
-                        environments: Some(vec![expected.clone()]),
+                        environments: Some(vec![expected.clone().into_request()]),
                         ..Default::default()
                     },
                     reply,

@@ -1,4 +1,6 @@
-use core_test_support::test_codex::local_selections;
+use codex_protocol::protocol::TurnEnvironmentRequest;
+use codex_protocol::protocol::TurnEnvironmentRequests;
+use core_test_support::test_codex::local_requests;
 use std::fs;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -25,8 +27,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
-use codex_protocol::protocol::TurnEnvironmentSelection;
-use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::user_input::UserInput;
 use codex_skills_extension::SkillsExtensionConfig;
 use codex_skills_extension::install;
@@ -226,9 +226,9 @@ async fn model_visible_environment_context_preserves_foreign_workspace_roots() -
             }])
             .with_thread_settings(ThreadSettingsOverrides {
                 permission_profile: Some(PermissionProfile::workspace_write()),
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![TurnEnvironmentSelection {
+                    vec![TurnEnvironmentRequest {
                         environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                         cwd: PathUri::from_abs_path(&test.config.cwd),
                         workspace_roots: vec![foreign_root],
@@ -305,7 +305,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(first_turn_cwd)),
+                environments: Some(local_requests(first_turn_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(first_sandbox_policy),
                 permission_profile: first_permission_profile,
@@ -337,7 +337,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(preturn_context_diff_cwd)),
+                environments: Some(local_requests(preturn_context_diff_cwd)),
                 approval_policy: Some(AskForApproval::OnRequest),
                 sandbox_policy: Some(second_sandbox_policy),
                 permission_profile: second_permission_profile,
@@ -425,7 +425,7 @@ async fn snapshot_model_visible_layout_cwd_change_refreshes_agents() -> Result<(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(cwd_one.clone())),
+                environments: Some(local_requests(cwd_one.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(first_sandbox_policy),
                 permission_profile: first_permission_profile,
@@ -455,7 +455,7 @@ async fn snapshot_model_visible_layout_cwd_change_refreshes_agents() -> Result<(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(cwd_two)),
+                environments: Some(local_requests(cwd_two)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(second_sandbox_policy),
                 permission_profile: second_permission_profile,
@@ -567,7 +567,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(resume_override_cwd)),
+                environments: Some(local_requests(resume_override_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -665,7 +665,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     core_test_support::submit_thread_settings(
         &resumed.codex,
         ThreadSettingsOverrides {
-            environments: Some(local_selections(resume_override_cwd)),
+            environments: Some(local_requests(resume_override_cwd)),
             model: Some("gpt-5.2".to_string()),
             ..Default::default()
         },

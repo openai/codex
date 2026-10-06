@@ -51,7 +51,7 @@ use core_test_support::responses::strip_metadata_from_json;
 use core_test_support::responses::strip_response_item_ids_from_json;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -924,7 +924,7 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(test.config.cwd.clone())),
+                environments: Some(local_requests(test.config.cwd.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

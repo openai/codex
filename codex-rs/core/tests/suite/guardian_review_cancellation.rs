@@ -21,7 +21,7 @@ use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::skip_if_wine_exec;
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use serde_json::Value;
@@ -159,7 +159,7 @@ async fn cancelling_tool_aborts_its_guardian_review(cancellation: Cancellation) 
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(test.config.cwd.clone())),
+                environments: Some(local_requests(test.config.cwd.clone())),
                 ..Default::default()
             }),
         )

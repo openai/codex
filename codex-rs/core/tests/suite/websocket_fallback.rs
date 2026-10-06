@@ -18,7 +18,7 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use pretty_assertions::assert_eq;
@@ -164,7 +164,7 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(cwd.abs())),
+                environments: Some(local_requests(cwd.abs())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

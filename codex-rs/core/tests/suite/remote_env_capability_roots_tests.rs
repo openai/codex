@@ -1,6 +1,8 @@
 //! Capability discovery stays within the environments captured by the current turn.
 
 use super::*;
+use codex_protocol::protocol::TurnEnvironmentRequests;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
 
@@ -96,9 +98,12 @@ async fn stale_roots_do_not_connect_unselected_executors(
                     text_elements: Vec::new(),
                 }])
                 .with_thread_settings(ThreadSettingsOverrides {
-                    environments: Some(TurnEnvironmentSelections::new(
+                    environments: Some(TurnEnvironmentRequests::new(
                         test.config.cwd.clone(),
-                        environments,
+                        environments
+                            .into_iter()
+                            .map(TurnEnvironmentSelection::into_request)
+                            .collect(),
                     )),
                     ..Default::default()
                 }),

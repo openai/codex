@@ -21,7 +21,7 @@ use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -334,7 +334,7 @@ async fn compaction_checkpoints_settings_changed_during_its_model_request() -> R
     submit_thread_settings(
         &test.codex,
         ThreadSettingsOverrides {
-            environments: Some(local_selections(updated_cwd_path.clone())),
+            environments: Some(local_requests(updated_cwd_path.clone())),
             model: Some(COMMITTED_MODEL.to_string()),
             disabled_plugin_ids: Some(vec!["slack@openai".to_string()]),
             ..Default::default()

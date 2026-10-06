@@ -100,6 +100,7 @@ pub use crate::approvals::NetworkPolicyRuleAction;
 pub use crate::environment::EnvironmentConfig;
 pub use crate::environment::EnvironmentConfigState;
 pub use crate::environment::TurnEnvironmentRequest;
+pub use crate::environment::TurnEnvironmentRequests;
 pub use crate::environment::TurnEnvironmentSelection;
 pub use crate::environment::TurnEnvironmentSelections;
 pub use crate::environment::has_full_access;
@@ -458,7 +459,7 @@ pub struct TurnSettingsUpdate {
     /// Replaces the selection for subsequent steps, without changing future turns.
     /// Environments may inherit the running turn's defaults or provide their own configuration,
     /// which can be pending. An already-selected environment with its own cannot switch back.
-    pub environments: Option<Vec<TurnEnvironmentSelection>>,
+    pub environments: Option<Vec<TurnEnvironmentRequest>>,
     pub model: Option<String>,
     /// `None` preserves the selection; `Some(None)` clears it.
     pub effort: Option<Option<ReasoningEffortConfig>>,
@@ -485,7 +486,7 @@ pub enum TurnSettingsUpdateOutcome {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ThreadSettingsOverrides {
     /// Updated fallback `cwd` and environments supplied together as a complete pair.
-    pub environments: Option<TurnEnvironmentSelections>,
+    pub environments: Option<TurnEnvironmentRequests>,
 
     /// Updated top-level runtime workspace roots for default environments.
     /// Explicit environment requests own their workspace roots separately.

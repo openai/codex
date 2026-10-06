@@ -28,7 +28,7 @@ use core_test_support::skip_if_sandbox;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
@@ -200,7 +200,7 @@ async fn guardian_revalidates_owning_session_before_allow(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(test.config.cwd.clone())),
+                environments: Some(local_requests(test.config.cwd.clone())),
                 ..Default::default()
             }),
         )

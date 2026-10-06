@@ -30,7 +30,7 @@ use core_test_support::skip_if_wine_exec;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexBuilder;
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
@@ -553,7 +553,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(fixture.cwd.abs())),
+                environments: Some(local_requests(fixture.cwd.abs())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile: Some(permission_profile),

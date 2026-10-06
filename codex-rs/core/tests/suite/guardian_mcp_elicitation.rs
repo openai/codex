@@ -23,7 +23,7 @@ use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_wine_exec;
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
@@ -182,7 +182,7 @@ async fn interrupt_aborts_server_initiated_mcp_guardian_review() -> Result<()> {
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(test.config.cwd.clone())),
+                environments: Some(local_requests(test.config.cwd.clone())),
                 ..Default::default()
             }),
         )

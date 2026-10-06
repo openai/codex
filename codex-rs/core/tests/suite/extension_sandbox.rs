@@ -1,3 +1,4 @@
+use core_test_support::test_codex::local_requests;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -40,7 +41,6 @@ use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::skip_if_target_windows;
-use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -294,7 +294,7 @@ async fn extension_tool_uses_granted_turn_permissions_without_host_local_persist
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(test.config.cwd.clone())),
+                environments: Some(local_requests(test.config.cwd.clone())),
                 approval_policy: Some(AskForApproval::OnRequest),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: Some(sandbox_policy),
@@ -517,7 +517,7 @@ async fn extension_tool_rebinds_granted_permissions_on_each_turn(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(test.config.cwd.clone())),
+                environments: Some(local_requests(test.config.cwd.clone())),
                 approval_policy: Some(AskForApproval::OnRequest),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: Some(sandbox_policy),

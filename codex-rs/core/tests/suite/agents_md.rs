@@ -30,7 +30,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentRequest;
-use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
@@ -1474,7 +1474,7 @@ async fn thread_provider_enforces_its_own_limit_before_startup_and_sampling() ->
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     fixture.test.config.cwd.clone(),
                     Vec::new(),
                 )),

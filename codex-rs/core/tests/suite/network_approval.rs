@@ -49,6 +49,7 @@ use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
@@ -80,6 +81,7 @@ use core_test_support::skip_if_target_windows;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::local;
+use core_test_support::test_codex::local_request;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -905,9 +907,9 @@ async fn background_network_approval_uses_current_review_settings_and_original_e
                     text_elements: Vec::new(),
                 }])
                 .with_thread_settings(ThreadSettingsOverrides {
-                    environments: Some(TurnEnvironmentSelections::new(
+                    environments: Some(TurnEnvironmentRequests::new(
                         current_cwd.abs(),
-                        vec![local(current_cwd.abs())],
+                        vec![local_request(current_cwd.abs())],
                     )),
                     collaboration_mode: Some(CollaborationMode {
                         mode: ModeKind::Default,
@@ -3308,7 +3310,7 @@ async fn submit_managed_network_turn(
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(turn_environment_selections),
+                environments: Some(turn_environment_selections.into_requests()),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(approvals_reviewer),
                 sandbox_policy: Some(sandbox_policy),

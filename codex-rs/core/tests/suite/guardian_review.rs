@@ -73,6 +73,7 @@ use core_test_support::skip_if_sandbox;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
+use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -1739,7 +1740,7 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(parent_environments),
+                environments: Some(parent_environments.into_requests()),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                 ..Default::default()
@@ -2695,7 +2696,7 @@ printf '%s\n' "${@: -1}" >> "${payload_path}""#,
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(test.config.cwd.clone())),
+                environments: Some(local_requests(test.config.cwd.clone())),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                 sandbox_policy: Some(sandbox_policy),

@@ -82,7 +82,7 @@ use core_test_support::responses::strip_response_item_ids_from_json;
 use core_test_support::responses_metadata as test_responses_metadata;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::local_selections;
+use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use futures::StreamExt;
@@ -2546,7 +2546,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(config.cwd.clone())),
+                environments: Some(local_requests(config.cwd.clone())),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
                 summary: Some(
@@ -2804,7 +2804,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_selections(config.cwd.clone())),
+                environments: Some(local_requests(config.cwd.clone())),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
                 summary: Some(ReasoningSummary::Concise),

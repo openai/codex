@@ -4,6 +4,7 @@ use super::*;
 use codex_core::context::UserGoalUpdate;
 use codex_history::RolloutItem;
 use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
@@ -202,9 +203,9 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![primary.clone(), secondary],
+                    vec![primary.clone().into_request(), secondary.into_request()],
                 )),
                 ..Default::default()
             }),
@@ -408,9 +409,9 @@ async fn guardian_reviews_with_offline_primary_executor() -> Result<()> {
             }])
             .with_thread_settings(ThreadSettingsOverrides {
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![primary],
+                    vec![primary.into_request()],
                 )),
                 ..Default::default()
             }),
@@ -578,9 +579,9 @@ async fn guardian_revalidates_allow_with_offline_secondary_executor() -> Result<
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![primary, secondary],
+                    vec![primary.into_request(), secondary.into_request()],
                 )),
                 ..Default::default()
             }),
