@@ -2617,7 +2617,10 @@ async fn remote_control_http_mode_reenrolls_after_explicit_missing_server_404() 
     )
     .await;
 
-    let (handshake_request, _websocket) = accept_remote_control_backend_connection(&listener).await;
+    // Re-enrollment is followed by reconnect backoff, so allow time for that delay.
+    let (handshake_request, _websocket) =
+        accept_remote_control_backend_connection_with_timeout(&listener, Duration::from_secs(45))
+            .await;
     expect_remote_control_status(
         &mut status_rx,
         /*expected_status*/ None,

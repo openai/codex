@@ -531,6 +531,17 @@ impl Session {
         self.input_queue
             .extend_pending_input_for_turn_state(turn_state.as_ref(), input)
             .await;
+        // Context construction can outlive an interrupt or replacement. Do not let
+        // start_task recreate a turn whose reservation is no longer ours.
+        if self
+            .active_turn
+            .lock()
+            .await
+            .as_ref()
+            .is_none_or(|turn| !Arc::ptr_eq(&turn.turn_state, &turn_state))
+        {
+            return;
+        }
         self.start_task(turn_context, Vec::new(), RegularTask::new())
             .await;
     }
