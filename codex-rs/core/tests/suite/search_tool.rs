@@ -656,6 +656,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
         Some(json!({
             "_codex_apps": {
                 "call_id": "calendar-call-1",
+                "root_turn_id": mock.requests()[0].body_json()["client_metadata"]["turn_id"],
                 "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI,
                 "contains_mcp_source": true,
                 "connector_id": "calendar",
@@ -678,6 +679,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
         apps_tool_call.pointer("/params/_meta/_codex_apps"),
         Some(&json!({
             "call_id": "calendar-call-1",
+            "root_turn_id": first_request_body["client_metadata"]["turn_id"],
             "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI,
             "contains_mcp_source": true,
             "connector_id": "calendar",

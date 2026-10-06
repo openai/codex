@@ -305,6 +305,12 @@ async fn tool_start_receives_executed_mcp_call_for_connector(
             .and_then(Value::as_str),
         Some("calendar_list_events")
     );
+    if matches!(owner, AppsServerOwner::Extension) {
+        assert_eq!(
+            executed_call.pointer("/params/_meta/_codex_apps/root_turn_id"),
+            None
+        );
+    }
 
     Ok(())
 }
