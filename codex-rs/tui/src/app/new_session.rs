@@ -53,7 +53,7 @@ impl App {
     pub(super) async fn load_new_session_config(
         &mut self,
         app_server: &AppServerSession,
-    ) -> Result<Config> {
+    ) -> Result<(Config, crate::local_settings::LocalSettings)> {
         let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
         let defaults_cwd = match app_server.thread_params_mode() {
             crate::app_server_session::ThreadParamsMode::Embedded => cwd.as_path(),
@@ -67,11 +67,14 @@ impl App {
         )
         .await?;
         // Stage local preferences and permission carryover without changing the active task.
-        let mut config = match self.rebuild_config_for_cwd(cwd).await {
-            Ok(config) => config,
+        let (mut config, local_settings) = match self.rebuild_config_for_cwd(cwd).await {
+            Ok(config) => {
+                let settings = self.local_settings.reloaded(&config);
+                (config, settings)
+            }
             Err(err) => {
                 tracing::warn!(%err, "failed to refresh local settings before a new thread");
-                self.config.clone()
+                (self.config.clone(), self.local_settings.clone())
             }
         };
         if let Some(defaults) = defaults.as_ref() {
@@ -93,6 +96,6 @@ impl App {
                 &self.harness_overrides,
             );
         }
-        Ok(config)
+        Ok((config, local_settings))
     }
 }

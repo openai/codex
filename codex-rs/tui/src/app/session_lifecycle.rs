@@ -988,7 +988,7 @@ impl App {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history. If an initial message is provided, `enqueue_primary_thread_session` suppresses it
         // until the new session is configured and any replayed turns have been rendered.
-        let mut config = match self.load_new_session_config(app_server).await {
+        let (mut config, local_settings) = match self.load_new_session_config(app_server).await {
             Ok(config) => config,
             Err(err) => {
                 if let Some(message) = initial_user_message {
@@ -1034,7 +1034,7 @@ impl App {
                     Some(started.session.thread_id),
                 )
                 .await;
-                self.local_settings = self.local_settings.reloaded(&config);
+                self.local_settings = local_settings;
                 self.refresh_server_version_overview_notice(CODEX_CLI_VERSION);
                 self.config = config;
                 self.remember_launch_permissions();

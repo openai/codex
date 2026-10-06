@@ -1826,7 +1826,7 @@ enabled = false
             .await;
 
         app.refresh_in_memory_config_from_disk().await?;
-        let new_config = app.load_new_session_config(&app_server).await?;
+        let (new_config, _) = app.load_new_session_config(&app_server).await?;
         let permission_config = app
             .rebuild_config_for_permission_profile(":workspace")
             .await?;
@@ -1988,6 +1988,25 @@ theme = "dracula"
             app.config.permissions.approval_policy.value(),
             original_policy
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn new_thread_keeps_live_settings_after_failed_reload() -> Result<()> {
+        let mut app = make_test_app().await;
+        let server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+        let home = tempdir()?;
+        app.config.codex_home = home.path().to_path_buf().abs();
+        let config_path = home.path().join("config.toml");
+        std::fs::write(&config_path, "[tui]\ntheme = 'dracula'\n")?;
+        app.refresh_in_memory_config_from_disk().await?;
+        // A live setting can be newer than the last successful disk load.
+        app.local_settings.tui.rendering.math = false;
+        std::fs::write(config_path, "[broken")?;
+
+        let (_, settings) = app.load_new_session_config(&server).await?;
+        assert_eq!(settings, app.local_settings);
+        server.shutdown().await?;
         Ok(())
     }
 

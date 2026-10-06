@@ -566,7 +566,7 @@ impl App {
                 }
             };
             if !unloaded && started.is_none() {
-                if let Err(control) = self
+                match self
                     .confirm_directory_trust(
                         tui,
                         app_server,
@@ -580,9 +580,10 @@ impl App {
                     )
                     .await
                 {
-                    return Ok(control);
+                    Ok(Some(reloaded)) => local_settings = reloaded,
+                    Ok(None) => {}
+                    Err(control) => return Ok(control),
                 }
-                local_settings = self.local_settings.reloaded(&resume_config);
             }
             // Folder selection and trust prompts can replace or clear the loading frame.
             if startup_draft.is_none() {
