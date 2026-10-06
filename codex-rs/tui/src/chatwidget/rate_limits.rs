@@ -566,9 +566,8 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: "No".to_string(),
+                name: "No (default)".to_string(),
                 display_shortcut: Some(key_hint::plain(KeyCode::Char('n')).into()),
-                is_default: true,
                 dismiss_on_select: true,
                 ..Default::default()
             },
