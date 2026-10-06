@@ -66,6 +66,11 @@ impl<H: ReviewHost> ReviewRequest<'_, H> {
         mut self,
         registry: &ExtensionRegistry<C>,
     ) -> Option<ReviewDecision> {
+        // Include fast decisions, preparation and cancellation, not just model review time.
+        let _decision_timer = self
+            .telemetry
+            .start_timer("codex.guardian.decision.duration_ms", &[])
+            .ok();
         let runtime = self.thread_store.get::<crate::ReviewerTasks>();
         let _task = runtime.as_ref().map(|runtime| runtime.tasks.token());
         if runtime
