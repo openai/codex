@@ -584,6 +584,8 @@ fn map_ws_error(err: WsError, url: &Url) -> ApiError {
 struct WrappedWebsocketError {
     code: Option<String>,
     message: Option<String>,
+    #[serde(default)]
+    headers: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -616,6 +618,16 @@ fn map_wrapped_websocket_error_event(
         headers,
         ..
     } = event;
+    let retry_after = [
+        error
+            .as_ref()
+            .and_then(|error| error.headers.as_ref())
+            .and_then(Value::as_object),
+        headers.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|headers| RetryAfter::from_headers(&json_headers_to_http_headers(headers)));
 
     if let Some(error) = error.as_ref()
         && let Some(code) = error.code.as_deref()
@@ -632,7 +644,7 @@ fn map_wrapped_websocket_error_event(
                 .message
                 .clone()
                 .unwrap_or_else(|| fallback_message.to_string()),
-            retry_after: None,
+            retry_after,
         });
     }
 
@@ -646,7 +658,7 @@ fn map_wrapped_websocket_error_event(
         url: None,
         headers: headers.as_ref().map(json_headers_to_http_headers),
         body: Some(original_payload),
-        retry_after: None,
+        retry_after,
     }))
 }
 
@@ -1049,6 +1061,35 @@ mod tests {
         let body = body.expect("expected body");
         assert!(body.contains("usage_limit_reached"));
         assert!(body.contains("The usage limit has been reached"));
+    }
+
+    /// Websocket error advice uses the shared HTTP value validation and duplicate handling.
+    #[tokio::test(start_paused = true)]
+    async fn wrapped_websocket_retry_after_uses_http_header_validation() {
+        for (error_headers, expected_seconds) in [
+            (json!("invalid"), 12),
+            (json!({"retry-after": "\n5\n"}), 12),
+            (json!({"retry-after": "\t5\t"}), 5),
+            (json!({"Retry-After": "5", "retry-after": "30"}), 30),
+        ] {
+            let payload = json!({
+                "type": "error",
+                "status": 429,
+                "error": {"code": "rate_limit_exceeded", "headers": error_headers},
+                "headers": {"retry-after": "12"}
+            })
+            .to_string();
+            let wrapped = parse_wrapped_websocket_error_event(&payload).unwrap();
+            let Some(ApiError::Transport(TransportError::Http { retry_after, .. })) =
+                map_wrapped_websocket_error_event(wrapped, payload)
+            else {
+                panic!("expected a websocket HTTP error");
+            };
+            assert_eq!(
+                retry_after,
+                RetryAfter::from_delay(Duration::from_secs(expected_seconds))
+            );
+        }
     }
 
     #[test]
