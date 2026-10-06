@@ -57,6 +57,11 @@ pub trait ReviewHost: Send + Sync {
             Option<Self::Evidence>,
         ),
     > + Send;
+    /// Revalidates the original action and history lifetime before using cached approval.
+    fn cached_approval_is_current(
+        &self,
+        prepared: &Self::Prepared,
+    ) -> impl Future<Output = bool> + Send;
     fn emit(&self, event: EventMsg) -> impl Future<Output = ()> + Send;
     fn record_evidence(
         &self,
@@ -73,7 +78,11 @@ pub trait ReviewHost: Send + Sync {
 }
 
 impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
-    fn review(&self, reason: GuardianReviewReason) -> ExtensionFuture<'_, Option<ReviewDecision>> {
+    fn review<'a>(
+        &'a self,
+        reason: GuardianReviewReason,
+        async_approval: Option<ExtensionFuture<'a, ()>>,
+    ) -> ExtensionFuture<'a, Option<ReviewDecision>> {
         Box::pin(async move {
             let deadline = Instant::now() + crate::REVIEW_TIMEOUT;
             let (prepared, report) = match self
@@ -87,24 +96,40 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
             self.host
                 .emit(EventMsg::GuardianAssessment(report.started_event()))
                 .await;
-            let (outcome, analytics, evidence) = if self.cancellation.is_cancelled() {
-                (
-                    GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
-                    GuardianReviewAnalyticsResult::without_session(),
-                    None,
-                )
+            let cancellation = self.cancellation.child_token();
+            let mut review = Box::pin(crate::run_with_retry(
+                GuardianReviewSessionLimits {
+                    max_attempts: crate::MAX_REVIEW_ATTEMPTS,
+                    deadline,
+                },
+                Some(&cancellation),
+                |deadline| self.host.attempt(&prepared, deadline, &cancellation),
+            ));
+            let (outcome, analytics, evidence) = if let Some(async_approval) = async_approval {
+                tokio::select! {
+                    biased;
+                    result = &mut review => result,
+                    () = async_approval => {
+                        // The async approval won. Finish cancellation through the existing
+                        // reviewer cleanup; the retry loop is never restarted.
+                        cancellation.cancel();
+                        let (_, analytics, _) = review.await;
+                        let outcome = if !self.host.cached_approval_is_current(&prepared).await
+                            || self.cancellation.is_cancelled() {
+                            GuardianReviewOutcome::Error(GuardianReviewError::Cancelled)
+                        } else if Instant::now() >= deadline {
+                            GuardianReviewOutcome::Error(GuardianReviewError::Timeout)
+                        } else {
+                            GuardianReviewOutcome::CachedApproval
+                        };
+                        (outcome, analytics, None)
+                    }
+                }
             } else {
-                Box::pin(crate::run_with_retry(
-                    GuardianReviewSessionLimits {
-                        max_attempts: crate::MAX_REVIEW_ATTEMPTS,
-                        deadline,
-                    },
-                    Some(&self.cancellation),
-                    |deadline| self.host.attempt(&prepared, deadline, &self.cancellation),
-                ))
-                .await
+                review.await
             };
             let completed_at_ms = codex_analytics::now_unix_millis();
+            let cached_approval = matches!(outcome, GuardianReviewOutcome::CachedApproval);
             let completed = report.complete(
                 outcome,
                 self.model,
@@ -112,7 +137,7 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
                 analytics,
                 completed_at_ms.try_into().unwrap_or_default(),
             );
-            if self.log_assessments {
+            if self.log_assessments && !cached_approval {
                 self.telemetry
                     .guardian_assessment(&completed.event, completed.assessment_outcome);
             }
@@ -137,6 +162,9 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
             self.host
                 .emit(EventMsg::GuardianAssessment(completed.event))
                 .await;
+            if cached_approval {
+                return Some(self.cached_approval().await);
+            }
             if let Some((turn_id, model)) = self.host.servicing_turn().await {
                 let denials = ReviewDenials::for_thread(self.thread_store);
                 if completed.assessment_outcome == Some(GuardianAssessmentOutcome::Deny) {

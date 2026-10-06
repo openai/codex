@@ -240,9 +240,22 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
 
         let review_evidence = match &outcome {
             GuardianReviewOutcome::Completed(_) => review_evidence,
-            GuardianReviewOutcome::Error(_) => None,
+            GuardianReviewOutcome::CachedApproval | GuardianReviewOutcome::Error(_) => None,
         };
         (outcome, analytics, review_evidence)
+    }
+
+    async fn cached_approval_is_current(&self, prepared: &PreparedApproval) -> bool {
+        let root = self
+            .session
+            .services
+            .agent_control
+            .get_guardian_package(self.session.thread_id)
+            .await;
+        !self.history_reset.is_cancelled()
+            && self.validate_action().is_ok()
+            && prepared.root_history
+                == root.map(|snapshot| (snapshot.root_thread_id, snapshot.history_reset_version))
     }
 
     fn validate_action(&self) -> Result<(&str, Option<&str>), ReviewDecision> {

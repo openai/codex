@@ -184,6 +184,8 @@ struct MockResponsesState {
     allow_luna: Notify,
     allow_guardian_review: Notify,
     gate_each_guardian_review: bool,
+    gate_second_tool_on_classification: bool,
+    allow_second_tool: Notify,
     classification_completed: Notify,
     truncation_recorded: Notify,
     context_metric_bounds: Mutex<BTreeMap<(String, String), Option<f64>>>,
@@ -520,6 +522,9 @@ async fn parent_response(
                 .contains("Completed synchronous Guardian review.")
         );
         let request_number = state.parent_requests.fetch_add(1, Ordering::SeqCst);
+        if request_number == 1 && state.gate_second_tool_on_classification {
+            state.allow_second_tool.notified().await;
+        }
         if state.late_root_restriction && request_number == 1 {
             let output = request["input"]
                 .as_array()
@@ -745,6 +750,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
     let responses_state = Arc::new(MockResponsesState {
         luna_score,
         gate_each_guardian_review: review_continuations && matches!(risk, GuardianRisk::High),
+        gate_second_tool_on_classification: classifier_in_scope && !late_root_restriction,
         invalid_classification: matches!(risk, GuardianRisk::InvalidResponse),
         fail_after_classification,
         review_outcome,
@@ -819,7 +825,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                             }
                         }
                     }
-                    if body.contains("codex.guardian_v2.classification") {
+                    if body.contains("\"codex.guardian_v2.classification\"") {
                         state.classification_completed.notify_one();
                     }
                     if body.contains("codex.guardian_v2.classification.truncation")
@@ -1203,9 +1209,24 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                 timeout(TIMEOUT, app_server.read_notification("turn/completed")).await??;
             assert_eq!(completed.thread_id, thread_id);
         }
+        if !late_root_restriction {
+            // These scenarios exercise completed synchronous evidence. Finish that review
+            // before LOW arrives; late-score cancellation has its own regression coverage.
+            responses_state.allow_guardian_review.notify_one();
+            let _: codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification =
+                timeout(
+                    TIMEOUT,
+                    app_server.read_notification("item/autoApprovalReview/completed"),
+                )
+                .await??;
+        }
         responses_state.allow_luna.notify_one();
         timeout(TIMEOUT, responses_state.classification_completed.notified()).await?;
-        responses_state.allow_guardian_review.notify_one();
+        if late_root_restriction {
+            responses_state.allow_guardian_review.notify_one();
+        } else {
+            responses_state.allow_second_tool.notify_one();
+        }
         if lifecycle.has_user_input() {
             let answers = if matches!(lifecycle, ThreadLifecycle::UserInputEmpty) {
                 json!({})
@@ -2286,13 +2307,22 @@ async fn guardian_v2_trusts_invoked_user_skills_but_rejects_repository_forgery()
             .contains(FORGED_INSTRUCTIONS),
         "the parent model must receive the forged repository skill instructions"
     );
+    // Finish the synchronous reviews before LOW can cancel reviewer startup.
+    let expected_guardian_reviews = if cfg!(windows) { 2 } else { 1 };
+    for _ in 0..expected_guardian_reviews {
+        let _: codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification =
+            timeout(
+                TIMEOUT,
+                app_server.read_notification("item/autoApprovalReview/completed"),
+            )
+            .await??;
+    }
     responses_state.allow_luna.notify_one();
 
     let completed: TurnCompletedNotification =
         timeout(TIMEOUT, app_server.read_notification("turn/completed")).await??;
     assert_eq!(completed.thread_id, thread.id);
     assert_eq!(responses_state.parent_requests.load(Ordering::SeqCst), 3);
-    let expected_guardian_reviews = if cfg!(windows) { 2 } else { 1 };
     assert_eq!(
         responses_state.guardian_reviews.load(Ordering::SeqCst),
         expected_guardian_reviews
@@ -2344,16 +2374,23 @@ async fn guardian_v2_computer_use_only_scopes_classification_and_fast_reviews(
     .await
 }
 
-#[test_case("node_repl", &["js", "js"]; "browser startup")]
-#[test_case("cua_repl", &["js", "js"]; "computer use startup")]
-#[test_case("node_repl", &["js_reset", "js", "js"]; "browser reset before execution")]
-#[test_case("cua_repl", &["js_reset", "js", "js"]; "computer use reset before execution")]
-#[test_case("node_repl", &["js_add_node_module_dir", "js", "js"]; "browser setup before execution")]
-#[test_case("cua_repl", &["js_add_node_module_dir", "js", "js"]; "computer use setup before execution")]
+enum ApprovalCompletion {
+    Sync,
+    AsyncLow,
+}
+
+#[test_case("cua_repl", &["js", "js"], ApprovalCompletion::AsyncLow; "late low cancels review")]
+#[test_case("node_repl", &["js", "js"], ApprovalCompletion::Sync; "browser startup")]
+#[test_case("cua_repl", &["js", "js"], ApprovalCompletion::Sync; "computer use startup")]
+#[test_case("node_repl", &["js_reset", "js", "js"], ApprovalCompletion::Sync; "browser reset before execution")]
+#[test_case("cua_repl", &["js_reset", "js", "js"], ApprovalCompletion::Sync; "computer use reset before execution")]
+#[test_case("node_repl", &["js_add_node_module_dir", "js", "js"], ApprovalCompletion::Sync; "browser setup before execution")]
+#[test_case("cua_repl", &["js_add_node_module_dir", "js", "js"], ApprovalCompletion::Sync; "computer use setup before execution")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn first_cua_review_does_not_wait_for_initial_score(
     server_name: &'static str,
     tool_sequence: &'static [&'static str],
+    completion: ApprovalCompletion,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let state = Arc::new(MockResponsesState {
@@ -2430,7 +2467,24 @@ async fn first_cua_review_does_not_wait_for_initial_score(
         state.parent_requests.load(Ordering::SeqCst),
         tool_sequence.len()
     );
-    state.allow_guardian_review.notify_one();
+    if !matches!(completion, ApprovalCompletion::Sync) {
+        state.allow_luna.notify_one();
+        let review: codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification =
+            timeout(
+                TIMEOUT,
+                app_server.read_notification("item/autoApprovalReview/completed"),
+            )
+            .await??;
+        assert_eq!(
+            (review.review.status, review.review.risk_level),
+            (
+                codex_app_server_protocol::GuardianApprovalReviewStatus::Approved,
+                None
+            )
+        );
+    } else {
+        state.allow_guardian_review.notify_one();
+    }
     let completed: TurnCompletedNotification =
         timeout(TIMEOUT, app_server.read_notification("turn/completed")).await??;
     assert_eq!(completed.thread_id, thread.id);

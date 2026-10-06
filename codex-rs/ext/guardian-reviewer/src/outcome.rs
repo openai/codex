@@ -7,6 +7,8 @@ use tokio::time::Instant;
 
 #[derive(Debug)]
 pub enum GuardianReviewOutcome {
+    /// Approved by current async evidence after the redundant attempt was drained.
+    CachedApproval,
     Completed(GuardianAssessment),
     Error(GuardianReviewError),
 }

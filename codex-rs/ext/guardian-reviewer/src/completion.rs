@@ -44,9 +44,24 @@ pub fn complete_review(
 ) -> ReviewCompletion {
     let completed_assessment = match &outcome {
         GuardianReviewOutcome::Completed(assessment) => Some(assessment.outcome),
-        GuardianReviewOutcome::Error(_) => None,
+        GuardianReviewOutcome::CachedApproval | GuardianReviewOutcome::Error(_) => None,
     };
     let assessment = match outcome {
+        GuardianReviewOutcome::CachedApproval => {
+            event.status = GuardianAssessmentStatus::Approved;
+            event.decision_source = None;
+            event.rationale = Some("Approved using a current low-risk async score.".to_owned());
+            analytics.decision = GuardianReviewDecision::Approved;
+            analytics.terminal_status = GuardianReviewTerminalStatus::Approved;
+            analytics.failure_reason = None;
+            return ReviewCompletion {
+                decision: Some(ReviewDecision::Approved),
+                event,
+                warning: None,
+                analytics,
+                assessment_outcome: None,
+            };
+        }
         GuardianReviewOutcome::Completed(assessment) => {
             let approved = matches!(assessment.outcome, GuardianAssessmentOutcome::Allow);
             analytics.decision = if approved {

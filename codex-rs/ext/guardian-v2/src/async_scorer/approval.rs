@@ -15,6 +15,7 @@ use codex_extension_api::ApprovalDecision;
 use codex_extension_api::ApprovalDecisionInput;
 use codex_extension_api::ApprovalReviewContributor;
 use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ExtensionMetrics;
 use codex_protocol::approvals::GuardianReviewReason;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::mcp::is_node_repl_backed_connector;
@@ -100,10 +101,14 @@ impl GuardianApprovalReviewer {
         }
         let reason = if mode == GuardianReviewMode::Adaptive && !input.require_fresh_review {
             match guardian_config.as_ref() {
-                Some(config) => match cached_evidence(thread, input, config, &policy).await {
-                    Ok(()) => return ApprovalDecision::Allow,
-                    Err(reason) => reason,
-                },
+                Some(config) => {
+                    match cached_evidence(thread, input, config, &policy, input.metrics.as_deref())
+                        .await
+                    {
+                        Ok(()) => return ApprovalDecision::Allow,
+                        Err(reason) => reason,
+                    }
+                }
                 None => {
                     record_fast_decision(input.metrics.as_deref(), "deferred", "scoring_failure");
                     GuardianReviewReason::ScoringFailure
@@ -119,7 +124,33 @@ impl GuardianApprovalReviewer {
             ?reason,
             "reviewing approval"
         );
-        match input.synchronous_reviewer.review(reason).await {
+        let async_approval = async {
+            if mode == GuardianReviewMode::Adaptive
+                && !input.require_fresh_review
+                && let Some(config) = guardian_config.as_ref()
+                && let Some(progress) = input.thread_store.get::<GuardianV2ScoreProgress>()
+            {
+                // Subscribe before checking so a concurrently published score is not lost.
+                let mut updates = progress.updates.subscribe();
+                loop {
+                    if cached_evidence(thread, input, config, &policy, /*metrics*/ None)
+                        .await
+                        .is_ok()
+                    {
+                        return;
+                    }
+                    if updates.changed().await.is_err() {
+                        break;
+                    }
+                }
+            }
+            std::future::pending::<()>().await;
+        };
+        match input
+            .synchronous_reviewer
+            .review(reason, Some(Box::pin(async_approval)))
+            .await
+        {
             Some(decision) => ApprovalDecision::Reviewed(decision),
             None => ApprovalDecision::AskUser,
         }
@@ -131,9 +162,9 @@ async fn cached_evidence(
     input: &ApprovalDecisionInput<'_>,
     config: &GuardianV2Config,
     policy: &GuardianModelPolicy,
+    metrics: Option<&dyn ExtensionMetrics>,
 ) -> Result<(), GuardianReviewReason> {
     let store = input.thread_store;
-    let metrics = input.metrics.as_deref();
     let Some(progress) = store.get::<GuardianV2ScoreProgress>() else {
         record_fast_decision(metrics, "deferred", "missing_score");
         return Err(GuardianReviewReason::MissingScore);

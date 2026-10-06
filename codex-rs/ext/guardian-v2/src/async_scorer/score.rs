@@ -18,6 +18,7 @@ use super::wrapper_lag::WrapperLag;
 #[derive(Default)]
 pub(super) struct GuardianV2ScoreProgress {
     state: Mutex<ScoreState>,
+    pub(super) updates: tokio::sync::watch::Sender<()>,
     pub(super) metrics: Option<Arc<dyn ExtensionMetrics>>,
 }
 
@@ -116,6 +117,7 @@ impl GuardianV2ScoreProgress {
             state.score = Some(score);
             state.authorization = Some(authorization);
             state.latest_scored_tool_call = state.latest_scored_tool_call.max(index);
+            self.updates.send_replace(());
         }
         accepted
     }

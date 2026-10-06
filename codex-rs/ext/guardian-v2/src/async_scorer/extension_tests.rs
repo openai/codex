@@ -3355,10 +3355,11 @@ async fn assert_parent_compaction_reuse(parent_context_for_review: bool) -> Resu
 
 struct CacheMiss;
 impl codex_extension_api::SynchronousApprovalReviewer for CacheMiss {
-    fn review(
-        &self,
+    fn review<'a>(
+        &'a self,
         _reason: codex_protocol::approvals::GuardianReviewReason,
-    ) -> codex_extension_api::ExtensionFuture<'_, Option<ReviewDecision>> {
+        _async_approval: Option<codex_extension_api::ExtensionFuture<'a, ()>>,
+    ) -> codex_extension_api::ExtensionFuture<'a, Option<ReviewDecision>> {
         Box::pin(async { Some(ReviewDecision::denied("cache miss")) })
     }
 }
