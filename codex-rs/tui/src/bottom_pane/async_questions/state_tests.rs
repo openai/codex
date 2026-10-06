@@ -141,6 +141,46 @@ fn long_prompt_keeps_the_active_input_visible() {
 }
 
 #[test]
+fn wrapped_question_url_keeps_its_complete_destination() {
+    let url = "https://github.com/openai/codex/pull/12345?diff=split";
+    let mut editor = editor();
+    editor.navigate(/*forward*/ true);
+    editor.state.pending[1].question.title = format!("Review this change ({url})?");
+
+    let width = 40;
+    let full_height = editor.desired_height(width);
+    for height in [full_height, 4] {
+        let buffer = render_editor(&editor, width, height);
+        let linked_text = buffer
+            .content
+            .iter()
+            .filter_map(|cell| {
+                let symbol = cell.symbol();
+                symbol.contains("\x1b]8;;").then(|| {
+                    let text = crate::terminal_hyperlinks::strip_osc8(symbol);
+                    assert_eq!(
+                        symbol,
+                        crate::terminal_hyperlinks::osc8_hyperlink(url, &text)
+                    );
+                    text
+                })
+            })
+            .collect::<String>();
+        if height == full_height {
+            assert_eq!(linked_text, url);
+            insta::assert_snapshot!(
+                "question_wrapped_url",
+                crate::terminal_hyperlinks::strip_osc8(&buffer_text(&buffer))
+            );
+        } else {
+            assert!(!linked_text.is_empty());
+            assert!(url.starts_with(&linked_text));
+            assert_ne!(linked_text, url);
+        }
+    }
+}
+
+#[test]
 fn selected_other_renders_as_a_dim_placeholder() {
     let mut editor = editor();
     editor.navigate(/*forward*/ true);

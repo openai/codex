@@ -586,6 +586,14 @@ fn trailing_url_end(candidate: &str) -> usize {
             unmatched
         } else {
             matches!(ch, ',' | '.' | ';' | '!' | '\'' | '"')
+                || ch == '?'
+                    && match remaining.chars().rev().nth(1) {
+                        Some(')') => balances[0] < 0,
+                        Some(']') => balances[1] < 0,
+                        Some('}') => balances[2] < 0,
+                        Some('>') => balances[3] < 0,
+                        _ => false,
+                    }
         };
         if !trim {
             break;
@@ -890,13 +898,18 @@ mod tests {
 
     #[test]
     fn discovers_punctuated_web_url_columns() {
-        assert_eq!(
-            web_links_in_text("See (https://example.com/a)."),
-            vec![TerminalHyperlink::web(
-                /*columns*/ 5..26,
-                "https://example.com/a".to_string(),
-            )]
-        );
+        for text in [
+            "See (https://example.com/a).",
+            "See (https://example.com/a)?",
+        ] {
+            assert_eq!(
+                web_links_in_text(text),
+                vec![TerminalHyperlink::web(
+                    /*columns*/ 5..26,
+                    "https://example.com/a".to_string(),
+                )]
+            );
+        }
     }
 
     #[test]
@@ -920,14 +933,18 @@ mod tests {
 
     #[test]
     fn preserves_balanced_parentheses_in_bare_web_urls() {
-        let destination = "https://en.wikipedia.org/wiki/Function_(mathematics)";
-        assert_eq!(
-            web_links_in_text(&format!("See ({destination}).")),
-            vec![TerminalHyperlink::web(
-                /*columns*/ 5..5 + usize::from(destination.cell_width()),
-                destination.to_string(),
-            )]
-        );
+        for destination in [
+            "https://en.wikipedia.org/wiki/Function_(mathematics)",
+            "https://en.wikipedia.org/wiki/Function_(mathematics)?q=(alpha)?",
+        ] {
+            assert_eq!(
+                web_links_in_text(&format!("See ({destination}).")),
+                vec![TerminalHyperlink::web(
+                    /*columns*/ 5..5 + usize::from(destination.cell_width()),
+                    destination.to_string(),
+                )]
+            );
+        }
     }
 
     #[test]

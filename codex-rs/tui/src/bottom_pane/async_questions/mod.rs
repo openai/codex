@@ -16,6 +16,11 @@ use crate::key_hint::KeyBindingListExt;
 use crate::keymap::KeymapContext;
 use crate::keymap::ListAction;
 use crate::keymap::RuntimeKeymap;
+use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::annotate_web_urls_in_line;
+use crate::terminal_hyperlinks::remap_source_wrapped_line;
+use crate::wrapping::WrappedLine;
+use crate::wrapping::wrap_ranges_trim;
 use codex_protocol::items::AsyncUserInputQuestion;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -150,13 +155,19 @@ impl AsyncQuestions {
             .and_then(|answer| answer.options_state.selected_idx)
     }
 
-    pub(super) fn wrapped_question_lines(&self, width: u16) -> Vec<String> {
+    pub(super) fn wrapped_question_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         self.current_question()
             .map(|q| {
-                textwrap::wrap(&q.title, width.max(1) as usize)
+                let source = annotate_web_urls_in_line(q.title.clone().into());
+                let wrapped = wrap_ranges_trim(&q.title, usize::from(width.max(1)))
                     .into_iter()
-                    .map(|line| line.to_string())
-                    .collect::<Vec<_>>()
+                    .map(|range| WrappedLine {
+                        line: (&q.title[range.clone()]).into(),
+                        range,
+                        prefix_bytes: 0,
+                    })
+                    .collect();
+                remap_source_wrapped_line(&source, wrapped)
             })
             .unwrap_or_default()
     }

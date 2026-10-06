@@ -3,13 +3,15 @@
 
 use ratatui::layout::Rect;
 
+use crate::terminal_hyperlinks::HyperlinkLine;
+
 use super::AsyncQuestions;
 use super::DESIRED_SPACERS_BETWEEN_SECTIONS;
 
 pub(super) struct LayoutSections {
     pub(super) progress_area: Rect,
     pub(super) question_area: Rect,
-    pub(super) question_lines: Vec<String>,
+    pub(super) question_lines: Vec<HyperlinkLine>,
     pub(super) options_area: Rect,
     pub(super) notes_area: Rect,
     pub(super) footer_lines: u16,

@@ -12,6 +12,7 @@ use crate::bottom_pane::selection_popup_common::menu_surface_inset;
 use crate::bottom_pane::selection_popup_common::menu_surface_padding_height;
 use crate::bottom_pane::selection_popup_common::render_menu_surface;
 use crate::render::renderable::Renderable;
+use crate::terminal_hyperlinks::HyperlinkParagraph;
 
 use super::AsyncQuestions;
 use super::TIP_SEPARATOR;
@@ -49,10 +50,11 @@ impl Renderable for AsyncQuestions {
         }
         let sections = self.layout_sections(content_area);
         Paragraph::new(self.progress_prefix_text().dim()).render(sections.progress_area, buf);
-        Paragraph::new(sections.question_lines.join("\n"))
-            .style(crate::style::accent_style())
-            .bold()
-            .render(sections.question_area, buf);
+        HyperlinkParagraph::new(
+            &sections.question_lines,
+            crate::style::accent_style().bold(),
+        )
+        .render(sections.question_area, buf);
 
         let option_rows = self.option_rows();
 
