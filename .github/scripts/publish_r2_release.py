@@ -522,7 +522,7 @@ def main() -> int:
                 endpoint, version, "prerelease"
             ):
                 channels.append("prerelease")
-            if "latest" in channels:
+            if "latest" in channels and args.prerelease == "false":
                 publish_installers(endpoint, args.tag, assets)
             for channel in channels:
                 channel_key = f"{PREFIX}/channels/{channel}"
