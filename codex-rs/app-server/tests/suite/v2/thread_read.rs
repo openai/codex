@@ -2426,6 +2426,7 @@ async fn read_items_page(
 
 fn paginated_turn_started(turn_id: &str) -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+        turn_attribution: None,
         turn_id: turn_id.to_string(),
         root_turn_id: None,
         trace_id: None,

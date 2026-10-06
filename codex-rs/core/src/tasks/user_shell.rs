@@ -121,7 +121,9 @@ pub(crate) async fn execute_user_shell_command(
         // standalone lifecycle tasks (for example /shell, and review once it emits TurnStarted).
         // `/compact` is an intentional exception because compaction requests should not include
         // freshly reinjected context before the summary/replacement history is applied.
-        session.emit_turn_started(&turn_context).await;
+        session
+            .emit_turn_started(&turn_context, TaskKind::Regular)
+            .await;
     }
 
     let Some((turn_environment, environment_shell)) = turn_context

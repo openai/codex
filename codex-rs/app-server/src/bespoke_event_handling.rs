@@ -3089,6 +3089,7 @@ mod tests {
             state.track_current_turn_event(
                 "turn-1",
                 &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+                    turn_attribution: None,
                     turn_id: "turn-1".to_string(),
                     root_turn_id: None,
                     trace_id: None,
@@ -3125,6 +3126,7 @@ mod tests {
             Event {
                 id: "turn-1".to_string(),
                 msg: EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+                    turn_attribution: None,
                     turn_id: "turn-1".to_string(),
                     root_turn_id: None,
                     trace_id: None,
@@ -3395,6 +3397,7 @@ mod tests {
             state.track_current_turn_event(
                 &event_turn_id,
                 &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+                    turn_attribution: None,
                     turn_id: event_turn_id.clone(),
                     root_turn_id: None,
                     trace_id: None,

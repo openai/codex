@@ -1201,6 +1201,7 @@ impl LocalAgentControl {
                     compacted.latest_token_usage_record = None;
                     if let Some(resume_metadata) = &mut compacted.resume_metadata {
                         resume_metadata.multi_agent_version = Some(multi_agent_version);
+                        resume_metadata.turn_attribution = None;
                         if !preserve_context_baselines {
                             resume_metadata.previous_turn_settings = None;
                         }

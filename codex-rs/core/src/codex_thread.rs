@@ -474,16 +474,9 @@ impl CodexThread {
             trace,
             cyber_access_program,
         } = request;
-        let root_turn_id = self
-            .session
-            .reference_context_item()
-            .await
-            .filter(|context| context.turn_id.as_deref() == Some(turn_id.as_str()))
-            .and_then(|context| context.root_turn_id);
         let start_options = TurnStartOptions {
             cyber_access_program,
-            root_turn_id,
-            ..Default::default()
+            ..self.session.recovered_turn_start_options(&turn_id).await
         };
         match self
             .io

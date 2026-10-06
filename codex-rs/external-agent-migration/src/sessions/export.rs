@@ -105,6 +105,7 @@ pub(super) fn rollout_items_from_messages(messages: Vec<ConversationMessage>) ->
                 let turn_id = format!("external-import-turn-{user_turn_count}");
                 items.push(RolloutItem::EventMsg(EventMsg::TurnStarted(
                     TurnStartedEvent {
+                        turn_attribution: None,
                         turn_id: turn_id.clone(),
                         root_turn_id: None,
                         trace_id: None,

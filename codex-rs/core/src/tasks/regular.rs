@@ -48,7 +48,7 @@ impl SessionTask for RegularTask {
         // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
         // not wait on startup prewarm resolution.
         let prewarmed_client_session = async {
-            sess.emit_turn_started(&ctx).await;
+            sess.emit_turn_started(&ctx, TaskKind::Regular).await;
             // Regular-start contributors run once, after the task is visible and interruptible.
             let prepares_mcp = sess
                 .services

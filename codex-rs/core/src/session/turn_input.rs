@@ -138,6 +138,7 @@ impl PreparedTurnInputSettings {
             final_output_json_schema,
             service_tier,
             parent_turn_id,
+            initiating_agent_path,
             root_turn_id,
             cyber_access_program,
         } = self.start_options;
@@ -183,6 +184,11 @@ impl PreparedTurnInputSettings {
             thread_settings::emit_applied(session, submission_id, settings_snapshot).await;
         }
         if let Some(parent_turn_id) = parent_turn_id {
+            if let Some(initiating_agent_path) = initiating_agent_path {
+                turn_context
+                    .turn_metadata_state
+                    .set_initiating_agent_path(initiating_agent_path);
+            }
             turn_context
                 .turn_metadata_state
                 .set_parent_turn_id(parent_turn_id);
@@ -288,10 +294,7 @@ pub(super) async fn handle_recovery(
     } = thread_settings.into();
     let request = TurnInputRequest::user_input(Vec::new())
         .with_thread_settings(thread_settings)
-        .on_start(TurnStartOptions {
-            turn_trigger: Some("retry".to_string()),
-            ..start_options
-        });
+        .on_start(start_options);
     let result = start_if_idle(
         session,
         WithTurnExtensionData {
@@ -633,8 +636,16 @@ async fn steer(
 
 impl Session {
     /// Called under the active-turn lock before running any task or lifecycle callback.
-    pub(crate) async fn record_started_turn(&self, turn_id: &str) {
-        self.state.lock().await.last_started_turn_id = Some(turn_id.to_string());
+    pub(crate) async fn record_started_turn(
+        &self,
+        turn_id: &str,
+        attribution: Option<codex_history::TurnAttribution>,
+    ) {
+        let mut state = self.state.lock().await;
+        state.last_started_turn_id = Some(turn_id.to_owned());
+        if let Some(attribution) = attribution {
+            state.turn_attribution = Some(attribution);
+        }
     }
 
     pub(crate) async fn route_realtime_text_input(

@@ -1249,6 +1249,7 @@ async fn thread_fork_can_cut_before_unfinished_stored_turn() -> Result<()> {
     append_rollout_item_to_path(
         &source_path,
         &RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_attribution: None,
             turn_id: unfinished_turn_id.to_string(),
             root_turn_id: None,
             trace_id: None,
@@ -1524,6 +1525,7 @@ async fn thread_fork_creates_reference_backed_paginated_thread() -> Result<()> {
     );
     for item in [
         RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_attribution: None,
             turn_id: "turn-1".to_string(),
             root_turn_id: None,
             trace_id: None,
@@ -1854,6 +1856,7 @@ async fn assert_thread_fork_freezes_active_paginated_turn_as_interrupted(
     append_rollout_item_to_path(
         source_path.as_path(),
         &RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_attribution: None,
             turn_id: "active-turn".to_string(),
             root_turn_id: None,
             trace_id: None,

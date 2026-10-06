@@ -2156,6 +2156,11 @@ pub struct TurnCompleteEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnStartedEvent {
+    /// Provenance of a regular turn, persisted before startup work can be suspended.
+    /// Absent on older records and non-regular tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_attribution: Option<crate::turn_input::TurnAttribution>,
     pub turn_id: String,
     /// ID of the originating turn in the root thread; equals `turn_id` for root turns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3280,8 +3285,7 @@ pub struct TurnContextNetworkItem {
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
-    /// Root turn that owns this subagent turn's attribution.
-    /// Only set for subagent turns; persisted so resume keeps the scope frozen at turn start.
+    /// Root turn that owns this turn's attribution, retained across recovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_turn_id: Option<String>,
     /// Plugin selection captured for this turn. Absent in older histories.

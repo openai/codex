@@ -1,5 +1,5 @@
-//! Captures recorded, uncanceled regular turns using one thread-configured local executor.
-//! Callers must flush the rollout after capture before persisting the snapshot.
+//! Captures interrupted turns for daemon recovery and restores persisted turn attribution.
+//! Callers must flush the rollout after capturing a live turn before persisting its snapshot.
 
 use super::Session;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -9,6 +9,16 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 pub(super) struct RecordedTurnInput;
 
 impl Session {
+    pub(crate) async fn recovered_turn_start_options(
+        &self,
+        turn_id: &str,
+    ) -> crate::TurnStartOptions {
+        self.state
+            .lock()
+            .await
+            .recovered_turn_start_options(turn_id)
+    }
+
     /// Captures a regular turn only after its input is recorded. The caller must flush the rollout.
     pub(crate) async fn interrupted_turn(
         &self,

@@ -3915,6 +3915,7 @@ async fn cold_paginated_resume_restores_usage_without_loading_turns() -> Result<
     append_rollout_item_to_path(
         &path,
         &RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_attribution: None,
             turn_id: canonical_turn_id.to_string(),
             root_turn_id: None,
             trace_id: None,
@@ -4027,6 +4028,7 @@ async fn cold_paginated_resume_omits_usage_when_its_turn_is_ambiguous() -> Resul
     append_rollout_item_to_path(
         &path,
         &RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_attribution: None,
             turn_id: interrupted_turn_id.to_string(),
             root_turn_id: None,
             trace_id: None,
@@ -4170,6 +4172,7 @@ async fn thread_resume_token_usage_replay_ignores_stale_interrupted_tail_turn() 
             "timestamp": meta_rfc3339,
             "type": "event_msg",
             "payload": serde_json::to_value(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_attribution: None,
                 turn_id: stale_turn_id.to_string(),
                 root_turn_id: None,
                 trace_id: None,
@@ -4259,6 +4262,7 @@ async fn thread_resume_token_usage_replay_can_belong_to_interrupted_turn() -> Re
             "timestamp": meta_rfc3339,
             "type": "event_msg",
             "payload": serde_json::to_value(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_attribution: None,
                 turn_id: interrupted_turn_id.to_string(),
                 root_turn_id: None,
                 trace_id: None,
@@ -4576,6 +4580,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
             "timestamp": meta_rfc3339,
             "type": "event_msg",
             "payload": serde_json::to_value(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_attribution: None,
                 turn_id: turn_id.to_string(),
                 root_turn_id: None,
                 trace_id: None,

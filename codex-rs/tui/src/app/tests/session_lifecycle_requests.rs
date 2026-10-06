@@ -2320,6 +2320,7 @@ async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> 
         user_item("newer-visible-prompt", "newer visible prompt"),
     ]);
     let events = std::iter::once(EventMsg::TurnStarted(TurnStartedEvent {
+        turn_attribution: None,
         turn_id: "cross-page-review-turn".to_string(),
         root_turn_id: None,
         trace_id: None,
@@ -2483,6 +2484,7 @@ async fn transcript_alt_beginning_loads_every_older_history_page() -> Result<()>
         .map(serde_json::from_str::<serde_json::Value>)
         .collect::<Result<Vec<_>, _>>()?;
     let events = std::iter::once(EventMsg::TurnStarted(TurnStartedEvent {
+        turn_attribution: None,
         turn_id: "multi-page-turn".to_string(),
         root_turn_id: None,
         trace_id: None,
@@ -2898,6 +2900,7 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
         .map(serde_json::from_str::<serde_json::Value>)
         .collect::<Result<Vec<_>, _>>()?;
     let events = std::iter::once(EventMsg::TurnStarted(TurnStartedEvent {
+        turn_attribution: None,
         turn_id: "scrollback-pagination-turn".to_string(),
         root_turn_id: None,
         trace_id: None,
@@ -4964,6 +4967,7 @@ async fn command_center_read_only_open_requests_and_failure_preservation() -> Re
                 let first_ordinal = contents.lines().count();
                 let events = [
                     EventMsg::TurnStarted(TurnStartedEvent {
+                        turn_attribution: None,
                         turn_id: format!("saved-turn-{index}"),
                         root_turn_id: None,
                         trace_id: None,

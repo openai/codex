@@ -523,6 +523,16 @@ impl TurnContext {
             .strict_auto_review_enabled
     }
 
+    pub(crate) fn attribution(&self) -> codex_history::TurnAttribution {
+        codex_history::TurnAttribution {
+            turn_id: self.sub_id.clone(),
+            turn_trigger: self.turn_metadata_state.current_turn_trigger(),
+            parent_turn_id: self.turn_metadata_state.parent_turn_id(),
+            initiating_agent_path: self.turn_metadata_state.initiating_agent_path().cloned(),
+            root_turn_id: self.turn_metadata_state.root_turn_id(),
+        }
+    }
+
     /// Captures current model metadata without preparing a step.
     pub(crate) fn capture_current_model_info(&self) -> Arc<ModelInfo> {
         Arc::clone(&self.next_step_settings.load().model_info)

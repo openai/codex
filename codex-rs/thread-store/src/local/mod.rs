@@ -1164,6 +1164,7 @@ mod tests {
         live_thread
             .append_items(&[RolloutItem::EventMsg(EventMsg::TurnStarted(
                 TurnStartedEvent {
+                    turn_attribution: None,
                     turn_id: "turn-1".to_string(),
                     root_turn_id: None,
                     trace_id: None,

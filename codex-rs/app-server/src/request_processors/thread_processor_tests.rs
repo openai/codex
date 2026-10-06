@@ -1199,6 +1199,7 @@ mod thread_processor_behavior_tests {
             state.track_current_turn_event(
                 "turn-1",
                 &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+                    turn_attribution: None,
                     turn_id: "turn-1".to_string(),
                     root_turn_id: None,
                     trace_id: None,

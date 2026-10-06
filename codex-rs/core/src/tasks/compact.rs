@@ -41,7 +41,7 @@ impl SessionTask for CompactTask {
             turn.id = %ctx.sub_id,
         );
         // Preparation errors must reach the task runner, which reports them to the client.
-        session.emit_turn_started(&ctx).await;
+        session.emit_turn_started(&ctx, TaskKind::Compact).await;
         let step_context = session
             .capture_step_context(Arc::clone(&ctx), &cancellation_token)
             .await?;

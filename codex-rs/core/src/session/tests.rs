@@ -4338,6 +4338,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
     let rollout_items = vec![
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
+                turn_attribution: None,
                 turn_id: turn_id.clone(),
                 root_turn_id: None,
                 trace_id: None,
@@ -6134,6 +6135,18 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
     let (mut session, turn_context) = make_session_and_context().await;
     let rollout_path = attach_thread_persistence(&mut session).await;
     let turn_context = Arc::new(turn_context);
+    turn_context
+        .turn_metadata_state
+        .set_turn_trigger("automation".to_string());
+    turn_context
+        .turn_metadata_state
+        .set_parent_turn_id("parent-turn".to_string());
+    turn_context
+        .turn_metadata_state
+        .set_root_turn_id("root-turn".to_string());
+    turn_context.turn_metadata_state.set_initiating_agent_path(
+        codex_protocol::AgentPath::try_from("/root/requester").expect("requester path"),
+    );
     let turn_context_baseline = turn_context.to_turn_context_item();
     let world_state = Arc::new(build_world_state_from_turn_context(&session, &turn_context).await);
     let previous_turn_settings = PreviousTurnSettings {
@@ -6146,11 +6159,19 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
         .set_previous_turn_settings(Some(previous_turn_settings.clone()))
         .await;
 
-    session.state.lock().await.last_started_turn_id = Some("checkpoint-turn".into());
     session.multi_agent_version = std::sync::OnceLock::from(MultiAgentVersion::V2);
     let expected = CompactionResumeMetadata {
         multi_agent_version: Some(MultiAgentVersion::V2),
-        last_started_turn_id: Some("checkpoint-turn".into()),
+        last_started_turn_id: Some(turn_context.sub_id.clone()),
+        turn_attribution: Some(codex_history::TurnAttribution {
+            turn_id: turn_context.sub_id.clone(),
+            turn_trigger: Some("automation".to_string()),
+            parent_turn_id: Some("parent-turn".to_string()),
+            initiating_agent_path: Some(
+                codex_protocol::AgentPath::try_from("/root/requester").expect("requester path"),
+            ),
+            root_turn_id: turn_context_baseline.root_turn_id.clone(),
+        }),
         previous_turn_settings: Some(previous_turn_settings),
     };
     let expected_settings = codex_protocol::protocol::ThreadSettingsAppliedEvent {
@@ -6158,6 +6179,21 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
         thread_settings: session.thread_settings_snapshot().await,
     };
 
+    session
+        .record_started_turn(&turn_context.sub_id, Some(turn_context.attribution()))
+        .await;
+    let compact_context = session.new_default_turn().await;
+    session
+        .record_started_turn(&compact_context.sub_id, /*attribution*/ None)
+        .await;
+    assert_eq!(
+        session.state.lock().await.turn_attribution,
+        expected.turn_attribution
+    );
+
+    session
+        .record_started_turn(&turn_context.sub_id, Some(turn_context.attribution()))
+        .await;
     let input_goal_ids =
         crate::context::UserGoalUpdate::message_ids(session.clone_history().await.raw_items());
     // The goal edit is accepted after the compaction input was captured.
@@ -6217,6 +6253,58 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
     );
     assert_eq!(saved_turn_context, &turn_context_baseline);
     assert_eq!(saved_settings, &expected_settings);
+    for same_turn_input in [false, true] {
+        let mut rollback_items = vec![RolloutItem::Compacted(compacted.clone())];
+        if same_turn_input {
+            rollback_items.push(RolloutItem::ResponseItem(
+                user_message("steered work").into(),
+            ));
+        }
+        rollback_items.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+            codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+        )));
+        let rolled_back = session
+            .reconstruct_history_from_rollout(&turn_context, &rollback_items)
+            .await;
+        assert_eq!(rolled_back.turn_attribution, None);
+    }
+
+    // Settings invalidate continuation eligibility; standalone compaction replaces its ID.
+    // Neither changes the regular work whose attribution the checkpoint preserves.
+    for last_started_turn_id in [None, Some("compact-turn".to_string())] {
+        let mut checkpoint = compacted.clone();
+        checkpoint
+            .resume_metadata
+            .as_mut()
+            .expect("resume metadata")
+            .last_started_turn_id = last_started_turn_id.clone();
+        let mut items = vec![RolloutItem::Compacted(checkpoint)];
+        if let Some(turn_id) = last_started_turn_id {
+            items.push(RolloutItem::EventMsg(EventMsg::TurnComplete(
+                TurnCompleteEvent {
+                    turn_id,
+                    last_agent_message: None,
+                    error: None,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
+                    time_to_first_token_ms: None,
+                },
+            )));
+        }
+        let reconstructed = session
+            .reconstruct_history_from_rollout(&turn_context, &items)
+            .await;
+        assert_eq!(reconstructed.turn_attribution, expected.turn_attribution);
+        assert_eq!(reconstructed.reference_context_item, None);
+        items.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+            codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+        )));
+        let rolled_back = session
+            .reconstruct_history_from_rollout(&turn_context, &items)
+            .await;
+        assert_eq!(rolled_back.turn_attribution, None);
+    }
 }
 
 #[tokio::test]

@@ -57,6 +57,7 @@ pub(super) async fn completed_history_app(
         let turn_id = format!("turn-{index}");
         let finished = completed_at.timestamp() + index as i64 * 60;
         let mut events = vec![EventMsg::TurnStarted(TurnStartedEvent {
+            turn_attribution: None,
             turn_id: turn_id.clone(),
             root_turn_id: None,
             trace_id: None,

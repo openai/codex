@@ -11,6 +11,7 @@ use super::AdditionalContextStore;
 use super::auto_compact_window::AutoCompactWindow;
 use super::auto_compact_window::AutoCompactWindowIds;
 use super::auto_compact_window::AutoCompactWindowSnapshot;
+use crate::TurnStartOptions;
 use crate::context_manager::ContextManager;
 use crate::context_manager::HistoryReplacement;
 use crate::session::PreviousTurnSettings;
@@ -18,6 +19,7 @@ use crate::session::session::SessionConfiguration;
 use crate::session::startup_prewarm::SessionStartupPrewarmHandle;
 use crate::session::time_reminder::CurrentTimeReminderState;
 use codex_history::ResponseItemEnvelope;
+use codex_history::TurnAttribution;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -84,6 +86,8 @@ pub(crate) struct SessionState {
     /// Latest task admitted in this runtime, retained across completion and history edits.
     /// Cleared by standalone settings changes to invalidate pending continuation.
     pub(crate) last_started_turn_id: Option<String>,
+    /// Latest regular turn, retained across completion, settings changes, and compaction.
+    pub(crate) turn_attribution: Option<TurnAttribution>,
     /// Runtime accounting state for the active auto-compaction window.
     auto_compact_window: AutoCompactWindow,
     /// Original request effort for the current model while configuration updates remain active.
@@ -129,6 +133,7 @@ impl SessionState {
             additional_context: AdditionalContextStore::default(),
             previous_turn_settings: None,
             last_started_turn_id: None,
+            turn_attribution: None,
             auto_compact_window: AutoCompactWindow::new_with_ids(auto_compact_window_ids),
             reasoning_effort_pin: ReasoningEffortPin::Unset,
             shutting_down: false,
@@ -191,6 +196,7 @@ impl SessionState {
                 .history
                 .replace_compacted(items, reviewer_compaction_hash.as_deref()),
             HistoryReplacement::Reset => {
+                self.turn_attribution = None;
                 self.history.replace_annotated(items);
                 true
             }
@@ -251,6 +257,21 @@ impl SessionState {
 
     pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
         self.history.reference_context_item()
+    }
+
+    pub(crate) fn recovered_turn_start_options(&self, turn_id: &str) -> TurnStartOptions {
+        self.turn_attribution
+            .as_ref()
+            .filter(|attribution| attribution.turn_id == turn_id)
+            .map(TurnAttribution::start_options)
+            .unwrap_or_else(|| TurnStartOptions {
+                // Older rollouts only persisted the root on the model-context record.
+                root_turn_id: self
+                    .reference_context_item()
+                    .filter(|context| context.turn_id.as_deref() == Some(turn_id))
+                    .and_then(|context| context.root_turn_id),
+                ..Default::default()
+            })
     }
 
     // Token/rate limit helpers

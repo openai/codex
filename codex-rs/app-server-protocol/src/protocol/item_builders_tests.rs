@@ -108,6 +108,7 @@ fn guardian_stdin_reviews_preserve_parent_command_history() {
     };
     let start_turn = |turn_id: &str| {
         RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_attribution: None,
             turn_id: turn_id.into(),
             root_turn_id: None,
             trace_id: None,

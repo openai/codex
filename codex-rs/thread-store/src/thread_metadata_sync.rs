@@ -712,6 +712,7 @@ mod tests {
         let update = sync
             .observe_appended_items(&[RolloutItem::EventMsg(EventMsg::TurnStarted(
                 TurnStartedEvent {
+                    turn_attribution: None,
                     turn_id: "turn-1".to_string(),
                     root_turn_id: None,
                     trace_id: None,

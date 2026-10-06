@@ -55,6 +55,7 @@ async fn history_fixture(
     for (index, count) in item_counts.iter().enumerate() {
         let turn_id = format!("turn-{index}");
         let mut events = vec![EventMsg::TurnStarted(TurnStartedEvent {
+            turn_attribution: None,
             turn_id: turn_id.clone(),
             root_turn_id: None,
             trace_id: None,

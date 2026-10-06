@@ -28,6 +28,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::turn_input::TurnAttribution;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
@@ -663,11 +664,316 @@ async fn recover_turn_if_idle_preserves_id_and_resumes_plan_mode() {
             .expect("recovered turn should include turn metadata"),
     )
     .expect("recovered turn metadata should be valid JSON");
-    assert_eq!(turn_metadata["turn_trigger"].as_str(), Some("retry"));
+    assert_eq!(
+        (
+            turn_metadata.get("turn_trigger"),
+            turn_metadata.get("parent_turn_id"),
+            turn_metadata["root_turn_id"].as_str(),
+        ),
+        (None, None, Some(turn_id))
+    );
     let user_input_groups = request.message_input_text_groups("user");
     assert_eq!(user_input_groups.len(), 1);
     assert_eq!(user_input_groups[0].len(), 1);
     assert!(user_input_groups[0][0].starts_with("<environment_context>"));
+}
+
+#[derive(Default)]
+struct RecoveryLifecycleBarrier {
+    block_next: AtomicBool,
+    entered: tokio::sync::Notify,
+    block_stop: AtomicBool,
+    stop_entered: tokio::sync::Notify,
+    release_stop: tokio::sync::Notify,
+}
+
+impl codex_extension_api::TurnLifecycleContributor for RecoveryLifecycleBarrier {
+    fn turn_start_phase(
+        &self,
+        _thread_store: &codex_extension_api::ExtensionData,
+    ) -> codex_extension_api::TurnStartPhase {
+        codex_extension_api::TurnStartPhase::RegularTaskStart
+    }
+
+    fn on_turn_start<'a>(
+        &'a self,
+        _input: codex_extension_api::TurnStartInput<'a>,
+    ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if self.block_next.swap(false, Ordering::SeqCst) {
+                self.entered.notify_one();
+                std::future::pending::<()>().await;
+            }
+        })
+    }
+
+    fn on_turn_stop<'a>(
+        &'a self,
+        _input: codex_extension_api::TurnStopInput<'a>,
+    ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if self.block_stop.swap(false, Ordering::SeqCst) {
+                self.stop_entered.notify_one();
+                self.release_stop.notified().await;
+            }
+        })
+    }
+}
+
+enum RecoveryPause {
+    AfterContext,
+    BeforeContext,
+    AfterLateCompletion,
+    LegacyRollout,
+}
+
+/// Cold recovery preserves attribution across repeated restarts, leaves unknown
+/// triggers absent, and starts new turns with fresh attribution.
+#[test_case(Some("automation"), RecoveryPause::AfterContext; "automation")]
+#[test_case(None, RecoveryPause::AfterContext; "unknown_trigger")]
+#[test_case(None, RecoveryPause::LegacyRollout; "legacy_root")]
+#[test_case(Some("automation"), RecoveryPause::BeforeContext; "before_context_is_written")]
+#[test_case(Some("composer"), RecoveryPause::AfterLateCompletion; "after_previous_turn_completes_late")]
+#[tokio::test]
+async fn recovery_preserves_durable_turn_attribution(
+    trigger: Option<&str>,
+    pause: RecoveryPause,
+) -> anyhow::Result<()> {
+    let mut server = responses::start_mock_server().await;
+    responses::mount_sse_once(&server, responses::sse_completed("prior-user-turn")).await;
+    let barrier = Arc::new(RecoveryLifecycleBarrier::default());
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.turn_lifecycle_contributor(barrier.clone());
+    let mut builder = test_codex().with_extensions(Arc::new(extensions.build()));
+    let mut test = builder.build_with_auto_env(&server).await?;
+    barrier.block_stop.store(
+        matches!(pause, RecoveryPause::AfterLateCompletion),
+        Ordering::SeqCst,
+    );
+    let TurnInputSubmission::Started {
+        turn_id: previous_turn_id,
+    } = submit_user_message(&test.codex, "establish the initial context baseline").await?
+    else {
+        panic!("expected the initial turn");
+    };
+    if matches!(pause, RecoveryPause::AfterLateCompletion) {
+        timeout(
+            Duration::from_secs(/*secs*/ 10),
+            barrier.stop_entered.notified(),
+        )
+        .await?;
+    } else {
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(event) if event.turn_id == previous_turn_id)
+        })
+        .await;
+    }
+    let request_received = Arc::new(tokio::sync::Notify::new());
+    if matches!(pause, RecoveryPause::BeforeContext) {
+        barrier.block_next.store(true, Ordering::SeqCst);
+    } else {
+        let notify = Arc::clone(&request_received);
+        responses::mount_response_once_match(
+            &server,
+            move |_: &wiremock::Request| {
+                notify.notify_one();
+                true
+            },
+            responses::sse_response(responses::sse_completed("initial"))
+                .set_delay(Duration::from_secs(/*secs*/ 60)),
+        )
+        .await;
+    }
+    let parent = trigger.map(|_| "parent-turn");
+    let initiating_agent_path =
+        parent.map(|_| AgentPath::root().join("requester").expect("requester path"));
+    let root = "root-turn";
+    let request = if trigger == Some("automation") {
+        TurnInputRequest::user_input(Vec::new())
+    } else {
+        user_message_request("recover this work")
+    };
+    let request = request.on_start(TurnStartOptions {
+        turn_trigger: trigger.map(str::to_owned),
+        parent_turn_id: parent.map(str::to_owned),
+        root_turn_id: Some(root.to_owned()),
+        initiating_agent_path: initiating_agent_path.clone(),
+        ..Default::default()
+    });
+    let turn_id = if matches!(pause, RecoveryPause::AfterLateCompletion) {
+        let TurnInputSubmission::Started { turn_id } =
+            test.codex.start_or_steer_turn(request).await?
+        else {
+            panic!("expected a new turn while the previous stop hook is pending");
+        };
+        turn_id
+    } else {
+        let StartIfIdleSubmission::Started { turn_id } =
+            test.codex.start_turn_if_idle(request).await?
+        else {
+            panic!("expected a new turn");
+        };
+        turn_id
+    };
+    timeout(Duration::from_secs(/*secs*/ 10), async {
+        if matches!(pause, RecoveryPause::BeforeContext) {
+            barrier.entered.notified().await;
+        } else {
+            request_received.notified().await;
+        }
+    })
+    .await?;
+    if matches!(pause, RecoveryPause::AfterLateCompletion) {
+        barrier.release_stop.notify_one();
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(event) if event.turn_id == previous_turn_id)
+        })
+        .await;
+    }
+    let thread_settings = test.codex.restorable_thread_settings().await;
+    if let Some(url) = test.executor_environment().exec_server_url() {
+        builder = builder.with_exec_server_url(url);
+    }
+
+    for attempt in 0..2 {
+        assert_eq!(
+            test.codex.suspend_turn_and_shutdown().await?,
+            codex_core::SuspendTurnOutcome::Suspended {
+                turn_id: turn_id.clone()
+            },
+        );
+        let rollout_path = test.codex.rollout_path().expect("durable rollout");
+        test.thread_manager
+            .remove_thread(&test.session_configured.thread_id)
+            .await
+            .expect("suspended thread is loaded");
+        if attempt == 0 && matches!(pause, RecoveryPause::LegacyRollout) {
+            let mut legacy_rollout = String::new();
+            for line in std::fs::read_to_string(&rollout_path)?.lines() {
+                let mut item: Value = serde_json::from_str(line)?;
+                if let Some(payload) = item["payload"].as_object_mut() {
+                    payload.remove("turn_attribution");
+                }
+                legacy_rollout.push_str(&serde_json::to_string(&item)?);
+                legacy_rollout.push('\n');
+            }
+            std::fs::write(&rollout_path, legacy_rollout)?;
+        }
+        server = responses::start_mock_server().await;
+        let notify = Arc::clone(&request_received);
+        let response = responses::mount_response_once_match(
+            &server,
+            move |_: &wiremock::Request| {
+                notify.notify_one();
+                true
+            },
+            responses::sse_response(responses::sse_completed("recovered"))
+                .set_delay(Duration::from_secs(/*secs*/ 60)),
+        )
+        .await;
+        test = builder
+            .resume(&server, Arc::clone(&test.home), rollout_path)
+            .await?;
+        assert_eq!(
+            test.codex
+                .recover_turn_if_idle(RecoverTurnRequest {
+                    turn_id: turn_id.clone(),
+                    thread_settings: ThreadSettingsOverrides {
+                        environments: thread_settings.environments.clone(),
+                        ..Default::default()
+                    },
+                    trace: None,
+                    cyber_access_program: None,
+                })
+                .await?,
+            StartIfIdleSubmission::Started {
+                turn_id: turn_id.clone()
+            },
+        );
+        let attribution = wait_for_event_match(&test.codex, |event| match event {
+            EventMsg::TurnStarted(event) if event.turn_id == turn_id => {
+                Some(event.turn_attribution.clone())
+            }
+            _ => None,
+        })
+        .await;
+        assert_eq!(
+            attribution,
+            Some(TurnAttribution {
+                turn_id: turn_id.clone(),
+                turn_trigger: trigger.map(str::to_owned),
+                parent_turn_id: parent.map(str::to_owned),
+                root_turn_id: Some(root.to_owned()),
+                initiating_agent_path: initiating_agent_path.clone(),
+            }),
+        );
+        timeout(
+            Duration::from_secs(/*secs*/ 10),
+            request_received.notified(),
+        )
+        .await?;
+        let request = response.single_request();
+        let metadata: Value = serde_json::from_str(
+            &request
+                .header("x-codex-turn-metadata")
+                .expect("turn metadata"),
+        )?;
+        assert_eq!(
+            (
+                metadata["turn_id"].as_str(),
+                metadata["turn_trigger"].as_str(),
+                metadata["parent_turn_id"].as_str(),
+                metadata["root_turn_id"].as_str(),
+            ),
+            (Some(turn_id.as_str()), trigger, parent, Some(root)),
+            "recovery attempt {attempt}",
+        );
+    }
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    if trigger != Some("automation") {
+        return Ok(());
+    }
+    let next_server = responses::start_mock_server().await;
+    test = builder.restart(&next_server, &test).await?;
+    test.codex.restore_thread_settings(thread_settings).await?;
+    let response = responses::mount_sse_once(&next_server, responses::sse_completed("new")).await;
+    let TurnInputSubmission::Started {
+        turn_id: next_turn_id,
+    } = test
+        .codex
+        .start_or_steer_turn(
+            user_message_request("new human work").on_start(TurnStartOptions {
+                turn_trigger: Some("composer".to_owned()),
+                ..Default::default()
+            }),
+        )
+        .await?
+    else {
+        panic!("expected a new turn");
+    };
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let request = response.single_request();
+    let metadata: Value = serde_json::from_str(
+        &request
+            .header("x-codex-turn-metadata")
+            .expect("turn metadata"),
+    )?;
+    assert_eq!(
+        (
+            metadata["turn_trigger"].as_str(),
+            metadata.get("parent_turn_id"),
+            metadata["root_turn_id"].as_str()
+        ),
+        (Some("composer"), None, Some(next_turn_id.as_str())),
+    );
+    Ok(())
 }
 
 /// Internal continuation creates a new turn without adding user authorization.

@@ -315,7 +315,11 @@ impl Session {
         let (pending_items, _) = self.input_queue.drain_mailbox_input_items().await;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
-            self.record_started_turn(&turn_context.sub_id).await;
+            self.record_started_turn(
+                &turn_context.sub_id,
+                (task_kind == TaskKind::Regular).then(|| turn_context.attribution()),
+            )
+            .await;
             let turn = active.get_or_insert_with(ActiveTurn::default);
             debug_assert!(turn.task.is_none());
             Arc::clone(&turn.turn_state)

@@ -26,6 +26,7 @@ use crate::protocol::v2::TurnError;
 fn projects_turn_lifecycle_without_prior_builder_state() {
     let started = project(RolloutItem::EventMsg(EventMsg::TurnStarted(
         TurnStartedEvent {
+            turn_attribution: None,
             turn_id: "turn-1".to_string(),
             root_turn_id: Some("root-turn".into()),
             trace_id: None,

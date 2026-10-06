@@ -3,6 +3,7 @@
 use crate::RolloutItem;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::turn_input::CyberAccessProgram;
+use codex_protocol::turn_input::TurnAttribution;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -17,6 +18,9 @@ pub struct CompactionResumeMetadata {
     pub multi_agent_version: Option<MultiAgentVersion>,
     /// Turn identity used to admit continuations after cold resume.
     pub last_started_turn_id: Option<String>,
+    /// Attribution of the latest regular turn, independent of continuation eligibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_attribution: Option<TurnAttribution>,
     pub previous_turn_settings: Option<PreviousTurnSettings>,
 }
 

@@ -8406,6 +8406,7 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
         );
         for item in [
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_attribution: None,
                 turn_id: turn_id.to_string(),
                 root_turn_id: None,
                 trace_id: None,

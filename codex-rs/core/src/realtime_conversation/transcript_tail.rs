@@ -37,6 +37,7 @@ pub(super) async fn record(session: &Session, text: String) -> std::io::Result<(
     let now = chrono::Utc::now();
     if recording_turn {
         let started = EventMsg::TurnStarted(TurnStartedEvent {
+            turn_attribution: None,
             turn_id: turn.sub_id.clone(),
             root_turn_id: Some(turn.sub_id.clone()),
             trace_id: turn.trace_id.clone(),
@@ -47,7 +48,9 @@ pub(super) async fn record(session: &Session, text: String) -> std::io::Result<(
         session
             .persist_rollout_items(&[RolloutItem::EventMsg(started)])
             .await;
-        session.record_started_turn(&turn.sub_id).await;
+        session
+            .record_started_turn(&turn.sub_id, /*attribution*/ None)
+            .await;
     }
     let item = session.response_item_from_user_input(content.clone());
     session
