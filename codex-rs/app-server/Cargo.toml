@@ -123,6 +123,9 @@ uuid = { workspace = true, features = ["serde", "v7"] }
 [target.'cfg(all(target_os = "linux", target_env = "musl", any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
 tikv-jemallocator = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 codex-windows-sandbox = { workspace = true }
 

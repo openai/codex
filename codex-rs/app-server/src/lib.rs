@@ -122,6 +122,8 @@ mod gateway_oauth_notifications;
 mod image_url;
 pub mod in_process;
 mod log_write_warning;
+#[cfg(unix)]
+mod managed_daemon;
 mod mcp_refresh;
 mod message_processor;
 mod model_catalog;
@@ -504,6 +506,10 @@ pub async fn run_main_with_transport_options(
 ) -> IoResult<AppServerExit> {
     #[cfg(target_os = "windows")]
     let _registered_core = codex_windows_sandbox::registered_core_requested();
+    let managed_daemon = matches!(&transport, AppServerTransport::UnixSocket { .. })
+        && runtime_options.managed_daemon;
+    #[cfg(unix)]
+    let nofile_limit_result = managed_daemon.then(managed_daemon::raise_nofile_limit);
     let loader_overrides = loader_overrides_with_test_user_config_file(
         loader_overrides,
         test_user_config_file_from_env(),
@@ -747,6 +753,10 @@ pub async fn run_main_with_transport_options(
         .with(log_db_layer)
         .with(otel_layers)
         .try_init();
+    #[cfg(unix)]
+    if let Some(Err(err)) = nofile_limit_result {
+        warn!(%err, "failed to raise managed app-server file descriptor limit");
+    }
     for warning in &config_warnings {
         match &warning.details {
             Some(details) => error!("{} {}", warning.summary, details),
@@ -784,8 +794,6 @@ pub async fn run_main_with_transport_options(
     let single_client_mode = matches!(&transport, AppServerTransport::Stdio);
     let graceful_signal_restart_enabled =
         runtime_options.install_shutdown_signal_handler && !single_client_mode;
-    let managed_daemon = matches!(&transport, AppServerTransport::UnixSocket { .. })
-        && runtime_options.managed_daemon;
     let mut app_server_client_name_rx = None;
 
     match &transport {
