@@ -74,6 +74,7 @@ pub use discoverable::ToolSuggestPluginDiscoveryInput;
 pub use executor_hooks::executor_plugin_hook_sources;
 pub use executor_provider::ExecutorPluginProvider;
 pub use executor_provider::ExecutorPluginProviderError;
+pub use executor_provider::PluginRootOwnership;
 pub use executor_provider::ResolvedExecutorPlugin;
 pub use loader::PluginHookLoadOutcome;
 pub use manager::ConfiguredMarketplace;
