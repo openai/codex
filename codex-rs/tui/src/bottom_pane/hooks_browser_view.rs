@@ -436,6 +436,12 @@ impl HooksBrowserView {
 
     #[allow(clippy::disallowed_methods)]
     fn handler_row_lines(&self, event_name: HookEventName, width: usize) -> Vec<Line<'static>> {
+        let index_width = self
+            .handlers_for_event(event_name)
+            .count()
+            .to_string()
+            .len()
+            .max(2);
         self.handlers_for_event(event_name)
             .enumerate()
             .map(|(idx, hook)| {
@@ -446,21 +452,27 @@ impl HooksBrowserView {
                 } else {
                     ' '
                 };
-                let row = match hook.trust_status {
-                    HookTrustStatus::Modified => {
-                        format!("[{marker}] {} · modified", hook_title(idx))
-                    }
-                    HookTrustStatus::Untrusted => format!("[{marker}] {} · new", hook_title(idx)),
-                    HookTrustStatus::Managed | HookTrustStatus::Trusted => {
-                        format!("[{marker}] {}", hook_title(idx))
-                    }
+                let title = hook
+                    .status_message
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|title| !title.is_empty())
+                    .unwrap_or("Unnamed hook");
+                let trust_suffix = match hook.trust_status {
+                    HookTrustStatus::Modified => " · modified",
+                    HookTrustStatus::Untrusted => " · new",
+                    HookTrustStatus::Managed | HookTrustStatus::Trusted => "",
                 };
                 let prefix = if self.state.selected_idx == Some(idx) {
                     "› "
                 } else {
                     "  "
                 };
-                let mut line = Line::from(format!("{prefix}{row}"));
+                let mut line = Line::from(vec![
+                    format!("{prefix}[{marker}] ").into(),
+                    format!("{:>index_width$}", idx + 1).dim(),
+                    format!("  {title}{trust_suffix}").into(),
+                ]);
                 line = truncate_line_with_ellipsis_if_overflow(line, width);
                 let needs_review = hook_needs_review(hook);
                 if self.state.selected_idx == Some(idx) {
@@ -719,10 +731,6 @@ fn event_description(event_name: HookEventName) -> &'static str {
     }
 }
 
-fn hook_title(idx: usize) -> String {
-    format!("Hook {}", idx + 1)
-}
-
 fn hook_source_summary(hook: &HookMetadata) -> String {
     match hook.source {
         HookSource::Plugin => hook
@@ -839,6 +847,7 @@ mod tests {
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
@@ -1081,6 +1090,46 @@ mod tests {
     }
 
     #[test]
+    fn renders_handler_status_messages_with_blank_fallback() {
+        let mut view = view();
+        view.entry.hooks[0].status_message = Some("  检查 🦀 shell commands  ".to_string());
+        view.entry.hooks[1].status_message = Some(" \t\n ".to_string());
+        view.entry.hooks[2].event_name = HookEventName::PreToolUse;
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert_snapshot!(
+            "hooks_browser_status_messages",
+            render_lines(&view, /*width*/ 112)
+        );
+
+        for (fg, bg) in [
+            ((230, 230, 230), (18, 20, 30)),
+            ((32, 32, 32), (255, 255, 255)),
+        ] {
+            crate::terminal_palette::with_test_default_colors(
+                crate::terminal_probe::DefaultColors { fg, bg },
+                || {
+                    let buf = render_buffer(&view, /*width*/ 112);
+                    let selected_y = (0..buf.area.height)
+                        .find(|&y| buf[(0, y)].symbol() == "›")
+                        .expect("selected hook row");
+                    for y in [selected_y, selected_y + 1] {
+                        assert!(buf[(7, y)].modifier.contains(Modifier::DIM));
+                        assert!(!buf[(10, y)].modifier.contains(Modifier::DIM));
+                    }
+                    assert_eq!(buf[(10, selected_y)].symbol(), "检");
+                    assert_eq!(buf[(10, selected_y)].fg, selection_style().fg.unwrap());
+                    assert_eq!(
+                        (0..buf.area.width)
+                            .map(|x| buf[(x, selected_y)].bg)
+                            .collect::<Vec<_>>(),
+                        vec![selection_style().bg.unwrap(); usize::from(buf.area.width)]
+                    );
+                },
+            );
+        }
+    }
+
+    #[test]
     fn renders_mcp_tool_handler_with_server_and_tool_details() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let mut configured_hook = hook(
@@ -1281,9 +1330,9 @@ mod tests {
     #[test]
     fn renders_scrolled_handler_window() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let hooks = (0..=MAX_POPUP_ROWS)
+        let hooks = (0..MAX_POPUP_ROWS + 3)
             .map(|idx| {
-                hook(
+                let mut hook = hook(
                     &format!("path:hook-{idx}"),
                     HookEventName::PreToolUse,
                     HookSource::User,
@@ -1292,18 +1341,27 @@ mod tests {
                     /*enabled*/ true,
                     /*is_managed*/ false,
                     idx as i64,
-                )
+                );
+                if idx % 2 == 0 {
+                    hook.status_message = Some(format!("Check tool {}", idx + 1));
+                }
+                hook
             })
             .collect();
         let mut view =
             HooksBrowserView::new(hooks, Vec::new(), Vec::new(), AppEventSender::new(tx_raw));
         view.handle_key_event(KeyEvent::from(KeyCode::Enter));
-        for _ in 0..MAX_POPUP_ROWS {
+        for _ in 0..MAX_POPUP_ROWS + 1 {
             view.handle_key_event(KeyEvent::from(KeyCode::Down));
         }
         assert_snapshot!(
             "hooks_browser_scrolled_handlers",
             render_lines(&view, /*width*/ 112)
+        );
+        assert_eq!(
+            view.selected_hook(HookEventName::PreToolUse)
+                .map(|hook| hook.key.as_str()),
+            Some("path:hook-9")
         );
     }
 
@@ -1321,6 +1379,8 @@ mod tests {
             /*display_order*/ 0,
         );
         capped_command_hook.source_path = test_path_buf("/tmp/h.json").abs();
+        capped_command_hook.status_message =
+            Some("Check shell commands before allowing them to execute".to_string());
         let mut view = HooksBrowserView::new(
             vec![capped_command_hook],
             Vec::new(),

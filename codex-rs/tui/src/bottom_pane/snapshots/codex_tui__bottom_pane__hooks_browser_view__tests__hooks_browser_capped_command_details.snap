@@ -7,7 +7,7 @@ expression: "render_lines(&view, 44)"
   Turn hooks on or off. Your changes are    
   saved automatically.                      
                                             
-› [x] Hook 1                                
+› [x]  1  Check shell commands before allow…
                                             
   Event     PreToolUse                      
   Matcher   Bash                            

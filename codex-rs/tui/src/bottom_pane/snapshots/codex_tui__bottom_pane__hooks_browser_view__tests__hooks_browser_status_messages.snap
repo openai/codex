@@ -4,17 +4,19 @@ expression: "render_lines(&view, 112)"
 ---
                                                                                                                 
   PreToolUse hooks                                                                                              
-  1 hook needs review before it can run.                                                                        
+  Turn hooks on or off. Your changes are saved automatically.                                                   
                                                                                                                 
-› [!]  1  Unnamed hook · new                                                                                    
+› [x]  1  检 查  🦀  shell commands                                                                                
+  [ ]  2  Unnamed hook                                                                                          
+  [x]  3  Unnamed hook                                                                                          
                                                                                                                 
   Event     PreToolUse                                                                                          
   Matcher   Bash                                                                                                
-  Source    User config - /tmp/hooks.json                                                                       
-  Command   ~/bin/untrusted.sh                                                                                  
-  Mode      Async                                                                                               
+  Source    Plugin - superpowers@openai-curated                                                                 
+  Command   ${CODEX_PLUGIN_ROOT}/hooks/pre-tool-use-check.sh                                                    
+  Mode      Sync                                                                                                
   Timeout   30s                                                                                                 
-  Trust     New hook - review required                                                                          
+  Trust     Trusted                                                                                             
                                                                                                                 
                                                                                                                 
-  t trust · esc back
+  space/enter toggle · esc back

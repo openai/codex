@@ -6,7 +6,7 @@ expression: "render_lines(&view, 112)"
   PreToolUse hooks                                                                                              
   1 hook needs review before it can run.                                                                        
                                                                                                                 
-› [!] Hook 1 · new                                                                                              
+› [!]  1  Unnamed hook · new                                                                                    
                                                                                                                 
   Event     PreToolUse                                                                                          
   Matcher   Bash                                                                                                

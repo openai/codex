@@ -6,8 +6,8 @@ expression: "render_lines(&view, 112)"
   PreToolUse hooks                                                                                              
   Turn hooks on or off. Your changes are saved automatically.                                                   
                                                                                                                 
-› [x] Hook 1                                                                                                    
-  [ ] Hook 2                                                                                                    
+› [x]  1  Unnamed hook                                                                                          
+  [ ]  2  Unnamed hook                                                                                          
                                                                                                                 
   Event     PreToolUse                                                                                          
   Matcher   Bash                                                                                                

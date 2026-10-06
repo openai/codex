@@ -65,10 +65,9 @@ fn render_line_rows(
             body.width,
             /*height*/ 1,
         );
-        line.clone().render(row_area, buf);
-        if line.style.bg.is_some() {
-            buf.set_style(row_area, line.style);
-        }
+        Paragraph::new(line.clone())
+            .style(line.style)
+            .render(row_area, buf);
     }
     picker_style::render_scroll_indicators(
         area,
@@ -160,3 +159,7 @@ impl Renderable for HooksBrowserView {
         self.render_footer(footer, buf);
     }
 }
+
+#[cfg(test)]
+#[path = "hooks_browser_render_tests.rs"]
+mod tests;
