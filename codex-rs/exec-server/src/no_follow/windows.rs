@@ -4,6 +4,7 @@ use std::ffi::c_void;
 use std::io;
 use std::io::Write;
 use std::mem::size_of;
+use std::mem::size_of_val;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
@@ -35,6 +36,9 @@ use windows_sys::Win32::Storage::FileSystem::FileDispositionInfo;
 use windows_sys::Win32::Storage::FileSystem::SetFileInformationByHandle;
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK_0;
+
+#[path = "windows_volume_fallback.rs"]
+mod volume_fallback;
 
 const FILE_DIRECTORY_FILE: u32 = 0x0000_0001;
 const FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x0000_0020;
@@ -125,13 +129,50 @@ fn open_handle(
     create_disposition: u32,
     create_options: u32,
 ) -> io::Result<OwnedHandle> {
-    let mut path = nt_path(path)?;
-    let name_length = u16::try_from((path.len() - 1) * size_of::<u16>())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "filesystem path is too long"))?;
-    let maximum_length = u16::try_from(path.len() * size_of::<u16>())
+    let mut name = nt_path(path)?;
+    if let Some(handle) = open_nt_handle(
+        &mut name,
+        /*root_directory*/ None,
+        desired_access,
+        create_disposition,
+        create_options,
+        OBJ_DONT_REPARSE,
+    )? {
+        return Ok(handle);
+    }
+
+    // Windows 10 also rejects the DOS drive alias itself. Only for drive-letter
+    // paths, open its verified volume root and keep strict checks below it.
+    if matches!(path.components().next(), Some(Component::Prefix(prefix))
+        if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)))
+    {
+        return volume_fallback::open_relative_to_volume(
+            &mut name,
+            desired_access,
+            create_disposition,
+            create_options,
+        );
+    }
+    Err(reparse_error())
+}
+
+fn reparse_error() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, "path contains a reparse point")
+}
+
+/// Returns `None` only for the native reparse status; other errors propagate.
+fn open_nt_handle(
+    path: &mut [u16],
+    root_directory: Option<&OwnedHandle>,
+    desired_access: u32,
+    create_disposition: u32,
+    create_options: u32,
+    attributes: u32,
+) -> io::Result<Option<OwnedHandle>> {
+    let maximum_length = u16::try_from(size_of_val(path))
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "filesystem path is too long"))?;
     let object_name = UNICODE_STRING {
-        Length: name_length,
+        Length: maximum_length - size_of::<u16>() as u16,
         MaximumLength: maximum_length,
         Buffer: path.as_mut_ptr(),
     };
@@ -143,9 +184,9 @@ fn open_handle(
     };
     let object_attributes = ObjectAttributes {
         length: size_of::<ObjectAttributes>() as u32,
-        root_directory: ptr::null_mut(),
+        root_directory: root_directory.map_or(ptr::null_mut(), AsRawHandle::as_raw_handle),
         object_name: &object_name,
-        attributes: OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE,
+        attributes: OBJ_CASE_INSENSITIVE | attributes,
         security_descriptor: ptr::null(),
         security_quality_of_service: (&raw const security_quality_of_service).cast(),
     };
@@ -169,13 +210,10 @@ fn open_handle(
             /*ea_length*/ 0,
         )
     };
+    if status == STATUS_REPARSE_POINT_ENCOUNTERED {
+        return Ok(None);
+    }
     if status < 0 {
-        if status == STATUS_REPARSE_POINT_ENCOUNTERED {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "path contains a reparse point",
-            ));
-        }
         let code = unsafe { RtlNtStatusToDosError(status) };
         return Err(io::Error::from_raw_os_error(code as i32));
     }
@@ -185,7 +223,7 @@ fn open_handle(
         ));
     }
 
-    Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
+    Ok(Some(unsafe { OwnedHandle::from_raw_handle(handle) }))
 }
 
 fn open_entry(path: &Path) -> io::Result<std::fs::File> {
