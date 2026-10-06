@@ -479,14 +479,16 @@ async fn finalized_turn_item_defers_mailbox_for_contributed_visible_text() {
     assert!(finalized.facts.defers_mailbox_delivery_to_next_turn);
 }
 
+#[test_case::test_case(MessagePhase::Commentary; "commentary")]
+#[test_case::test_case(MessagePhase::PartialAnswer; "partial_answer")]
 #[tokio::test]
-async fn finalized_turn_item_keeps_mailbox_open_for_commentary_text() {
+async fn finalized_turn_item_keeps_mailbox_open_for_nonterminal_text(phase: MessagePhase) {
     let (mut session, turn_context) = make_session_and_context().await;
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
     builder.turn_item_contributor(Arc::new(RewriteAgentMessageContributor));
     session.services.extensions = Arc::new(builder.build());
     let turn_store = ExtensionData::new(turn_context.sub_id.clone());
-    let item = assistant_output_text_with_phase("still working", Some(MessagePhase::Commentary));
+    let item = assistant_output_text_with_phase("still working", Some(phase));
 
     let finalized = finalize_non_tool_response_item(
         &session,
@@ -545,9 +547,10 @@ fn completed_item_defers_mailbox_delivery_for_unknown_phase_messages() {
     ));
 }
 
-#[test]
-fn completed_item_keeps_mailbox_delivery_open_for_commentary_messages() {
-    let item = assistant_output_text_with_phase("still working", Some(MessagePhase::Commentary));
+#[test_case::test_case(MessagePhase::Commentary; "commentary")]
+#[test_case::test_case(MessagePhase::PartialAnswer; "partial_answer")]
+fn completed_item_keeps_mailbox_delivery_open_for_nonterminal_messages(phase: MessagePhase) {
+    let item = assistant_output_text_with_phase("still working", Some(phase));
 
     assert!(!completed_item_defers_mailbox_delivery_to_next_turn(
         &item, /*plan_mode*/ false,

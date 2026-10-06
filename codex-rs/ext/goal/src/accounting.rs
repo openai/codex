@@ -172,7 +172,7 @@ impl GoalAccountingState {
                 });
                 turn.has_activity |= has_text || message.questions.is_some();
                 turn.empty_final |=
-                    !has_text && !matches!(message.phase, Some(MessagePhase::Commentary));
+                    !has_text && matches!(message.phase, Some(MessagePhase::FinalAnswer) | None);
             }
             TurnItem::Reasoning(reasoning) => {
                 turn.has_activity |= reasoning

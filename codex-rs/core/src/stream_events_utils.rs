@@ -291,7 +291,7 @@ pub(crate) async fn finalize_non_tool_response_item(
                     Some(combined)
                 };
                 let defers_mailbox_delivery_to_next_turn =
-                    !matches!(agent_message.phase, Some(MessagePhase::Commentary))
+                    matches!(agent_message.phase, Some(MessagePhase::FinalAnswer) | None)
                         && last_agent_message.is_some();
                 (
                     agent_message.memory_citation.clone(),
@@ -532,7 +532,7 @@ fn completed_item_defers_mailbox_delivery_to_next_turn(
 ) -> bool {
     match item {
         ResponseItem::Message { role, phase, .. } => {
-            if role != "assistant" || matches!(phase, Some(MessagePhase::Commentary)) {
+            if role != "assistant" || !matches!(phase, Some(MessagePhase::FinalAnswer) | None) {
                 return false;
             }
             // Treat `None` like final-answer text so untagged providers default

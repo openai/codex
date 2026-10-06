@@ -25,13 +25,16 @@ use tokio::sync::oneshot;
 enum Boundary {
     Reasoning,
     Commentary,
+    PartialAnswer,
 }
 
 #[tracing_test::traced_test]
 #[test_case(Boundary::Reasoning, false; "reasoning_default")]
 #[test_case(Boundary::Commentary, false; "commentary_default")]
+#[test_case(Boundary::PartialAnswer, false; "partial_answer_default")]
 #[test_case(Boundary::Reasoning, true; "reasoning_deferred")]
 #[test_case(Boundary::Commentary, true; "commentary_deferred")]
+#[test_case(Boundary::PartialAnswer, true; "partial_answer_deferred")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mailbox_preemption_preserves_response_when_deferred(
     boundary: Boundary,
@@ -44,14 +47,17 @@ async fn mailbox_preemption_preserves_response_when_deferred(
             responses::ev_reasoning_item("boundary", &["Preparing the next action"], &[]),
             "reasoning",
         ),
-        Boundary::Commentary => {
+        Boundary::Commentary | Boundary::PartialAnswer => {
+            let phase = match boundary {
+                Boundary::Commentary => "commentary",
+                Boundary::PartialAnswer => "partial_answer",
+                Boundary::Reasoning => unreachable!(),
+            };
             let mut done = responses::ev_assistant_message("boundary", "I will update the plan.");
-            done["item"]["phase"] = json!("commentary");
-            (
-                responses::ev_message_item_added("boundary", ""),
-                done,
-                "commentary",
-            )
+            done["item"]["phase"] = json!(phase);
+            let mut added = responses::ev_message_item_added("boundary", "");
+            added["item"]["phase"] = json!(phase);
+            (added, done, phase)
         }
     };
     let (streaming, _completions) = start_streaming_sse_server(vec![

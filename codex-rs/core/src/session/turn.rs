@@ -2750,11 +2750,13 @@ async fn try_run_sampling_request(
                     cancellation_token: cancellation_token.child_token(),
                 };
 
-                // TODO: Allow mailbox preemption after PartialAnswer and keep delivery open
-                // in the completed-item deferral predicates.
                 let preempt_for_mailbox_mail = match &item {
                     ResponseItem::Message { role, phase, .. } => {
-                        role == "assistant" && matches!(phase, Some(MessagePhase::Commentary))
+                        role == "assistant"
+                            && matches!(
+                                phase,
+                                Some(MessagePhase::Commentary | MessagePhase::PartialAnswer)
+                            )
                     }
                     ResponseItem::Reasoning { .. } => true,
                     ResponseItem::AgentMessage { .. } => false,

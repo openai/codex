@@ -1,0 +1,23 @@
+---
+source: core/tests/suite/scenarios_mailbox_preemption_tests.rs
+expression: "context_snapshot::format_context_snapshot(\"Worker messages arrive during a response. Deferred mailbox preemption lets the planned tool execute before the next request receives both messages.\",\n&entries, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: Worker messages arrive during a response. Deferred mailbox preemption lets the planned tool execute before the next request receives both messages.
+
+## Window 1
+-- request 1 (request) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Plan the next action while the worker finishes.
+-- request 2 (request) --
+04:message/assistant:
+    I will update the plan.
+05:function_call/update_plan:{"plan":[{"status":"in_progress","step":"Reply to the user"}]}
+06:function_call_output:Plan updated
+07:agent_message
+08:agent_message

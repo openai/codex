@@ -155,8 +155,10 @@ pub fn collect_transcript(
                         ConversationTranscriptEntryKind::Developer
                     }
                     "assistant"
-                        if matches!(phase, None | Some(MessagePhase::FinalAnswer))
-                            && !InterAgentCommunication::is_message_content(content) =>
+                        if matches!(
+                            phase,
+                            None | Some(MessagePhase::PartialAnswer | MessagePhase::FinalAnswer)
+                        ) && !InterAgentCommunication::is_message_content(content) =>
                     {
                         ConversationTranscriptEntryKind::ProtectedAssistant
                     }

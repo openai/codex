@@ -1,0 +1,43 @@
+---
+source: core/tests/suite/scenarios_partial_answers.rs
+expression: "context_snapshot::format_request_history_snapshot(\"A forked worker receives both stable answer fragments, with their phases preserved and parent commentary filtered out.\",\n&child_requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: A forked worker receives both stable answer fragments, with their phases preserved and parent commentary filtered out.
+
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Give me both results.
+04:message/assistant:
+    The first result is ready.
+05:message/assistant:
+    The second result is ready.
+06:message/user:
+    Have a worker check both results.
+07:message/developer:
+    You are an agent in a team of agents collaborating to complete a task.
+
+    You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. All ag...nd capable, and have access to the same set of tools. [hash=876a93c54d3f61d6]
+
+    You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task an... `send_message` to pass a message to a running agent. [hash=824c12425c7626dc]
+    Child agents can also spawn their own sub-agents.
+
+    When you provide a response in the final channel, that content is immediately delivered back to your parent agent.
+    <OMITTED 15 LINES; ~225 TOKENS; hash=fa366829bdb214be>
+    - All agents use the same current working directory.
+    - As a result, edits made by one agent are immediately visible to all other agents.
+
+    When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
+
+    There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
+
+    Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d...fork_turns` to `"none"` or a positive integer string. [hash=db3545796947884f]
+08:message/developer:
+    <MULTI_AGENT_MODE>
+09:agent_message

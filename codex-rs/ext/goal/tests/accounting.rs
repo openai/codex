@@ -76,6 +76,7 @@ fn empty_continuations_require_three_turns_without_activity_or_goal_changes() {
         ("goal", 5),
         ("reset", 6),
         ("missing final", 6),
+        ("partial answer", 6),
     ] {
         let state = GoalAccountingState::default();
         for turn in 1..=blocking_turn {
@@ -87,7 +88,13 @@ fn empty_continuations_require_three_turns_without_activity_or_goal_changes() {
             };
             state.start_turn(&id, ModeKind::Default, &TokenUsage::default());
             state.mark_turn_goal_active(&id, goal_id);
-            if !(turn == 3 && interruption == "missing final") {
+            if turn == 3 && interruption == "partial answer" {
+                let mut partial = empty_final.clone();
+                if let TurnItem::AgentMessage(message) = &mut partial {
+                    message.phase = Some(MessagePhase::PartialAnswer);
+                }
+                state.record_item(&id, &partial);
+            } else if !(turn == 3 && interruption == "missing final") {
                 state.record_item(&id, &empty_final);
             }
             // Admission can finish after output arrives, but before turn-stop evaluation.

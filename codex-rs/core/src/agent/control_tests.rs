@@ -2449,6 +2449,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                     ),
                 },
                 assistant_message("parent commentary", Some(MessagePhase::Commentary)),
+                assistant_message("parent answer fragment", Some(MessagePhase::PartialAnswer)),
                 assistant_message("parent final answer", Some(MessagePhase::FinalAnswer)),
                 standalone_output,
                 assistant_message("parent unknown phase", /*phase*/ None),
@@ -2529,6 +2530,22 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     };
     assert!(assistant_position(&parent_thread.session.clone_history().await).is_some());
     assert_eq!(assistant_position(&history), None);
+    let expected_partial_answer = parent_thread
+        .session
+        .clone_history()
+        .await
+        .raw_items()
+        .find(|item| {
+            matches!(
+                item,
+                ResponseItem::Message {
+                    phase: Some(MessagePhase::PartialAnswer),
+                    ..
+                }
+            )
+        })
+        .cloned()
+        .expect("parent answer fragment should be recorded");
     let expected_final_answer = parent_thread
         .session
         .clone_history()
@@ -2587,6 +2604,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let expected_history = [
         expected_parent_seed,
         expected_developer_message,
+        expected_partial_answer,
         expected_final_answer,
         expected_standalone_output,
         ContextualUserFragment::into(MultiAgentRoleInstructions::Configured(

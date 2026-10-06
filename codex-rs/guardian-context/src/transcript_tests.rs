@@ -135,6 +135,15 @@ fn registered_transcript_filters_roles_and_preserves_node_repl_tool_attribution(
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
+                text: "The first result is ready.".to_string(),
+            }],
+            phase: Some(MessagePhase::PartialAnswer),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
                 text: "Inspection complete.".to_string(),
             }],
             phase: Some(MessagePhase::FinalAnswer),
@@ -187,6 +196,10 @@ fn registered_transcript_filters_roles_and_preserves_node_repl_tool_attribution(
                     "Inspect the workspace."
                 ),
                 entry(ConversationTranscriptEntryKind::Developer, &approved_action),
+                entry(
+                    ConversationTranscriptEntryKind::ProtectedAssistant,
+                    "The first result is ready."
+                ),
                 entry(
                     ConversationTranscriptEntryKind::ProtectedAssistant,
                     "Inspection complete."

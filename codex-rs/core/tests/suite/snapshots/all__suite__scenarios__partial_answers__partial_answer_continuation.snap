@@ -1,0 +1,26 @@
+---
+source: core/tests/suite/scenarios_partial_answers.rs
+expression: "context_snapshot::format_request_history_snapshot(\"A nonterminal answer continues sampling; its phase survives an ordinary follow-up.\",\n&requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: A nonterminal answer continues sampling; its phase survives an ordinary follow-up.
+
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Give me both results.
+-- request 2 (turn) --
+04:message/assistant:
+    The first result is ready.
+-- request 3 (turn) --
+05:message/assistant:
+    Checking the remaining result.
+06:message/assistant:
+    The second result is ready.
+07:message/user:
+    Summarize the results.

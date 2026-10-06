@@ -89,7 +89,10 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_context_baselines: bool
         RolloutItem::ResponseItem(envelope) => match &envelope.item {
             ResponseItem::Message { role, phase, .. } => match role.as_str() {
                 "system" | "developer" | "user" => true,
-                "assistant" => *phase == Some(MessagePhase::FinalAnswer),
+                "assistant" => matches!(
+                    phase,
+                    Some(MessagePhase::PartialAnswer | MessagePhase::FinalAnswer)
+                ),
                 _ => false,
             },
             ResponseItem::FunctionCallOutput { call_id: None, .. }
