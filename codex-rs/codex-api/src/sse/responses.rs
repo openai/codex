@@ -735,6 +735,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn partial_answer_phase_survives_item_start_and_completion() {
+        let item = json!({
+            "id": "msg_partial",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "phase": "partial_answer"
+        });
+        let added = json!({"type": "response.output_item.added", "item": item});
+        let delta = json!({"type": "response.output_text.delta", "delta": "First result."});
+        let mut done_item = item;
+        done_item["content"] = json!([{"type": "output_text", "text": "First result."}]);
+        let done = json!({"type": "response.output_item.done", "item": done_item});
+        let completed = json!({
+            "type": "response.completed",
+            "response": {"id": "resp1", "end_turn": false}
+        });
+        let stream = [added, delta, done, completed]
+            .into_iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>();
+
+        let events = collect_events(&[stream.as_bytes()]).await;
+        assert_matches!(events.as_slice(), [
+            Ok(ResponseEvent::OutputItemAdded(ResponseItem::Message {
+                phase: Some(MessagePhase::PartialAnswer), content: start_content, ..
+            })),
+            Ok(ResponseEvent::OutputTextDelta(text)),
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message {
+                phase: Some(MessagePhase::PartialAnswer), content: done_content, ..
+            })),
+            Ok(ResponseEvent::Completed { end_turn: Some(false), .. }),
+        ] if start_content.is_empty()
+            && text == "First result."
+            && done_content == &vec![codex_protocol::models::ContentItem::OutputText {
+                text: "First result.".to_string()
+            }]);
+    }
+
+    #[tokio::test]
     async fn parses_items_and_completed() {
         let item1 = json!({
             "type": "response.output_item.done",

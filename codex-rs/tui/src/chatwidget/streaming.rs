@@ -482,7 +482,7 @@ impl ChatWidget {
                 Some(MessagePhase::FinalAnswer) | None => {
                     !self.input_queue.pending_steers.is_empty()
                 }
-                Some(MessagePhase::Commentary) => true,
+                Some(MessagePhase::Commentary | MessagePhase::PartialAnswer) => true,
             };
         self.maybe_restore_status_indicator_after_stream_idle();
     }

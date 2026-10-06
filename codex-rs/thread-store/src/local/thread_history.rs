@@ -520,7 +520,7 @@ WHERE thread_id = ?
                 .map_err(thread_history_error)?;
             }
             ThreadItem::AgentMessage {
-                phase: Some(MessagePhase::Commentary) | None,
+                phase: Some(MessagePhase::Commentary | MessagePhase::PartialAnswer) | None,
                 ..
             }
             | ThreadItem::HookPrompt { .. }

@@ -928,6 +928,8 @@ impl RealtimeConversationManager {
         if handoff.client_managed_handoffs {
             return Ok(());
         }
+        // TODO: Preserve explicit PartialAnswer phases through completed and streamed BEM
+        // routing, with integration coverage asserting the speakable channel.
         let phase = if handoff.routes_handoff_by_bem() {
             match bem_message_phase(
                 &output_text,
@@ -942,6 +944,8 @@ impl RealtimeConversationManager {
         } else {
             phase
         };
+        // TODO: Treat PartialAnswer as nonterminal for V1 handoffs, omitting the final-message
+        // prefix for streamed, completed-item, and standalone output.
         let is_commentary = matches!(phase, Some(MessagePhase::Commentary));
         let active_handoff = handoff.stream.lock().await.active_handoff.clone();
         let output = match active_handoff {
@@ -2272,7 +2276,9 @@ fn v3_output_writer(
         CodexResponseHandoffMode::Thinking => None,
         CodexResponseHandoffMode::Commentary => Some(RealtimeContextAppendChannel::Commentary),
         CodexResponseHandoffMode::BemTags => match phase {
-            Some(MessagePhase::FinalAnswer) => Some(RealtimeContextAppendChannel::Speakable),
+            Some(MessagePhase::PartialAnswer | MessagePhase::FinalAnswer) => {
+                Some(RealtimeContextAppendChannel::Speakable)
+            }
             Some(MessagePhase::Commentary) => Some(RealtimeContextAppendChannel::Commentary),
             None => Some(RealtimeContextAppendChannel::Speakable),
         },

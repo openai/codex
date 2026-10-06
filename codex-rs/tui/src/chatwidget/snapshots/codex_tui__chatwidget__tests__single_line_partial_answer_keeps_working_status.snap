@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: normalize_snapshot_paths(terminal.backend().vt100().screen().contents())
+---
+
+
+• 1
+
+• Working (0s • esc to interrupt)
+
+
+› Ask Codex to do anything
+
+  gpt-5 default · /tmp/project
