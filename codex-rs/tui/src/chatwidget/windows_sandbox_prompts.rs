@@ -33,7 +33,7 @@ impl ChatWidget {
             !allow_unelevated || self.elevated_windows_sandbox_setup_required();
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(
-            Paragraph::new(if allow_unelevated {
+            crate::terminal_hyperlinks::HyperlinkText::new(if allow_unelevated {
                 vec![
                     line!["Set up the Codex agent sandbox to protect your files and control network access. Learn more <https://developers.openai.com/codex/windows>"],
                 ]
@@ -42,8 +42,7 @@ impl ChatWidget {
                     line!["Your organization requires the default Codex agent sandbox to continue. Set it up to protect your files and control network access."],
                     line!["Learn more <https://developers.openai.com/codex/windows>"],
                 ]
-            })
-            .wrap(Wrap { trim: false }),
+            }),
         ));
 
         let accept_otel = self.session_telemetry.clone();
@@ -170,7 +169,7 @@ impl ChatWidget {
         ]);
 
         let mut header = ColumnRenderable::new();
-        header.push(*Box::new(Paragraph::new(lines).wrap(Wrap { trim: false })));
+        header.push(crate::terminal_hyperlinks::HyperlinkText::new(lines));
 
         let elevated_preset = preset.clone();
         let legacy_preset = preset;
