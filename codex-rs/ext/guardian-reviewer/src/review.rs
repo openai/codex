@@ -141,6 +141,12 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
                 let denials = ReviewDenials::for_thread(self.thread_store);
                 if completed.assessment_outcome == Some(GuardianAssessmentOutcome::Deny) {
                     if let Some(message) = denials.record_denial(&turn_id, &model).await {
+                        // The denial window returns a warning only once per turn.
+                        self.telemetry.counter(
+                            "codex.guardian.denial_limit_reached",
+                            /*inc*/ 1,
+                            &[],
+                        );
                         self.host
                             .interrupt(
                                 &turn_id,
