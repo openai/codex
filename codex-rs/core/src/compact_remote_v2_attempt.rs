@@ -43,7 +43,11 @@ pub(super) async fn run_remote_compact_v2_attempt(
     let turn_context = &step_context.turn;
     let mut history = sess.clone_history().await;
     let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
-    let base_instructions = if step_context.uses_incremental_tools() {
+    let tools_in_history = step_context.settings.model_info.use_responses_lite
+        && history
+            .raw_items()
+            .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }));
+    let base_instructions = if tools_in_history {
         BaseInstructions {
             text: String::new(),
             provenance: None,
@@ -91,7 +95,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
     input.push(ResponseItem::CompactionTrigger {});
     let prompt = Prompt {
         input,
-        tools: if step_context.uses_incremental_tools() {
+        tools: if tools_in_history {
             Arc::default()
         } else {
             tool_router.model_visible_specs()

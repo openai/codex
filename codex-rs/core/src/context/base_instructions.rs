@@ -19,7 +19,7 @@ impl BaseInstructionsFragment {
         metadata
             .content_item_kinds
             .as_ref()
-            .is_some_and(|kinds| kinds.iter().any(|kind| kind.0 == Self::KIND))
+            .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Self::KIND))
     }
 }
 

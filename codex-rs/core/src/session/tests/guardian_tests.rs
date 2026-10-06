@@ -1113,7 +1113,7 @@ async fn compaction_initial_context_preserves_separate_guardian_developer_messag
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let world_state = Arc::new(
         session
-            .build_world_state_for_step(&step_context)
+            .build_world_state_for_step(&step_context, /*new_window*/ true)
             .await
             .expect("world state should build"),
     );

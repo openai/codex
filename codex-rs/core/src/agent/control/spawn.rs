@@ -12,6 +12,7 @@ use crate::agents_md_manager::SessionInstructions;
 use crate::codex_thread::CodexThread;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::PermissionProfileSnapshot;
+use crate::context::BaseInstructionsFragment;
 use crate::context::ContextualUserFragment;
 use crate::context::CurrentTimeReminder;
 use crate::context::CurrentTimeUnavailable;
@@ -95,10 +96,10 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_context_baselines: bool
                 ),
                 _ => false,
             },
-            ResponseItem::FunctionCallOutput { call_id: None, .. }
-            | ResponseItem::ConfigurationUpdate { .. } => true,
             ResponseItem::AdditionalTools { .. }
-            | ResponseItem::AgentMessage { .. }
+            | ResponseItem::FunctionCallOutput { call_id: None, .. }
+            | ResponseItem::ConfigurationUpdate { .. } => true,
+            ResponseItem::AgentMessage { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }
@@ -141,7 +142,7 @@ fn retain_forked_developer_message(item: &mut ResponseItem, usage_hint_texts: &[
     content.retain(|content_item| {
         // Persisted role hints can predate the current bundled wording and lack markers.
         if matches!(
-            content_item.kind().0.as_str(),
+            content_item.kind().as_str(),
             "guardian.approved_action" | "multi_agent.role_instructions" | "multi_agent.usage_hint"
         ) {
             return false;
@@ -1141,6 +1142,11 @@ impl LocalAgentControl {
                 metadata.user_input_order = None;
             }
             let response_item = &mut envelope.item;
+            // Tool declarations and their comparison baseline must survive or be rebuilt together.
+            // Apply this to both standalone items and compaction replacement histories.
+            if matches!(response_item, ResponseItem::AdditionalTools { .. }) {
+                return preserve_context_baselines;
+            }
             if matches!(response_item, ResponseItem::AgentMessage { .. }) {
                 return false;
             }
@@ -1156,6 +1162,9 @@ impl LocalAgentControl {
                     return false;
                 };
                 content.retain_mut(|content_item| {
+                    if content_item.kind().as_str() == BaseInstructionsFragment::KIND {
+                        return preserve_context_baselines;
+                    }
                     let ContentItem::InputText { text } = content_item.content_mut() else {
                         return true;
                     };

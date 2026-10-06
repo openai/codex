@@ -620,6 +620,11 @@ impl ContextManager {
         self.items.iter().map(|envelope| &envelope.item)
     }
 
+    pub(crate) fn has_tool_declarations(&self) -> bool {
+        self.raw_items()
+            .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
+    }
+
     /// Returns annotated history items without cloning their response payloads.
     pub(crate) fn annotated_items(&self) -> &[ResponseItemEnvelope] {
         &self.items

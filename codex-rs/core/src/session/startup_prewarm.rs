@@ -418,6 +418,9 @@ async fn schedule_startup_prewarm_inner(
             text: base_instructions,
             provenance: None,
         },
+        session
+            .current_window_uses_incremental_tools(&step_context)
+            .await,
     );
     startup_turn_context.session_telemetry.record_startup_phase(
         "startup_prewarm_build_prompt",

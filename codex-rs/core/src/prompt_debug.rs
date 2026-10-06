@@ -108,7 +108,13 @@ pub(crate) async fn build_prompt_input_from_session(
         .await
         .for_prompt(&step_context.settings.model_info.input_modalities);
     let base_instructions = sess.get_base_instructions().await;
-    let prompt = build_prompt(prompt_input, step_context.as_ref(), base_instructions);
+    let prompt = build_prompt(
+        prompt_input,
+        step_context.as_ref(),
+        base_instructions,
+        sess.current_window_uses_incremental_tools(&step_context)
+            .await,
+    );
 
     Ok(prompt.input)
 }

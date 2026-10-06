@@ -1,0 +1,102 @@
+---
+source: core/tests/suite/scenarios_incremental_tools_resume.rs
+expression: "context_snapshot::format_request_history_snapshot(\"A resumed legacy window retains its generated prefix; the next window records tools and instructions once, then emits only tool changes after resume.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: A resumed legacy window retains its generated prefix; the next window records tools and instructions once, then emits only tool changes after resume.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-5.4"
+  parallel_tool_calls: false
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"context":"all_turns","effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+-- request 1 (turn) --
+00:additional_tools/developer (2; hash=30feffe01b108a65):
+        - namespace/functions; hash=dfb4b8684addc20d
+          - custom/exec
+          - function/wait
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - function/new_context
+          - function/get_context_remaining
+          - custom/apply_patch
+          - function/view_image
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer:
+    <context_window>
+    Agent name: /root
+    First context window id: <UUID 1>
+    Current context window id: <UUID 1>
+    </context_window>
+04:message/user:
+    <ENVIRONMENT_CONTEXT>
+05:message/user:
+    Begin with the legacy tool prefix.
+-- request 2 (turn) --
+06:message/user:
+    <ENVIRONMENT_CONTEXT>
+07:message/user:
+    Resume without moving the tool prefix.
+
+## Window 2 (after request 2: input diverged at item 03)
+Settings: same as window 1
+-- request 3 (turn) --
+00:additional_tools/developer (2; hash=30feffe01b108a65):
+        - namespace/functions; hash=dfb4b8684addc20d
+          - custom/exec
+          - function/wait
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - function/new_context
+          - function/get_context_remaining
+          - custom/apply_patch
+          - function/view_image
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer:
+    <context_window>
+    Agent name: /root
+    First context window id: <UUID 1>
+    Current context window id: <UUID 2>
+    Previous context window id: <UUID 1>
+    </context_window>
+04:message/user:
+    <ENVIRONMENT_CONTEXT>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user:
+    Continue in the new window with incremental tools.
+-- request 4 (turn) --
+07:message/user:
+    <ENVIRONMENT_CONTEXT>
+08:message/user:
+    Resume with the new window unchanged.
+-- request 5 (turn) --
+09:additional_tools/developer (1; hash=6334fc838872158e):
+        - namespace/functions: This is an incremental namespace update. Previously declared tools remain available for direct ca...; hash=1099660be7ddd67e
+          - function/update_plan
+10:message/developer:
+    The following tools are no longer available. Do not call them:
+    - functions.exec_command
+    - functions.write_stdin
+11:message/user:
+    <ENVIRONMENT_CONTEXT>
+12:message/user:
+    Enable planning and remove shell tools after migration.
+-- request 6 (turn) --
+13:message/user:
+    Continue with the same tools.

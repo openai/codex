@@ -1,0 +1,73 @@
+---
+source: core/tests/suite/scenarios_incremental_tools_resume.rs
+expression: "context_snapshot::format_request_history_snapshot(\"Disabling incremental tools preserves updates in the existing window; after compaction the generated catalog survives resume.\",\n&mock.requests(),\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: Disabling incremental tools preserves updates in the existing window; after compaction the generated catalog survives resume.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-5.4"
+  parallel_tool_calls: false
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"context":"all_turns","effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+-- request 1 (turn) --
+00:additional_tools/developer (2; hash=44f4cad2ce4ab17d):
+        - namespace/functions; hash=101d32aa59ea258b
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - custom/apply_patch
+          - function/view_image
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
+    Begin with all tools.
+-- request 2 (turn) --
+05:message/developer:
+    The following tools are no longer available. Do not call them:
+    - functions.exec_command
+    - functions.write_stdin
+06:message/user:
+    <ENVIRONMENT_CONTEXT>
+07:message/user:
+    Disable incremental tools and remove shell tools in the existing window.
+-- request 3 (compaction) --
+08:compaction_trigger
+
+## Window 2 (after request 3: input diverged at item 00)
+Settings: same as window 1
+-- request 4 (turn) --
+00:additional_tools/developer (2; hash=2155c287c22bb8e8):
+        - namespace/functions; hash=cc7ea9ff03477840
+          - function/request_user_input
+          - custom/apply_patch
+          - function/view_image
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/user:
+    Begin with all tools.
+03:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+04:message/user:
+    <ENVIRONMENT_CONTEXT>
+05:message/user:
+    Disable incremental tools and remove shell tools in the existing window.
+06:compaction:encrypted=true; chars=17; hash=6c10f5e81c1f8e16
+07:message/user:
+    Continue in the new window.
+-- request 5 (turn) --
+08:message/user:
+    <ENVIRONMENT_CONTEXT>
+09:message/user:
+    Resume with the same tools.

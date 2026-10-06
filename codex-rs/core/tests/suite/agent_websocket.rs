@@ -304,11 +304,13 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
     Ok(())
 }
 
-#[test_case::test_case(false; "update_plan disabled")]
-#[test_case::test_case(true; "update_plan enabled")]
+#[test_case::test_case(false, false; "update_plan disabled")]
+#[test_case::test_case(true, false; "update_plan enabled")]
+#[test_case::test_case(true, true; "incremental tools")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_first_turn_uses_startup_prewarm_and_create(
     update_plan_enabled: bool,
+    incremental_tools: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -327,7 +329,18 @@ async fn websocket_first_turn_uses_startup_prewarm_and_create(
         .with_config(move |config| {
             config.update_plan_enabled = update_plan_enabled;
             config.analytics_enabled = Some(false);
+            if incremental_tools {
+                config
+                    .features
+                    .enable(Feature::IncrementalTools)
+                    .expect("enable incremental tools");
+            }
         });
+    if incremental_tools {
+        builder = builder.with_model_info_override("gpt-5.2", |model| {
+            model.use_responses_lite = true;
+        });
+    }
     let test = builder.build_with_websocket_server(&server).await?;
     test.submit_turn_with_policy("hello", test.config.legacy_sandbox_policy())
         .await?;
@@ -341,13 +354,24 @@ async fn websocket_first_turn_uses_startup_prewarm_and_create(
         .body_json();
     let turn = connection.get(1).expect("missing turn request").body_json();
     assert_eq!(turn["previous_response_id"], "warm-1");
-    assert_eq!(
-        warmup["input"][0]["content"][0]["text"]
-            .as_str()
-            .expect("warmup base instructions")
-            .contains("update_plan"),
-        update_plan_enabled
-    );
+    if incremental_tools {
+        assert_eq!(warmup["input"], json!([]));
+        assert!(
+            turn["input"]
+                .as_array()
+                .expect("turn input array")
+                .iter()
+                .any(|item| item["type"] == "additional_tools")
+        );
+    } else {
+        assert_eq!(
+            warmup["input"][0]["content"][0]["text"]
+                .as_str()
+                .expect("warmup base instructions")
+                .contains("update_plan"),
+            update_plan_enabled
+        );
+    }
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
     assert_eq!(warmup["generate"].as_bool(), Some(false));
     let warmup_metadata: Value = serde_json::from_str(
@@ -361,11 +385,11 @@ async fn websocket_first_turn_uses_startup_prewarm_and_create(
         warmup_metadata["window_id"].as_str(),
         warmup["client_metadata"]["x-codex-window-id"].as_str()
     );
-    assert!(
+    assert_eq!(
         turn["tools"]
             .as_array()
             .is_some_and(|tools| !tools.is_empty()),
-        "expected request tools to be populated"
+        !incremental_tools
     );
     assert_eq!(turn["type"].as_str(), Some("response.create"));
     assert_eq!(turn.get("generate"), None);

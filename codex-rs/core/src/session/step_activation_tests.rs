@@ -675,13 +675,19 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
     // Even after the live update, an already-captured request retains its own
     // summary setting in the durable context.
     for step in [&before, &during, &after] {
-        let world_state = session
+        session
             .record_context_updates_and_set_reference_context_item(step)
             .await
             .expect("record captured settings");
         assert_eq!(
             session.reference_context_item().await.unwrap().summary,
             step.settings.reasoning_summary,
+        );
+        let world_state = Arc::new(
+            session
+                .build_world_state_for_step(step, /*new_window*/ true)
+                .await
+                .unwrap(),
         );
         session.start_new_context_window(step, world_state).await;
         assert_eq!(

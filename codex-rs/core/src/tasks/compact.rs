@@ -45,7 +45,11 @@ impl SessionTask for CompactTask {
         let step_context = session
             .capture_step_context(Arc::clone(&ctx), &cancellation_token)
             .await?;
-        let world_state = Arc::new(session.build_world_state_for_step(&step_context).await?);
+        let world_state = Arc::new(
+            session
+                .build_world_state_for_step(&step_context, /*new_window*/ true)
+                .await?,
+        );
         if ctx.config.features.enabled(Feature::TokenBudget) {
             crate::compact_token_budget::run_manual_compact_task(
                 session,

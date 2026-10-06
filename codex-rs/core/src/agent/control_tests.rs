@@ -88,6 +88,7 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::WorldStateItem;
 use codex_thread_store::ArchiveThreadParams;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
@@ -468,6 +469,10 @@ async fn mcp_attribution_in_constructed_request(thread: &CodexThread) -> McpAttr
             .for_prompt(&step_context.settings.model_info.input_modalities),
         &step_context,
         thread.session.get_prompt_base_instructions().await,
+        thread
+            .session
+            .current_window_uses_incremental_tools(&step_context)
+            .await,
     );
     let metadata = thread
         .session
@@ -2528,6 +2533,15 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         "parent trigger message".to_string(),
         /*trigger_turn*/ true,
     );
+    let tool_declarations = ResponseItem::AdditionalTools {
+        id: None,
+        role: "developer".to_string(),
+        tools: vec![serde_json::json!({"type": "function", "name": "parent_tool"})],
+    };
+    let tool_state = serde_json::json!({"top_level_tools": {"function:parent_tool": "hash"}})
+        .as_object()
+        .unwrap()
+        .clone();
     let standalone_output = ResponseItem::FunctionCallOutput {
         id: None,
         call_id: None,
@@ -2608,6 +2622,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                     internal_chat_message_metadata_passthrough: None,
                 },
                 trigger_message.to_response_input_item().into(),
+                tool_declarations.clone(),
                 spawn_agent_call(&parent_spawn_call_id),
             ],
         )
@@ -2623,9 +2638,10 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let parent_reference_context_item = turn_context.to_turn_context_item();
     parent_thread
         .session
-        .persist_rollout_items(&[RolloutItem::TurnContext(
-            parent_reference_context_item.clone(),
-        )])
+        .persist_rollout_items(&[
+            RolloutItem::WorldState(WorldStateItem::full(tool_state.clone())),
+            RolloutItem::TurnContext(parent_reference_context_item.clone()),
+        ])
         .await;
     parent_thread
         .session
@@ -2754,6 +2770,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         expected_partial_answer,
         expected_final_answer,
         expected_standalone_output,
+        tool_declarations,
         ContextualUserFragment::into(MultiAgentRoleInstructions::Configured(
             "Child subagent guidance.".to_string(),
         )),
@@ -2769,6 +2786,12 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         serde_json::to_value(Some(parent_reference_context_item))
             .expect("serialize expected reference context item"),
         "full-history forked child should preserve the parent diff baseline"
+    );
+
+    assert_eq!(
+        history.world_state_checkpoint().unwrap().state,
+        tool_state,
+        "full-history forks must retain the catalog baseline with its declarations"
     );
 
     let mut no_hint_child_config = harness.config.clone();
@@ -2900,7 +2923,13 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(marke
         "compacted parent delegated task".to_string(),
         /*trigger_turn*/ true,
     );
+    let tool_declarations = ResponseItem::AdditionalTools {
+        id: None,
+        role: "developer".to_string(),
+        tools: vec![serde_json::json!({"type": "function", "name": "compacted_tool"})],
+    };
     let replacement_history = vec![
+        tool_declarations.clone(),
         ContextualUserFragment::into(crate::context::GuardianApprovedAction::new("parent-private-release".to_owned())),
         ResponseItem::Message {
             id: None,
@@ -3043,6 +3072,17 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(marke
         .await
         .expect("child thread should be registered");
     let history = child_thread.session.clone_history().await;
+    assert_eq!(
+        strip_response_item_ids(
+            &history
+                .raw_items()
+                .filter(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
+                .cloned()
+                .collect::<Vec<_>>()
+        ),
+        vec![tool_declarations],
+        "full-history forks must retain declarations embedded in compaction checkpoints"
+    );
     assert!(
         !history_contains_text(
             history.conversation_history_snapshot().review_items(),

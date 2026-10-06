@@ -4030,7 +4030,7 @@ async fn start_new_context_window_persists_checkpoint_state() {
         .expect("a fresh cancellation token cannot be cancelled");
     let world_state = Arc::new(
         session
-            .build_world_state_for_step(&step_context)
+            .build_world_state_for_step(&step_context, /*new_window*/ true)
             .await
             .expect("world state should build"),
     );
@@ -6762,7 +6762,7 @@ async fn build_initial_context(
 ) -> Vec<ResponseItem> {
     let step_context = StepContext::for_test(Arc::clone(turn_context));
     let world_state = session
-        .build_world_state_for_step(&step_context)
+        .build_world_state_for_step(&step_context, /*new_window*/ true)
         .await
         .expect("world state should build");
     let (updates, _) = session
@@ -6777,7 +6777,7 @@ pub(crate) async fn build_world_state_from_turn_context(
 ) -> WorldState {
     let step_context = StepContext::for_test(Arc::clone(turn_context));
     session
-        .build_world_state_for_step(&step_context)
+        .build_world_state_for_step(&step_context, /*new_window*/ false)
         .await
         .expect("world state should build")
 }
@@ -11375,6 +11375,7 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
             Vec::new(),
             |config| {
                 config.features.enable(Feature::TokenBudget).unwrap();
+                config.features.enable(Feature::IncrementalTools).unwrap();
             },
         )
         .await;
@@ -11392,6 +11393,7 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
     update_turn_settings_for_test(Arc::get_mut(&mut turn_context).unwrap(), |settings| {
         let model_info = Arc::make_mut(&mut settings.model_info);
         model_info.slug = "model-a".to_string();
+        model_info.use_responses_lite = true;
         model_info.context_window = None;
         model_info.max_context_window = None;
         let messages = model_info.model_messages.as_mut().unwrap();
@@ -11405,12 +11407,23 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
             realtime_active: None,
         }))
         .await;
+    session
+        .replace_history(
+            vec![user_message("Existing legacy window")],
+            Some(turn_context.to_turn_context_item()),
+        )
+        .await;
     let step_a = session
         .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())
         .await
         .unwrap();
-    let world_a = Arc::new(session.build_world_state_for_step(&step_a).await.unwrap());
-    let (initial_a, _) = crate::compact::build_compaction_replacement_history(
+    let world_a = Arc::new(
+        session
+            .build_world_state_for_step(&step_a, /*new_window*/ true)
+            .await
+            .unwrap(),
+    );
+    let (initial_a, expected_snapshot) = crate::compact::build_compaction_replacement_history(
         &session,
         &step_a,
         &world_a,
@@ -11440,7 +11453,10 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())
         .await
         .unwrap();
-    let world_b = session.build_world_state_for_step(&step_b).await.unwrap();
+    let world_b = session
+        .build_world_state_for_step(&step_b, /*new_window*/ true)
+        .await
+        .unwrap();
     let initial_b = session
         .build_initial_context_with_world_state(&step_b, &world_b)
         .await
@@ -11456,7 +11472,7 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
     .await;
 
     assert_eq!(restored_a, initial_a);
-    assert_eq!(restored_snapshot, world_a.render_full().0);
+    assert_eq!(restored_snapshot, expected_snapshot);
     let initial_a = initial_a
         .into_iter()
         .map(|item| item.item)
@@ -12050,7 +12066,12 @@ async fn remote_compaction_v2_retains_only_the_selected_step(first_attempt: Firs
         Arc::clone(&primary),
         Arc::clone(&fallback),
         &mut client_session,
-        Arc::new(session.build_world_state_for_step(&fallback).await.unwrap()),
+        Arc::new(
+            session
+                .build_world_state_for_step(&fallback, /*new_window*/ true)
+                .await
+                .unwrap(),
+        ),
         CompactionReason::ModelDownshift,
         CompactionPhase::PreTurn,
     )

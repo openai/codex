@@ -3599,16 +3599,18 @@ impl Session {
     pub(crate) async fn record_step_world_state_if_changed(
         &self,
         step_context: &step_context::StepContext,
-    ) -> CodexResult<Arc<WorldState>> {
+    ) -> CodexResult<()> {
         let turn_context = step_context.turn.as_ref();
         // Render model-visible state from the same step used to build and run tools.
-        let world_state = Arc::new(self.build_world_state_for_step(step_context).await?);
+        let world_state = self
+            .build_world_state_for_step(step_context, /*new_window*/ false)
+            .await?;
         let (world_state_snapshot, fragments, world_state_item) = self
             .state
             .lock()
             .await
             .history
-            .render_step_world_state(world_state.as_ref());
+            .render_step_world_state(&world_state);
         let items = crate::context_manager::updates::merge_world_state_updates(fragments);
         if !items.is_empty() {
             self.record_conversation_items(turn_context, &step_context.settings.model_info, &items)
@@ -3625,7 +3627,7 @@ impl Session {
             self.persist_rollout_items(&[RolloutItem::WorldState(world_state_item)])
                 .await;
         }
-        Ok(world_state)
+        Ok(())
     }
 
     /// Retains the step captured for execution.
@@ -4534,7 +4536,7 @@ impl Session {
         &self,
         step_context: &StepContext,
         world_state: Arc<WorldState>,
-    ) -> u64 {
+    ) {
         let turn_context = step_context.turn.as_ref();
         let history = self.clone_history().await;
         let input_goal_ids = crate::context::UserGoalUpdate::message_ids(history.raw_items());
@@ -4585,7 +4587,6 @@ impl Session {
         )
         .await;
         self.recompute_token_usage(turn_context).await;
-        window_number
     }
 
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
@@ -4610,7 +4611,7 @@ impl Session {
     pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
         step_context: &StepContext,
-    ) -> CodexResult<Arc<WorldState>> {
+    ) -> CodexResult<()> {
         let turn_context = step_context.turn.as_ref();
         let reference_context_item = {
             let state = self.state.lock().await;
@@ -4619,11 +4620,13 @@ impl Session {
         let turn_context_item = step_context.to_turn_context_item();
         let turn_context_changed = reference_context_item.as_ref() != Some(&turn_context_item);
         let should_inject_full_context = reference_context_item.is_none();
-        let world_state = Arc::new(self.build_world_state_for_step(step_context).await?);
+        let world_state = self
+            .build_world_state_for_step(step_context, should_inject_full_context)
+            .await?;
         // Full initial context resets the baseline; later turns persist only its changes.
         let (mut context_items, world_state_item) = if should_inject_full_context {
             let (context_updates, snapshot) = self
-                .build_initial_context_with_world_state(step_context, world_state.as_ref())
+                .build_initial_context_with_world_state(step_context, &world_state)
                 .await;
             let context_items =
                 crate::context_manager::updates::merge_world_state_updates(context_updates);
@@ -4639,8 +4642,7 @@ impl Session {
         } else {
             let (world_state_items, world_state_item) = {
                 let mut state = self.state.lock().await;
-                let (fragments, rollout_item) =
-                    state.history.update_world_state(world_state.as_ref());
+                let (fragments, rollout_item) = state.history.update_world_state(&world_state);
                 (
                     crate::context_manager::updates::merge_world_state_updates(fragments),
                     rollout_item,
@@ -4657,7 +4659,7 @@ impl Session {
         // A snapshot can change without producing model-visible or TurnContext updates.
         let only_world_state_changed = !turn_context_changed && context_items.is_empty();
         if only_world_state_changed && world_state_item.is_none() {
-            return Ok(world_state);
+            return Ok(());
         }
         if !context_items.is_empty() {
             self.record_conversation_items(
@@ -4674,7 +4676,7 @@ impl Session {
         }
         // A snapshot-only change does not require a duplicate TurnContext record.
         if only_world_state_changed {
-            return Ok(world_state);
+            return Ok(());
         }
         // Persist one `TurnContextItem` per real user turn so resume/lazy replay can recover the
         // latest durable baseline even when this turn emitted no model-visible context diffs.
@@ -4685,7 +4687,7 @@ impl Session {
         // context items.
         let mut state = self.state.lock().await;
         state.set_reference_context_item(Some(turn_context_item));
-        Ok(world_state)
+        Ok(())
     }
 
     pub(crate) async fn update_token_usage_info(

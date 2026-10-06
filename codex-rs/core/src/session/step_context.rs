@@ -49,7 +49,8 @@ pub(crate) struct StepContext {
 }
 
 impl StepContext {
-    pub(crate) fn uses_incremental_tools(&self) -> bool {
+    /// Whether new context windows should record tool declarations in history.
+    pub(crate) fn incremental_tools_enabled(&self) -> bool {
         self.settings.model_info.use_responses_lite
             && self
                 .turn

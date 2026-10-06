@@ -1179,8 +1179,9 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
             )
     }));
 
+    let step_context = StepContext::for_test(Arc::clone(&turn));
     let world_state = session
-        .build_world_state_for_step(&StepContext::for_test(Arc::clone(&turn)))
+        .build_world_state_for_step(&step_context, /*new_window*/ true)
         .await
         .expect("world state should build");
     assert_eq!(

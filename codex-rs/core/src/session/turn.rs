@@ -11,7 +11,6 @@ use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::context::UserVerificationNotice;
-use crate::context::world_state::WorldState;
 use crate::cyber_access_program;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::feedback_tags;
@@ -279,8 +278,8 @@ pub(crate) async fn run_turn(
         }
         Err(err) => return Err(err),
     };
-    // Keep the exact model-visible state used by this turn and its inline compactions.
-    let (world_state, display_roots) = tokio::join!(
+    // Record initial context while preparing diff display roots.
+    let (record_context, display_roots) = tokio::join!(
         sess.record_context_updates_and_set_reference_context_item(first_step_context.as_ref()),
         async {
             // Guardian must not wait for remote Git discovery just to display diff paths.
@@ -306,7 +305,7 @@ pub(crate) async fn run_turn(
             }
         },
     );
-    let mut world_state = world_state?;
+    record_context?;
 
     let Some((injection_items, explicitly_enabled_connectors)) = build_skills_and_plugins(
         &sess,
@@ -349,13 +348,11 @@ pub(crate) async fn run_turn(
             Arc::clone(&first_step_context),
             Arc::clone(&first_step_context),
             &mut client_session,
-            Arc::clone(&world_state),
             CompactionReason::ContextLimit,
             CompactionPhase::PreTurn,
         )
         .await?;
-        world_state = sess
-            .record_context_updates_and_set_reference_context_item(first_step_context.as_ref())
+        sess.record_context_updates_and_set_reference_context_item(first_step_context.as_ref())
             .await?;
         crate::guardian::finalize_guardian_input(
             &sess,
@@ -505,8 +502,7 @@ pub(crate) async fn run_turn(
             )
             .await?;
 
-            world_state = sess
-                .record_step_world_state_if_changed(step_context.as_ref())
+            sess.record_step_world_state_if_changed(step_context.as_ref())
                 .await?;
 
             // Isolated Guardian reviewers deliberately have no skill catalog.
@@ -627,7 +623,6 @@ pub(crate) async fn run_turn(
                         Arc::clone(&step_context),
                         Arc::clone(&step_context),
                         &mut client_session,
-                        Arc::clone(&world_state),
                         CompactionReason::ContextLimit,
                         CompactionPhase::MidTurn,
                     )
@@ -736,7 +731,6 @@ pub(crate) async fn run_turn(
                             Arc::clone(&step_context),
                             Arc::clone(&step_context),
                             &mut client_session,
-                            Arc::clone(&world_state),
                             CompactionReason::ContextLimit,
                             CompactionPhase::PostTurn,
                         )
@@ -787,7 +781,6 @@ pub(crate) async fn run_turn(
                     Arc::clone(&step_context),
                     Arc::clone(&step_context),
                     &mut client_session,
-                    Arc::clone(&world_state),
                     CompactionReason::ContextLimit,
                     CompactionPhase::MidTurn,
                 )
@@ -1324,13 +1317,11 @@ async fn run_pre_sampling_compact(
         let step_context = sess
             .capture_step_context(Arc::clone(turn_context), cancellation_token)
             .await?;
-        let world_state = Arc::new(sess.build_world_state_for_step(&step_context).await?);
         run_auto_compact(
             sess,
             Arc::clone(&step_context),
             step_context,
             client_session,
-            world_state,
             CompactionReason::ContextLimit,
             CompactionPhase::PreTurn,
         )
@@ -1422,16 +1413,11 @@ async fn maybe_run_previous_model_inline_compact(
     let replacement_step_context = sess
         .capture_speculative_step_context(Arc::clone(turn_context), cancellation_token)
         .await?;
-    let world_state = Arc::new(
-        sess.build_world_state_for_step(&replacement_step_context)
-            .await?,
-    );
     run_auto_compact(
         sess,
         step_context,
         replacement_step_context,
         client_session,
-        world_state,
         reason,
         CompactionPhase::PreTurn,
     )
@@ -1439,7 +1425,7 @@ async fn maybe_run_previous_model_inline_compact(
     Ok(())
 }
 
-/// `world_state` belongs to `replacement_step_context`, which may differ from the compactor.
+/// The replacement context may use a different model than the compactor.
 #[instrument(
     level = "trace",
     skip_all,
@@ -1450,7 +1436,6 @@ async fn run_auto_compact(
     step_context: Arc<StepContext>,
     replacement_step_context: Arc<StepContext>,
     client_session: &mut ModelClientSession,
-    world_state: Arc<WorldState>,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
@@ -1461,6 +1446,10 @@ async fn run_auto_compact(
     {
         return Ok(());
     }
+    let world_state = Arc::new(
+        sess.build_world_state_for_step(&replacement_step_context, /*new_window*/ true)
+            .await?,
+    );
     let _profile_guard = turn_context.turn_timing_state.begin_compaction();
     let _compaction_span = trace_span!(
         "codex.compaction",
@@ -1574,17 +1563,18 @@ pub(crate) fn build_prompt(
     input: Vec<ResponseItem>,
     step_context: &StepContext,
     base_instructions: BaseInstructions,
+    incremental_tools: bool,
 ) -> Prompt {
     let turn_context = &step_context.turn;
     Prompt {
         input,
-        tools: if step_context.uses_incremental_tools() {
+        tools: if incremental_tools {
             Arc::default()
         } else {
             step_context.tool_router.model_visible_specs()
         },
         parallel_tool_calls: true,
-        base_instructions: if step_context.uses_incremental_tools() {
+        base_instructions: if incremental_tools {
             BaseInstructions {
                 text: String::new(),
                 provenance: None,
@@ -1663,6 +1653,8 @@ async fn run_sampling_request(
             prompt_input,
             step_context.as_ref(),
             base_instructions.clone(),
+            sess.current_window_uses_incremental_tools(&step_context)
+                .await,
         );
         let responses_metadata = sess
             .responses_metadata(step_context.as_ref(), CodexResponsesRequestKind::Turn)
