@@ -42,6 +42,7 @@ use codex_skills::SkillRootLoadRequest;
 use codex_skills::SkillRootLoader;
 use codex_skills::parse_skill_frontmatter_metadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::PluginSkillRoot;
 use codex_utils_plugins::SkillDiscoveryMode;
 use codex_utils_plugins::migrated_command_skills_root;
@@ -201,9 +202,17 @@ impl SkillRootLoader<PluginSkillRoot> for TestSkillRootLoader {
                 outcome.errors.extend(snapshot.errors);
             }
             outcome.skills.sort_by(|left, right| {
-                left.name
-                    .cmp(&right.name)
-                    .then_with(|| left.path_to_skills_md.cmp(&right.path_to_skills_md))
+                left.name.cmp(&right.name).then_with(|| {
+                    left.path_to_skills_md
+                        .to_abs_path()
+                        .expect("host test skill path")
+                        .cmp(
+                            &right
+                                .path_to_skills_md
+                                .to_abs_path()
+                                .expect("host test skill path"),
+                        )
+                })
             });
             outcome
         })
@@ -261,7 +270,10 @@ fn load_test_skill_root(root: &PluginSkillRoot) -> LoadedSkillRoot {
                 });
             match parsed {
                 Ok(parsed) => {
-                    discovery_paths.insert(canonical_path.clone(), path);
+                    discovery_paths.insert(
+                        PathUri::from_abs_path(&canonical_path),
+                        PathUri::from_abs_path(&path),
+                    );
                     skills.push(SkillMetadata {
                         name: format!("{}:{}", root.plugin_namespace, parsed.name),
                         description: parsed.description,
@@ -269,7 +281,7 @@ fn load_test_skill_root(root: &PluginSkillRoot) -> LoadedSkillRoot {
                         interface: None,
                         dependencies: None,
                         policy: None,
-                        path_to_skills_md: canonical_path,
+                        path_to_skills_md: PathUri::from_abs_path(&canonical_path),
                         scope: SkillScope::User,
                         plugin_id: Some(root.plugin_identity.plugin_id.clone()),
                         remote_plugin_id: root.plugin_identity.remote_plugin_id.clone(),

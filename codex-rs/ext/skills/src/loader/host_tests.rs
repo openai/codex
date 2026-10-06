@@ -10,6 +10,7 @@ use codex_skills::SkillMetadata;
 use codex_skills::SkillPolicy;
 use codex_skills::SkillToolDependency;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::PluginIdentity;
 use codex_utils_plugins::PluginSkillRoot;
 use codex_utils_plugins::SkillDiscoveryMode;
@@ -150,7 +151,7 @@ policy:
                 allow_implicit_invocation: Some(false),
                 products: vec![Product::Codex, Product::Chatgpt, Product::Atlas],
             }),
-            path_to_skills_md: skill_path,
+            path_to_skills_md: PathUri::from_abs_path(&skill_path),
             scope: SkillScope::User,
             plugin_id: None,
             remote_plugin_id: None,
@@ -176,7 +177,7 @@ async fn invalid_optional_metadata_fails_open() {
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: skill_path,
+            path_to_skills_md: PathUri::from_abs_path(&skill_path),
             scope: SkillScope::Repo,
             plugin_id: None,
             remote_plugin_id: None,
@@ -222,7 +223,7 @@ async fn loads_host_interface_metadata_and_local_asset_paths() {
             }),
             dependencies: None,
             policy: None,
-            path_to_skills_md: skill_path,
+            path_to_skills_md: PathUri::from_abs_path(&skill_path),
             scope: SkillScope::User,
             plugin_id: None,
             remote_plugin_id: None,
@@ -265,7 +266,7 @@ async fn loads_plugin_skill_interface_icons_from_local_and_shared_assets() {
             }),
             dependencies: None,
             policy: None,
-            path_to_skills_md: fixture.skill_path,
+            path_to_skills_md: PathUri::from_abs_path(&fixture.skill_path),
             scope: SkillScope::User,
             plugin_id: Some("fixture@test".to_string()),
             remote_plugin_id: None,
@@ -303,7 +304,7 @@ async fn rejects_plugin_skill_interface_icons_outside_shared_assets() {
             }),
             dependencies: None,
             policy: None,
-            path_to_skills_md: fixture.skill_path,
+            path_to_skills_md: PathUri::from_abs_path(&fixture.skill_path),
             scope: SkillScope::User,
             plugin_id: Some("fixture@test".to_string()),
             remote_plugin_id: None,
@@ -333,7 +334,7 @@ async fn rejects_interface_fields_that_escape_or_fail_validation() {
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: skill_path,
+            path_to_skills_md: PathUri::from_abs_path(&skill_path),
             scope: SkillScope::User,
             plugin_id: None,
             remote_plugin_id: None,
@@ -355,7 +356,10 @@ async fn skips_hidden_host_skills() {
 
     assert_eq!(snapshot.errors, Vec::new());
     assert_eq!(snapshot.skills.len(), 1);
-    assert_eq!(snapshot.skills[0].path_to_skills_md, visible_path);
+    assert_eq!(
+        snapshot.skills[0].path_to_skills_md,
+        PathUri::from_abs_path(&visible_path)
+    );
 }
 
 #[tokio::test]
@@ -383,7 +387,7 @@ async fn discovers_nested_plugin_namespace_without_plugin_identity() {
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: skill_path,
+            path_to_skills_md: PathUri::from_abs_path(&skill_path),
             scope: SkillScope::User,
             plugin_id: None,
             remote_plugin_id: None,
@@ -428,7 +432,7 @@ async fn plugin_root_accepts_maximum_length_qualified_skill_name() {
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: skill_path,
+            path_to_skills_md: PathUri::from_abs_path(&skill_path),
             scope: SkillScope::User,
             plugin_id: Some("demo@test".to_string()),
             remote_plugin_id: None,
@@ -529,15 +533,17 @@ async fn recursive_plugin_root_preserves_owner_namespace_and_shared_asset_policy
             }),
             dependencies: None,
             policy: None,
-            path_to_skills_md: skill_path.clone(),
+            path_to_skills_md: PathUri::from_abs_path(&skill_path),
             scope: SkillScope::User,
             plugin_id: Some("demo@test".to_string()),
             remote_plugin_id: Some("remote-demo".to_string()),
         }]
     );
     assert_eq!(
-        snapshot.skill_discovery_path_by_path.get(&skill_path),
-        Some(&skill_path)
+        snapshot
+            .skill_discovery_path_by_path
+            .get(&PathUri::from_abs_path(&skill_path)),
+        Some(&PathUri::from_abs_path(&skill_path))
     );
 }
 
@@ -581,7 +587,7 @@ async fn direct_child_plugin_root_ignores_nested_skills() {
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: direct_path,
+            path_to_skills_md: PathUri::from_abs_path(&direct_path),
             scope: SkillScope::User,
             plugin_id: Some("demo@test".to_string()),
             remote_plugin_id: None,
@@ -662,15 +668,19 @@ async fn recursive_plugin_root_preserves_symlinked_skill_discovery_path() {
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: target_skill.clone(),
+            path_to_skills_md: PathUri::from_abs_path(&target_skill),
             scope: SkillScope::User,
             plugin_id: Some("demo@test".to_string()),
             remote_plugin_id: None,
         }]
     );
     assert_eq!(
-        snapshot.skill_discovery_path_by_path.get(&target_skill),
-        Some(&snapshot.root.join("alias/SKILL.md"))
+        snapshot
+            .skill_discovery_path_by_path
+            .get(&PathUri::from_abs_path(&target_skill)),
+        Some(&PathUri::from_abs_path(
+            &snapshot.root.join("alias/SKILL.md")
+        ))
     );
 }
 
@@ -694,11 +704,15 @@ async fn follows_directory_symlinks_except_for_system_scope() {
                 &snapshot.skills[0].path_to_skills_md,
                 snapshot.skills[0].scope
             ),
-            (&target_skill, scope)
+            (&PathUri::from_abs_path(&target_skill), scope)
         );
         assert_eq!(
-            snapshot.skill_discovery_path_by_path.get(&target_skill),
-            Some(&snapshot.root.join("alias/SKILL.md"))
+            snapshot
+                .skill_discovery_path_by_path
+                .get(&PathUri::from_abs_path(&target_skill)),
+            Some(&PathUri::from_abs_path(
+                &snapshot.root.join("alias/SKILL.md")
+            ))
         );
     }
 

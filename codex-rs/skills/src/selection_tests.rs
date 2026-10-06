@@ -1,5 +1,4 @@
 use super::*;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use pretty_assertions::assert_eq;
@@ -9,8 +8,8 @@ use std::collections::HashSet;
 #[derive(Default)]
 struct TestLookup {
     skills: Vec<SkillMetadata>,
-    disabled_paths: HashSet<AbsolutePathBuf>,
-    skill_discovery_path_by_path: HashMap<AbsolutePathBuf, AbsolutePathBuf>,
+    disabled_paths: HashSet<PathUri>,
+    skill_discovery_path_by_path: HashMap<PathUri, PathUri>,
 }
 
 impl ExplicitSkillLookup for TestLookup {
@@ -18,11 +17,11 @@ impl ExplicitSkillLookup for TestLookup {
         &self.skills
     }
 
-    fn disabled_paths(&self) -> &HashSet<AbsolutePathBuf> {
+    fn disabled_paths(&self) -> &HashSet<PathUri> {
         &self.disabled_paths
     }
 
-    fn skill_discovery_path_for_path(&self, path: &AbsolutePathBuf) -> Option<&AbsolutePathBuf> {
+    fn skill_discovery_path_for_path(&self, path: &PathUri) -> Option<&PathUri> {
         self.skill_discovery_path_by_path.get(path)
     }
 }
@@ -35,7 +34,7 @@ fn make_skill(name: &str, path: &str) -> SkillMetadata {
         interface: None,
         dependencies: None,
         policy: None,
-        path_to_skills_md: test_path_buf(path).abs(),
+        path_to_skills_md: test_path_buf(path).abs().into(),
         scope: codex_protocol::protocol::SkillScope::User,
         plugin_id: None,
         remote_plugin_id: None,
@@ -49,7 +48,7 @@ fn linked_skill_mention(name: &str, unix_path: &str) -> String {
 fn collect_mentions(
     inputs: &[UserInput],
     skills: &[SkillMetadata],
-    disabled_paths: &HashSet<AbsolutePathBuf>,
+    disabled_paths: &HashSet<PathUri>,
     connector_slug_counts: &HashMap<String, usize>,
 ) -> Vec<SkillMetadata> {
     let loaded_skills = TestLookup {
@@ -64,7 +63,7 @@ fn skill_outcome_with_discovery_path(skill: SkillMetadata, discovery_path: &str)
     TestLookup {
         skill_discovery_path_by_path: HashMap::from([(
             skill.path_to_skills_md.clone(),
-            test_path_buf(discovery_path).abs(),
+            test_path_buf(discovery_path).abs().into(),
         )]),
         skills: vec![skill],
         ..Default::default()
@@ -200,7 +199,7 @@ fn collect_explicit_skill_mentions_skips_disabled_structured_and_blocks_plain_fa
             path: test_path_buf("/tmp/alpha"),
         },
     ];
-    let disabled = HashSet::from([test_path_buf("/tmp/alpha").abs()]);
+    let disabled = HashSet::from([test_path_buf("/tmp/alpha").abs().into()]);
     let connector_counts = HashMap::new();
 
     let selected = collect_mentions(&inputs, &skills, &disabled, &connector_counts);
@@ -298,7 +297,7 @@ fn collect_explicit_skill_mentions_skips_when_linked_path_disabled() {
         text: format!("use {}", linked_skill_mention("demo-skill", "/tmp/alpha")),
         text_elements: Vec::new(),
     }];
-    let disabled = HashSet::from([test_path_buf("/tmp/alpha").abs()]);
+    let disabled = HashSet::from([test_path_buf("/tmp/alpha").abs().into()]);
     let connector_counts = HashMap::new();
 
     let selected = collect_mentions(&inputs, &skills, &disabled, &connector_counts);
@@ -351,4 +350,83 @@ fn collect_explicit_skill_mentions_skips_missing_path_without_fallback() {
     let selected = collect_mentions(&inputs, &skills, &HashSet::new(), &connector_counts);
 
     assert_eq!(selected, Vec::new());
+}
+
+/// Linked native paths use URI identity across Windows case and separator spellings.
+#[test]
+fn collect_explicit_skill_mentions_matches_windows_path_identity() {
+    let skill = SkillMetadata {
+        path_to_skills_md: PathUri::parse("file:///C:/Skills/Demo/SKILL.md").unwrap(),
+        ..make_skill("demo-skill", "/tmp/demo/SKILL.md")
+    };
+    let loaded_skills = TestLookup {
+        skill_discovery_path_by_path: HashMap::from([(
+            skill.path_to_skills_md.clone(),
+            PathUri::parse("file:///C:/Project/.agents/skills/Demo/SKILL.md").unwrap(),
+        )]),
+        skills: vec![skill.clone()],
+        ..Default::default()
+    };
+
+    for path in [
+        r"c:\skills\demo\skill.md",
+        "C:/SKILLS/DEMO/skill.md",
+        "skill://c:/project/.agents/skills/demo/skill.md",
+    ] {
+        let inputs = vec![UserInput::Text {
+            text: format!("use [$demo-skill]({path})"),
+            text_elements: Vec::new(),
+        }];
+
+        let selected = collect_explicit_skill_mentions(&inputs, &loaded_skills, &HashMap::new());
+
+        assert_eq!(selected, vec![skill.clone()]);
+    }
+}
+
+/// A differently cased disabled Windows identity still blocks a linked skill selection.
+#[test]
+fn collect_explicit_skill_mentions_rejects_disabled_windows_path_identity() {
+    let skill = SkillMetadata {
+        path_to_skills_md: PathUri::parse("file:///C:/Skills/Demo/SKILL.md").unwrap(),
+        ..make_skill("demo-skill", "/tmp/demo/SKILL.md")
+    };
+    let loaded_skills = TestLookup {
+        skills: vec![skill],
+        disabled_paths: HashSet::from([PathUri::parse("file:///C:/skills/demo/skill.md").unwrap()]),
+        ..Default::default()
+    };
+    let inputs = vec![UserInput::Text {
+        text: r"use [$demo-skill](C:\Skills\Demo\SKILL.md)".to_string(),
+        text_elements: Vec::new(),
+    }];
+
+    let selected = collect_explicit_skill_mentions(&inputs, &loaded_skills, &HashMap::new());
+
+    assert_eq!(selected, Vec::new());
+}
+
+/// Native mention text retains literal spaces, percent escapes, and fragments in skill paths.
+#[test]
+fn collect_explicit_skill_mentions_preserves_native_uri_characters() {
+    let percent = make_skill("demo-skill", "/tmp/demo skill%23/SKILL.md");
+    let fragment = make_skill("demo-skill", "/tmp/demo skill#/SKILL.md");
+    let loaded_skills = TestLookup {
+        skills: vec![percent.clone(), fragment.clone()],
+        ..Default::default()
+    };
+
+    for (path, skill) in [
+        ("/tmp/demo skill%23/SKILL.md", percent),
+        ("/tmp/demo skill#/SKILL.md", fragment),
+    ] {
+        let inputs = vec![UserInput::Text {
+            text: linked_skill_mention("demo-skill", path),
+            text_elements: Vec::new(),
+        }];
+
+        let selected = collect_explicit_skill_mentions(&inputs, &loaded_skills, &HashMap::new());
+
+        assert_eq!(selected, vec![skill]);
+    }
 }

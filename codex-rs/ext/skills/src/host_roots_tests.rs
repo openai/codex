@@ -234,7 +234,7 @@ fn expected_skill(path: AbsolutePathBuf, name: &str, scope: SkillScope) -> Skill
         interface: None,
         dependencies: None,
         policy: None,
-        path_to_skills_md: path,
+        path_to_skills_md: PathUri::from_abs_path(&path),
         scope,
         plugin_id: None,
         remote_plugin_id: None,

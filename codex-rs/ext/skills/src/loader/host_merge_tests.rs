@@ -426,7 +426,9 @@ async fn deduplicated_symlinked_skill_preserves_first_discovery_path() {
         ),
         (
             Some(&canonical_first_root),
-            Some(&canonical_first_root.join("first-link/SKILL.md")),
+            Some(&PathUri::from_abs_path(
+                &canonical_first_root.join("first-link/SKILL.md")
+            )),
         )
     );
 }
@@ -503,6 +505,42 @@ async fn merges_host_root_results_in_input_order_when_scans_finish_out_of_order(
                     .abs(),
                 message: "missing YAML frontmatter delimited by ---".to_string(),
             },
+        ]
+    );
+}
+
+/// Equal-name skills retain native path order so URI escaping does not reorder the catalog.
+#[tokio::test]
+async fn same_name_skills_preserve_native_path_order() {
+    let temp = TempDir::new().expect("temp dir");
+    let root = dunce::canonicalize(temp.path())
+        .expect("canonical skill root")
+        .abs();
+    write_skill(&root, "é", "demo", "Accented path");
+    write_skill(&root, "a", "demo", "ASCII path");
+
+    let outcome = load_and_merge_host_skill_roots(
+        vec![HostSkillRoot::host(
+            root.clone(),
+            SkillScope::User,
+            Arc::clone(&LOCAL_FS),
+        )],
+        &Semaphore::new(/*permits*/ 1),
+        /*restriction_product*/ None,
+        /*plugin_skill_snapshots*/ None,
+    )
+    .await;
+
+    assert_eq!(outcome.errors, Vec::new());
+    assert_eq!(
+        outcome
+            .skills
+            .iter()
+            .map(|skill| &skill.path_to_skills_md)
+            .collect::<Vec<_>>(),
+        vec![
+            &PathUri::from_abs_path(&root.join("a/SKILL.md")),
+            &PathUri::from_abs_path(&root.join("é/SKILL.md")),
         ]
     );
 }

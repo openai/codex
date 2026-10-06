@@ -12,6 +12,7 @@ use codex_skills::SkillRootSnapshots;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::PathExt;
+use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::PluginIdentity;
 use codex_utils_plugins::PluginSkillRoot;
 use codex_utils_plugins::SkillDiscoveryMode;
@@ -409,9 +410,11 @@ async fn snapshot_for_config_preserves_host_precedence_for_symlinked_plugin_root
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: dunce::canonicalize(plugin_skill_path)
-                .expect("canonical plugin skill path")
-                .abs(),
+            path_to_skills_md: PathUri::from_abs_path(
+                &dunce::canonicalize(plugin_skill_path)
+                    .expect("canonical plugin skill path")
+                    .abs()
+            ),
             scope: SkillScope::User,
             plugin_id: None,
             remote_plugin_id: None,
@@ -729,13 +732,9 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
         .expect("skill path should canonicalize")
         .abs();
 
-    assert_eq!(skill.path_to_skills_md, skill_path);
+    assert_eq!(skill.path_to_skills_md, PathUri::from_abs_path(&skill_path));
     assert!(outcome.disabled_paths.contains(&skill.path_to_skills_md));
-    assert!(
-        outcome
-            .implicit_skill_for_doc_path(&skill.path_to_skills_md)
-            .is_none()
-    );
+    assert!(outcome.implicit_skill_for_doc_path(&skill_path).is_none());
 }
 
 #[tokio::test]

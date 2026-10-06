@@ -19,6 +19,8 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_connectors::AppInfo;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 
 impl ChatWidget {
@@ -64,26 +66,22 @@ impl ChatWidget {
         }
 
         let mut initial_state = HashMap::new();
+        let mut items = Vec::with_capacity(self.skills_all.len());
         for skill in &self.skills_all {
-            initial_state.insert(skill.path.clone(), skill.enabled);
+            let Some(path) = skill.path.to_inferred_path_uri() else {
+                tracing::warn!(path = %skill.path, "skill has no absolute path for configuration");
+                continue;
+            };
+            initial_state.insert(path.clone(), skill.enabled);
+            items.push(SkillsToggleItem {
+                name: skill_display_name(skill),
+                skill_name: skill.name.clone(),
+                description: skill_description(skill).to_string(),
+                enabled: skill.enabled,
+                path,
+            });
         }
         self.skills_initial_state = Some(initial_state);
-
-        let items: Vec<SkillsToggleItem> = self
-            .skills_all
-            .iter()
-            .map(|skill| {
-                let display_name = skill_display_name(skill);
-                let description = skill_description(skill).to_string();
-                SkillsToggleItem {
-                    name: display_name,
-                    skill_name: skill.name.clone(),
-                    description,
-                    enabled: skill.enabled,
-                    path: skill.path.clone(),
-                }
-            })
-            .collect();
 
         let view = SkillsToggleView::new(
             items,
@@ -93,9 +91,9 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
-    pub(crate) fn update_skill_enabled(&mut self, path: AbsolutePathBuf, enabled: bool) {
+    pub(crate) fn update_skill_enabled(&mut self, path: PathUri, enabled: bool) {
         for skill in &mut self.skills_all {
-            if skill.path == path {
+            if skill.path.to_inferred_path_uri().as_ref() == Some(&path) {
                 skill.enabled = enabled;
             }
         }
@@ -108,7 +106,9 @@ impl ChatWidget {
         };
         let mut current_state = HashMap::new();
         for skill in &self.skills_all {
-            current_state.insert(skill.path.clone(), skill.enabled);
+            if let Some(path) = skill.path.to_inferred_path_uri() {
+                current_state.insert(path, skill.enabled);
+            }
         }
 
         let mut enabled_count = 0;
@@ -158,10 +158,11 @@ impl ChatWidget {
             }
 
             // Best effort only: annotate exact SKILL.md path matches from the loaded skills list.
-            if let Some(skill) = self
-                .skills_all
-                .iter()
-                .find(|skill| skill.path.as_path() == path)
+            if let Some(path) = LegacyAppPathString::from_path(path).to_inferred_path_uri()
+                && let Some(skill) = self
+                    .skills_all
+                    .iter()
+                    .find(|skill| skill.path.to_inferred_path_uri().as_ref() == Some(&path))
             {
                 *name = format!("{name} ({} skill)", skill.name);
             }
@@ -204,35 +205,49 @@ pub(crate) fn find_skill_mentions_with_tool_mentions(
     mentions: &ToolMentions,
     skills: &[SkillMetadata],
 ) -> Vec<SkillMetadata> {
-    let mention_skill_paths: HashSet<&str> = mentions
+    if mentions.names.is_empty() && mentions.linked_paths.is_empty() {
+        return Vec::new();
+    }
+
+    let mention_skill_paths: HashSet<PathUri> = mentions
         .linked_paths
         .values()
         .filter(|path| is_skill_path(path))
-        .map(|path| normalize_skill_path(path))
+        .filter_map(|path| {
+            LegacyAppPathString::from_string(normalize_skill_path(path)).to_inferred_path_uri()
+        })
         .collect();
+
+    // Share parsed identities between passes while keeping linked paths ahead of plain names.
+    let parsed_skills = skills
+        .iter()
+        .filter_map(|skill| {
+            let path = skill.path.to_inferred_path_uri()?;
+            Some((skill, path))
+        })
+        .collect::<Vec<_>>();
 
     let mut seen_names = HashSet::new();
     let mut seen_paths = HashSet::new();
     let mut matches: Vec<SkillMetadata> = Vec::new();
 
-    for skill in skills {
-        if seen_paths.contains(&skill.path) {
+    for (skill, path) in &parsed_skills {
+        if seen_paths.contains(path) {
             continue;
         }
-        let path_str = skill.path.to_string_lossy();
-        if mention_skill_paths.contains(path_str.as_ref()) {
-            seen_paths.insert(skill.path.clone());
+        if mention_skill_paths.contains(path) {
+            seen_paths.insert(path.clone());
             seen_names.insert(skill.name.clone());
-            matches.push(skill.clone());
+            matches.push((*skill).clone());
         }
     }
 
-    for skill in skills {
-        if seen_paths.contains(&skill.path) {
+    for (skill, path) in parsed_skills {
+        if seen_paths.contains(&path) {
             continue;
         }
         if mentions.names.contains(&skill.name) && seen_names.insert(skill.name.clone()) {
-            seen_paths.insert(skill.path.clone());
+            seen_paths.insert(path);
             matches.push(skill.clone());
         }
     }

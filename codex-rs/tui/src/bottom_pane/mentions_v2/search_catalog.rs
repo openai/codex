@@ -80,7 +80,7 @@ fn skill_candidate(skill: &SkillMetadata) -> Candidate {
         mention_type: MentionType::Skill,
         selection: Selection::Tool {
             insert_text: format!("${skill_name}"),
-            path: Some(skill.path.to_string_lossy().into_owned()),
+            path: Some(skill.path.as_str().to_owned()),
         },
     }
 }

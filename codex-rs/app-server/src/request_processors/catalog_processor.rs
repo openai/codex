@@ -22,7 +22,7 @@ const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
 
 fn skills_to_info(
     skills: &[codex_skills::SkillMetadata],
-    disabled_paths: &HashSet<AbsolutePathBuf>,
+    disabled_paths: &HashSet<PathUri>,
 ) -> Vec<codex_app_server_protocol::SkillMetadata> {
     skills
         .iter()
@@ -60,7 +60,7 @@ fn skills_to_info(
                             .collect(),
                     }
                 }),
-                path: skill.path_to_skills_md.clone(),
+                path: skill.path_to_skills_md.clone().into(),
                 scope: skill.scope.into(),
                 enabled,
                 plugin_id: skill.plugin_id.clone(),

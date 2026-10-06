@@ -74,13 +74,13 @@ async fn async_question_answers_preserve_ambiguous_skill_selection_and_dismiss_r
         short_description: None,
         interface: None,
         dependencies: None,
-        path: test_path_buf("/tmp/route/SKILL.md").abs(),
+        path: test_path_buf("/tmp/route/SKILL.md").abs().into(),
         scope: crate::test_support::skill_scope_repo(),
         enabled: true,
         plugin_id: None,
     };
     let mut duplicate = skill.clone();
-    duplicate.path = test_path_buf("/tmp/other-route/SKILL.md").abs();
+    duplicate.path = test_path_buf("/tmp/other-route/SKILL.md").abs().into();
     chat.set_skills(Some(vec![skill.clone(), duplicate]));
     chat.add_async_questions("message", &questions());
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
@@ -99,7 +99,7 @@ async fn async_question_answers_preserve_ambiguous_skill_selection_and_dismiss_r
             },
             UserInput::Skill {
                 name: skill.name,
-                path: skill.path.to_path_buf()
+                path: PathBuf::from(skill.path.as_str())
             },
         ]
     );

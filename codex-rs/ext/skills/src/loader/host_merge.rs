@@ -7,7 +7,6 @@ use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_skills::LoadedSkillRoot;
 use codex_skills::SkillRootSnapshots;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::PluginSkillRoot;
 use codex_utils_plugins::migrated_command_skills_root;
@@ -160,8 +159,7 @@ pub(crate) async fn load_and_merge_host_skill_roots_with_request_snapshots(
                 !migrated_command_root.as_ref().is_some_and(|migrated_root| {
                     skill
                         .path_to_skills_md
-                        .as_path()
-                        .starts_with(migrated_root.as_path())
+                        .starts_with(&PathUri::from_abs_path(migrated_root))
                 })
             })
         })
@@ -180,8 +178,7 @@ pub(crate) async fn load_and_merge_host_skill_roots_with_request_snapshots(
         snapshot.skills.retain(|skill| {
             !skill
                 .path_to_skills_md
-                .as_path()
-                .starts_with(migrated_command_root.as_path())
+                .starts_with(&PathUri::from_abs_path(migrated_command_root))
                 || skill.plugin_id.as_ref().is_none_or(|plugin_id| {
                     native_plugin_skill_names
                         .get(plugin_id)
@@ -205,8 +202,7 @@ fn merge_host_skill_root_snapshots(snapshots: Vec<HostSkillRootSnapshot>) -> Ski
     let mut skill_root_by_path = HashMap::new();
     let mut skill_discovery_path_by_path = HashMap::new();
     let mut agent_plugin_skill_paths = HashSet::new();
-    let mut file_systems_by_skill_path =
-        HashMap::<AbsolutePathBuf, Arc<dyn ExecutorFileSystem>>::new();
+    let mut file_systems_by_skill_path = HashMap::<PathUri, Arc<dyn ExecutorFileSystem>>::new();
 
     for snapshot in snapshots {
         if !snapshot.skills.is_empty() && !skill_roots.contains(&snapshot.root) {
@@ -241,11 +237,13 @@ fn merge_host_skill_root_snapshots(snapshots: Vec<HostSkillRootSnapshot>) -> Ski
     skill_roots.retain(|root| retained_roots.contains(root));
     file_systems_by_skill_path.retain(|path, _| retained_paths.contains(path));
     agent_plugin_skill_paths.retain(|path| retained_paths.contains(path));
-    skills.sort_by(|left, right| {
-        scope_rank(left.scope)
-            .cmp(&scope_rank(right.scope))
-            .then_with(|| left.name.cmp(&right.name))
-            .then_with(|| left.path_to_skills_md.cmp(&right.path_to_skills_md))
+    // Keep native path ordering: URI escaping can reorder same-name skills.
+    skills.sort_by_cached_key(|skill| {
+        (
+            scope_rank(skill.scope),
+            skill.name.clone(),
+            skill.path_to_skills_md.to_abs_path().ok(),
+        )
     });
 
     SkillLoadOutcome::from_parts(

@@ -3,6 +3,8 @@ use std::collections::HashSet;
 
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathUri;
 
 use crate::SkillMetadata;
 use crate::ToolMentionKind;
@@ -19,9 +21,9 @@ use crate::tool_kind_for_path;
 pub trait ExplicitSkillLookup {
     fn skills(&self) -> &[SkillMetadata];
 
-    fn disabled_paths(&self) -> &HashSet<AbsolutePathBuf>;
+    fn disabled_paths(&self) -> &HashSet<PathUri>;
 
-    fn skill_discovery_path_for_path(&self, path: &AbsolutePathBuf) -> Option<&AbsolutePathBuf>;
+    fn skill_discovery_path_for_path(&self, path: &PathUri) -> Option<&PathUri>;
 
     fn is_skill_enabled(&self, skill: &SkillMetadata) -> bool {
         !self.disabled_paths().contains(&skill.path_to_skills_md)
@@ -54,7 +56,7 @@ pub fn collect_explicit_skill_mentions(
     };
     let mut selected: Vec<SkillMetadata> = Vec::new();
     let mut seen_names: HashSet<String> = HashSet::new();
-    let mut seen_paths: HashSet<AbsolutePathBuf> = HashSet::new();
+    let mut seen_paths: HashSet<PathUri> = HashSet::new();
     let mut blocked_plain_names: HashSet<String> = HashSet::new();
 
     for input in inputs {
@@ -63,6 +65,7 @@ pub fn collect_explicit_skill_mentions(
             let Ok(path) = AbsolutePathBuf::relative_to_current_dir(path) else {
                 continue;
             };
+            let path = PathUri::from_abs_path(&path);
 
             let Some(skill) = selection_context
                 .loaded_skills
@@ -120,14 +123,14 @@ fn select_skills_from_mentions(
     blocked_plain_names: &HashSet<String>,
     mentions: &ToolMentions<'_>,
     seen_names: &mut HashSet<String>,
-    seen_paths: &mut HashSet<AbsolutePathBuf>,
+    seen_paths: &mut HashSet<PathUri>,
     selected: &mut Vec<SkillMetadata>,
 ) {
     if mentions.is_empty() {
         return;
     }
 
-    let mention_skill_paths: HashSet<String> = mentions
+    let mention_skill_paths: HashSet<PathUri> = mentions
         .paths()
         .filter(|path| {
             !matches!(
@@ -135,7 +138,12 @@ fn select_skills_from_mentions(
                 ToolMentionKind::App | ToolMentionKind::Mcp | ToolMentionKind::Plugin
             )
         })
-        .map(normalize_host_skill_path)
+        .filter_map(|path| {
+            let path = normalize_skill_path(path);
+            PathUri::from_host_native_path(path)
+                .ok()
+                .or_else(|| LegacyAppPathString::from_string(path).to_inferred_path_uri())
+        })
         .collect();
 
     for skill in selection_context.loaded_skills.skills() {
@@ -145,16 +153,11 @@ fn select_skills_from_mentions(
             continue;
         }
 
-        let canonical_path = normalize_host_skill_path(&skill.path_to_skills_md.to_string_lossy());
         let matches_discovery_path = selection_context
             .loaded_skills
             .skill_discovery_path_for_path(&skill.path_to_skills_md)
-            .is_some_and(|discovery_path| {
-                mention_skill_paths.contains(&normalize_host_skill_path(
-                    &discovery_path.to_string_lossy(),
-                ))
-            });
-        if mention_skill_paths.contains(&canonical_path) || matches_discovery_path {
+            .is_some_and(|discovery_path| mention_skill_paths.contains(discovery_path));
+        if mention_skill_paths.contains(&skill.path_to_skills_md) || matches_discovery_path {
             seen_paths.insert(skill.path_to_skills_md.clone());
             seen_names.insert(skill.name.clone());
             selected.push(skill.clone());
@@ -194,10 +197,6 @@ fn select_skills_from_mentions(
             selected.push(skill.clone());
         }
     }
-}
-
-fn normalize_host_skill_path(path: &str) -> String {
-    normalize_skill_path(path).replace('\\', "/")
 }
 
 #[cfg(test)]

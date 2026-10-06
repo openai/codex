@@ -6,6 +6,7 @@ use std::num::NonZeroUsize;
 use crate::ConfigLayerSource;
 use crate::ConfigLayerStack;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -76,10 +77,10 @@ impl TryFrom<toml::Value> for SkillsConfig {
 }
 
 /// Selects configured skills by their name or canonical document path.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SkillConfigRuleSelector {
     Name(String),
-    Path(AbsolutePathBuf),
+    Path(PathUri),
 }
 
 /// Enables or disables every skill matched by its selector.
@@ -101,8 +102,8 @@ impl SkillConfigRules {
     /// Explicit path selectors remain effective even when no current skill matches.
     pub fn resolve_disabled_paths<'a>(
         &self,
-        skills: impl IntoIterator<Item = (&'a str, &'a AbsolutePathBuf)> + Clone,
-    ) -> HashSet<AbsolutePathBuf> {
+        skills: impl IntoIterator<Item = (&'a str, &'a PathUri)> + Clone,
+    ) -> HashSet<PathUri> {
         let mut disabled_paths = HashSet::new();
 
         for entry in &self.entries {
@@ -195,9 +196,9 @@ pub fn skill_config_rules_from_stack(config_layer_stack: &ConfigLayerStack) -> S
 
 fn skill_config_rule_selector(entry: &SkillConfig) -> Option<SkillConfigRuleSelector> {
     match (entry.path.as_ref(), entry.name.as_deref()) {
-        (Some(path), None) => Some(SkillConfigRuleSelector::Path(
-            path.canonicalize().unwrap_or_else(|_| path.clone()),
-        )),
+        (Some(path), None) => Some(SkillConfigRuleSelector::Path(PathUri::from_abs_path(
+            &path.canonicalize().unwrap_or_else(|_| path.clone()),
+        ))),
         (None, Some(name)) => {
             let name = name.trim();
             if name.is_empty() {

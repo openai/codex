@@ -5,6 +5,7 @@ use crate::ConfigLayerStack;
 use crate::ConfigRequirementsToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
@@ -96,7 +97,7 @@ fn session_flags_can_reenable_user_disabled_path() {
         )),
         SkillConfigRules {
             entries: vec![SkillConfigRule {
-                selector: SkillConfigRuleSelector::Path(skill_path.abs()),
+                selector: SkillConfigRuleSelector::Path(PathUri::from_abs_path(&skill_path.abs())),
                 enabled: true,
             }],
         }
@@ -116,7 +117,7 @@ fn session_flags_can_disable_user_enabled_path() {
         )),
         SkillConfigRules {
             entries: vec![SkillConfigRule {
-                selector: SkillConfigRuleSelector::Path(skill_path.abs()),
+                selector: SkillConfigRuleSelector::Path(PathUri::from_abs_path(&skill_path.abs())),
                 enabled: false,
             }],
         }
@@ -164,7 +165,9 @@ enabled = true
         SkillConfigRules {
             entries: vec![
                 SkillConfigRule {
-                    selector: SkillConfigRuleSelector::Path(skill_path.abs()),
+                    selector: SkillConfigRuleSelector::Path(PathUri::from_abs_path(
+                        &skill_path.abs()
+                    )),
                     enabled: false,
                 },
                 SkillConfigRule {
@@ -182,14 +185,14 @@ fn path_rule_disables_selected_path() {
     let path = codex_home.path().join("disable-by-path/SKILL.md").abs();
     let rules = SkillConfigRules {
         entries: vec![SkillConfigRule {
-            selector: SkillConfigRuleSelector::Path(path.clone()),
+            selector: SkillConfigRuleSelector::Path(PathUri::from_abs_path(&path)),
             enabled: false,
         }],
     };
 
     assert_eq!(
         rules.resolve_disabled_paths(std::iter::empty()),
-        [path].into_iter().collect()
+        [PathUri::from_abs_path(&path)].into_iter().collect()
     );
 }
 
@@ -200,7 +203,7 @@ fn later_name_rule_reenables_path_disabled_skill() {
     let rules = SkillConfigRules {
         entries: vec![
             SkillConfigRule {
-                selector: SkillConfigRuleSelector::Path(path.clone()),
+                selector: SkillConfigRuleSelector::Path(PathUri::from_abs_path(&path)),
                 enabled: false,
             },
             SkillConfigRule {
@@ -211,7 +214,7 @@ fn later_name_rule_reenables_path_disabled_skill() {
     };
 
     assert_eq!(
-        rules.resolve_disabled_paths([("demo", &path)]),
+        rules.resolve_disabled_paths([("demo", &PathUri::from_abs_path(&path))]),
         Default::default()
     );
 }
@@ -229,14 +232,17 @@ fn later_path_rule_reenables_one_skill_disabled_by_name() {
                 enabled: false,
             },
             SkillConfigRule {
-                selector: SkillConfigRuleSelector::Path(first_path.clone()),
+                selector: SkillConfigRuleSelector::Path(PathUri::from_abs_path(&first_path)),
                 enabled: true,
             },
         ],
     };
 
     assert_eq!(
-        rules.resolve_disabled_paths([("demo", &first_path), ("demo", &second_path)]),
-        [second_path].into_iter().collect()
+        rules.resolve_disabled_paths([
+            ("demo", &PathUri::from_abs_path(&first_path)),
+            ("demo", &PathUri::from_abs_path(&second_path)),
+        ]),
+        [PathUri::from_abs_path(&second_path)].into_iter().collect()
     );
 }

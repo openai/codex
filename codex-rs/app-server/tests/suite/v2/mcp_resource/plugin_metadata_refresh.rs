@@ -133,7 +133,7 @@ async fn signed_image_renewal_preserves_live_mcp_and_plugin_skills() -> Result<(
     );
     assert!(warm_skills[0].enabled);
     assert_eq!(
-        std::fs::read_to_string(warm_skills[0].path.as_path())?,
+        std::fs::read_to_string(warm_skills[0].path.as_str())?,
         SKILL_CONTENTS
     );
 
@@ -169,7 +169,7 @@ async fn signed_image_renewal_preserves_live_mcp_and_plugin_skills() -> Result<(
     assert_eq!(sessions.load(Ordering::SeqCst), warm_sessions);
     assert_eq!(calls.snapshot().main_prompt_reads, 4);
     assert_eq!(
-        std::fs::read_to_string(warm_skills[0].path.as_path())?,
+        std::fs::read_to_string(warm_skills[0].path.as_str())?,
         SKILL_CONTENTS
     );
     server_handle.abort();

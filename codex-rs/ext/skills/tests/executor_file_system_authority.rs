@@ -304,7 +304,7 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
     assert_eq!(skill.name, "synthetic");
     assert_eq!(
         skill.path_to_skills_md,
-        canonical_root.join("skill/SKILL.md")
+        PathUri::from_abs_path(&canonical_root.join("skill/SKILL.md"))
     );
     assert_eq!(
         snapshot.read_skill_text(&skill).await.expect("skill body"),

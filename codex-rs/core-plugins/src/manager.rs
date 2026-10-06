@@ -122,6 +122,7 @@ use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::PluginIdentity;
 use codex_utils_plugins::PluginSkillRoot;
 use std::collections::BTreeSet;
@@ -469,7 +470,7 @@ pub struct PluginDetail {
     pub installed: bool,
     pub enabled: bool,
     pub skills: Vec<SkillMetadata>,
-    pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
+    pub disabled_skill_paths: HashSet<PathUri>,
     /// Packaged onboarding path; callers apply visibility and enablement.
     pub onboarding_skill: Option<AbsolutePathBuf>,
     pub hooks: Vec<PluginHookSummary>,
@@ -2729,10 +2730,11 @@ impl PluginsManager {
             if !path.as_path().starts_with(plugin_root.as_path()) {
                 return None;
             }
+            let path_uri = PathUri::from_abs_path(&path);
             resolved_skills
                 .skills
                 .iter()
-                .any(|skill| skill.path_to_skills_md == path)
+                .any(|skill| skill.path_to_skills_md == path_uri)
                 .then_some(path)
         });
         let plugin_data_root = self.store.plugin_data_root(&plugin_id);

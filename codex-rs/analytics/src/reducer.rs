@@ -172,6 +172,7 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
+use codex_utils_path_uri::PathUri;
 use sha1::Digest;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -1356,7 +1357,10 @@ impl AnalyticsReducer {
                         SkillScope::System => "system",
                         SkillScope::Admin => "admin",
                     };
-                    let repo_root = get_git_repo_root(path.as_path());
+                    let repo_root = path
+                        .to_abs_path()
+                        .ok()
+                        .and_then(|path| get_git_repo_root(path.as_path()));
                     let repo_url = if let Some(root) = repo_root.as_ref() {
                         get_git_origin_url(root).await
                     } else {
@@ -1365,7 +1369,7 @@ impl AnalyticsReducer {
                     let skill_id = skill_id_for_local_skill(
                         repo_url.as_ref().map(SanitizedGitUrl::as_str),
                         repo_root.as_deref(),
-                        path.as_path(),
+                        &path,
                         invocation.skill_name.as_str(),
                     );
                     (skill_id, Some(skill_scope.to_string()))
@@ -3835,7 +3839,7 @@ fn rejection_reason_from_error_type(
 pub(crate) fn skill_id_for_local_skill(
     repo_url: Option<&str>,
     repo_root: Option<&Path>,
-    skill_path: &Path,
+    skill_path: &PathUri,
     skill_name: &str,
 ) -> String {
     let path = normalize_path_for_skill_id(repo_url, repo_root, skill_path);
@@ -3857,10 +3861,14 @@ pub(crate) fn skill_id_for_local_skill(
 pub(crate) fn normalize_path_for_skill_id(
     repo_url: Option<&str>,
     repo_root: Option<&Path>,
-    skill_path: &Path,
+    skill_path: &PathUri,
 ) -> String {
+    // Foreign paths have no host repository to inspect; retain their native spelling for telemetry.
+    let Ok(skill_path) = skill_path.to_abs_path() else {
+        return skill_path.inferred_native_path_string().replace('\\', "/");
+    };
     let resolved_path =
-        std::fs::canonicalize(skill_path).unwrap_or_else(|_| skill_path.to_path_buf());
+        std::fs::canonicalize(skill_path.as_path()).unwrap_or_else(|_| skill_path.to_path_buf());
     match (repo_url, repo_root) {
         (Some(_), Some(root)) => {
             let resolved_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());

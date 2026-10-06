@@ -11,6 +11,7 @@ use crate::reducer::normalize_path_for_skill_id;
 use crate::reducer::skill_id_for_local_skill;
 use crate::tests::support::TEST_PRODUCT_CLIENT_ID;
 use crate::tests::support::test_tracking_context;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::PathBuf;
@@ -24,13 +25,13 @@ fn expected_absolute_path(path: &PathBuf) -> String {
 
 #[test]
 fn normalize_path_for_skill_id_repo_scoped_uses_relative_path() {
-    let repo_root = PathBuf::from("/repo/root");
-    let skill_path = PathBuf::from("/repo/root/.codex/skills/doc/SKILL.md");
+    let repo_root = std::env::temp_dir().join("repo/root");
+    let skill_path = repo_root.join(".codex/skills/doc/SKILL.md");
 
     let path = normalize_path_for_skill_id(
         Some("https://example.com/repo.git"),
         Some(repo_root.as_path()),
-        skill_path.as_path(),
+        &PathUri::from_host_native_path(&skill_path).expect("native skill path"),
     );
 
     assert_eq!(path, ".codex/skills/doc/SKILL.md");
@@ -38,12 +39,12 @@ fn normalize_path_for_skill_id_repo_scoped_uses_relative_path() {
 
 #[test]
 fn normalize_path_for_skill_id_user_scoped_uses_absolute_path() {
-    let skill_path = PathBuf::from("/Users/abc/.codex/skills/doc/SKILL.md");
+    let skill_path = std::env::temp_dir().join("Users/abc/.codex/skills/doc/SKILL.md");
 
     let path = normalize_path_for_skill_id(
         /*repo_url*/ None,
         /*repo_root*/ None,
-        skill_path.as_path(),
+        &PathUri::from_host_native_path(&skill_path).expect("native skill path"),
     );
     let expected = expected_absolute_path(&skill_path);
 
@@ -52,12 +53,12 @@ fn normalize_path_for_skill_id_user_scoped_uses_absolute_path() {
 
 #[test]
 fn normalize_path_for_skill_id_admin_scoped_uses_absolute_path() {
-    let skill_path = PathBuf::from("/etc/codex/skills/doc/SKILL.md");
+    let skill_path = std::env::temp_dir().join("etc/codex/skills/doc/SKILL.md");
 
     let path = normalize_path_for_skill_id(
         /*repo_url*/ None,
         /*repo_root*/ None,
-        skill_path.as_path(),
+        &PathUri::from_host_native_path(&skill_path).expect("native skill path"),
     );
     let expected = expected_absolute_path(&skill_path);
 
@@ -66,15 +67,38 @@ fn normalize_path_for_skill_id_admin_scoped_uses_absolute_path() {
 
 #[test]
 fn normalize_path_for_skill_id_repo_root_not_in_skill_path_uses_absolute_path() {
-    let repo_root = PathBuf::from("/repo/root");
-    let skill_path = PathBuf::from("/other/path/.codex/skills/doc/SKILL.md");
+    let repo_root = std::env::temp_dir().join("repo/root");
+    let skill_path = std::env::temp_dir().join("other/path/.codex/skills/doc/SKILL.md");
 
     let path = normalize_path_for_skill_id(
         Some("https://example.com/repo.git"),
         Some(repo_root.as_path()),
-        skill_path.as_path(),
+        &PathUri::from_host_native_path(&skill_path).expect("native skill path"),
     );
     let expected = expected_absolute_path(&skill_path);
+
+    assert_eq!(path, expected);
+}
+
+/// Foreign paths keep native telemetry spelling without depending on host filesystem lookup.
+#[test]
+fn normalize_path_for_skill_id_foreign_path_uses_native_spelling() {
+    let (uri, expected) = if cfg!(windows) {
+        (
+            "file:///Users/abc/.codex/skills/doc%20%23/SKILL.md",
+            "/Users/abc/.codex/skills/doc #/SKILL.md",
+        )
+    } else {
+        (
+            "file:///C:/Users/abc/.codex/skills/doc%20%23/SKILL.md",
+            "C:/Users/abc/.codex/skills/doc #/SKILL.md",
+        )
+    };
+    let path = normalize_path_for_skill_id(
+        /*repo_url*/ None,
+        /*repo_root*/ None,
+        &PathUri::parse(uri).expect("foreign skill URI"),
+    );
 
     assert_eq!(path, expected);
 }
@@ -84,11 +108,15 @@ async fn reducer_ingests_skill_invoked_fact() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
     let tracking = test_tracking_context("thread-1", "turn-1");
-    let skill_path = PathBuf::from("/Users/abc/.codex/skills/doc/SKILL.md");
+    let skill_path = std::env::temp_dir()
+        .ancestors()
+        .last()
+        .expect("temporary directory root")
+        .join("Users/abc/.codex/skills/doc/SKILL.md");
     let expected_skill_id = skill_id_for_local_skill(
         /*repo_url*/ None,
         /*repo_root*/ None,
-        skill_path.as_path(),
+        &PathUri::from_host_native_path(&skill_path).expect("native skill path"),
         "doc",
     );
 
@@ -99,7 +127,8 @@ async fn reducer_ingests_skill_invoked_fact() {
                 invocations: vec![SkillInvocation {
                     skill_name: "doc".to_string(),
                     location: SkillInvocationLocation::Host {
-                        path: skill_path,
+                        path: PathUri::from_host_native_path(&skill_path)
+                            .expect("native skill path"),
                         scope: codex_protocol::protocol::SkillScope::User,
                     },
                     plugin_id: None,
@@ -138,8 +167,11 @@ async fn reducer_includes_plugin_ids_for_plugin_skill_invocations() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
     let tracking = test_tracking_context("thread-1", "turn-1");
-    let skill_path =
-        PathBuf::from("/Users/abc/.codex/plugins/cache/test/sample/skills/doc/SKILL.md");
+    let skill_path = std::env::temp_dir()
+        .ancestors()
+        .last()
+        .expect("temporary directory root")
+        .join("Users/abc/.codex/plugins/cache/test/sample/skills/doc/SKILL.md");
 
     reducer
         .ingest(
@@ -148,7 +180,8 @@ async fn reducer_includes_plugin_ids_for_plugin_skill_invocations() {
                 invocations: vec![SkillInvocation {
                     skill_name: "sample:doc".to_string(),
                     location: SkillInvocationLocation::Host {
-                        path: skill_path,
+                        path: PathUri::from_host_native_path(&skill_path)
+                            .expect("native skill path"),
                         scope: codex_protocol::protocol::SkillScope::User,
                     },
                     plugin_id: Some("sample@test".to_string()),

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 
 use crate::SkillMetadata;
 
@@ -23,7 +24,7 @@ pub struct SkillError {
 pub struct LoadedSkillRoot {
     pub root: AbsolutePathBuf,
     pub skills: Vec<SkillMetadata>,
-    pub skill_discovery_path_by_path: Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
+    pub skill_discovery_path_by_path: Arc<HashMap<PathUri, PathUri>>,
     pub errors: Vec<SkillError>,
     pub is_agent_plugin: bool,
 }

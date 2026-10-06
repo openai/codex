@@ -41,6 +41,8 @@ use codex_rmcp_client::McpOAuthClientRegistration;
 use codex_rmcp_client::OAuthDiscoveryTimeout;
 use codex_rmcp_client::StreamableHttpRedirectMode;
 use codex_rmcp_client::perform_oauth_login_silent;
+use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathUri;
 
 mod local;
 mod reconcile;
@@ -67,7 +69,7 @@ pub(crate) struct PluginRequestProcessor {
 
 fn plugin_skills_to_info<'a>(
     skills: impl IntoIterator<Item = &'a codex_skills::SkillMetadata>,
-    disabled_skill_paths: &HashSet<AbsolutePathBuf>,
+    disabled_skill_paths: &HashSet<PathUri>,
 ) -> Vec<SkillSummary> {
     skills
         .into_iter()
@@ -87,7 +89,7 @@ fn plugin_skills_to_info<'a>(
                     default_prompt: interface.default_prompt,
                 }
             }),
-            path: Some(skill.path_to_skills_md.clone()),
+            path: Some(skill.path_to_skills_md.clone().into()),
             enabled: !disabled_skill_paths.contains(&skill.path_to_skills_md),
         })
         .collect()
@@ -1111,9 +1113,18 @@ impl PluginRequestProcessor {
                 let onboarding_skill = if outcome.plugin.enabled
                     && let Some(path) = outcome.plugin.onboarding_skill.as_ref()
                 {
+                    let path = PathUri::from_abs_path(path);
                     skills
                         .iter()
-                        .find(|skill| skill.enabled && skill.path.as_ref() == Some(path))
+                        .find(|skill| {
+                            skill.enabled
+                                && skill
+                                    .path
+                                    .as_ref()
+                                    .and_then(LegacyAppPathString::to_inferred_path_uri)
+                                    .as_ref()
+                                    == Some(&path)
+                        })
                         .cloned()
                 } else {
                     None

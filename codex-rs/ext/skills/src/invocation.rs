@@ -33,7 +33,7 @@ pub fn detect_implicit_skill_invocation(
         return Some(SkillInvocation {
             skill_name: skill.name,
             location: SkillInvocationLocation::Host {
-                path: skill.path_to_skills_md.to_path_buf(),
+                path: skill.path_to_skills_md,
                 scope: skill.scope,
             },
             plugin_id: skill.plugin_id,

@@ -2,6 +2,7 @@
 
 use super::*;
 use codex_app_server_protocol::ImageReference;
+use codex_utils_path_uri::LegacyAppPathString;
 
 impl ChatWidget {
     pub(crate) fn set_task_mentions_enabled(&mut self, enabled: bool) {
@@ -291,7 +292,7 @@ impl ChatWidget {
             .map(|binding| binding.mention.clone())
             .collect();
         let mut skill_names_lower: HashSet<String> = HashSet::new();
-        let mut selected_skill_paths: HashSet<AbsolutePathBuf> = HashSet::new();
+        let mut selected_skill_paths = HashSet::new();
         let mut selected_plugin_ids: HashSet<String> = HashSet::new();
 
         if let Some(skills) = self.bottom_pane.skills() {
@@ -300,32 +301,40 @@ impl ChatWidget {
                 .map(|skill| skill.name.to_ascii_lowercase())
                 .collect();
 
+            // TODO(anp): Preserve executor path identity through both structured skill input paths
+            // below and selection. UserInput::Skill still relies on host-native path interpretation.
             for binding in &mention_bindings {
                 let path = binding
                     .path
                     .strip_prefix("skill://")
                     .unwrap_or(binding.path.as_str());
-                let path = Path::new(path);
-                if let Some(skill) = skills.iter().find(|skill| skill.path.as_path() == path)
-                    && selected_skill_paths.insert(skill.path.clone())
+                let Some(path) = LegacyAppPathString::from_string(path).to_inferred_path_uri()
+                else {
+                    continue;
+                };
+                if let Some(skill) = skills
+                    .iter()
+                    .find(|skill| skill.path.to_inferred_path_uri().as_ref() == Some(&path))
+                    && selected_skill_paths.insert(path)
                 {
                     items.push(UserInput::Skill {
                         name: skill.name.clone(),
-                        path: skill.path.to_path_buf(),
+                        path: PathBuf::from(skill.path.as_str()),
                     });
                 }
             }
 
             let skill_mentions = find_skill_mentions_with_tool_mentions(&mentions, skills);
             for skill in skill_mentions {
-                if bound_names.contains(skill.name.as_str())
-                    || !selected_skill_paths.insert(skill.path.clone())
-                {
+                let Some(path) = skill.path.to_inferred_path_uri() else {
+                    continue;
+                };
+                if bound_names.contains(skill.name.as_str()) || !selected_skill_paths.insert(path) {
                     continue;
                 }
                 items.push(UserInput::Skill {
                     name: skill.name.clone(),
-                    path: skill.path.to_path_buf(),
+                    path: PathBuf::from(skill.path.as_str()),
                 });
             }
         }

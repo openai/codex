@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 
 use crate::SkillMetadata;
 
 /// Counts how often each skill name appears (exact and ASCII-lowercase), excluding disabled paths.
 pub fn build_skill_name_counts(
     skills: &[SkillMetadata],
-    disabled_paths: &HashSet<AbsolutePathBuf>,
+    disabled_paths: &HashSet<PathUri>,
 ) -> (HashMap<String, usize>, HashMap<String, usize>) {
     let mut exact_counts: HashMap<String, usize> = HashMap::new();
     let mut lower_counts: HashMap<String, usize> = HashMap::new();

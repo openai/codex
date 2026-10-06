@@ -20,6 +20,7 @@ use codex_skills::LoadedSkills;
 use codex_skills::SkillMetadata;
 use codex_skills::SkillRootLoadRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
@@ -117,7 +118,9 @@ async fn curated_git_requirements_control_plugin_skills() -> Result<()> {
                     interface: None,
                     dependencies: None,
                     policy: None,
-                    path_to_skills_md: AbsolutePathBuf::try_from(fs::canonicalize(skill_path)?)?,
+                    path_to_skills_md: PathUri::from_abs_path(&AbsolutePathBuf::try_from(
+                        fs::canonicalize(skill_path)?,
+                    )?),
                     scope: SkillScope::User,
                     plugin_id: Some(plugin_id),
                     remote_plugin_id: None,

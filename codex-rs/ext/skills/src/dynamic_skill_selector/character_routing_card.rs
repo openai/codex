@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use codex_utils_path_uri::LegacyAppPathString;
+
 use crate::HostSkillsSnapshot;
 
 use crate::catalog::SkillCatalog;
@@ -29,14 +31,17 @@ impl CharacterRoutingCardSkillSelector {
                 entry.authority.kind == SkillSourceKind::Host && entry.is_model_visible()
             })
             .take(MAX_CANDIDATES)
-            .map(|(id, entry)| (entry.main_prompt.as_str().replace('\\', "/"), id))
+            .filter_map(|(id, entry)| {
+                let path = LegacyAppPathString::from_string(entry.main_prompt.as_str())
+                    .to_inferred_path_uri()?;
+                Some((path, id))
+            })
             .collect::<HashMap<_, _>>();
         let routing_fields = host_snapshot
             .into_iter()
             .flat_map(|snapshot| snapshot.outcome().skills.iter())
             .filter_map(|skill| {
-                let id = host_skill_ids
-                    .get(&skill.path_to_skills_md.to_string_lossy().replace('\\', "/"))?;
+                let id = host_skill_ids.get(&skill.path_to_skills_md)?;
                 let interface = skill.interface.as_ref()?;
                 let mut field = String::new();
                 for value in [

@@ -193,7 +193,7 @@ async fn skills_list_disabled_bundled_skills_preserves_shared_system_skill_cache
     assert!(
         system_skill_paths
             .iter()
-            .all(|path| path.as_path().is_file()),
+            .all(|path| std::path::Path::new(path.as_str()).is_file()),
         "disabled app-server must not remove the cache shared by other processes"
     );
 
@@ -659,7 +659,7 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
         .find(|skill| skill.name == "linear:triage-issues")
         .expect("expected skill from cached remote plugin");
     assert_eq!(
-        std::fs::canonicalize(skill.path.as_path())?,
+        std::fs::canonicalize(skill.path.as_str())?,
         expected_skill_path
     );
     assert_eq!(
@@ -1003,14 +1003,14 @@ enabled = true
                     Ok((
                         skill.path.clone(),
                         skill.description.clone(),
-                        std::fs::read_to_string(&skill.path)?,
+                        std::fs::read_to_string(skill.path.as_str())?,
                     ))
                 })
                 .collect::<std::io::Result<Vec<_>>>()?;
             assert_eq!(
                 skills,
                 vec![(
-                    expected_path.clone(),
+                    expected_path.clone().into(),
                     format!("version {version}"),
                     body.clone()
                 )],
