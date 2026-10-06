@@ -26,6 +26,7 @@ use windows_sys::Win32::Foundation::ERROR_NO_DATA;
 use windows_sys::Win32::Foundation::ERROR_PIPE_BUSY;
 use windows_sys::Win32::Foundation::ERROR_PIPE_NOT_CONNECTED;
 use windows_sys::Win32::Foundation::ERROR_SEM_TIMEOUT;
+use windows_sys::Win32::Foundation::ERROR_SERVICE_ALREADY_RUNNING;
 use windows_sys::Win32::Foundation::ERROR_SERVICE_DOES_NOT_EXIST;
 use windows_sys::Win32::Foundation::ERROR_SERVICE_MARKED_FOR_DELETE;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -187,6 +188,37 @@ fn service_unavailable() -> anyhow::Result<WindowsSandboxProvisioningOutcome> {
         bail!("app runtime provisioning service is unavailable; refusing helper fallback");
     }
     Ok(WindowsSandboxProvisioningOutcome::Unavailable)
+}
+
+/// Starts a stopped service only for explicit setup. The normal connection path
+/// waits for startup and authenticates the pipe server; SCM authorizes the start.
+pub fn start_windows_sandbox_service_for_setup() -> anyhow::Result<()> {
+    query_service_status()
+        .and_then(|status| {
+            if status.dwCurrentState == Services::SERVICE_STOPPED {
+                let service = open_service(Services::SERVICE_START)
+                    .context("request permission to start sandbox service for setup")?;
+                if unsafe { Services::StartServiceW(service.0, 0, ptr::null()) } == 0 {
+                    let error = io::Error::last_os_error();
+                    if error.raw_os_error() != Some(ERROR_SERVICE_ALREADY_RUNNING as i32) {
+                        return Err(error).context("start sandbox service for setup");
+                    }
+                }
+            }
+            Ok(())
+        })
+        .or_else(|error| {
+            if error.downcast_ref::<io::Error>().is_some_and(|error| {
+                matches!(error.raw_os_error(), Some(code)
+                if code == ERROR_SERVICE_DOES_NOT_EXIST as i32
+                    || code == ERROR_SERVICE_MARKED_FOR_DELETE as i32)
+            }) {
+                // The connection path preserves registered Core's no-fallback error.
+                Ok(())
+            } else {
+                Err(error)
+            }
+        })
 }
 
 /// Records desktop uninstall ownership without creating or enabling a sandbox.
@@ -385,26 +417,7 @@ fn verify_server(pipe: HANDLE) -> anyhow::Result<u32> {
 }
 
 fn query_service_status() -> anyhow::Result<Services::SERVICE_STATUS_PROCESS> {
-    let manager =
-        unsafe { Services::OpenSCManagerW(ptr::null(), ptr::null(), Services::SC_MANAGER_CONNECT) };
-    if manager.is_null() {
-        return Err(io::Error::last_os_error()).context("open service control manager");
-    }
-    let manager = ServiceHandle(manager);
-
-    let service_name = crate::to_wide(crate::windows_sandbox_service_name()?);
-    let service = unsafe {
-        Services::OpenServiceW(
-            manager.0,
-            service_name.as_ptr(),
-            Services::SERVICE_QUERY_STATUS,
-        )
-    };
-    if service.is_null() {
-        return Err(io::Error::last_os_error()).context("open sandbox provisioning service");
-    }
-    let service = ServiceHandle(service);
-
+    let service = open_service(Services::SERVICE_QUERY_STATUS)?;
     let mut status: Services::SERVICE_STATUS_PROCESS = unsafe { std::mem::zeroed() };
     let mut bytes_needed = 0;
     if unsafe {
@@ -423,6 +436,22 @@ fn query_service_status() -> anyhow::Result<Services::SERVICE_STATUS_PROCESS> {
         crate::service_diagnostics::record_stopped(&status, service.0);
     }
     Ok(status)
+}
+
+fn open_service(access: u32) -> anyhow::Result<ServiceHandle> {
+    let manager =
+        unsafe { Services::OpenSCManagerW(ptr::null(), ptr::null(), Services::SC_MANAGER_CONNECT) };
+    if manager.is_null() {
+        return Err(io::Error::last_os_error()).context("open service control manager");
+    }
+    let manager = ServiceHandle(manager);
+
+    let service_name = crate::to_wide(crate::windows_sandbox_service_name()?);
+    let service = unsafe { Services::OpenServiceW(manager.0, service_name.as_ptr(), access) };
+    if service.is_null() {
+        return Err(io::Error::last_os_error()).context("open sandbox provisioning service");
+    }
+    Ok(ServiceHandle(service))
 }
 
 struct ServiceHandle(SC_HANDLE);

@@ -216,6 +216,9 @@ impl WindowsSandboxRequestProcessor {
                                     &service_setup_request.command_cwd,
                                 )?;
                             }
+                            if codex_windows_sandbox::registered_core_requested() {
+                                codex_windows_sandbox::start_windows_sandbox_service_for_setup()?;
+                            }
                             // The shared setup path below handles helper fallback and
                             // refreshes workspace ACLs after provisioning.
                             codex_windows_sandbox::provision_windows_sandbox_via_service(
