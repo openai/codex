@@ -4765,17 +4765,38 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
         config.model_context_window = Some(context_window);
         config.model_auto_compact_token_limit = Some(limit);
     });
-    let codex = builder.build(&server).await.unwrap().codex;
+    let codex = builder.build_with_auto_env(&server).await.unwrap().codex;
+    let continuation = r#"{"review_target":"RB._~:-opaque"}"#;
 
     codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: FUNCTION_CALL_LIMIT_MSG.into(),
-            text_elements: Vec::new(),
-        }]))
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: FUNCTION_CALL_LIMIT_MSG.into(),
+                text_elements: Vec::new(),
+            }])
+            .with_responses_metadata(Some(std::collections::HashMap::from([(
+                "misalignment_override".to_string(),
+                continuation.to_string(),
+            )]))),
+        )
         .await
         .unwrap();
 
     wait_for_event(&codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
+
+    for (request, expected) in [
+        (first_turn_mock.single_request(), Some(continuation)),
+        (auto_compact_mock.single_request(), None),
+        (post_auto_compact_mock.single_request(), Some(continuation)),
+    ] {
+        let metadata: Value = serde_json::from_str(
+            request.body_json()["client_metadata"]["x-codex-turn-metadata"]
+                .as_str()
+                .expect("turn metadata"),
+        )
+        .expect("valid turn metadata");
+        assert_eq!(metadata["misalignment_override"].as_str(), expected);
+    }
 
     // Assert first request captured expected user message that triggers function call.
     let first_request = first_turn_mock.single_request().input();

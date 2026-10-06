@@ -15,4 +15,8 @@ detailedExplanation: string | null,
 /**
  * Instruction to submit as the next turn's user input if continuation is confirmed.
  */
-steer: MisalignmentSteer | null, };
+steer: MisalignmentSteer | null,
+/**
+ * Opaque server-issued block target. Presence alone does not enable target-based continuation.
+ */
+reviewTarget?: string | null, };

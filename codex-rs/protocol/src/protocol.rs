@@ -2040,6 +2040,9 @@ pub struct MisalignmentErrorDetails {
     /// Model-visible instruction to submit if the user elects to continue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steer: Option<MisalignmentSteer>,
+    /// Opaque server-issued block target, echoed verbatim only on explicit continuation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_target: Option<String>,
 }
 
 impl fmt::Debug for MisalignmentErrorDetails {
@@ -2052,6 +2055,7 @@ impl fmt::Debug for MisalignmentErrorDetails {
                 &self.detailed_explanation.is_some(),
             )
             .field("has_steer", &self.steer.is_some())
+            .field("has_review_target", &self.review_target.is_some())
             .finish()
     }
 }
@@ -5869,6 +5873,7 @@ mod tests {
             misalignment: Some(MisalignmentErrorDetails {
                 error_type: Some("unauthorized_data_transfer".to_string()),
                 detailed_explanation: Some("Sensitive customer explanation".to_string()),
+                review_target: Some("sensitive-review-target".to_string()),
                 steer: Some(MisalignmentSteer {
                     message: "Sensitive customer steering".to_string(),
                 }),
@@ -5890,6 +5895,7 @@ mod tests {
         let debug = format!("{event:?}");
         assert!(!debug.contains("Sensitive customer explanation"));
         assert!(!debug.contains("Sensitive customer steering"));
+        assert!(!debug.contains("sensitive-review-target"));
     }
 
     #[test]

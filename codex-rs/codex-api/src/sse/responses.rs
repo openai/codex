@@ -1251,6 +1251,7 @@ mod tests {
                     misalignment,
                     &Some(MisalignmentErrorDetails {
                         error_type: Some("future_safety_category".to_string()),
+                        review_target: None,
                         detailed_explanation: Some(
                             "The agent attempted an external transfer.".to_string()
                         ),

@@ -442,6 +442,9 @@ pub struct MisalignmentErrorDetails {
     pub detailed_explanation: Option<String>,
     /// Instruction to submit as the next turn's user input if continuation is confirmed.
     pub steer: Option<MisalignmentSteer>,
+    /// Opaque server-issued block target. Presence alone does not enable target-based continuation.
+    #[ts(optional = nullable)]
+    pub review_target: Option<String>,
 }
 
 impl fmt::Debug for MisalignmentErrorDetails {
@@ -454,6 +457,7 @@ impl fmt::Debug for MisalignmentErrorDetails {
                 &self.detailed_explanation.is_some(),
             )
             .field("has_steer", &self.steer.is_some())
+            .field("has_review_target", &self.review_target.is_some())
             .finish()
     }
 }
@@ -464,6 +468,7 @@ impl From<CoreMisalignmentErrorDetails> for MisalignmentErrorDetails {
             error_type: value.error_type,
             detailed_explanation: value.detailed_explanation,
             steer: value.steer.map(Into::into),
+            review_target: value.review_target,
         }
     }
 }

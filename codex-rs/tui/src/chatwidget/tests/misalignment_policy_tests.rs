@@ -237,6 +237,7 @@ async fn misalignment_turn_end_discards_history_search_and_question_drafts() {
 fn review_details() -> codex_app_server_protocol::MisalignmentErrorDetails {
     codex_app_server_protocol::MisalignmentErrorDetails {
         error_type: Some("new_category".to_string()),
+        review_target: None,
         detailed_explanation: Some(
             "The agent proposed a change outside your instructions.".to_string(),
         ),

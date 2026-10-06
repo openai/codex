@@ -13,6 +13,7 @@ fn policy_error() -> AppServerTurnError {
         codex_error_info: Some(AppServerCodexErrorInfo::MisalignmentPolicyViolation),
         additional_details: None,
         misalignment: Some(MisalignmentErrorDetails {
+            review_target: Some("RB".to_string()),
             error_type: None,
             detailed_explanation: Some(
                 "The proposed action exceeded the request.\n\n".repeat(1_500),

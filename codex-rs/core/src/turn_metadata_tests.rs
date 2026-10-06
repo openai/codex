@@ -1031,8 +1031,12 @@ fn turn_metadata_state_bounds_trigger_only_for_analytics() {
     }
 }
 
-#[test]
-fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
+#[test_case::test_case(r#"{"review_target":"RB._~:-opaque"}"#, None; "target")]
+#[test_case::test_case(r#"{"timestamp":1750000000}"#, Some(r#"{"timestamp":1750000000}"#); "legacy_timestamp")]
+fn turn_metadata_state_overlays_compaction_only_on_compaction_requests(
+    continuation: &str,
+    compaction_override: Option<&str>,
+) {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
     let permission_profile = PermissionProfile::read_only();
@@ -1051,14 +1055,32 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
         /*auto_review_enabled*/ false,
         &model_info_from_slug("gpt-5.4"),
     );
-    state.set_responses_api_metadata(BTreeMap::from([(
-        "codex_security_surface".to_string(),
-        "sdk".to_string(),
-    )]));
-    state.set_responsesapi_client_metadata(HashMap::from([(
-        "compaction".to_string(),
-        "client-supplied".to_string(),
-    )]));
+    state.set_responses_api_metadata(BTreeMap::from([
+        ("codex_security_surface".to_string(), "sdk".to_string()),
+        (
+            "misalignment_override".to_string(),
+            r#"{"review_target":"RC"}"#.to_string(),
+        ),
+    ]));
+    let ordinary_json: Value =
+        serde_json::from_str(&test_turn_responses_metadata_json(&state, "thread-a:1"))
+            .expect("json");
+    assert!(ordinary_json.get("misalignment_override").is_none());
+    state.set_responsesapi_client_metadata(HashMap::from([
+        ("compaction".to_string(), "client-supplied".to_string()),
+        (
+            "misalignment_override".to_string(),
+            continuation.to_string(),
+        ),
+    ]));
+
+    let mcp_metadata = state
+        .current_meta_value_for_mcp_request(test_mcp_turn_metadata_context())
+        .expect("MCP metadata");
+    assert_eq!(
+        mcp_metadata["misalignment_override"].as_str(),
+        compaction_override
+    );
 
     let compact_header = test_compaction_responses_metadata_json(
         &state,
@@ -1076,6 +1098,10 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
     assert_eq!(compact_json[WINDOW_ID_KEY].as_str(), Some("thread-a:2"));
     assert_eq!(compact_json["codex_security_surface"].as_str(), Some("sdk"));
     assert_eq!(
+        compact_json["misalignment_override"].as_str(),
+        compaction_override
+    );
+    assert_eq!(
         compact_json["compaction"],
         serde_json::json!({
             "trigger": "auto",
@@ -1088,6 +1114,7 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
 
     let regular_header = test_turn_responses_metadata_json(&state, "thread-a:3");
     let regular_json: Value = serde_json::from_str(&regular_header).expect("json");
+    assert_eq!(regular_json["misalignment_override"], continuation);
     assert_eq!(regular_json["request_kind"].as_str(), Some("turn"));
     assert_eq!(regular_json[WINDOW_ID_KEY].as_str(), Some("thread-a:3"));
     assert_eq!(regular_json["codex_security_surface"].as_str(), Some("sdk"));

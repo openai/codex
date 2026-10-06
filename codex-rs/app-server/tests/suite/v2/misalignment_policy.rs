@@ -24,6 +24,7 @@ use wiremock::ResponseTemplate;
 const MESSAGE: &str = "This request violated the misalignment policy.";
 const EXPLANATION: &str = "The agent attempted to transfer your files externally.";
 const STEER: &str = "Continue without transferring the user's files externally.";
+const REVIEW_TARGET: &str = "RB._~:-opaque";
 
 #[tokio::test]
 async fn streamed_policy_violation_completes_turn_with_typed_terminal_error() -> Result<()> {
@@ -104,6 +105,7 @@ async fn streamed_policy_violation_exposes_resumable_misalignment_details() -> R
                     "misalignment": {
                         "error_type": "unauthorized_data_transfer",
                         "detailed_explanation": EXPLANATION,
+                        "review_target": REVIEW_TARGET,
                         "steer": { "message": STEER }
                     }
                 }
@@ -129,6 +131,7 @@ async fn http_403_policy_violation_exposes_resumable_misalignment_details() -> R
             "misalignment": {
                 "error_type": "unauthorized_data_transfer",
                 "detailed_explanation": EXPLANATION,
+                "review_target": REVIEW_TARGET,
                 "steer": { "message": STEER }
             }
         }
@@ -165,6 +168,7 @@ async fn classification_only_policy_violation_preserves_the_terminal_error() -> 
         response,
         Some(MisalignmentErrorDetails {
             error_type: Some("unsafe_activity".to_string()),
+            review_target: None,
             detailed_explanation: None,
             steer: None,
         }),
@@ -255,6 +259,7 @@ async fn assert_policy_violation_completes_turn_with_typed_terminal_error(
     .await?;
     assert!(!rollout.contains(EXPLANATION));
     assert!(!rollout.contains(STEER));
+    assert!(!rollout.contains(REVIEW_TARGET));
 
     Ok(())
 }
@@ -262,6 +267,7 @@ async fn assert_policy_violation_completes_turn_with_typed_terminal_error(
 fn resumable_misalignment() -> MisalignmentErrorDetails {
     MisalignmentErrorDetails {
         error_type: Some("unauthorized_data_transfer".to_string()),
+        review_target: Some(REVIEW_TARGET.to_string()),
         detailed_explanation: Some(EXPLANATION.to_string()),
         steer: Some(MisalignmentSteer {
             message: STEER.to_string(),

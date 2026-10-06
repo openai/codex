@@ -490,6 +490,10 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
     let start_metadata = HashMap::from([
         ("fiber_run_id".to_string(), "fiber-start-123".to_string()),
         ("source".to_string(), "initial-source".to_string()),
+        (
+            "misalignment_override".to_string(),
+            r#"{"review_target":"RB._~:-opaque"}"#.to_string(),
+        ),
     ]);
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
@@ -519,6 +523,10 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
         ("fiber_run_id".to_string(), "fiber-steer-456".to_string()),
         ("origin".to_string(), "gaas".to_string()),
         ("source".to_string(), "steer-source".to_string()),
+        (
+            "misalignment_override".to_string(),
+            r#"{"review_target":"RC"}"#.to_string(),
+        ),
     ]);
     let steer_req = mcp
         .send_turn_steer_request(TurnSteerParams {
@@ -570,6 +578,10 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
     assert_eq!(second_metadata["turn_id"].as_str(), Some(turn_id.as_str()));
     assert_eq!(second_metadata["turn_trigger"].as_str(), Some("user"));
     assert_eq!(second_metadata["source"].as_str(), Some("steer-source"));
+    assert_eq!(
+        second_metadata["misalignment_override"],
+        first_metadata["misalignment_override"],
+    );
 
     let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
     assert_eq!(

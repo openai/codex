@@ -8763,6 +8763,13 @@ class MisalignmentErrorDetails(BaseModel):
             description="Open-ended classification; clients must accept categories added by Responses.",
         ),
     ] = None
+    review_target: Annotated[
+        str | None,
+        Field(
+            alias="reviewTarget",
+            description="Opaque server-issued block target. Presence alone does not enable target-based continuation.",
+        ),
+    ] = None
     steer: Annotated[
         MisalignmentSteer | None,
         Field(

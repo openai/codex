@@ -11467,6 +11467,13 @@
             "null"
           ]
         },
+        "reviewTarget": {
+          "description": "Opaque server-issued block target. Presence alone does not enable target-based continuation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "steer": {
           "anyOf": [
             {
