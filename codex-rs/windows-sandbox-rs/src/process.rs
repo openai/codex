@@ -51,15 +51,8 @@ pub enum ConsoleMode {
 }
 
 pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
-    let mut items: Vec<(String, String)> =
-        env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    items.sort_by(|a, b| {
-        a.0.to_uppercase()
-            .cmp(&b.0.to_uppercase())
-            .then(a.0.cmp(&b.0))
-    });
     let mut w: Vec<u16> = Vec::new();
-    for (k, v) in items {
+    for (k, v) in ordered_env_entries(env) {
         let mut s = to_wide(format!("{k}={v}"));
         s.pop();
         w.extend_from_slice(&s);
@@ -67,6 +60,23 @@ pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     }
     w.push(0);
     w
+}
+
+// Match the environment we actually serialize, including for callers which
+// supply multiple spellings of a Windows key. Keep the first spelling in the
+// existing block order instead of letting HashMap iteration pick the value.
+pub(crate) fn ordered_env_entries(env: &HashMap<String, String>) -> Vec<(&str, &str)> {
+    let mut items: Vec<(&str, &str)> = env
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+    items.sort_by(|a, b| {
+        a.0.to_uppercase()
+            .cmp(&b.0.to_uppercase())
+            .then(a.0.cmp(b.0))
+    });
+    items.dedup_by(|a, b| a.0.eq_ignore_ascii_case(b.0));
+    items
 }
 
 unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {

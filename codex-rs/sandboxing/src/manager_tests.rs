@@ -764,7 +764,7 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
                     environment_id: None,
                     network: None,
                     sandbox_policy_cwd: &cwd_uri,
-                    sandbox_exe: None,
+                    sandbox_exe: Some(configured_helper.as_path()),
                     use_legacy_landlock: false,
                     windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
                 },

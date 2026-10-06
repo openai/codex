@@ -25,6 +25,13 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::user_input::UserInput;
+use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxDirectSpawnTransformRequest;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxTransformRequest;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::WindowsSandboxProxySettingsMode;
+use codex_utils_path_uri::PathUri;
 use codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard;
 use core_test_support::PathExt;
 use core_test_support::responses::ev_assistant_message;
@@ -399,6 +406,190 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
         err.to_string(),
         "unsupported operation: windows unelevated restricted-token sandbox cannot enforce deny-read restrictions directly; refusing to run unsandboxed"
     );
+    Ok(())
+}
+
+#[tokio::test]
+#[serial(codex_home)]
+async fn windows_elevated_temp_only_core_and_direct_spawn_enforce_carveouts() -> anyhow::Result<()>
+{
+    let _account_guard = WindowsSandboxAccountTestGuard::acquire()?;
+    let codex_home = codex_home_for_windows_sandbox_test("windows-temp-only-child-codex-home")?;
+    let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
+    stage_windows_sandbox_helpers()?;
+    let fixture = TempDir::new()?;
+    let root = dunce::canonicalize(fixture.path())?;
+    let (codex, _) = stage_windows_sandbox_cli(&root.join("bin"))?;
+    let cwd = root.join("work").abs();
+    let temp = root.join("selected-temp");
+    let other = root.join("other-temp");
+    let read_only = temp.join("read-only");
+    let denied = temp.join("denied");
+    for path in [
+        cwd.as_path(),
+        other.as_path(),
+        read_only.as_path(),
+        denied.as_path(),
+    ] {
+        std::fs::create_dir_all(path)?;
+    }
+    std::fs::write(read_only.join("public.txt"), "READ-CONTROL\n")?;
+    std::fs::write(denied.join("secret.txt"), "SECRET-CONTROL\n")?;
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Tmpdir,
+                },
+                FileSystemAccessMode::Write,
+            ),
+            FileSystemSandboxEntry::new(read_only.clone().abs().into(), FileSystemAccessMode::Read),
+            FileSystemSandboxEntry::new(denied.clone().abs().into(), FileSystemAccessMode::Deny),
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let command = concat!(
+        "echo allowed>%ALLOWED_FILE% 2>NUL & ",
+        "echo wrong>%OTHER_FILE% 2>NUL & ",
+        "echo wrong>cwd.txt 2>NUL & ",
+        "type %PUBLIC_FILE% 2>NUL & ",
+        "echo wrong>%READONLY_FILE% 2>NUL & ",
+        "type %SECRET_FILE% 2>NUL & ",
+        "echo wrong>%DENIED_FILE% 2>NUL & exit /b 0"
+    );
+    // Cover duplicate TEMP through Core and a lone mixed-case TMP through the
+    // actual direct-spawn wrapper. In both cases the child's value must match its grant.
+    for direct_spawn in [false, true] {
+        // As in the deny-read test below, put quoted paths in the environment
+        // rather than in cmd /C's argument: the Win32 argv encoder escapes
+        // literal argument quotes for CRT parsing, which cmd does not use.
+        let mut env: HashMap<String, String> = [
+            ("ALLOWED_FILE", temp.join("allowed.txt")),
+            ("OTHER_FILE", other.join("wrong.txt")),
+            ("PUBLIC_FILE", read_only.join("public.txt")),
+            ("READONLY_FILE", read_only.join("wrong.txt")),
+            ("SECRET_FILE", denied.join("secret.txt")),
+            ("DENIED_FILE", denied.join("wrong.txt")),
+        ]
+        .into_iter()
+        .map(|(name, path)| (name.to_string(), format!("\"{}\"", path.display())))
+        .collect();
+        let child_var = if direct_spawn {
+            env.insert("tMp".to_string(), temp.to_string_lossy().into_owned());
+            "%TMP%"
+        } else {
+            env.insert("Temp".to_string(), other.to_string_lossy().into_owned());
+            env.insert("TEMP".to_string(), temp.to_string_lossy().into_owned());
+            "%TEMP%"
+        };
+        let command = format!("echo CHILD-TEMP:{child_var} & {command}");
+        let (exit_code, stdout, stderr) = if direct_spawn {
+            let cwd_uri = PathUri::from_abs_path(&cwd);
+            let request = SandboxManager::new().transform_for_direct_spawn(
+                SandboxDirectSpawnTransformRequest {
+                    workspace_roots: std::slice::from_ref(&cwd),
+                    windows_sandbox_proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
+                    transform: SandboxTransformRequest {
+                        command: SandboxCommand {
+                            program: "cmd.exe".into(),
+                            args: vec!["/D".into(), "/C".into(), command],
+                            cwd: cwd_uri.clone(),
+                            env,
+                            managed_network: None,
+                            additional_permissions: None,
+                        },
+                        permissions: &permission_profile,
+                        sandbox: SandboxType::WindowsRestrictedToken,
+                        enforce_managed_network: false,
+                        environment_id: None,
+                        network: None,
+                        sandbox_policy_cwd: &cwd_uri,
+                        sandbox_exe: Some(codex.as_path()),
+                        use_legacy_landlock: false,
+                        windows_sandbox_level: WindowsSandboxLevel::Elevated,
+                    },
+                },
+            )?;
+            let output = Command::new(&request.command[0])
+                .args(&request.command[1..])
+                .current_dir(request.cwd.to_abs_path()?)
+                .env_clear()
+                .envs(&request.env)
+                .output()?;
+            (
+                output.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&output.stdout).into_owned(),
+                String::from_utf8_lossy(&output.stderr).into_owned(),
+            )
+        } else {
+            let output = process_exec_tool_call(
+                ExecParams {
+                    command: vec!["cmd.exe".into(), "/D".into(), "/C".into(), command],
+                    cwd: cwd.clone(),
+                    expiration: 30_000.into(),
+                    capture_policy: ExecCapturePolicy::ShellTool,
+                    env,
+                    network: None,
+                    network_environment_id: None,
+                    sandbox_permissions: SandboxPermissions::UseDefault,
+                    windows_sandbox_level: WindowsSandboxLevel::Elevated,
+                    justification: None,
+                    arg0: None,
+                },
+                &permission_profile,
+                &cwd,
+                std::slice::from_ref(&cwd),
+                &None,
+                /*codex_self_exe*/ &None,
+                /*use_legacy_landlock*/ false,
+                /*stdout_stream*/ None,
+            )
+            .await?;
+            (output.exit_code, output.stdout.text, output.stderr.text)
+        };
+        assert_eq!(
+            exit_code, 0,
+            "direct_spawn={direct_spawn}: {stdout} {stderr}"
+        );
+        let expected_temp = format!("CHILD-TEMP:{}", temp.display());
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line.trim().eq_ignore_ascii_case(&expected_temp)),
+            "child TEMP did not match granted directory, direct_spawn={direct_spawn}: {stdout} {stderr}"
+        );
+        assert!(
+            stdout.contains("READ-CONTROL"),
+            "direct_spawn={direct_spawn}: {stdout} {stderr}"
+        );
+        assert!(
+            !stdout.contains("SECRET-CONTROL"),
+            "direct_spawn={direct_spawn}: {stdout} {stderr}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(temp.join("allowed.txt"))?.trim(),
+            "allowed"
+        );
+        for path in [
+            other.join("wrong.txt"),
+            cwd.join("cwd.txt").into_path_buf(),
+            read_only.join("wrong.txt"),
+            denied.join("wrong.txt"),
+        ] {
+            assert!(
+                !path.exists(),
+                "direct_spawn={direct_spawn}: unexpectedly wrote {}",
+                path.display()
+            );
+        }
+        std::fs::remove_file(temp.join("allowed.txt"))?;
+    }
     Ok(())
 }
 

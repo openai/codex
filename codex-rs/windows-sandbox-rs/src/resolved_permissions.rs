@@ -156,19 +156,8 @@ impl ResolvedWindowsSandboxPermissions {
         env_map: &HashMap<String, String>,
     ) -> Vec<WindowsWritableRoot> {
         let mut file_system = self.file_system.clone();
+        resolve_workload_temp_paths(&mut file_system, env_map);
         file_system
-            .entries
-            .retain(|FileSystemSandboxEntry { path, .. }| {
-                !matches!(
-                    path,
-                    FileSystemPath::Special {
-                        value: codex_protocol::permissions::FileSystemSpecialPath::Tmpdir
-                            | codex_protocol::permissions::FileSystemSpecialPath::SlashTmp,
-                    }
-                )
-            });
-
-        let mut roots = file_system
             .get_writable_roots_with_cwd(cwd)
             .into_iter()
             .map(|root| WindowsWritableRoot {
@@ -179,46 +168,43 @@ impl ResolvedWindowsSandboxPermissions {
                     .map(AbsolutePathBuf::into_path_buf)
                     .collect(),
             })
-            .collect::<Vec<_>>();
-
-        if self.has_writable_tmpdir_entry() {
-            roots.extend(windows_temp_env_roots(env_map).into_iter().map(|root| {
-                WindowsWritableRoot {
-                    root,
-                    read_only_subpaths: Vec::new(),
-                }
-            }));
-        }
-
-        roots
-    }
-
-    fn has_writable_tmpdir_entry(&self) -> bool {
-        self.file_system
-            .entries
-            .iter()
-            .any(|FileSystemSandboxEntry { path, access, .. }| {
-                matches!(
-                    path,
-                    FileSystemPath::Special {
-                        value: codex_protocol::permissions::FileSystemSpecialPath::Tmpdir,
-                    }
-                ) && access.can_write()
-            })
+            .collect()
     }
 }
 
-fn windows_temp_env_roots(env_map: &HashMap<String, String>) -> Vec<PathBuf> {
-    ["TEMP", "TMP"]
+/// Replace `:tmpdir` with absolute TEMP/TMP paths from the completed Windows
+/// workload environment. Use the same key order as the child's environment
+/// block; never use host TEMP/TMP. Preserve access and missing-path rules so
+/// the ordinary policy evaluator still handles read/deny carveouts.
+pub fn resolve_workload_temp_paths(
+    file_system: &mut FileSystemSandboxPolicy,
+    workload_env: &HashMap<String, String>,
+) {
+    use codex_protocol::permissions::FileSystemSpecialPath;
+
+    file_system.entries = std::mem::take(&mut file_system.entries)
         .into_iter()
-        .filter_map(|key| {
-            env_map
-                .get(key)
-                .map(|value| PathBuf::from(value.as_str()))
-                .or_else(|| std::env::var_os(key).map(PathBuf::from))
+        .flat_map(|entry| match &entry.path {
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Tmpdir,
+            } => crate::process::ordered_env_entries(workload_env)
+                .into_iter()
+                .filter(|(key, value)| {
+                    (key.eq_ignore_ascii_case("TEMP") || key.eq_ignore_ascii_case("TMP"))
+                        && Path::new(value).is_absolute()
+                })
+                .filter_map(|(_, value)| AbsolutePathBuf::from_absolute_path(value).ok())
+                .map(|path| FileSystemSandboxEntry {
+                    path: path.into(),
+                    ..entry.clone()
+                })
+                .collect(),
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::SlashTmp,
+            } => Vec::new(),
+            _ => vec![entry],
         })
-        .filter(|path| path.is_absolute())
-        .collect()
+        .collect();
 }
 
 #[cfg(test)]
@@ -269,13 +255,97 @@ mod tests {
             .collect::<std::collections::HashSet<_>>();
 
         let expected_roots = [
-            temp_dir,
+            dunce::canonicalize(&temp_dir).expect("canonicalize temp dir"),
             dunce::canonicalize(&cwd).expect("canonicalize cwd"),
         ]
         .into_iter()
         .collect::<std::collections::HashSet<_>>();
 
         assert_eq!(expected_roots, roots);
+    }
+
+    #[test]
+    fn explicit_empty_or_missing_override_does_not_fall_back_to_temp() {
+        let dir = TempDir::new().unwrap();
+        let cwd = dir.path().join("work");
+        let codex_home = dir.path().join("codex-home");
+        let temp = dir.path().join("temp");
+        for path in [&cwd, &codex_home, &temp] {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        let env = HashMap::from([("Temp".into(), temp.to_string_lossy().into_owned())]);
+        let profile = permission_profile_with_entries(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Tmpdir,
+                },
+                FileSystemAccessMode::Write,
+            ),
+        ]);
+        let permissions =
+            ResolvedWindowsSandboxPermissions::try_from_permission_profile(&profile).unwrap();
+        assert_eq!(
+            token_mode_for_permission_profile(&profile, &[], &cwd, &env).unwrap(),
+            WindowsSandboxTokenMode::WritableRootsCapability
+        );
+        for overrides in [vec![], vec![dir.path().join("missing")]] {
+            assert!(
+                crate::setup::effective_write_roots_for_permissions(
+                    &permissions,
+                    &cwd,
+                    &env,
+                    &codex_home,
+                    Some(&overrides)
+                )
+                .is_empty(),
+                "invalid override {overrides:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unavailable_windows_temp_never_creates_write_capabilities() {
+        let dir = TempDir::new().unwrap();
+        let cwd = dir.path().join("work");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let profile = permission_profile_with_entries(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Tmpdir,
+                },
+                FileSystemAccessMode::Write,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::SlashTmp,
+                },
+                FileSystemAccessMode::Write,
+            ),
+        ]);
+        let explicit_empty = HashMap::from([
+            ("TEMP".into(), String::new()),
+            ("TMP".into(), "relative".into()),
+        ]);
+        assert_eq!(
+            token_mode_for_permission_profile(&profile, &[], &cwd, &explicit_empty).unwrap(),
+            WindowsSandboxTokenMode::ReadOnlyCapability
+        );
+        assert_eq!(
+            token_mode_for_permission_profile(&profile, &[], &cwd, &HashMap::new()).unwrap(),
+            WindowsSandboxTokenMode::ReadOnlyCapability
+        );
     }
 
     #[test]

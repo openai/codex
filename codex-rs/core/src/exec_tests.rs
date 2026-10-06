@@ -886,6 +886,7 @@ fn windows_elevated_supports_split_restricted_read_roots() {
             &permission_profile,
             &temp_dir.path().abs(),
             /*use_windows_elevated_backend*/ true,
+            &std::collections::HashMap::new(),
         ),
         Ok(Some(WindowsSandboxFilesystemOverrides {
             read_roots_override: Some(vec![expected_docs]),
@@ -939,6 +940,7 @@ fn windows_elevated_supports_split_write_read_carveouts() {
             &permission_profile,
             &temp_dir.path().abs(),
             /*use_windows_elevated_backend*/ true,
+            &std::collections::HashMap::new(),
         ),
         Ok(Some(WindowsSandboxFilesystemOverrides {
             read_roots_override: None,
@@ -965,6 +967,7 @@ fn windows_workspace_defaults_do_not_hide_explicit_metadata_carveouts() {
         &default_profile,
         &cwd,
         /*use_windows_elevated_backend*/ true,
+        &std::collections::HashMap::new(),
     )
     .expect("resolve workspace defaults");
     assert!(
@@ -992,6 +995,7 @@ fn windows_workspace_defaults_do_not_hide_explicit_metadata_carveouts() {
             &explicit_profile,
             &cwd,
             /*use_windows_elevated_backend*/ true,
+            &std::collections::HashMap::new(),
         )
         .expect("resolve explicit metadata carveout")
         .expect("explicit metadata carveout needs an override");
@@ -1041,6 +1045,7 @@ fn windows_elevated_supports_unreadable_split_carveouts() {
             &permission_profile,
             &temp_dir.path().abs(),
             /*use_windows_elevated_backend*/ true,
+            &std::collections::HashMap::new(),
         ),
         Ok(Some(WindowsSandboxFilesystemOverrides {
             read_roots_override: None,
@@ -1102,6 +1107,7 @@ fn windows_elevated_supports_unreadable_globs() {
             &permission_profile,
             &temp_dir.path().abs(),
             /*use_windows_elevated_backend*/ true,
+            &std::collections::HashMap::new(),
         ),
         Ok(Some(WindowsSandboxFilesystemOverrides {
             read_roots_override: None,

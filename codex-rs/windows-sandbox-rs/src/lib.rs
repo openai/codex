@@ -398,6 +398,8 @@ pub use resolved_permissions::ResolvedWindowsSandboxPermissions;
 #[cfg(target_os = "windows")]
 pub use resolved_permissions::WindowsSandboxTokenMode;
 #[cfg(target_os = "windows")]
+pub use resolved_permissions::resolve_workload_temp_paths;
+#[cfg(target_os = "windows")]
 pub use resolved_permissions::token_mode_for_permission_profile;
 #[cfg(target_os = "windows")]
 pub use runtime_ownership::APP_CORE_RUNNER_ALIAS;

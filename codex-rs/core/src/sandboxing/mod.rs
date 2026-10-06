@@ -149,6 +149,7 @@ impl ExecRequest {
                     &permission_profile,
                     &sandbox_policy_cwd,
                     use_windows_elevated_backend,
+                    &env,
                 )
             } else {
                 resolve_windows_restricted_token_filesystem_overrides(
