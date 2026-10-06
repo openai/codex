@@ -10,6 +10,9 @@ use std::sync::PoisonError;
 
 use crate::agent::control::AgentTreeMembership;
 use crate::agent::control::AgentTreeTeardownGuard;
+use crate::thread_manager::thread_store_error_kind;
+use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErrKind;
 use codex_protocol::protocol::Op;
 use codex_thread_store::LiveThreadInitGuard;
 use futures::future::BoxFuture;
@@ -32,16 +35,25 @@ impl SessionStartup {
     }
 
     pub(crate) fn hold_membership(&self, membership: AgentTreeMembership) {
-        let previous = self
-            .lock_teardown()
-            .replace(membership.into_teardown_guard());
+        let teardown = membership.into_teardown_guard("session_startup", /*thread_id*/ None);
+        let previous = self.lock_teardown().replace(teardown);
         assert!(previous.is_none(), "agent-tree membership already set");
     }
 
-    pub(crate) fn session_teardown(&self) -> Option<AgentTreeTeardownGuard> {
-        self.lock_teardown()
-            .as_ref()
-            .map(AgentTreeTeardownGuard::clone_for_teardown)
+    pub(crate) fn set_session(&self, session: Arc<Session>) {
+        let thread_id = session.thread_id;
+        let mut teardown = self.lock_teardown();
+        if self.session.set(session).is_ok()
+            && let Some(teardown) = teardown.as_mut()
+        {
+            teardown.set_thread_id(thread_id);
+        }
+    }
+
+    pub(crate) fn session_teardown(&self, thread_id: ThreadId) -> Option<AgentTreeTeardownGuard> {
+        let teardown = self.lock_teardown();
+        let teardown = teardown.as_ref()?;
+        Some(teardown.clone_for_teardown("session_loop", Some(thread_id)))
     }
 
     pub(crate) fn release_membership(&self) {
@@ -51,7 +63,12 @@ impl SessionStartup {
     }
 
     pub(crate) async fn cleanup(&self) {
-        let teardown = self.lock_teardown().take();
+        let mut teardown = self.lock_teardown().take();
+        if let Some(teardown) = teardown.as_mut()
+            && let Some(session) = self.session.get()
+        {
+            teardown.set_thread_id(session.thread_id);
+        }
         if let Some(io) = self.io.get() {
             // The session loop owns persistence now. Preserve its shutdown semantics even
             // if registration or the caller's handoff was interrupted after the loop started.
@@ -59,7 +76,10 @@ impl SessionStartup {
             let _ = io.submit(Op::Interrupt).await;
             if let Err(error) = io.shutdown_and_wait().await {
                 if let Some(teardown) = teardown.as_ref() {
-                    teardown.record_shutdown_failure();
+                    teardown.record_shutdown_failure(
+                        "stop_session_io",
+                        CodexErrKind::from(&error).into(),
+                    );
                 }
                 tracing::warn!("failed to stop cancelled session init: {error}");
             }
@@ -70,7 +90,10 @@ impl SessionStartup {
             let mut persistence = std::mem::take(&mut *self.persistence.lock().await);
             if let Err(error) = persistence.discard().await {
                 if let Some(teardown) = teardown.as_ref() {
-                    teardown.record_shutdown_failure();
+                    teardown.record_shutdown_failure(
+                        "discard_persistence",
+                        thread_store_error_kind(&error),
+                    );
                 }
                 tracing::warn!(
                     "failed to discard thread persistence for failed session init: {error}"

@@ -466,7 +466,7 @@ impl LocalAgentControl {
         let Ok(membership) = self.runtime.admit_start() else {
             return;
         };
-        let teardown = membership.into_teardown_guard();
+        let teardown = membership.into_teardown_guard("completion_watcher", Some(child_thread_id));
         let control = self.clone();
         let watcher = async move {
             let status = match control.subscribe_status(child_thread_id).await {

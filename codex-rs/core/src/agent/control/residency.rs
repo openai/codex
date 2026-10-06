@@ -8,6 +8,7 @@ use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::error::AgentErrorContext;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrKind;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -184,11 +185,15 @@ impl V2Residency {
             // must keep delivery excluded and capacity reserved through registry removal.
             let manager = Arc::clone(manager);
             let residency = Arc::clone(self);
-            let teardown = membership.clone().into_teardown_guard();
+            let teardown = membership
+                .clone()
+                .into_teardown_guard("resident_eviction", Some(candidate_thread_id));
             let eviction = tokio::spawn(async move {
                 let _residency_guard = residency_guard;
                 candidate_thread.ensure_rollout_materialized().await;
                 if let Err(err) = candidate_thread.shutdown_and_wait().await {
+                    teardown
+                        .record_shutdown_failure("stop_resident", CodexErrKind::from(&err).into());
                     warn!(
                         "failed to shut down v2 resident thread before unloading {candidate_thread_id}: {err}"
                     );

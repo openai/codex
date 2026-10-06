@@ -966,7 +966,7 @@ impl Session {
         // This task will run until Op::Shutdown is received.
         let tree_teardown = startup
             .as_ref()
-            .and_then(|startup| startup.session_teardown());
+            .and_then(|startup| startup.session_teardown(thread_id));
         let session_for_loop = Arc::clone(&session);
         let session_loop_handle = tokio::spawn(storage_originator.scope(async move {
             submission_loop(session_for_loop, configured_config, rx_sub)

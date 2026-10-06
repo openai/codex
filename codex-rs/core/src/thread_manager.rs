@@ -3,6 +3,10 @@ mod shared_instructions;
 mod shutdown;
 
 pub use shutdown::AgentTreeShutdown;
+pub use shutdown::AgentTreeShutdownFailure;
+pub use shutdown::AgentTreeShutdownFailureReason;
+pub use shutdown::AgentTreeShutdownReport;
+pub(crate) use shutdown::thread_store_error_kind;
 
 use crate::CodexAppsToolsCache;
 use crate::agent::LocalAgentControl;

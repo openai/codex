@@ -1,5 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::AgentTreeShutdownFailure;
+use codex_core::AgentTreeShutdownFailureReason;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
@@ -701,7 +703,11 @@ async fn tree_shutdown_waits_for_children_without_affecting_other_roots() -> Res
         error.details(),
         CodexErrorDetails::InvalidRequest(_)
     ));
-    tokio::time::timeout(Duration::from_secs(/*secs*/ 10), shutdown.wait()).await??;
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 10), shutdown.wait_detailed())
+        .await?
+        .expect("tree shutdown should succeed");
+    // Legacy waiters observe the same successful completion after a detailed wait.
+    shutdown.wait().await?;
     assert!(test.codex.wait_until_terminated().now_or_never().is_some());
     assert!(worker.wait_until_terminated().now_or_never().is_some());
     assert!(
@@ -809,9 +815,33 @@ async fn tree_shutdown_reports_persistence_writer_failure() -> Result<()> {
         .thread_manager
         .request_agent_tree_shutdown(root_id)
         .await?;
-    let result = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), shutdown.wait()).await?;
+    let report = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), shutdown.wait_detailed())
+        .await?
+        .expect_err("shutdown should report the failed persistence writer");
 
-    assert!(result.is_err());
+    assert_eq!(
+        report.failures,
+        vec![AgentTreeShutdownFailure {
+            operation: "session_shutdown",
+            thread_id: Some(root_id),
+            reason: AgentTreeShutdownFailureReason::OperationFailed {
+                phase: "close_persistence",
+                error_kind: "thread_store_not_found",
+            },
+        }]
+    );
+    assert_eq!(report.omitted_failures, 0);
+    assert_eq!(
+        shutdown
+            .wait_detailed()
+            .await
+            .expect_err("failure persists"),
+        report
+    );
+    shutdown
+        .wait()
+        .await
+        .expect_err("legacy wait must still report the failure");
     Ok(())
 }
 

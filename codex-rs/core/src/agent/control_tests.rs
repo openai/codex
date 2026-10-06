@@ -4271,7 +4271,14 @@ async fn completion_watcher_does_not_hide_tree_shutdown_failure() {
         child_thread_id.to_string(),
         /*child_agent_path*/ None,
     );
-    harness.control.runtime.record_shutdown_failure();
+    harness.control.runtime.record_shutdown_failure(
+        crate::thread_manager::AgentTreeShutdownFailure::operation_failed(
+            "completion_watcher_test",
+            "test",
+            Some(parent_thread_id),
+            "test_error",
+        ),
+    );
     let shutdown = harness.control.runtime.request_shutdown();
 
     timeout(Duration::from_secs(5), shutdown.wait())

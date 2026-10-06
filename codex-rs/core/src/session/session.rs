@@ -1846,7 +1846,7 @@ impl Session {
                 next_internal_sub_id: AtomicU64::new(0),
             });
             if let Some(startup) = &startup {
-                let _ = startup.session.set(Arc::clone(&sess));
+                startup.set_session(Arc::clone(&sess));
             }
             if let Some(network_policy_decider_session) = network_policy_decider_session {
                 let mut guard = network_policy_decider_session.write().await;
