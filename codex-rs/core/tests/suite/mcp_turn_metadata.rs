@@ -670,9 +670,9 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request(
                 ..Default::default()
             })
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![test.executor_environment().selection().clone()],
+                    vec![test.executor_environment().request()],
                 )),
                 approval_policy: Some(AskForApproval::OnRequest),
                 sandbox_policy: Some(sandbox_policy),

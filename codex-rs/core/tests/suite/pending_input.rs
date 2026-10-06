@@ -566,7 +566,7 @@ async fn queue_only_agent_mail_wakes_sleeping_root_with_previous_turn_context(
         .await?;
     wait_for_turn_complete(&test.codex).await;
     // Automatic turns need not replace the model-context baseline on replay.
-    let TurnInputSubmission::Started { turn_id } = test
+    let TurnInputSubmission::Started { turn_id, .. } = test
         .codex
         .start_or_steer_turn(
             TurnInputRequest::user_input(Vec::new()).on_start(TurnStartOptions {
