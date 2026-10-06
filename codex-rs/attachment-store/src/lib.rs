@@ -38,6 +38,8 @@ pub trait AttachmentStore: Send + Sync {
 pub struct UploadRequest {
     /// Thread receiving this attachment; storage backends may use it for placement.
     pub thread_id: String,
+    /// Whether the originating thread intentionally skips durable persistence.
+    pub ephemeral: bool,
     /// Optional name associated with the attachment.
     pub file_name: Option<String>,
     /// Attachment bytes to persist.
@@ -49,6 +51,7 @@ impl fmt::Debug for UploadRequest {
         formatter
             .debug_struct("UploadRequest")
             .field("thread_id", &self.thread_id)
+            .field("ephemeral", &self.ephemeral)
             .field("file_name", &self.file_name)
             .field("data", &"<redacted>")
             .finish()
