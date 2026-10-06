@@ -431,7 +431,6 @@ async fn model_resolution_preserves_startup_overrides_and_instruction_provenance
         .expect("test model should have instruction metadata");
     messages.instructions_template =
         Some("Catalog B.\n# Personality\nfixed\n# Rules\nKeep the rules.".to_string());
-    messages.instructions_variables = None;
     messages.auto_review = Some(auto_review);
     messages.guardian_v2 = Some(guardian_v2);
     let catalog = ModelsResponse {

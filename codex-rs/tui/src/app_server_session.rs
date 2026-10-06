@@ -1894,7 +1894,7 @@ pub(crate) fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
                 description: effort.description,
             })
             .collect(),
-        supports_personality: model.supports_personality,
+        supports_personality: false,
         additional_speed_tiers: model.additional_speed_tiers,
         service_tiers: model
             .service_tiers

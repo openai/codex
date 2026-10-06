@@ -647,7 +647,6 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
             persistent_instructions: None,
             tools: None,
             instructions_template: Some("base instructions".to_string()),
-            instructions_variables: None,
             approvals: None,
             collaboration_modes: None,
             auto_review: None,

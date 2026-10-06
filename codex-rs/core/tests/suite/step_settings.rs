@@ -1083,7 +1083,6 @@ async fn active_model_switch_updates_core_context_from_captured_settings(
                 }
                 let messages = model.model_messages.as_mut().expect("model messages");
                 messages.instructions_template = Some(format!("Instructions for {slug}."));
-                messages.instructions_variables = None;
                 messages.collaboration_modes = Some(CollaborationModeMessages {
                     default: Some(format!("Default collaboration for {slug}.")),
                     plan: None,

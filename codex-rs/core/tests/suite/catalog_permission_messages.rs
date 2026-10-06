@@ -35,7 +35,6 @@ async fn catalog_permission_message_loaded_from_remote_models_is_sent() -> Resul
         persistent_instructions: None,
         tools: None,
         instructions_template: None,
-        instructions_variables: None,
         approvals: None,
         collaboration_modes: None,
         auto_review: None,

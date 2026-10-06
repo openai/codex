@@ -78,7 +78,6 @@ fn model_with_collaboration_messages(
         persistent_instructions: None,
         tools: None,
         instructions_template: None,
-        instructions_variables: None,
         approvals: None,
         collaboration_modes: None,
         auto_review: None,

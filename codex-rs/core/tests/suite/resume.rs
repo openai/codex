@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_config::types::Personality;
 use codex_core::TurnInputRequest;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
@@ -128,9 +129,17 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        config.model = Some("gpt-5.2".to_string());
-    });
+    let legacy_instructions = "Legacy model instructions\n# Personality\nBe pragmatic.";
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.2", move |model| {
+            model
+                .model_messages
+                .get_or_insert_default()
+                .instructions_template = Some(legacy_instructions.to_string());
+        })
+        .with_config(|config| {
+            config.personality = Some(Personality::Pragmatic);
+        });
     let initial = builder.build(&server).await?;
     let codex = Arc::clone(&initial.codex);
 
@@ -149,6 +158,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     let initial_instructions = initial_mock.single_request().instructions_text();
+    assert_eq!(initial_instructions, legacy_instructions);
 
     let resumed_mock = mount_sse_sequence(
         &server,
@@ -169,8 +179,17 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
 
     let mut resume_builder = test_codex().with_config(|config| {
         config.model = Some("gpt-5.4".to_string());
+        config.personality = Some(Personality::None);
     });
     let resumed = resume_builder.restart(&server, &initial).await?;
+    assert_eq!(
+        resumed.session_configured.thread_id,
+        initial.session_configured.thread_id
+    );
+    assert_eq!(
+        resumed.codex.config_snapshot().await.personality,
+        Some(Personality::None)
+    );
     resumed
         .codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
@@ -200,6 +219,12 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
 
     let first_resumed = &requests[0];
     assert_eq!(first_resumed.instructions_text(), initial_instructions);
+    assert!(
+        first_resumed
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text == "Record initial instructions")
+    );
     let first_developer_texts = first_resumed.message_input_texts("developer");
     let first_model_switch_count = first_developer_texts
         .iter()

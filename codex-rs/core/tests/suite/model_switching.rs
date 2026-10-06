@@ -385,9 +385,13 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
     Ok(())
 }
 
+#[test_case(None; "omitted personality keeps opt-out")]
+#[test_case(Some(Personality::Friendly); "friendly clears opt-out")]
+#[test_case(Some(Personality::Pragmatic); "pragmatic clears opt-out")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_change_with_legacy_personality_override_only_appends_model_instructions()
--> Result<()> {
+async fn model_change_respects_personality_opt_out_updates(
+    personality: Option<Personality>,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -397,55 +401,56 @@ async fn model_change_with_legacy_personality_override_only_appends_model_instru
     )
     .await;
 
-    let mut builder = test_codex().with_model("gpt-5.5");
-    let test = builder.build(&server).await?;
     let next_model = "exp-codex-personality";
+    let mut builder = test_codex()
+        .with_model_info_override(next_model, |model| {
+            configure_model_switching_fixture(model);
+            model
+                .model_messages
+                .as_mut()
+                .expect("test model should have instruction metadata")
+                .instructions_template = Some(
+                "Catalog instructions.\n# Personality\nCatalog style.\n# Rules\nKeep the rules."
+                    .to_string(),
+            );
+        })
+        .with_model("gpt-5.5")
+        .with_config(|config| config.personality = Some(Personality::None));
+    let test = builder.build_with_auto_env(&server).await?;
 
-    test.codex
-        .start_or_steer_turn(read_only_user_turn(
-            &test,
-            vec![UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            test.session_configured.model.clone(),
-        ))
-        .await?;
-    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    submit_model_turn(
+        &test.codex,
+        &test.session_configured.model,
+        ThreadSettingsOverrides::default(),
+    )
+    .await?;
 
     core_test_support::submit_thread_settings(
         &test.codex,
         ThreadSettingsOverrides {
-            model: Some(next_model.to_string()),
-            personality: Some(Personality::Pragmatic),
+            personality,
             ..Default::default()
         },
     )
     .await?;
 
-    test.codex
-        .start_or_steer_turn(read_only_user_turn(
-            &test,
-            vec![UserInput::Text {
-                text: "switch model and personality".into(),
-                text_elements: Vec::new(),
-            }],
-            next_model.to_string(),
-        ))
-        .await?;
-    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    submit_model_turn(&test.codex, next_model, ThreadSettingsOverrides::default()).await?;
 
     let requests = resp_mock.requests();
     assert_eq!(requests.len(), 2, "expected two model requests");
 
     let second_request = requests.last().expect("expected second request");
     let developer_texts = second_request.message_input_texts("developer");
-    assert!(
-        developer_texts
-            .iter()
-            .any(|text| text.contains("<model_switch>")),
-        "expected model switch message when model changes"
-    );
+    let model_switch = developer_texts
+        .iter()
+        .find(|text| text.contains("<model_switch>"))
+        .expect("expected model switch message when model changes");
+    let expected_instructions = if personality.is_some() {
+        "Catalog instructions.\n# Personality\nCatalog style.\n# Rules\nKeep the rules."
+    } else {
+        "Catalog instructions.\n# Rules\nKeep the rules."
+    };
+    assert!(model_switch.contains(expected_instructions));
     assert!(
         !developer_texts
             .iter()

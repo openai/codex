@@ -122,7 +122,7 @@ impl ResolvedStepSettings {
     }
 
     /// Applies sparse edits to the retained selection, preserving pinned metadata
-    /// unless model or personality selection changes, then resolves request values.
+    /// unless the model changes, then resolves request values.
     pub(super) async fn apply_update(
         &self,
         update: &StepSettingsUpdate,
@@ -132,14 +132,12 @@ impl ResolvedStepSettings {
         fast_mode_enabled: bool,
     ) -> ConstraintResult<Self> {
         let selected = self.selected.apply(update, constraints)?;
-        let model_info = if selected.collaboration_mode.model()
-            == self.selected.collaboration_mode.model()
-            && selected.personality == self.selected.personality
-        {
-            Arc::clone(&self.model_info)
-        } else {
-            Arc::new(selected.resolve_model_info(models_manager, overrides).await)
-        };
+        let model_info =
+            if selected.collaboration_mode.model() == self.selected.collaboration_mode.model() {
+                Arc::clone(&self.model_info)
+            } else {
+                Arc::new(selected.resolve_model_info(models_manager, overrides).await)
+            };
         let mut next = Self::new(Arc::new(selected), model_info, fast_mode_enabled);
         next.mcp_approvals_reviewer_override = update
             .approvals_reviewer

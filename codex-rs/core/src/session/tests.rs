@@ -11288,7 +11288,6 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         model_info.max_context_window = None;
         let messages = model_info.model_messages.as_mut().unwrap();
         messages.instructions_template = Some("A instructions".to_string());
-        messages.instructions_variables = None;
     });
     session
         .set_previous_turn_settings(Some(PreviousTurnSettings {

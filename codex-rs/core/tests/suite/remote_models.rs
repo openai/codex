@@ -85,7 +85,6 @@ async fn disabled_update_plan_preserves_custom_catalog_instructions() -> Result<
         .as_mut()
         .expect("model prompt templates");
     messages.instructions_template = Some(INSTRUCTIONS.to_string());
-    messages.instructions_variables = None;
     let test = test_codex()
         .with_model("gpt-5.5")
         .with_config(move |config| {
