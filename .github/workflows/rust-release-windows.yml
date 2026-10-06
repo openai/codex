@@ -222,8 +222,6 @@ jobs:
         env:
           ARCH: ${{ matrix.arch }}
           VOICE_ARCH: ${{ matrix.arch }}
-          # Avoid Java JIT crashes in the Windows ARM64 voice build.
-          BAZEL_HOST_JVM_ARG: ${{ matrix.arch == 'aarch64' && '-Xint' || '' }}
           BUILDBUDDY_API_KEY: ""
         run: |
           (cd codex-rs && cargo update --workspace)
