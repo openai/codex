@@ -258,3 +258,39 @@ fn information_banner_preserves_input_and_honors_dismissal() {
         assert_eq!(pane.composer_text(), "1");
     }
 }
+
+#[test]
+fn banner_copy_preserves_wrapped_url_destinations() {
+    let url = "https://github.com/openai/codex/pull/12345?diff=split";
+    let (tx, _rx) = unbounded_channel();
+    let mut pane = test_pane(AppEventSender::new(tx));
+    pane.set_inline_banner(Some(ActionableBanner {
+        title: "Review the release".into(),
+        description: format!("Open {url} before continuing."),
+        ..Default::default()
+    }));
+    let area = Rect::new(0, 0, 40, pane.desired_height(/*width*/ 40));
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    pane.render(area, &mut buf);
+    let linked = buf
+        .content
+        .iter()
+        .filter(|cell| cell.symbol().contains("\x1b]8;;"))
+        .map(|cell| {
+            assert!(cell.symbol().starts_with(&format!("\x1b]8;;{url}\x07")));
+            crate::terminal_hyperlinks::strip_osc8(cell.symbol())
+        })
+        .collect::<String>();
+    assert_eq!(linked, url);
+    let visible = buf
+        .content
+        .chunks(usize::from(area.width))
+        .map(|row| {
+            row.iter()
+                .map(|cell| crate::terminal_hyperlinks::strip_osc8(cell.symbol()))
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("banner_wrapped_url", visible);
+}

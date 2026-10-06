@@ -13,7 +13,7 @@ use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::terminal_palette::best_color;
 use crate::terminal_palette::default_fg;
-use crate::wrapping::word_wrap_lines;
+use crate::wrapping::word_wrap_line_with_source;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -21,9 +21,9 @@ use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use std::cell::Cell;
 
@@ -112,11 +112,19 @@ impl Renderable for InlineBanner {
 struct BannerContent(Vec<Line<'static>>);
 
 impl BannerContent {
-    fn wrapped_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = word_wrap_lines(&self.0, width as usize);
+    fn wrapped_lines(&self, width: u16) -> Vec<crate::terminal_hyperlinks::HyperlinkLine> {
+        let mut lines = crate::terminal_hyperlinks::annotate_web_urls(self.0.clone())
+            .into_iter()
+            .flat_map(|source| {
+                let wrapped = word_wrap_line_with_source(&source.line, usize::from(width));
+                crate::terminal_hyperlinks::remap_source_wrapped_line(&source, wrapped)
+            })
+            .collect::<Vec<_>>();
         if lines.len() > 8 {
             lines.truncate(7);
-            lines.push("…".dim().into());
+            lines.push(crate::terminal_hyperlinks::HyperlinkLine::new(
+                "…".dim().into(),
+            ));
         }
         lines
     }
@@ -127,7 +135,14 @@ impl Renderable for BannerContent {
         let lines = self.wrapped_lines(area.width);
         // Explicit foreground avoids a terminal's separate bold color washing out the title.
         let foreground = default_fg().map(best_color).unwrap_or(Color::Reset);
-        Widget::render(Paragraph::new(lines).fg(foreground), area, buf);
+        Widget::render(
+            crate::terminal_hyperlinks::HyperlinkParagraph::new(
+                &lines,
+                Style::default().fg(foreground),
+            ),
+            area,
+            buf,
+        );
     }
 
     fn desired_height(&self, width: u16) -> u16 {

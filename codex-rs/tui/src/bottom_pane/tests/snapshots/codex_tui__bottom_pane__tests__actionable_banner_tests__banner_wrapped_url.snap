@@ -1,0 +1,16 @@
+---
+source: tui/src/bottom_pane/tests/actionable_banner_tests.rs
+expression: visible
+---
+                                        
+  Review the release                    
+  Open https://github.com/openai/       
+  codex/pull/12345?diff=split before    
+  continuing.                           
+                                        
+  esc to dismiss · type to continue     
+                                        
+                                        
+› Ask Codex to do anything              
+                                        
+  ? for shortcuts    100% context left
