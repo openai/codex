@@ -931,10 +931,22 @@ impl McpServerElicitationOverlay {
             .collect()
     }
 
-    fn wrapped_prompt_lines(&self, width: u16) -> Vec<String> {
-        textwrap::wrap(&self.current_prompt_text(), width.max(1) as usize)
-            .into_iter()
-            .map(|line| line.to_string())
+    fn wrapped_prompt_lines(&self, width: u16) -> Vec<crate::terminal_hyperlinks::HyperlinkLine> {
+        self.current_prompt_text()
+            .split('\n')
+            .flat_map(|text| {
+                let source =
+                    crate::terminal_hyperlinks::annotate_web_urls_in_line(text.to_owned().into());
+                let wrapped = crate::wrapping::wrap_ranges_trim(text, usize::from(width.max(1)))
+                    .into_iter()
+                    .map(|range| crate::wrapping::WrappedLine {
+                        line: (&text[range.clone()]).into(),
+                        range,
+                        prefix_bytes: 0,
+                    })
+                    .collect();
+                crate::terminal_hyperlinks::remap_source_wrapped_line(&source, wrapped)
+            })
             .collect()
     }
 
@@ -1284,27 +1296,16 @@ impl McpServerElicitationOverlay {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let answered = self.is_current_field_answered();
-        for (offset, line) in self.wrapped_prompt_lines(area.width).iter().enumerate() {
-            let y = area.y.saturating_add(offset as u16);
-            if y >= area.y + area.height {
-                break;
-            }
-            let line = if answered {
-                Line::from(line.clone())
-            } else {
-                Line::from(line.clone()).fg(crate::style::accent_color())
-            };
-            Paragraph::new(line).render(
-                Rect {
-                    x: area.x,
-                    y,
-                    width: area.width,
-                    height: 1,
-                },
-                buf,
-            );
-        }
+        let style = if self.is_current_field_answered() {
+            ratatui::style::Style::default()
+        } else {
+            ratatui::style::Style::default().fg(crate::style::accent_color())
+        };
+        crate::terminal_hyperlinks::HyperlinkParagraph::new(
+            &self.wrapped_prompt_lines(area.width),
+            style,
+        )
+        .render(area, buf);
     }
 
     fn render_input(&self, area: Rect, buf: &mut Buffer) {
@@ -1816,7 +1817,12 @@ mod tests {
         for y in 0..buf.area().height {
             let mut row = String::new();
             for x in 0..buf.area().width {
-                row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+                row.push(
+                    crate::terminal_hyperlinks::strip_osc8(buf[(x, y)].symbol())
+                        .chars()
+                        .next()
+                        .unwrap_or(' '),
+                );
             }
             lines.push(row);
         }
@@ -2609,6 +2615,43 @@ mod tests {
             rx.try_recv(),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         ));
+    }
+
+    #[test]
+    fn form_prompt_preserves_the_complete_wrapped_url_destination() {
+        let url = "https://github.com/openai/codex/pull/12345?diff=split";
+        let (tx, _rx) = test_sender();
+        let request = from_form_request(
+            ThreadId::default(),
+            form_request(
+                &format!("Review {url} before choosing."),
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {"confirmed": {"type": "boolean", "title": "Continue"}},
+                    "required": ["confirmed"]
+                }),
+                /*meta*/ None,
+            ),
+        )
+        .expect("supported form");
+        let overlay = McpServerElicitationOverlay::new(
+            request, tx, /*has_input_focus*/ true, /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+        );
+        let area = Rect::new(0, 0, 40, 20);
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+        let linked = buf
+            .content
+            .iter()
+            .filter(|cell| cell.symbol().contains("\x1b]8;;"))
+            .map(|cell| {
+                assert!(cell.symbol().starts_with(&format!("\x1b]8;;{url}\x07")));
+                crate::terminal_hyperlinks::strip_osc8(cell.symbol())
+            })
+            .collect::<String>();
+        assert_eq!(linked, url);
+        insta::assert_snapshot!("mcp_form_wrapped_url", snapshot_buffer(&buf));
     }
 
     #[test]
