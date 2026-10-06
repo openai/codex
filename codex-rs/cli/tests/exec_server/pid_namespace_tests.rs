@@ -14,7 +14,10 @@ use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn pid_inheritance_is_startup_only_for_process_and_filesystem_helpers() -> Result<()> {
-    let Some(bwrap) = codex_sandboxing::find_system_bwrap_in_path() else {
+    let Some(bwrap) = codex_sandboxing::find_system_bwrap_in_path(
+        &PermissionProfile::read_only().file_system_sandbox_policy(),
+        &std::env::current_dir()?,
+    ) else {
         eprintln!("skipping PID namespace test: no system bubblewrap");
         return Ok(());
     };

@@ -1,8 +1,13 @@
 use crate::policy_transforms::should_require_platform_sandbox;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use std::ffi::CString;
 use std::io::ErrorKind;
 use std::io::Read;
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -37,12 +42,18 @@ const SYSTEM_BWRAP_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const SYSTEM_BWRAP_PROBE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const SYSTEM_BWRAP_PROBE_STDERR_LIMIT_BYTES: u64 = 64 * 1024;
 
-pub fn system_bwrap_warning(permission_profile: &PermissionProfile) -> Option<String> {
+pub fn system_bwrap_warning(
+    permission_profile: &PermissionProfile,
+    sandbox_policy_cwd: &Path,
+) -> Option<String> {
     if !should_warn_about_system_bwrap(permission_profile) {
         return None;
     }
 
-    let system_bwrap_path = find_system_bwrap_in_path();
+    let system_bwrap_path = find_system_bwrap_in_path(
+        &permission_profile.file_system_sandbox_policy(),
+        sandbox_policy_cwd,
+    );
     system_bwrap_warning_for_path(system_bwrap_path.as_deref())
 }
 
@@ -165,29 +176,136 @@ fn is_user_namespace_failure(output: &Output) -> bool {
         .any(|failure| stderr.contains(failure))
 }
 
-pub fn find_system_bwrap_in_path() -> Option<PathBuf> {
-    let search_path = std::env::var_os("PATH")?;
-    let cwd = std::env::current_dir().ok()?;
-    find_system_bwrap_in_search_paths(std::env::split_paths(&search_path), &cwd)
+pub fn find_system_bwrap_in_path(
+    file_system_policy: &FileSystemSandboxPolicy,
+    sandbox_policy_cwd: &Path,
+) -> Option<PathBuf> {
+    find_pre_sandbox_executable_in_path(
+        SYSTEM_BWRAP_PROGRAM,
+        file_system_policy,
+        sandbox_policy_cwd,
+    )
 }
 
-fn find_system_bwrap_in_search_paths(
+/// Finds the first canonical PATH executable for use before sandbox construction.
+/// Skips candidates under a non-root process cwd and candidates the current user
+/// can modify or replace through writes allowed by the filesystem policy.
+pub fn find_pre_sandbox_executable_in_path(
+    program: &str,
+    file_system_policy: &FileSystemSandboxPolicy,
+    sandbox_policy_cwd: &Path,
+) -> Option<PathBuf> {
+    let search_path = std::env::var_os("PATH")?;
+    let cwd = std::env::current_dir().ok()?;
+    find_executable_in_search_paths(
+        program,
+        std::env::split_paths(&search_path),
+        &cwd,
+        file_system_policy,
+        sandbox_policy_cwd,
+    )
+}
+
+fn find_executable_in_search_paths(
+    program: &str,
     search_paths: impl IntoIterator<Item = PathBuf>,
     cwd: &Path,
+    file_system_policy: &FileSystemSandboxPolicy,
+    sandbox_policy_cwd: &Path,
 ) -> Option<PathBuf> {
     let search_path = std::env::join_paths(search_paths).ok()?;
     let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     let cwd_is_root = cwd.parent().is_none();
-    which::which_in_all(SYSTEM_BWRAP_PROGRAM, Some(search_path), &cwd)
+    // Full-disk policies intentionally have no enumerated writable roots.
+    let full_disk_write = file_system_policy.has_full_disk_write_access();
+    let writable_roots = file_system_policy
+        .get_writable_roots_with_cwd_inheriting_root_metadata(sandbox_policy_cwd)
+        .into_iter()
+        .map(|mut root| {
+            if let Ok(canonical) = std::fs::canonicalize(&root.root)
+                && let Ok(canonical) = AbsolutePathBuf::from_absolute_path_checked(canonical)
+            {
+                for subpath in &mut root.read_only_subpaths {
+                    if let Ok(relative) = subpath.as_path().strip_prefix(root.root.as_path()) {
+                        *subpath = canonical.join(relative);
+                    }
+                }
+                root.root = canonical;
+            }
+            root
+        })
+        .collect::<Vec<_>>();
+    let policy_can_write = |path: &Path| {
+        full_disk_write
+            || writable_roots
+                .iter()
+                .any(|root| root.is_path_writable(path))
+    };
+    which::which_in_all(program, Some(search_path), &cwd)
         .ok()?
         .find_map(|path| {
             let path = std::fs::canonicalize(path).ok()?;
-            if !cwd_is_root && path.starts_with(&cwd) {
+            // Preserve read-only carveouts, but also check ancestors: a protected
+            // file can still be replaced by renaming a writable parent directory.
+            // Host-protected installations remain usable even with full-disk writes.
+            if (!cwd_is_root && path.starts_with(&cwd))
+                || (policy_can_write(&path) && current_user_can_modify(&path))
+                || path.ancestors().any(|component| {
+                    let Some(parent) = component.parent() else {
+                        return false;
+                    };
+                    // Read-only carveouts are bind mounts and cannot themselves
+                    // be renamed/unlinked. Continue checking above them, since a
+                    // mutable ancestor could still redirect the installation path.
+                    let is_read_only_mount = writable_roots.iter().any(|root| {
+                        root.read_only_subpaths
+                            .iter()
+                            .any(|path| path.as_path() == component)
+                    });
+                    policy_can_write(parent)
+                        && !is_read_only_mount
+                        && current_user_can_modify(parent)
+                })
+            {
                 None
             } else {
                 Some(path)
             }
         })
+}
+
+fn current_user_can_modify(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return true;
+    };
+    // Owners can chmod a currently read-only file or directory before writing it.
+    // SAFETY: geteuid has no preconditions.
+    if metadata.uid() == unsafe { libc::geteuid() } {
+        return true;
+    }
+    let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+        return true;
+    };
+    // Ask the kernel to check effective credentials, including POSIX ACLs. Older
+    // libc faccessat emulation ignores ACLs, which could misclassify a writable path.
+    // SAFETY: path is a live, NUL-terminated string, and no pointer is retained.
+    if unsafe {
+        libc::syscall(
+            libc::SYS_faccessat2,
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            libc::W_OK,
+            libc::AT_EACCESS,
+        )
+    } == 0
+    {
+        return true;
+    }
+    // Unknown errors must not turn an unverified candidate into a trusted one.
+    !matches!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::EACCES | libc::EROFS)
+    )
 }
 
 #[cfg(test)]

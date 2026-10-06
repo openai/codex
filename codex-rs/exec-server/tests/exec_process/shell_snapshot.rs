@@ -108,8 +108,10 @@ async fn shell_snapshot_concurrent_replays_keep_independent_readers(
     let deny_fd_path = sandbox_mode == SnapshotSandbox::DenyFdPath;
     let use_sandbox = sandbox_mode != SnapshotSandbox::None;
     if use_sandbox
-        && let Some(warning) =
-            codex_sandboxing::system_bwrap_warning(&PermissionProfile::read_only())
+        && let Some(warning) = codex_sandboxing::system_bwrap_warning(
+            &PermissionProfile::read_only(),
+            &std::env::current_dir()?,
+        )
     {
         eprintln!("skipping sandbox test: {warning}");
         return Ok(());

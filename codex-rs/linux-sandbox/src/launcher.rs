@@ -11,6 +11,7 @@ use crate::bundled_bwrap;
 use crate::bundled_bwrap::BundledBwrapLauncher;
 use crate::exec_util::argv_to_cstrings;
 use crate::exec_util::make_files_inheritable;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_sandboxing::find_system_bwrap_in_path;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -34,6 +35,8 @@ struct SystemBwrapCapabilities {
     supports_perms: bool,
     supports_ro_bind_fd: bool,
 }
+
+static LAUNCHER: OnceLock<BubblewrapLauncher> = OnceLock::new();
 
 pub(crate) fn exec_bwrap(mut argv: Vec<String>, preserved_files: Vec<File>) -> ! {
     if argv
@@ -129,22 +132,28 @@ fn translate_legacy_bwrap_fd_mounts(argv: &mut Vec<String>) -> Result<(), String
     Ok(())
 }
 
-fn preferred_bwrap_launcher() -> BubblewrapLauncher {
-    static LAUNCHER: OnceLock<BubblewrapLauncher> = OnceLock::new();
-    LAUNCHER
-        .get_or_init(|| {
-            if let Some(path) = find_system_bwrap_in_path()
-                && let Some(launcher) = system_bwrap_launcher_for_path(&path)
-            {
-                return BubblewrapLauncher::System(launcher);
-            }
+pub(crate) fn initialize_bwrap_launcher(
+    file_system_policy: &FileSystemSandboxPolicy,
+    sandbox_policy_cwd: &Path,
+) {
+    LAUNCHER.get_or_init(|| {
+        if let Some(path) = find_system_bwrap_in_path(file_system_policy, sandbox_policy_cwd)
+            && let Some(launcher) = system_bwrap_launcher_for_path(&path)
+        {
+            return BubblewrapLauncher::System(launcher);
+        }
 
-            match bundled_bwrap::launcher() {
-                Some(launcher) => BubblewrapLauncher::Bundled(launcher),
-                None => BubblewrapLauncher::Unavailable,
-            }
-        })
-        .clone()
+        match bundled_bwrap::launcher() {
+            Some(launcher) => BubblewrapLauncher::Bundled(launcher),
+            None => BubblewrapLauncher::Unavailable,
+        }
+    });
+}
+
+fn preferred_bwrap_launcher() -> &'static BubblewrapLauncher {
+    LAUNCHER.get().unwrap_or_else(|| {
+        panic!("bubblewrap launcher must be initialized with the command's permissions")
+    })
 }
 
 fn system_bwrap_launcher_for_path(system_bwrap_path: &Path) -> Option<SystemBwrapLauncher> {

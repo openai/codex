@@ -18,7 +18,10 @@ async fn root_metadata_symlinks_cannot_reopen_approved_denials() {
     if should_skip_bwrap_tests().await {
         return;
     }
-    let Some(bwrap) = codex_sandboxing::find_system_bwrap_in_path() else {
+    let Some(bwrap) = codex_sandboxing::find_system_bwrap_in_path(
+        &PermissionProfile::read_only().file_system_sandbox_policy(),
+        &std::env::current_dir().expect("current directory"),
+    ) else {
         eprintln!("skipping root metadata test: system bubblewrap is unavailable");
         return;
     };

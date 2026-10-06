@@ -1,4 +1,7 @@
 use super::*;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::path::PathBuf;
@@ -127,7 +130,13 @@ fn finds_first_executable_bwrap_in_joined_search_path() {
     let search_path = std::env::join_paths([first_dir, second_dir]).expect("join search path");
 
     assert_eq!(
-        find_system_bwrap_in_search_paths(std::env::split_paths(&search_path), &cwd),
+        find_executable_in_search_paths(
+            "bwrap",
+            std::env::split_paths(&search_path),
+            &cwd,
+            &PermissionProfile::read_only().file_system_sandbox_policy(),
+            &cwd,
+        ),
         Some(expected_bwrap)
     );
 }
@@ -144,7 +153,13 @@ fn skips_workspace_local_bwrap_in_joined_search_path() {
     let search_path = std::env::join_paths([cwd.clone(), trusted_dir]).expect("join search path");
 
     assert_eq!(
-        find_system_bwrap_in_search_paths(std::env::split_paths(&search_path), &cwd),
+        find_executable_in_search_paths(
+            "bwrap",
+            std::env::split_paths(&search_path),
+            &cwd,
+            &PermissionProfile::read_only().file_system_sandbox_policy(),
+            &cwd,
+        ),
         Some(expected_bwrap)
     );
 }
@@ -158,9 +173,175 @@ fn root_cwd_does_not_hide_system_bwrap_candidates() {
     let search_path = std::env::join_paths([bin_dir]).expect("join search path");
 
     assert_eq!(
-        find_system_bwrap_in_search_paths(std::env::split_paths(&search_path), Path::new("/")),
+        find_executable_in_search_paths(
+            "bwrap",
+            std::env::split_paths(&search_path),
+            Path::new("/"),
+            &PermissionProfile::read_only().file_system_sandbox_policy(),
+            Path::new("/"),
+        ),
         Some(expected_bwrap)
     );
+    assert_eq!(
+        find_executable_in_search_paths(
+            "bwrap",
+            std::env::split_paths(&search_path),
+            Path::new("/"),
+            &PermissionProfile::Disabled.file_system_sandbox_policy(),
+            Path::new("/"),
+        ),
+        None,
+    );
+}
+
+#[test]
+fn skips_bwrap_in_writable_roots_outside_command_cwd() {
+    let temp_dir = tempdir().expect("temp dir");
+    let workspace = temp_dir.path().join("workspace");
+    let cwd = workspace.join("service");
+    let workspace_bin = workspace.join("bin");
+    let extra_root = temp_dir.path().join("extra");
+    let trusted_dir = temp_dir.path().join("trusted");
+    for dir in [&cwd, &workspace_bin, &extra_root, &trusted_dir] {
+        std::fs::create_dir_all(dir).expect("create directory");
+    }
+    write_named_fake_bwrap_in(&workspace_bin);
+    write_named_fake_bwrap_in(&extra_root);
+    let expected_bwrap = write_named_fake_bwrap_in(&trusted_dir);
+    let writable_roots = vec![workspace, extra_root.clone()];
+    let policy = PermissionProfile::read_only()
+        .file_system_sandbox_policy()
+        .with_additional_writable_roots(
+            &cwd,
+            &writable_roots
+                .into_iter()
+                .map(|path| AbsolutePathBuf::try_from(path).unwrap())
+                .collect::<Vec<_>>(),
+        );
+    let search_paths = vec![workspace_bin, extra_root];
+
+    assert_eq!(
+        find_executable_in_search_paths("bwrap", search_paths.clone(), &cwd, &policy, &cwd),
+        None,
+    );
+    assert_eq!(
+        find_executable_in_search_paths(
+            "bwrap",
+            search_paths.into_iter().chain([trusted_dir]),
+            &cwd,
+            &policy,
+            &cwd,
+        ),
+        Some(expected_bwrap),
+    );
+}
+
+#[test]
+fn skips_bwrap_in_symlinked_writable_root() {
+    let temp_dir = tempdir().expect("temp dir");
+    let workspace = temp_dir.path().join("workspace");
+    let cwd = workspace.join("service");
+    let workspace_bin = workspace.join("bin");
+    let alias = temp_dir.path().join("alias");
+    std::fs::create_dir_all(&cwd).expect("create cwd");
+    std::fs::create_dir_all(&workspace_bin).expect("create bin");
+    std::os::unix::fs::symlink(&workspace, &alias).expect("create workspace alias");
+    write_named_fake_bwrap_in(&workspace_bin);
+    let policy = PermissionProfile::read_only()
+        .file_system_sandbox_policy()
+        .with_additional_writable_roots(&cwd, &[AbsolutePathBuf::try_from(alias).unwrap()]);
+
+    assert_eq!(
+        find_executable_in_search_paths("bwrap", [workspace_bin], &cwd, &policy, &cwd),
+        None,
+    );
+}
+
+#[test]
+fn full_disk_write_rejects_owned_bwrap_even_when_chmod_read_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().unwrap();
+    let bin = temp.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let bwrap = write_named_fake_bwrap_in(&bin);
+    std::fs::set_permissions(&bwrap, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let policy = PermissionProfile::Disabled.file_system_sandbox_policy();
+
+    assert_eq!(
+        find_executable_in_search_paths("bwrap", [bin], Path::new("/"), &policy, Path::new("/")),
+        None,
+    );
+}
+
+#[test]
+fn read_only_bwrap_carveout_does_not_trust_a_replaceable_parent() {
+    let temp = tempdir().unwrap();
+    let bin = temp.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let bwrap = write_named_fake_bwrap_in(&bin);
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry::new(
+            AbsolutePathBuf::try_from(temp.path()).unwrap().into(),
+            FileSystemAccessMode::Write,
+        ),
+        FileSystemSandboxEntry::new(
+            AbsolutePathBuf::try_from(bwrap).unwrap().into(),
+            FileSystemAccessMode::Read,
+        ),
+    ]);
+
+    assert_eq!(
+        find_executable_in_search_paths("bwrap", [bin], Path::new("/"), &policy, Path::new("/")),
+        None,
+    );
+}
+
+#[test]
+fn root_write_preserves_a_read_only_system_installation() {
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSpecialPath;
+
+    let temp = tempdir().unwrap();
+    // Use a system executable as a discovery-only candidate. Never execute it.
+    let system_binary = std::fs::canonicalize("/bin/true").unwrap();
+    let protected_root = system_binary
+        .ancestors()
+        .find(|path| path.parent() == Some(Path::new("/")))
+        .unwrap();
+    std::os::unix::fs::symlink(&system_binary, temp.path().join("bwrap")).unwrap();
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            FileSystemAccessMode::Write,
+        ),
+        FileSystemSandboxEntry::new(
+            AbsolutePathBuf::try_from(protected_root).unwrap().into(),
+            FileSystemAccessMode::Read,
+        ),
+    ]);
+
+    for policy in [
+        policy,
+        PermissionProfile::Disabled.file_system_sandbox_policy(),
+    ] {
+        // Root can modify the system installation unless the policy protects it.
+        // SAFETY: geteuid has no preconditions.
+        let can_modify_system =
+            policy.has_full_disk_write_access() && unsafe { libc::geteuid() } == 0;
+        assert_eq!(
+            find_executable_in_search_paths(
+                "bwrap",
+                [temp.path().to_path_buf()],
+                Path::new("/"),
+                &policy,
+                Path::new("/"),
+            ),
+            (!can_modify_system).then(|| system_binary.clone()),
+        );
+    }
 }
 
 fn write_fake_bwrap(contents: &str) -> tempfile::TempPath {
