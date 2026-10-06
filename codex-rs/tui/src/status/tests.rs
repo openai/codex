@@ -828,23 +828,33 @@ async fn status_uses_server_provider_id_and_auth_requirement() {
         sanitize_directory(render_lines(&composite.display_lines(/*width*/ 120))).join("\n");
     assert_snapshot!("status_server_auth_required", rendered);
 
-    for width in [42, 120] {
-        let destinations: Vec<String> = composite
-            .display_hyperlink_lines(width)
-            .into_iter()
-            .flat_map(|line| line.hyperlinks.into_iter())
-            .map(|link| link.destination)
-            .collect();
-        assert_eq!(destinations, vec!["https://chatgpt.com/settings/usage"]);
+    for width in [24, 42, 120] {
+        let lines = composite.display_hyperlink_lines(width);
+        let mut fragments = String::new();
+        let mut destinations = Vec::new();
+        for line in lines {
+            let visible = line.line.to_string();
+            for link in line.hyperlinks {
+                fragments.extend(
+                    visible
+                        .chars()
+                        .skip(link.columns.start)
+                        .take(link.columns.len()),
+                );
+                destinations.push(link.destination);
+            }
+        }
+        assert_eq!(
+            fragments, "https://chatgpt.com/settings/usage",
+            "width {width}"
+        );
+        assert!(!destinations.is_empty());
+        assert!(
+            destinations
+                .iter()
+                .all(|destination| destination == "https://chatgpt.com/settings/usage")
+        );
     }
-
-    let narrow_destinations: Vec<String> = composite
-        .display_hyperlink_lines(/*width*/ 24)
-        .into_iter()
-        .flat_map(|line| line.hyperlinks.into_iter())
-        .map(|link| link.destination)
-        .collect();
-    assert_eq!(narrow_destinations, Vec::<String>::new());
 }
 
 #[tokio::test]
