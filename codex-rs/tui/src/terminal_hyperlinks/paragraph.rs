@@ -1,4 +1,4 @@
-//! Paragraph rendering that keeps visible text and hyperlink annotations aligned.
+//! Paragraph and prelaid-out row rendering that keeps visible text and links aligned.
 
 use super::HyperlinkLine;
 use super::annotate_web_urls;
@@ -6,6 +6,7 @@ use super::mark_buffer_hyperlinks;
 use super::visible_lines_ref;
 use crate::render::renderable::Renderable;
 use ratatui::buffer::Buffer;
+use ratatui::buffer::CellWidth;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -67,5 +68,65 @@ impl Widget for HyperlinkParagraph<'_> {
             .scroll((self.scroll_rows, 0))
             .render(area, buf);
         mark_buffer_hyperlinks(buf, area, self.lines, usize::from(self.scroll_rows));
+    }
+}
+
+/// Owns rows that have already been wrapped or clipped by their layout code.
+/// Rendering clips to the viewport without changing row count or spacing.
+pub(crate) struct HyperlinkRows(Vec<HyperlinkLine>);
+
+impl From<Vec<HyperlinkLine>> for HyperlinkRows {
+    fn from(lines: Vec<HyperlinkLine>) -> Self {
+        Self(lines)
+    }
+}
+
+impl Renderable for HyperlinkRows {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        for (row, line) in self.0.iter().take(usize::from(area.height)).enumerate() {
+            line.render(Rect::new(area.x, area.y + row as u16, area.width, 1), buf);
+        }
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        if width == 0 {
+            0
+        } else {
+            self.0.len().min(usize::from(u16::MAX)) as u16
+        }
+    }
+}
+
+/// Render one already-laid-out row, clipping text and links without wrapping it again.
+impl Widget for &HyperlinkLine {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        self.line.clone().render(area, buf);
+        if area.is_empty() {
+            return;
+        }
+        for link in &self.hyperlinks {
+            let Some(destination) = link.terminal_destination() else {
+                continue;
+            };
+            let mut trailing_columns = 0usize;
+            for column in link.columns.start.min(usize::from(area.width))
+                ..link.columns.end.min(usize::from(area.width))
+            {
+                if trailing_columns > 0 {
+                    trailing_columns -= 1;
+                    continue;
+                }
+                let cell = &mut buf[(area.x + column as u16, area.y)];
+                if cell.diff_option == ratatui::buffer::CellDiffOption::Skip {
+                    continue;
+                }
+                trailing_columns = usize::from(cell.cell_width()).saturating_sub(1);
+                let symbol = format!("\x1b]8;;{destination}\x07{}\x1b]8;;\x07", cell.symbol());
+                let width = std::num::NonZeroU16::new(cell.cell_width())
+                    .unwrap_or(std::num::NonZeroU16::MIN);
+                cell.set_symbol(&symbol)
+                    .set_diff_option(ratatui::buffer::CellDiffOption::ForcedWidth(width));
+            }
+        }
     }
 }

@@ -7,6 +7,7 @@ mod paragraph;
 mod source;
 
 pub(crate) use paragraph::HyperlinkParagraph;
+pub(crate) use paragraph::HyperlinkRows;
 pub(crate) use paragraph::HyperlinkText;
 pub(crate) use source::LineWrapPolicy;
 pub(crate) use source::LogicalLineSource;

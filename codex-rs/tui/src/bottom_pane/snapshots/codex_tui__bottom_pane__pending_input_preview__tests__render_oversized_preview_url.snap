@@ -1,0 +1,8 @@
+---
+source: tui/src/bottom_pane/pending_input_preview.rs
+expression: visible
+---
+• Queued follow-up inputs       
+  ↳ Review                      
+    https://github.com/openai/co
+    ⇧← edit last queued message
