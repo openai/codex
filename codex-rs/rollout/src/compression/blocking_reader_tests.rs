@@ -1,4 +1,4 @@
-//! Exercises cancellation while the worker is blocked inside a read.
+//! Exercises cancellation during reads and between records.
 
 use std::io;
 use std::io::BufRead;
@@ -8,8 +8,10 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use pretty_assertions::assert_eq;
+use tempfile::TempDir;
 
 use super::ReadMetrics;
+use super::read_rollout_lines;
 use super::scan_lines;
 
 struct PausedRead {
@@ -67,5 +69,31 @@ async fn cancellation_during_read_does_not_deliver_the_record() -> anyhow::Resul
     resume.send(())?;
     done.await?;
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelling_full_scan_stops_before_the_next_record() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let path = home.path().join("rollout.jsonl");
+    std::fs::write(&path, "first\nsecond\n")?;
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+    let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        read_rollout_lines(&path, move |lines| {
+            assert_eq!(lines.next().transpose()?, Some("first".to_string()));
+            let _ = started_tx.send(());
+            continue_rx.recv().map_err(io::Error::other)?;
+            let _ = finished_tx.send(lines.next().transpose());
+            Ok(())
+        })
+        .await
+    });
+    started_rx.await?;
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    continue_tx.send(())?;
+    assert_eq!(finished_rx.await??, None);
     Ok(())
 }

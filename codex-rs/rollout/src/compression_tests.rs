@@ -51,6 +51,49 @@ async fn load_rollout_items_reads_compressed_rollout() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn full_history_load_preserves_records_and_errors_across_representations()
+-> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(19);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&path, thread_id, "message with unicode: π")?;
+    let original = fs::read_to_string(&path)?;
+    let expected = RolloutRecorder::load_rollout_items(&path).await?;
+    let contents = format!(
+        " \r\ninvalid JSON\n{{}}\n{}",
+        original.trim_end().replace('\n', "\r\n")
+    );
+    fs::write(&path, &contents)?;
+    let expected = (expected.0, expected.1, 2);
+    assert_eq!(
+        serde_json::to_value(RolloutRecorder::load_rollout_items(&path).await?)?,
+        serde_json::to_value(&expected)?
+    );
+    compress_now(&path)?;
+    assert_eq!(
+        serde_json::to_value(RolloutRecorder::load_rollout_items(&path).await?)?,
+        serde_json::to_value(&expected)?
+    );
+
+    for bytes in [b" \r\n\n".as_slice(), b"valid utf8\n\xff".as_slice()] {
+        fs::write(&path, bytes)?;
+        let plain = RolloutRecorder::load_rollout_items(&path)
+            .await
+            .unwrap_err();
+        compress_now(&path)?;
+        let compressed = RolloutRecorder::load_rollout_items(&path)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (compressed.kind(), compressed.to_string()),
+            (plain.kind(), plain.to_string())
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn read_session_meta_line_stops_before_invalid_utf8_tail() -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let uuid = Uuid::from_u128(16);
