@@ -89,6 +89,13 @@ fn response_outputs_enter_thread_conversation_on_completion() -> anyhow::Result<
                 {
                     "type": "message",
                     "role": "assistant",
+                    "phase": "partial_answer",
+                    "content": [{"type": "output_text", "text": "first tests passed"}]
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "final_answer",
                     "content": [{"type": "output_text", "text": "tests passed"}]
                 }
             ]
@@ -101,7 +108,30 @@ fn response_outputs_enter_thread_conversation_on_completion() -> anyhow::Result<
     let mut expected_thread_items = inference.request_item_ids.clone();
     expected_thread_items.extend(inference.response_item_ids.clone());
 
-    assert_eq!(inference.response_item_ids.len(), 1);
+    assert_eq!(
+        inference
+            .response_item_ids
+            .iter()
+            .map(|id| {
+                let item = &rollout.conversation_items[id];
+                (item.channel.clone(), item.body.parts.clone())
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                Some(ConversationChannel::Final),
+                vec![ConversationPart::Text {
+                    text: "first tests passed".into(),
+                }]
+            ),
+            (
+                Some(ConversationChannel::Final),
+                vec![ConversationPart::Text {
+                    text: "tests passed".into(),
+                }]
+            ),
+        ],
+    );
     assert_eq!(
         rollout.threads["thread-root"].conversation_item_ids,
         expected_thread_items,

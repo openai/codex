@@ -673,6 +673,20 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
                     thread_id,
                     "turn-1",
                     CoreTurnItem::AgentMessage(AgentMessageItem {
+                        id: "partial-1".to_string(),
+                        content: vec![AgentMessageContent::Text {
+                            text: "stable partial answer".to_string(),
+                        }],
+                        phase: Some(MessagePhase::PartialAnswer),
+                        memory_citation: None,
+                        delivery: None,
+                        questions: None,
+                    }),
+                ),
+                paginated_completed_item(
+                    thread_id,
+                    "turn-1",
+                    CoreTurnItem::AgentMessage(AgentMessageItem {
                         id: "final-1".to_string(),
                         content: vec![AgentMessageContent::Text {
                             text: "😀 **Final**  \nneedle".to_string(),
@@ -759,6 +773,24 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
     assert_eq!(data[2].snippet, "😀 Final needle");
     assert_eq!(data[2].snippet_match_range.start, 9);
     assert_eq!(data[2].snippet_match_range.end, 15);
+    assert_eq!(next_cursor, None);
+
+    let request_id = mcp
+        .send_thread_search_occurrences_request(ThreadSearchOccurrencesParams {
+            thread_id: thread_id.to_string(),
+            search_term: "partial".to_string(),
+            cursor: None,
+            limit: Some(3),
+        })
+        .await?;
+    let ThreadSearchOccurrencesResponse { data, next_cursor } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(
+        data.iter()
+            .map(|occurrence| (occurrence.item_id.as_str(), occurrence.snippet.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("partial-1", "stable partial answer")]
+    );
     assert_eq!(next_cursor, None);
 
     let fork_request_id = mcp

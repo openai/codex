@@ -4012,27 +4012,35 @@ async fn realtime_v2_noop_tool_call_returns_empty_function_output_without_respon
     Ok(())
 }
 
+#[test_matrix([None, Some("final_answer"), Some("commentary"), Some("partial_answer")], [false, true])]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Result<()> {
+async fn conversation_mirrors_assistant_message_text_to_realtime_handoff(
+    phase: Option<&str>,
+    active_handoff: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let api_server = start_mock_server().await;
+    let mut message = responses::ev_assistant_message("msg_1", "assistant says hi");
+    if let Some(phase) = phase {
+        message["item"]["phase"] = json!(phase);
+    }
     let _response_mock = responses::mount_sse_once(
         &api_server,
         responses::sse(vec![
             responses::ev_response_created("resp_1"),
-            responses::ev_assistant_message("msg_1", "assistant says hi"),
+            message,
             responses::ev_completed("resp_1"),
         ]),
     )
     .await;
 
-    let realtime_server = start_websocket_server(vec![vec![
-        vec![
-            json!({
-                "type": "session.updated",
-                "session": { "id": "sess_1", "instructions": "backend prompt" }
-            }),
+    let mut realtime_events = vec![json!({
+        "type": "session.updated",
+        "session": { "id": "sess_1", "instructions": "backend prompt" }
+    })];
+    if active_handoff {
+        realtime_events.extend([
             json!({
                 "type": "conversation.input_transcript.delta",
                 "delta": "delegate hello"
@@ -4043,10 +4051,9 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
                 "item_id": "item_1",
                 "input_transcript": "delegate hello"
             }),
-        ],
-        vec![],
-    ]])
-    .await;
+        ]);
+    }
+    let realtime_server = start_websocket_server(vec![vec![realtime_events, vec![]]]).await;
 
     let mut builder = test_codex().with_config({
         let realtime_base_url = realtime_server.uri().to_string();
@@ -4055,7 +4062,7 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
             config.realtime.version = RealtimeWsVersion::V1;
         }
     });
-    let test = builder.build(&api_server).await?;
+    let test = builder.build_with_auto_env(&api_server).await?;
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
@@ -4095,28 +4102,31 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
     .await;
     assert_eq!(session_updated, "sess_1");
 
-    let _ = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::HandoffRequested(handoff),
-        }) if handoff.handoff_id == "handoff_1" => Some(()),
-        _ => None,
-    })
-    .await;
+    if active_handoff {
+        let _ = wait_for_event_match(&test.codex, |msg| match msg {
+            EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                payload: RealtimeEvent::HandoffRequested(handoff),
+            }) if handoff.handoff_id == "handoff_1" => Some(()),
+            _ => None,
+        })
+        .await;
+    } else {
+        test.codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "hello without a realtime delegation".to_string(),
+                text_elements: Vec::new(),
+            }]))
+            .await?;
+    }
 
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-    while tokio::time::Instant::now() < deadline {
-        let connections = realtime_server.connections();
-        if connections.len() == 1 && connections[0].len() >= 2 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-
+    let append = realtime_server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 1)
+        .await;
     let realtime_connections = realtime_server.connections();
     assert_eq!(realtime_connections.len(), 1);
     assert_eq!(realtime_connections[0].len(), 2);
@@ -4124,17 +4134,18 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
         realtime_connections[0][0].body_json()["type"].as_str(),
         Some("session.update")
     );
+    let expected_text = if matches!(phase, Some("commentary" | "partial_answer")) {
+        "assistant says hi"
+    } else {
+        "\"Agent Final Message\":\n\nassistant says hi"
+    };
     assert_eq!(
-        realtime_connections[0][1].body_json()["type"].as_str(),
-        Some("conversation.handoff.append")
-    );
-    assert_eq!(
-        realtime_connections[0][1].body_json()["handoff_id"].as_str(),
-        Some("handoff_1")
-    );
-    assert_eq!(
-        realtime_connections[0][1].body_json()["output_text"].as_str(),
-        Some("\"Agent Final Message\":\n\nassistant says hi")
+        append.body_json(),
+        json!({
+            "type": "conversation.handoff.append",
+            "handoff_id": if active_handoff { "handoff_1" } else { "codex" },
+            "output_text": expected_text,
+        })
     );
 
     realtime_server.shutdown().await;
@@ -4272,8 +4283,12 @@ async fn conversation_relays_only_public_reasoning_as_quiet_status(enabled: bool
     Ok(())
 }
 
+#[test_matrix([None, Some("partial_answer")], [false, true])]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_flushes_assistant_deltas_every_200ms_for_v3_handoff() -> Result<()> {
+async fn conversation_routes_assistant_messages_for_v3_handoff(
+    phase: Option<&str>,
+    streamed: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let initial_commentary_text = "[PRO";
@@ -4282,33 +4297,42 @@ async fn conversation_flushes_assistant_deltas_every_200ms_for_v3_handoff() -> R
     let commentary_text =
         format!("{initial_commentary_text}{first_commentary_delta}{second_commentary_delta}");
     let (gate_commentary_done_tx, gate_commentary_done_rx) = oneshot::channel();
-    let commentary_item_added =
+    let mut commentary_item_added =
         responses::ev_message_item_added("msg_commentary", initial_commentary_text);
-    let commentary_item_done = responses::ev_assistant_message("msg_commentary", &commentary_text);
+    let mut commentary_item_done =
+        responses::ev_assistant_message("msg_commentary", &commentary_text);
+    if let Some(phase) = phase {
+        commentary_item_added["item"]["phase"] = json!(phase);
+        commentary_item_done["item"]["phase"] = json!(phase);
+    }
     let initial_final_text = "[DO";
     let final_delta = "NE]done";
     let final_text = format!("{initial_final_text}{final_delta}");
     let final_item_added = responses::ev_message_item_added("msg_final", initial_final_text);
     let final_item_done = responses::ev_assistant_message("msg_final", &final_text);
-    let response_chunks = vec![
+    let mut response_chunks = vec![StreamingSseChunk {
+        gate: None,
+        body: sse_event(responses::ev_response_created("resp_stream")),
+    }];
+    if streamed {
+        response_chunks.extend([
+            StreamingSseChunk {
+                gate: None,
+                body: sse_event(commentary_item_added),
+            },
+            StreamingSseChunk {
+                gate: None,
+                body: sse_event(responses::ev_output_text_delta(first_commentary_delta)),
+            },
+            StreamingSseChunk {
+                gate: None,
+                body: sse_event(responses::ev_output_text_delta(&second_commentary_delta)),
+            },
+        ]);
+    }
+    response_chunks.extend([
         StreamingSseChunk {
-            gate: None,
-            body: sse_event(responses::ev_response_created("resp_stream")),
-        },
-        StreamingSseChunk {
-            gate: None,
-            body: sse_event(commentary_item_added),
-        },
-        StreamingSseChunk {
-            gate: None,
-            body: sse_event(responses::ev_output_text_delta(first_commentary_delta)),
-        },
-        StreamingSseChunk {
-            gate: None,
-            body: sse_event(responses::ev_output_text_delta(&second_commentary_delta)),
-        },
-        StreamingSseChunk {
-            gate: Some(gate_commentary_done_rx),
+            gate: streamed.then_some(gate_commentary_done_rx),
             body: sse_event(commentary_item_done),
         },
         StreamingSseChunk {
@@ -4327,7 +4351,7 @@ async fn conversation_flushes_assistant_deltas_every_200ms_for_v3_handoff() -> R
             gate: None,
             body: sse_event(responses::ev_completed("resp_stream")),
         },
-    ];
+    ]);
     let (api_server, completions) = start_streaming_sse_server(vec![response_chunks]).await;
 
     let realtime_server = start_websocket_server(vec![vec![
@@ -4410,15 +4434,17 @@ async fn conversation_flushes_assistant_deltas_every_200ms_for_v3_handoff() -> R
     })
     .await;
 
-    let _ = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::AgentMessageContentDelta(event)
-            if event.item_id == "msg_commentary" && event.delta == first_commentary_delta =>
-        {
-            Some(())
-        }
-        _ => None,
-    })
-    .await;
+    if streamed {
+        let _ = wait_for_event_match(&test.codex, |msg| match msg {
+            EventMsg::AgentMessageContentDelta(event)
+                if event.item_id == "msg_commentary" && event.delta == first_commentary_delta =>
+            {
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+    }
     assert_eq!(
         wait_for_websocket_request(
             &realtime_server,
@@ -4430,7 +4456,7 @@ async fn conversation_flushes_assistant_deltas_every_200ms_for_v3_handoff() -> R
         json!({
             "type": "delegation.context.append",
             "delegation_item_id": "delegation_stream",
-            "channel": "commentary",
+            "channel": if phase.is_some() { "speakable" } else { "commentary" },
             "content": [{ "type": "input_text", "text": commentary_text }]
         })
     );
@@ -4477,20 +4503,38 @@ async fn conversation_flushes_assistant_deltas_every_200ms_for_v3_handoff() -> R
     Ok(())
 }
 
+#[test_matrix(["commentary", "partial_answer"], [false, true])]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_handoff_persists_across_item_done_until_turn_complete() -> Result<()> {
+async fn conversation_handoff_persists_across_item_done_until_turn_complete(
+    phase: &str,
+    streamed: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let (gate_second_message_tx, gate_second_message_rx) = oneshot::channel();
     let mut commentary_message = responses::ev_assistant_message("msg-1", "assistant message 1");
-    commentary_message["item"]["phase"] = json!("commentary");
+    commentary_message["item"]["phase"] = json!(phase);
     let mut final_message = responses::ev_assistant_message("msg-2", "assistant message 2");
     final_message["item"]["phase"] = json!("final_answer");
-    let first_chunks = vec![
-        StreamingSseChunk {
-            gate: None,
-            body: sse_event(responses::ev_response_created("resp-1")),
-        },
+    let mut first_chunks = vec![StreamingSseChunk {
+        gate: None,
+        body: sse_event(responses::ev_response_created("resp-1")),
+    }];
+    if streamed {
+        let mut added = responses::ev_message_item_added("msg-1", "");
+        added["item"]["phase"] = json!(phase);
+        first_chunks.extend([
+            StreamingSseChunk {
+                gate: None,
+                body: sse_event(added),
+            },
+            StreamingSseChunk {
+                gate: None,
+                body: sse_event(responses::ev_output_text_delta("assistant message 1")),
+            },
+        ]);
+    }
+    first_chunks.extend([
         StreamingSseChunk {
             gate: None,
             body: sse_event(commentary_message),
@@ -4503,7 +4547,7 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
             gate: None,
             body: sse_event(responses::ev_completed("resp-1")),
         },
-    ];
+    ]);
     let (api_server, completions) = start_streaming_sse_server(vec![first_chunks]).await;
 
     let realtime_server = start_websocket_server(vec![vec![

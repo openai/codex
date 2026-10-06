@@ -243,7 +243,7 @@ impl RealtimeStreamedItem {
     fn output_prefix(&self) -> &'static str {
         if self.prefix_final_message
             && self.sent_bytes == 0
-            && !matches!(self.phase, Some(MessagePhase::Commentary))
+            && matches!(self.phase, Some(MessagePhase::FinalAnswer) | None)
         {
             AGENT_FINAL_MESSAGE_PREFIX
         } else {
@@ -928,9 +928,9 @@ impl RealtimeConversationManager {
         if handoff.client_managed_handoffs {
             return Ok(());
         }
-        // TODO: Preserve explicit PartialAnswer phases through completed and streamed BEM
-        // routing, with integration coverage asserting the speakable channel.
-        let phase = if handoff.routes_handoff_by_bem() {
+        let phase = if handoff.routes_handoff_by_bem()
+            && !matches!(phase, Some(MessagePhase::PartialAnswer))
+        {
             match bem_message_phase(
                 &output_text,
                 &handoff.codex_response_handoff_channel_prefixes,
@@ -944,9 +944,10 @@ impl RealtimeConversationManager {
         } else {
             phase
         };
-        // TODO: Treat PartialAnswer as nonterminal for V1 handoffs, omitting the final-message
-        // prefix for streamed, completed-item, and standalone output.
-        let is_commentary = matches!(phase, Some(MessagePhase::Commentary));
+        let is_nonterminal = matches!(
+            phase,
+            Some(MessagePhase::Commentary | MessagePhase::PartialAnswer)
+        );
         let active_handoff = handoff.stream.lock().await.active_handoff.clone();
         let output = match active_handoff {
             Some(handoff_id) => {
@@ -963,7 +964,7 @@ impl RealtimeConversationManager {
                         ),
                         phase,
                     }
-                } else if handoff.event_parser == RealtimeEventParser::V1 && is_commentary {
+                } else if handoff.event_parser == RealtimeEventParser::V1 && is_nonterminal {
                     RealtimeOutbound::HandoffAppend {
                         handoff_id,
                         text: output_text,
@@ -990,7 +991,8 @@ impl RealtimeConversationManager {
                     }
                 } else {
                     RealtimeOutbound::StandaloneHandoff {
-                        text: if handoff.event_parser == RealtimeEventParser::V1 && !is_commentary {
+                        text: if handoff.event_parser == RealtimeEventParser::V1 && !is_nonterminal
+                        {
                             format!("{AGENT_FINAL_MESSAGE_PREFIX}{output_text}")
                         } else {
                             output_text
@@ -1032,14 +1034,14 @@ impl RealtimeConversationManager {
             let Some(handoff_id) = stream.active_handoff.clone() else {
                 return;
             };
+            // An explicit stable fragment is answer text, even when it starts
+            // with characters that legacy BEM treats as a private channel tag.
+            let parse_bem = handoff.routes_handoff_by_bem()
+                && !matches!(phase, Some(MessagePhase::PartialAnswer));
             let mut streamed_item = RealtimeStreamedItem {
                 handoff_id,
-                phase: if handoff.routes_handoff_by_bem() {
-                    None
-                } else {
-                    phase
-                },
-                bem_channel_parser: handoff.routes_handoff_by_bem().then(|| {
+                phase: if parse_bem { None } else { phase },
+                bem_channel_parser: parse_bem.then(|| {
                     BemChannelParser::new(Arc::clone(
                         &handoff.codex_response_handoff_channel_prefixes,
                     ))

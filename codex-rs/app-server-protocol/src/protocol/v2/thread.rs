@@ -1589,8 +1589,8 @@ pub struct ThreadSearchResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadSearchOccurrencesParams {
     pub thread_id: String,
-    /// Case-insensitive literal substring to find in visible user messages and final assistant
-    /// messages.
+    /// Case-insensitive literal substring to find in visible user messages and both partial and
+    /// final assistant answers.
     pub search_term: String,
     /// Opaque cursor returned by a previous call for the same thread and search term.
     #[ts(optional = nullable)]

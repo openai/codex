@@ -377,7 +377,9 @@ fn role_from_str(role: &str) -> Option<ConversationRole> {
 fn channel_from_phase(phase: &str) -> Option<ConversationChannel> {
     match phase {
         "commentary" => Some(ConversationChannel::Commentary),
-        "final_answer" => Some(ConversationChannel::Final),
+        // Both answer phases are Harmony final-channel text; only the latter
+        // declares a terminal answer.
+        "partial_answer" | "final_answer" => Some(ConversationChannel::Final),
         "summary" => Some(ConversationChannel::Summary),
         _ => None,
     }

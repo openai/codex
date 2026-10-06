@@ -125,7 +125,13 @@ FROM (
       ON turns.thread_id = items.thread_id
      AND turns.turn_id = items.turn_id
     WHERE items.thread_id = ?
-      AND items.item_type = 'userMessage'
+      AND (
+          items.item_type = 'userMessage'
+          OR (
+              items.item_type = 'agentMessage'
+              AND json_extract(items.item_json, '$.phase') = 'partial_answer'
+          )
+      )
       AND items.rollout_ordinal >= ?
       AND items.rollout_ordinal < ?
       AND turns.rollout_ordinal >= ?

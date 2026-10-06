@@ -1769,7 +1769,7 @@ WHERE thread_id = ? AND turn_id = ?
 }
 
 #[tokio::test]
-async fn summary_items_use_final_answers_and_ignore_commentary() {
+async fn summary_items_use_final_answers_and_ignore_nonterminal_messages() {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
     let thread_id = ThreadId::default();
@@ -1814,6 +1814,11 @@ async fn summary_items_use_final_answers_and_ignore_commentary() {
                     thread_id,
                     "turn-1",
                     agent_message("commentary-1", MessagePhase::Commentary),
+                ),
+                completed_item(
+                    thread_id,
+                    "turn-1",
+                    agent_message("partial-1", MessagePhase::PartialAnswer),
                 ),
                 completed_item(
                     thread_id,
@@ -1877,11 +1882,16 @@ WHERE thread_id = ? AND turn_id = ?
                     "turn-2",
                     agent_message("commentary-2", MessagePhase::Commentary),
                 ),
+                completed_item(
+                    thread_id,
+                    "turn-2",
+                    agent_message("partial-2", MessagePhase::PartialAnswer),
+                ),
                 turn_completed("turn-2"),
             ],
         })
         .await
-        .expect("append commentary-only turn");
+        .expect("append turn without a final answer");
 
     let summary = store
         .list_turns(ListTurnsParams {
