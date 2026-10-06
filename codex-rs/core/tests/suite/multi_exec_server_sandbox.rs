@@ -181,12 +181,14 @@ async fn two_exec_servers_isolate_workspace_write_roots() -> Result<()> {
     let second_workspace_uri = PathUri::from_host_native_path(second_workspace.path())?;
     let environments = vec![
         TurnEnvironmentSelection {
+            selected_capability_roots: Default::default(),
             environment_id: FIRST_ENVIRONMENT_ID.to_string(),
             cwd: first_workspace_uri.clone(),
             workspace_roots: vec![first_workspace_uri],
             config: EnvironmentConfigState::FromThread,
         },
         TurnEnvironmentSelection {
+            selected_capability_roots: Default::default(),
             environment_id: SECOND_ENVIRONMENT_ID.to_string(),
             cwd: second_workspace_uri.clone(),
             workspace_roots: vec![second_workspace_uri],

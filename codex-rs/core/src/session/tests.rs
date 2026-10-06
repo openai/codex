@@ -7858,6 +7858,7 @@ async fn request_permissions_tool_resolves_legacy_paths_against_selected_environ
         user_home_dir: Some(PathUri::from_abs_path(&environment_home)),
         ..TurnEnvironment::new(
             TurnEnvironmentSelection {
+                selected_capability_roots: Default::default(),
                 environment_id: "remote".to_string(),
                 cwd: PathUri::from_abs_path(&environment_cwd),
                 workspace_roots: Vec::new(),
@@ -8537,6 +8538,7 @@ async fn primary_environment_uses_first_turn_environment() {
         .environments
         .push(TurnEnvironmentState::Ready(TurnEnvironment::new(
             TurnEnvironmentSelection {
+                selected_capability_roots: Default::default(),
                 environment_id: "second".to_string(),
                 cwd: second_cwd_uri.clone(),
                 workspace_roots: Vec::new(),
@@ -9579,7 +9581,7 @@ async fn refresh_mcp_servers_uses_latest_state_for_existing_turns() {
     let rematerialized_old = session
         .mcp_runtime_for_step(
             &turn_context,
-            /*selected_capability_roots*/ &[],
+            &[],
             /*required_servers*/ &[],
             /*required_plugins*/ &HashSet::new(),
         )
@@ -10025,10 +10027,11 @@ async fn mcp_refresh_detects_shared_auth_manager_changes() {
 #[tokio::test]
 async fn capability_roots_require_turn_environment_selection() {
     let (mut session, turn_context) = make_session_and_context().await;
-    let environment = turn_context
+    let mut environment = turn_context
         .initial_environments
         .primary()
-        .expect("ready local environment");
+        .expect("ready local environment")
+        .clone();
     let root = codex_protocol::capabilities::SelectedCapabilityRoot {
         id: "selected-root".to_string(),
         location: codex_protocol::capabilities::CapabilityRootLocation::Environment {
@@ -10037,6 +10040,13 @@ async fn capability_roots_require_turn_environment_selection() {
         },
     };
     session.services.selected_capability_roots = vec![root.clone()];
+    environment.selection = TurnEnvironmentSelection::new(
+        environment.selection.into_request(),
+        std::slice::from_ref(&root),
+    );
+    let selected_environments = TurnEnvironmentSnapshot {
+        environments: vec![TurnEnvironmentState::Ready(environment)],
+    };
 
     let unselected_roots = session
         .resolve_selected_capability_roots_for_step(&TurnEnvironmentSnapshot::default())
@@ -10044,7 +10054,7 @@ async fn capability_roots_require_turn_environment_selection() {
     assert!(unselected_roots.is_empty());
 
     let selected_roots = session
-        .resolve_selected_capability_roots_for_step(&turn_context.initial_environments)
+        .resolve_selected_capability_roots_for_step(&selected_environments)
         .await;
     assert_eq!(
         selected_roots
@@ -10085,6 +10095,7 @@ async fn conflicting_ready_environment_root_ids_keep_first_location() {
         environment_config.selected_capability_roots = vec![selected_root.clone()];
         turn_environments.push(TurnEnvironment::new(
             TurnEnvironmentSelection {
+                selected_capability_roots: Default::default(),
                 environment_id: environment_id.clone(),
                 cwd: local_environment.cwd().clone(),
                 workspace_roots: local_environment.workspace_roots().to_vec(),
@@ -10375,6 +10386,7 @@ async fn record_context_updates_emits_environment_item_for_cwd_changes() {
     current_context.initial_environments.environments[0] =
         TurnEnvironmentState::Ready(TurnEnvironment::new(
             TurnEnvironmentSelection {
+                selected_capability_roots: Default::default(),
                 environment_id: environment.selection.environment_id,
                 cwd: PathUri::from_abs_path(&cwd),
                 workspace_roots: Vec::new(),
@@ -10436,6 +10448,7 @@ async fn record_context_updates_use_environment_permission_profile_and_workspace
     current_context.initial_environments.environments[0] =
         TurnEnvironmentState::Ready(TurnEnvironment::new(
             TurnEnvironmentSelection {
+                selected_capability_roots: Default::default(),
                 environment_id: environment.selection.environment_id,
                 cwd,
                 workspace_roots: vec![PathUri::from_abs_path(&workspace_root)],
@@ -10513,6 +10526,7 @@ async fn record_context_updates_omits_environment_item_when_disabled() {
     current_context.initial_environments.environments[0] =
         TurnEnvironmentState::Ready(TurnEnvironment::new(
             TurnEnvironmentSelection {
+                selected_capability_roots: Default::default(),
                 environment_id: environment.selection.environment_id,
                 cwd: PathUri::from_abs_path(&test_path_buf("/new-repo").abs()),
                 workspace_roots: Vec::new(),
@@ -11080,6 +11094,7 @@ async fn turn_context_item_stores_local_cwd() {
     turn_context.initial_environments.environments[0] =
         TurnEnvironmentState::Ready(TurnEnvironment::new(
             TurnEnvironmentSelection {
+                selected_capability_roots: Default::default(),
                 environment_id: "remote".to_string(),
                 cwd,
                 workspace_roots: Vec::new(),

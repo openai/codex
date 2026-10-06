@@ -3065,6 +3065,7 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
     let environments = vec![
         local(local_cwd.path().abs()),
         TurnEnvironmentSelection {
+            selected_capability_roots: Default::default(),
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&remote_cwd),
             workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],

@@ -105,6 +105,7 @@ async fn windows_exec_server_runs_with_native_shell_and_cwd() -> Result<()> {
                 vec![{
                     let cwd = PathUri::parse("file:///C:/codex-home")?;
                     TurnEnvironmentSelection {
+                        selected_capability_roots: Default::default(),
                         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                         cwd: cwd.clone(),
                         workspace_roots: vec![cwd],

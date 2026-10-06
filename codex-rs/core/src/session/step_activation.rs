@@ -275,7 +275,9 @@ impl Session {
         let environments = environment_requests.map(|requests| {
             requests
                 .into_iter()
-                .map(TurnEnvironmentSelection::new)
+                .map(|request| {
+                    TurnEnvironmentSelection::new(request, &self.services.selected_capability_roots)
+                })
                 .collect::<Vec<_>>()
         });
         let updates_step_settings = updates_model_settings || approvals_reviewer.is_some();

@@ -1158,6 +1158,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
 
     let turn_store = ExtensionData::new("turn-1");
     let turn_environment = TurnEnvironmentSelection {
+        selected_capability_roots: Default::default(),
         environment_id: "env-1".to_string(),
         cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
         workspace_roots: Vec::new(),
@@ -2380,6 +2381,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
             environments: &[TurnEnvironmentSelection {
+                selected_capability_roots: Default::default(),
                 environment_id: "env-1".to_string(),
                 cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
                 workspace_roots: Vec::new(),

@@ -1,6 +1,7 @@
 //! Environment requests, thread selections, and attachment authority.
-//! Input APIs accept requests; runtime code uses selections constructed by the thread.
+//! Selections bind requests to the thread's capability roots before runtime use.
 
+use crate::capabilities::EnvironmentCapabilityRoots;
 use crate::capabilities::SelectedCapabilityRoot;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::WindowsSandboxLevel;
@@ -14,10 +15,11 @@ use codex_network_proxy::EnvironmentNetworkPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 
-/// An environment requested by a caller, before construction of thread-owned state.
+/// An environment requested by a caller, before attaching the receiving thread's roots.
 ///
-/// Input APIs accept requests so the receiving thread has a construction boundary for
-/// attaching its state before passing a selection to runtime code.
+/// Callers choose the environment and paths, but startup may still need to load roots from
+/// saved history or inherited attachments. Keeping this input separate lets the receiving
+/// thread construct a complete selection instead of filling in missing roots later.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurnEnvironmentRequest {
     pub environment_id: String,
@@ -26,25 +28,44 @@ pub struct TurnEnvironmentRequest {
     pub config: EnvironmentConfigState,
 }
 
-/// An environment selected by a thread for runtime use.
-/// Constructed from caller input at the receiving thread's startup or settings boundary.
+/// An environment selected for a thread, with its capability roots already attached.
+///
+/// Runtime snapshots carry this value so capability discovery uses the roots captured
+/// with the environment. Construct it from a request and the receiving thread's roots.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurnEnvironmentSelection {
     pub environment_id: String,
     pub cwd: PathUri,
     pub workspace_roots: Vec<PathUri>,
     pub config: EnvironmentConfigState,
+    /// Roots selected by the client for this environment when the thread started.
+    pub selected_capability_roots: EnvironmentCapabilityRoots,
 }
 
 impl TurnEnvironmentSelection {
-    /// Constructs runtime state at the receiving thread boundary.
-    pub fn new(request: TurnEnvironmentRequest) -> Self {
+    /// Attaches this environment's roots before the selection enters runtime state.
+    /// The caller supplies the receiving thread's roots so reselection restores them and
+    /// reusing an environment from another thread does not reuse that thread's root choices.
+    pub fn new(request: TurnEnvironmentRequest, roots: &[SelectedCapabilityRoot]) -> Self {
         Self {
+            selected_capability_roots: EnvironmentCapabilityRoots::for_environment(
+                &request.environment_id,
+                roots,
+            ),
             environment_id: request.environment_id,
             cwd: request.cwd,
             workspace_roots: request.workspace_roots,
             config: request.config,
         }
+    }
+
+    /// Whether these selections refer to the same environment and workspace.
+    /// Unlike full selection equality, this ignores configuration and capability roots:
+    /// those can differ between threads that follow the same owner's configuration.
+    pub fn has_same_workspace(&self, other: &Self) -> bool {
+        self.environment_id == other.environment_id
+            && self.cwd == other.cwd
+            && self.workspace_roots == other.workspace_roots
     }
 
     /// Requests this environment again; the receiving thread supplies its own roots.
@@ -92,7 +113,7 @@ impl TurnEnvironmentSelections {
 }
 
 /// Environment input supplied together with its fallback working directory.
-/// The receiving thread constructs selections before capturing these environments.
+/// The receiving thread attaches roots in `select` before capturing these environments.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurnEnvironmentRequests {
     pub legacy_fallback_cwd: AbsolutePathBuf,
@@ -110,14 +131,15 @@ impl TurnEnvironmentRequests {
         }
     }
 
-    /// Constructs the selections captured by the receiving thread.
-    pub fn select(self) -> TurnEnvironmentSelections {
+    /// Constructs selections with the receiving thread's roots, including roots retained
+    /// while an environment was deselected. Snapshots can then carry complete selections.
+    pub fn select(self, roots: &[SelectedCapabilityRoot]) -> TurnEnvironmentSelections {
         TurnEnvironmentSelections {
             legacy_fallback_cwd: self.legacy_fallback_cwd,
             environments: self
                 .environment_requests
                 .into_iter()
-                .map(TurnEnvironmentSelection::new)
+                .map(|request| TurnEnvironmentSelection::new(request, roots))
                 .collect(),
         }
     }

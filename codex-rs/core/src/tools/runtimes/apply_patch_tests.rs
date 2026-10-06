@@ -22,6 +22,7 @@ use std::collections::HashMap;
 fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::TurnEnvironment {
     crate::session::turn_context::TurnEnvironment::new(
         TurnEnvironmentSelection {
+            selected_capability_roots: Default::default(),
             environment_id: environment_id.to_string(),
             cwd: PathUri::from_abs_path(&std::env::temp_dir().abs()),
             workspace_roots: Vec::new(),

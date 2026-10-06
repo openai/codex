@@ -501,12 +501,13 @@ impl Session {
         environments: &TurnEnvironmentSnapshot,
     ) -> Vec<ResolvedSelectedCapabilityRoot> {
         let captured_environments = environments.captured_environments();
-        let thread_root_count = self.services.selected_capability_roots.len();
+        let thread_roots = environments.selected_capability_roots();
+        let thread_root_count = thread_roots.len();
         let mut root_locations_by_id = HashMap::new();
         let mut selected_capability_roots = Vec::new();
         let mut ready_environment_root_count = 0;
         let combined_roots = combine_selected_capability_roots(
-            &self.services.selected_capability_roots,
+            &thread_roots,
             environments.turn_environments().map(|environment| {
                 (
                     environment.config_origin,

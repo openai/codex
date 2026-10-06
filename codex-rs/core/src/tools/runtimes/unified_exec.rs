@@ -806,6 +806,7 @@ mod tests {
     fn test_turn_environment(cwd: PathUri) -> TurnEnvironment {
         TurnEnvironment::new(
             TurnEnvironmentSelection {
+                selected_capability_roots: Default::default(),
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd,
                 workspace_roots: Vec::new(),

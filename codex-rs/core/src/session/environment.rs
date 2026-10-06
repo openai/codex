@@ -190,11 +190,10 @@ impl Session {
                 let mut environments = configuration.environments.clone();
                 let latest_environments = &state.session_configuration.environments;
                 for environment in &mut environments {
-                    if let Some(latest) = latest_environments.iter().find(|latest| {
-                        latest.environment_id == environment.environment_id
-                            && latest.cwd == environment.cwd
-                            && latest.workspace_roots == environment.workspace_roots
-                    }) {
+                    if let Some(latest) = latest_environments
+                        .iter()
+                        .find(|latest| latest.has_same_workspace(environment))
+                    {
                         environment.config = latest.config.clone();
                     }
                 }
@@ -237,10 +236,12 @@ impl Session {
         inherited: &TurnEnvironmentSnapshot,
         selected: &[TurnEnvironmentSelection],
     ) {
-        for starting in inherited
-            .starting()
-            .filter(|starting| selected.contains(&starting.selection))
-        {
+        for starting in inherited.starting().filter(|starting| {
+            selected.iter().any(|selection| {
+                selection.has_same_workspace(&starting.selection)
+                    && matches!(selection.config, EnvironmentConfigState::Pending)
+            })
+        }) {
             let Some(configuration) = starting.owner_configuration() else {
                 continue;
             };
@@ -285,9 +286,7 @@ impl Session {
         let mut future = state.session_configuration.environments.clone();
         let inherited = matches!(source, ConfigUpdateSource::Inherited);
         let matches = |environment: &TurnEnvironmentSelection| {
-            environment.environment_id == selection.environment_id
-                && environment.cwd == selection.cwd
-                && environment.workspace_roots == selection.workspace_roots
+            environment.has_same_workspace(selection)
                 && (!inherited || matches!(environment.config, EnvironmentConfigState::Pending))
         };
         let environments = (

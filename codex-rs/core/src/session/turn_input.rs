@@ -107,7 +107,10 @@ impl PreparedTurnInputSettings {
         {
             None
         } else {
-            let updates = thread_settings::prepare_update(thread_settings);
+            let updates = thread_settings::prepare_update(
+                thread_settings,
+                &session.services.selected_capability_roots,
+            );
             session
                 .preview_settings(&updates)
                 .await

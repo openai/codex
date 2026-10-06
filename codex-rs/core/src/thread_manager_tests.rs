@@ -1990,6 +1990,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         AbsolutePathBuf::try_from(config.cwd.as_path().join("selected")).expect("absolute path");
     std::fs::create_dir_all(&selected_cwd).expect("create selected cwd");
     let environments = vec![TurnEnvironmentSelection {
+        selected_capability_roots: Default::default(),
         environment_id: "local".to_string(),
         cwd: PathUri::from_abs_path(&selected_cwd),
         workspace_roots: Vec::new(),

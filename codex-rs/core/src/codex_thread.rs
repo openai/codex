@@ -749,7 +749,8 @@ impl CodexThread {
                 approval_policy,
                 approvals_reviewer,
             },
-            environments: environment_requests.map(TurnEnvironmentRequests::select),
+            environments: environment_requests
+                .map(|requests| requests.select(&self.session.services.selected_capability_roots)),
             runtime_workspace_roots,
             profile_workspace_roots,
             sandbox_policy,

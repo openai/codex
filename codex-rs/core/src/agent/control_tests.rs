@@ -31,6 +31,7 @@ use crate::thread_manager::ForkSnapshot;
 use crate::thread_manager::StartThreadOptions;
 use crate::tools::handlers::multi_agents_common::thread_spawn_source;
 use assert_matches::assert_matches;
+use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::Instructions;
 use codex_extension_api::LoadInstructionsFuture;
 use codex_extension_api::LoadedUserInstructions;
@@ -45,6 +46,8 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
 use codex_protocol::ResponseItemId;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -1925,6 +1928,7 @@ async fn v2_spawn_resolves_reported_effort_without_changing_child_selection(
     parent.shutdown_and_wait().await.expect("shutdown parent");
 }
 
+/// Pending configuration reaches descendants even when their root metadata differs.
 #[tokio::test]
 async fn pending_environment_failure_reaches_child_and_grandchild() {
     let (home, mut config) = test_config().await;
@@ -1940,15 +1944,31 @@ async fn pending_environment_failure_reaches_child_and_grandchild() {
     let harness = AgentControlHarness::new_with_config(home, config).await;
     let cwd = PathUri::from_abs_path(&harness.config.codex_home);
     let pending = TurnEnvironmentSelection {
+        selected_capability_roots: Default::default(),
         environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         cwd: cwd.clone(),
-        workspace_roots: vec![cwd],
+        workspace_roots: vec![cwd.clone()],
         config: EnvironmentConfigState::Pending,
     };
+    // Only the second root's environment is selected. Inherited root lists can therefore
+    // give this root a different position without changing which configuration to follow.
+    let roots = ["unselected", codex_exec_server::LOCAL_ENVIRONMENT_ID]
+        .into_iter()
+        .map(|environment_id| SelectedCapabilityRoot {
+            id: environment_id.to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: environment_id.to_string(),
+                path: cwd.clone(),
+            },
+        })
+        .collect::<Vec<_>>();
+    let mut thread_extension_init = ExtensionDataInit::new();
+    thread_extension_init.insert(roots);
     let root = harness
         .manager
         .start_thread(StartThreadOptions {
             environments: Some(vec![pending.clone().into_request()]),
+            thread_extension_init,
             ..StartThreadOptions::new(harness.config.clone())
         })
         .await
@@ -1969,8 +1989,16 @@ async fn pending_environment_failure_reaches_child_and_grandchild() {
             .get_thread(agent.thread_id)
             .await
             .expect("get descendant");
-        assert_eq!(thread.environment_selections().await, vec![pending.clone()]);
-        descendants.push(Arc::clone(&thread));
+        let selections = thread.environment_selections().await;
+        assert_eq!(
+            selections
+                .clone()
+                .into_iter()
+                .map(TurnEnvironmentSelection::into_request)
+                .collect::<Vec<_>>(),
+            vec![pending.clone().into_request()],
+        );
+        descendants.push((Arc::clone(&thread), selections));
         parent = thread;
     }
 
@@ -1978,13 +2006,12 @@ async fn pending_environment_failure_reaches_child_and_grandchild() {
     root.environment_failed(&pending, error.to_string())
         .await
         .expect("fail root environment");
-    let failed = TurnEnvironmentSelection {
-        config: EnvironmentConfigState::Failed(error.to_string()),
-        ..pending
-    };
     timeout(Duration::from_secs(/*secs*/ 5), async {
-        for thread in descendants {
-            while thread.environment_selections().await != [failed.clone()] {
+        for (thread, mut expected) in descendants {
+            for selection in &mut expected {
+                selection.config = EnvironmentConfigState::Failed(error.to_string());
+            }
+            while thread.environment_selections().await != expected {
                 sleep(Duration::from_millis(/*millis*/ 10)).await;
             }
         }

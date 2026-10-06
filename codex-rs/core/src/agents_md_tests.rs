@@ -368,6 +368,7 @@ fn resolved_local_environments<const N: usize>(
             .map(|(environment_id, cwd)| {
                 TurnEnvironmentState::Ready(TurnEnvironment::new(
                     TurnEnvironmentSelection {
+                        selected_capability_roots: Default::default(),
                         environment_id: environment_id.to_string(),
                         cwd: PathUri::from_abs_path(&cwd),
                         workspace_roots: Vec::new(),

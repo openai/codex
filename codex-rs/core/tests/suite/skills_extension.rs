@@ -3112,6 +3112,7 @@ async fn production_turn_keeps_rebalanced_catalogs_stable_after_compaction_and_r
             /*connect_timeout*/ None,
         )?;
     let pending_selection = TurnEnvironmentSelection {
+        selected_capability_roots: Default::default(),
         environment_id: "skills-executor".to_string(),
         cwd: PathUri::from_abs_path(&test.config.cwd),
         workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],

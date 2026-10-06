@@ -3,6 +3,10 @@
 use super::*;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_extension_api::ExtensionDataInit;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::EnvironmentCapabilityRoots;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::TurnEnvironmentRequests;
@@ -10,9 +14,13 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::environment_config_for_selection;
 use pretty_assertions::assert_eq;
+use test_case::test_case;
 
+/// Active updates restore selected roots even when the request only names the environment.
+#[test_case(false; "without roots")]
+#[test_case(true; "with roots")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn current_turn_environment_selections_follow_active_updates() -> Result<()> {
+async fn current_turn_environment_selections_follow_active_updates(with_roots: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -22,13 +30,44 @@ async fn current_turn_environment_selections_follow_active_updates() -> Result<(
     )
     .await;
     let test = step_settings_test().build_with_auto_env(&server).await?;
-    let thread = &test.codex;
+    let selection = test.executor_environment().selection().clone();
+    let roots = if with_roots {
+        vec![SelectedCapabilityRoot {
+            id: "selected-root".to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: selection.environment_id.clone(),
+                path: selection.cwd.clone(),
+            },
+        }]
+    } else {
+        Vec::new()
+    };
+    let mut thread_extension_init = ExtensionDataInit::new();
+    thread_extension_init.insert(roots.clone());
+    let thread = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            environments: Some(vec![selection.into_request()]),
+            thread_extension_init,
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?
+        .thread;
+    let thread = &thread;
     let turn_id = start_paused_turn(thread).await?.turn_id;
     let initial = thread
         .active_turn_environment_selections()
         .await
         .expect("running turn");
     assert_eq!(initial.len(), 1);
+    assert_eq!(
+        EnvironmentCapabilityRoots::collect(
+            initial
+                .iter()
+                .map(|selection| &selection.selected_capability_roots)
+        ),
+        roots,
+    );
     assert_eq!(
         thread.current_turn_environment_selections(&turn_id).await,
         Some(initial.clone())
@@ -41,17 +80,16 @@ async fn current_turn_environment_selections_follow_active_updates() -> Result<(
     );
 
     for environments in [vec![], initial.clone()] {
+        let requested = environments
+            .clone()
+            .into_iter()
+            .map(TurnEnvironmentSelection::into_request)
+            .collect();
         apply_turn_settings(
             thread,
             &turn_id,
             TurnSettingsUpdate {
-                environments: Some(
-                    environments
-                        .clone()
-                        .into_iter()
-                        .map(TurnEnvironmentSelection::into_request)
-                        .collect(),
-                ),
+                environments: Some(requested),
                 ..Default::default()
             },
         )
