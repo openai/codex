@@ -42,6 +42,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -908,15 +909,28 @@ impl RealtimeWebsocketClient {
         default_headers: HeaderMap,
         transcript_state: RealtimeTranscriptState,
     ) -> Result<RealtimeWebsocketConnection, ApiError> {
-        self.connect_sideband(
-            config,
-            call_id,
-            extra_headers,
-            default_headers,
-            RealtimeSessionInitialization::ExistingCall,
-            transcript_state,
-        )
-        .await
+        // Instant Connect returns a call ID before ICE activates the call. Its sideband
+        // can briefly return 404 while the client connects media in parallel.
+        let mut activation_delays = [100, 300, 800].into_iter();
+        loop {
+            let result = self
+                .connect_sideband(
+                    config.clone(),
+                    call_id,
+                    extra_headers.clone(),
+                    default_headers.clone(),
+                    RealtimeSessionInitialization::ExistingCall,
+                    transcript_state.clone(),
+                )
+                .await;
+            if matches!(&result, Err(ApiError::Api { status, .. }) if *status == StatusCode::NOT_FOUND)
+                && let Some(delay_ms) = activation_delays.next()
+            {
+                sleep(Duration::from_millis(delay_ms)).await;
+                continue;
+            }
+            return result;
+        }
     }
 
     async fn connect_sideband(
