@@ -5,6 +5,8 @@
 //! events, keeps server metadata, and aggregates tools and resources across
 //! running RMCP clients.
 
+#[path = "connection_manager/catalog_telemetry.rs"]
+mod catalog_telemetry;
 #[path = "connection_manager/required.rs"]
 mod required;
 #[path = "connection_manager/resources.rs"]

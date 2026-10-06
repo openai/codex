@@ -123,6 +123,22 @@ pub struct SessionTelemetry {
     pub(crate) metrics_use_metadata_tags: bool,
 }
 
+/// Bounds product SKU attribution before it is used in telemetry dimensions.
+pub fn bounded_product_sku(product_sku: Option<&str>) -> Option<&'static str> {
+    const KNOWN_PRODUCT_SKUS: &[&str] = &["codex"];
+
+    match product_sku {
+        None | Some("") => None,
+        Some(sku) => Some(
+            KNOWN_PRODUCT_SKUS
+                .iter()
+                .copied()
+                .find(|known| *known == sku)
+                .unwrap_or("other"),
+        ),
+    }
+}
+
 impl SessionTelemetry {
     pub fn with_tool_result_log_config(mut self, config: ToolResultLogConfig) -> Self {
         self.tool_result_log_config = config;
@@ -157,18 +173,7 @@ impl SessionTelemetry {
 
     /// Attributes bounded telemetry without turning arbitrary configuration into metric labels.
     pub fn with_product_sku(mut self, product_sku: Option<&str>) -> Self {
-        const KNOWN_PRODUCT_SKUS: &[&str] = &["codex"];
-
-        self.metadata.product_sku = match product_sku {
-            None | Some("") => None,
-            Some(sku) => Some(
-                KNOWN_PRODUCT_SKUS
-                    .iter()
-                    .copied()
-                    .find(|known| *known == sku)
-                    .unwrap_or("other"),
-            ),
-        };
+        self.metadata.product_sku = bounded_product_sku(product_sku);
         self
     }
 
