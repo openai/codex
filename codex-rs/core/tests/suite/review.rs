@@ -833,7 +833,6 @@ async fn review_uses_updated_turn_permissions_and_approval_policy() {
         review_context.approvals_reviewer,
         Some(ApprovalsReviewer::User)
     );
-    assert_eq!(review_context.personality, Some(Personality::Friendly));
     // The review delegate still starts in its own default mode, not the parent's Plan mode.
     assert_eq!(
         review_context.collaboration_mode,

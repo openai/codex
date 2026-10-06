@@ -24,7 +24,6 @@ use crate::capabilities::SelectedCapabilityRoot;
 use crate::config_types::ApprovalsReviewer;
 use crate::config_types::CollaborationMode;
 use crate::config_types::ModeKind;
-use crate::config_types::MultiAgentMode;
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::WindowsSandboxLevel;
@@ -3317,12 +3316,6 @@ impl WorldStateItem {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
-pub struct TurnContextNetworkItem {
-    pub allowed_domains: Vec<String>,
-    pub denied_domains: Vec<String>,
-}
-
 /// Persist once per real user turn after computing that turn's model-visible
 /// context updates, and again after mid-turn compaction when replacement
 /// history re-establishes full context, so resume/fork replay can recover the
@@ -3339,14 +3332,6 @@ pub struct TurnContextItem {
     #[ts(optional)]
     pub disabled_plugin_ids: Option<Vec<String>>,
     pub cwd: AbsolutePathBuf,
-    /// Effective workspace roots used to materialize symbolic
-    /// `:workspace_roots` filesystem permissions in `permission_profile`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_date: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timezone: Option<String>,
     pub approval_policy: AskForApproval,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
@@ -3357,33 +3342,25 @@ pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub network: Option<TurnContextNetworkItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_system_sandbox_policy: Option<RawFileSystemSandboxPolicy>,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comp_hash: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub personality: Option<Personality>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collaboration_mode: Option<CollaborationMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_version: Option<MultiAgentVersion>,
-    /// Legacy effective model-visible mode retained to deserialize older rollouts.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub multi_agent_mode: Option<MultiAgentMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realtime_active: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cyber_access_program: Option<CyberAccessProgram>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
-    // Compatibility-only field written with a default value so older Codex
-    // versions can deserialize turn-context rollout items. It is no longer
-    // read by context reconstruction and should be removed in a future schema
-    // cleanup.
-    pub summary: ReasoningSummaryConfig,
+    /// Legacy placeholder written as `Some(ReasoningSummaryConfig::None)` for older readers.
+    /// Optional so newer readers also accept its future removal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<ReasoningSummaryConfig>,
 }
 
 impl TurnContextItem {
@@ -6197,18 +6174,18 @@ mod tests {
     }
 
     #[test]
-    fn turn_context_item_deserializes_without_network() -> Result<()> {
+    fn turn_context_item_deserializes_without_summary() -> Result<()> {
         let item: TurnContextItem = serde_json::from_value(json!({
             "cwd": test_path_buf("/tmp"),
             "approval_policy": "never",
             "sandbox_policy": { "type": "danger-full-access" },
             "model": "gpt-5",
-            "summary": "auto",
         }))?;
 
-        assert_eq!(item.network, None);
+        assert_eq!(item.summary, None);
         assert_eq!(item.file_system_sandbox_policy, None);
         assert_eq!(item.comp_hash, None);
+        assert_eq!(serde_json::to_value(item)?.get("summary"), None);
         Ok(())
     }
 
@@ -6227,24 +6204,17 @@ mod tests {
     }
 
     #[test]
-    fn turn_context_item_serializes_network_when_present() -> Result<()> {
+    fn turn_context_item_serializes_split_policy_and_summary() -> Result<()> {
         let item = TurnContextItem {
             turn_id: None,
             root_turn_id: None,
             disabled_plugin_ids: None,
             cwd: test_path_buf("/tmp").abs(),
-            workspace_roots: None,
-            current_date: None,
-            timezone: None,
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             permission_profile: None,
             active_permission_profile: None,
-            network: Some(TurnContextNetworkItem {
-                allowed_domains: vec!["api.example.com".to_string()],
-                denied_domains: vec!["blocked.example.com".to_string()],
-            }),
             file_system_sandbox_policy: Some(
                 FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
                     path: FileSystemPath::GlobPattern {
@@ -6258,24 +6228,15 @@ mod tests {
             ),
             model: "gpt-5".to_string(),
             comp_hash: None,
-            personality: None,
             collaboration_mode: None,
             multi_agent_version: None,
-            multi_agent_mode: None,
             realtime_active: None,
             cyber_access_program: None,
             effort: None,
-            summary: ReasoningSummaryConfig::Auto,
+            summary: Some(ReasoningSummaryConfig::None),
         };
 
         let value = serde_json::to_value(item)?;
-        assert_eq!(
-            value["network"],
-            json!({
-                "allowed_domains": ["api.example.com"],
-                "denied_domains": ["blocked.example.com"],
-            })
-        );
         assert_eq!(
             value["file_system_sandbox_policy"],
             json!({
@@ -6289,7 +6250,9 @@ mod tests {
                 }]
             })
         );
-        assert_eq!(value["summary"], json!("auto"));
+        let legacy_summary: ReasoningSummaryConfig =
+            serde_json::from_value(value["summary"].clone())?;
+        assert_eq!(legacy_summary, ReasoningSummaryConfig::None);
         Ok(())
     }
 

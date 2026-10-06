@@ -1,4 +1,4 @@
-//! Compaction checkpoints retain the summary captured after a mid-turn settings update.
+//! Model requests retain the summary captured after a mid-turn settings update and compaction.
 
 use super::*;
 use codex_history::RolloutItem;
@@ -79,12 +79,14 @@ async fn compaction_preserves_updated_summary(mode: CompactionMode) -> Result<()
     test.codex.shutdown_and_wait().await?;
 
     let requests = responses.requests();
+    assert_eq!(requests.len(), 4);
     assert_eq!(
         [
             requests[0].body_json()["reasoning"]["summary"].clone(),
-            requests[1].body_json()["reasoning"]["summary"].clone()
+            requests[1].body_json()["reasoning"]["summary"].clone(),
+            requests[3].body_json()["reasoning"]["summary"].clone(),
         ],
-        [json!("concise"), json!("detailed")]
+        [json!("concise"), json!("detailed"), json!("detailed")]
     );
     let rollout =
         std::fs::read_to_string(test.session_configured.rollout_path.expect("rollout path"))?;
@@ -101,6 +103,6 @@ async fn compaction_preserves_updated_summary(mode: CompactionMode) -> Result<()
             RolloutItem::TurnContext(context) => Some(context.summary),
             _ => None,
         });
-    assert_eq!(checkpoint, Some(ReasoningSummary::Detailed));
+    assert_eq!(checkpoint, Some(Some(ReasoningSummary::None)));
     Ok(())
 }

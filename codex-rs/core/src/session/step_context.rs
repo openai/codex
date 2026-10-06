@@ -76,7 +76,6 @@ impl StepContext {
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         let mut item = self.turn.to_turn_context_item();
         item.realtime_active = Some(self.realtime.active);
-        item.summary = self.settings.reasoning_summary;
         item
     }
 

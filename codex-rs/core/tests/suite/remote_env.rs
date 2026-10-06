@@ -701,12 +701,6 @@ async fn environment_permissions_follow_configuration_ownership() -> Result<()> 
             _ => None,
         })
         .context("owner turn context")?;
-    assert!(
-        turn_context
-            .workspace_roots
-            .as_ref()
-            .is_some_and(|roots| roots.contains(&owner_profile_workspace_root))
-    );
     assert_eq!(
         (
             turn_context.permission_profile,
@@ -807,14 +801,13 @@ async fn executor_profile_roots_survive_settings_restore_and_turn_recording() ->
             _ => None,
         })
         .context("recorded turn context")?;
-    // The rollout retains compiled permissions, not the unprojectable root list.
+    // The rollout retains compiled permissions.
     assert_eq!(
         (
             context.permission_profile,
             context.active_permission_profile,
-            context.workspace_roots
         ),
-        (Some(expected_profile), Some(active_profile), None)
+        (Some(expected_profile), Some(active_profile))
     );
     Ok(())
 }
