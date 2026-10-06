@@ -271,7 +271,7 @@ approvals_reviewer = "user"
         text_elements: Vec::new(),
     }]);
     let submitted = test.codex.start_or_steer_turn(request).await?;
-    let TurnInputSubmission::Started { turn_id } = submitted else {
+    let TurnInputSubmission::Started { turn_id, .. } = submitted else {
         anyhow::bail!("expected a new turn, got {submitted:?}");
     };
 

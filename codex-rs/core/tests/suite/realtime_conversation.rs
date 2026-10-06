@@ -5751,7 +5751,7 @@ async fn inbound_handoff_request_updates_realtime_state_during_active_turn(
             text_elements: Vec::new(),
         }]))
         .await?;
-    let TurnInputSubmission::Started { turn_id } = started else {
+    let TurnInputSubmission::Started { turn_id, .. } = started else {
         panic!("expected the text input to start a turn");
     };
 
@@ -5867,7 +5867,13 @@ async fn inbound_handoff_request_updates_realtime_state_during_active_turn(
             text_elements: Vec::new(),
         }]))
         .await?;
-    assert_eq!(steered, TurnInputSubmission::Steered { turn_id });
+    assert_eq!(
+        steered,
+        TurnInputSubmission::Steered {
+            root_turn_id: turn_id.clone(),
+            turn_id
+        }
+    );
     let _ = second_completed_tx.send(());
     second_completion
         .await

@@ -83,6 +83,7 @@ fn transcript_export_excludes_hidden_review_prompts_and_nested_duplicates() {
     let duplicate_two = user("duplicate-two", "duplicate review prompt");
     let turn = |id: &str, items: Vec<ThreadItem>, status| Turn {
         id: id.to_string(),
+        root_turn_id: None,
         items,
         items_view: TurnItemsView::Full,
         status,

@@ -4622,7 +4622,7 @@ async fn paginated_compaction_cold_resume_from_bounded_suffix() -> Result<()> {
         },
     )
     .await?;
-    let codex_core::TurnInputSubmission::Started { turn_id } = test
+    let codex_core::TurnInputSubmission::Started { turn_id, .. } = test
         .codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
             text: FUNCTION_CALL_LIMIT_MSG.into(),

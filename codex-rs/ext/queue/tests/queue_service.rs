@@ -393,7 +393,7 @@ async fn starting_a_selected_item_preserves_the_remaining_queue() -> anyhow::Res
 
     assert!(matches!(
         submission,
-        StartIfIdleSubmission::Started { turn_id } if !turn_id.is_empty()
+        StartIfIdleSubmission::Started { turn_id, .. } if !turn_id.is_empty()
     ));
     assert_eq!(vec![first], service.list(thread_id).await?);
     wait_for_event_match(test.codex.as_ref(), |event| match event {

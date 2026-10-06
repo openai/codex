@@ -86,7 +86,7 @@ async fn initial_plugin_ids_use_turn_context_without_extra_settings_checkpoints(
         .codex
         .start_turn_if_idle(TurnInputRequest::user_input(Vec::new()))
         .await?;
-    let StartIfIdleSubmission::Started { turn_id } = submission else {
+    let StartIfIdleSubmission::Started { turn_id, .. } = submission else {
         panic!("expected an accepted first turn, got {submission:?}");
     };
     wait_for_event(
@@ -220,7 +220,7 @@ async fn settings_notifications_keep_their_commit_across_postcommit_work(
                             .with_thread_settings(thread_settings),
                         )
                         .await?;
-                    let TurnInputSubmission::Started { turn_id } = result else {
+                    let TurnInputSubmission::Started { turn_id, .. } = result else {
                         panic!("expected a new turn, got {result:?}");
                     };
                     Ok(turn_id)

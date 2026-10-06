@@ -86,7 +86,7 @@ impl SettingsOperation {
                         .with_thread_settings(thread_settings),
                     )
                     .await?;
-                let TurnInputSubmission::Started { turn_id } = result else {
+                let TurnInputSubmission::Started { turn_id, .. } = result else {
                     anyhow::bail!("expected a new turn, got {result:?}");
                 };
                 turn_id

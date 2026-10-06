@@ -79,6 +79,7 @@ async fn configured_ctrl_space_submit_wins_over_transcript_selection() -> Result
                     thread_id: thread_id.to_string(),
                     turn: Turn {
                         id: "turn".into(),
+                        root_turn_id: None,
                         items_view: TurnItemsView::Full,
                         items: Vec::new(),
                         status: TurnStatus::InProgress,
@@ -185,6 +186,7 @@ fn complete_plan_turn(app: &mut App) {
     let thread_id = ThreadId::new().to_string();
     let turn = Turn {
         id: "plan-turn".into(),
+        root_turn_id: None,
         items_view: TurnItemsView::Full,
         items: Vec::new(),
         status: TurnStatus::InProgress,

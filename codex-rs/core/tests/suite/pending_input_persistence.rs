@@ -235,7 +235,7 @@ async fn steered_input_checkpoint_controls_next_request(
             text_elements: Vec::new(),
         }]))
         .await?;
-    let TurnInputSubmission::Started { turn_id } = first else {
+    let TurnInputSubmission::Started { turn_id, .. } = first else {
         panic!("first input should start a turn");
     };
     wait_for_event(&test.codex, |event| {
@@ -259,7 +259,10 @@ async fn steered_input_checkpoint_controls_next_request(
     };
     assert_eq!(
         test.codex.start_or_steer_turn(input).await?,
-        TurnInputSubmission::Steered { turn_id }
+        TurnInputSubmission::Steered {
+            root_turn_id: turn_id.clone(),
+            turn_id
+        }
     );
     // Steering still waits for the existing inference stream to finish.
     assert!(checkpoint_requests.try_recv().is_err());

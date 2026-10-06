@@ -97,7 +97,7 @@ async fn idle_response_items_include_pending_mailbox_in_first_request() -> anyho
             responses::user_message_item("automatic response item"),
         )))
         .await?;
-    let StartIfIdleSubmission::Started { turn_id } = submission else {
+    let StartIfIdleSubmission::Started { turn_id, .. } = submission else {
         panic!("automatic input should start a turn");
     };
     wait_for_turn_complete(test.codex.as_ref()).await;
@@ -152,7 +152,7 @@ async fn standalone_tool_output_starts_instruction_turn() -> anyhow::Result<()> 
         .codex
         .start_or_steer_turn(TurnInputRequest::new(TurnInput::ResponseItem(output)))
         .await?;
-    let TurnInputSubmission::Started { turn_id } = submission else {
+    let TurnInputSubmission::Started { turn_id, .. } = submission else {
         panic!("standalone output should start a turn");
     };
     wait_for_turn_complete(test.codex.as_ref()).await;
@@ -1924,7 +1924,7 @@ async fn interrupt_if_no_pending_input_checks_turn_and_queue(
         .build_with_auto_env(&config_server)
         .await?;
     let codex = &test.codex;
-    let TurnInputSubmission::Started { turn_id } = codex
+    let TurnInputSubmission::Started { turn_id, .. } = codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
             text: INITIAL_PROMPT.to_string(),
             text_elements: Vec::new(),

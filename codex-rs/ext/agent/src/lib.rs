@@ -85,7 +85,7 @@ impl AgentRunner {
             )
             .await?
         {
-            StartIfIdleSubmission::Started { turn_id } => turn_id,
+            StartIfIdleSubmission::Started { turn_id, .. } => turn_id,
             StartIfIdleSubmission::NotSubmitted { reason } => {
                 return Err(CodexErr::InvalidRequest(format!(
                     "agent prompt was not submitted: {reason:?}"

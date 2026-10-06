@@ -386,6 +386,10 @@ impl<'de> Deserialize<'de> for Thread {
 pub struct Turn {
     /// Identifier for this turn. Codex-generated turn IDs are UUIDv7.
     pub id: String,
+    /// ID of the first turn in the chain of work that led to this turn.
+    /// Pass this as `rootTurnId` when starting work on behalf of this turn.
+    /// May be null in older history or a `review/start` response.
+    pub root_turn_id: Option<String>,
     /// Thread items currently included in this turn payload.
     pub items: Vec<ThreadItem>,
     /// Describes how much of `items` has been loaded for this turn.

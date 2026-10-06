@@ -265,7 +265,7 @@ async fn reasoning_effort_override_recovery_reuses_trusted_tail_update() -> anyh
             text_elements: Vec::new(),
         }]))
         .await?;
-    let TurnInputSubmission::Started { turn_id } = submission else {
+    let TurnInputSubmission::Started { turn_id, .. } = submission else {
         panic!("expected a new turn");
     };
     wait_for_event(&test.codex, |event| {
@@ -314,7 +314,10 @@ async fn reasoning_effort_override_recovery_reuses_trusted_tail_update() -> anyh
                 cyber_access_program: None,
             })
             .await?,
-        StartIfIdleSubmission::Started { turn_id },
+        StartIfIdleSubmission::Started {
+            root_turn_id: turn_id.clone(),
+            turn_id
+        },
     );
     wait_for_event(&resumed.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))

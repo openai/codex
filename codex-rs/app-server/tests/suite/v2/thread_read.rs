@@ -215,6 +215,7 @@ async fn thread_read_can_include_turns() -> Result<()> {
     assert_eq!(thread.turns.len(), 1);
     let turn = &thread.turns[0];
     assert_eq!(turn.status, TurnStatus::Completed);
+    assert_eq!(turn.root_turn_id, None);
     assert_eq!(turn.items_view, TurnItemsView::Full);
     assert_eq!(turn.items.len(), 1, "expected user message item");
     match &turn.items[0] {
@@ -238,9 +239,13 @@ async fn thread_read_can_include_turns() -> Result<()> {
     Ok(())
 }
 
-/// Preserves a file-backed image across a completed turn, including a cold history read.
+/// Preserves a file-backed image and causal root across completion and a cold history read.
+#[test_case::test_case(ThreadHistoryMode::Legacy; "legacy")]
+#[test_case::test_case(ThreadHistoryMode::Paginated; "paginated")]
 #[tokio::test]
-async fn thread_read_preserves_file_id_from_completed_turn() -> Result<()> {
+async fn thread_read_preserves_file_id_and_root_from_completed_turn(
+    history_mode: ThreadHistoryMode,
+) -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
@@ -252,6 +257,7 @@ async fn thread_read_preserves_file_id_from_completed_turn() -> Result<()> {
     let start_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            history_mode: Some(history_mode),
             ..Default::default()
         })
         .await?;
@@ -264,15 +270,18 @@ async fn thread_read_preserves_file_id_from_completed_turn() -> Result<()> {
         detail: None,
     };
 
-    timeout(
+    let completed = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.start_turn_and_wait_for_completion(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![image.clone()],
+            root_turn_id: Some("causal-root".to_string()),
             ..Default::default()
         }),
     )
     .await??;
+    let expected_root = "causal-root";
+    assert_eq!(completed.turn.root_turn_id.as_deref(), Some(expected_root));
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
@@ -287,6 +296,10 @@ async fn thread_read_preserves_file_id_from_completed_turn() -> Result<()> {
         panic!("expected completed turn to start with a user message");
     };
     assert_eq!(content, &vec![image.clone()]);
+    assert_eq!(
+        loaded_thread.turns[0].root_turn_id.as_deref(),
+        Some(expected_root)
+    );
 
     timeout(DEFAULT_READ_TIMEOUT, mcp.shutdown_gracefully()).await??;
     drop(mcp);
@@ -297,7 +310,7 @@ async fn thread_read_preserves_file_id_from_completed_turn() -> Result<()> {
         .await?;
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
-            thread_id: thread.id,
+            thread_id: thread.id.clone(),
             include_turns: true,
         })
         .await?;
@@ -308,6 +321,24 @@ async fn thread_read_preserves_file_id_from_completed_turn() -> Result<()> {
         panic!("expected persisted turn to start with a user message");
     };
     assert_eq!(content, &vec![image]);
+    assert_eq!(
+        restarted_thread.turns[0].root_turn_id.as_deref(),
+        Some(expected_root)
+    );
+    let page_id = mcp
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: thread.id,
+            cursor: None,
+            limit: Some(1),
+            sort_direction: Some(SortDirection::Asc),
+            items_view: None,
+        })
+        .await?;
+    let page: ThreadTurnsListResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(page_id)).await??;
+    assert_eq!(page.data.len(), 1);
+    assert_eq!(page.data[0].id, completed.turn.id);
+    assert_eq!(page.data[0].root_turn_id.as_deref(), Some(expected_root));
 
     Ok(())
 }
@@ -1787,6 +1818,7 @@ async fn paginated_history_lists_and_legacy_reads_use_projected_turns_and_items(
 
     let expected_turn_1_full = Turn {
         id: "turn-1".to_string(),
+        root_turn_id: None,
         items: vec![
             ThreadItem::UserMessage {
                 id: "user-1".to_string(),
@@ -1816,6 +1848,7 @@ async fn paginated_history_lists_and_legacy_reads_use_projected_turns_and_items(
     };
     let expected_turn_2_full = Turn {
         id: "turn-2".to_string(),
+        root_turn_id: None,
         items: vec![ThreadItem::UserMessage {
             id: "user-2".to_string(),
             client_id: None,
@@ -1979,6 +2012,7 @@ async fn paginated_history_lists_and_legacy_reads_use_projected_turns_and_items(
         first_page.data,
         vec![Turn {
             id: "turn-1".to_string(),
+            root_turn_id: None,
             items: vec![
                 ThreadItem::UserMessage {
                     id: "user-1".to_string(),
@@ -2016,6 +2050,7 @@ async fn paginated_history_lists_and_legacy_reads_use_projected_turns_and_items(
         second_page.data,
         vec![Turn {
             id: "turn-2".to_string(),
+            root_turn_id: None,
             items: Vec::new(),
             items_view: TurnItemsView::NotLoaded,
             status: TurnStatus::Interrupted,
@@ -2438,6 +2473,7 @@ fn paginated_turn_started(turn_id: &str) -> RolloutItem {
 
 fn paginated_turn_completed(turn_id: &str) -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+        root_turn_id: None,
         turn_id: turn_id.to_string(),
         last_agent_message: None,
         error: None,

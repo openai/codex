@@ -43,7 +43,7 @@ pub async fn start_review_turn(
     match crate::run_before_review_deadline(deadline, external_cancel, runtime.submit_turn(request))
         .await?
     {
-        Ok(TurnInputSubmission::Started { turn_id }) => Ok(turn_id),
+        Ok(TurnInputSubmission::Started { turn_id, .. }) => Ok(turn_id),
         result => Err(GuardianReviewSessionOutcome::SessionFailed {
             error: match result {
                 Ok(submission) => anyhow!("guardian review input was not started: {submission:?}"),

@@ -137,7 +137,7 @@ async fn turn_completion_metrics_follow_model_switch(scenario: UsageScenario) {
         .with_runtime_reader(),
     )
     .expect("in-memory metrics client");
-    let (mut session, mut turn_context, _receiver) = make_session_and_context_with_rx().await;
+    let (mut session, mut turn_context, receiver) = make_session_and_context_with_rx().await;
     let session_telemetry = session
         .services
         .session_telemetry
@@ -243,7 +243,21 @@ async fn turn_completion_metrics_follow_model_switch(scenario: UsageScenario) {
     } else {
         Ok(None)
     };
+    let expected_root = turn_context.root_turn_id();
     session.on_task_finished(turn_context, task_result).await;
+    let mut terminal_root = None;
+    while let Ok(event) = receiver.try_recv() {
+        match event.msg {
+            codex_protocol::protocol::EventMsg::TurnComplete(event) => {
+                terminal_root = event.root_turn_id;
+            }
+            codex_protocol::protocol::EventMsg::TurnAborted(event) => {
+                terminal_root = event.root_turn_id;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(terminal_root, Some(expected_root));
 
     let snapshot = metrics.snapshot().expect("runtime metrics snapshot");
     let token_usage_metric = find_metric(&snapshot, TURN_TOKEN_USAGE_METRIC);

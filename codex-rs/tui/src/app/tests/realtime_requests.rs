@@ -299,6 +299,7 @@ async fn switching_agent_threads_preserves_backend_voice_and_routes_pending_spee
             thread_id: source.to_string(),
             turn: Turn {
                 id: turn_id.into(),
+                root_turn_id: None,
                 items: vec![answer.clone()],
                 items_view: TurnItemsView::Summary,
                 status: TurnStatus::Completed,
@@ -665,6 +666,7 @@ async fn replay_reconciles_only_matching_voice_captions_one_for_one() {
         .insert(source, records);
     let voice = Turn {
         id: "voice-turn".into(),
+        root_turn_id: None,
         items: vec![
             test_user_message(
                 "voice-user",
@@ -929,6 +931,7 @@ async fn unrendered_buffered_items_do_not_consume_retained_captions() {
                 thread_id: source.to_string(),
                 turn: Turn {
                     id: turn_id.into(),
+                    root_turn_id: None,
                     items,
                     items_view: TurnItemsView::Summary,
                     status,
@@ -1212,6 +1215,7 @@ async fn rejected_realtime_speech_restores_the_delegated_final_answer() -> Resul
             thread_id: thread_id.to_string(),
             turn: Turn {
                 id: "rejected-turn".to_string(),
+                root_turn_id: None,
                 items: vec![answer],
                 items_view: TurnItemsView::Summary,
                 status: TurnStatus::Completed,
@@ -1311,6 +1315,7 @@ async fn switching_threads_retains_undelivered_voice_answer_after_replay_evictio
             thread_id: original.to_string(),
             turn: Turn {
                 id: "switched-turn".to_string(),
+                root_turn_id: None,
                 items: vec![answer],
                 items_view: TurnItemsView::Summary,
                 status: TurnStatus::Completed,
@@ -1391,6 +1396,7 @@ async fn switching_threads_retains_undelivered_voice_answer_after_replay_evictio
             session: Some(test_thread_session(original, app.config.cwd.to_path_buf())),
             turns: vec![Turn {
                 id: "replayed-turn".to_string(),
+                root_turn_id: None,
                 items: vec![replayed_item],
                 items_view: TurnItemsView::Summary,
                 status: TurnStatus::Completed,
@@ -1593,6 +1599,7 @@ async fn delegated_final_speech_reaches_app_server_once_and_stale_speech_is_reje
             thread_id: thread_id.to_string(),
             turn: Turn {
                 id: turn_id.to_string(),
+                root_turn_id: None,
                 items: vec![answer],
                 items_view: TurnItemsView::Summary,
                 status: TurnStatus::Completed,
@@ -1670,6 +1677,7 @@ async fn delegated_final_speech_reaches_app_server_once_and_stale_speech_is_reje
             thread_id: thread_id.to_string(),
             turn: Turn {
                 id: second_turn.to_string(),
+                root_turn_id: None,
                 items: vec![second_answer],
                 items_view: TurnItemsView::Summary,
                 status: TurnStatus::Completed,

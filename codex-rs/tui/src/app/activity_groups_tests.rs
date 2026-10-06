@@ -44,6 +44,7 @@ fn reasoning(id: &str) -> ThreadItem {
 fn turn(items: Vec<ThreadItem>) -> Turn {
     Turn {
         id: "turn".to_owned(),
+        root_turn_id: None,
         items,
         items_view: TurnItemsView::Full,
         status: TurnStatus::Completed,

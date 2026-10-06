@@ -7,6 +7,7 @@ use pretty_assertions::assert_eq;
 fn turn(id: &str, status: TurnStatus, item_ids: &[&str]) -> Turn {
     Turn {
         id: id.to_string(),
+        root_turn_id: None,
         items: item_ids
             .iter()
             .map(|id| ThreadItem::UserMessage {

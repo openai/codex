@@ -163,6 +163,7 @@ async fn steer_joins_existing_turn_without_extending_sampling(
             )
             .await?,
         TurnInputSubmission::Steered {
+            root_turn_id: call.turn_id.clone(),
             turn_id: call.turn_id.clone()
         }
     );
@@ -223,6 +224,7 @@ async fn steer_joins_existing_turn_without_extending_sampling(
                     })
                     .await?,
                 StartIfIdleSubmission::Started {
+                    root_turn_id: call.turn_id.clone(),
                     turn_id: call.turn_id.clone()
                 }
             );

@@ -157,7 +157,7 @@ pub(crate) async fn pending_subagent_scenario(
         .await;
 
     let mut created = test.thread_manager.subscribe_thread_created();
-    let TurnInputSubmission::Started { turn_id } = root
+    let TurnInputSubmission::Started { turn_id, .. } = root
         .thread
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
             text: "Delegate waiting for the shared workspace, and report what the worker finds."

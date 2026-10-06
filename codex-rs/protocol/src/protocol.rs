@@ -2130,6 +2130,10 @@ pub struct ContextCompactedEvent;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnCompleteEvent {
+    /// Resolved causal root for this turn; absent on older or synthetic events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub root_turn_id: Option<String>,
     pub turn_id: String,
     pub last_agent_message: Option<String>,
     /// Terminal error details when the turn completed unsuccessfully.
@@ -4225,6 +4229,10 @@ pub struct Chunk {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnAbortedEvent {
+    /// Resolved causal root for this turn; absent on older or synthetic events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub root_turn_id: Option<String>,
     pub turn_id: Option<String>,
     pub reason: TurnAbortReason,
     /// Optional error describing why the turn was interrupted.
@@ -6103,9 +6111,12 @@ mod tests {
 
         match event {
             EventMsg::TurnAborted(TurnAbortedEvent {
-                turn_id, reason, ..
+                turn_id,
+                root_turn_id,
+                reason,
+                ..
             }) => {
-                assert_eq!(turn_id, None);
+                assert_eq!((turn_id, root_turn_id), (None, None));
                 assert_eq!(reason, TurnAbortReason::Interrupted);
             }
             _ => panic!("expected turn_aborted event"),

@@ -2555,7 +2555,7 @@ async fn active_environment_update_wakes_the_old_wait_with_the_new_selection() -
         ],
     )
     .await;
-    let TurnInputSubmission::Started { turn_id } = thread
+    let TurnInputSubmission::Started { turn_id, .. } = thread
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
             text: "use the selected environment".to_string(),
             text_elements: Vec::new(),

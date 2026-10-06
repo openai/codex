@@ -583,11 +583,13 @@ async fn turn_start_with_empty_input_runs_model_request() -> Result<()> {
         })
         .await?;
     assert!(!turn.id.is_empty());
+    assert_eq!(turn.root_turn_id.as_deref(), Some(turn.id.as_str()));
 
     let started: TurnStartedNotification =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_notification("turn/started")).await??;
     assert_eq!(started.thread_id, thread.id);
     assert_eq!(started.turn.id, turn.id);
+    assert_eq!(started.turn.root_turn_id.as_deref(), Some(turn.id.as_str()));
     assert_eq!(started.turn.status, TurnStatus::InProgress);
 
     let completed: TurnCompletedNotification = timeout(
@@ -597,6 +599,10 @@ async fn turn_start_with_empty_input_runs_model_request() -> Result<()> {
     .await??;
     assert_eq!(completed.thread_id, thread.id);
     assert_eq!(completed.turn.id, turn.id);
+    assert_eq!(
+        completed.turn.root_turn_id.as_deref(),
+        Some(turn.id.as_str())
+    );
     assert_eq!(completed.turn.status, TurnStatus::Completed);
     assert_eq!(completed.turn.items_view, TurnItemsView::Summary);
     assert!(matches!(
@@ -703,16 +709,17 @@ async fn turn_start_steers_active_turn_and_returns_active_turn_id() -> Result<()
                     text_elements: Vec::new(),
                 }],
                 turn_trigger: Some("goal".to_string()),
+                parent_turn_id: Some("initiating-turn".to_string()),
+                root_turn_id: Some("causal-root".to_string()),
                 cyber_access_program: Some(CyberAccessProgram::DaybreakBlue),
                 ..Default::default()
             },
         })
         .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/started"),
-    )
-    .await??;
+    let started: TurnStartedNotification =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_notification("turn/started")).await??;
+    assert_eq!(active_turn.root_turn_id.as_deref(), Some("causal-root"));
+    assert_eq!(started.turn.root_turn_id.as_deref(), Some("causal-root"));
     timeout(
         DEFAULT_READ_TIMEOUT,
         server.wait_for_request_count(/*count*/ 1),
@@ -746,21 +753,25 @@ async fn turn_start_steers_active_turn_and_returns_active_turn_id() -> Result<()
                     text_elements: Vec::new(),
                 }],
                 turn_trigger: Some("user".to_string()),
+                parent_turn_id: Some("steering-turn".to_string()),
+                root_turn_id: Some("steering-root".to_string()),
                 cyber_access_program: Some(CyberAccessProgram::Standard),
                 ..Default::default()
             },
         })
         .await?;
     assert_eq!(steered_turn.id, active_turn.id);
+    assert_eq!(steered_turn.root_turn_id, active_turn.root_turn_id);
 
     release_response
         .send(())
         .expect("active response gate should remain open");
-    timeout(
+    let completed: TurnCompletedNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
+        mcp.read_notification("turn/completed"),
     )
     .await??;
+    assert_eq!(completed.turn.root_turn_id.as_deref(), Some("causal-root"));
 
     let requests = server.requests().await;
     assert_eq!(requests.len(), 2);
@@ -773,6 +784,8 @@ async fn turn_start_steers_active_turn_and_returns_active_turn_id() -> Result<()
                 .context("expected x-codex-turn-metadata")?,
         )?;
         assert_eq!(turn_metadata["turn_trigger"].as_str(), Some("goal"));
+        assert_eq!(turn_metadata["parent_turn_id"], "initiating-turn");
+        assert_eq!(turn_metadata["root_turn_id"], "causal-root");
     }
     Ok(())
 }
@@ -3389,6 +3402,8 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
                     text_elements: Vec::new(),
                 }],
                 turn_trigger: None,
+                parent_turn_id: None,
+                root_turn_id: None,
                 tool_output: None,
                 responsesapi_client_metadata: None,
                 additional_context: None,
@@ -3442,6 +3457,8 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
                     text_elements: Vec::new(),
                 }],
                 turn_trigger: None,
+                parent_turn_id: None,
+                root_turn_id: None,
                 tool_output: None,
                 responsesapi_client_metadata: None,
                 additional_context: None,

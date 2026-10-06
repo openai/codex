@@ -815,6 +815,10 @@ async fn queue_start_without_id_starts_the_head_when_idle() -> Result<()> {
         .await?;
     let started: ThreadQueueStartResponse =
         timeout(READ_TIMEOUT, app.read_response(start_request_id)).await??;
+    assert_eq!(
+        started.turn.root_turn_id.as_deref(),
+        Some(started.turn.id.as_str())
+    );
     let started_item = loop {
         let started_item: ItemStartedNotification =
             timeout(READ_TIMEOUT, app.read_notification("item/started")).await??;

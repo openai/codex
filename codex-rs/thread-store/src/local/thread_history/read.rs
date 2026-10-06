@@ -52,6 +52,7 @@ pub(super) struct RolloutHistoryPosition {
 pub(super) struct StoredTurnRow {
     pub position: RolloutHistoryPosition,
     pub turn_id: String,
+    pub root_turn_id: Option<String>,
     pub status: StoredTurnStatus,
     pub error: Option<StoredTurnError>,
     pub started_at: Option<i64>,
@@ -141,6 +142,7 @@ pub(in crate::local) async fn list_turns(
         };
         turns.push(StoredTurn {
             turn_id: turn.turn_id,
+            root_turn_id: turn.root_turn_id,
             items,
             items_view: params.items_view,
             status: turn.status,
@@ -312,6 +314,7 @@ pub(super) fn stored_turn_row(row: sqlx::sqlite::SqliteRow) -> ThreadStoreResult
             rollout_ordinal: row.try_get("rollout_ordinal")?,
         },
         turn_id: row.try_get("turn_id")?,
+        root_turn_id: row.try_get("root_turn_id")?,
         status,
         error,
         started_at: row.try_get("started_at")?,

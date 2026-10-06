@@ -399,6 +399,13 @@ enum TurnContextBuildMode {
 }
 
 impl TurnContext {
+    /// Returns the resolved causal root for this admitted turn.
+    pub(crate) fn root_turn_id(&self) -> String {
+        self.turn_metadata_state
+            .root_turn_id()
+            .unwrap_or_else(|| self.sub_id.clone())
+    }
+
     /// Builds a review turn with shared session grants and fresh turn-local state.
     pub(super) fn for_review(
         &self,

@@ -90,7 +90,10 @@ async fn yielded_skill_read_keeps_originating_turn_metadata() -> Result<()> {
         text_elements: Vec::new(),
     }]);
     let submitted = test.codex.start_or_steer_turn(request).await?;
-    let TurnInputSubmission::Started { turn_id: turn_a } = submitted else {
+    let TurnInputSubmission::Started {
+        turn_id: turn_a, ..
+    } = submitted
+    else {
         anyhow::bail!("expected turn A to start, got {submitted:?}");
     };
     wait_for_event(&test.codex, |event| {
@@ -135,7 +138,10 @@ async fn yielded_skill_read_keeps_originating_turn_metadata() -> Result<()> {
             text_elements: Vec::new(),
         }]))
         .await?;
-    let TurnInputSubmission::Started { turn_id: turn_b } = submitted else {
+    let TurnInputSubmission::Started {
+        turn_id: turn_b, ..
+    } = submitted
+    else {
         anyhow::bail!("expected turn B to start, got {submitted:?}");
     };
     wait_for_event(&test.codex, |event| {

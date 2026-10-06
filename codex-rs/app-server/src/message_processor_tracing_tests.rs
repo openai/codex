@@ -684,6 +684,8 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
                         text_elements: Vec::new(),
                     }],
                     turn_trigger: None,
+                    parent_turn_id: None,
+                    root_turn_id: None,
                     tool_output: None,
                     responsesapi_client_metadata: None,
                     additional_context: None,

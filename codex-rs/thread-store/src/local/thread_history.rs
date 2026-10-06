@@ -316,6 +316,7 @@ async fn apply_change_set(
 INSERT INTO thread_turns (
     thread_id,
     turn_id,
+    root_turn_id,
     rollout_ordinal,
     rollout_byte_offset,
     rollout_end_ordinal,
@@ -325,8 +326,9 @@ INSERT INTO thread_turns (
     started_at,
     completed_at,
     duration_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(thread_id, turn_id) DO UPDATE SET
+    root_turn_id = COALESCE(thread_turns.root_turn_id, excluded.root_turn_id),
     rollout_end_ordinal = excluded.rollout_end_ordinal,
     rollout_end_byte_offset = excluded.rollout_end_byte_offset,
     status = excluded.status,
@@ -340,6 +342,7 @@ WHERE thread_turns.rollout_end_ordinal IS NULL
         )
         .bind(thread_id)
         .bind(turn_id.as_str())
+        .bind(turn.root_turn_id)
         .bind(rollout_ordinal)
         .bind(rollout_byte_offset)
         .bind(terminal_ordinal)

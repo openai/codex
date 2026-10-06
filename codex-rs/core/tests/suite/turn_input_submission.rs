@@ -87,7 +87,8 @@ async fn turn_extension_data_is_captured_for_automatic_turns() -> anyhow::Result
         })
         .await?
         .thread;
-    let TurnInputSubmission::Started { turn_id } = submit_user_message(&thread, "start").await?
+    let TurnInputSubmission::Started { turn_id, .. } =
+        submit_user_message(&thread, "start").await?
     else {
         anyhow::bail!("first input must start a turn");
     };
@@ -106,6 +107,7 @@ async fn turn_extension_data_is_captured_for_automatic_turns() -> anyhow::Result
             ))
             .await?,
         TurnInputSubmission::Steered {
+            root_turn_id: turn_id.clone(),
             turn_id: turn_id.clone()
         }
     );
@@ -635,7 +637,8 @@ async fn recover_turn_if_idle_preserves_id_and_resumes_plan_mode() {
     assert_eq!(
         submission,
         StartIfIdleSubmission::Started {
-            turn_id: turn_id.to_string(),
+            root_turn_id: turn_id.to_string(),
+            turn_id: turn_id.to_string()
         }
     );
     assert_eq!(
@@ -752,6 +755,7 @@ async fn recovery_preserves_durable_turn_attribution(
     );
     let TurnInputSubmission::Started {
         turn_id: previous_turn_id,
+        ..
     } = submit_user_message(&test.codex, "establish the initial context baseline").await?
     else {
         panic!("expected the initial turn");
@@ -801,14 +805,14 @@ async fn recovery_preserves_durable_turn_attribution(
         ..Default::default()
     });
     let turn_id = if matches!(pause, RecoveryPause::AfterLateCompletion) {
-        let TurnInputSubmission::Started { turn_id } =
+        let TurnInputSubmission::Started { turn_id, .. } =
             test.codex.start_or_steer_turn(request).await?
         else {
             panic!("expected a new turn while the previous stop hook is pending");
         };
         turn_id
     } else {
-        let StartIfIdleSubmission::Started { turn_id } =
+        let StartIfIdleSubmission::Started { turn_id, .. } =
             test.codex.start_turn_if_idle(request).await?
         else {
             panic!("expected a new turn");
@@ -887,6 +891,7 @@ async fn recovery_preserves_durable_turn_attribution(
                 })
                 .await?,
             StartIfIdleSubmission::Started {
+                root_turn_id: root.to_owned(),
                 turn_id: turn_id.clone()
             },
         );
@@ -930,10 +935,15 @@ async fn recovery_preserves_durable_turn_attribution(
         );
     }
     test.codex.submit(Op::Interrupt).await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnAborted(_))
+    let aborted = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnAborted(event) => Some(event.clone()),
+        _ => None,
     })
     .await;
+    assert_eq!(
+        (aborted.turn_id.as_deref(), aborted.root_turn_id.as_deref()),
+        (Some(turn_id.as_str()), Some(root)),
+    );
     if trigger != Some("automation") {
         return Ok(());
     }
@@ -943,6 +953,7 @@ async fn recovery_preserves_durable_turn_attribution(
     let response = responses::mount_sse_once(&next_server, responses::sse_completed("new")).await;
     let TurnInputSubmission::Started {
         turn_id: next_turn_id,
+        ..
     } = test
         .codex
         .start_or_steer_turn(
@@ -994,6 +1005,7 @@ async fn continue_turn_if_idle_starts_new_turn_with_internal_input() {
     responses::mount_sse_once(&server, responses::sse_completed("original")).await;
     let TurnInputSubmission::Started {
         turn_id: previous_turn_id,
+        ..
     } = test
         .codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
@@ -1030,7 +1042,7 @@ async fn continue_turn_if_idle_starts_new_turn_with_internal_input() {
         )
         .await
         .unwrap();
-    let TurnInputSubmission::Started { turn_id } = submission else {
+    let TurnInputSubmission::Started { turn_id, .. } = submission else {
         panic!("continuation did not start")
     };
     wait_for_event(&test.codex, |event| {
@@ -1166,12 +1178,20 @@ async fn turn_input_submission_reports_started_and_steered_for_concurrent_submis
     let (started_turn_id, steered_turn_id, started_message) =
         match (&first_submission, &second_submission) {
             (
-                TurnInputSubmission::Started { turn_id: started },
-                TurnInputSubmission::Steered { turn_id: steered },
+                TurnInputSubmission::Started {
+                    turn_id: started, ..
+                },
+                TurnInputSubmission::Steered {
+                    turn_id: steered, ..
+                },
             ) => (started, steered, "first message"),
             (
-                TurnInputSubmission::Steered { turn_id: steered },
-                TurnInputSubmission::Started { turn_id: started },
+                TurnInputSubmission::Steered {
+                    turn_id: steered, ..
+                },
+                TurnInputSubmission::Started {
+                    turn_id: started, ..
+                },
             ) => (started, steered, "second message"),
             _ => panic!(
                 "concurrent messages must start exactly one turn and steer the other: \
@@ -1231,7 +1251,7 @@ async fn turn_input_submission_applies_thread_settings_only_after_accepted_input
     let started = submit_user_message(codex, "start turn")
         .await
         .expect("first message should start a turn");
-    let TurnInputSubmission::Started { turn_id } = started else {
+    let TurnInputSubmission::Started { turn_id, .. } = started else {
         panic!("first message should start a turn");
     };
     timeout(
@@ -1256,7 +1276,13 @@ async fn turn_input_submission_applies_thread_settings_only_after_accepted_input
         )
         .await
         .expect("persistent settings should not reject a steer");
-    assert_eq!(steered, TurnInputSubmission::Steered { turn_id });
+    assert_eq!(
+        steered,
+        TurnInputSubmission::Steered {
+            root_turn_id: turn_id.clone(),
+            turn_id
+        }
+    );
     assert_eq!(
         codex.config_snapshot().await.approval_policy,
         AskForApproval::Never
@@ -1353,7 +1379,7 @@ async fn start_or_steer_turn_requires_matching_active_output_schema() {
         )
         .await
         .expect("first message should start a turn");
-    let TurnInputSubmission::Started { turn_id } = started else {
+    let TurnInputSubmission::Started { turn_id, .. } = started else {
         panic!("first message should start a turn");
     };
     timeout(
@@ -1397,7 +1423,13 @@ async fn start_or_steer_turn_requires_matching_active_output_schema() {
         )
         .await
         .expect("matching schema should steer");
-    assert_eq!(steered, TurnInputSubmission::Steered { turn_id });
+    assert_eq!(
+        steered,
+        TurnInputSubmission::Steered {
+            root_turn_id: turn_id.clone(),
+            turn_id
+        }
+    );
 
     release_response
         .send(())
@@ -1438,7 +1470,7 @@ async fn sampling_is_ready_for_daemon_recovery(
         builder = builder.with_exec_server_url(&remote.websocket_url);
     }
     let test = builder.build_with_streaming_server(&server).await?;
-    let StartIfIdleSubmission::Started { turn_id } = test
+    let StartIfIdleSubmission::Started { turn_id, .. } = test
         .codex
         .start_turn_if_idle(TurnInputRequest::user_input(input))
         .await?
@@ -1510,7 +1542,7 @@ async fn daemon_recovery_includes_local_environment_that_finished_starting() -> 
             ),
         )
         .await?;
-    let StartIfIdleSubmission::Started { turn_id } = started else {
+    let StartIfIdleSubmission::Started { turn_id, .. } = started else {
         anyhow::bail!("turn should start");
     };
 
