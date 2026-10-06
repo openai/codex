@@ -1101,6 +1101,7 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) approval_policy: String,
     pub(crate) approvals_reviewer: String,
     pub(crate) guardian_v2_enabled: bool,
+    pub(crate) multi_agent_version: codex_protocol::protocol::MultiAgentVersion,
     pub(crate) sandbox_network_access: bool,
     pub(crate) collaboration_mode: Option<&'static str>,
     pub(crate) personality: Option<String>,

@@ -1298,6 +1298,7 @@ async fn track_turn_resolved_config_analytics(
                 .get::<codex_extension_api::GuardianV2Enabled>()
                 .is_some(),
             sandbox_network_access: turn_context.network_sandbox_policy().is_enabled(),
+            multi_agent_version: turn_context.multi_agent_version,
             collaboration_mode: turn_context.mode(),
             personality: turn_context.personality(),
             workspace_kind: turn_context.turn_metadata_state.workspace_kind(),

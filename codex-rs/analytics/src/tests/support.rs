@@ -360,6 +360,7 @@ pub(super) fn sample_turn_resolved_config(
         approval_policy: AskForApproval::OnRequest,
         approvals_reviewer: ApprovalsReviewer::AutoReview,
         guardian_v2_enabled: false,
+        multi_agent_version: codex_protocol::protocol::MultiAgentVersion::Disabled,
         sandbox_network_access: true,
         collaboration_mode: ModeKind::Plan,
         personality: None,
