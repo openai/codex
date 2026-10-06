@@ -1,5 +1,6 @@
 //! Cache captured shell state in executor memory. Replay through a per-launch
 //! unnamed reader when the capture sandbox permits it; otherwise retain env replay.
+//! Command metrics exclude prewarm and measure lookup/capture wait before replay.
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -63,6 +64,7 @@ struct CachedShellSnapshot {
 }
 
 struct ShellSnapshot {
+    prewarmed: bool,
     state: String,
     file_source: bool,
     environment: HashMap<String, String>,
@@ -121,6 +123,7 @@ impl ShellSnapshotCache {
             }
         };
 
+        let wait_started_at = std::time::Instant::now();
         let (snapshot, attempt) = {
             let mut entries = self.entries.lock().await;
             let position = entries.iter().position(|entry| {
@@ -166,14 +169,27 @@ impl ShellSnapshotCache {
                 (snapshot, 1)
             }
         };
+        let mut availability = match snapshot.get() {
+            Some(Ok(snapshot)) if snapshot.prewarmed => "prewarm_ready",
+            Some(Ok(_)) => "cache_hit",
+            Some(Err(_)) => "unavailable",
+            None => "capture_pending",
+        };
         let capture = async {
+            let prewarmed = purpose == CapturePurpose::Prewarm;
             let attempt = attempt.to_string();
             let purpose = match purpose {
                 CapturePurpose::Execution => "execution",
                 CapturePurpose::Prewarm => "prewarm",
             };
             let started_at = std::time::Instant::now();
-            let result = capture_snapshot(params, prepared, shell_type).await;
+            let result =
+                capture_snapshot(params, prepared, shell_type)
+                    .await
+                    .map(|mut snapshot| {
+                        snapshot.prewarmed = prewarmed;
+                        snapshot
+                    });
             telemetry.shell_snapshot_captured(
                 started_at.elapsed(),
                 result.as_ref().map(|_| ()).map_err(|(reason, _)| *reason),
@@ -190,6 +206,7 @@ impl ShellSnapshotCache {
             CapturePurpose::Execution => {
                 snapshot
                     .get_or_init(|| async {
+                        availability = "on_demand";
                         capture.await.map_err(|err| {
                             tracing::warn!("failed to capture shell snapshot: {err:?}");
                             Instant::now() + SNAPSHOT_RETRY_BACKOFF
@@ -205,11 +222,16 @@ impl ShellSnapshotCache {
                     .await?
             }
         };
-        let Ok(snapshot) = snapshot else {
-            return Ok(None);
-        };
+        let wait = wait_started_at.elapsed();
         if purpose == CapturePurpose::Prewarm {
             return Ok(None);
+        }
+        let Ok(snapshot) = snapshot else {
+            telemetry.shell_snapshot_command(wait, availability, "fallback");
+            return Ok(None);
+        };
+        if availability == "capture_pending" && snapshot.prewarmed {
+            availability = "prewarm_pending";
         }
 
         // POSIX sh cannot portably close arbitrary descriptors above 9. Keep its
@@ -227,6 +249,7 @@ impl ShellSnapshotCache {
                         ?error,
                         "cannot prepare shell snapshot transport; using normal startup"
                     );
+                    telemetry.shell_snapshot_command(wait, availability, "fallback");
                     return Ok(None);
                 }
             }
@@ -293,6 +316,7 @@ impl ShellSnapshotCache {
             params.argv[2]
         );
 
+        telemetry.shell_snapshot_command(wait, availability, "used");
         Ok(reader)
     }
 }
@@ -500,6 +524,7 @@ fn parse_snapshot(
     environment.retain(|name, _| !shell_environment::is_non_inheritable_env_var(name));
 
     Ok(ShellSnapshot {
+        prewarmed: false,
         state,
         file_source: false,
         environment,

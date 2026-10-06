@@ -2754,6 +2754,14 @@ async fn shell_startup_credentials_are_brokered(
     allow_login_shell: bool,
     login: bool,
 ) -> Result<()> {
+    use codex_otel::MetricsClient;
+    use codex_otel::MetricsConfig;
+    use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+    use opentelemetry_sdk::metrics::data::HistogramDataPoint;
+    use opentelemetry_sdk::metrics::data::MetricData;
+    use opentelemetry_sdk::metrics::data::SumDataPoint;
+    use std::collections::BTreeMap;
+
     skip_if_no_network!(Ok(()));
 
     const GH_HOST: &str = "github.example.com";
@@ -2915,9 +2923,24 @@ ZDOTDIR = "{}"
         }
     });
     let server = start_mock_server().await;
-    let test = builder.build(&server).await?;
+    let mut test = builder.build(&server).await?;
+    let metrics = if login {
+        // Keep the collector local to this thread so parallel tests cannot affect counts.
+        let metrics = MetricsClient::new(
+            MetricsConfig::in_memory("test", "test", "1", Default::default()).with_runtime_reader(),
+        )?;
+        let mut options = test.start_thread_options().await;
+        options.thread_extension_init.insert(metrics.clone());
+        let thread = test.thread_manager.start_thread(options).await?;
+        test.codex.shutdown_and_wait().await?;
+        test.codex = thread.thread;
+        test.session_configured = thread.session_configured;
+        Some(metrics)
+    } else {
+        None
+    };
     let snapshot_dir = test.home.path().join("shell_snapshots");
-    let workdir = if allow_login_shell || shell_mode == "zsh_fork" {
+    let workdir = if (allow_login_shell && !login) || shell_mode == "zsh_fork" {
         test.cwd.path().to_path_buf()
     } else {
         let workdir = test.cwd.path().join("brokered-subdirectory");
@@ -3025,6 +3048,44 @@ ZDOTDIR = "{}"
     }
     let result = parse_result(&output);
     assert_eq!(result.exit_code, Some(0), "command failed: {result:?}");
+    if let Some(metrics) = metrics {
+        let snapshot = metrics.snapshot()?;
+        let mut counts = BTreeMap::new();
+        for metric in snapshot
+            .scope_metrics()
+            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+        {
+            let count = match (metric.name(), metric.data()) {
+                ("codex.shell_snapshot.command", AggregatedMetrics::U64(MetricData::Sum(sum))) => {
+                    for point in sum.data_points() {
+                        let tags = point
+                            .attributes()
+                            .map(|tag| (tag.key.as_str(), tag.value.to_string()))
+                            .collect::<BTreeMap<_, _>>();
+                        assert_eq!(
+                            ["version", "state", "outcome"]
+                                .map(|key| tags.get(key).map(String::as_str)),
+                            [Some("v1"), Some("protected"), Some("used")],
+                        );
+                    }
+                    sum.data_points().map(SumDataPoint::value).sum::<u64>()
+                }
+                (
+                    "codex.shell_snapshot.wait_ms",
+                    AggregatedMetrics::F64(MetricData::Histogram(histogram)),
+                ) => histogram.data_points().map(HistogramDataPoint::count).sum(),
+                _ => continue,
+            };
+            counts.insert(metric.name(), count);
+        }
+        assert_eq!(
+            counts,
+            BTreeMap::from([
+                ("codex.shell_snapshot.command", 1),
+                ("codex.shell_snapshot.wait_ms", 1),
+            ]),
+        );
+    }
     assert!(!result.stdout.contains(REAL_GITHUB_TOKEN));
     assert!(!result.stdout.contains(REAL_CUSTOM_TOKEN));
     let values = result.stdout.lines().collect::<Vec<_>>();

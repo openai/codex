@@ -217,6 +217,28 @@ impl ExecServerTelemetry {
         let _ = metrics.counter("codex.shell_snapshot", /*inc*/ 1, &tags);
     }
 
+    /// One observation per eligible execution preparation, excluding prewarm.
+    /// `used` means selected for replay, not that restoration or execution succeeded.
+    #[cfg(unix)]
+    pub(crate) fn shell_snapshot_command(
+        &self,
+        wait: Duration,
+        state: &'static str,
+        outcome: &'static str,
+    ) {
+        let Some(metrics) = self
+            .inner
+            .as_ref()
+            .map(|inner| inner.metrics.clone())
+            .or_else(codex_otel::global)
+        else {
+            return;
+        };
+        let tags = [("version", "v2"), ("state", state), ("outcome", outcome)];
+        let _ = metrics.counter("codex.shell_snapshot.command", /*inc*/ 1, &tags);
+        let _ = metrics.record_duration("codex.shell_snapshot.wait_ms", wait, &tags);
+    }
+
     pub(crate) fn remote_registration_completed(&self, result: &'static str, duration: Duration) {
         self.record_operation(REMOTE_REGISTRATION_METRICS, result, duration);
     }

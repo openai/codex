@@ -85,6 +85,7 @@ async fn snapshot_failure_retries_are_bounded_and_single_flight(
     )?;
     let telemetry = ExecServerTelemetry::new(metrics.clone());
 
+    let mut expected_commands = BTreeMap::new();
     for attempt in 1..=5 {
         if attempt == recovery_attempt {
             std::fs::write(
@@ -142,6 +143,13 @@ async fn snapshot_failure_retries_are_bounded_and_single_flight(
             (&concurrent.command, &concurrent.env)
         );
 
+        let outcome = if concurrent.command != params.argv {
+            "used"
+        } else {
+            "fallback"
+        };
+        *expected_commands.entry(outcome.to_string()).or_insert(0) +=
+            if prewarming { 1 } else { 2 };
         tokio::time::pause();
         if attempt < recovery_attempt || recovery_attempt > MAX_SNAPSHOT_ATTEMPTS {
             cache
@@ -153,6 +161,7 @@ async fn snapshot_failure_retries_are_bounded_and_single_flight(
                 )
                 .await
                 .expect("capture must stay cached during backoff");
+            *expected_commands.entry("fallback".to_string()).or_insert(0) += 1;
             assert_eq!(
                 (&prepared.command, &prepared.env),
                 (&params.argv, &params.env)
@@ -174,6 +183,8 @@ async fn snapshot_failure_retries_are_bounded_and_single_flight(
     let snapshot = metrics.snapshot()?;
     let mut counters = BTreeMap::new();
     let mut durations = BTreeMap::new();
+    let mut commands = BTreeMap::new();
+    let mut waits = BTreeMap::new();
     for metric in snapshot
         .scope_metrics()
         .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
@@ -203,9 +214,41 @@ async fn snapshot_failure_retries_are_bounded_and_single_flight(
                     durations.insert(tags, point.count());
                 }
             }
+            "codex.shell_snapshot.command" => {
+                let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+                    panic!("expected command counter");
+                };
+                for point in sum.data_points() {
+                    let outcome = point
+                        .attributes()
+                        .find(|tag| tag.key.as_str() == "outcome")
+                        .unwrap()
+                        .value
+                        .to_string();
+                    *commands.entry(outcome).or_insert(0) += point.value();
+                }
+            }
+            "codex.shell_snapshot.wait_ms" => {
+                let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data() else {
+                    panic!("expected wait histogram");
+                };
+                for point in histogram.data_points() {
+                    let outcome = point
+                        .attributes()
+                        .find(|tag| tag.key.as_str() == "outcome")
+                        .unwrap()
+                        .value
+                        .to_string();
+                    *waits.entry(outcome).or_insert(0) += point.count();
+                }
+            }
             _ => {}
         }
     }
+    assert_eq!(
+        (commands, waits),
+        (expected_commands.clone(), expected_commands)
+    );
     let mut expected_counters = BTreeMap::new();
     let mut expected_durations = BTreeMap::new();
     let captures = prewarm_fails_first
