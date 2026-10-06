@@ -822,7 +822,7 @@ impl TurnContext {
         let step_settings = Arc::new(ResolvedStepSettings::new(
             Arc::new(selected),
             model_info,
-            config.features.enabled(Feature::FastMode),
+            &config.features,
         ));
         config.service_tier = step_settings.service_tier.clone();
         let session_telemetry = step_settings.telemetry(&self.session_telemetry);
@@ -1395,7 +1395,7 @@ impl Session {
         let step_settings = Arc::new(ResolvedStepSettings::new(
             Arc::clone(&session_configuration.step_settings),
             Arc::new(model_info),
-            self.features.enabled(Feature::FastMode),
+            &self.features,
         ));
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.thread_id(),

@@ -107,6 +107,56 @@ fn next_copy_selection(
 }
 
 #[tokio::test]
+async fn service_tier_commands_and_saved_selection_respect_independent_speed_policy() {
+    for (fast_enabled, ultrafast_enabled) in [(false, true), (true, false)] {
+        let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+        let mut preset = get_available_model(&chat, "gpt-5.5");
+        preset.service_tiers = ["priority", "ultrafast"]
+            .into_iter()
+            .map(|tier| codex_protocol::openai_models::ModelServiceTier {
+                id: tier.to_string(),
+                name: tier.to_string(),
+                description: format!("{tier} processing"),
+            })
+            .collect();
+        preset.default_service_tier = Some("ultrafast".to_string());
+        chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
+        chat.set_feature_enabled(Feature::FastMode, fast_enabled);
+        chat.set_feature_enabled(Feature::UltrafastMode, ultrafast_enabled);
+        chat.set_service_tier(Some("ultrafast".to_string()));
+        assert_eq!(
+            chat.current_service_tier(),
+            ultrafast_enabled.then_some("ultrafast")
+        );
+        assert_eq!(
+            chat.current_model_service_tier_commands()
+                .into_iter()
+                .map(|tier| tier.id)
+                .collect::<Vec<_>>(),
+            vec![
+                if ultrafast_enabled {
+                    "ultrafast"
+                } else {
+                    "priority"
+                }
+                .to_string()
+            ],
+        );
+        chat.bottom_pane
+            .set_composer_text("/ultra".to_string(), Vec::new(), Vec::new());
+        let snapshot_name = if ultrafast_enabled {
+            "ultrafast_command_allowed"
+        } else {
+            "ultrafast_command_denied"
+        };
+        insta::assert_snapshot!(
+            snapshot_name,
+            normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 80))
+        );
+    }
+}
+
+#[tokio::test]
 async fn service_tier_commands_lowercase_catalog_names() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
     let mut preset = get_available_model(&chat, "gpt-5.5");

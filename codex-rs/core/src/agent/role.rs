@@ -206,6 +206,10 @@ mod role_overrides {
                     .enabled(Feature::FastMode)
                     .then(|| ServiceTier::Fast.request_value().to_string()),
                 Some(ServiceTier::Flex) => Some(ServiceTier::Flex.request_value().to_string()),
+                None if service_tier == "ultrafast" => next_config
+                    .features
+                    .enabled(Feature::UltrafastMode)
+                    .then(|| service_tier.clone()),
                 None => Some(service_tier.clone()),
             };
         }

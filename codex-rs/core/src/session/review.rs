@@ -99,7 +99,7 @@ pub(super) async fn spawn_review_thread(
     let step_settings = Arc::new(ResolvedStepSettings::new(
         Arc::new(selected),
         Arc::new(model_info.clone()),
-        review_features.enabled(Feature::FastMode),
+        &review_features,
     ));
     per_turn_config.model = Some(model);
     per_turn_config.model_reasoning_effort = reasoning_effort;

@@ -62,6 +62,24 @@ impl CloudRequirementsTomlBundle {
             .into_iter()
             .rev()
             .map(|fragment| {
+                // Older backends used this fragment to deny every accelerated tier.
+                // Preserve that meaning through mixed deployments and rollbacks.
+                if fragment.id == "rbac-fast-mode"
+                    && let Ok(mut contents) = toml::from_str::<toml::Value>(&fragment.contents)
+                    && let Some(features) = contents
+                        .get_mut("features")
+                        .and_then(toml::Value::as_table_mut)
+                    && features.get("fast_mode").and_then(toml::Value::as_bool) == Some(false)
+                {
+                    features.insert("ultrafast_mode".to_string(), toml::Value::Boolean(false));
+                    return RequirementsLayerEntry::from_toml_value(
+                        RequirementSource::EnterpriseManaged {
+                            id: fragment.id,
+                            name: fragment.name,
+                        },
+                        contents,
+                    );
+                }
                 RequirementsLayerEntry::from_toml(
                     RequirementSource::EnterpriseManaged {
                         id: fragment.id,

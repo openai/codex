@@ -1081,7 +1081,8 @@ impl App {
         );
         if server_model_cleared
             && config.model.is_none()
-            && config.features.enabled(Feature::FastMode)
+            && (config.features.enabled(Feature::FastMode)
+                || config.features.enabled(Feature::UltrafastMode))
         {
             // Bootstrap's fallback model may be seeded from the client. Resolve tiers
             // against the server catalog when config/read cleared the model.

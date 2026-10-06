@@ -60,7 +60,7 @@ async fn application_network_defaults_and_null_base_url_are_exposed() -> Result<
     let mut server = start_server(&home).await?;
     assert_eq!(
         read_requirements(&mut server).await?,
-        json!({"requirements": null})
+        json!({"requirements": null, "supportsIndependentSpeedModes": true})
     );
     Ok(())
 }

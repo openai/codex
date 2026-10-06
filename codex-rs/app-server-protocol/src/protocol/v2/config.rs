@@ -760,6 +760,10 @@ pub enum ResidencyRequirement {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigRequirementsReadResponse {
+    /// Whether Fast and Ultra Fast requirements are enforced independently.
+    /// Older servers omit this field and use Fast mode as a shared speed gate.
+    #[serde(default)]
+    pub supports_independent_speed_modes: Option<bool>,
     /// Null if no requirements are configured (e.g. no requirements.toml/MDM entries).
     #[experimental(nested)]
     pub requirements: Option<ConfigRequirements>,

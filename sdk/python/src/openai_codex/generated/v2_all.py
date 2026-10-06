@@ -11840,6 +11840,13 @@ class ConfigRequirementsReadResponse(BaseModel):
             description="Null if no requirements are configured (e.g. no requirements.toml/MDM entries)."
         ),
     ] = None
+    supports_independent_speed_modes: Annotated[
+        bool | None,
+        Field(
+            alias="supportsIndependentSpeedModes",
+            description="Whether Fast and Ultra Fast requirements are enforced independently. Older servers omit this field and use Fast mode as a shared speed gate.",
+        ),
+    ] = None
 
 
 class ExternalAgentConfigDetectResponse(BaseModel):

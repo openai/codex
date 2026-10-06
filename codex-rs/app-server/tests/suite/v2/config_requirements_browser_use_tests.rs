@@ -66,7 +66,11 @@ async fn config_requirements_read_preserves_webmcp_policy() -> Result<()> {
                 "{contents}",
             );
         } else {
-            assert_eq!(wire, json!({ "requirements": null }), "{contents}");
+            assert_eq!(
+                wire,
+                json!({ "requirements": null, "supportsIndependentSpeedModes": true }),
+                "{contents}"
+            );
         }
     }
     Ok(())

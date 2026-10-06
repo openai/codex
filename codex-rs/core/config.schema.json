@@ -1205,6 +1205,9 @@
             "tui_app_server": {
               "type": "boolean"
             },
+            "ultrafast_mode": {
+              "type": "boolean"
+            },
             "unavailable_dummy_tools": {
               "type": "boolean"
             },
@@ -7379,6 +7382,9 @@
           "type": "boolean"
         },
         "tui_app_server": {
+          "type": "boolean"
+        },
+        "ultrafast_mode": {
           "type": "boolean"
         },
         "unavailable_dummy_tools": {

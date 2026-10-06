@@ -66,10 +66,10 @@ impl ChatWidget {
     }
 
     pub(super) fn sync_service_tier_commands(&mut self) {
+        let commands = self.current_model_service_tier_commands();
         self.bottom_pane
-            .set_service_tier_commands_enabled(self.fast_mode_enabled());
-        self.bottom_pane
-            .set_service_tier_commands(self.current_model_service_tier_commands());
+            .set_service_tier_commands_enabled(!commands.is_empty());
+        self.bottom_pane.set_service_tier_commands(commands);
     }
 
     pub(super) fn current_model_service_tier_commands(&self) -> Vec<ServiceTierCommand> {
@@ -85,6 +85,7 @@ impl ChatWidget {
                         preset
                             .service_tiers
                             .into_iter()
+                            .filter(|tier| self.config.features.service_tier_enabled(&tier.id))
                             .map(|tier| ServiceTierCommand {
                                 id: tier.id,
                                 name: tier.name.to_lowercase(),

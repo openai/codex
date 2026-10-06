@@ -401,6 +401,8 @@ pub enum Feature {
     Artifact,
     /// Enable Fast mode selection in the TUI and request layer.
     FastMode,
+    /// Enable Ultra Fast mode independently of Fast mode.
+    UltrafastMode,
     /// Enable explicitly requested model changes for later step captures.
     StepModelSwitching,
     /// Enable voice conversations in the TUI.
@@ -550,6 +552,15 @@ impl Features {
 
     pub fn enabled(&self, f: Feature) -> bool {
         self.enabled.contains(&f)
+    }
+
+    /// Whether a routing tier is enabled, independently of model catalog support.
+    pub fn service_tier_enabled(&self, service_tier: &str) -> bool {
+        match service_tier {
+            "flex" => true,
+            "ultrafast" => self.enabled(Feature::UltrafastMode),
+            _ => self.enabled(Feature::FastMode),
+        }
     }
 
     /// Returns whether persistent execution is enabled for the selected effort.
@@ -1889,6 +1900,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::FastMode,
         key: "fast_mode",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::UltrafastMode,
+        key: "ultrafast_mode",
         stage: Stage::Stable,
         default_enabled: true,
     },

@@ -1062,11 +1062,8 @@ async fn activation_must_match_the_retained_turn_authority(change: ManagedPolicy
     model_info.slug = "step-settings-policy-destination".to_string();
     let mut selected = current.selected().clone();
     selected.collaboration_mode.settings.model = model_info.slug.clone();
-    let destination = ResolvedStepSettings::new(
-        Arc::new(selected),
-        Arc::new(model_info),
-        session.features.enabled(Feature::FastMode),
-    );
+    let destination =
+        ResolvedStepSettings::new(Arc::new(selected), Arc::new(model_info), &session.features);
     let mut live = session.state.lock().await.session_configuration.clone();
     live.original_config_do_not_use = Arc::clone(&prepared.config);
     assert_eq!(

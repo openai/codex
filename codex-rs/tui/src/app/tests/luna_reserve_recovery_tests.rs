@@ -189,6 +189,8 @@ async fn luna_reserve_recovery_restores_task_and_pending_turn_after_fresh_backen
         app.chat_widget
             .set_feature_enabled(Feature::FastMode, /*enabled*/ false);
         app.chat_widget
+            .set_feature_enabled(Feature::UltrafastMode, /*enabled*/ false);
+        app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::High));
         let original_mode = app.chat_widget.effective_collaboration_mode();
         let config_path = app.config.codex_home.join("config.toml");

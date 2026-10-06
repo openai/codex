@@ -211,6 +211,12 @@ Codex home must support compressed rollout files, including shared histories.
 
 ## Managed model provider requirements
 
+`configRequirements/read` reports `supportsIndependentSpeedModes: true` when
+`features.fast_mode` and `features.ultrafast_mode` independently control Fast and
+Ultra Fast. Older servers omit this field and use Fast mode as a shared speed
+gate. Missing individual feature requirements impose no additional restriction;
+the model catalog still determines which service tiers a model supports.
+
 Existing threads retain their provider configuration. Input RPCs reject requests when managed
 `model_provider` or `model_providers` requirements no longer match that configuration, or cannot
 be loaded. This covers turn start/steer, review, compaction, manual queue start, and active goal

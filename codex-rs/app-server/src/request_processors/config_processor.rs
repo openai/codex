@@ -143,7 +143,10 @@ impl ConfigRequestProcessor {
             self.thread_manager.auth_manager().allowed_login_methods(),
         );
 
-        Ok(ConfigRequirementsReadResponse { requirements })
+        Ok(ConfigRequirementsReadResponse {
+            supports_independent_speed_modes: Some(true),
+            requirements,
+        })
     }
 
     pub(crate) async fn value_write(

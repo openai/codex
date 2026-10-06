@@ -116,7 +116,7 @@ impl ChatWidget {
             self.set_daybreak_enabled(self.daybreak_enabled);
             self.refresh_status_surfaces();
         }
-        if feature == Feature::FastMode {
+        if matches!(feature, Feature::FastMode | Feature::UltrafastMode) {
             self.refresh_effective_service_tier();
             self.sync_service_tier_commands();
         }

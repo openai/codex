@@ -412,7 +412,7 @@ impl Session {
                 &constraints,
                 self.services.models_manager.as_ref(),
                 &overrides,
-                self.features.enabled(Feature::FastMode),
+                &self.features,
             )
             .await
             .map_err(|error| error.to_string())

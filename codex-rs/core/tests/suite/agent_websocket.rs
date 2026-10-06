@@ -27,11 +27,15 @@ use std::time::Duration;
 
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 
-#[test_case::test_case(true; "fast mode enabled")]
-#[test_case::test_case(false; "fast mode disabled")]
+#[test_case::test_case("priority", true, false; "fast mode enabled")]
+#[test_case::test_case("priority", false, true; "fast mode disabled")]
+#[test_case::test_case("ultrafast", false, true; "ultrafast mode enabled")]
+#[test_case::test_case("ultrafast", true, false; "ultrafast mode disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawned_agent_prewarm_handshake_inherits_effective_root_service_tier(
+    tier: &'static str,
     fast_mode_enabled: bool,
+    ultrafast_mode_enabled: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -63,7 +67,11 @@ async fn spawned_agent_prewarm_handshake_inherits_effective_root_service_tier(
         ],
     ])
     .await;
-    let tier = ServiceTier::Fast.request_value();
+    let tier_enabled = if tier == "ultrafast" {
+        ultrafast_mode_enabled
+    } else {
+        fast_mode_enabled
+    };
     let test = test_codex()
         .with_model("gpt-5.4")
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -89,7 +97,11 @@ async fn spawned_agent_prewarm_handshake_inherits_effective_root_service_tier(
                     .disable(Feature::FastMode)
                     .expect("fast mode");
             }
-            config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+            config
+                .features
+                .set_enabled(Feature::UltrafastMode, ultrafast_mode_enabled)
+                .expect("configure Ultra Fast mode");
+            config.service_tier = Some(tier.to_string());
         })
         .build_with_websocket_server(&server)
         .await?;
@@ -122,7 +134,7 @@ async fn spawned_agent_prewarm_handshake_inherits_effective_root_service_tier(
         "child startup should connect before its first turn"
     );
     let handshakes = server.handshakes();
-    let expected_hint = if fast_mode_enabled {
+    let expected_hint = if tier_enabled {
         format!("model=gpt-5.4;tier={tier}")
     } else {
         "model=gpt-5.4".to_string()
@@ -140,7 +152,7 @@ async fn spawned_agent_prewarm_handshake_inherits_effective_root_service_tier(
     assert_eq!(child_warmup["generate"], false);
     assert_eq!(
         child_warmup["service_tier"].as_str(),
-        fast_mode_enabled.then_some(tier)
+        tier_enabled.then_some(tier)
     );
     assert_eq!(server.handshakes().len(), 2);
     child.shutdown_and_wait().await?;

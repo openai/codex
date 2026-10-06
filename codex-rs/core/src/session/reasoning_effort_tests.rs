@@ -40,7 +40,7 @@ async fn initial_replay_preserves_prewarmed_effort(history: InitialHistory) {
     let prewarm_settings = ResolvedStepSettings::new(
         Arc::new(selected.clone()),
         Arc::clone(&model_info),
-        /*fast_mode_enabled*/ false,
+        &codex_features::Features::default(),
     );
     // Force the ordering where prewarm pins its request before initial replay finishes.
     assert_eq!(
@@ -55,7 +55,7 @@ async fn initial_replay_preserves_prewarmed_effort(history: InitialHistory) {
     let turn_settings = ResolvedStepSettings::new(
         Arc::new(selected),
         model_info,
-        /*fast_mode_enabled*/ false,
+        &codex_features::Features::default(),
     );
     assert_eq!(
         session

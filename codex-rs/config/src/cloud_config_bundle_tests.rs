@@ -18,6 +18,77 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use tempfile::tempdir;
 
+#[test]
+fn legacy_speed_denial_is_normalized_without_changing_other_fragments() {
+    for (id, contents, expected_ultrafast) in [
+        (
+            "rbac-fast-mode",
+            "[features]\nfast_mode = false",
+            Some(false),
+        ),
+        ("rbac-fast-mode", "[features]\nfast_mode = true", None),
+        ("admin-layer", "[features]\nfast_mode = false", None),
+    ] {
+        let requirements = compose_requirements(
+            CloudRequirementsTomlBundle {
+                enterprise_managed: vec![CloudRequirementsFragment {
+                    id: id.to_string(),
+                    name: id.to_string(),
+                    contents: contents.to_string(),
+                }],
+            }
+            .into_layers(),
+        )
+        .expect("valid cloud requirements")
+        .expect("requirements layer")
+        .into_toml();
+        assert_eq!(
+            requirements
+                .feature_requirements
+                .expect("feature requirements")
+                .entries
+                .get("ultrafast_mode")
+                .copied(),
+            expected_ultrafast,
+            "fragment={id}",
+        );
+    }
+}
+
+#[test]
+fn enterprise_speed_override_still_takes_precedence_over_legacy_baseline() {
+    let requirements = compose_requirements(
+        CloudRequirementsTomlBundle {
+            enterprise_managed: vec![
+                CloudRequirementsFragment {
+                    id: "admin-layer".to_string(),
+                    name: "Admin".to_string(),
+                    contents: "[features]\nultrafast_mode = true".to_string(),
+                },
+                CloudRequirementsFragment {
+                    id: "rbac-fast-mode".to_string(),
+                    name: "Legacy RBAC".to_string(),
+                    contents: "[features]\nfast_mode = false".to_string(),
+                },
+            ],
+        }
+        .into_layers(),
+    )
+    .expect("valid cloud requirements")
+    .expect("requirements layers")
+    .into_toml();
+    assert_eq!(
+        requirements
+            .feature_requirements
+            .expect("feature requirements")
+            .entries,
+        std::collections::BTreeMap::from([
+            ("fast_mode".to_string(), false),
+            ("ultrafast_mode".to_string(), true),
+        ]),
+    );
+}
+
 #[tokio::test]
 async fn shared_future_runs_once() {
     let counter = Arc::new(AtomicUsize::new(0));

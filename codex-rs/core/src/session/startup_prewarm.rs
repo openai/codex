@@ -347,7 +347,7 @@ async fn schedule_startup_prewarm_inner(
     ) {
         crate::session::get_service_tier(
             session.services.agent_control.service_tier(),
-            session.features().enabled(Feature::FastMode),
+            &session.features(),
             &preconnect_model_info,
         )
     } else {

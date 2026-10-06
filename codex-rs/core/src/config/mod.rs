@@ -3989,6 +3989,9 @@ impl Config {
                     .enabled(Feature::FastMode)
                     .then(|| ServiceTier::Fast.request_value().to_string()),
                 Some(ServiceTier::Flex) => Some(ServiceTier::Flex.request_value().to_string()),
+                None if service_tier == "ultrafast" => features
+                    .enabled(Feature::UltrafastMode)
+                    .then_some(service_tier),
                 None => Some(service_tier),
             }
         });

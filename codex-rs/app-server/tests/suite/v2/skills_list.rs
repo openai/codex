@@ -713,7 +713,10 @@ async fn config_reads_complete_alongside_skills_list_request() -> Result<()> {
     assert!(config.layers.is_none());
     assert_eq!(
         requirements,
-        ConfigRequirementsReadResponse { requirements: None }
+        ConfigRequirementsReadResponse {
+            supports_independent_speed_modes: Some(true),
+            requirements: None,
+        }
     );
     assert!(!permission_profiles.data.is_empty());
 
