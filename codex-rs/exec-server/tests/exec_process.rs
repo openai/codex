@@ -244,7 +244,7 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
     let padding = if !use_remote && !tty && shell_name == "bash" {
         format!(
             "snapshot_padding() {{ printf '%s' '{}'; }}\n",
-            "🦀".repeat(20_000)
+            "🦀".repeat(200_000)
         )
     } else {
         String::new()
