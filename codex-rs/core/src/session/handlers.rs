@@ -461,11 +461,15 @@ pub(super) async fn submission_loop(
                 continue;
             }
         };
-        if matches!(sub.op, Op::ResolveElicitation { .. }) {
-            debug!(submission_id = %sub.id, operation = sub.op.kind(), "Submission");
-        } else {
-            debug!(?sub, "Submission");
-        }
+        debug!(
+            thread_id = %sess.thread_id(),
+            submission_id = %sub.id,
+            operation = sub.op.kind(),
+            parent_turn_id = ?sub.parent_turn_id,
+            root_turn_id = ?sub.root_turn_id,
+            op = ?sub.op,
+            "Submission"
+        );
         let dispatch_span = submission_dispatch_span(&sub);
         let should_exit = async {
             match sub.op {

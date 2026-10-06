@@ -6,7 +6,6 @@ use codex_protocol::protocol::W3cTraceContext;
 use tokio::sync::OwnedRwLockReadGuard;
 
 #[derive(Debug)]
-#[expect(dead_code, reason = "Turn ancestry is retained in Debug diagnostics.")]
 pub(crate) struct Submission {
     pub id: String,
     pub op: Op,
