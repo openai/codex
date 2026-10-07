@@ -173,7 +173,7 @@ pub struct W3cTraceContext {
     pub tracestate: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct ConversationStartParams {
     /// Whether Codex response handoffs are managed through explicit client append calls.
     pub client_managed_handoffs: bool,
@@ -212,6 +212,17 @@ pub struct ConversationStartParams {
     /// Overrides the configured realtime protocol version for this session only.
     pub version: Option<RealtimeConversationVersion>,
     pub voice: Option<RealtimeVoice>,
+}
+
+impl fmt::Debug for ConversationStartParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Text, instructions, and transport endpoints can contain credentials.
+        f.debug_struct("ConversationStartParams")
+            .field("output_modality", &self.output_modality)
+            .field("initial_items_count", &self.initial_items.len())
+            .field("version", &self.version)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -594,6 +605,12 @@ pub enum Op {
     #[debug("RealtimeConversationStart {{ session_id: {:?}, version: {:?}, output_modality: {:?} }}", _0.realtime_session_id, _0.version, _0.output_modality)]
     RealtimeConversationStart(ConversationStartParams),
 
+    /// Start a realtime conversation and report completion of the connection attempt.
+    RealtimeConversationAttach {
+        params: ConversationStartParams,
+        reply: oneshot::Sender<CodexResult<()>>,
+    },
+
     /// Send audio input to the running realtime conversation stream.
     #[debug("RealtimeConversationAudio {{ item_id: {:?}, sample_rate: {}, num_channels: {}, samples_per_channel: {:?} }}", _0.frame.item_id, _0.frame.sample_rate, _0.frame.num_channels, _0.frame.samples_per_channel)]
     RealtimeConversationAudio(ConversationAudioParams),
@@ -608,6 +625,12 @@ pub enum Op {
 
     /// Close the running realtime conversation stream.
     RealtimeConversationClose,
+
+    /// Close only the matching session after earlier start operations finish.
+    RealtimeConversationDetach {
+        realtime_session_id: String,
+        reply: oneshot::Sender<CodexResult<()>>,
+    },
 
     /// Request the list of voices supported by realtime conversation streams.
     RealtimeConversationListVoices,
@@ -952,10 +975,12 @@ impl Op {
             Self::InterruptIfNoPendingInput { .. } => "interrupt_if_no_pending_input",
             Self::CleanBackgroundTerminals => "clean_background_terminals",
             Self::RealtimeConversationStart(_) => "realtime_conversation_start",
+            Self::RealtimeConversationAttach { .. } => "realtime_conversation_attach",
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
             Self::RealtimeConversationSpeech(_) => "realtime_conversation_speech",
             Self::RealtimeConversationClose => "realtime_conversation_close",
+            Self::RealtimeConversationDetach { .. } => "realtime_conversation_detach",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::TurnInput { .. } => "turn_input",
             Self::RecoverTurn { .. } => "recover_turn",
@@ -4514,6 +4539,10 @@ pub struct CollabResumeEndEvent {
     /// resume.
     pub status: AgentStatus,
 }
+
+#[cfg(test)]
+#[path = "conversation_start_params_tests.rs"]
+mod conversation_start_params_tests;
 
 #[cfg(test)]
 mod tests {

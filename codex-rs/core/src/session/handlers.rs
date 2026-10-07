@@ -518,6 +518,25 @@ pub(super) async fn submission_loop(
                     }
                     false
                 }
+                Op::RealtimeConversationAttach { params, reply } => {
+                    let result =
+                        crate::realtime_conversation::handle_attach(&sess, sub.id, params).await;
+                    let _ = reply.send(result);
+                    false
+                }
+                Op::RealtimeConversationDetach {
+                    realtime_session_id,
+                    reply,
+                } => {
+                    crate::realtime_conversation::handle_detach(
+                        &sess,
+                        Some(&realtime_session_id),
+                        &sub.id,
+                    )
+                    .await;
+                    let _ = reply.send(Ok(()));
+                    false
+                }
                 Op::RealtimeConversationAudio(params) => {
                     handle_realtime_conversation_audio(&sess, sub.id.clone(), params).await;
                     false

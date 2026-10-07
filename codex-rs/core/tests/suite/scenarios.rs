@@ -271,6 +271,20 @@ fn configure_scenario_catalog(config: &mut Config) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn realtime_attachment_replacement_preserves_handoff_context() -> Result<()> {
+    let requests = super::realtime_attachment::attachment_replacement_scenario().await?;
+    insta::assert_snapshot!(
+        "realtime_attachment_replacement",
+        context_snapshot::format_request_history_snapshot(
+            "A replacement fences an older pending connection and stale stops; only the selected call starts a Codex handoff.",
+            &requests,
+            &ContextSnapshotOptions::default().rewrite_known_segments(),
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_mcp_schema_limits_preserve_explicit_overrides() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let requests = super::code_mode::mcp_schema_max_bytes_scenario().await?;

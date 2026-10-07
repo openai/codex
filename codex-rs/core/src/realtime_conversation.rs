@@ -513,6 +513,8 @@ impl RealtimeHandoffState {
 
 #[allow(dead_code)]
 struct ConversationState {
+    session_id: Option<String>,
+    sub_id: String,
     audio_tx: Sender<RealtimeAudioFrame>,
     text_tx: Sender<ConversationTextParams>,
     session_kind: RealtimeSessionKind,
@@ -614,23 +616,34 @@ impl RealtimeConversationManager {
         &self,
         start: RealtimeStart,
         mode_instructions: RealtimeModeInstructions,
+        sess: &Arc<Session>,
+        sub_id: &str,
     ) -> CodexResult<RealtimeStartOutput> {
         let previous_state = {
             let mut guard = self.state.lock().await;
             guard.conversation.take()
         };
         if let Some(state) = previous_state {
+            let previous_sub_id = state.sub_id.clone();
             stop_conversation_state(state, RealtimeFanoutTaskStop::Await).await;
+            send_realtime_conversation_closed(
+                sess,
+                previous_sub_id,
+                RealtimeConversationEnd::Requested,
+            )
+            .await;
         }
 
-        self.start_inner(start, mode_instructions).await
+        self.start_inner(start, mode_instructions, sub_id).await
     }
 
     async fn start_inner(
         &self,
         start: RealtimeStart,
         mode_instructions: RealtimeModeInstructions,
+        sub_id: &str,
     ) -> CodexResult<RealtimeStartOutput> {
+        let session_id = start.session_config.session_id.clone();
         let RealtimeStart {
             api_provider,
             http_client_factory,
@@ -770,6 +783,8 @@ impl RealtimeConversationManager {
 
         let mut state = self.state.lock().await;
         state.conversation = Some(ConversationState {
+            session_id,
+            sub_id: sub_id.to_owned(),
             audio_tx,
             text_tx,
             session_kind,
@@ -812,20 +827,32 @@ impl RealtimeConversationManager {
         }
     }
 
-    pub(crate) async fn finish_if_active(&self, realtime_active: &Arc<AtomicBool>) {
-        let state = {
-            let mut guard = self.state.lock().await;
-            match guard.conversation.as_ref() {
-                Some(state) if Arc::ptr_eq(&state.realtime_active, realtime_active) => {
-                    guard.conversation.take()
-                }
-                _ => None,
-            }
-        };
-
-        if let Some(state) = state {
-            stop_conversation_state(state, RealtimeFanoutTaskStop::Detach).await;
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "Publish the matching close before a replacement can start its history segment."
+    )]
+    async fn finish_if_active(
+        &self,
+        sess: &Arc<Session>,
+        realtime_active: &Arc<AtomicBool>,
+        sub_id: String,
+        end: RealtimeConversationEnd,
+    ) {
+        // Keep selection and its close event together. An old fanout must not
+        // close the history segment that belongs to a replacement.
+        let mut guard = self.state.lock().await;
+        if !guard
+            .conversation
+            .as_ref()
+            .is_some_and(|state| Arc::ptr_eq(&state.realtime_active, realtime_active))
+        {
+            return;
         }
+        let Some(state) = guard.conversation.take() else {
+            return;
+        };
+        stop_conversation_state(state, RealtimeFanoutTaskStop::Detach).await;
+        send_realtime_conversation_closed(sess, sub_id, end).await;
     }
 
     pub(crate) async fn audio_in(&self, frame: RealtimeAudioFrame) -> CodexResult<()> {
@@ -1717,7 +1744,10 @@ async fn handle_start_inner(
         sdp,
         existing_call_id,
     };
-    let start_output = sess.conversation.start(start, mode_instructions).await?;
+    let start_output = sess
+        .conversation
+        .start(start, mode_instructions, sess, sub_id)
+        .await?;
 
     info!("realtime conversation started");
 
@@ -1802,7 +1832,14 @@ async fn handle_start_inner(
             }
         }
         // Make realtime_end eligible only after the tail has reached history.
-        sess_clone.conversation.state.lock().await.context_active = false;
+        {
+            let mut state = sess_clone.conversation.state.lock().await;
+            if state.conversation.as_ref().is_none_or(|current| {
+                Arc::ptr_eq(&current.realtime_active, &fanout_realtime_active)
+            }) {
+                state.context_active = false;
+            }
+        }
         if let Some(error) = handoff_error {
             end = RealtimeConversationEnd::Error;
             sess_clone
@@ -1822,9 +1859,8 @@ async fn handle_start_inner(
             }
             sess_clone
                 .conversation
-                .finish_if_active(&fanout_realtime_active)
+                .finish_if_active(&sess_clone, &fanout_realtime_active, sub_id, end)
                 .await;
-            send_realtime_conversation_closed(&sess_clone, sub_id, end).await;
         }
     });
     sess.conversation
@@ -1983,7 +2019,41 @@ pub(crate) async fn handle_speech(
 }
 
 pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
-    end_realtime_conversation(sess, sub_id, RealtimeConversationEnd::Requested).await;
+    handle_detach(sess, /*expected*/ None, &sub_id).await;
+}
+
+/// Uses the ordinary sequential start path and reports its connection result.
+pub(crate) async fn handle_attach(
+    sess: &Arc<Session>,
+    sub_id: String,
+    params: ConversationStartParams,
+) -> CodexResult<()> {
+    let prepared = prepare_realtime_start(sess, params).await?;
+    handle_start_inner(sess, &sub_id, prepared).await
+}
+
+pub(crate) async fn handle_detach(sess: &Arc<Session>, expected: Option<&str>, stop_sub_id: &str) {
+    let current = {
+        let mut state = sess.conversation.state.lock().await;
+        if expected.is_some_and(|expected| {
+            state
+                .conversation
+                .as_ref()
+                .and_then(|current| current.session_id.as_deref())
+                != Some(expected)
+        }) {
+            return;
+        }
+        state.conversation.take()
+    };
+    let sub_id = if let Some(current) = current {
+        let sub_id = current.sub_id.clone();
+        stop_conversation_state(current, RealtimeFanoutTaskStop::Await).await;
+        sub_id
+    } else {
+        stop_sub_id.to_owned()
+    };
+    send_realtime_conversation_closed(sess, sub_id, RealtimeConversationEnd::Requested).await;
 }
 
 fn spawn_realtime_input_task(
@@ -2736,15 +2806,6 @@ async fn send_conversation_error(
         }),
     })
     .await;
-}
-
-async fn end_realtime_conversation(
-    sess: &Arc<Session>,
-    sub_id: String,
-    end: RealtimeConversationEnd,
-) {
-    let _ = sess.conversation.shutdown().await;
-    send_realtime_conversation_closed(sess, sub_id, end).await;
 }
 
 async fn send_realtime_conversation_closed(
