@@ -1,0 +1,38 @@
+diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
+--- a/rust/private/rustc.bzl
++++ b/rust/private/rustc.bzl
+@@ -1121,6 +1121,9 @@
+ 
+     # Wrapper args first
+     process_wrapper_flags = ctx.actions.args()
++    # Build-script file paths can exceed Windows' command-line limit by themselves.
++    process_wrapper_flags.set_param_file_format("multiline")
++    process_wrapper_flags.use_param_file("@%s")
+ 
+     for build_env_file in build_env_files:
+         process_wrapper_flags.add("--env-file", build_env_file)
+diff --git a/util/process_wrapper/options.rs b/util/process_wrapper/options.rs
+--- a/util/process_wrapper/options.rs
++++ b/util/process_wrapper/options.rs
+@@ -136,10 +136,17 @@
+         &mut require_explicit_unstable_features,
+     );
+ 
+-    let mut child_args = match flags
+-        .parse(env::args().collect())
+-        .map_err(OptionError::FlagError)?
+-    {
++    let mut args: Vec<String> = env::args().collect();
++    // Bazel may spill the leading wrapper arguments to a multiline params file.
++    // Read them verbatim; child rustc @files after `--` are handled separately.
++    if let Some(path) = args.get(1).and_then(|arg| arg.strip_prefix('@')) {
++        let contents = std::fs::read_to_string(path).map_err(|err| {
++            OptionError::Generic(format!("reading wrapper arguments from {path:?}: {err}"))
++        })?;
++        args.splice(1..2, contents.lines().map(str::to_owned));
++    }
++
++    let mut child_args = match flags.parse(args).map_err(OptionError::FlagError)? {
+         ParseOutcome::Help(help) => {
+             eprintln!("{help}");
+             exit(0);

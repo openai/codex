@@ -92,6 +92,7 @@ native_prefix = rule(
     implementation = _native_prefix_impl,
     attrs = {
         "archives": attr.label_list(allow_files = True, mandatory = True),
+        "copts": attr.string_list(),
         "target": attr.string(mandatory = True),
         "_driver": attr.label(default = "//third_party/voice:bazel_native.py", allow_single_file = True),
         "_recipe": attr.label(default = "//third_party/voice:native_recipe"),

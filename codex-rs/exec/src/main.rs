@@ -1,3 +1,7 @@
+// Release builds exceed rustc's default query depth when laying out the async
+// MessageProcessor::handle_initialized_client_request future.
+#![recursion_limit = "256"]
+
 //! Entry-point for the `codex-exec` binary.
 //!
 //! When this CLI is invoked normally, it parses the standard `codex-exec` CLI

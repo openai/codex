@@ -1,0 +1,118 @@
+--- a/cargo/private/cargo_build_script.bzl
++++ b/cargo/private/cargo_build_script.bzl
+@@ -3,6 +3,7 @@
+ load("@apple_support//lib:apple_support.bzl", "apple_support")
+ load("@bazel_skylib//lib:paths.bzl", "paths")
+ load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
++load("@platforms//host:constraints.bzl", "HOST_CONSTRAINTS")
+ load("@rules_cc//cc:action_names.bzl", "ACTION_NAMES")
+ load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
+ load("//rust:defs.bzl", "rust_common")
+@@ -11,6 +12,7 @@
+ # buildifier: disable=bzl-visibility
+ load(
+     "//rust/private:rustc.bzl",
++    "collect_extra_rustc_flags",
+     "get_compilation_mode_opts",
+     "get_linker_and_args",
+ )
+@@ -23,6 +25,7 @@
+     "expand_dict_value_locations",
+     "find_cc_toolchain",
+     "find_toolchain",
++    "is_exec_configuration",
+     _name_to_crate_name = "name_to_crate_name",
+ )
+
+@@ -66,6 +69,43 @@
+     },
+     executable = True,
+ )
++
++def _release_user_opts(ctx, flags):
++    # Bazel 9.2's default exec transition appends -g0 to host copts/cxxopts on
++    # non-Windows servers. Remove only that suffix; preserve explicit -g0.
++    # https://github.com/bazelbuild/bazel/blob/9.2.0/src/main/starlark/builtins_bzl/common/builtin_exec_platforms.bzl
++    if is_exec_configuration(ctx) and "@platforms//os:windows" not in HOST_CONSTRAINTS and flags and flags[-1] == "-g0":
++        return flags[:-1]
++    return flags
++
++def _cargo_profile_native_flags(flags):
++    # Let cc-rs/cmake derive optimization and debug info from Cargo's profile.
++    # Filter toolchain defaults only; explicit user flags are appended afterwards.
++    profile_defaults = [
++        "-O0",
++        "-O1",
++        "-O2",
++        "-O3",
++        "-Og",
++        "-Os",
++        "-Oz",
++        "-Ofast",
++        "-g0",
++        "-DNDEBUG",
++        "-DNDEBUG=1",
++        "/Od",
++        "/O1",
++        "/O2",
++        "/Ox",
++        "/Ob0",
++        "/Ob1",
++        "/Ob2",
++        "/Ob3",
++        "/Oi",
++        "/DNDEBUG",
++        "/DNDEBUG=1",
++    ]
++    return [flag for flag in flags if flag not in profile_defaults]
+
+ def get_cc_compile_args_and_env(cc_toolchain, feature_configuration):
+     """Gather cc environment variables from the given `cc_toolchain`
+@@ -469,6 +509,22 @@
+         env["CARGO_PKG_VERSION_PRE"] = patch[1] if len(patch) > 1 else ""
+         env["CARGO_PKG_VERSION"] = ctx.attr.version
+
++    cargo_release_profile = _feature_enabled(ctx, "cargo-release-profile")
++    if cargo_release_profile:
++        # Compatibility with Cargo release profiles that retain debug info:
++        # DEBUG describes symbol generation, not debug assertions. Read the
++        # consuming crate's configuration, not the build-script executable's.
++        debug_info = get_compilation_mode_opts(ctx, toolchain).debug_info
++        flags = collect_extra_rustc_flags(ctx, toolchain, None, "rlib")
++        for flag in flags:
++            # Accept both -Copt-level=N and the split -C opt-level=N spelling.
++            codegen = flag.removeprefix("-C").removeprefix("--codegen=")
++            if codegen.startswith("opt-level="):
++                env["OPT_LEVEL"] = codegen.removeprefix("opt-level=")
++            elif codegen.startswith("debuginfo="):
++                debug_info = codegen.removeprefix("debuginfo=")
++        env["DEBUG"] = "false" if debug_info in ["0", "none"] else "true"
++
+     # Pull in env vars which may be required for the cc_toolchain to work (e.g. on OSX, the SDK version).
+     # We hope that the linker env is sufficient for the whole cc_toolchain.
+     cc_toolchain, feature_configuration = find_cc_toolchain(ctx)
+@@ -484,6 +540,13 @@
+     if cc_toolchain:
+         # MSVC requires INCLUDE to be set
+         cc_c_args, cc_cxx_args, cc_env = get_cc_compile_args_and_env(cc_toolchain, feature_configuration)
++        if cargo_release_profile:
++            # Preserve SDK, ABI, CRT and security options. User copts and crate
++            # build_script_env overrides retain precedence over these defaults.
++            copts = _release_user_opts(ctx, ctx.fragments.cpp.copts)
++            cxxopts = _release_user_opts(ctx, ctx.fragments.cpp.cxxopts)
++            cc_c_args = _cargo_profile_native_flags(cc_c_args) + copts + ctx.fragments.cpp.conlyopts
++            cc_cxx_args = _cargo_profile_native_flags(cc_cxx_args) + copts + cxxopts
+         include = cc_env.get("INCLUDE")
+         if include:
+             if toolchain.exec_triple.str.find("windows") > 0:
+@@ -837,6 +900,10 @@
+         "_cargo_manifest_dir_filename_suffixes_to_retain": attr.label(
+             default = Label("//cargo/settings:cargo_manifest_dir_filename_suffixes_to_retain"),
+         ),
++        "_extra_exec_rustc_flag": attr.label(default = Label("//rust/settings:extra_exec_rustc_flag")),
++        "_extra_exec_rustc_flags": attr.label(default = Label("//rust/settings:extra_exec_rustc_flags")),
++        "_extra_rustc_flag": attr.label(default = Label("//rust/settings:extra_rustc_flag")),
++        "_extra_rustc_flags": attr.label(default = Label("//rust/settings:extra_rustc_flags")),
+         "_debug_std_streams_output_group": attr.label(
+             default = Label("//cargo/settings:debug_std_streams_output_group"),
+         ),

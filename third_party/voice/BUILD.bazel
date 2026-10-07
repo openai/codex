@@ -175,6 +175,11 @@ filegroup(
     tags = ["manual"],
 )
 
+config_setting(
+    name = "optimized",
+    values = {"compilation_mode": "opt"},
+)
+
 # Configure probes execute target binaries: constrain each action's host too.
 _NATIVE_PLATFORMS = [
     ("macos", "aarch64", "apple-darwin"),
@@ -198,6 +203,12 @@ _NATIVE_PLATFORMS = [
     native_prefix(
         name = "native_prefix_" + os + "_" + cpu,
         archives = [":archives"],
+        # Preserve the native recipe's Meson/CMake release optimization after
+        # toolchain flags, without optimizing unrelated native targets or tools.
+        copts = select({
+            ":optimized": ["-O3"],
+            "//conditions:default": [],
+        }),
         exec_compatible_with = [
             "@platforms//os:" + os,
             "@platforms//cpu:" + cpu,

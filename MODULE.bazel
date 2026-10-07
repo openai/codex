@@ -207,14 +207,16 @@ rules_rust.patch(
         # Carry the OpenAI setup fix that makes build-script tools available
         # through their runfiles after the rules_rs upgrade.
         "//patches:rules_rust_build_script_tools_transition.patch",
+        # Opt-in release profile compatibility for native Cargo build scripts.
+        "//patches:rules_rust_release_build_script_profile.patch",
         # Prefer Rust's direct linker for Windows/MSVC and keep hermetic
         # LLVM's non-.lib runtime artifacts compatible with it.
         "//patches:rules_rust_windows_msvc_direct_link_args.patch",
         # Skip transient native-Windows linker outputs while consolidating
         # dependency search paths.
         "//patches:rules_rust_windows_process_wrapper_skip_temp_outputs.patch",
-        # Group build-script argument files to avoid Windows command-line limits.
-        "//patches:rules_rust_group_build_script_arg_files.patch",
+        # Spill wrapper arguments to a params file to avoid Windows command-line limits.
+        "//patches:rules_rust_process_wrapper_param_file.patch",
         "//patches:rules_rust_windows_execroot_separators.patch",
         "//patches:rules_rust_compiler_thp.patch",
     ],
@@ -292,9 +294,19 @@ nightly_rust.repository_set(
 )
 use_repo(nightly_rust, "rust_toolchains")
 
+# Match Cargo's MSVC static CRT policy for target and host dependencies. V8's
+# allocator shim must not also import the dynamic UCRT. Selecting by target
+# triple applies to cross builds without affecting Windows GNU, Linux or macOS.
+MSVC_RUSTC_FLAGS = {
+    "aarch64-pc-windows-msvc": ["-Ctarget-feature=+crt-static"],
+    "x86_64-pc-windows-msvc": ["-Ctarget-feature=+crt-static"],
+}
+
 toolchains = use_extension("@rules_rs//rs/toolchains:module_extension.bzl", "toolchains")
 toolchains.toolchain(
     edition = "2024",
+    extra_exec_rustc_flags = MSVC_RUSTC_FLAGS,
+    extra_rustc_flags = MSVC_RUSTC_FLAGS,
     version = "1.95.0",
 )
 use_repo(toolchains, "default_rust_toolchains")
@@ -592,6 +604,13 @@ inject_repo(crate, "v8_targets")
 llvm = use_extension("@llvm//extensions:llvm.bzl", "llvm")
 use_repo(llvm, "llvm-project")
 
+crate.annotation(
+    # Disable SQLite intrinsics that can crash at startup on older x64 Windows CPUs.
+    build_script_env_select = {
+        "x86_64-pc-windows-msvc": '{"LIBSQLITE3_FLAGS": "SQLITE_DISABLE_INTRINSIC"}',
+    },
+    crate = "libsqlite3-sys",
+)
 crate.annotation(
     # Provide the hermetic SDK path so the build script doesn't try to invoke an unhermetic `xcrun --show-sdk-path`.
     build_script_data = [
