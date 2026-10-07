@@ -6738,6 +6738,10 @@
     "WindowsToml": {
       "additionalProperties": false,
       "properties": {
+        "allow_mxc": {
+          "description": "False blocks both explicit MXC configuration and automatic selection.",
+          "type": "boolean"
+        },
         "sandbox": {
           "$ref": "#/definitions/WindowsSandboxModeToml"
         }
