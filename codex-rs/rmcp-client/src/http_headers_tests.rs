@@ -43,8 +43,14 @@ async fn helper_attempt_is_shared_after_cancellation() {
             .await
             .is_err()
     );
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(cancelled_finished.exists());
+    // Observe the helper finishing without polling the cancelled attempt again.
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
+        while !cancelled_finished.exists() {
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
+        }
+    })
+    .await
+    .expect("cancelled helper finished independently");
     assert!(cancelled.headers().await.is_ok());
     assert_eq!(
         std::fs::read_to_string(&cancelled_invocations).expect("cancelled invocation count"),
@@ -60,8 +66,13 @@ async fn helper_attempt_is_shared_after_cancellation() {
         .await
         .is_err()
     );
-    tokio::time::sleep(Duration::from_millis(/*millis*/ 500)).await;
-    assert!(cancelled_finished.exists());
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
+        while !cancelled_finished.exists() {
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
+        }
+    })
+    .await
+    .expect("cancelled refresh finished independently");
     assert_eq!(
         cancelled.refresh(headers.refresh_epoch).await.unwrap(),
         headers.values
