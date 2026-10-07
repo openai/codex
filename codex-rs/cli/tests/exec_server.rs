@@ -97,6 +97,75 @@ fn local_exec_server_ignores_invalid_config_without_strict_config() -> Result<()
     Ok(())
 }
 
+/// Real global CLI flags must reach executor config reads; unrelated startup flags stay private.
+#[tokio::test]
+async fn local_exec_server_projects_global_mxc_preference() -> Result<()> {
+    let home = TempDir::new()?;
+    let cwd = url::Url::from_directory_path(home.path())
+        .map_err(|()| anyhow::anyhow!("could not convert home to file URL"))?;
+    let mut child = tokio::process::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+        .env("CODEX_HOME", home.path())
+        .args([
+            "-c",
+            "features.prefer_mxc=true",
+            "-c",
+            "model='private-startup-model'",
+            "exec-server",
+            "--listen",
+            "stdio",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let mut stdin = child.stdin.take().context("exec-server stdin")?;
+    let mut stdout = BufReader::new(child.stdout.take().context("exec-server stdout")?);
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        send_json_line(
+            &mut stdin,
+            &serde_json::json!({"id": 1, "method": "initialize",
+                "params": {"clientName": "mxc-test", "resumeSessionId": null}}),
+        )
+        .await?;
+        wait_for_response(&mut stdout, /*expected_id*/ 1).await?;
+        send_json_line(
+            &mut stdin,
+            &serde_json::json!({"method": "initialized", "params": {}}),
+        )
+        .await?;
+        send_json_line(
+            &mut stdin,
+            &serde_json::json!({"id": 2, "method": "environmentConfig/read", "params": {
+                "cwd": cwd, "configPaths": [["features", "prefer_mxc"], ["model"]],
+                "requirementsPaths": []
+            }}),
+        )
+        .await?;
+        wait_for_response(&mut stdout, /*expected_id*/ 2).await
+    })
+    .await
+    .context("executor CLI config read timed out")??;
+    let layers = result["result"]["config"]["layers"]
+        .as_array()
+        .context("config layers")?;
+    let session = layers
+        .iter()
+        .find(|l| l["source"] == "session-flags")
+        .context("session flags")?;
+    let value: toml::Value = toml::from_str(session["toml"].as_str().context("session TOML")?)?;
+    assert_eq!(
+        value,
+        toml::Value::Table(toml::toml! { [features] prefer_mxc = true })
+    );
+    drop(stdin);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(30), child.wait())
+            .await??
+            .success()
+    );
+    Ok(())
+}
+
 /// The standalone exec-server accepts an explicit per-connection concurrency limit.
 #[test]
 fn local_exec_server_accepts_concurrent_requests_flag() -> Result<()> {
@@ -617,7 +686,7 @@ fn local_exec_server_exits_successfully_on_sigterm() -> Result<()> {
 async fn wait_for_response(
     stdout: &mut (impl tokio::io::AsyncBufRead + Unpin),
     expected_id: i64,
-) -> Result<()> {
+) -> Result<serde_json::Value> {
     loop {
         let mut line = String::new();
         if stdout.read_line(&mut line).await? == 0 {
@@ -629,7 +698,7 @@ async fn wait_for_response(
                 message.get("error").is_none(),
                 "exec-server request {expected_id} failed: {message}"
             );
-            return Ok(());
+            return Ok(message);
         }
     }
 }

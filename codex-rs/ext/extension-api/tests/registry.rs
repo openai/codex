@@ -78,12 +78,14 @@ fn mcp_context_preserves_selected_executor_order_and_unavailability() {
             cwd: PathUri::parse("file:///workspace").expect("workspace URI"),
             workspace_roots: Vec::new(),
             config: EnvironmentConfigState::Pending,
+            selected_capability_roots: Default::default(),
         },
         TurnEnvironmentSelection {
             environment_id: "ready-secondary".to_owned(),
             cwd: PathUri::parse("file:///other").expect("workspace URI"),
             workspace_roots: Vec::new(),
             config: EnvironmentConfigState::FromThread,
+            selected_capability_roots: Default::default(),
         },
     ];
     let context = McpServerContributionContext::global(&config);

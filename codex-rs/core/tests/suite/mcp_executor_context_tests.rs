@@ -106,7 +106,7 @@ async fn thread_projection_preserves_executor_order_and_unavailable_selections()
             let selections = requests
                 .iter()
                 .cloned()
-                .map(TurnEnvironmentSelection::new)
+                .map(|request| TurnEnvironmentSelection::new(request, &[]))
                 .collect::<Vec<_>>();
             recorder
                 .observed
