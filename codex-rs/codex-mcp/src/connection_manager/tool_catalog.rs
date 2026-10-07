@@ -22,6 +22,7 @@ use super::catalog_telemetry::record_binding_catalog_size;
 use super::catalog_telemetry::tool_definition_json_bytes;
 use crate::binding::McpBinding;
 use crate::binding::PreparedMcpCall;
+use crate::binding::PreparedToolInfo;
 use crate::binding_clients::McpBindingClients;
 use crate::client_tool_catalog::ClientToolCatalogRevision;
 use crate::client_tool_catalog::CodexAppsToolSnapshot;
@@ -68,6 +69,11 @@ pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
 pub(crate) enum BindingCatalogRevision {
     Ready(ClientToolCatalogRevision),
     Cached(u64),
+}
+
+enum PendingCallToolInfo {
+    BindingCatalog(usize),
+    Owned(PreparedToolInfo),
 }
 
 impl McpConnectionSet {
@@ -461,7 +467,7 @@ impl McpConnectionSet {
             &self.non_prefixed_mcp_tool_servers,
         );
         let mut tools = Vec::with_capacity(listed_tools.len());
-        let mut calls = std::collections::HashMap::with_capacity(listed_tools.len());
+        let mut pending_calls = Vec::with_capacity(listed_tools.len());
         for tool_info in listed_tools {
             let model_visible = crate::tool_is_model_visible(&tool_info);
             let Some((client, snapshot)) = clients.get(&tool_info.server_name) else {
@@ -470,29 +476,46 @@ impl McpConnectionSet {
                 }
                 continue;
             };
-            let Some(call) = self.prepare_call(
-                &tool_info,
-                Arc::clone(client),
-                Arc::clone(&config),
-                Arc::clone(snapshot),
-            ) else {
+            if config
+                .permission_profile_for_server(&tool_info.server_name)
+                .is_none()
+            {
                 trace!(
                     server_name = %tool_info.server_name,
                     tool_name = %tool_info.tool.name,
                     "omitting MCP tool without an exact ready client"
                 );
                 continue;
+            }
+            let pending_tool_info = if model_visible {
+                let tool_index = tools.len();
+                tools.push(tool_info);
+                PendingCallToolInfo::BindingCatalog(tool_index)
+            } else {
+                PendingCallToolInfo::Owned(tool_info.into())
+            };
+            pending_calls.push((pending_tool_info, Arc::clone(client), Arc::clone(snapshot)));
+        }
+        let tools: Arc<[ToolInfo]> = tools.into();
+        let mut calls = std::collections::HashMap::with_capacity(pending_calls.len());
+        for (pending_tool_info, client, snapshot) in pending_calls {
+            let tool_info = match pending_tool_info {
+                PendingCallToolInfo::BindingCatalog(tool_index) => {
+                    PreparedToolInfo::from_binding_catalog(Arc::clone(&tools), tool_index)
+                }
+                PendingCallToolInfo::Owned(tool_info) => tool_info,
+            };
+            let Some(call) = self.prepare_call(tool_info, client, Arc::clone(&config), snapshot)
+            else {
+                continue;
             };
             calls.insert(
                 (
-                    tool_info.server_name.clone(),
-                    tool_info.tool.name.to_string(),
+                    call.server_name().to_string(),
+                    call.tool_info().tool.name.to_string(),
                 ),
                 call,
             );
-            if model_visible {
-                tools.push(tool_info);
-            }
         }
         let clients = Arc::new(McpBindingClients::new(
             clients
@@ -553,28 +576,36 @@ impl McpConnectionSet {
         tool_info
             .callable_name
             .clone_from(&advertised_tool.callable_name);
-        self.prepare_call(&tool_info, Arc::new(client), config, snapshot)
+        self.prepare_call(tool_info, Arc::new(client), config, snapshot)
     }
 
     fn prepare_call(
         self: &Arc<Self>,
-        tool_info: &ToolInfo,
+        tool_info: impl Into<PreparedToolInfo>,
         client: Arc<ManagedClient>,
         config: Arc<crate::McpConfig>,
         tool_catalog_snapshot: Arc<ToolCatalogSnapshot>,
     ) -> Option<PreparedMcpCall> {
-        let server_name = &tool_info.server_name;
-        let view = self.servers.get(server_name)?;
+        let tool_info = tool_info.into();
+        let (server_metadata, plugin_id, selected_plugin_server) = {
+            let server_name = &tool_info.get().server_name;
+            let view = self.servers.get(server_name)?;
+            (
+                view.metadata.clone(),
+                self.plugin_id_for_mcp_server_name(server_name)
+                    .map(str::to_string),
+                self.is_selected_plugin_mcp_server(server_name),
+            )
+        };
         PreparedMcpCall::new(
             Arc::clone(self),
             client,
             config,
             tool_catalog_snapshot,
-            tool_info.clone(),
-            view.metadata.clone(),
-            self.plugin_id_for_mcp_server_name(server_name)
-                .map(str::to_string),
-            self.is_selected_plugin_mcp_server(server_name),
+            tool_info,
+            server_metadata,
+            plugin_id,
+            selected_plugin_server,
         )
     }
 

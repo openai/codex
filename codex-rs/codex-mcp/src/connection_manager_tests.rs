@@ -2309,7 +2309,7 @@ async fn list_all_tools_uses_shared_codex_apps_cache_while_client_is_pending() {
 }
 
 #[tokio::test]
-async fn capture_binding_uses_the_ready_clients_own_tools() {
+async fn capture_binding_preserves_ready_client_catalog_and_shares_prepared_metadata() {
     let codex_home = tempdir().expect("tempdir");
     let cache_context = create_codex_apps_tools_cache_context(
         codex_home.path().to_path_buf(),
@@ -2323,9 +2323,21 @@ async fn capture_binding_uses_the_ready_clients_own_tools() {
             "shared_cached_tool",
         )],
     );
+    let mut visible_collision = create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "collision");
+    visible_collision.connector_id = Some("a-visible".to_string());
+    let mut hidden_collision = create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "collision");
+    hidden_collision.connector_id = Some("z-hidden".to_string());
+    hidden_collision.tool.meta = Some(rmcp::model::MetaObject(
+        serde_json::json!({ "ui": { "visibility": [] } })
+            .as_object()
+            .expect("metadata object")
+            .clone(),
+    ));
     let mut ready_client = create_test_managed_client(vec![
         create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "client_local_tool"),
         create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "client_local_blocked"),
+        visible_collision,
+        hidden_collision,
     ])
     .await;
     let tool_filter = ToolFilter {
@@ -2387,11 +2399,25 @@ async fn capture_binding_uses_the_ready_clients_own_tools() {
             .iter()
             .map(|tool| tool.callable_name.as_str())
             .collect::<Vec<_>>(),
-        vec!["client_local_tool"]
+        vec!["client_local_tool", "collision"]
+    );
+    let prepared = step
+        .prepare_call(CODEX_APPS_MCP_SERVER_NAME, "client_local_tool")
+        .expect("client-local tool should be callable");
+    assert!(std::ptr::eq(
+        step.tools()
+            .first()
+            .expect("binding should advertise the client-local tool first"),
+        prepared.tool_info()
+    ));
+    assert_eq!(
+        step.tool_info(CODEX_APPS_MCP_SERVER_NAME, "collision")
+            .and_then(|tool| tool.connector_id.as_deref()),
+        Some("z-hidden")
     );
     assert!(
-        step.prepare_call(CODEX_APPS_MCP_SERVER_NAME, "client_local_tool")
-            .is_some()
+        step.prepare_call(CODEX_APPS_MCP_SERVER_NAME, "collision")
+            .is_none()
     );
     assert!(
         step.prepare_call(CODEX_APPS_MCP_SERVER_NAME, "shared_cached_tool")

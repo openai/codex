@@ -34,7 +34,7 @@ pub struct McpBinding {
     clients: Arc<McpBindingClients>,
     config: Arc<McpConfig>,
     plugins_available: bool,
-    tools: Vec<ToolInfo>,
+    tools: Arc<[ToolInfo]>,
     calls: HashMap<(String, String), PreparedMcpCall>,
 }
 
@@ -56,7 +56,7 @@ impl McpBinding {
         clients: Arc<McpBindingClients>,
         config: Arc<McpConfig>,
         plugins_available: bool,
-        tools: Vec<ToolInfo>,
+        tools: impl Into<Arc<[ToolInfo]>>,
         calls: HashMap<(String, String), PreparedMcpCall>,
     ) -> Self {
         Self {
@@ -64,7 +64,7 @@ impl McpBinding {
             clients,
             config,
             plugins_available,
-            tools,
+            tools: tools.into(),
             calls,
         }
     }
@@ -173,11 +173,40 @@ pub struct PreparedMcpCall {
     client: Arc<ManagedClient>,
     config: Arc<McpConfig>,
     catalog_snapshot: Arc<ToolCatalogSnapshot>,
-    tool_info: ToolInfo,
+    tool_info: PreparedToolInfo,
     server_name: String,
     server_metadata: McpServerMetadata,
     plugin_id: Option<String>,
     selected_plugin_server: bool,
+}
+
+#[derive(Clone)]
+pub(crate) struct PreparedToolInfo {
+    catalog: Arc<[ToolInfo]>,
+    index: usize,
+}
+
+impl PreparedToolInfo {
+    pub(crate) fn from_binding_catalog(catalog: Arc<[ToolInfo]>, index: usize) -> Self {
+        assert!(
+            index < catalog.len(),
+            "prepared tool index must refer to its binding catalog"
+        );
+        Self { catalog, index }
+    }
+
+    pub(crate) fn get(&self) -> &ToolInfo {
+        &self.catalog[self.index]
+    }
+}
+
+impl From<ToolInfo> for PreparedToolInfo {
+    fn from(tool_info: ToolInfo) -> Self {
+        Self {
+            catalog: Arc::new([tool_info]),
+            index: 0,
+        }
+    }
 }
 
 impl PreparedMcpCall {
@@ -190,12 +219,13 @@ impl PreparedMcpCall {
         client: Arc<ManagedClient>,
         config: Arc<McpConfig>,
         catalog_snapshot: Arc<ToolCatalogSnapshot>,
-        tool_info: ToolInfo,
+        tool_info: impl Into<PreparedToolInfo>,
         server_metadata: McpServerMetadata,
         plugin_id: Option<String>,
         selected_plugin_server: bool,
     ) -> Option<Self> {
-        let server_name = tool_info.server_name.clone();
+        let tool_info = tool_info.into();
+        let server_name = tool_info.get().server_name.clone();
         config.permission_profile_for_server(&server_name)?;
         Some(Self {
             connections,
@@ -211,7 +241,7 @@ impl PreparedMcpCall {
     }
 
     pub fn tool_info(&self) -> &ToolInfo {
-        &self.tool_info
+        self.tool_info.get()
     }
 
     /// Returns the configuration and approval authority captured with this client.
@@ -261,7 +291,7 @@ impl PreparedMcpCall {
 
     pub fn tool_approval_mode(&self) -> AppToolApproval {
         self.server_metadata
-            .tool_approval_mode(&self.tool_info.tool.name)
+            .tool_approval_mode(&self.tool_info().tool.name)
     }
 
     /// Returns the explicit output budget captured with this call's effective server config.
@@ -271,7 +301,7 @@ impl PreparedMcpCall {
             .server(&self.server_name)?
             .config()
             .tools
-            .get(self.tool_info.tool.name.as_ref())?
+            .get(self.tool_info().tool.name.as_ref())?
             .output_token_limit
             .map(std::num::NonZeroUsize::get)
     }
@@ -316,7 +346,7 @@ impl PreparedMcpCall {
             }
             (server_timeout, requested_timeout) => server_timeout.or(requested_timeout),
         };
-        let tool_name = self.tool_info.tool.name.to_string();
+        let tool_name = self.tool_info().tool.name.to_string();
         self.client
             .tool_catalog
             .run_with_snapshot(&self.catalog_snapshot, || async {
@@ -324,7 +354,7 @@ impl PreparedMcpCall {
                 let timeout_deadline =
                     effective_timeout.map(|timeout| tokio::time::Instant::now() + timeout);
                 let add_trusted_access_context = self.connections.add_trusted_access_context(
-                    &self.tool_info,
+                    self.tool_info(),
                     &self.server_metadata,
                     arguments.as_ref(),
                     meta,
