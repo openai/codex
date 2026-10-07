@@ -73,6 +73,9 @@ tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+codex-linux-sandbox = { workspace = true }
+
 [target.'cfg(unix)'.dependencies]
 codex-uds = { workspace = true }
 libc = { workspace = true }

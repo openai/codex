@@ -60,9 +60,22 @@ pub fn detect_shell_type(shell_path: impl AsRef<std::path::Path>) -> Option<Shel
 
 #[cfg(unix)]
 fn get_user_shell_path() -> Option<PathBuf> {
+    get_user_path(|passwd| passwd.pw_shell)
+        .map(|path| PathBuf::from(path.to_string_lossy().into_owned()))
+}
+
+/// Read the current account's home directory without consulting the environment.
+#[cfg(unix)]
+pub fn get_user_home_path() -> Option<PathBuf> {
+    get_user_path(|passwd| passwd.pw_dir).filter(|path| !path.as_os_str().is_empty())
+}
+
+#[cfg(unix)]
+fn get_user_path(field: fn(&libc::passwd) -> *mut libc::c_char) -> Option<PathBuf> {
     let uid = unsafe { libc::getuid() };
     use std::ffi::CStr;
     use std::mem::MaybeUninit;
+    use std::os::unix::ffi::OsStrExt;
     use std::ptr;
 
     let mut passwd = MaybeUninit::<libc::passwd>::uninit();
@@ -96,14 +109,14 @@ fn get_user_shell_path() -> Option<PathBuf> {
             }
 
             let passwd = unsafe { passwd.assume_init_ref() };
-            if passwd.pw_shell.is_null() {
+            let path = field(passwd);
+            if path.is_null() {
                 return None;
             }
 
-            let shell_path = unsafe { CStr::from_ptr(passwd.pw_shell) }
-                .to_string_lossy()
-                .into_owned();
-            return Some(PathBuf::from(shell_path));
+            // Both callers select a field stored in the still-live passwd buffer.
+            let path = unsafe { CStr::from_ptr(path) };
+            return Some(PathBuf::from(std::ffi::OsStr::from_bytes(path.to_bytes())));
         }
 
         if status != libc::ERANGE {

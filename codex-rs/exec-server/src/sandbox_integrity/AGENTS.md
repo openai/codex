@@ -30,7 +30,7 @@ negatives. Backend glob/symlink nuances and writable hard-link aliases are not
 fully modeled. The separate glob scan can differ from enforcement's snapshot.
 Metrics describe observed checker outcomes, not accuracy or missed violations.
 
-Windows scanner discovery currently uses `which`, while enforcement uses
+MXC scanner discovery currently uses `which`, while enforcement uses
 `Command`. Their search-order and environment differences can select different
 executables or cause only one scan to use the internal walker. This is an accepted
 telemetry limitation for this phase; changing production scanner selection is deferred.

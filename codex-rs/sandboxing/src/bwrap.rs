@@ -206,7 +206,8 @@ pub fn find_pre_sandbox_executable_in_path(
     )
 }
 
-fn find_executable_in_search_paths(
+/// Apply the pre-sandbox executable selection rules to an explicit command context.
+pub fn find_executable_in_search_paths(
     program: &str,
     search_paths: impl IntoIterator<Item = PathBuf>,
     cwd: &Path,

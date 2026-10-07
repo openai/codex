@@ -15,6 +15,7 @@
 //! - bubblewrap used to construct the filesystem view before exec.
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
@@ -37,6 +38,7 @@ use codex_protocol::protocol::FileSystemPath;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::FileSystemSpecialPath;
 use codex_protocol::protocol::WritableRoot;
+use codex_sandboxing::find_executable_in_search_paths;
 use codex_sandboxing::find_pre_sandbox_executable_in_path;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use globset::GlobBuilder;
@@ -58,6 +60,9 @@ const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     "/nix/store",
     "/run/current-system/sw",
 ];
+
+/// External scanner used by deny-glob expansion and its dependency inventory.
+pub const GLOB_SCAN_PROGRAM: &str = "rg";
 
 const MAX_UNREADABLE_GLOB_MATCHES: usize = 8192;
 pub(crate) const WSL_INTEROP_DIR: &str = "/run/WSL";
@@ -499,10 +504,17 @@ fn create_filesystem_args(
         expand_unreadable_globs_with_ripgrep(
             &unreadable_globs,
             cwd,
-            file_system_sandbox_policy,
+            || {
+                find_pre_sandbox_executable_in_path(
+                    GLOB_SCAN_PROGRAM,
+                    file_system_sandbox_policy,
+                    cwd,
+                )
+            },
             options
                 .glob_scan_max_depth
                 .or(file_system_sandbox_policy.glob_scan_max_depth),
+            |_| {},
         )?
         .into_iter()
         .map(AbsolutePathBuf::into_path_buf),
@@ -888,17 +900,47 @@ fn append_daemon_socket_masks(
     Ok(())
 }
 
-fn expand_unreadable_globs_with_ripgrep(
+/// Expand deny globs with the launcher's scanner in an explicit command environment.
+/// The supplied environment replaces inheritance, including when it is empty.
+pub fn expand_unreadable_globs_in_environment(
     patterns: &[String],
     cwd: &Path,
     file_system_policy: &FileSystemSandboxPolicy,
     max_depth: Option<usize>,
+    env: &HashMap<String, String>,
+    command_cwd: &Path,
+) -> Result<Vec<AbsolutePathBuf>> {
+    expand_unreadable_globs_with_ripgrep(
+        patterns,
+        cwd,
+        || {
+            find_executable_in_search_paths(
+                GLOB_SCAN_PROGRAM,
+                std::env::split_paths(env.get("PATH")?),
+                command_cwd,
+                file_system_policy,
+                cwd,
+            )
+        },
+        max_depth,
+        |command| {
+            command.env_clear().envs(env).current_dir(command_cwd);
+        },
+    )
+}
+
+fn expand_unreadable_globs_with_ripgrep(
+    patterns: &[String],
+    cwd: &Path,
+    resolve_scanner: impl FnOnce() -> Option<PathBuf>,
+    max_depth: Option<usize>,
+    configure_command: impl Fn(&mut Command),
 ) -> Result<Vec<AbsolutePathBuf>> {
     if patterns.is_empty() || max_depth == Some(0) {
         return Ok(Vec::new());
     }
 
-    let rg_path = find_pre_sandbox_executable_in_path("rg", file_system_policy, cwd);
+    let rg_path = resolve_scanner();
 
     // Group each pattern by the static path prefix before its first glob
     // metacharacter. That keeps scans narrow, avoids searching from `/`, and
@@ -924,7 +966,13 @@ fn expand_unreadable_globs_with_ripgrep(
     let mut expanded_paths = BTreeSet::new();
     for (search_root, globs) in patterns_by_search_root {
         let paths = match &rg_path {
-            Some(rg_path) => ripgrep_files(rg_path, search_root.as_path(), &globs, max_depth)?,
+            Some(rg_path) => ripgrep_files(
+                rg_path,
+                search_root.as_path(),
+                &globs,
+                max_depth,
+                &configure_command,
+            )?,
             None => glob_files(search_root.as_path(), &globs, max_depth)?,
         };
         for path in paths {
@@ -1013,11 +1061,13 @@ fn ripgrep_files(
     search_root: &Path,
     globs: &[String],
     max_depth: Option<usize>,
+    configure_command: &impl Fn(&mut Command),
 ) -> Result<Vec<AbsolutePathBuf>> {
+    let mut command = Command::new(rg_path);
+    configure_command(&mut command);
     // Use `rg --files` rather than shell expansion so dotfiles and ignored files
     // are still considered. A status 1 with no stderr is ripgrep's "no matches"
     // case, not a sandbox construction error.
-    let mut command = Command::new(rg_path);
     command
         .arg("--no-config")
         .arg("--files")
@@ -3028,7 +3078,7 @@ mod tests {
     }
 
     fn ripgrep_available() -> bool {
-        Command::new("rg")
+        Command::new(GLOB_SCAN_PROGRAM)
             .arg("--version")
             .output()
             .is_ok_and(|output| output.status.success())

@@ -16,6 +16,8 @@ mod windows;
 mod windows_mxc;
 
 #[cfg(target_os = "linux")]
+pub use bwrap::find_executable_in_search_paths;
+#[cfg(target_os = "linux")]
 pub use bwrap::find_pre_sandbox_executable_in_path;
 #[cfg(target_os = "linux")]
 pub use bwrap::find_system_bwrap_in_path;
