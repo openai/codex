@@ -1145,6 +1145,122 @@ async fn thread_search_filters_by_source_kind() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_list_db_only_errors_distinguish_unavailable_database_from_empty_history()
+-> Result<()> {
+    use codex_app_server::in_process;
+    use codex_app_server::in_process::InProcessStartArgs;
+    use codex_app_server_protocol::ClientInfo;
+    use codex_app_server_protocol::InitializeParams;
+    use codex_arg0::Arg0DispatchPaths;
+    use codex_config::CloudConfigBundleLoader;
+    use codex_config::LoaderOverrides;
+    use codex_config::NoopThreadConfigLoader;
+    use codex_core::config::ConfigBuilder;
+    use codex_exec_server::EnvironmentManager;
+    use codex_feedback::CodexFeedback;
+    use std::sync::Arc;
+
+    let home = TempDir::new()?;
+    let other_home = TempDir::new()?;
+    create_minimal_config(home.path())?;
+    let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
+    let config = Arc::new(
+        ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .fallback_cwd(Some(home.path().to_path_buf()))
+            .loader_overrides(loader_overrides.clone())
+            .build()
+            .await?,
+    );
+    let right_db = codex_state::StateRuntime::init(
+        config.sqlite_config().clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    let wrong_db = codex_state::StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(other_home.path().abs()),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    // A rollout file must not conceal a failed database-only read.
+    create_fake_rollout(
+        home.path(),
+        "2025-01-03T12-00-00",
+        "2025-01-03T12:00:00Z",
+        "only in the rollout",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    for (state_db, should_succeed) in [
+        (None, false),
+        (Some(wrong_db), false),
+        (Some(right_db), true),
+    ] {
+        let client = in_process::start(InProcessStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::clone(&config),
+            cli_overrides: Vec::new(),
+            loader_overrides: loader_overrides.clone(),
+            strict_config: false,
+            cloud_config_bundle: CloudConfigBundleLoader::default(),
+            embedded_network_policy: Default::default(),
+            thread_config_loader: Arc::new(NoopThreadConfigLoader),
+            feedback: CodexFeedback::new(),
+            log_db: None,
+            state_db,
+            environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+            config_warnings: Vec::new(),
+            session_source: CoreSessionSource::Cli,
+            enable_codex_api_key_env: false,
+            initialize: InitializeParams {
+                client_info: ClientInfo {
+                    name: "codex-app-server-tests".into(),
+                    title: None,
+                    version: "0.1.0".into(),
+                },
+                capabilities: None,
+            },
+            channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await?;
+        for archived in [false, true] {
+            for cwd in [json!(null), json!([])] {
+                let result = client
+                    .request(ClientRequest::ThreadList {
+                        request_id: RequestId::Integer(1),
+                        params: serde_json::from_value(json!({
+                            "useStateDbOnly": true,
+                            "modelProviders": [],
+                            "archived": archived,
+                            "cwd": cwd,
+                        }))?,
+                    })
+                    .await?;
+                if should_succeed {
+                    let page: ThreadListResponse = serde_json::from_value(
+                        result.expect("a healthy, empty database should list successfully"),
+                    )?;
+                    assert_eq!(
+                        page,
+                        ThreadListResponse {
+                            data: vec![],
+                            next_cursor: None,
+                            backwards_cursor: None
+                        }
+                    );
+                } else {
+                    let error =
+                        result.expect_err("an unavailable database must not look exhausted");
+                    assert_eq!(error.code, -32603);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_state_db_only_returns_sqlite_without_jsonl_repair() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(

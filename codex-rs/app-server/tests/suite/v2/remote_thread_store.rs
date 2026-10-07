@@ -191,6 +191,106 @@ async fn thread_start_defaults_to_legacy_without_history_list_support() -> Resul
 }
 
 #[tokio::test]
+async fn thread_list_repeated_cursor_returns_internal_error() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let store_id = Uuid::new_v4().to_string();
+    create_config_toml_with_thread_store(codex_home.path(), "http://127.0.0.1:1", &store_id)?;
+    let thread_store = InMemoryThreadStore::for_id(store_id.clone());
+    let _in_memory_store = InMemoryThreadStoreId { store_id };
+    thread_store
+        .repeat_list_threads_cursor_for_testing("repeated-cursor")
+        .await;
+    let client = start_in_process_server(codex_home.path()).await?;
+
+    let error = client
+        .request(ClientRequest::ThreadList {
+            request_id: RequestId::Integer(1),
+            params: ThreadListParams {
+                excluded_thread_ids: None,
+                originators: None,
+                cursor: None,
+                limit: Some(1),
+                sort_key: None,
+                sort_direction: None,
+                model_providers: Some(Vec::new()),
+                source_kinds: None,
+                archived: None,
+                section_id: None,
+                project_id: None,
+                cwd: None,
+                use_state_db_only: false,
+                search_term: None,
+                parent_thread_id: None,
+                ancestor_thread_id: None,
+            },
+        })
+        .await?
+        .expect_err("a repeated refill cursor must fail thread/list");
+    assert_eq!(error.code, -32603);
+    assert_eq!(error.message, "thread listing returned a repeated cursor");
+
+    let thread_id = ThreadId::new();
+    thread_store
+        .create_thread(StoreCreateThreadParams {
+            creator_user_id: None,
+            creator_account_id: None,
+            session_id: thread_id.into(),
+            thread_id,
+            extra_config: None,
+            forked_from_id: None,
+            parent_thread_id: None,
+            source: SessionSource::Cli,
+            thread_source: None,
+            originator: "test_originator".to_string(),
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            selected_capability_roots: Vec::new(),
+            multi_agent_version: None,
+            history_mode: Default::default(),
+            history_base: None,
+            subagent_history_start_ordinal: None,
+            initial_window_id: Uuid::now_v7().to_string(),
+            runtime_workspace_roots: None,
+            metadata: ThreadPersistenceMetadata {
+                cwd: Some(codex_home.path().to_path_buf()),
+                model_provider: "mock_provider".to_string(),
+                memory_mode: ThreadMemoryMode::Enabled,
+            },
+        })
+        .await?;
+
+    let error = client
+        .request(ClientRequest::ThreadList {
+            request_id: RequestId::Integer(2),
+            params: ThreadListParams {
+                excluded_thread_ids: None,
+                originators: None,
+                cursor: Some("repeated-cursor".to_string()),
+                limit: Some(1),
+                sort_key: None,
+                sort_direction: None,
+                model_providers: Some(Vec::new()),
+                source_kinds: None,
+                archived: None,
+                section_id: None,
+                project_id: None,
+                cwd: None,
+                use_state_db_only: false,
+                search_term: None,
+                parent_thread_id: None,
+                ancestor_thread_id: None,
+            },
+        })
+        .await?
+        .expect_err("a repeated full-page cursor must fail thread/list");
+    assert_eq!(error.code, -32603);
+    assert_eq!(error.message, "thread listing returned a repeated cursor");
+
+    client.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_attachment_operations_without_sqlite_return_method_not_found() -> Result<()> {
     let codex_home = TempDir::new()?;
     let store_id = Uuid::new_v4().to_string();

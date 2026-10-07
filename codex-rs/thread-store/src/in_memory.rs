@@ -526,6 +526,7 @@ pub struct InMemoryThreadStore {
 #[derive(Default)]
 struct InMemoryThreadStoreState {
     calls: InMemoryThreadStoreCalls,
+    repeated_list_threads_cursor: Option<String>,
     created_threads: HashMap<ThreadId, CreateThreadParams>,
     histories: HashMap<ThreadId, Vec<RolloutItem>>,
     metadata_updates: HashMap<ThreadId, ThreadMetadataPatch>,
@@ -564,6 +565,11 @@ impl InMemoryThreadStore {
     /// Returns the calls observed by this store.
     pub async fn calls(&self) -> InMemoryThreadStoreCalls {
         self.state.lock().await.calls.clone()
+    }
+
+    /// Makes every thread-list page return the same cursor for public API error-path tests.
+    pub async fn repeat_list_threads_cursor_for_testing(&self, cursor: impl Into<String>) {
+        self.state.lock().await.repeated_list_threads_cursor = Some(cursor.into());
     }
 
     /// Makes metadata updates apply normally while returning no materialized thread.
@@ -753,7 +759,7 @@ impl InMemoryThreadStore {
         items.sort_by_key(|item| item.thread_id.to_string());
         Ok(ThreadPage {
             items,
-            next_cursor: None,
+            next_cursor: state.repeated_list_threads_cursor.clone(),
         })
     }
 
