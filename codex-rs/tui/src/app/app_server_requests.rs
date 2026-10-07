@@ -220,25 +220,39 @@ impl PendingAppServerRequests {
                 request_id,
                 response,
             } => {
-                let (decision, content) = match response {
+                let (decision, content, meta) = match response {
                     crate::app_command::UserVerificationResponse::Accept { proof } => (
                         codex_app_server_protocol::McpServerElicitationAction::Accept,
                         Some(
                             serde_json::to_value(proof)
                                 .map_err(|_| "Invalid verification proof".to_string())?,
                         ),
+                        None,
                     ),
                     crate::app_command::UserVerificationResponse::Cancel => (
                         codex_app_server_protocol::McpServerElicitationAction::Cancel,
                         None,
+                        Some(serde_json::json!({"openai/userVerificationReason": "userCancelled"})),
                     ),
+                    crate::app_command::UserVerificationResponse::Failed { error } => {
+                        // Serialize only the closed protocol reason, never the display message.
+                        let error = serde_json::to_value(error)
+                            .map_err(|_| "Invalid verification error".to_string())?;
+                        (
+                            codex_app_server_protocol::McpServerElicitationAction::Cancel,
+                            None,
+                            Some(
+                                serde_json::json!({"openai/userVerificationReason": error["reason"]}),
+                            ),
+                        )
+                    }
                 };
                 AppCommand::ResolveElicitation {
                     server_name,
                     request_id,
                     decision,
                     content,
-                    meta: None,
+                    meta,
                 }
             }
             op => op,

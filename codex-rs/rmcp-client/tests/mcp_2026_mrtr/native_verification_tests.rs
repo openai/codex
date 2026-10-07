@@ -116,7 +116,10 @@ async fn native_mrtr_returns_validated_proof_or_cancellation_in_content() -> any
         (
             ElicitationAction::Accept,
             json!({"signature": "invalid"}),
-            json!({"action": "cancel"}),
+            json!({
+                "action": "cancel",
+                "_meta": {"openai/userVerificationReason": "invalidProof"},
+            }),
         ),
     ] {
         let server = MockServer::start().await;

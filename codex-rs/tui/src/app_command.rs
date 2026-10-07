@@ -9,6 +9,7 @@ use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_app_server_protocol::UserInput;
+use codex_app_server_protocol::UserVerificationErrorDetails;
 use codex_app_server_protocol::UserVerificationProof;
 use codex_config::types::ApprovalsReviewer;
 use codex_protocol::ThreadId;
@@ -196,6 +197,16 @@ pub(crate) enum UserVerificationResponse {
         proof: UserVerificationProof,
     },
     Cancel,
+    Failed {
+        error: UserVerificationErrorDetails,
+    },
+}
+
+/// Carries only a safe display message and the closed native error category.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UserVerificationFailure {
+    pub(crate) message: &'static str,
+    pub(crate) details: UserVerificationErrorDetails,
 }
 
 impl AppCommand {

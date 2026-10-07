@@ -131,12 +131,12 @@ fn user_verification_cancels_acceptance_without_a_valid_bounded_proof() {
             validate_response(ElicitationResponse {
                 action: ElicitationAction::Accept,
                 content,
-                meta: None,
+                meta: Some(json!({"openai/userVerificationReason": "userCancelled"})),
             }),
             ElicitationResponse {
                 action: ElicitationAction::Cancel,
                 content: None,
-                meta: None,
+                meta: Some(json!({"openai/userVerificationReason": "invalidProof"})),
             }
         );
     }
@@ -149,12 +149,14 @@ fn user_verification_decline_and_cancel_discard_proof_material() {
             validate_response(ElicitationResponse {
                 action: action.clone(),
                 content: Some(json!({"credentialId": "AQID", "signature": "BAUG"})),
-                meta: Some(json!({"secret": "discarded"})),
+                meta: Some(
+                    json!({"secret": "discarded", "openai/userVerificationReason": "timeout"})
+                ),
             }),
             ElicitationResponse {
                 action,
                 content: None,
-                meta: None
+                meta: Some(json!({"openai/userVerificationReason": "timeout"}))
             }
         );
     }

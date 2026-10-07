@@ -1,4 +1,4 @@
-//! Safe user-facing messages for typed local verification failures.
+//! Keeps safe display messages and bounded categories for local verification failures.
 
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::UserVerificationCancellationReason;
@@ -7,15 +7,22 @@ use codex_app_server_protocol::UserVerificationFailureReason;
 use codex_app_server_protocol::UserVerificationInvalidRequestReason;
 use codex_app_server_protocol::UserVerificationUnavailableReason;
 
-pub(super) fn verification_error_message(error: &TypedRequestError) -> &'static str {
+use crate::app_command::UserVerificationFailure;
+
+pub(super) fn verification_failure(error: &TypedRequestError) -> UserVerificationFailure {
     let TypedRequestError::Server { source, .. } = error else {
-        return "Could not complete user verification with the local Codex binary.";
+        return UserVerificationFailure {
+            message: "Could not complete user verification with the local Codex binary.",
+            details: UserVerificationErrorDetails::Failed {
+                reason: UserVerificationFailureReason::ServiceError,
+            },
+        };
     };
     let details = source
         .data
         .clone()
         .and_then(|data| serde_json::from_value::<UserVerificationErrorDetails>(data).ok());
-    match details {
+    let message = match details {
         Some(UserVerificationErrorDetails::InvalidRequest {
             reason: UserVerificationInvalidRequestReason::InvalidParams,
         }) => "The local Codex binary could not verify this request.",
@@ -47,6 +54,12 @@ pub(super) fn verification_error_message(error: &TypedRequestError) -> &'static 
             reason: UserVerificationFailureReason::ServiceError,
         })
         | None => "The local Codex binary could not complete user verification.",
+    };
+    UserVerificationFailure {
+        message,
+        details: details.unwrap_or(UserVerificationErrorDetails::Failed {
+            reason: UserVerificationFailureReason::ServiceError,
+        }),
     }
 }
 

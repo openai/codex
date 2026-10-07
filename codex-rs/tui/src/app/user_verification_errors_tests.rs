@@ -13,7 +13,7 @@ fn user_verification_errors_use_typed_reasons_without_raw_provider_diagnostics()
         },
     };
     assert_eq!(
-        verification_error_message(&error),
+        verification_failure(&error).message,
         "No user-verification credential is available in the local Codex binary."
     );
     let malformed = TypedRequestError::Server {
@@ -27,7 +27,7 @@ fn user_verification_errors_use_typed_reasons_without_raw_provider_diagnostics()
         },
     };
     assert_eq!(
-        verification_error_message(&malformed),
+        verification_failure(&malformed).message,
         "The local Codex binary could not complete user verification."
     );
 }
@@ -52,6 +52,6 @@ fn unavailable_reasons_use_device_and_session_neutral_copy() {
                 data: Some(serde_json::json!({ "type": "unavailable", "reason": reason })),
             },
         };
-        assert_eq!(verification_error_message(&error), expected);
+        assert_eq!(verification_failure(&error).message, expected);
     }
 }

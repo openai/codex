@@ -110,7 +110,9 @@ async fn user_verification_remembers_cancellation_before_request_handler_runs() 
     assert_eq!(
         serde_json::to_value(response)?,
         json!({
-            "jsonrpc": "2.0", "id": 1, "result": {"action": "cancel"}
+            "jsonrpc": "2.0", "id": 1, "result": {
+                "action": "cancel", "_meta": {"openai/userVerificationReason": "interrupted"}
+            }
         })
     );
     assert!(
@@ -159,7 +161,12 @@ async fn user_verification_early_cancellation_storage_fails_closed_at_capacity()
         })))),
         RequestContext::new(RequestId::Number(5000), client.peer().clone()),
     ).await?;
-    assert_eq!(serde_json::to_value(response)?, json!({"action": "cancel"}));
+    assert_eq!(
+        serde_json::to_value(response)?,
+        json!({
+            "action": "cancel", "_meta": {"openai/userVerificationReason": "approvalUnavailable"}
+        })
+    );
     // Ordinary requests still work after verification fails closed.
     server
         .send(serde_json::from_value::<ServerJsonRpcMessage>(json!({

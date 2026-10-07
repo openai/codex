@@ -151,7 +151,14 @@ impl ElicitationClientService {
                 return Ok(ElicitationResponse {
                     action: ElicitationAction::Cancel,
                     content: None,
-                    meta: None,
+                    meta: user_verification.then(|| {
+                        if cancellations.saturated {
+                            crate::UserVerificationReason::ApprovalUnavailable
+                        } else {
+                            crate::UserVerificationReason::Interrupted
+                        }
+                        .into_meta()
+                    }),
                 });
             }
             cancellations.pending.insert(id.clone(), cancel_tx);
@@ -167,14 +174,14 @@ impl ElicitationClientService {
                 return Ok(ElicitationResponse {
                     action: ElicitationAction::Cancel,
                     content: None,
-                    meta: None,
+                    meta: user_verification.then(|| crate::UserVerificationReason::Interrupted.into_meta()),
                 });
             }
             _ = cancel_rx => {
                 return Ok(ElicitationResponse {
                     action: ElicitationAction::Cancel,
                     content: None,
-                    meta: None,
+                    meta: user_verification.then(|| crate::UserVerificationReason::Interrupted.into_meta()),
                 });
             }
             response = (self.send_elicitation)(id, request) => response,

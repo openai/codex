@@ -982,7 +982,7 @@ async fn user_verification_cancels_when_no_app_can_receive_the_request() {
         ElicitationResponse {
             action: ElicitationAction::Cancel,
             content: None,
-            meta: None
+            meta: Some(json!({"openai/userVerificationReason": "approvalUnavailable"}))
         },
     );
 }
@@ -1016,7 +1016,7 @@ async fn user_verification_cancels_for_an_event_receiver_without_host_activation
         ElicitationResponse {
             action: ElicitationAction::Cancel,
             content: None,
-            meta: None,
+            meta: Some(json!({"openai/userVerificationReason": "approvalUnavailable"})),
         },
     );
     assert!(events.try_recv().is_err());
@@ -1099,7 +1099,7 @@ async fn user_verification_rejects_attached_servers_even_if_they_use_the_plugin_
             ElicitationResponse {
                 action: ElicitationAction::Cancel,
                 content: None,
-                meta: None
+                meta: Some(json!({"openai/userVerificationReason": "approvalUnavailable"}))
             },
         );
         assert!(events.try_recv().is_err());

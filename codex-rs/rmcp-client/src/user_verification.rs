@@ -5,11 +5,44 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rmcp::model::CustomRequest;
 use rmcp::model::ElicitationAction;
 use serde::Deserialize;
+use serde::Serialize;
 
 use crate::rmcp_client::Elicitation;
 use crate::rmcp_client::ElicitationResponse;
 
 pub(crate) const MODE: &str = "openai/userVerification";
+
+/// Bounded diagnostic reason only; never a proof or an authorization decision.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UserVerificationReason {
+    UserCancelled,
+    UserDeclined,
+    CredentialMissing,
+    BiometricsUnavailable,
+    ProviderUnavailable,
+    AuthenticationFailed,
+    Timeout,
+    ProviderError,
+    ServiceError,
+    InvalidParams,
+    InvalidProof,
+    InvalidResponse,
+    ResponseError,
+    ResponseChannelClosed,
+    Interrupted,
+    ApprovalUnavailable,
+}
+
+impl UserVerificationReason {
+    pub fn from_meta(meta: Option<&serde_json::Value>) -> Option<Self> {
+        Self::deserialize(meta?.get("openai/userVerificationReason")?).ok()
+    }
+
+    pub fn into_meta(self) -> serde_json::Value {
+        serde_json::json!({"openai/userVerificationReason": self})
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -53,6 +86,7 @@ pub(crate) fn parse_request(request: CustomRequest) -> Result<Elicitation, rmcp:
 
 /// Accept only a bounded proof, and never return proof material for cancellation or rejection.
 pub(crate) fn validate_response(mut response: ElicitationResponse) -> ElicitationResponse {
+    let reason = UserVerificationReason::from_meta(response.meta.as_ref());
     response.meta = None;
     match response.action {
         ElicitationAction::Accept => {
@@ -69,9 +103,15 @@ pub(crate) fn validate_response(mut response: ElicitationResponse) -> Elicitatio
             }
             tracing::warn!("user-verification acceptance omitted a valid proof; cancelling");
             response.action = ElicitationAction::Cancel;
+            response.meta = Some(UserVerificationReason::InvalidProof.into_meta());
         }
-        ElicitationAction::Decline | ElicitationAction::Cancel => {}
-        _ => response.action = ElicitationAction::Cancel,
+        ElicitationAction::Decline | ElicitationAction::Cancel => {
+            response.meta = reason.map(UserVerificationReason::into_meta);
+        }
+        _ => {
+            response.action = ElicitationAction::Cancel;
+            response.meta = Some(UserVerificationReason::InvalidResponse.into_meta());
+        }
     }
     response.content = None;
     response

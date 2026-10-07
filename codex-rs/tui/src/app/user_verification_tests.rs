@@ -29,6 +29,11 @@ fn verification_request() -> ServerRequest {
 enum RpcScenario {
     Success,
     MethodNotFound,
+    VerificationError {
+        error_type: &'static str,
+        reason: &'static str,
+        expected_reason: &'static str,
+    },
     CancelWhilePending,
     RemoteWorkspace,
 }
@@ -54,6 +59,26 @@ async fn user_verification_controller_suppresses_a_late_proof_after_cancellation
 async fn user_verification_remote_workspace_dismisses_the_waiting_prompt() -> color_eyre::Result<()>
 {
     run_verification_rpc_scenario(RpcScenario::RemoteWorkspace).await
+}
+
+#[tokio::test]
+async fn user_verification_controller_preserves_typed_error_reasons_in_the_rpc_response()
+-> color_eyre::Result<()> {
+    for (error_type, reason, expected_reason) in [
+        ("invalidRequest", "invalidParams", "invalidParams"),
+        ("unavailable", "credentialMissing", "credentialMissing"),
+        ("cancelled", "userCancelled", "userCancelled"),
+        ("failed", "authenticationFailed", "authenticationFailed"),
+        ("unavailable", "private native failure", "serviceError"),
+    ] {
+        run_verification_rpc_scenario(RpcScenario::VerificationError {
+            error_type,
+            reason,
+            expected_reason,
+        })
+        .await?;
+    }
+    Ok(())
 }
 
 async fn run_verification_rpc_scenario(scenario: RpcScenario) -> color_eyre::Result<()> {
@@ -106,6 +131,13 @@ async fn run_verification_rpc_scenario(scenario: RpcScenario) -> color_eyre::Res
                             }
                             if scenario == RpcScenario::MethodNotFound {
                                 serde_json::json!({ "id": request.id, "error": { "code": -32601, "message": "unknown method: private server diagnostic" } })
+                            } else if let RpcScenario::VerificationError {
+                                error_type,
+                                reason,
+                                ..
+                            } = scenario
+                            {
+                                serde_json::json!({ "id": request.id, "error": { "code": -32603, "message": "private native provider diagnostic", "data": { "type": error_type, "reason": reason } } })
                             } else {
                                 serde_json::json!({ "id": request.id, "result": { "proof": proof } })
                             }
@@ -128,10 +160,22 @@ async fn run_verification_rpc_scenario(scenario: RpcScenario) -> color_eyre::Res
                     );
                     response_received = true;
                     assert_eq!(response.id, RequestId::Integer(7));
-                    let expected = if scenario == RpcScenario::Success {
-                        serde_json::json!({ "action": "accept", "content": proof, "_meta": null })
-                    } else {
-                        serde_json::json!({ "action": "cancel", "content": null, "_meta": null })
+                    let expected = match scenario {
+                        RpcScenario::Success => {
+                            serde_json::json!({ "action": "accept", "content": proof, "_meta": null })
+                        }
+                        _ => {
+                            let reason = match scenario {
+                                RpcScenario::MethodNotFound => "serviceError",
+                                RpcScenario::CancelWhilePending => "userCancelled",
+                                RpcScenario::RemoteWorkspace => "providerUnavailable",
+                                RpcScenario::VerificationError {
+                                    expected_reason, ..
+                                } => expected_reason,
+                                RpcScenario::Success => unreachable!(),
+                            };
+                            serde_json::json!({ "action": "cancel", "content": null, "_meta": {"openai/userVerificationReason": reason} })
+                        }
                     };
                     assert_eq!(response.result, expected);
                     if let Some(id) = pending_verification_id.take() {
@@ -217,7 +261,10 @@ async fn run_verification_rpc_scenario(scenario: RpcScenario) -> color_eyre::Res
         )
         .await?;
     }
-    if matches!(scenario, RpcScenario::Success | RpcScenario::MethodNotFound) {
+    if matches!(
+        scenario,
+        RpcScenario::Success | RpcScenario::MethodNotFound | RpcScenario::VerificationError { .. }
+    ) {
         let completion =
             tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), event_rx.recv())
                 .await?

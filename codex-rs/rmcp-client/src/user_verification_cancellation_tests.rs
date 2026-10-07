@@ -369,7 +369,10 @@ async fn cancelling_one_verification_leaves_the_mcp_connection_and_other_request
         anyhow::bail!("expected a cancellation response");
     };
     assert_eq!(cancel.id, first_id);
-    assert_eq!(serde_json::to_value(cancel.result)?["action"], "cancel");
+    assert_eq!(
+        serde_json::to_value(cancel.result)?,
+        json!({"action": "cancel", "_meta": {"openai/userVerificationReason": "interrupted"}})
+    );
 
     for request_id in [first_id, RequestId::Number(999)] {
         server
