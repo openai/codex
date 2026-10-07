@@ -1167,7 +1167,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::InstantInterrupt,
         key: "instant_interrupt",
         stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::CodeModeOnly,

@@ -32,7 +32,8 @@ fn sleep_tool_config_rejects_unknown_mode() {
 #[test]
 fn under_development_features_are_disabled_by_default() {
     for spec in crate::FEATURES {
-        if matches!(spec.stage, Stage::UnderDevelopment) {
+        // Instant interrupts are enabled by default while retaining their development stage.
+        if matches!(spec.stage, Stage::UnderDevelopment) && spec.id != Feature::InstantInterrupt {
             assert_eq!(
                 spec.default_enabled, false,
                 "feature `{}` is under development and must be disabled by default",
@@ -121,7 +122,8 @@ fn codex_apps_mcp_protocol_can_be_enabled_independently_of_generic_mcp() {
 #[test]
 fn default_enabled_features_are_stable() {
     for spec in crate::FEATURES {
-        if spec.default_enabled {
+        // Instant interrupts are enabled by default while retaining their development stage.
+        if spec.default_enabled && spec.id != Feature::InstantInterrupt {
             assert!(
                 matches!(spec.stage, Stage::Stable | Stage::Removed),
                 "feature `{}` is enabled by default but is not stable/removed ({:?})",

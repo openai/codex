@@ -20,7 +20,7 @@ def test_turn_steer_adds_follow_up_input(tmp_path) -> None:
         )
 
         with Codex(config=harness.app_server_config()) as codex:
-            thread = codex.thread_start()
+            thread = codex.thread_start(config={"features.instant_interrupt": False})
             turn = thread.turn("Start a steerable turn.")
             harness.responses.wait_for_requests(1)
             steer = turn.steer("Use this steering input.")
