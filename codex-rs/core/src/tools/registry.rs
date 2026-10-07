@@ -72,9 +72,11 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
 
     /// Returns lazily cached, augmented Code Mode definitions owned by this runtime.
     /// Input and output schemas must be cleared after rendering their declarations.
+    /// Return None when the requested rendering inputs differ from the cached inputs.
     fn cached_code_mode_definitions(
         &self,
         _code_mode_input_schema_max_bytes: Option<usize>,
+        _tool_description_first: bool,
     ) -> Option<&[codex_code_mode::ToolDefinition]> {
         None
     }

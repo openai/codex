@@ -90,6 +90,7 @@ pub fn tool_spec_to_code_mode_tool_definition(spec: &ToolSpec) -> Option<CodeMod
 pub fn collect_code_mode_tool_definitions<'a>(
     specs: impl IntoIterator<Item = &'a ToolSpec>,
     code_mode_input_schema_max_bytes: Option<usize>,
+    tool_description_first: bool,
 ) -> Vec<CodeModeToolDefinition> {
     let mut tool_definitions = specs
         .into_iter()
@@ -100,8 +101,11 @@ pub fn collect_code_mode_tool_definitions<'a>(
                 let namespace_description = namespace.description.trim();
                 if !namespace_description.is_empty() {
                     for definition in &mut definitions {
-                        definition.description =
-                            format!("{namespace_description}\n\n{}", definition.description);
+                        definition.description = if tool_description_first {
+                            format!("{}\n\n{namespace_description}", definition.description)
+                        } else {
+                            format!("{namespace_description}\n\n{}", definition.description)
+                        };
                     }
                 }
             }

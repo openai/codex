@@ -58,10 +58,12 @@ fn code_mode_materializes_mcp_output_schemas() {
         super::collect_code_mode_tool_definitions(
             [&ToolSpec::Function(parsed)],
             /*code_mode_input_schema_max_bytes*/ None,
+            /*tool_description_first*/ false,
         ),
         super::collect_code_mode_tool_definitions(
             [&ToolSpec::Function(eager)],
             /*code_mode_input_schema_max_bytes*/ None,
+            /*tool_description_first*/ false,
         ),
     );
 }
