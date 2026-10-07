@@ -73,6 +73,13 @@ async fn sandbox_starts_with_multiple_denied_files(rules: DeniedFileRules) {
         FileSystemSandboxEntry::new(workspace.clone().into(), FileSystemAccessMode::Write),
     ];
     let mut env = create_env_from_core_vars();
+    // User config must not suppress the files used to construct deny masks.
+    let rg_config = workspace.join("ripgrep.conf");
+    std::fs::write(rg_config.as_path(), "--quiet\n").expect("write ripgrep config");
+    env.insert(
+        "RIPGREP_CONFIG_PATH".to_string(),
+        rg_config.to_str().expect("UTF-8 config path").to_string(),
+    );
     let rg_fixture = if use_controlled_rg_path {
         let fixture = tempfile::tempdir_in(temp.path().parent().expect("workspace parent"))
             .expect("rg fixture");
@@ -151,6 +158,17 @@ printf '%s\000' "$CODEX_TEST_DENIED_PATH_0" "$CODEX_TEST_DENIED_PATH_1" "$CODEX_
         &FileSystemSandboxPolicy::restricted(entries),
         NetworkSandboxPolicy::Enabled,
     );
+    if matches!(rules, DeniedFileRules::Globs)
+        && codex_sandboxing::find_pre_sandbox_executable_in_path(
+            "rg",
+            &permission_profile.file_system_sandbox_policy(),
+            workspace.as_path(),
+        )
+        .is_none()
+    {
+        eprintln!("skipping ripgrep config test: no protected rg is available");
+        return;
+    }
     let output = run_cmd_result_with_permission_profile_for_cwd(
         &[
             "/bin/sh",

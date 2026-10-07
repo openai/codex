@@ -1019,6 +1019,7 @@ fn ripgrep_files(
     // case, not a sandbox construction error.
     let mut command = Command::new(rg_path);
     command
+        .arg("--no-config")
         .arg("--files")
         .arg("--hidden")
         .arg("--no-ignore")
