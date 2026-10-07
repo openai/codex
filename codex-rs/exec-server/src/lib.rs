@@ -41,6 +41,12 @@ mod rpc;
 mod rpc_server_requests;
 mod rpc_timing;
 mod runtime_options;
+#[cfg(target_os = "windows")]
+#[expect(
+    dead_code,
+    reason = "The integrity runner is added later in this stack."
+)]
+mod sandbox_integrity;
 mod sandbox_selection;
 mod sandboxed_file_open;
 mod sandboxed_file_system;

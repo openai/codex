@@ -70,25 +70,11 @@ pub enum PolicyError {
     CommandLine(#[from] CommandLineError),
 }
 
-pub(super) fn build_request(
-    command: &MxcCommand,
-    command_cwd: &Path,
-    env: Vec<String>,
-    volume_roots: &[PathBuf],
-    platform_read_roots: &[PathBuf],
-) -> Result<ExecutionRequest, PolicyError> {
-    if command.command.is_empty() {
-        return Err(PolicyError::EmptyCommand);
-    }
-    let permissions = &command.permissions;
-    let cwd = &command.sandbox_policy_cwd;
-    if !cwd.is_absolute() {
-        return Err(PolicyError::RelativePolicyCwd);
-    }
-    if !command_cwd.is_absolute() {
-        return Err(PolicyError::RelativeCommandCwd);
-    }
-    let mut policy = permissions.file_system_sandbox_policy();
+/// Bind MXC's temporary-directory symbols using the filtered command environment.
+pub(super) fn materialize_temporary_paths(
+    mut policy: FileSystemSandboxPolicy,
+    env: &[String],
+) -> std::io::Result<FileSystemSandboxPolicy> {
     // Resolve Windows temporary directories from the filtered command
     // environment, including case-insensitive names.
     let mut temp_values = HashMap::new();
@@ -126,6 +112,28 @@ pub(super) fn build_request(
             }
         })
         .collect();
+    Ok(policy)
+}
+
+pub(super) fn build_request(
+    command: &MxcCommand,
+    command_cwd: &Path,
+    env: Vec<String>,
+    volume_roots: &[PathBuf],
+    platform_read_roots: &[PathBuf],
+) -> Result<ExecutionRequest, PolicyError> {
+    if command.command.is_empty() {
+        return Err(PolicyError::EmptyCommand);
+    }
+    let permissions = &command.permissions;
+    let cwd = &command.sandbox_policy_cwd;
+    if !cwd.is_absolute() {
+        return Err(PolicyError::RelativePolicyCwd);
+    }
+    if !command_cwd.is_absolute() {
+        return Err(PolicyError::RelativeCommandCwd);
+    }
+    let policy = materialize_temporary_paths(permissions.file_system_sandbox_policy(), &env)?;
     let full_disk_write = policy.has_full_disk_write_access();
     let volumes = volume_roots
         .iter()

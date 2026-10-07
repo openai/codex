@@ -48,23 +48,8 @@ pub(super) fn run() -> Result<i32> {
         .map_err(|_| anyhow::anyhow!("invalid MXC launcher request"))?;
     // The transport itself proves this is an explicit child environment; it
     // may intentionally contain no variables once launcher state is removed.
-    let mask = unsafe { GetLogicalDrives() };
-    ensure!(
-        mask != 0,
-        "cannot enumerate Windows volumes: {}",
-        std::io::Error::last_os_error()
-    );
-    let mut volumes: Vec<PathBuf> = (0..26)
-        .filter(|index| mask & (1 << index) != 0)
-        .map(|index| PathBuf::from(format!("{}:\\", (b'A' + index as u8) as char)))
-        .collect();
     let command_cwd = std::env::current_dir()?;
-    // An explicit UNC cwd has no drive letter and is absent from GetLogicalDrives.
-    for cwd in [&command.sandbox_policy_cwd, &command_cwd] {
-        if let Some(root) = cwd.ancestors().last() {
-            volumes.push(root.to_path_buf());
-        }
-    }
+    let volumes = volume_roots(&command.sandbox_policy_cwd, &command_cwd)?;
     let request = crate::policy::build_request(
         &command,
         &command_cwd,
@@ -75,6 +60,29 @@ pub(super) fn run() -> Result<i32> {
         &platform_read_roots()?,
     )?;
     crate::native::launch(&request)
+}
+
+pub(super) fn volume_roots(
+    policy_cwd: &std::path::Path,
+    command_cwd: &std::path::Path,
+) -> Result<Vec<PathBuf>> {
+    let mask = unsafe { GetLogicalDrives() };
+    ensure!(
+        mask != 0,
+        "cannot enumerate Windows volumes: {}",
+        std::io::Error::last_os_error()
+    );
+    let mut volumes: Vec<PathBuf> = (0..26)
+        .filter(|index| mask & (1 << index) != 0)
+        .map(|index| PathBuf::from(format!("{}:\\", (b'A' + index as u8) as char)))
+        .collect();
+    // An explicit UNC cwd has no drive letter and is absent from GetLogicalDrives.
+    for cwd in [policy_cwd, command_cwd] {
+        if let Some(root) = cwd.ancestors().last() {
+            volumes.push(root.to_path_buf());
+        }
+    }
+    Ok(volumes)
 }
 
 fn platform_read_roots() -> Result<Vec<PathBuf>> {

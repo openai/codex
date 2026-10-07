@@ -3214,6 +3214,7 @@ dependencies = [
  "codex-file-system",
  "codex-file-watcher",
  "codex-http-client",
+ "codex-mxc-sandbox",
  "codex-network-proxy",
  "codex-otel",
  "codex-protocol",
@@ -3260,6 +3261,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "which 8.0.0",
  "windows-sys 0.61.2",
  "wiremock",
 ]

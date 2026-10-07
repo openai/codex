@@ -80,6 +80,8 @@ rustix = { workspace = true, features = ["fs"] }
 tempfile = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
+codex-mxc-sandbox = { workspace = true }
+which = { workspace = true }
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
