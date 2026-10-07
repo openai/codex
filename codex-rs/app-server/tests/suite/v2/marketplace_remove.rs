@@ -123,15 +123,11 @@ async fn marketplace_remove_rejects_unknown_marketplace() -> Result<()> {
     Ok(())
 }
 
-#[test_case(false; "project only")]
-#[test_case(true; "project and user")]
 #[tokio::test]
-async fn marketplace_remove_preserves_project_marketplace(user_entry: bool) -> Result<()> {
+async fn marketplace_remove_ignores_startup_project_config() -> Result<()> {
     let codex_home = TempDir::new()?;
-    if user_entry {
-        record_user_marketplace(codex_home.path(), "debug", &configured_marketplace_update())?;
-    }
-    // TestAppServer starts in CODEX_HOME, so make it a trusted project as well.
+    // TestAppServer starts in CODEX_HOME, so put project config there to verify
+    // that the global marketplace RPC does not use it.
     std::fs::create_dir_all(codex_home.path().join(".git"))?;
     std::fs::create_dir_all(codex_home.path().join(".codex"))?;
     let project_config_path = codex_home.path().join(".codex/config.toml");
@@ -141,35 +137,26 @@ async fn marketplace_remove_preserves_project_marketplace(user_entry: bool) -> R
     write_installed_marketplace(codex_home.path(), "debug")?;
     let snapshot_path =
         marketplace_install_root(codex_home.path()).join("debug/.agents/plugins/marketplace.json");
-    let user_config_path = codex_home.path().join("config.toml");
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build_initialized()
         .await?;
-    let user_config = std::fs::read_to_string(&user_config_path)?;
-    let request_id = mcp
-        .send_marketplace_remove_request(MarketplaceRemoveParams {
-            marketplace_name: "debug".to_string(),
+    let response: MarketplaceRemoveResponse = mcp
+        .request(|request_id| ClientRequest::MarketplaceRemove {
+            request_id,
+            params: MarketplaceRemoveParams {
+                marketplace_name: "debug".to_string(),
+            },
         })
         .await?;
-    let err = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
-    )
-    .await??;
 
-    assert_eq!(err.error.code, -32600);
-    assert!(
-        err.error
-            .message
-            .starts_with("marketplace `debug` is configured in project (")
-    );
-    assert_eq!(std::fs::read_to_string(user_config_path)?, user_config);
+    assert_eq!(response.marketplace_name, "debug");
+    assert!(response.installed_root.is_some());
     assert_eq!(
         std::fs::read_to_string(project_config_path)?,
         project_config
     );
-    assert_eq!(std::fs::read_to_string(snapshot_path)?, "{}");
+    assert!(!snapshot_path.exists());
     Ok(())
 }

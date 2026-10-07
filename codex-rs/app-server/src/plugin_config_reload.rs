@@ -17,6 +17,16 @@ pub(crate) fn for_cwd(manager: ConfigManager, cwd: AbsolutePathBuf) -> ConfigLay
     Arc::new(move || runtime.block_on(manager.load_config_layers_for_cwd(cwd.clone())))
 }
 
+/// Reloads config without deriving project context from a process cwd.
+pub(crate) fn global(manager: ConfigManager) -> ConfigLayerReload {
+    let runtime = tokio::runtime::Handle::current();
+    Arc::new(move || {
+        runtime
+            .block_on(manager.load_non_project_config())
+            .map(|config| config.config_layer_stack)
+    })
+}
+
 pub(crate) fn defaults(manager: ConfigManager) -> ConfigLayerReload {
     let runtime = tokio::runtime::Handle::current();
     Arc::new(move || {

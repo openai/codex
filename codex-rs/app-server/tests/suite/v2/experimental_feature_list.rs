@@ -145,12 +145,16 @@ async fn experimental_feature_list_resolves_thread_project_config() -> Result<()
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     let workspace = TempDir::new()?;
+    let codex_home_key = codex_home.path().to_string_lossy().replace('\\', "\\\\");
     let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
     MockResponsesConfig::new(&server.uri())
         .with_extra_config(&format!(
-            "[projects.\"{workspace_key}\"]\ntrust_level = \"trusted\""
+            "[projects.\"{codex_home_key}\"]\ntrust_level = \"trusted\"\n\
+             [projects.\"{workspace_key}\"]\ntrust_level = \"trusted\""
         ))
         .write(codex_home.path())?;
+    #[cfg(unix)]
+    let config_toml = std::fs::read(codex_home.path().join("config.toml"))?;
     let project_config_dir = workspace.path().join(".codex");
     std::fs::create_dir_all(&project_config_dir)?;
     std::fs::write(
@@ -159,12 +163,42 @@ async fn experimental_feature_list_resolves_thread_project_config() -> Result<()
 memories = true
 "#,
     )?;
+    let launch_project_config_dir = codex_home.path().join(".codex");
+    std::fs::create_dir(&launch_project_config_dir)?;
+    std::fs::copy(
+        project_config_dir.join("config.toml"),
+        launch_project_config_dir.join("config.toml"),
+    )?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_managed_config()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
+
+    #[cfg(unix)]
+    {
+        let deleted_launch_dir = workspace.path().join("deleted-launch");
+        std::fs::rename(codex_home.path(), &deleted_launch_dir)?;
+        std::fs::create_dir(codex_home.path())?;
+        std::fs::write(codex_home.path().join("config.toml"), config_toml)?;
+        std::fs::create_dir(&launch_project_config_dir)?;
+        std::fs::copy(
+            project_config_dir.join("config.toml"),
+            launch_project_config_dir.join("config.toml"),
+        )?;
+        std::fs::remove_dir_all(deleted_launch_dir)?;
+    }
+    let request_id = mcp
+        .send_experimental_feature_list_request(ExperimentalFeatureListParams::default())
+        .await?;
+    let global = read_response::<ExperimentalFeatureListResponse>(&mut mcp, request_id).await?;
+    let global_memories = global
+        .data
+        .iter()
+        .find(|feature| feature.name == "memories")
+        .expect("memories feature should be present");
+    assert!(!global_memories.enabled);
 
     let thread_start_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
