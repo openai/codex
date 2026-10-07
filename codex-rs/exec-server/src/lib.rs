@@ -41,7 +41,7 @@ mod rpc;
 mod rpc_server_requests;
 mod rpc_timing;
 mod runtime_options;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[expect(
     dead_code,
     reason = "The integrity runner is added later in this stack."
