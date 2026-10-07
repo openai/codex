@@ -1531,6 +1531,10 @@ impl Session {
                 ),
             );
             state.base_instructions_provenance = base_instructions_provenance.clone();
+            // Restore a provided effort baseline before startup prewarm can establish a new one.
+            if let Some(pin) = thread_extension_data.remove::<ReasoningEffortPin>() {
+                state.reasoning_effort_pin = pin.as_ref().clone();
+            }
             state.active_disabled_plugin_ids = session_configuration.disabled_plugin_ids.clone();
             let managed_network_requirements_configured = config
                 .config_layer_stack

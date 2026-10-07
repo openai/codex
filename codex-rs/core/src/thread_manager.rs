@@ -9,6 +9,7 @@ pub use shutdown::AgentTreeShutdownReport;
 pub(crate) use shutdown::thread_store_error_kind;
 
 use crate::CodexAppsToolsCache;
+use crate::CodexThreadSettingsOverrides;
 use crate::agent::LocalAgentControl;
 use crate::agent::api::AgentConfigUpdate;
 use crate::agent::api::AgentControl;
@@ -1434,6 +1435,36 @@ impl ThreadManager {
             .timed_out
             .sort_by_key(std::string::ToString::to_string);
         report
+    }
+
+    /// Captures the parent's current settings for a persisted-history fork.
+    /// Apply the returned settings to the new thread before starting its first turn.
+    pub async fn fork_options_from_parent(
+        &self,
+        source_thread_id: ThreadId,
+    ) -> CodexResult<(StartThreadOptions, CodexThreadSettingsOverrides)> {
+        let parent = self.get_thread(source_thread_id).await?;
+        let (config, settings, windows_sandbox_level, environments, reasoning_effort_pin) =
+            parent.session.fork_config().await;
+        let mut thread_extension_init = ExtensionDataInit::default();
+        thread_extension_init.insert(reasoning_effort_pin);
+        Ok((
+            StartThreadOptions {
+                history_mode: Some(settings.history_mode),
+                environments: Some(settings.environments.into_requests().environment_requests),
+                inherited_environments: Some(environments),
+                client_mcp_extensions: parent.client_mcp_extensions(),
+                disabled_plugin_ids: Some(settings.disabled_plugin_ids),
+                thread_extension_init,
+                turn_extension_init: settings.turn_extension_init,
+                ..StartThreadOptions::new(config)
+            },
+            CodexThreadSettingsOverrides {
+                collaboration_mode: Some(settings.collaboration_mode),
+                windows_sandbox_level: Some(windows_sandbox_level),
+                ..Default::default()
+            },
+        ))
     }
 
     /// Fork a legacy thread by snapshotting its full rollout history according to

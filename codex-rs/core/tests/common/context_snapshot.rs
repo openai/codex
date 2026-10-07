@@ -691,6 +691,10 @@ fn render_item(
                 .unwrap_or_else(|| "<NO_COMMAND>".to_string());
             format!("{index:02}:local_shell_call:{command}")
         }
+        "configuration_update" => {
+            let reasoning = normalizer.json(&item["reasoning"]);
+            format!("{index:02}:configuration_update:reasoning={reasoning}")
+        }
         "reasoning" => {
             let summary = item
                 .get("summary")

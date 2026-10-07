@@ -1033,7 +1033,7 @@ async fn plugin_mention_does_not_suppress_same_name_skill() {
         short_description: None,
         interface: None,
         dependencies: None,
-        path: skill_path.clone(),
+        path: skill_path.clone().into(),
         scope: crate::test_support::skill_scope_user(),
         enabled: true,
         plugin_id: None,

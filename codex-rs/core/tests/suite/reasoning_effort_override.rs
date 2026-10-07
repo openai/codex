@@ -77,6 +77,209 @@ fn message(role: &str, text: &str) -> Value {
     })
 }
 
+pub(super) async fn prediction_fork_requests() -> anyhow::Result<Vec<ResponsesRequest>> {
+    let server = responses::start_mock_server().await;
+    let mut mocks = Vec::new();
+    for id in ["parent-high", "parent-low", "child-medium", "parent-medium"] {
+        mocks.push(
+            responses::mount_sse_once(
+                &server,
+                responses::sse(vec![
+                    responses::ev_reasoning_item(
+                        &format!("reasoning-{id}"),
+                        &["Keep the existing context."],
+                        &["Continue from the previous response."],
+                    ),
+                    responses::ev_assistant_message(&format!("answer-{id}"), "Ready to continue."),
+                    responses::ev_completed(id),
+                ]),
+            )
+            .await,
+        );
+    }
+    let mut test = override_builder()
+        .with_config(|config| {
+            config.workspace_roots = vec![config.cwd.clone()];
+            config.model_reasoning_effort = Some(ReasoningEffort::High);
+            // The child's first turn must preserve the pin even without startup prewarm.
+            config.model_provider.supports_websockets = false;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_text_turn("first parent turn").await?;
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            effort: Some(Some(ReasoningEffort::Low)),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.submit_text_turn("second parent turn").await?;
+    let parent = Arc::clone(&test.codex);
+    parent.flush_rollout().await?;
+    let (mut options, settings) = test
+        .thread_manager
+        .fork_options_from_parent(test.session_configured.thread_id)
+        .await?;
+    options.config.ephemeral = true;
+    options.thread_source = Some(ThreadSource::Feature("composer_predictions".to_string()));
+    let child = test
+        .thread_manager
+        .fork_legacy_thread(
+            ForkSnapshot::Interrupted,
+            options,
+            parent.rollout_path().expect("parent rollout path"),
+        )
+        .await?;
+    child.thread.restore_thread_settings(settings).await?;
+    assert_eq!(
+        child.thread.config_snapshot().await.collaboration_mode,
+        parent.config_snapshot().await.collaboration_mode,
+    );
+    for thread in [child.thread, parent] {
+        test.codex = thread;
+        submit_thread_settings(
+            &test.codex,
+            ThreadSettingsOverrides {
+                effort: Some(Some(ReasoningEffort::Medium)),
+                ..Default::default()
+            },
+        )
+        .await?;
+        test.submit_text_turn("continue identically").await?;
+    }
+    let requests = mocks
+        .iter()
+        .map(responses::ResponseMock::single_request)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.body_json()["reasoning"]["effort"].clone())
+            .collect::<Vec<_>>(),
+        vec![Value::from("high"); 4],
+    );
+    assert_eq!(
+        effort_updates(&requests[2]),
+        vec![
+            effort_update(ReasoningEffort::High),
+            effort_update(ReasoningEffort::Low),
+            effort_update(ReasoningEffort::Medium),
+        ],
+    );
+    let comparable = |index: usize| {
+        let mut body = requests[index].body_json();
+        body.as_object_mut()
+            .expect("request body")
+            .remove("client_metadata");
+        responses::strip_response_item_ids_from_json(responses::strip_metadata_from_json(body))
+    };
+    assert_eq!(comparable(2), comparable(3));
+    Ok(requests)
+}
+
+#[test_case(Some(ReasoningEffort::Low); "selected effort")]
+#[test_case(None; "model default")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prediction_fork_pins_effort_from_parent_with_overrides_disabled(
+    parent_effort: Option<ReasoningEffort>,
+) -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let mock = responses::mount_sse_sequence(
+        &server,
+        ["parent-high", "parent-low", "child-medium"]
+            .into_iter()
+            .map(|id| responses::sse(vec![responses::ev_completed(id)]))
+            .collect(),
+    )
+    .await;
+    let mut test = test_codex()
+        .with_model_info_override("gpt-5.4", |model| {
+            model.use_responses_lite = true;
+            model.supports_reasoning_effort_updates = true;
+            model.default_reasoning_level = Some(ReasoningEffort::Low);
+        })
+        .with_config(|config| {
+            config
+                .features
+                .disable(Feature::ReasoningEffortOverride)
+                .expect("disable reasoning effort overrides");
+            config.model_reasoning_effort = Some(ReasoningEffort::High);
+            config.model_provider.supports_websockets = false;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_text_turn("first parent turn").await?;
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            effort: Some(parent_effort),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.submit_text_turn("second parent turn").await?;
+    test.codex.flush_rollout().await?;
+    let (mut options, settings) = test
+        .thread_manager
+        .fork_options_from_parent(test.session_configured.thread_id)
+        .await?;
+    options.config.ephemeral = true;
+    options
+        .config
+        .features
+        .enable(Feature::ReasoningEffortOverride)?;
+    options.thread_source = Some(ThreadSource::Feature("composer_predictions".to_string()));
+    let child = test
+        .thread_manager
+        .fork_legacy_thread(
+            ForkSnapshot::Interrupted,
+            options,
+            test.codex.rollout_path().expect("parent rollout path"),
+        )
+        .await?;
+    child.thread.restore_thread_settings(settings).await?;
+    test.codex = child.thread;
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            effort: Some(Some(ReasoningEffort::Medium)),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.submit_text_turn("child turn").await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].body_json()["reasoning"]["effort"], "high");
+    assert_eq!(requests[1].body_json()["reasoning"]["effort"], "low");
+    assert!(effort_updates(&requests[1]).is_empty());
+    assert_eq!(
+        effort_updates(&requests[2]),
+        vec![effort_update(ReasoningEffort::Medium)],
+    );
+    let comparable = |index: usize| {
+        let mut body = requests[index].body_json();
+        body.as_object_mut()
+            .expect("request body")
+            .remove("client_metadata");
+        responses::strip_response_item_ids_from_json(responses::strip_metadata_from_json(body))
+    };
+    let parent = comparable(1);
+    let mut child = comparable(2);
+    let child_input = child["input"].as_array_mut().expect("child input");
+    assert_eq!(
+        child_input.pop(),
+        Some(effort_update(ReasoningEffort::Medium))
+    );
+    assert_eq!(child_input.pop(), Some(message("user", "child turn")));
+    assert_eq!(child, parent);
+    Ok(())
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WorkerOverrides {
     Enabled,

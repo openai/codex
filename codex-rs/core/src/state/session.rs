@@ -30,8 +30,9 @@ use codex_protocol::protocol::TurnContextItem;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
-/// Runtime request effort, initially unset and established by prewarm or sampling.
+/// Runtime request effort, inherited from a parent or established by prewarm or sampling.
 /// Successful compaction allows a fresh baseline without an override.
+#[derive(Clone)]
 pub(crate) enum ReasoningEffortPin {
     Unset,
     Compacted,

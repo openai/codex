@@ -10,11 +10,14 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use app_test_support::write_models_cache;
 use codex_app_server_protocol::ActivePermissionProfile;
 use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::DeprecationNoticeNotification;
+use codex_app_server_protocol::DynamicToolFunctionSpec;
+use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -55,13 +58,18 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_core::test_support::all_model_presets;
 use codex_features::Feature;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -80,6 +88,7 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -2697,5 +2706,298 @@ async fn pathless_ephemeral_thread_rejects_codex_home_path_after_reload() -> Res
         fork_err.error.message
     );
 
+    Ok(())
+}
+
+#[test_case(ThreadHistoryMode::Legacy; "legacy")]
+#[test_case(ThreadHistoryMode::Paginated; "paginated")]
+#[tokio::test]
+async fn inheriting_fork_preserves_parent_config(history_mode: ThreadHistoryMode) -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_reasoning_item("reasoning", &["A summary"], &["Private reasoning"]),
+                responses::ev_assistant_message("answer", "Done"),
+                responses::ev_completed("initial"),
+            ]),
+            responses::sse(vec![responses::ev_completed("child")]),
+            responses::sse(vec![responses::ev_completed("parent")]),
+        ],
+    )
+    .await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    write_models_cache(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let model = all_model_presets()
+        .iter()
+        .find(|model| model.show_in_picker && !model.service_tiers.is_empty())
+        .expect("a bundled model supports service tiers");
+    let tier = &model.service_tiers[0].id;
+    let parent = mcp
+        .start_thread(ThreadStartParams {
+            history_mode: Some(history_mode),
+            base_instructions: Some("Retain these base instructions.".into()),
+            developer_instructions: Some("Retain this system policy context.".into()),
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "parent_tool".into(),
+                description: "The parent's client-provided tool description.".into(),
+                input_schema: json!({"type": "object", "properties": {}}),
+                defer_loading: false,
+            })]),
+            ..Default::default()
+        })
+        .await?;
+    mcp.start_turn_and_wait_for_completion(TurnStartParams {
+        thread_id: parent.thread.id.clone(),
+        input: vec![UserInput::Text {
+            text: "Initial turn".into(),
+            text_elements: vec![],
+        }],
+        service_tier: Some(Some(tier.clone())),
+        collaboration_mode: Some(CollaborationMode {
+            mode: ModeKind::Plan,
+            settings: Settings {
+                model: model.id.clone(),
+                reasoning_effort: Some(ReasoningEffort::High),
+                developer_instructions: Some("Keep the parent's planning instructions.".into()),
+            },
+        }),
+        disabled_plugin_ids: Some(vec!["unused@plugin".into()]),
+        ..Default::default()
+    })
+    .await?;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: parent.thread.id.clone(),
+            experimental_prediction_mode: true,
+            ephemeral: true,
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let child: ThreadForkResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(fork_id)).await??;
+    assert_eq!(
+        (
+            &child.model,
+            &child.reasoning_effort,
+            &child.service_tier,
+            &child.disabled_plugin_ids
+        ),
+        (
+            &model.id,
+            &Some(ReasoningEffort::High),
+            &Some(tier.clone()),
+            &vec!["unused@plugin".to_string()]
+        ),
+    );
+    assert!(child.thread.path.is_none());
+    for id in [&child.thread.id, &parent.thread.id] {
+        mcp.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: id.clone(),
+            input: vec![UserInput::Text {
+                text: "Continue identically".into(),
+                text_elements: vec![],
+            }],
+            ..Default::default()
+        })
+        .await?;
+    }
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 3);
+    let comparable = |index: usize| {
+        let body = requests[index].body_json();
+        responses::strip_response_item_ids_from_json(json!({
+            "input": body["input"],
+            "instructions": body["instructions"],
+            "tools": body["tools"],
+            "model": body["model"],
+            "reasoning": body["reasoning"],
+            "service_tier": body["service_tier"],
+
+        }))
+    };
+    assert_eq!(comparable(1), comparable(2));
+    assert_eq!(
+        requests[1].body_json()["prompt_cache_key"],
+        requests[2].body_json()["prompt_cache_key"]
+    );
+    assert!(
+        requests[1].body_json()["tools"]
+            .to_string()
+            .contains("parent_tool")
+    );
+    Ok(())
+}
+
+#[test_case(ThreadHistoryMode::Legacy, false; "fresh persistent legacy")]
+#[test_case(ThreadHistoryMode::Legacy, true; "ephemeral legacy")]
+#[test_case(ThreadHistoryMode::Paginated, false; "fresh persistent paginated")]
+#[test_case(ThreadHistoryMode::Paginated, true; "ephemeral paginated")]
+#[tokio::test]
+async fn inheriting_fork_requires_persisted_parent(
+    history_mode: ThreadHistoryMode,
+    ephemeral: bool,
+) -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    write_models_cache(codex_home.path()).await?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let parent = mcp
+        .start_thread(ThreadStartParams {
+            history_mode: Some(history_mode),
+            ephemeral: Some(ephemeral),
+            ..Default::default()
+        })
+        .await?;
+    if ephemeral {
+        mcp.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: parent.thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "Complete an ephemeral turn".into(),
+                text_elements: vec![],
+            }],
+            ..Default::default()
+        })
+        .await?;
+    }
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: parent.thread.id.clone(),
+            experimental_prediction_mode: true,
+            ephemeral: true,
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    assert!(
+        error
+            .error
+            .message
+            .contains("no rollout found for thread id"),
+        "unexpected fork error: {}",
+        error.error.message
+    );
+    if let Some(path) = parent.thread.path {
+        assert!(!path.exists(), "forking should not materialize the parent");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn inheriting_fork_requires_loaded_parent() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id,
+            experimental_prediction_mode: true,
+            ephemeral: true,
+            ..Default::default()
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    assert_eq!(
+        error.error.message,
+        "`experimentalPredictionMode` requires a loaded parent",
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn inheriting_fork_requires_ephemeral_child() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: "not-loaded".into(),
+            experimental_prediction_mode: true,
+            ..Default::default()
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    assert_eq!(
+        error.error.message,
+        "`experimentalPredictionMode` requires `ephemeral: true`",
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn inheriting_fork_rejects_configuration_overrides() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    for (key, value) in [
+        ("model", json!("other-model")),
+        ("modelProvider", json!("other-provider")),
+        ("serviceTier", Value::Null),
+        ("cwd", json!(codex_home.path())),
+        ("runtimeWorkspaceRoots", json!([])),
+        ("approvalPolicy", json!("never")),
+        ("approvalsReviewer", json!("user")),
+        ("sandbox", json!("read-only")),
+        ("permissions", json!(":read-only")),
+        ("baseInstructions", json!("override")),
+        ("developerInstructions", json!("override")),
+        ("config", json!({"model": "other-model"})),
+        ("config", json!({"model_reasoning_effort": "low"})),
+    ] {
+        let mut params = json!({
+            "threadId": "not-loaded", "experimentalPredictionMode": true, "ephemeral": true,
+        });
+        params[key] = value;
+        let request = mcp.send_raw_request("thread/fork", Some(params)).await?;
+        let error = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_error_message(RequestId::Integer(request)),
+        )
+        .await??;
+        assert_eq!(
+            error.error.message,
+            "`experimentalPredictionMode` cannot be combined with configuration overrides",
+            "override: {key}"
+        );
+    }
     Ok(())
 }
