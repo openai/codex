@@ -60,8 +60,8 @@ jobs:
 
   build:
     needs: tag-check
-    name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
-    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
+    runs-on: ${{ matrix.runner }}
     # Linux releases also build the native voice runtime in this job.
     timeout-minutes: 120
     permissions:
@@ -71,17 +71,23 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      # macOS release packages archive packed dSYM bundles before stripping.
+      # Preserve Cargo names while teams opt into the additional Bazel artifacts.
+      ARTIFACT_SUFFIX: ${{ matrix.build-system == 'bazel' && '-bazel' || '' }}
+      # Archive packed macOS dSYMs before stripping the Cargo binaries.
       CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: ${{ contains(matrix.target, 'apple-darwin') && 'packed' || 'off' }}
-      # Use the git CLI instead of Cargo's libgit2 path for git dependencies.
-      # macOS release runners have intermittently failed to fetch nested
-      # submodules through SecureTransport/libgit2, especially libwebrtc's
-      # libyuv submodule from chromium.googlesource.com.
+      # The git CLI reliably fetches nested native-library submodules on macOS.
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
     strategy:
       fail-fast: false
       matrix:
+        build-system: [cargo, bazel]
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+        bundle: [primary, app-server]
         include:
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
@@ -173,11 +179,12 @@ jobs:
           set -euo pipefail
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils pkg-config libcap-dev
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.build-system == 'cargo' && matrix.target || '' }}
 
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+      - if: ${{ matrix.build-system == 'cargo' && contains(matrix.target, 'linux') }}
         name: Use hermetic Cargo home (musl)
         shell: bash
         run: |
@@ -188,20 +195,20 @@ jobs:
           echo "${cargo_home}/bin" >> "$GITHUB_PATH"
           : > "${cargo_home}/config.toml"
 
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+      - if: ${{ matrix.build-system == 'cargo' && contains(matrix.target, 'linux') }}
         name: Install Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.14.0
           use-cache: false
 
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+      - if: ${{ matrix.build-system == 'cargo' && contains(matrix.target, 'linux') }}
         name: Install musl build tools
         env:
           TARGET: ${{ matrix.target }}
         run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
 
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+      - if: ${{ matrix.build-system == 'cargo' && contains(matrix.target, 'linux') }}
         name: Disable aws-lc jitter entropy (musl)
         shell: bash
         run: |
@@ -213,11 +220,12 @@ jobs:
           echo "${target_no_jitter}=1" >> "$GITHUB_ENV"
 
       - name: Configure rusty_v8 artifact overrides and verify checksums
+        if: ${{ matrix.build-system == 'cargo' }}
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: ${{ matrix.target }}
 
-      - if: ${{ contains(matrix.target, 'linux') }}
+      - if: ${{ matrix.build-system == 'cargo' && contains(matrix.target, 'linux') }}
         name: Build bwrap and export digest
         shell: bash
         run: |
@@ -240,12 +248,10 @@ jobs:
           echo "Built bwrap ${bwrap_path} with sha256:${digest}"
 
       - name: Cargo build
+        if: ${{ matrix.build-system == 'cargo' }}
         shell: bash
         run: |
           target="${{ matrix.target }}"
-          if [[ "$target" == "x86_64-pc-windows-msvc" ]]; then
-            export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
-          fi
           build_args=()
           for binary in ${{ matrix.binaries }}; do
             # bwrap was built, finalized, and hashed before this build so
@@ -259,12 +265,22 @@ jobs:
           export STABLE_GIT_COMMIT
           cargo build --target "$target" --release --timings "${build_args[@]}"
 
-      - name: Upload Cargo timings
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - name: Prepare Bazel release build
+        if: ${{ matrix.build-system == 'bazel' }}
+        uses: ./.github/actions/prepare-bazel-ci
         with:
-          name: cargo-timings-rust-release-${{ matrix.target }}-${{ matrix.bundle }}
-          path: codex-rs/target/**/cargo-timings/cargo-timing.html
-          if-no-files-found: warn
+          target: ${{ matrix.target }}
+          cache-scope: bazel-release-${{ matrix.bundle }}
+
+      - name: Build Bazel release binaries and symbols
+        if: ${{ matrix.build-system == 'bazel' }}
+        uses: ./.github/actions/build-bazel-release
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        with:
+          target: ${{ matrix.target }}
+          bundle: ${{ matrix.bundle }}
+          release-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
 
       - name: Build symbols archive and strip binaries
         shell: bash
@@ -285,10 +301,21 @@ jobs:
             --archive-dir "symbols-dist/${{ matrix.artifact_name }}" \
             --binaries "${binaries[*]}"
 
+      - name: Suffix Bazel artifact filenames
+        if: ${{ matrix.build-system == 'bazel' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for artifact in "symbols-dist/${{ matrix.artifact_name }}"/*; do
+            name="${artifact##*/}"
+            stem="${name%%.*}"
+            mv "$artifact" "${artifact%/*}/${stem}-bazel${name#"$stem"}"
+          done
+
       - name: Upload symbols archive
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ matrix.artifact_name }}-symbols
+          name: ${{ matrix.artifact_name }}-symbols${{ env.ARTIFACT_SUFFIX }}
           path: codex-rs/symbols-dist/${{ matrix.artifact_name }}/*
           if-no-files-found: error
 
@@ -312,7 +339,7 @@ jobs:
             x86_64-unknown-linux-gnu) prefix=linux_x86_64 ;;
             *) exit 1 ;;
           esac
-          bazel build -c opt //codex-rs/voice-host:codex-voice-host //third_party/voice:native_runtime
+          bazel build --config=release //codex-rs/voice-host:codex-voice-host //third_party/voice:native_runtime
           source="bazel-bin/third_party/voice/native_runtime_${prefix}"
           output="${RUNNER_TEMP}/signed-voice/${APP_TARGET}"
           mkdir -p "$output"
@@ -352,7 +379,7 @@ jobs:
         name: Upload unsigned macOS artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ matrix.artifact_name }}-unsigned
+          name: ${{ matrix.artifact_name }}-unsigned${{ env.ARTIFACT_SUFFIX }}
           path: codex-rs/unsigned-dist/${{ matrix.target }}/*
           if-no-files-found: error
 
@@ -429,7 +456,7 @@ jobs:
           binaries: codex-package-${{ matrix.target }}.tar.gz codex-package-${{ matrix.target }}.tar.zst
 
       - name: Build Python runtime wheel
-        if: ${{ matrix.bundle == 'primary' && runner.os != 'macOS' }}
+        if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' && runner.os != 'macOS' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -490,7 +517,7 @@ jobs:
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
 
       - name: Upload Python runtime wheel
-        if: ${{ matrix.bundle == 'primary' && runner.os != 'macOS' }}
+        if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' && runner.os != 'macOS' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: python-runtime-wheel-${{ matrix.target }}
@@ -534,10 +561,21 @@ jobs:
             zstd -T0 -19 --rm "$dest/$base"
           done
 
+      - name: Suffix Bazel artifact filenames
+        if: ${{ matrix.build-system == 'bazel' && runner.os != 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for artifact in "dist/${{ matrix.target }}"/*; do
+            name="${artifact##*/}"
+            stem="${name%%.*}"
+            mv "$artifact" "${artifact%/*}/${stem}-bazel${name#"$stem"}"
+          done
+
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: ${{ runner.os != 'macOS' }}
         with:
-          name: ${{ matrix.artifact_name }}
+          name: ${{ matrix.artifact_name }}${{ env.ARTIFACT_SUFFIX }}
           # Upload the per-binary .zst files, .tar.gz equivalents, and any
           # prebuilt archives staged above.
           path: |
@@ -580,7 +618,7 @@ jobs:
           # Release tags bump Cargo.toml without rewriting the workspace lockfile.
           # Refresh workspace versions before Bazel reads the Cargo dependency graph.
           (cd codex-rs && cargo update --workspace)
-          bazel build -c opt //codex-rs/voice-host:codex-voice-host //third_party/voice:native_runtime
+          bazel build --config=release --macos_minimum_os=14.0 //codex-rs/voice-host:codex-voice-host //third_party/voice:native_runtime
           runtime="bazel-bin/third_party/voice/native_runtime_${PREFIX}"
           PYTHONPATH=third_party/voice python3 - "$runtime" "$TARGET" <<'PY'
           from pathlib import Path
@@ -603,7 +641,7 @@ jobs:
   sign-macos-binaries:
     needs: [build, build-macos-voice]
     if: ${{ always() && needs.build.result == 'success' && needs.build-macos-voice.result == 'success' }}
-    name: Sign macOS binaries - ${{ matrix.target }} - ${{ matrix.bundle }}
+    name: Sign macOS binaries - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment:
@@ -613,9 +651,17 @@ jobs:
       contents: read
       id-token: write
 
+    env:
+      ARTIFACT_SUFFIX: ${{ matrix.build-system == 'bazel' && '-bazel' || '' }}
+
     strategy:
       fail-fast: false
       matrix:
+        build-system: [cargo, bazel]
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+        bundle: [primary, app-server]
         include:
           - target: aarch64-apple-darwin
             bundle: primary
@@ -642,7 +688,7 @@ jobs:
       - name: Download unsigned macOS binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ matrix.artifact_name }}-unsigned
+          name: ${{ matrix.artifact_name }}-unsigned${{ env.ARTIFACT_SUFFIX }}
           path: ${{ runner.temp }}/unsigned-macos
 
       - name: Download unsigned voice runtime
@@ -822,14 +868,14 @@ jobs:
         if: ${{ matrix.bundle == 'primary' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: voice-${{ matrix.target }}-signed
+          name: voice-${{ matrix.target }}-signed${{ env.ARTIFACT_SUFFIX }}
           path: signed-voice-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
       - name: Upload signed macOS binaries
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ matrix.artifact_name }}-signed-binaries
+          name: ${{ matrix.artifact_name }}-signed-binaries${{ env.ARTIFACT_SUFFIX }}
           path: signed-macos/${{ matrix.target }}/*
           if-no-files-found: error
 
@@ -837,7 +883,7 @@ jobs:
         if: ${{ matrix.bundle == 'primary' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ matrix.target }}-signed-resources
+          name: ${{ matrix.target }}-signed-resources${{ env.ARTIFACT_SUFFIX }}
           path: signed-resources/${{ matrix.target }}/*
           if-no-files-found: error
 
@@ -845,13 +891,13 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ matrix.artifact_name }}-binary-signing-verification
+          name: ${{ matrix.artifact_name }}-binary-signing-verification${{ env.ARTIFACT_SUFFIX }}
           path: macos-binary-signing-verification/${{ matrix.target }}/
           if-no-files-found: warn
 
   package-macos:
     needs: sign-macos-binaries
-    name: Package macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }}
+    name: Package macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
     runs-on: macos-15-xlarge
     timeout-minutes: 45
     permissions:
@@ -860,9 +906,17 @@ jobs:
       run:
         working-directory: codex-rs
 
+    env:
+      ARTIFACT_SUFFIX: ${{ matrix.build-system == 'bazel' && '-bazel' || '' }}
+
     strategy:
       fail-fast: false
       matrix:
+        build-system: [cargo, bazel]
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+        bundle: [primary, app-server]
         include:
           - target: aarch64-apple-darwin
             bundle: primary
@@ -893,20 +947,20 @@ jobs:
       - name: Download signed macOS binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ matrix.artifact_name }}-signed-binaries
+          name: ${{ matrix.artifact_name }}-signed-binaries${{ env.ARTIFACT_SUFFIX }}
           path: codex-rs/target/${{ matrix.target }}/release
 
       - name: Download signed macOS helpers
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ matrix.target }}-signed-resources
+          name: ${{ matrix.target }}-signed-resources${{ env.ARTIFACT_SUFFIX }}
           path: codex-rs/signed-resources/${{ matrix.target }}
 
       - name: Download signed voice runtime
         if: ${{ matrix.bundle == 'primary' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: voice-${{ matrix.target }}-signed
+          name: voice-${{ matrix.target }}-signed${{ env.ARTIFACT_SUFFIX }}
           path: ${{ runner.temp }}/signed-voice
 
       - name: Verify signed voice runtime
@@ -1040,12 +1094,12 @@ jobs:
         if: ${{ matrix.build_dmg == 'true' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ matrix.artifact_name }}-unsigned-dmg
+          name: ${{ matrix.artifact_name }}-unsigned-dmg${{ env.ARTIFACT_SUFFIX }}
           path: codex-rs/target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg
           if-no-files-found: error
 
       - name: Build Python runtime wheel
-        if: ${{ matrix.bundle == 'primary' }}
+        if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1097,7 +1151,7 @@ jobs:
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
 
       - name: Upload Python runtime wheel
-        if: ${{ matrix.bundle == 'primary' }}
+        if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: python-runtime-wheel-${{ matrix.target }}
@@ -1122,13 +1176,13 @@ jobs:
       - name: Upload packaged macOS artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ matrix.artifact_name }}-packaged
+          name: ${{ matrix.artifact_name }}-packaged${{ env.ARTIFACT_SUFFIX }}
           path: codex-rs/dist/${{ matrix.target }}/*
           if-no-files-found: error
 
   sign-macos-dmg:
     needs: package-macos
-    name: Sign macOS DMG - ${{ matrix.target }}
+    name: Sign macOS DMG - ${{ matrix.target }} - ${{ matrix.build-system }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment:
@@ -1138,9 +1192,16 @@ jobs:
       contents: read
       id-token: write
 
+    env:
+      ARTIFACT_SUFFIX: ${{ matrix.build-system == 'bazel' && '-bazel' || '' }}
+
     strategy:
       fail-fast: false
       matrix:
+        build-system: [cargo, bazel]
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
         include:
           - target: aarch64-apple-darwin
             artifact_name: aarch64-apple-darwin
@@ -1155,7 +1216,7 @@ jobs:
       - name: Download unsigned macOS DMG
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ matrix.artifact_name }}-unsigned-dmg
+          name: ${{ matrix.artifact_name }}-unsigned-dmg${{ env.ARTIFACT_SUFFIX }}
           path: ${{ runner.temp }}/unsigned-dmg
 
       - name: Set up AKV PKCS11 macOS signing
@@ -1209,7 +1270,7 @@ jobs:
       - name: Upload signed macOS DMG
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ matrix.artifact_name }}-signed-dmg
+          name: ${{ matrix.artifact_name }}-signed-dmg${{ env.ARTIFACT_SUFFIX }}
           path: ${{ runner.temp }}/unsigned-dmg/codex-${{ matrix.target }}.dmg
           if-no-files-found: error
 
@@ -1217,7 +1278,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ matrix.artifact_name }}-dmg-signing-verification
+          name: ${{ matrix.artifact_name }}-dmg-signing-verification${{ env.ARTIFACT_SUFFIX }}
           path: macos-dmg-signing-verification/${{ matrix.target }}/
           if-no-files-found: warn
 
@@ -1225,7 +1286,7 @@ jobs:
     needs:
       - package-macos
       - sign-macos-dmg
-    name: Verify macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }}
+    name: Verify macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
     runs-on: macos-15-xlarge
     timeout-minutes: 30
     permissions:
@@ -1234,9 +1295,17 @@ jobs:
       run:
         working-directory: codex-rs
 
+    env:
+      ARTIFACT_SUFFIX: ${{ matrix.build-system == 'bazel' && '-bazel' || '' }}
+
     strategy:
       fail-fast: false
       matrix:
+        build-system: [cargo, bazel]
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+        bundle: [primary, app-server]
         include:
           - target: aarch64-apple-darwin
             bundle: primary
@@ -1267,20 +1336,20 @@ jobs:
       - name: Download packaged macOS artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ matrix.artifact_name }}-packaged
+          name: ${{ matrix.artifact_name }}-packaged${{ env.ARTIFACT_SUFFIX }}
           path: codex-rs/dist/${{ matrix.target }}
 
       - name: Download signed macOS binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ matrix.artifact_name }}-signed-binaries
+          name: ${{ matrix.artifact_name }}-signed-binaries${{ env.ARTIFACT_SUFFIX }}
           path: ${{ runner.temp }}/signed-binaries
 
       - name: Download signed macOS DMG
         if: ${{ matrix.verify_dmg == 'true' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ matrix.artifact_name }}-signed-dmg
+          name: ${{ matrix.artifact_name }}-signed-dmg${{ env.ARTIFACT_SUFFIX }}
           path: ${{ runner.temp }}/signed-dmg
 
       - name: Verify signed macOS artifacts
@@ -1450,10 +1519,21 @@ jobs:
           trap - EXIT
           cp "$dmg_path" "dist/${target}/codex-${target}.dmg"
 
+      - name: Suffix Bazel artifact filenames
+        if: ${{ matrix.build-system == 'bazel' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for artifact in "dist/${{ matrix.target }}"/*; do
+            name="${artifact##*/}"
+            stem="${name%%.*}"
+            mv "$artifact" "${artifact%/*}/${stem}-bazel${name#"$stem"}"
+          done
+
       - name: Upload verified macOS artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ matrix.artifact_name }}
+          name: ${{ matrix.artifact_name }}${{ env.ARTIFACT_SUFFIX }}
           path: codex-rs/dist/${{ matrix.target }}/*
           if-no-files-found: error
 
@@ -1602,7 +1682,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
-          pattern: "{{aarch64,x86_64}-{apple-darwin{,-app-server},unknown-linux-musl{,-app-server},pc-windows-msvc},*-symbols,argument-comment-lint-*,python-runtime-wheel-*,npm-packages}"
+          pattern: "{{aarch64,x86_64}-{apple-darwin{,-app-server},unknown-linux-musl{,-app-server},pc-windows-msvc}{,-bazel},*-symbols{,-bazel},argument-comment-lint-*,python-runtime-wheel-*,npm-packages}"
 
       - name: Download verified provisioned macOS packages
         if: vars.CODEX_PROVISIONED_MACOS_CANDIDATE == 'true'
