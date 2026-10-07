@@ -5,8 +5,9 @@
 //! Long text splits losslessly only after admission, preserving whole-entry selection.
 //! Action-specific attestations follow the transcript so they do not invalidate
 //! the reusable history prefix when previous decisions or tool evidence change.
-//! Async retained context also follows the transcript so its rolling window cannot
-//! invalidate that prefix. Sync retains its existing section order.
+//! Async retained context initially follows the transcript. Independent snapshot
+//! preparation moves retained user instructions ahead of it, leaving assistant context here.
+//! Stateful reviewers retain their existing section order.
 
 use codex_context_fragments::ContextualUserFragment;
 use codex_history::CodexHarnessMetadata;
@@ -414,6 +415,7 @@ impl ComposedContext {
     pub fn into_annotated_user_inputs(
         self,
     ) -> Result<(Vec<UserInput>, Option<CodexHarnessMetadata>), SectionError> {
+        let has_split_assistant_omission = self.has_split_assistant_omission();
         let mut inputs = Vec::new();
         let mut metadata = CodexHarnessMetadata::default();
         for section in self.sections {
@@ -441,6 +443,9 @@ impl ComposedContext {
                 });
             }
         }
+        if has_split_assistant_omission {
+            metadata.guardian_retained_omissions = None;
+        }
         Ok((
             inputs,
             (!metadata.guardian_sources.is_empty() || metadata.guardian_source_order_guidance)
@@ -458,6 +463,7 @@ impl ComposedContext {
 
     /// Host-only delivery proof follows exactly the entries that survived admission.
     pub fn into_annotated_messages(self) -> Vec<ResponseItemEnvelope> {
+        let has_split_assistant_omission = self.has_split_assistant_omission();
         let mut messages = Vec::new();
         let mut user_content = Vec::new();
         let mut metadata = CodexHarnessMetadata::default();
@@ -491,6 +497,15 @@ impl ComposedContext {
         }
         if !user_content.is_empty() {
             messages.push(delivered_message(user_content, metadata));
+        }
+        if has_split_assistant_omission {
+            // Snapshot sections can cross message boundaries. Do not claim that
+            // the instruction prefix delivered an assistant notice in the suffix.
+            for message in &mut messages {
+                if let Some(metadata) = &mut message.metadata {
+                    metadata.guardian_retained_omissions = None;
+                }
+            }
         }
         messages
     }

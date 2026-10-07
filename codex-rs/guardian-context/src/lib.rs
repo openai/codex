@@ -48,6 +48,7 @@ pub use verified_answers::RenderedVerifiedAnswers;
 pub use verified_answers::render_verified_answer;
 pub use verified_answers::render_verified_answers;
 
+mod retained_assistant_context;
 mod retained_instructions;
 mod sender_user_messages;
 pub use retained_instructions::retained_assistant_message;

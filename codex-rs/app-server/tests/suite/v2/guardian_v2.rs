@@ -1328,9 +1328,15 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                 .collect::<Vec<_>>();
             assert_eq!(
                 history_texts.first().and_then(|text| text.lines().next()),
-                Some(">>> TRANSCRIPT START")
+                Some(">>> RETAINED USER INSTRUCTIONS START")
             );
-            assert!(history_texts.contains(&">>> TRANSCRIPT START\n"));
+            assert!(history_texts.windows(2).any(|texts| {
+                texts
+                    == [
+                        ">>> RETAINED USER INSTRUCTIONS END\n\n",
+                        ">>> TRANSCRIPT START\n",
+                    ]
+            }));
             assert!(history_texts.iter().any(|text| text.contains(USER_CONTEXT)));
             assert!(history_texts.iter().any(|text| text.contains("guardian-0")));
             assert!(history_texts.windows(2).any(|texts| {
@@ -1352,19 +1358,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                 .filter_map(|item| item["text"].as_str())
                 .collect::<Vec<_>>();
             assert_eq!(
-                action_texts.first().and_then(|text| text.lines().next()),
-                Some(">>> RETAINED USER INSTRUCTIONS START")
-            );
-            let action_start = action_texts
-                .iter()
-                .position(|text| *text == "The Codex agent has requested the following action:\n")
-                .expect("planned action follows retained context");
-            assert_eq!(
-                action_texts[action_start - 1],
-                ">>> RETAINED USER INSTRUCTIONS END\n\n"
-            );
-            assert_eq!(
-                &action_texts[action_start..action_start + 2],
+                &action_texts[..2],
                 &[
                     "The Codex agent has requested the following action:\n",
                     ">>> APPROVAL REQUEST START\n",
