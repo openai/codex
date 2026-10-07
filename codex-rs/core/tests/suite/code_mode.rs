@@ -6015,7 +6015,6 @@ async fn code_mode_interrupt_terminates_active_cells_and_nested_tools() -> Resul
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
             let _ = config.features.enable(Feature::CodeMode);
-            let _ = config.features.enable(Feature::CodeModeInterrupt);
             let _ = config.features.enable(Feature::ExecutedToolCallMetadata);
         });
     let test = builder.build_with_auto_env(&server).await?;
