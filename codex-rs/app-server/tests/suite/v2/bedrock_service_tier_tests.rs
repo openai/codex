@@ -8,8 +8,8 @@ use codex_app_server_protocol::ModelServiceTier;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
-#[test_case::test_case("amazon-bedrock", vec!["openai.gpt-6-astra"]; "mantle")]
-#[test_case::test_case("amazon-bedrock-runtime", vec!["global.openai.gpt-6-astra", "us.openai.gpt-6-astra"]; "runtime")]
+#[test_case::test_case("amazon-bedrock", vec!["openai.gpt-6.1-sol", "openai.gpt-6-astra"]; "mantle")]
+#[test_case::test_case("amazon-bedrock-runtime", vec!["global.openai.gpt-6.1-sol", "global.openai.gpt-6-astra", "us.openai.gpt-6.1-sol", "us.openai.gpt-6-astra"]; "runtime")]
 #[tokio::test]
 async fn bedrock_model_list_advertises_ultrafast_without_changing_default(
     provider_id: &str,

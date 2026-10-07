@@ -14,6 +14,9 @@ use pretty_assertions::assert_eq;
 #[test_case::test_case(AMAZON_BEDROCK_PROVIDER_ID, "openai.gpt-6-astra"; "mantle")]
 #[test_case::test_case(AMAZON_BEDROCK_RUNTIME_PROVIDER_ID, "global.openai.gpt-6-astra"; "runtime global")]
 #[test_case::test_case(AMAZON_BEDROCK_RUNTIME_PROVIDER_ID, "us.openai.gpt-6-astra"; "runtime us")]
+#[test_case::test_case(AMAZON_BEDROCK_PROVIDER_ID, "openai.gpt-6.1-sol"; "mantle sol61")]
+#[test_case::test_case(AMAZON_BEDROCK_RUNTIME_PROVIDER_ID, "global.openai.gpt-6.1-sol"; "runtime global sol61")]
+#[test_case::test_case(AMAZON_BEDROCK_RUNTIME_PROVIDER_ID, "us.openai.gpt-6.1-sol"; "runtime us sol61")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bedrock_ultrafast_can_be_configured_and_toggled(
     provider_id: &'static str,

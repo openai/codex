@@ -102,11 +102,16 @@ pub(super) fn normalize_bundled_bedrock_catalog(
         model.service_tiers.clear();
         if matches!(
             (endpoint, model.slug.as_str()),
-            (BedrockEndpoint::Mantle, AMAZON_BEDROCK_GPT_6_ASTRA_MODEL_ID)
-                | (
-                    BedrockEndpoint::Runtime,
-                    "global.openai.gpt-6-astra" | "us.openai.gpt-6-astra"
-                )
+            (
+                BedrockEndpoint::Mantle,
+                AMAZON_BEDROCK_GPT_6_ASTRA_MODEL_ID | AMAZON_BEDROCK_GPT_6_1_SOL_MODEL_ID
+            ) | (
+                BedrockEndpoint::Runtime,
+                "global.openai.gpt-6-astra"
+                    | "us.openai.gpt-6-astra"
+                    | "global.openai.gpt-6.1-sol"
+                    | "us.openai.gpt-6.1-sol"
+            )
         ) {
             model.service_tiers.push(ModelServiceTier {
                 id: "ultrafast".to_string(),
@@ -373,7 +378,10 @@ mod tests {
             expected.use_responses_lite = false;
             expected.tool_mode = None;
             expected.additional_speed_tiers.clear();
-            expected.service_tiers = if slug == AMAZON_BEDROCK_GPT_6_ASTRA_MODEL_ID {
+            expected.service_tiers = if matches!(
+                slug,
+                AMAZON_BEDROCK_GPT_6_ASTRA_MODEL_ID | AMAZON_BEDROCK_GPT_6_1_SOL_MODEL_ID
+            ) {
                 vec![ModelServiceTier {
                     id: "ultrafast".to_string(),
                     name: "Ultrafast".to_string(),
