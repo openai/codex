@@ -546,7 +546,14 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
     access_mode: ACCESS_MODE,
     inheritance: u32,
 ) -> Result<bool> {
-    let directory = if inheritance == 0 {
+    // Only directories need MAXIMUM_ALLOWED to suppress child ACL propagation.
+    // On active EXE/DLL files, it can request access that causes sharing violations.
+    let directory = if inheritance == 0
+        && path
+            .metadata()
+            .with_context(|| format!("inspect ACL target {}", path.display()))?
+            .is_dir()
+    {
         Some(
             OpenOptions::new()
                 .access_mode(MAXIMUM_ALLOWED)
@@ -559,7 +566,7 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
         None
     };
     // A root-only grant must preserve existing permissions and deny ACEs.
-    let access_mode = if directory.is_some() {
+    let access_mode = if inheritance == 0 {
         GRANT_ACCESS
     } else {
         access_mode
@@ -610,7 +617,7 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
             continue;
         }
         if !dacl_allow_mask_needs_refresh(p_dacl, *sid, allow_mask, disallow_mask)
-            || directory.is_some() && p_dacl.is_null()
+            || inheritance == 0 && p_dacl.is_null()
         {
             continue;
         }
@@ -643,8 +650,8 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
         if code2 != ERROR_SUCCESS {
             return Err(anyhow!("SetEntriesInAclW failed: {code2}"));
         }
-        // For inheriting grants, request ACL-write access only when an update
-        // is needed. Use the same long-path support as the read handle.
+        // For files and inheriting directory grants, request ACL-write access only
+        // when an update is needed. Use the same long-path support as the read handle.
         let handle = match directory {
             // MAXIMUM_ALLOWED suppresses propagation of existing inheritable ACEs too.
             Some(directory) => directory,

@@ -7,6 +7,7 @@ use crate::ensure_allow_mask_aces_with_inheritance;
 use crate::path_mask_allows;
 use pretty_assertions::assert_eq;
 use std::fs;
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LocalFree;
@@ -20,6 +21,7 @@ use windows_sys::Win32::Storage::FileSystem::DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
+use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
 use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
 
@@ -165,6 +167,13 @@ fn repairs_children_when_runtime_root_already_has_read_execute_access() {
         unsafe { add_deny_write_ace(&write_denied_file, sandbox_sid.as_ptr()) }
             .expect("deny runtime writes")
     );
+
+    // Keep data-write and delete opens blocked throughout repair and revalidation.
+    let _reader = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&node)
+        .expect("hold runtime file open for reading");
 
     for _ in 0..2 {
         ensure_runtime_tree_readable(runtime.path(), sandbox_sid.as_ptr())
