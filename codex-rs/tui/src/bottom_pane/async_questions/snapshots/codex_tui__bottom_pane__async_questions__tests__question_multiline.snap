@@ -1,0 +1,19 @@
+---
+source: tui/src/bottom_pane/async_questions/state_tests.rs
+expression: "rendered[0]"
+---
+
+  1 of 2
+
+  Run this command:
+
+  ```sh
+  printf '診 断 '
+  ```
+  Then review (https://example.com/diagnostics?view=full)?
+
+
+  Type your answer
+
+  enter submit   ⌃] skip   ⇧→ main prompt
+  ⇧← next question
