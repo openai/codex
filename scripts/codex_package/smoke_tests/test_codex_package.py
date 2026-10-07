@@ -234,11 +234,13 @@ def test_windows_debug_symbols_resolve_packaged_code(
     code_mode_host_debug_symbols: Path,
 ) -> None:
     """Windows host symbols match the packaged executable's debug signature."""
-    # Rust embeds an underscored PDB name, but release archives normalize it.
-    symbols = code_mode_host_debug_symbols.rename(
-        code_mode_host_debug_symbols.with_name("codex_code_mode_host.pdb")
-    )
-    host = symbols.with_suffix(".exe")
+    # Cargo embeds an underscored PDB name; Bazel uses the binary's name.
+    # Offer the archived PDB under both names so dumpbin still verifies that
+    # its signature matches the packaged executable, regardless of builder.
+    cargo_symbols = code_mode_host_debug_symbols.with_name("codex_code_mode_host.pdb")
+    shutil.copy2(code_mode_host_debug_symbols, cargo_symbols)
+    symbols = (code_mode_host_debug_symbols, cargo_symbols)
+    host = code_mode_host_debug_symbols.with_suffix(".exe")
     shutil.copy2(package.cli.with_name("codex-code-mode-host.exe"), host)
     result = subprocess.run(
         ["dumpbin", "/PDBPATH", str(host)],
@@ -249,4 +251,6 @@ def test_windows_debug_symbols_resolve_packaged_code(
         check=True,
         timeout=45,
     )
-    assert str(symbols).casefold() in result.stdout.casefold(), result.stdout
+    assert any(str(path).casefold() in result.stdout.casefold() for path in symbols), (
+        result.stdout
+    )

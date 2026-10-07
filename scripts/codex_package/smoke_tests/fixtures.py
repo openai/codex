@@ -85,6 +85,7 @@ suppress_unstable_features_warning = true
 
 [sandbox_workspace_write]
 network_access = true
+writable_roots = []
 
 [features]
 code_mode_only = true
