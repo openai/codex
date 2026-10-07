@@ -544,6 +544,15 @@ impl From<ThreadTurnsListResponse> for TurnsPage {
 pub struct ThreadForkParams {
     pub thread_id: String,
 
+    /// Start from the loaded parent's effective config, tools, environments, and
+    /// persisted history to maximize prompt-cache reuse. Requires a loaded,
+    /// persisted parent and `ephemeral: true`. Enables `features.reasoning_effort_override`
+    /// on the fork. Cannot be combined with configuration overrides, `path`, `lastTurnId`,
+    /// or `beforeTurnId`.
+    #[experimental("thread/fork.experimentalPredictionMode")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub experimental_prediction_mode: bool,
+
     /// Optional last turn id to fork through, inclusive.
     ///
     /// When specified, turns after `last_turn_id` are omitted from the fork.
