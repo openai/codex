@@ -45,6 +45,10 @@ def parse_package_version(value: str) -> str:
 
 
 def parse_args() -> argparse.Namespace:
+    return create_parser().parse_args()
+
+
+def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Build a canonical Codex package directory and optional archive.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -169,11 +173,18 @@ def parse_args() -> argparse.Namespace:
             "scripts/codex_package/rg."
         ),
     )
-    return parser.parse_args()
+    return parser
 
 
 def main() -> int:
     args = parse_args()
+    package_dir = assemble_package(args)
+    archive_package(package_dir, args)
+    return 0
+
+
+def assemble_package(args: argparse.Namespace) -> Path:
+    """Build the directory before optional downstream additions and archiving."""
     spec = TARGET_SPECS[getattr(args, "target", None) or default_target()]
     variant = PACKAGE_VARIANTS[args.variant]
     package_dir_arg = getattr(args, "package_dir", None)
@@ -228,14 +239,16 @@ def main() -> int:
     validate_package_dir(
         package_dir, variant, spec, include_zsh=inputs.zsh_bin is not None
     )
+    return package_dir
 
+
+def archive_package(package_dir: Path, args: argparse.Namespace) -> None:
     for archive_output in args.archive_output:
         archive_path = archive_output.resolve()
         write_archive(package_dir, archive_path, force=args.force)
         print(f"Built Codex package archive at {archive_path}")
 
     print(f"Built Codex package directory at {package_dir}")
-    return 0
 
 
 def resolve_optional_input_path(

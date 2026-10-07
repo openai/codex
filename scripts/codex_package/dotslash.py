@@ -1,5 +1,6 @@
 """Fetch executable artifacts from checked-in DotSlash manifests."""
 
+import gzip
 import hashlib
 import json
 import shutil
@@ -184,6 +185,11 @@ def extract_archive_member(
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.unlink(missing_ok=True)
 
+    if artifact.archive_format == "gz":
+        with gzip.open(archive_path, "rb") as extracted, open(dest, "wb") as out:
+            shutil.copyfileobj(extracted, out)
+        return
+
     if artifact.archive_format == "tar.gz":
         with tarfile.open(archive_path, "r:gz") as archive:
             try:
@@ -218,5 +224,5 @@ def extract_archive_member(
 
     raise RuntimeError(
         f"Unsupported {artifact_label} archive format {artifact.archive_format!r}; "
-        "expected tar.gz or zip"
+        "expected gz, tar.gz or zip"
     )
