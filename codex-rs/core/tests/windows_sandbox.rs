@@ -1,3 +1,12 @@
+//! Exercises the Windows sandbox in a dedicated integration-test binary.
+//!
+//! Elevated cases share machine-wide accounts, so keep them out of the sharded
+//! core suite: otherwise several shards spend their test deadlines waiting for
+//! the account lock. The guard still coordinates with other test binaries.
+
+#![cfg(target_os = "windows")]
+#![allow(clippy::expect_used)]
+
 use anyhow::Context;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::TurnInputRequest;
