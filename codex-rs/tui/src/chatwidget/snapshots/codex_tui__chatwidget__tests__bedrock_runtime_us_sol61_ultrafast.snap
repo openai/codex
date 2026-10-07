@@ -1,0 +1,17 @@
+---
+source: tui/src/chatwidget/tests/bedrock_catalog_tests.rs
+expression: "format!(\"Bundled catalog:\\n{bundled_view}\\n\\nCustom catalog:\\n{custom_view}\")"
+---
+Bundled catalog:
+› /ultrafast  The fastest available responses for latency-sensitive work.
+
+› /ultrafast
+
+  GPT-6.1 Sol (US cross-region) default · /tmp/project
+
+Custom catalog:
+› /express  My custom Bedrock tier.
+
+› /express
+
+  GPT-6.1-Sol default · /tmp/project
