@@ -1964,7 +1964,16 @@ async fn user_input_does_not_preempt_after_reasoning_item() {
     let (server, _completions) =
         start_streaming_sse_server(vec![first_chunks, response_completed_chunks("resp-2")]).await;
 
-    let codex = build_codex(&server).await;
+    let codex = test_codex()
+        .with_config(|config| {
+            config.update_plan_enabled = true;
+            config.features.disable(Feature::InstantInterrupt).unwrap();
+        })
+        .with_model("gpt-5.4")
+        .build_with_streaming_server(&server)
+        .await
+        .expect("build streaming Codex test session")
+        .codex;
 
     submit_user_input(&codex, "first prompt").await;
 
@@ -2390,6 +2399,7 @@ async fn steered_user_input_waits_for_model_continuation_after_mid_turn_compact(
     let codex = test_codex()
         .with_model("gpt-5.4")
         .with_config(|config| {
+            config.features.disable(Feature::InstantInterrupt).unwrap();
             config.model_provider.name = "OpenAI (test)".to_string();
             config.model_provider.supports_websockets = false;
             config.model_auto_compact_token_limit = Some(200);
@@ -2475,6 +2485,7 @@ async fn steered_user_input_follows_compact_when_only_the_steer_needs_follow_up(
     let codex = test_codex()
         .with_model("gpt-5.4")
         .with_config(|config| {
+            config.features.disable(Feature::InstantInterrupt).unwrap();
             config.model_provider.name = "OpenAI (test)".to_string();
             config.model_provider.supports_websockets = false;
             config.model_auto_compact_token_limit = Some(200);
@@ -2592,6 +2603,7 @@ async fn steered_user_input_waits_when_tool_output_triggers_compact_before_next_
     let test = test_codex()
         .with_model("gpt-5.4")
         .with_config(|config| {
+            config.features.disable(Feature::InstantInterrupt).unwrap();
             config.model_provider.name = "OpenAI (test)".to_string();
             config.model_provider.supports_websockets = false;
             config.model_auto_compact_token_limit = Some(200);
