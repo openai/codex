@@ -1,0 +1,50 @@
+name: Build Bazel release staging archive
+description: Build a binary/symbol archive and extract writable inputs for existing signing and packaging.
+inputs:
+  target:
+    description: Rust release target triple.
+    required: true
+  bundle:
+    description: Binary bundle (combined, primary, app-server, or helpers).
+    default: combined
+  release-dir:
+    description: Directory where the archive is extracted for signing and packaging.
+    required: true
+  build-mode:
+    description: Release optimizations, or debug for faster package smoke builds.
+    default: release
+
+runs:
+  using: composite
+  steps:
+    - name: Refresh release workspace metadata
+      shell: bash
+      working-directory: ${{ github.workspace }}/codex-rs
+      # Release tags change Cargo.toml; rules_rs needs matching workspace lock entries.
+      run: cargo update --workspace
+
+    - name: Build staging archive
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        TARGET: ${{ inputs.target }}
+        BUNDLE: ${{ inputs.bundle }}
+        BUILD_MODE: ${{ inputs.build-mode }}
+        # Keep Git Bash from rewriting Bazel labels as Windows paths.
+        MSYS2_ARG_CONV_EXCL: "*"
+      run: |
+        python3 .github/scripts/run_bazel_with_buildbuddy.py build \
+          ${{ runner.os == 'Windows' && '--config=ci-windows-msvc' || '' }} \
+          "--platforms=@rules_rs//rs/platforms:$TARGET" \
+          "--//codex-rs:runtime_package_build_mode=$BUILD_MODE" \
+          "//codex-rs:runtime_package_$BUNDLE"
+
+    - name: Extract staging archive
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        BUNDLE: ${{ inputs.bundle }}
+        RELEASE_DIR: ${{ inputs.release-dir }}
+      run: |
+        mkdir -p "$RELEASE_DIR"
+        tar -xzf "bazel-bin/codex-rs/runtime_package_$BUNDLE.tar.gz" -C "$RELEASE_DIR"

@@ -1,4 +1,5 @@
 load("//:defs.bzl", "codex_rust_crate")
+load("//bazel/rules:runtime_package.bzl", "release_binary")
 
 # Cargo's build.rs emits rustc-link-arg-bin so only the setup helper gets the
 # asInvoker manifest. rules_rust warns on and drops that directive, so Bazel
@@ -55,4 +56,16 @@ codex_rust_crate(
         ":codex-command-runner",
         ":codex-windows-sandbox-setup",
     ],
+)
+
+release_binary(
+    name = "command-runner-release",
+    binary = ":codex-command-runner",
+    target_compatible_with = ["@platforms//os:windows"],
+)
+
+release_binary(
+    name = "sandbox-setup-release",
+    binary = ":codex-windows-sandbox-setup",
+    target_compatible_with = ["@platforms//os:windows"],
 )

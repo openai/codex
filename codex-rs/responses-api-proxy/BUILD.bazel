@@ -1,6 +1,11 @@
 load("//:defs.bzl", "codex_rust_crate")
+load("//bazel/rules:runtime_package.bzl", "release_binary")
 
 codex_rust_crate(
     name = "responses-api-proxy",
     crate_name = "codex_responses_api_proxy",
+)
+
+release_binary(
+    binary = ":codex-responses-api-proxy",
 )

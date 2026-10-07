@@ -1,3 +1,6 @@
+load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
+load("//bazel/rules:runtime_package.bzl", "runtime_archive")
+
 exports_files([
     "clippy.toml",
 ])
@@ -22,5 +25,81 @@ test_suite(
     tests = [
         "//codex-rs/cli:codex-help-bench",
     ],
+    visibility = ["//visibility:public"],
+)
+
+string_flag(
+    name = "runtime_package_build_mode",
+    build_setting_default = "release",
+    values = [
+        "release",
+        "debug",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "runtime_package",
+    actual = ":runtime_package_combined",
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+)
+
+# These targets produce flat staging archives for the existing signing and
+# packaging steps. Release builds retain their binaries and debug symbols.
+runtime_archive(
+    name = "runtime_package_combined",
+    srcs = [
+        "//codex-rs/app-server:release_files",
+        "//codex-rs/cli:release_files",
+        "//codex-rs/code-mode-host:release_files",
+    ] + select({
+        "@platforms//os:linux": ["//codex-rs/bwrap:release_files"],
+        "@platforms//os:windows": [
+            "//codex-rs/windows-sandbox-rs:command-runner-release_files",
+            "//codex-rs/windows-sandbox-rs:sandbox-setup-release_files",
+        ],
+        "//conditions:default": [],
+    }),
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+)
+
+runtime_archive(
+    name = "runtime_package_primary",
+    srcs = [
+        "//codex-rs/cli:release_files",
+        "//codex-rs/code-mode-host:release_files",
+        "//codex-rs/responses-api-proxy:release_files",
+    ] + select({
+        "@platforms//os:linux": ["//codex-rs/bwrap:release_files"],
+        "//conditions:default": [],
+    }),
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+)
+
+runtime_archive(
+    name = "runtime_package_app-server",
+    srcs = [
+        "//codex-rs/app-server:release_files",
+        "//codex-rs/code-mode-host:release_files",
+    ] + select({
+        "@platforms//os:linux": ["//codex-rs/bwrap:release_files"],
+        "//conditions:default": [],
+    }),
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+)
+
+runtime_archive(
+    name = "runtime_package_helpers",
+    srcs = [
+        "//codex-rs/windows-sandbox-rs:command-runner-release_files",
+        "//codex-rs/windows-sandbox-rs:sandbox-setup-release_files",
+        "//codex-rs/windows-sandbox-service:release_files",
+    ],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:windows"],
     visibility = ["//visibility:public"],
 )

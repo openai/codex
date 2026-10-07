@@ -1,5 +1,6 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("//:defs.bzl", "codex_rust_crate")
+load("//bazel/rules:runtime_package.bzl", "release_binary")
 
 codex_rust_crate(
     name = "bwrap",
@@ -19,6 +20,11 @@ codex_rust_crate(
         ],
         "//conditions:default": [],
     }),
+)
+
+release_binary(
+    binary = ":bwrap",
+    target_compatible_with = ["@platforms//os:linux"],
 )
 
 genrule(

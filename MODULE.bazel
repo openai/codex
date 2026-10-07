@@ -160,6 +160,7 @@ single_version_override(
 )
 
 bazel_dep(name = "rules_platform", version = "0.1.0")
+bazel_dep(name = "rules_pkg", version = "1.0.1")
 bazel_dep(name = "aws-lc", version = "5.1.0.bcr.1")
 bazel_dep(name = "rules_rs", version = "0.0.96")
 bazel_dep(name = "rules_foreign_cc", version = "0.15.1")

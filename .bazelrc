@@ -231,22 +231,41 @@ common:v8-target-arm64 --@v8//bazel/config:v8_target_cpu=arm64
 # the matching runtime objects.
 common:rusty-v8-upstream-libcxx --@v8//:v8_use_rusty_v8_custom_libcxx=True
 
+# Native Windows archive builds inherit the runner's MSVC SDK environment.
+# Client environment capture and repository discovery happen before target
+# transitions, so these runner settings cannot live in runtime_package.bzl.
+# The archive target selects its own MSVC host platform and native toolchains.
+build:ci-windows-msvc --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0
+build:ci-windows-msvc --action_env=PATH
+build:ci-windows-msvc --host_action_env=PATH
+build:ci-windows-msvc --action_env=INCLUDE
+build:ci-windows-msvc --host_action_env=INCLUDE
+build:ci-windows-msvc --action_env=LIB
+build:ci-windows-msvc --host_action_env=LIB
+build:ci-windows-msvc --action_env=LIBPATH
+build:ci-windows-msvc --host_action_env=LIBPATH
+build:ci-windows-msvc --action_env=SystemRoot
+build:ci-windows-msvc --host_action_env=SystemRoot
+build:ci-windows-msvc --action_env=PROCESSOR_ARCHITECTURE
+build:ci-windows-msvc --host_action_env=PROCESSOR_ARCHITECTURE
+build:ci-windows-msvc --action_env=WindowsSdkDir
+build:ci-windows-msvc --host_action_env=WindowsSdkDir
+build:ci-windows-msvc --action_env=VCINSTALLDIR
+build:ci-windows-msvc --host_action_env=VCINSTALLDIR
+
 # Release profile settings are also defined in codex-rs/Cargo.toml.
+# runtime_package.bzl applies this profile to archive dependencies automatically.
 # Packaging extracts symbols before stripping; the Rust toolchains retain
-# line tables and use split-debuginfo=off. opt mode selects Rust opt-level=3;
-# Cargo release disables assertions/checks even if a smoke build overrides
-# opt-level to 0, so these are explicit rather than inferred from optimization.
+# line tables and use split-debuginfo=off. opt mode selects Rust opt-level=3,
+# which disables debug assertions and overflow checks by default.
 build:release --compilation_mode=opt
 build:release --@rules_rust//rust/settings:lto=thin
 build:release --@rules_rust//rust/settings:codegen_units=4
-build:release --@rules_rust//rust/settings:extra_rustc_flag=-Cdebug-assertions=no
-build:release --@rules_rust//rust/settings:extra_rustc_flag=-Coverflow-checks=no
 # Match observed Cargo 1.95 build-tool commands: opt-level=0, assertions off,
 # and rustc's non-incremental default of 16 codegen units (not target's 4).
 build:release --@rules_rust//rust/settings:extra_exec_rustc_flag=-Copt-level=0
 build:release --@rules_rust//rust/settings:extra_exec_rustc_flag=-Ccodegen-units=16
 build:release --@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebug-assertions=no
-build:release --@rules_rust//rust/settings:extra_exec_rustc_flag=-Coverflow-checks=no
 
 # Compatibility: Cargo build scripts consume the Rust profile, including debug
 # info, and choose their native optimization. Preserve explicit user C/C++ flags.

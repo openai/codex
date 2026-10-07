@@ -1,8 +1,14 @@
 load("//:defs.bzl", "codex_rust_crate")
+load("//bazel/rules:runtime_package.bzl", "release_binary")
 
 codex_rust_crate(
     name = "windows-sandbox-service",
     binary_test_target_compatible_with = ["@platforms//os:windows"],
     compile_data = ["src/registered_runtime/removal.ps1"],
     crate_name = "codex_windows_sandbox_service",
+)
+
+release_binary(
+    binary = ":codex-windows-sandbox-service",
+    target_compatible_with = ["@platforms//os:windows"],
 )
