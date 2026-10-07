@@ -16,7 +16,6 @@ impl ReviewerSession for Session {
     async fn snapshot(&self) -> Option<usize> {
         Some(self.0)
     }
-    async fn commit_snapshot(&self) {}
 }
 
 struct Request {

@@ -112,6 +112,7 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) request: GuardianApprovalRequest,
     pub(crate) category: GuardianScope,
     pub(crate) reasons: ApprovalRequestReasons,
+    pub(super) authorization: Option<super::review::ReviewAuthorization>,
     pub(crate) schema: Value,
     pub(crate) review_model: ReviewModel,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
@@ -208,6 +209,7 @@ pub struct GuardianReviewSessionReuseKey {
     base_instructions: Option<String>,
     user_instructions: Option<Instructions>,
     thread_instructions: Option<Instructions>,
+    project_instructions: Option<Arc<crate::agents_md::LoadedAgentsMd>>,
     compact_prompt: Option<String>,
     cwd: PathUri,
     mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
@@ -252,6 +254,7 @@ impl GuardianReviewSessionReuseKey {
             base_instructions: spawn_config.base_instructions.clone(),
             user_instructions: instructions.user,
             thread_instructions: instructions.thread,
+            project_instructions: instructions.project_snapshot,
             compact_prompt: spawn_config.compact_prompt.clone(),
             cwd: PathUri::from_abs_path(&spawn_config.cwd),
             mcp_servers: spawn_config.mcp_servers.clone(),
@@ -991,35 +994,6 @@ impl codex_guardian_reviewer::ReviewerSession for GuardianReviewSession {
     }
     async fn snapshot(&self) -> Option<GuardianReviewForkSnapshot> {
         self.state.lock().await.conversation.snapshot().cloned()
-    }
-
-    async fn commit_snapshot(&self) {
-        // The pool holds the review lock until this checkpoint is published. Capture the
-        // completed model context directly; saving and reloading the transcript adds no state.
-        let items = self.session.guardian_fork_history().await;
-        let history_version = self.session.clone_history().await.history_version();
-        let mut state = self.state.lock().await;
-        // Forks must not inherit a cursor for evidence a completed turn compacted away.
-        if state.transcript_history_version != history_version
-            && self
-                .session
-                .services
-                .thread_extension_data
-                .get::<super::input_budget::CheckpointRecovery>()
-                .is_some()
-        {
-            state.conversation.reset_transcript();
-            state.transcript_source = None;
-            state.last_admitted_node_repl_response_sequence = 0;
-        }
-        let last_admitted_node_repl_response_sequence =
-            state.last_admitted_node_repl_response_sequence;
-        let transcript_source = state.transcript_source;
-        state.conversation.commit_snapshot(GuardianReviewHistory {
-            initial_history: InitialHistory::Forked(items),
-            transcript_source,
-            last_admitted_node_repl_response_sequence,
-        });
     }
 }
 

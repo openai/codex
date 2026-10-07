@@ -79,7 +79,7 @@ impl ThreadLifecycleContributor<Config> for GuardianExtension {
                             let manager = manager.upgrade().ok_or_else(|| {
                                 anyhow::anyhow!("thread manager is no longer available")
                             })?;
-                            let (mut options, state) = context.thread_options(snapshot).await;
+                            let (mut options, state) = context.thread_options(kind, snapshot).await;
                             if matches!(
                                 kind,
                                 codex_analytics::GuardianReviewSessionKind::EphemeralForked

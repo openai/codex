@@ -58,7 +58,7 @@ pub(crate) fn install(session: &Session, config: &Config) {
                 let runtime = Arc::clone(&runtime);
                 Box::pin(async move {
                     let history_reset = context.history_reset.clone();
-                    let (mut options, state) = context.thread_options(snapshot).await;
+                    let (mut options, state) = context.thread_options(kind, snapshot).await;
                     if matches!(
                         kind,
                         codex_analytics::GuardianReviewSessionKind::EphemeralForked

@@ -89,6 +89,7 @@ pub enum GuardianReviewSessionOutcome {
     },
     TimedOut,
     Aborted,
+    StaleAuthorization,
 }
 
 impl From<GuardianReviewSessionOutcome> for GuardianReviewOutcome {
@@ -125,6 +126,9 @@ impl From<GuardianReviewSessionOutcome> for GuardianReviewOutcome {
             }),
             GuardianReviewSessionOutcome::TimedOut => Self::Error(GuardianReviewError::Timeout),
             GuardianReviewSessionOutcome::Aborted => Self::Error(GuardianReviewError::Cancelled),
+            GuardianReviewSessionOutcome::StaleAuthorization => {
+                Self::Error(GuardianReviewError::StaleAuthorization)
+            }
         }
     }
 }

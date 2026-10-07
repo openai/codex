@@ -1,5 +1,6 @@
 //! Resolves global, thread, and repository instructions into one validated snapshot.
 //! Refreshes are serialized; the state lock is never held while calling providers.
+//! Isolated reviewers can pin a captured repository snapshot without executor discovery.
 
 use crate::agents_md::LoadedAgentsMd;
 use crate::agents_md::load_project_instructions;
@@ -29,6 +30,8 @@ pub(crate) struct AgentsMdManager {
 pub(crate) struct SessionInstructions {
     pub(crate) user: Option<Instructions>,
     pub(crate) thread: Option<Instructions>,
+    /// A reviewer-owned repository snapshot. `Some`, even when empty, skips discovery.
+    pub(crate) project_snapshot: Option<Arc<LoadedAgentsMd>>,
     pub(crate) user_provider: Option<Arc<dyn UserInstructionsProvider>>,
     pub(crate) thread_provider: Option<Arc<dyn ThreadInstructionsProvider>>,
 }
@@ -121,7 +124,9 @@ impl AgentsMdManager {
                 }
             }
 
-            let loaded = if refresh_repository {
+            let loaded = if let Some(project) = &instructions.project_snapshot {
+                project.as_ref().clone()
+            } else if refresh_repository {
                 load_project_instructions(config, /*user_instructions*/ None, environments)
                     .await?
                     .unwrap_or_default()
@@ -145,6 +150,23 @@ impl AgentsMdManager {
 
     pub(crate) async fn get_loaded(&self) -> Option<Arc<LoadedAgentsMd>> {
         self.state.lock().await.cache.loaded.clone()
+    }
+
+    /// Captures even an empty result, but never attributes another environment's cache
+    /// to a turn-only reviewer that has no issuing step snapshot.
+    pub(crate) async fn project_snapshot(
+        &self,
+        config: &Config,
+        environments: &TurnEnvironmentSnapshot,
+    ) -> Option<Arc<LoadedAgentsMd>> {
+        let selections = environments
+            .turn_environments()
+            .map(|environment| environment.selection.clone())
+            .collect::<Vec<_>>();
+        let state = self.state.lock().await;
+        (state.cache.selections.as_ref() == Some(&selections)
+            && state.cache.active_project_trust_level == config.active_project.trust_level)
+            .then(|| state.cache.loaded.clone().unwrap_or_default())
     }
 
     pub(crate) async fn inherited_instructions(&self) -> SessionInstructions {

@@ -6,6 +6,8 @@
 
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_analytics::GuardianReviewSessionKind;
@@ -35,11 +37,12 @@ pub trait ReviewerSession: Send + Sync + 'static {
 
     fn context(&self) -> &Self::Context;
     fn snapshot(&self) -> impl Future<Output = Option<Self::Snapshot>> + Send;
-    fn commit_snapshot(&self) -> impl Future<Output = ()> + Send;
 }
 
 /// Executes one approval on a selected session. The host must drain the submitted
-/// turn before returning Reusable, and must keep the issuing action and permissions bound.
+/// turn before returning Reusable or Rollback, and must keep the issuing action and permissions bound.
+/// The pool reserves the session while running the request; the host must capture, validate,
+/// and publish any reusable checkpoint before returning, without yielding after validation.
 pub trait ReviewerRequest: Send + Sync {
     type Session: ReviewerSession;
 
@@ -68,10 +71,12 @@ pub struct ReviewSessionResult {
     pub analytics: GuardianReviewAnalyticsResult,
 }
 
-/// Whether the host drained the session sufficiently for another review to use it.
+/// How the pool may reuse a session and its committed history after an attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionDisposition {
     Reusable,
+    /// Drop this attempt's context; continue from the last committed review.
+    Rollback,
     Discard,
 }
 
@@ -96,6 +101,7 @@ struct Trunk<S: ReviewerSession> {
     session: Arc<S>,
     review_lock: Arc<Semaphore>,
     cancellation: CancellationToken,
+    rollback: AtomicBool,
 }
 
 impl<S: ReviewerSession> Drop for Trunk<S> {
@@ -156,6 +162,7 @@ impl<S: ReviewerSession> ReviewerPool<S> {
                 session: Arc::new(session),
                 review_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
                 cancellation: guard.disarm(),
+                rollback: AtomicBool::new(/*v*/ false),
             }));
         }
         Ok(())
@@ -191,6 +198,7 @@ impl<S: ReviewerSession> ReviewerPool<S> {
         .await
         {
             Ok(mut state) => {
+                let mut snapshot = None;
                 let context = request.context(state.as_ref().map(|trunk| trunk.session.as_ref()));
                 // Claim cached reviewers before validating them: retirement cancels
                 // the session before releasing its review permit.
@@ -200,9 +208,17 @@ impl<S: ReviewerSession> ReviewerPool<S> {
                 if let Some(trunk) = state.as_ref()
                     && (requires_fresh_session
                         || trunk.cancellation.is_cancelled()
-                        || trunk.session.context() != &context)
+                        || trunk.session.context() != &context
+                        || trunk.rollback.load(Ordering::Acquire))
                     && reserved_permit.is_some()
                 {
+                    if !requires_fresh_session
+                        && !trunk.cancellation.is_cancelled()
+                        && trunk.session.context() == &context
+                        && trunk.rollback.load(Ordering::Acquire)
+                    {
+                        snapshot = trunk.session.snapshot().await;
+                    }
                     state.take();
                     drop(reserved_permit.take());
                 }
@@ -216,7 +232,7 @@ impl<S: ReviewerSession> ReviewerPool<S> {
                             request.setup(),
                             context.clone(),
                             GuardianReviewSessionKind::TrunkNew,
-                            /*snapshot*/ None,
+                            snapshot,
                             cancellation.clone(),
                         ),
                     )
@@ -248,6 +264,7 @@ impl<S: ReviewerSession> ReviewerPool<S> {
                         session,
                         review_lock,
                         cancellation: lifetime.disarm(),
+                        rollback: AtomicBool::new(/*v*/ false),
                     }));
                     spawned_trunk = true;
                 }
@@ -289,12 +306,12 @@ impl<S: ReviewerSession> ReviewerPool<S> {
             disposition,
             analytics,
         } = request.run(&trunk.session, kind).await;
-        if disposition == SessionDisposition::Reusable
-            && matches!(outcome, GuardianReviewSessionOutcome::Completed(_))
-        {
-            trunk.session.commit_snapshot().await;
+        if disposition == SessionDisposition::Rollback {
+            // Publish retirement before releasing the permit. Concurrent reviews only
+            // fork the previously committed snapshot, never this invalidated attempt.
+            trunk.rollback.store(true, Ordering::Release);
         }
-        if disposition == SessionDisposition::Reusable {
+        if disposition != SessionDisposition::Discard {
             review_lifetime.disarm();
         } else {
             drop(review_lifetime);
