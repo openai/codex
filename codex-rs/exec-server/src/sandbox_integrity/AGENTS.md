@@ -40,9 +40,9 @@ implementations. Review against this scope. Regressions in explicit policy
 handling, executor context, or reporting remain actionable; this is not a blanket
 exemption for false positives or false negatives.
 
-## Open eligibility issue
+## Eligibility
 
-Approved escalations that retain only deny-read restrictions should be excluded.
-The current full-disk-write guard does not exclude `:root = write` plus denials,
-and `SandboxExecRequest` lacks the approval context to distinguish that escalation
-from a configured weak policy. Do not infer approval from policy shape.
+Skip `SandboxOverride::EscalatedSandboxWithRestrictions` before preparation or
+telemetry: these approved escalations retain only deny-read restrictions.
+An ordinary configured `:root = write` policy with denials is still checked.
+Do not infer approval from policy shape.

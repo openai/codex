@@ -98,7 +98,7 @@ pub struct SandboxCommand {
 /// Build this only at the execution boundary: in exec-server, or in its logical equivalent within
 /// app-server. Orchestration and transport code should retain [`PathUri`] values and defer
 /// conversion to native paths until this request is created.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SandboxExecRequest {
     /// Controller-selected override, retained for observations without altering the sandbox command.
     pub sandbox_override: SandboxOverride,
