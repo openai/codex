@@ -155,6 +155,43 @@ async fn mitm_policy_rechecks_local_private_target_after_connect() {
 }
 
 #[tokio::test]
+async fn mitm_policy_rechecks_dns_for_approved_unallowlisted_host() {
+    let app_state = Arc::new(network_proxy_state_for_policy(NetworkProxyConfig::default()));
+    let host = "does-not-resolve.invalid";
+    // The context represents an approved CONNECT, without a persisted allowlist entry.
+    let ctx = policy_ctx(
+        Arc::clone(&app_state),
+        NetworkMode::Full,
+        host,
+        /*target_port*/ 443,
+    );
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/")
+        .header(HOST, host)
+        .body(Body::empty())
+        .unwrap();
+    let response = mitm_blocking_response(&req, &ctx)
+        .await
+        .unwrap()
+        .expect("approved CONNECT must still validate DNS on inner requests");
+    let blocked = app_state.drain_blocked().await.unwrap();
+    assert_eq!(
+        (
+            response.status(),
+            blocked
+                .iter()
+                .map(|request| (request.host.as_str(), request.reason.as_str(), request.port))
+                .collect::<Vec<_>>()
+        ),
+        (
+            StatusCode::FORBIDDEN,
+            vec![(host, REASON_NOT_ALLOWED_LOCAL, Some(443))]
+        ),
+    );
+}
+
+#[tokio::test]
 async fn mitm_policy_allows_matching_hooked_write_in_full_mode() {
     let secret_file = NamedTempFile::new().unwrap();
     std::fs::write(secret_file.path(), "ghp-secret\n").unwrap();

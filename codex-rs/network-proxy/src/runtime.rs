@@ -87,6 +87,12 @@ impl std::fmt::Display for HostBlockReason {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostAuthorization {
+    RequireAllowlist,
+    Approved,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostBlockDecision {
     Allowed,
@@ -694,8 +700,13 @@ impl NetworkProxyState {
     }
 
     pub async fn host_blocked(&self, host: &str, port: u16) -> Result<HostBlockDecision> {
-        self.host_blocked_with_local_binding(host, port, /*allow_local_binding*/ None)
-            .await
+        self.host_blocked_with_local_binding(
+            host,
+            port,
+            /*allow_local_binding*/ None,
+            HostAuthorization::RequireAllowlist,
+        )
+        .await
     }
 
     pub(crate) async fn host_blocked_with_local_binding(
@@ -703,7 +714,34 @@ impl NetworkProxyState {
         host: &str,
         port: u16,
         allow_local_binding: Option<bool>,
+        authorization: HostAuthorization,
     ) -> Result<HostBlockDecision> {
+        self.host_blocked_with_lookup(
+            host,
+            port,
+            allow_local_binding,
+            authorization,
+            |host, port| async move {
+                lookup_host((host.as_str(), port))
+                    .await
+                    .map(Iterator::collect)
+            },
+        )
+        .await
+    }
+
+    async fn host_blocked_with_lookup<F, Fut>(
+        &self,
+        host: &str,
+        port: u16,
+        allow_local_binding: Option<bool>,
+        authorization: HostAuthorization,
+        lookup: F,
+    ) -> Result<HostBlockDecision>
+    where
+        F: FnOnce(String, u16) -> Fut,
+        Fut: Future<Output = std::io::Result<Vec<SocketAddr>>>,
+    {
         self.reload_if_needed().await?;
         let host = match Host::parse(host) {
             Ok(host) => host,
@@ -722,7 +760,6 @@ impl NetworkProxyState {
                 allowed_domains,
             )
         };
-        let allowed_domains_empty = allowed_domains.is_none();
         let allowed_domains = allowed_domains.unwrap_or_default();
 
         let host_str = host.as_str();
@@ -730,12 +767,13 @@ impl NetworkProxyState {
         // Decision order matters:
         //  1) explicit deny always wins
         //  2) local/private networking is opt-in (defense-in-depth)
-        //  3) allowlist is enforced when configured
+        //  3) DNS requires an allowlist match or an approval
         if globset_matches_host_or_unscoped(&deny_set, host_str) {
             return Ok(HostBlockDecision::Blocked(HostBlockReason::Denied));
         }
 
-        let is_allowlisted = globset_matches_host_or_unscoped(&allow_set, host_str);
+        let is_authorized = authorization == HostAuthorization::Approved
+            || globset_matches_host_or_unscoped(&allow_set, host_str);
         if !allow_local_binding {
             // If the intent is "prevent access to local/internal networks", we must not rely solely
             // on string checks like `localhost` / `127.0.0.1`. Attackers can use DNS rebinding or
@@ -760,23 +798,14 @@ impl NetworkProxyState {
                 if !is_explicit_local_allowlisted(&allowed_domains, &host) {
                     return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
                 }
-            } else if host_resolves_to_non_public_ip(
-                host_str,
-                port,
-                DNS_LOOKUP_TIMEOUT,
-                |host, port| async move {
-                    lookup_host((host.as_str(), port))
-                        .await
-                        .map(Iterator::collect)
-                },
-            )
-            .await
+            } else if is_authorized
+                && host_resolves_to_non_public_ip(host_str, port, DNS_LOOKUP_TIMEOUT, lookup).await
             {
                 return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
             }
         }
 
-        if allowed_domains_empty || !is_allowlisted {
+        if !is_authorized {
             Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed))
         } else {
             Ok(HostBlockDecision::Allowed)
@@ -2388,3 +2417,7 @@ mod tests {
         assert!(!state.is_unix_socket_allowed(&socket_path).await.unwrap());
     }
 }
+
+#[cfg(test)]
+#[path = "host_policy_tests.rs"]
+mod host_policy_tests;

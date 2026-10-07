@@ -14,6 +14,7 @@ use crate::network_policy::NetworkDecisionSource;
 use crate::network_policy::NetworkPolicyDecider;
 use crate::runtime::BlockedRequestObserver;
 use crate::runtime::ConfigState;
+use crate::runtime::HostAuthorization;
 use crate::runtime::HostBlockDecision;
 use crate::runtime::HostBlockReason;
 use crate::runtime::unix_socket_permissions_supported;
@@ -1040,17 +1041,31 @@ impl NetworkProxy {
                         crate::NetworkDecision::deny(crate::reasons::REASON_NOT_ALLOWED)
                     }
                     decision = async {
-                        match state.host_blocked_with_local_binding(
+                        let host_decision = state.host_blocked_with_local_binding(
                             &request.host, request.port, Some(allow_local_binding),
-                        ).await {
+                            HostAuthorization::RequireAllowlist,
+                        ).await;
+                        let host_decision = match host_decision {
                             // Controller approval alone cannot bypass attachment policy.
                             Ok(HostBlockDecision::Allowed) if !environment_policy_applies => {
-                                NetworkDecision::Allow
+                                Ok(HostBlockDecision::Allowed)
                             }
                             Ok(HostBlockDecision::Allowed)
                             | Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed)) => {
-                                decider.decide(request).await
+                                let decision = decider.decide(request.clone()).await;
+                                if !matches!(decision, NetworkDecision::Allow) {
+                                    return decision;
+                                }
+                                state.host_blocked_with_local_binding(
+                                    &request.host, request.port, Some(allow_local_binding),
+                                    HostAuthorization::Approved,
+                                ).await
                             }
+                            Ok(HostBlockDecision::Blocked(reason)) => Ok(HostBlockDecision::Blocked(reason)),
+                            Err(err) => Err(err),
+                        };
+                        match host_decision {
+                            Ok(HostBlockDecision::Allowed) => NetworkDecision::Allow,
                             Ok(HostBlockDecision::Blocked(reason)) => {
                                 NetworkDecision::deny_with_source(
                                     reason.as_str(),

@@ -8,6 +8,7 @@ use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::reasons::REASON_MITM_HOOK_DENIED;
 use crate::responses::blocked_text_response;
 use crate::responses::text_response;
+use crate::runtime::HostAuthorization;
 use crate::runtime::HostBlockDecision;
 use crate::runtime::HostBlockReason;
 use crate::state::BlockedRequest;
@@ -390,7 +391,12 @@ async fn evaluate_mitm_policy(
     if matches!(
         policy
             .app_state
-            .host_blocked(&policy.target_host, policy.target_port)
+            .host_blocked_with_local_binding(
+                &policy.target_host,
+                policy.target_port,
+                /*allow_local_binding*/ None,
+                HostAuthorization::Approved,
+            )
             .await?,
         HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
     ) {

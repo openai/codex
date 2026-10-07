@@ -1,6 +1,7 @@
 use crate::reasons::REASON_POLICY_DENIED;
 use crate::request_cancellation::NetworkRequestCancellation;
 use crate::request_disconnect::NetworkRequestDisconnect;
+use crate::runtime::HostAuthorization;
 use crate::runtime::HostBlockDecision;
 use crate::runtime::HostBlockReason;
 use crate::state::NetworkProxyState;
@@ -371,14 +372,31 @@ pub(crate) async fn evaluate_host_policy(
         HostBlockDecision::Allowed => (NetworkDecision::Allow, false),
         HostBlockDecision::Blocked(HostBlockReason::NotAllowed) => {
             if let Some(decider) = decider {
-                let mut request = request.clone();
-                if request.environment_id.is_none()
+                let mut attributed_request = request.clone();
+                if attributed_request.environment_id.is_none()
                     && let Some(environment_id) = state.environment_id()
                 {
-                    request.environment_id = Some(environment_id.to_string());
+                    attributed_request.environment_id = Some(environment_id.to_string());
                 }
-                request.execution_id = execution_id.clone();
-                let decider_decision = map_decider_decision(decider.decide(request).await);
+                attributed_request.execution_id = execution_id.clone();
+                let mut decider_decision =
+                    map_decider_decision(decider.decide(attributed_request).await);
+                // Approval permits DNS, but cannot bypass private-address or explicit deny policy.
+                if matches!(decider_decision, NetworkDecision::Allow)
+                    && let HostBlockDecision::Blocked(reason) = state
+                        .host_blocked_with_local_binding(
+                            &request.host,
+                            request.port,
+                            /*allow_local_binding*/ None,
+                            HostAuthorization::Approved,
+                        )
+                        .await?
+                {
+                    decider_decision = NetworkDecision::deny_with_source(
+                        reason.as_str(),
+                        NetworkDecisionSource::BaselinePolicy,
+                    );
+                }
                 let policy_override = matches!(decider_decision, NetworkDecision::Allow);
                 (decider_decision, policy_override)
             } else {

@@ -1453,10 +1453,6 @@ fn create_seatbelt_args_allows_local_binding_when_explicitly_enabled() {
         "policy should allow loopback outbound when explicitly enabled:\n{policy}"
     );
     assert!(
-        policy.contains("(allow network-outbound (remote ip \"*:53\"))"),
-        "policy should allow DNS egress when local binding is explicitly enabled:\n{policy}"
-    );
-    assert!(
         !policy.contains("\n(allow network-outbound)\n"),
         "policy should keep proxy-routed behavior without blanket outbound allowance:\n{policy}"
     );

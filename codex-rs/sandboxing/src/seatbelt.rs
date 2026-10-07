@@ -337,10 +337,6 @@ fn dynamic_network_policy_for_network(
             policy.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
             policy.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
         }
-        if proxy.allow_local_binding && !proxy.ports.is_empty() {
-            policy.push_str("; allow DNS lookups while application traffic remains proxy-routed\n");
-            policy.push_str("(allow network-outbound (remote ip \"*:53\"))\n");
-        }
         for port in &proxy.ports {
             policy.push_str(&format!(
                 "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
@@ -1123,3 +1119,7 @@ mod fcntl_tests;
 #[cfg(test)]
 #[path = "seatbelt_tls_tests.rs"]
 mod tls_tests;
+
+#[cfg(test)]
+#[path = "seatbelt_network_tests.rs"]
+mod network_tests;
