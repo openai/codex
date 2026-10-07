@@ -22,6 +22,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -40,7 +41,6 @@ from fixtures import SmokePackage
     ("arguments", "expected"),
     [
         pytest.param(("--help",), "Usage:", id="help"),
-        pytest.param(("--version",), None, id="version"),
         pytest.param(("features", "list"), "code_mode", id="features"),
         pytest.param(("completion", "bash"), "codex", id="completion"),
     ],
@@ -48,11 +48,23 @@ from fixtures import SmokePackage
 def test_cli_public_commands(
     package: SmokePackage,
     arguments: tuple[str, ...],
-    expected: str | None,
+    expected: str,
 ) -> None:
-    """Packaged CLI remains usable for discovery, version, features, and completions."""
+    """Packaged CLI remains usable for discovery, features, and completions."""
     output = package.run(*arguments).stdout
-    assert expected in output if expected is not None else output.strip()
+    assert expected in output
+
+
+def test_cli_version_matches_release_sources(package: SmokePackage) -> None:
+    """Verify the compiled banner against the sources used to package the release."""
+    root = next(
+        parent
+        for parent in Path(__file__).resolve().parents
+        if (parent / "codex-rs/Cargo.toml").is_file()
+    )
+    manifest = tomllib.loads((root / "codex-rs/Cargo.toml").read_text())
+    version = manifest["workspace"]["package"]["version"]
+    assert package.run("--version").stdout == f"codex-cli {version}\n"
 
 
 @pytest.mark.parametrize("entrypoint", ["codex", "codex-app-server"])
