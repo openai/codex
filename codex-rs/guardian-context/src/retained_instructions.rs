@@ -216,7 +216,7 @@ impl ComposedContext {
         let (assistant, instructions): (Vec<_>, Vec<_>) =
             std::mem::take(items).into_iter().partition(|item| {
                 item.retention == Retention::Optional(BudgetPriority::Commentary)
-                    || matches!(&item.content, ContentItem::InputText { text }
+                    || matches!(&item.content, SectionContent::Other(ContentItem::InputText { text })
                         if text.strip_suffix('\n') == Some(assistant_omission.as_str()))
             });
         let mut prefix = self.sections.remove(index);
@@ -228,16 +228,12 @@ impl ComposedContext {
                 SectionOutput {
                     id: "retained_assistant_context",
                     delivery: SectionDelivery::UserContent(
-                        std::iter::once(Budgeted::required(ContentItem::InputText {
-                            text: assistant_start.to_owned(),
-                        }))
-                        .chain(assistant)
-                        .chain(std::iter::once(Budgeted::required(
-                            ContentItem::InputText {
-                                text: assistant_end.to_owned(),
-                            },
-                        )))
-                        .collect(),
+                        std::iter::once(Budgeted::required(assistant_start.to_owned().into()))
+                            .chain(assistant)
+                            .chain(std::iter::once(Budgeted::required(
+                                assistant_end.to_owned().into(),
+                            )))
+                            .collect(),
                     ),
                 },
             );
@@ -284,7 +280,7 @@ impl ComposedContext {
         self.sections.retain_mut(|section| {
             if section.id == "retained_assistant_context" {
                 return !matches!(&section.delivery, SectionDelivery::UserContent(items)
-                    if items.iter().all(|item| matches!(&item.content, ContentItem::InputText { text }
+                    if items.iter().all(|item| matches!(&item.content, SectionContent::Other(ContentItem::InputText { text })
                         if text == assistant_start || text == assistant_end)));
             }
             if section.id != "retained_user_instructions" {

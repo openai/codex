@@ -197,7 +197,14 @@ fn changing_retained_context_and_attestations_preserves_history_before_the_curre
 
 #[test]
 fn snapshot_split_preserves_evidence_and_prefix_when_assistants_and_reviews_change() {
-    for message_id in [None, Some("instruction".to_owned())] {
+    for (format, message_id) in [TranscriptFormat::Line, TranscriptFormat::Json]
+        .into_iter()
+        .flat_map(|format| {
+            [None, Some("instruction".to_owned())]
+                .into_iter()
+                .map(move |message_id| (format, message_id))
+        })
+    {
         let has_source_id = message_id.is_some();
         let mut retained = RetainedContext::default();
         retained.record_user_message(
@@ -215,7 +222,8 @@ fn snapshot_split_preserves_evidence_and_prefix_when_assistants_and_reviews_chan
             items: vec![user_message(vec!["Current workspace evidence.".to_owned()])],
             retained: Some(retained),
         };
-        let profile = ContextProfile::asynchronous();
+        let mut profile = ContextProfile::asynchronous();
+        profile.transcript_format = format;
         let mut prefix = None;
         // Append, replace and remove reviews while assistant evidence grows.
         for generation in 0..4 {
@@ -261,7 +269,7 @@ fn snapshot_split_preserves_evidence_and_prefix_when_assistants_and_reviews_chan
                     node_repl: None,
                 })
                 .unwrap();
-            let transcript = profile.render_transcript(
+            let transcript = profile.prepare_transcript(
                 collected.transcript_entries(),
                 /*entry_number_offset*/ 0,
             );
