@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::sandbox::SandboxOverride;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
@@ -34,6 +35,7 @@ async fn snapshot_failure_omits_credentials_and_stops_descendants(
     let permissions = PermissionProfile::Disabled;
     let manager = SandboxManager::new();
     let attempt = SandboxAttempt {
+        sandbox_override: SandboxOverride::NoOverride,
         sandbox: SandboxType::None,
         sandbox_requested: false,
         permissions: &permissions,

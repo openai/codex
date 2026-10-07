@@ -7,6 +7,7 @@ use codex_exec_server::ShellInfo;
 use codex_exec_server::ShellSnapshotRequest;
 use codex_features::Feature;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::sandbox::SandboxOverride;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxablePreference;
 use codex_tools::ToolName;
@@ -92,6 +93,7 @@ impl Session {
                         /*has_managed_network_requirements*/ false,
                     )
                     .then(|| FileSystemSandboxContext {
+                        sandbox_override: SandboxOverride::NoOverride,
                         permissions: environment.permission_profile().clone(),
                         cwd: environment.cwd().clone(),
                         workspace_roots: environment.workspace_roots().to_vec(),

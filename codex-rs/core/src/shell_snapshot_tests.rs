@@ -17,6 +17,8 @@ use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::config_types::EnvironmentVariablePattern;
 #[cfg(unix)]
 use codex_protocol::models::PermissionProfile;
+#[cfg(unix)]
+use codex_protocol::sandbox::SandboxOverride;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
@@ -411,6 +413,7 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
     let permissions = PermissionProfile::Disabled;
     let cancellation = CancellationToken::new();
     let mut attempt = SandboxAttempt {
+        sandbox_override: SandboxOverride::NoOverride,
         sandbox: SandboxType::None,
         sandbox_requested: false,
         permissions: &permissions,

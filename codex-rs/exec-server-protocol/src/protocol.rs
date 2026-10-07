@@ -1224,6 +1224,7 @@ mod base64_bytes {
 #[cfg(test)]
 mod tests {
     use super::CapabilityRootDiscoverRequest;
+    use super::WireExecParams;
     #[test]
     fn discovery_v2_support_defaults_off_for_older_executors() -> serde_json::Result<()> {
         let legacy: super::EnvironmentCapabilities = serde_json::from_value(serde_json::json!({}))?;
@@ -1269,6 +1270,7 @@ mod tests {
     use codex_protocol::permissions::FileSystemSandboxPolicy;
     use codex_protocol::permissions::FileSystemSpecialPath;
     use codex_protocol::permissions::NetworkSandboxPolicy;
+    use codex_protocol::sandbox::SandboxOverride;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
@@ -1378,6 +1380,35 @@ mod tests {
         assert!(legacy_serialized.get("threadId").is_none());
         assert!(legacy_serialized.get("toolCallId").is_none());
         assert!(legacy_serialized.get("metadata").is_none());
+
+        for sandbox_override in [
+            SandboxOverride::NoOverride,
+            SandboxOverride::EscalatedSandboxWithRestrictions,
+            SandboxOverride::BypassSandboxFirstAttempt,
+        ] {
+            let mut params = params.clone();
+            let mut sandbox = FileSystemSandboxContext::from_permission_profile(
+                PermissionProfile::read_only(),
+                params.cwd.clone(),
+            );
+            sandbox.sandbox_override = sandbox_override;
+            params.sandbox = Some(sandbox);
+            let mut json = serde_json::to_value(&params).expect("serialize sandboxed exec");
+            assert_eq!(
+                json["sandbox"].get("sandboxOverride").is_none(),
+                sandbox_override.is_no_override(),
+            );
+            let wire: WireExecParams = serde_json::from_value(json.clone()).expect("wire exec");
+            assert_eq!(ExecParams::from(wire), params);
+
+            json["sandbox"]
+                .as_object_mut()
+                .unwrap()
+                .remove("sandboxOverride");
+            params.sandbox.as_mut().unwrap().sandbox_override = SandboxOverride::NoOverride;
+            let legacy: WireExecParams = serde_json::from_value(json).expect("legacy wire exec");
+            assert_eq!(ExecParams::from(legacy), params);
+        }
     }
 
     #[test]
@@ -1779,6 +1810,7 @@ mod tests {
         let workspace = PathUri::parse("file:///workspace/other").expect("selected workspace");
         let path = cwd.join("note.txt").expect("read path");
         let sandbox = FileSystemSandboxContext {
+            sandbox_override: SandboxOverride::EscalatedSandboxWithRestrictions,
             workspace_roots: vec![workspace],
             ..FileSystemSandboxContext::from_permission_profile(PermissionProfile::Disabled, cwd)
         };

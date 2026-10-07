@@ -17,6 +17,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::sandbox::SandboxOverride;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 pub use environment_accessor::EnvironmentAccess;
@@ -351,6 +352,9 @@ pub struct FileSystemSandboxContext {
     /// Serializes paths as executor file URIs instead of the profile's default native paths.
     #[serde(with = "exec_permission_profile_serde")]
     pub permissions: PermissionProfile,
+    /// Controller-selected override for observations, never an authorization to widen permissions.
+    #[serde(default, skip_serializing_if = "SandboxOverride::is_no_override")]
+    pub sandbox_override: SandboxOverride,
     /// Working directory on the selected executor used to interpret sandbox permissions.
     /// Required even for absolute permissions; a process may use a different working directory.
     pub cwd: PathUri,
@@ -394,6 +398,7 @@ impl FileSystemSandboxContext {
     pub fn from_permission_profile(permissions: PermissionProfile, cwd: PathUri) -> Self {
         Self {
             permissions,
+            sandbox_override: SandboxOverride::NoOverride,
             workspace_roots: vec![cwd.clone()],
             cwd,
             user_home_dir: None,
@@ -463,6 +468,8 @@ impl FileSystemSandboxContext {
 #[serde(rename_all = "camelCase")]
 pub struct WireFileSystemSandboxContext {
     permissions: ExecPermissionProfile,
+    #[serde(default, skip_serializing_if = "SandboxOverride::is_no_override")]
+    sandbox_override: SandboxOverride,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cwd: Option<PathUri>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -495,6 +502,7 @@ impl From<FileSystemSandboxContext> for WireFileSystemSandboxContext {
     fn from(sandbox: FileSystemSandboxContext) -> Self {
         let FileSystemSandboxContext {
             permissions,
+            sandbox_override,
             cwd,
             workspace_roots,
             user_home_dir,
@@ -531,6 +539,7 @@ impl From<FileSystemSandboxContext> for WireFileSystemSandboxContext {
         };
         Self {
             permissions,
+            sandbox_override,
             cwd: legacy_needs_cwd.then(|| cwd.clone()),
             workspace_roots: if legacy_needs_cwd {
                 workspace_roots.clone()
@@ -582,6 +591,7 @@ impl WireFileSystemSandboxContext {
     pub fn into_context(self, cwd: PathUri) -> FileSystemSandboxContext {
         FileSystemSandboxContext {
             permissions: self.permissions.into(),
+            sandbox_override: self.sandbox_override,
             cwd,
             workspace_roots: match self.policy_context {
                 Some(policy_context) => policy_context.workspace_roots,

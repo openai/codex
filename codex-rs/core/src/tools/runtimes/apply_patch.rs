@@ -98,6 +98,7 @@ impl ApplyPatchRuntime {
             req.additional_permissions.as_ref(),
         );
         Some(FileSystemSandboxContext {
+            sandbox_override: attempt.sandbox_override,
             permissions,
             cwd: attempt.sandbox_cwd.clone(),
             workspace_roots: attempt.workspace_roots.to_vec(),

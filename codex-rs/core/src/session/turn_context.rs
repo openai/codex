@@ -35,6 +35,7 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::sandbox::SandboxOverride;
 use codex_protocol::turn_input::CyberAccessProgram;
 use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
@@ -242,6 +243,7 @@ impl TurnEnvironment {
             additional_permissions.as_ref(),
         );
         FileSystemSandboxContext {
+            sandbox_override: SandboxOverride::NoOverride,
             permissions,
             cwd: self.cwd().clone(),
             workspace_roots: self.workspace_roots().to_vec(),

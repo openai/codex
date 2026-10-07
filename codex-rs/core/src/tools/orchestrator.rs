@@ -23,6 +23,7 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
+use crate::tools::sandboxing::ensure_native_sandbox;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::unsandboxed_execution_allowed;
 use codex_otel::ToolDecisionSource;
@@ -83,6 +84,7 @@ impl ToolOrchestrator {
             tool_name: tool_ctx.tool_name.clone(),
         };
         let attempt_with_network_approval = SandboxAttempt {
+            sandbox_override: attempt.sandbox_override,
             sandbox: attempt.sandbox,
             sandbox_requested: attempt.sandbox_requested,
             permissions: attempt.permissions,
@@ -347,7 +349,7 @@ impl ToolOrchestrator {
             SandboxType::None
         };
         if !executor_managed_process_sandbox {
-            sandbox_override.ensure_native_sandbox(initial_sandbox)?;
+            ensure_native_sandbox(sandbox_override, initial_sandbox)?;
         }
 
         let sandbox_policy_cwd = tool
@@ -360,6 +362,7 @@ impl ToolOrchestrator {
             turn_ctx.config.codex_linux_sandbox_exe.as_ref()
         };
         let initial_attempt = SandboxAttempt {
+            sandbox_override,
             sandbox: initial_sandbox,
             sandbox_requested,
             permissions: initial_permissions,
@@ -534,6 +537,7 @@ impl ToolOrchestrator {
                     codex_sandbox_exe
                 };
                 let retry_attempt = SandboxAttempt {
+                    sandbox_override,
                     sandbox: retry_sandbox,
                     sandbox_requested: retry_sandbox_requested,
                     permissions: initial_permissions,
