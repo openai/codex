@@ -15,6 +15,7 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::executor_windows_sandbox_selection;
 use codex_apply_patch::AppliedPatchDelta;
+use codex_apply_patch::AppliedPatchFileChange;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchOptions;
 use codex_exec_server::FileSystemSandboxContext;
@@ -169,7 +170,7 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
         &mut self,
         req: &ApplyPatchRequest,
         attempt: &SandboxAttempt<'_>,
-        _ctx: &ToolCtx,
+        ctx: &ToolCtx,
     ) -> Result<ApplyPatchRuntimeOutput, ToolError> {
         let started_at = Instant::now();
         let fs = req.turn_environment.environment.get_filesystem();
@@ -203,6 +204,28 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
             Ok(delta) => delta,
             Err(failure) => failure.into_parts().1,
         };
+        // Count committed paths, including changes made before a later patch failure.
+        for change in delta.changes() {
+            let move_path = match &change.change {
+                AppliedPatchFileChange::Update { move_path, .. } => move_path.as_ref(),
+                AppliedPatchFileChange::Add { .. } | AppliedPatchFileChange::Delete { .. } => None,
+            };
+            for path in
+                std::iter::once(&change.path).chain(move_path.filter(|path| *path != &change.path))
+            {
+                if let Some(filename @ ("agents.md" | "agents.override.md")) = path
+                    .basename()
+                    .map(|name| name.to_ascii_lowercase())
+                    .as_deref()
+                {
+                    ctx.step_context.session_telemetry.counter(
+                        "codex.agents_md.edit",
+                        /*inc*/ 1,
+                        &[("filename", filename)],
+                    );
+                }
+            }
+        }
         self.committed_delta.append(delta);
         let output = ExecToolCallOutput {
             exit_code,
