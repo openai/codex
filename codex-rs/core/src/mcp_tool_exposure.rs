@@ -28,7 +28,6 @@ pub(crate) struct McpHandlerCache {
 }
 
 struct CachedMcpHandler {
-    tool_info: McpToolInfo,
     agent_plugin: bool,
     schema_max_bytes: Option<NonZeroUsize>,
     handler: Arc<McpHandler>,
@@ -98,7 +97,7 @@ fn append_mcp_tools(
         // Handlers contain immutable tool metadata, not a connection or authorization snapshot.
         // Preserve their identity across equivalent bindings so the search index can also be reused.
         let handler = if let Some(cached) = handlers.get(&tool_name).filter(|cached| {
-            cached.tool_info == *tool
+            cached.handler.tool_info() == tool
                 && cached.agent_plugin == agent_plugin
                 && cached.schema_max_bytes == tool_input_schema_max_bytes
         }) {
@@ -123,7 +122,6 @@ fn append_mcp_tools(
             handlers.insert(
                 tool_name.clone(),
                 CachedMcpHandler {
-                    tool_info: tool.clone(),
                     agent_plugin,
                     schema_max_bytes: tool_input_schema_max_bytes,
                     handler: Arc::clone(&handler),
