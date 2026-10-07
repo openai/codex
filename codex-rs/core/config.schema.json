@@ -815,6 +815,9 @@
             "code_mode_prewarm": {
               "type": "boolean"
             },
+            "code_mode_tool_description_first": {
+              "type": "boolean"
+            },
             "code_mode_tool_search": {
               "type": "boolean"
             },
@@ -7033,6 +7036,9 @@
           "type": "boolean"
         },
         "code_mode_prewarm": {
+          "type": "boolean"
+        },
+        "code_mode_tool_description_first": {
           "type": "boolean"
         },
         "code_mode_tool_search": {
