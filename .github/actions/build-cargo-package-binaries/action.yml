@@ -1,0 +1,135 @@
+name: Build Cargo package binaries
+description: Set up Cargo and build unstripped runtime package binaries and symbols.
+inputs:
+  target:
+    description: Rust release target triple.
+    required: true
+  binaries:
+    description: Space-separated binary target names.
+    required: true
+  build-mode:
+    description: Release optimizations, or debug for faster package smoke builds.
+    default: release
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup-ci
+
+    - name: Configure Cargo release profile
+      shell: bash
+      env:
+        BUILD_MODE: ${{ inputs.build-mode }}
+        # macOS symbol extraction needs packed dSYM bundles before binaries are stripped.
+        CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: ${{ contains(inputs.target, 'apple-darwin') && 'packed' || 'off' }}
+      run: |
+        set -euo pipefail
+        echo "CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=$CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO" >> "$GITHUB_ENV"
+        case "$BUILD_MODE" in
+          release) ;;
+          debug)
+            # Use the release profile so assertions, symbols and packaging match production.
+            # Only trade compiler optimizations for faster builds.
+            {
+              echo "CARGO_PROFILE_RELEASE_OPT_LEVEL=0"
+              echo "CARGO_PROFILE_RELEASE_LTO=off"
+              echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256"
+            } >> "$GITHUB_ENV"
+            ;;
+          *) echo "Unsupported build mode: $BUILD_MODE" >&2; exit 1 ;;
+        esac
+
+    - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      with:
+        targets: ${{ inputs.target }}
+
+    - name: Use hermetic Cargo home (musl)
+      if: ${{ runner.os == 'Linux' }}
+      shell: bash
+      working-directory: codex-rs
+      run: |
+        set -euo pipefail
+        cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+        mkdir -p "${cargo_home}/bin"
+        echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+        echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+        : > "${cargo_home}/config.toml"
+
+    - name: Install Zig
+      if: ${{ runner.os == 'Linux' }}
+      uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+      with:
+        version: 0.14.0
+        use-cache: false
+
+    - name: Install musl build tools
+      if: ${{ runner.os == 'Linux' }}
+      shell: bash
+      working-directory: codex-rs
+      env:
+        TARGET: ${{ inputs.target }}
+      run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+    - name: Disable aws-lc jitter entropy (musl)
+      if: ${{ runner.os == 'Linux' }}
+      shell: bash
+      working-directory: codex-rs
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        # aws-lc's jitter entropy path does not work reliably on musl builders,
+        # so disable it globally and per target.
+        echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
+        target_no_jitter="AWS_LC_SYS_NO_JITTER_ENTROPY_${TARGET}"
+        target_no_jitter="${target_no_jitter//-/_}"
+        echo "${target_no_jitter}=1" >> "$GITHUB_ENV"
+
+    - name: Configure rusty_v8 artifact overrides and verify checksums
+      uses: ./.github/actions/setup-rusty-v8
+      with:
+        target: ${{ inputs.target }}
+
+    - name: Configure MSVC environment
+      if: ${{ runner.os == 'Windows' }}
+      uses: ./.github/actions/setup-msvc-env
+      with:
+        target: ${{ inputs.target }}
+
+    - name: Build bwrap and export digest
+      if: ${{ runner.os == 'Linux' }}
+      shell: bash
+      working-directory: codex-rs
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        cargo build --target "${TARGET}" --release --timings --bin bwrap
+
+        bwrap_path="${CARGO_TARGET_DIR}/${TARGET}/release/bwrap"
+        # Codex embeds this digest at build time and verifies the packaged
+        # bwrap at runtime, so hash its final stripped bytes first.
+        strip --strip-debug --strip-unneeded "$bwrap_path"
+        digest="$(sha256sum "$bwrap_path" | awk '{print $1}')"
+        echo "CODEX_BWRAP_SHA256=${digest}" >> "$GITHUB_ENV"
+
+    - name: Build Codex package binaries
+      shell: bash
+      working-directory: codex-rs
+      env:
+        TARGET: ${{ inputs.target }}
+        BINARIES: ${{ inputs.binaries }}
+      run: |
+        set -euo pipefail
+        build_args=()
+        for binary in $BINARIES; do
+          build_args+=(--bin "$binary")
+        done
+        # SQLite intrinsics can emit instructions unsupported by older x64
+        # CPUs, causing Windows release binaries to crash during startup.
+        if [[ "${TARGET}" == "x86_64-pc-windows-msvc" ]]; then
+          export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+        fi
+        STABLE_GIT_COMMIT="$(git rev-parse HEAD)"
+        export STABLE_GIT_COMMIT
+        cargo build --target "${TARGET}" --release --timings "${build_args[@]}"

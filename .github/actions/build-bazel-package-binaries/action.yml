@@ -1,0 +1,35 @@
+name: Build Bazel package binaries
+description: Set up Bazel and stage unstripped runtime package binaries and symbols.
+inputs:
+  target:
+    description: Rust release target triple.
+    required: true
+  build-mode:
+    description: Release optimizations, or debug for faster package smoke builds.
+    default: release
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Bazel
+      uses: ./.github/actions/prepare-bazel-ci
+      with:
+        target: ${{ inputs.target }}
+        cache-scope: bazel-release
+
+    - name: Install Cargo for workspace metadata
+      uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+
+    - name: Configure MSVC environment
+      if: ${{ runner.os == 'Windows' }}
+      uses: ./.github/actions/setup-msvc-env
+      with:
+        target: ${{ inputs.target }}
+
+    - name: Build Bazel release binaries and symbols
+      uses: ./.github/actions/build-bazel-release
+      with:
+        target: ${{ inputs.target }}
+        bundle: combined
+        release-dir: ${{ env.CARGO_TARGET_DIR }}/${{ inputs.target }}/release
+        build-mode: ${{ inputs.build-mode }}
