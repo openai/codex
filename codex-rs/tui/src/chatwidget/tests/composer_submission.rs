@@ -1012,6 +1012,68 @@ async fn submission_prefers_selected_duplicate_skill_path() {
 }
 
 #[tokio::test]
+async fn plugin_mention_does_not_suppress_same_name_skill() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    chat.bottom_pane
+        .set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+            config_name: "app-0123456789abcdef0123456789abcdef@test".to_string(),
+            display_name: "foo".to_string(),
+            plugin_namespace: None,
+            description: None,
+            has_skills: true,
+            mcp_server_names: Vec::new(),
+            app_connector_ids: Vec::new(),
+        }]));
+    let skill_path = test_path_buf("/tmp/foo/SKILL.md").abs();
+    chat.set_skills(Some(vec![SkillMetadata {
+        name: "foo".to_string(),
+        description: "Foo skill".to_string(),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        path: skill_path.clone(),
+        scope: crate::test_support::skill_scope_user(),
+        enabled: true,
+        plugin_id: None,
+    }]));
+
+    chat.submit_user_message(UserMessage {
+        text: "@foo $foo".to_string(),
+        local_images: Vec::new(),
+        remote_image_urls: Vec::new(),
+        text_elements: Vec::new(),
+        mention_bindings: vec![MentionBinding {
+            sigil: '@',
+            mention: "foo".to_string(),
+            path: "plugin://app-0123456789abcdef0123456789abcdef@test".to_string(),
+        }],
+    });
+
+    let Op::UserTurn { items, .. } = next_submit_op(&mut op_rx) else {
+        panic!("expected Op::UserTurn");
+    };
+    assert_eq!(
+        items,
+        vec![
+            UserInput::Text {
+                text: "@foo $foo".to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Skill {
+                name: "foo".to_string(),
+                path: skill_path.to_path_buf(),
+            },
+            UserInput::Mention {
+                name: "foo".to_string(),
+                path: "plugin://app-0123456789abcdef0123456789abcdef@test".to_string(),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
 async fn blocked_image_restore_preserves_mention_bindings() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

@@ -132,6 +132,21 @@ fn plugin_mention_name(plugin_name: &str, display_name: &str) -> String {
         return result;
     }
 
+    // Generated app IDs have no useful words to title-case; use a bounded mention label instead.
+    if let Some(app_id) = plugin_name.strip_prefix("app-")
+        && app_id.len() == 32
+        && app_id
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        && (1..=64).contains(&display_name.len())
+        && display_name
+            .bytes()
+            .all(crate::mention_codec::is_mention_name_char)
+        && !crate::mention_codec::is_common_env_var(display_name)
+    {
+        return display_name.to_owned();
+    }
+
     title_case_plugin_name(plugin_name)
 }
 
@@ -242,6 +257,34 @@ mod tests {
             plugin_mention_name("google_calendar", "Google Calendar"),
             "Google_Calendar"
         );
+        assert_eq!(
+            plugin_mention_name(
+                "app-6a6b12e06c5c8191ac5d5252fa5f92c8",
+                "app_6a6b12e06c5c8191ac5d5252fa5f92c8"
+            ),
+            "app-6a6b12e06c5c8191ac5d5252fa5f92c8"
+        );
+    }
+
+    #[test]
+    fn generated_app_mentions_use_bounded_display_names() {
+        let plugin_name = "app-6a6b12e06c5c8191ac5d5252fa5f92c8";
+        for display_name in ["Postman", "foo-bar_baz", &"a".repeat(64)] {
+            assert_eq!(plugin_mention_name(plugin_name, display_name), display_name);
+        }
+        for display_name in [
+            "",
+            "Foo Bar",
+            "Café",
+            "PATH",
+            "XDG_CONFIG_HOME",
+            &"a".repeat(65),
+        ] {
+            assert_eq!(
+                plugin_mention_name(plugin_name, display_name),
+                "App-6a6b12e06c5c8191ac5d5252fa5f92c8"
+            );
+        }
     }
 
     #[test]
@@ -251,5 +294,19 @@ mod tests {
             plugin_mention_name("browser-use", "Browser Use"),
             "Browser-Use"
         );
+        for (plugin_name, expected) in [
+            ("1vault", "1vault"),
+            ("app-short", "App-Short"),
+            (
+                "app-6a6b12e06c5c8191ac5d5252fa5f92cg",
+                "App-6a6b12e06c5c8191ac5d5252fa5f92cg",
+            ),
+            (
+                "app-6A6B12E06C5C8191AC5D5252FA5F92C8",
+                "App-6A6B12E06C5C8191AC5D5252FA5F92C8",
+            ),
+        ] {
+            assert_eq!(plugin_mention_name(plugin_name, "Vault"), expected);
+        }
     }
 }

@@ -289,6 +289,7 @@ impl ChatWidget {
             collect_tool_mentions(reply_text.as_deref().unwrap_or(&text), &HashMap::new());
         let bound_names: HashSet<String> = mention_bindings
             .iter()
+            .filter(|binding| binding.sigil == '$')
             .map(|binding| binding.mention.clone())
             .collect();
         let mut skill_names_lower: HashSet<String> = HashSet::new();
