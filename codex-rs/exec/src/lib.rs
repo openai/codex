@@ -1865,6 +1865,7 @@ async fn resolve_resume_thread_id(
                 ClientRequest::ThreadList {
                     request_id: RequestId::Integer(0),
                     params: ThreadListParams {
+                        excluded_thread_ids: None,
                         originators: None,
                         cursor,
                         limit: Some(100),
@@ -1951,6 +1952,7 @@ async fn resolve_resume_thread_id(
             ClientRequest::ThreadList {
                 request_id: RequestId::Integer(0),
                 params: ThreadListParams {
+                    excluded_thread_ids: None,
                     originators: None,
                     cursor,
                     limit: Some(100),

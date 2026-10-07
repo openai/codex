@@ -64,6 +64,7 @@ pub(super) async fn lookup(
             loop {
                 let response = app_server
                     .thread_list(ThreadListParams {
+                        excluded_thread_ids: None,
                         originators: None,
                         cursor,
                         limit: Some(100),

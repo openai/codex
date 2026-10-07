@@ -349,6 +349,7 @@ async fn execute_inner(
                 request(&handle, |request_id| ClientRequest::ThreadList {
                     request_id,
                     params: ThreadListParams {
+                        excluded_thread_ids: None,
                         originators: None,
                         cursor: arguments.cursor.clone(),
                         limit: Some(limit),

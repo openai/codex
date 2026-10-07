@@ -2090,6 +2090,7 @@ fn thread_list_params(
     use_state_db_only: bool,
 ) -> ThreadListParams {
     ThreadListParams {
+        excluded_thread_ids: None,
         originators: None,
         cursor,
         limit: Some(PAGE_SIZE as u32),

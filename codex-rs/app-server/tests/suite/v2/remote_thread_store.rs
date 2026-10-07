@@ -345,6 +345,7 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
         .request(ClientRequest::ThreadList {
             request_id: RequestId::Integer(3),
             params: ThreadListParams {
+                excluded_thread_ids: None,
                 originators: None,
                 cursor: None,
                 limit: Some(10),

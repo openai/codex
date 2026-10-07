@@ -12,6 +12,11 @@ cursor?: string | null, /**
  * Optional page size; defaults to a reasonable server-side value.
  */
 limit?: number | null, /**
+ * Thread IDs to exclude before applying the result limit. Up to 100
+ * entries; invalid IDs or a larger list are rejected, never truncated.
+ * Send the same exclusions on each page. Omitted, null, or empty means no exclusions.
+ */
+excludedThreadIds?: Array<string> | null, /**
  * Optional sort key; defaults to created_at.
  */
 sortKey?: ThreadSortKey | null, /**

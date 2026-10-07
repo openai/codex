@@ -102,6 +102,7 @@ async fn list_threads_with_sort(
     mcp.request(|request_id| ClientRequest::ThreadList {
         request_id,
         params: codex_app_server_protocol::ThreadListParams {
+            excluded_thread_ids: None,
             originators: None,
             cursor,
             limit,
@@ -142,6 +143,7 @@ async fn list_threads_for_relation(
     mcp.request(|request_id| ClientRequest::ThreadList {
         request_id,
         params: codex_app_server_protocol::ThreadListParams {
+            excluded_thread_ids: None,
             originators: None,
             cursor,
             limit: Some(limit),
@@ -254,6 +256,231 @@ async fn thread_list_basic_empty() -> Result<()> {
     assert!(data.is_empty());
     assert_eq!(next_cursor, None);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_exclusions_refill_across_storage_paths_and_scopes() -> Result<()> {
+    let home = TempDir::new()?;
+    create_minimal_config(home.path())?;
+    let ids = create_fake_rollouts(
+        home.path(),
+        /*count*/ 12,
+        |i| {
+            if i == 5 {
+                "other_provider"
+            } else {
+                "mock_provider"
+            }
+        },
+        |i| {
+            timestamp_at(
+                /*year*/ 2025,
+                /*month*/ 3,
+                20 - i as u32,
+                /*hour*/ 12,
+                /*minute*/ 0,
+                /*second*/ 0,
+            )
+        },
+        "List exclusions",
+    )?;
+    let mut server = init_mcp(home.path()).await?;
+    // Scan once so both DB-only and scan/repair modes see the same stored history.
+    let _: ThreadListResponse = server
+        .request(|request_id| ClientRequest::ThreadList {
+            request_id,
+            params: serde_json::from_value(json!({"limit": 100, "modelProviders": []}))
+                .expect("valid list"),
+        })
+        .await?;
+    // Pin two rows. A null section scope must continue to exclude both of them.
+    for id in &ids[8..10] {
+        let _: ThreadSectionMoveResponse = server
+            .request(|request_id| ClientRequest::ThreadSectionMove {
+                request_id,
+                params: ThreadSectionMoveParams {
+                    thread_id: id.clone(),
+                    section_id: Some(codex_state::PINNED_THREAD_SECTION_ID.to_string()),
+                    before_thread_id: None,
+                },
+            })
+            .await?;
+    }
+    for archived in [false, true] {
+        if archived {
+            for id in &ids {
+                let _: codex_app_server_protocol::ThreadArchiveResponse = server
+                    .request(|request_id| ClientRequest::ThreadArchive {
+                        request_id,
+                        params: codex_app_server_protocol::ThreadArchiveParams {
+                            thread_id: id.clone(),
+                        },
+                    })
+                    .await?;
+            }
+        }
+        for (db_only, sort, direction, scoped) in [
+            (false, "created_at", "desc", false),
+            (true, "created_at", "asc", true),
+            (true, "updated_at", "desc", false),
+            (false, "updated_at", "asc", true),
+            (true, "recency_at", "asc", false),
+            (false, "recency_at", "desc", true),
+        ] {
+            let mut query = json!({
+                "limit": 100, "archived": archived,
+                "modelProviders": ["mock_provider"], "sourceKinds": ["cli"],
+                "sortKey": sort, "sortDirection": direction, "useStateDbOnly": db_only,
+            });
+            if scoped {
+                query["sectionId"] = serde_json::Value::Null;
+                query["projectId"] = serde_json::Value::Null;
+            }
+            let baseline: ThreadListResponse = server
+                .request(|request_id| ClientRequest::ThreadList {
+                    request_id,
+                    params: serde_json::from_value(query.clone()).expect("valid list"),
+                })
+                .await?;
+            let baseline: Vec<_> = baseline.data.into_iter().map(|t| t.id).collect();
+            assert!(!baseline.contains(&ids[5]));
+            assert!(baseline.len() >= 7, "{query}: {baseline:?}");
+            if scoped {
+                assert!(!baseline.contains(&ids[8]));
+                assert!(!baseline.contains(&ids[9]));
+            }
+            // Drop a dense prefix, a later row, a duplicate and an unknown ID.
+            let excluded = vec![
+                baseline[0].clone(),
+                baseline[1].clone(),
+                baseline[2].clone(),
+                baseline[4].clone(),
+                baseline[0].clone(),
+                Uuid::new_v4().to_string(),
+            ];
+            let expected: Vec<_> = baseline
+                .iter()
+                .filter(|id| !excluded.contains(id))
+                .cloned()
+                .collect();
+            query["excludedThreadIds"] = json!(excluded);
+            query["limit"] = json!(2);
+            let mut actual = Vec::new();
+            for _ in 0..=baseline.len() {
+                let page: ThreadListResponse = server
+                    .request(|request_id| ClientRequest::ThreadList {
+                        request_id,
+                        params: serde_json::from_value(query.clone()).expect("valid list"),
+                    })
+                    .await?;
+                assert_eq!(
+                    page.data.len(),
+                    2.min(expected.len() - actual.len()),
+                    "must fill every eligible page: {query}"
+                );
+                actual.extend(page.data.into_iter().map(|t| t.id));
+                query["cursor"] = json!(page.next_cursor);
+                if page.next_cursor.is_none() {
+                    break;
+                }
+            }
+            assert_eq!(actual, expected, "{query}");
+            assert!(query["cursor"].is_null(), "{query}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_exclusions_validate_bound_without_truncating_and_keep_section_order()
+-> Result<()> {
+    let home = TempDir::new()?;
+    create_minimal_config(home.path())?;
+    let ids = create_fake_rollouts(
+        home.path(),
+        /*count*/ 5,
+        |_| "mock_provider",
+        |i| {
+            timestamp_at(
+                /*year*/ 2025,
+                /*month*/ 4,
+                10 + i as u32,
+                /*hour*/ 12,
+                /*minute*/ 0,
+                /*second*/ 0,
+            )
+        },
+        "Section list",
+    )?;
+    let mut server = init_mcp(home.path()).await?;
+    let _: ThreadListResponse = server
+        .request(|request_id| ClientRequest::ThreadList {
+            request_id,
+            params: serde_json::from_value(json!({"limit": 100, "modelProviders": []}))
+                .expect("valid list"),
+        })
+        .await?;
+    for id in &ids {
+        let _: ThreadSectionMoveResponse = server
+            .request(|request_id| ClientRequest::ThreadSectionMove {
+                request_id,
+                params: ThreadSectionMoveParams {
+                    thread_id: id.clone(),
+                    section_id: Some(codex_state::PINNED_THREAD_SECTION_ID.to_string()),
+                    before_thread_id: None,
+                },
+            })
+            .await?;
+    }
+    // The last entry must take effect even at the bound. Unknown/deleted IDs are allowed.
+    let mut excluded: Vec<String> = (0..99).map(|_| Uuid::new_v4().to_string()).collect();
+    excluded.push(ids[0].clone());
+    let mut query = json!({
+        "sectionId": codex_state::PINNED_THREAD_SECTION_ID,
+        "sortKey": "section_position", "limit": 2, "excludedThreadIds": excluded,
+        "modelProviders": [],
+    });
+    let mut actual = Vec::new();
+    for _ in 0..=ids.len() {
+        let page: ThreadListResponse = server
+            .request(|request_id| ClientRequest::ThreadList {
+                request_id,
+                params: serde_json::from_value(query.clone()).expect("valid list"),
+            })
+            .await?;
+        assert_eq!(page.data.len(), 2.min(4 - actual.len()));
+        actual.extend(page.data.into_iter().map(|t| t.id));
+        query["cursor"] = json!(page.next_cursor);
+        if page.next_cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(actual, ids[1..]);
+    assert!(query["cursor"].is_null());
+    excluded.push(ids[1].clone());
+    for (input, expected_message) in [
+        (
+            json!(excluded),
+            "excludedThreadIds accepts at most 100 entries",
+        ),
+        (json!(["not-a-thread"]), "invalid excluded thread id"),
+    ] {
+        let req = server
+            .send_raw_request("thread/list", Some(json!({"excludedThreadIds": input})))
+            .await?;
+        let err = timeout(
+            DEFAULT_READ_TIMEOUT,
+            server.read_stream_until_error_message(RequestId::Integer(req)),
+        )
+        .await??;
+        assert_eq!(err.error.code, -32602);
+        assert!(
+            err.error.message.starts_with(expected_message),
+            "{}",
+            err.error.message
+        );
+    }
     Ok(())
 }
 
@@ -548,6 +775,7 @@ async fn thread_list_respects_cwd_filters() -> Result<()> {
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            excluded_thread_ids: None,
             originators: None,
             cursor: None,
             limit: Some(10),
@@ -662,6 +890,7 @@ sqlite = true
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            excluded_thread_ids: None,
             originators: None,
             cursor: None,
             limit: Some(10),
@@ -950,6 +1179,7 @@ sqlite = true
 
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            excluded_thread_ids: None,
             originators: None,
             cursor: None,
             limit: Some(10),
@@ -987,6 +1217,7 @@ sqlite = true
 
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            excluded_thread_ids: None,
             originators: None,
             cursor: None,
             limit: Some(10),
@@ -1017,6 +1248,7 @@ sqlite = true
 
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            excluded_thread_ids: None,
             originators: None,
             cursor: None,
             limit: Some(10),
@@ -1203,6 +1435,7 @@ async fn thread_list_relation_filters_reject_invalid_requests() -> Result<()> {
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            excluded_thread_ids: None,
             originators: None,
             cursor: None,
             limit: Some(10),
@@ -1230,6 +1463,7 @@ async fn thread_list_relation_filters_reject_invalid_requests() -> Result<()> {
     let thread_id = ThreadId::new().to_string();
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            excluded_thread_ids: None,
             originators: None,
             cursor: None,
             limit: Some(10),
@@ -1517,6 +1751,7 @@ async fn thread_list_reports_loaded_subagent_direct_input_capability() -> Result
         .request(|request_id| ClientRequest::ThreadList {
             request_id,
             params: codex_app_server_protocol::ThreadListParams {
+                excluded_thread_ids: None,
                 originators: None,
                 cursor: None,
                 limit: Some(10),
@@ -2339,6 +2574,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
     } = {
         let request_id = mcp
             .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+                excluded_thread_ids: None,
                 originators: None,
                 cursor: None,
                 limit: Some(1),
@@ -2381,6 +2617,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
     } = {
         let request_id = mcp
             .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+                excluded_thread_ids: None,
                 originators: None,
                 cursor: Some(backwards_cursor),
                 limit: Some(10),
@@ -2813,6 +3050,7 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
 
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            excluded_thread_ids: None,
             originators: None,
             cursor: Some("not-a-cursor".to_string()),
             limit: Some(2),

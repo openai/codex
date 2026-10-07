@@ -32,6 +32,7 @@ pub(crate) async fn list_pinned_threads(
                 .request_typed::<ThreadListResponse>(ClientRequest::ThreadList {
                     request_id: RequestId::String(Uuid::new_v4().to_string()),
                     params: ThreadListParams {
+                        excluded_thread_ids: None,
                         originators: None,
                         cursor: cursor.clone(),
                         limit: Some(100),
@@ -169,6 +170,7 @@ impl SourcePage {
                 .request_typed::<ThreadListResponse>(ClientRequest::ThreadList {
                     request_id: RequestId::String(Uuid::new_v4().to_string()),
                     params: ThreadListParams {
+                        excluded_thread_ids: None,
                         originators: None,
                         cursor: self.cursor.clone(),
                         limit: Some(PAGE_SIZE),
