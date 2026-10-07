@@ -746,12 +746,8 @@ async fn external_auth_refreshes_on_unauthorized(model_path: &str) -> Result<()>
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_req)).await??;
 
     if model_path != "/v1" {
-        // Force discovery after login cached the same workspace's route.
-        let config_path = codex_home.path().join("config.toml");
-        std::fs::write(
-            &config_path,
-            std::fs::read_to_string(&config_path)?.replace("/backend-api\"", "/backend-api/\""),
-        )?;
+        // Arm the failure before invalidating the route cached during login. Background
+        // discovery can otherwise cache a successful response before this mock is mounted.
         Mock::given(path("/backend-api/wham/accounts/check"))
             .and(header(
                 "authorization",
@@ -762,6 +758,11 @@ async fn external_auth_refreshes_on_unauthorized(model_path: &str) -> Result<()>
             .expect(/*r*/ 1)
             .mount(&backend)
             .await;
+        let config_path = codex_home.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            std::fs::read_to_string(&config_path)?.replace("/backend-api\"", "/backend-api/\""),
+        )?;
     }
 
     let turn_req = mcp
