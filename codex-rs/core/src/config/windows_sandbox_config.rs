@@ -120,6 +120,30 @@ pub(super) fn config_allows_mxc(
     } else {
         None
     };
+    Ok(windows_mxc_allowed_by_config(
+        windows_sandbox_mode,
+        network_requirements,
+        features,
+        enable_network_proxy,
+        profile_local_binding,
+    ))
+}
+
+/// Eligibility shared with remote selection after the caller resolves its active profile.
+/// Managed network requirements outrank feature and profile binding restrictions.
+pub fn windows_mxc_allowed_by_config(
+    windows_sandbox_mode: &ConstrainedWithSource<Option<WindowsSandboxModeToml>>,
+    network_requirements: Option<&Sourced<NetworkConstraints>>,
+    features: Option<&FeaturesToml>,
+    enable_network_proxy: bool,
+    profile_local_binding: Option<bool>,
+) -> bool {
+    if windows_sandbox_mode
+        .can_set(&Some(WindowsSandboxModeToml::Mxc))
+        .is_err()
+    {
+        return false;
+    }
     let allow_local_binding = network_requirements
         .and_then(|requirements| requirements.value.allow_local_binding)
         .or_else(|| {
@@ -128,7 +152,7 @@ pub(super) fn config_allows_mxc(
                 .and_then(|config| config.allow_local_binding)
         })
         .or(profile_local_binding);
-    Ok(allow_local_binding != Some(false))
+    allow_local_binding != Some(false)
 }
 
 #[cfg(test)]

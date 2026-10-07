@@ -221,6 +221,7 @@ pub use windows_sandbox_config::PreparedWindowsSandboxConfig;
 use windows_sandbox_config::config_allows_mxc;
 pub use windows_sandbox_config::prepare_windows_sandbox_config;
 use windows_sandbox_config::resolve_windows_sandbox_type;
+pub use windows_sandbox_config::windows_mxc_allowed_by_config;
 
 const DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS: i64 = 200;
 const DEFAULT_IGNORE_LARGE_UNTRACKED_FILES: i64 = 10 * 1024 * 1024;

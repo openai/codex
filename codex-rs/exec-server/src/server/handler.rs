@@ -209,12 +209,16 @@ impl ExecServerHandler {
         params: EnvironmentConfigReadParams,
     ) -> Result<EnvironmentConfigReadResponse, JSONRPCErrorError> {
         self.require_initialized_for("environment config")?;
-        read_environment_config(crate::LOCAL_FS.as_ref(), params)
-            .await
-            .map_err(|error| match error {
-                ReadEnvironmentConfigError::InvalidParams(message) => invalid_params(message),
-                ReadEnvironmentConfigError::Internal(message) => internal_error(message),
-            })
+        read_environment_config(
+            crate::LOCAL_FS.as_ref(),
+            params,
+            self.runtime_paths.prefer_mxc,
+        )
+        .await
+        .map_err(|error| match error {
+            ReadEnvironmentConfigError::InvalidParams(message) => invalid_params(message),
+            ReadEnvironmentConfigError::Internal(message) => internal_error(message),
+        })
     }
 
     pub(crate) fn environment_status(&self) -> Result<EnvironmentStatus, JSONRPCErrorError> {

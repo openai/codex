@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::ConfigLayerSource;
 use codex_config::McpServerConfig;
 use codex_config::McpServerDisabledReason;
 use codex_config::RequirementSource;
@@ -8,6 +9,8 @@ use codex_config::RequirementsLayerEntry;
 use codex_config::compose_requirements_for_hostname;
 use codex_config::format_config_layer_source;
 use codex_config::host_name;
+use codex_config::loader::LocalConfigLayers;
+use codex_config::loader::LocalTomlLayer;
 use codex_config::loader::LocalTomlLayerStack;
 use codex_config::loader::load_local_config_layers;
 use codex_exec_server_protocol::EnvironmentConfigLayer;
@@ -15,6 +18,7 @@ use codex_exec_server_protocol::EnvironmentConfigLayerStack;
 use codex_exec_server_protocol::EnvironmentConfigReadParams;
 use codex_exec_server_protocol::EnvironmentConfigReadResponse;
 use codex_file_system::ExecutorFileSystem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_home_dir::find_codex_home;
 use codex_utils_path_uri::PathUri;
 
@@ -32,6 +36,7 @@ pub(crate) enum ReadEnvironmentConfigError {
 pub(crate) async fn read_environment_config(
     file_system: &dyn ExecutorFileSystem,
     params: EnvironmentConfigReadParams,
+    prefer_mxc: Option<bool>,
 ) -> Result<EnvironmentConfigReadResponse, ReadEnvironmentConfigError> {
     validate_paths(&params)?;
     let cwd = params
@@ -41,14 +46,15 @@ pub(crate) async fn read_environment_config(
     let codex_home = find_codex_home().map_err(|error| {
         ReadEnvironmentConfigError::Internal(format!("failed to find Codex home: {error}"))
     })?;
-    let layers = load_local_config_layers(file_system, codex_home.as_path(), &cwd)
+    let mut layers = load_local_config_layers(file_system, codex_home.as_path(), &cwd)
         .await
         .map_err(|error| {
             ReadEnvironmentConfigError::Internal(format!(
                 "failed to load executor-local config: {error}"
             ))
-        })?
-        .project(&params.config_paths, &params.requirements_paths);
+        })?;
+    include_startup_preference(&mut layers, &cwd, prefer_mxc);
+    let layers = layers.project(&params.config_paths, &params.requirements_paths);
 
     Ok(EnvironmentConfigReadResponse {
         user_home_dir: dirs::home_dir()
@@ -60,6 +66,32 @@ pub(crate) async fn read_environment_config(
         })?,
         requirements: serialize_layer_stack(layers.requirements, ToString::to_string)?,
     })
+}
+
+fn include_startup_preference(
+    layers: &mut LocalConfigLayers,
+    cwd: &AbsolutePathBuf,
+    prefer_mxc: Option<bool>,
+) {
+    if let Some(prefer_mxc) = prefer_mxc {
+        // CLI flags follow project layers, but never outrank legacy managed/MDM.
+        // Insert before projection, which also adjusts the cloud insertion index.
+        let index = layers
+            .config
+            .layers
+            .partition_point(|layer| layer.source <= ConfigLayerSource::SessionFlags);
+        layers.config.layers.insert(
+            index,
+            LocalTomlLayer {
+                source: ConfigLayerSource::SessionFlags,
+                base_dir: cwd.clone(),
+                toml: codex_config::build_cli_overrides_layer(&[(
+                    "features.prefer_mxc".to_string(),
+                    toml::Value::Boolean(prefer_mxc),
+                )]),
+            },
+        );
+    }
 }
 
 impl Environment {
@@ -186,3 +218,7 @@ fn serialize_layer_stack<S>(
         cloud_insertion_index: stack.cloud_insertion_index,
     })
 }
+
+#[cfg(test)]
+#[path = "environment_config_tests.rs"]
+mod tests;

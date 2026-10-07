@@ -214,7 +214,7 @@ fn maybe_run_exec_server_from_test_binary(guard: Option<&TestBinaryDispatchGuard
             std::process::exit(1);
         }
     };
-    let runtime_paths = match ExecServerRuntimeOptions::new(
+    let mut runtime_paths = match ExecServerRuntimeOptions::new(
         current_exe.clone(),
         linux_sandbox_exe(guard, &current_exe),
     ) {
@@ -224,6 +224,14 @@ fn maybe_run_exec_server_from_test_binary(guard: Option<&TestBinaryDispatchGuard
             std::process::exit(1);
         }
     };
+    runtime_paths.prefer_mxc = env::var("CODEX_EXEC_SERVER_TEST_PREFER_MXC")
+        .ok()
+        .map(|value| {
+            value.parse().unwrap_or_else(|error| {
+                eprintln!("invalid test MXC preference: {error}");
+                std::process::exit(1);
+            })
+        });
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
