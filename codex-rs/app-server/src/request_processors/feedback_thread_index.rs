@@ -73,9 +73,9 @@ impl FeedbackThreadIndex {
             process_discarded_review_records: failures.process_discarded_records,
             notes: "Selection only, not an upload receipt. Null filenames mean no path was available. \
                     Omitted threads exceeded the rollout thread limit; their retained reviews are \
-                    still in auto-review-failures.jsonl. Review evidence is process-local and bounded; \
-                    missing evidence does not imply no denial. The discarded-record count is \
-                    process-wide, not specific to this tree, and resets on restart.",
+                    still in auto-review-failures.jsonl. Review evidence is persisted and bounded; \
+                    missing evidence does not imply no denial. The discarded-record count covers \
+                    only the process-wide in-memory fallback and resets on restart.",
         }
     }
 

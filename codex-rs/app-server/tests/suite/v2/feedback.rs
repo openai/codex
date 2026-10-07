@@ -92,13 +92,12 @@ async fn feedback_upload_limits_concurrency_and_releases_failed_uploads() -> Res
 }
 
 #[tokio::test]
-async fn feedback_upload_includes_sqlite_flush_and_query_failures() -> Result<()> {
+async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures() -> Result<()> {
     use std::io::Read;
     use std::sync::Arc;
 
     use app_test_support::MockResponsesConfig;
     use codex_app_server_protocol::ClientNotification;
-    use codex_app_server_protocol::ThreadStartParams;
     use codex_state::SqliteConfig;
     use codex_utils_absolute_path::test_support::PathExt;
     use tokio::io::AsyncReadExt;
@@ -191,6 +190,45 @@ async fn feedback_upload_includes_sqlite_flush_and_query_failures() -> Result<()
 
     let models = wiremock::MockServer::start().await;
     MockResponsesConfig::new(&models.uri()).write(home.path())?;
+    let thread_id = codex_protocol::ThreadId::new();
+    let sqlite = SqliteConfig::new_for_testing(home.path().abs());
+    let state =
+        codex_state::StateRuntime::init(sqlite.clone(), "mock_provider".to_string()).await?;
+    let review = json!({
+        "reviewed_thread_id": thread_id,
+        "status": "denied",
+        "action": "original reviewed action",
+        "instructions": "original review instructions",
+        "history": [{"role": "user", "content": "original authorization"}],
+        "decision": "original denial",
+        "context_omitted": false,
+    });
+    for (id, record) in [
+        (thread_id, review.clone()),
+        (codex_protocol::ThreadId::new(), json!({"unrelated": true})),
+    ] {
+        let rollout_path = home.path().join(format!("{id}.jsonl"));
+        std::fs::write(&rollout_path, "")?;
+        state
+            .upsert_thread(
+                &codex_state::ThreadMetadataBuilder::new(
+                    id,
+                    rollout_path,
+                    chrono::Utc::now(),
+                    codex_protocol::protocol::SessionSource::Cli,
+                )
+                .build("mock_provider"),
+            )
+            .await?;
+        state
+            .record_guardian_review_failure(&codex_feedback::GuardianReviewRecord::new(
+                id,
+                serde_json::to_vec(&record)?,
+            ))
+            .await?;
+    }
+    state.close().await;
+    // This new process can recover review context only from SQLite.
     let mut app_server = TestAppServer::builder()
         .with_codex_home(home.path())
         .with_env_overrides(&[
@@ -202,35 +240,25 @@ async fn feedback_upload_includes_sqlite_flush_and_query_failures() -> Result<()
         ])
         .build_initialized()
         .await?;
-    let request = app_server
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
-            ephemeral: Some(true),
-            ..Default::default()
-        })
-        .await?;
-    let response = app_server
-        .read_stream_until_response_message(RequestId::Integer(request))
-        .await?;
-    let thread_id = response.result["thread"]["id"].as_str().unwrap();
-    let sqlite = SqliteConfig::new_for_testing(home.path().abs());
     let pool = sqlite.open_read_write_pool(&sqlite.logs_db_path()).await?;
     // This old history exists only in SQLite, as if it had already left the memory ring.
     sqlx::query("INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, thread_id) VALUES (1, 0, 'INFO', 'test', 'sqlite-only-history', ?)")
-        .bind(thread_id).execute(&pool).await?;
+        .bind(thread_id.to_string()).execute(&pool).await?;
     sqlx::query("CREATE TRIGGER fail_log_insert BEFORE INSERT ON logs BEGIN SELECT RAISE(ABORT, 'synthetic-secret'); END")
         .execute(&pool).await?;
 
     #[derive(Debug, PartialEq)]
     enum Phase {
+        WithoutLogs,
         WriteFailure,
         Corrupt,
     }
-    for phase in [Phase::WriteFailure, Phase::Corrupt] {
+    for phase in [Phase::WithoutLogs, Phase::WriteFailure, Phase::Corrupt] {
         match phase {
             Phase::Corrupt => {
                 sqlx::raw_sql("PRAGMA writable_schema = ON; UPDATE sqlite_schema SET rootpage = 2147483647 WHERE name = 'logs'; PRAGMA schema_version = 1000000;").execute(&pool).await?;
             }
-            Phase::WriteFailure => {}
+            Phase::WithoutLogs | Phase::WriteFailure => {}
         }
         // Notifications emit an INFO log, ensuring feedback/upload has a batch to flush.
         app_server
@@ -254,7 +282,7 @@ async fn feedback_upload_includes_sqlite_flush_and_query_failures() -> Result<()
             .send_raw_request(
                 "feedback/upload",
                 Some(json!({
-                    "classification": "bug", "includeLogs": true, "threadId": thread_id
+                    "classification": "bug", "includeLogs": phase != Phase::WithoutLogs, "threadId": thread_id
                 })),
             )
             .await?;
@@ -286,6 +314,15 @@ async fn feedback_upload_includes_sqlite_flush_and_query_failures() -> Result<()
                 }
             }
         }
+        if phase == Phase::WithoutLogs {
+            assert!(!attachments.contains_key("auto-review-failures.jsonl"));
+            assert!(!attachments.contains_key("codex-logs.log"));
+            continue;
+        }
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&attachments["auto-review-failures.jsonl"])?,
+            review,
+        );
         assert!(!attachments.contains_key("daemon.stderr.log"));
         assert!(!attachments.contains_key("daemon.stderr.log.previous"));
         assert_eq!(

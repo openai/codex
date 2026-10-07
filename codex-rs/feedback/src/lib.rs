@@ -42,6 +42,7 @@ pub use feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
 pub use feedback_diagnostics::FeedbackDiagnostic;
 pub use feedback_diagnostics::FeedbackDiagnostics;
 pub use guardian::GuardianReviewFailures;
+pub use guardian::GuardianReviewRecord;
 pub use guardian::guardian_review_failures;
 pub use guardian::record_guardian_review_failure;
 pub use report_upload::FeedbackDelivery;

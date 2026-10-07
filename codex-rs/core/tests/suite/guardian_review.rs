@@ -2207,10 +2207,31 @@ async fn guardian_denial_rejects_tool_call_with_rationale(
     assert!(guardian_request.body_contains_text(&command));
     assert_eq!(guardian_request.body_json()["model"], "gpt-5.6-luna");
 
-    let feedback = codex_feedback::guardian_review_failures(&[test.session_configured.thread_id])
-        .attachment
-        .expect("failed Guardian review");
+    test.codex.shutdown_and_wait().await?;
+    let state_db = codex_state::StateRuntime::init(
+        test.config.sqlite.clone(),
+        test.config.model_provider_id.clone(),
+    )
+    .await?;
+    let durable = state_db.list_guardian_review_records().await?;
+    assert_eq!(
+        durable.len(),
+        1,
+        "the Guardian capture must persist, not just fall back to memory"
+    );
+    let feedback = codex_feedback::guardian_review_failures(
+        Some(&state_db),
+        &[test.session_configured.thread_id],
+    )
+    .await
+    .attachment
+    .expect("failed Guardian review");
     let record: serde_json::Value = serde_json::from_slice(&feedback.buffer)?;
+    assert_eq!(
+        record,
+        serde_json::from_slice::<serde_json::Value>(&durable[0].record)?
+    );
+    assert_eq!(record["instructions"], guardian_request.instructions_text());
     assert!(
         guardian_request.body_contains_text(record["action"].as_str().expect("reviewed action"))
     );

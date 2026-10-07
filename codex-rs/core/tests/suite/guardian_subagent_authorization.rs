@@ -1389,7 +1389,11 @@ async fn run_guardian_subagent_review(
         .thread_manager
         .list_agent_subtree_thread_ids(root_thread_id)
         .await?;
-    let failures = codex_feedback::guardian_review_failures(&feedback_thread_ids);
+    let failures = codex_feedback::guardian_review_failures(
+        test.codex.state_db().as_deref(),
+        &feedback_thread_ids,
+    )
+    .await;
     assert_eq!(failures.thread_ids, vec![worker_thread_id]);
     let feedback = failures.attachment.expect("failed worker review");
     let record: Value = serde_json::from_slice(&feedback.buffer)?;

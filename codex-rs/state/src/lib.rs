@@ -34,6 +34,10 @@ pub use model::QueuedUserSubmissionRecord;
 pub use model::RolloutMigrationCursor;
 pub use model::RolloutMigrationSkippedRollout;
 pub use model::RolloutMigrationState;
+pub use runtime::GuardianReviewRecord;
+pub use runtime::MAX_GUARDIAN_REVIEW_BYTES;
+pub use runtime::MAX_GUARDIAN_REVIEW_RECORDS;
+pub use runtime::MAX_GUARDIAN_REVIEW_RECORDS_PER_THREAD;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
 pub use sqlite::SqliteConfig;
