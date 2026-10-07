@@ -324,6 +324,7 @@ impl CommandExecRequestProcessor {
             self.config.effective_local_windows_sandbox_type(),
             use_legacy_landlock,
         )
+        .await
         .map_err(|err| internal_error(format!("exec failed: {err}")))?;
         self.command_exec_manager
             .start(StartCommandExecParams {

@@ -298,6 +298,7 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
     }
     .map_err(|err| invalid_params(format!("failed to prepare process sandbox: {err}")))?;
     request.sandbox_override = sandbox_context.sandbox_override;
+    crate::run_integrity_checks(&request).await;
     let windows_sandbox = if sandbox == SandboxType::WindowsRestrictedToken {
         let windows_sandbox_level = windows_sandbox_level.ok_or_else(|| {
             invalid_params("restricted token sandbox requires a sandbox level".to_string())

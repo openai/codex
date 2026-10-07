@@ -329,7 +329,8 @@ pub async fn process_exec_tool_call(
         codex_self_exe,
         windows_sandbox_type,
         use_legacy_landlock,
-    )?;
+    )
+    .await?;
 
     // Route through the sandboxing module for a single, unified execution path.
     crate::sandboxing::execute_env(exec_req, stdout_stream).await
@@ -338,7 +339,7 @@ pub async fn process_exec_tool_call(
 /// Transform a portable exec request into the concrete argv/env that should be
 /// spawned under the requested sandbox policy.
 #[allow(clippy::too_many_arguments)]
-pub fn build_exec_request(
+pub async fn build_exec_request(
     params: ExecParams,
     permission_profile: &PermissionProfile,
     sandbox_cwd: &AbsolutePathBuf,
@@ -439,7 +440,7 @@ pub fn build_exec_request(
     } else {
         Vec::new()
     };
-    ExecRequest::from_sandbox_exec_request(request, options, windows_sandbox_workspace_roots)
+    ExecRequest::from_sandbox_exec_request(request, options, windows_sandbox_workspace_roots).await
 }
 
 pub(crate) async fn execute_exec_request(

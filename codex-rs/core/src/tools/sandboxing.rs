@@ -487,7 +487,7 @@ impl<'a> SandboxAttempt<'a> {
         }
     }
 
-    pub fn env_for(
+    pub async fn env_for(
         &self,
         command: SandboxCommand,
         options: ExecOptions,
@@ -517,9 +517,10 @@ impl<'a> SandboxAttempt<'a> {
             .map(PathUri::to_abs_path)
             .collect::<std::io::Result<Vec<_>>>()?;
         crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options, workspace_roots)
+            .await
     }
 
-    pub fn env_for_exec_server(
+    pub async fn env_for_exec_server(
         &self,
         command: SandboxCommand,
         options: ExecOptions,
@@ -546,11 +547,9 @@ impl<'a> SandboxAttempt<'a> {
             })
             .map_err(CodexErr::from)?;
         request.sandbox_override = self.sandbox_override;
-        let mut exec_request = crate::sandboxing::ExecRequest::from_sandbox_exec_request(
-            request,
-            options,
-            Vec::new(),
-        )?;
+        let mut exec_request =
+            crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options, Vec::new())
+                .await?;
         exec_request.exec_server_managed_network = managed_network;
         if self.sandbox_requested {
             exec_request.exec_server_sandbox = Some(FileSystemSandboxContext {

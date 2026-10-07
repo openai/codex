@@ -93,6 +93,7 @@ impl SandboxedFileSystem {
             .sandbox_runner
             .sandbox_command(sandbox)
             .map_err(map_sandbox_error)?;
+        crate::run_integrity_checks(&command).await;
         crate::sandboxed_file_open::open(command, path.clone(), mode)
             .await
             .map_err(map_sandbox_error)

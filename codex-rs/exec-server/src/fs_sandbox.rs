@@ -88,6 +88,7 @@ impl FileSystemSandboxRunner {
         request: FsHelperRequest,
     ) -> Result<FsHelperPayload, JSONRPCErrorError> {
         let command = self.sandbox_command(sandbox)?;
+        crate::run_integrity_checks(&command).await;
         let request_json = serde_json::to_vec(&request).map_err(json_error)?;
         run_command(command, request_json).await
     }

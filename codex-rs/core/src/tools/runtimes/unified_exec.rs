@@ -688,6 +688,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                     managed_network,
                     Some(&req.turn_environment.selection.environment_id),
                 )
+                .await
                 .map_err(ToolError::Codex)?;
             exec_env.exec_server_env_config = req.exec_server_env_config.clone();
             match zsh_fork::maybe_prepare_unified_exec(req, attempt, ctx, exec_env, zsh_fork_config)

@@ -1268,9 +1268,11 @@ impl UnifiedExecProcessManager {
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, ToolError> {
         let mut request = if environment.is_remote() || shell_snapshot.is_some() {
-            attempt.env_for_exec_server(command, options)
+            attempt.env_for_exec_server(command, options).await
         } else {
-            attempt.env_for(command, options, network, environment_id)
+            attempt
+                .env_for(command, options, network, environment_id)
+                .await
         }
         .map_err(ToolError::Codex)?;
         let network_policy_decider = network_proxy_launch

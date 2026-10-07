@@ -56,6 +56,7 @@ pub(super) async fn spawn_command_under_sandbox(
         codex_protocol::sandbox::SandboxType::None,
         /*use_legacy_landlock*/ false,
     )
+    .await
     .map_err(|err| io::Error::other(err.to_string()))?;
 
     let (program, args) = exec_request

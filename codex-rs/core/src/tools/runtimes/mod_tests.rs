@@ -147,6 +147,7 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
             ),
             /*environment_id*/ None,
         )
+        .await
         .expect("prepare exec request");
 
     assert_eq!(exec_request.cwd, PathUri::from_abs_path(&command_cwd));

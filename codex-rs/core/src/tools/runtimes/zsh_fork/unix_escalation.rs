@@ -717,7 +717,8 @@ impl CoreShellCommandExecutor {
                     env,
                     permission_profile: &self.permission_profile,
                     additional_permissions: None,
-                })?
+                })
+                .await?
             }
             EscalationExecution::Permissions(
                 EscalationPermissions::AdditionalPermissionProfile(permission_profile),
@@ -729,7 +730,8 @@ impl CoreShellCommandExecutor {
                     env,
                     permission_profile: &self.permission_profile,
                     additional_permissions: Some(permission_profile),
-                })?
+                })
+                .await?
             }
             EscalationExecution::Permissions(EscalationPermissions::ResolvedPermissionProfile(
                 permissions,
@@ -741,7 +743,8 @@ impl CoreShellCommandExecutor {
                     env,
                     permission_profile: &permissions.permission_profile,
                     additional_permissions: None,
-                })?
+                })
+                .await?
             }
         };
 
@@ -749,7 +752,7 @@ impl CoreShellCommandExecutor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn prepare_sandboxed_exec(
+    async fn prepare_sandboxed_exec(
         &self,
         params: PrepareSandboxedExecParams<'_>,
     ) -> anyhow::Result<PreparedExec> {
@@ -800,7 +803,8 @@ impl CoreShellCommandExecutor {
             exec_request,
             options,
             self.windows_sandbox_workspace_roots.clone(),
-        )?;
+        )
+        .await?;
         if let Some(network) = exec_request.network.as_ref() {
             network
                 .apply_to_env_for_optional_environment(
