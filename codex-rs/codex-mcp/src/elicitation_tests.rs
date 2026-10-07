@@ -14,6 +14,309 @@ use std::sync::atomic::Ordering::Relaxed;
 
 type ReviewerResponse = std::result::Result<Option<ElicitationResponse>, &'static str>;
 
+#[tokio::test]
+async fn abandonment_is_ordered_and_exactly_once_when_the_native_waiter_is_dropped() {
+    let (manager, _, _) = verification_fixture(AskForApproval::OnRequest, /*reviewer*/ None);
+    let router = manager.router.clone();
+    let authority = manager.authority.lock().unwrap().clone().unwrap();
+    let (tx, events) = async_channel::unbounded();
+    let (replacement_tx, replacement_events) = async_channel::unbounded();
+    let request = ElicitationRequest::Form {
+        meta: None,
+        message: "Continue".into(),
+        requested_schema: json!({"type": "object"}),
+    };
+    let mut first = Box::pin(router.request_user_interaction(
+        Some(tx),
+        &authority,
+        "server".into(),
+        request.clone(),
+    ));
+    let mut sibling = Box::pin(router.request_user_interaction(
+        Some(replacement_tx),
+        &authority,
+        "server".into(),
+        request,
+    ));
+    assert!(futures::poll!(&mut first).is_pending());
+    let EventMsg::ElicitationRequest(first_request) = events.recv().await.unwrap().msg else {
+        panic!("request must precede abandonment");
+    };
+    assert!(futures::poll!(&mut sibling).is_pending());
+    let EventMsg::ElicitationRequest(sibling_request) =
+        replacement_events.recv().await.unwrap().msg
+    else {
+        panic!("expected sibling request");
+    };
+    drop(first);
+    let EventMsg::ElicitationAbandoned(abandoned) = events.recv().await.unwrap().msg else {
+        panic!("expected abandonment");
+    };
+    assert_eq!(
+        abandoned,
+        ElicitationAbandonedEvent {
+            server_name: first_request.server_name,
+            id: first_request.id.clone()
+        }
+    );
+    assert_eq!(router.requests.lock().unwrap().pending.len(), 1);
+    let ProtocolRequestId::String(id) = first_request.id else {
+        panic!("generated token")
+    };
+    assert!(
+        router
+            .resolve(
+                "server".into(),
+                RequestId::String(id.into()),
+                approved_response()
+            )
+            .await
+            .is_err()
+    );
+    let ProtocolRequestId::String(id) = sibling_request.id else {
+        panic!("generated token")
+    };
+    router
+        .resolve(
+            "server".into(),
+            RequestId::String(id.into()),
+            approved_response(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sibling.await.unwrap(), approved_response());
+    assert!(events.try_recv().is_err());
+    assert!(replacement_events.try_recv().is_err());
+    assert!(router.requests.lock().unwrap().pending.is_empty());
+}
+
+#[tokio::test]
+async fn bounded_sources_preserve_backpressure_across_close() {
+    let (manager, _, _) = verification_fixture(AskForApproval::OnRequest, /*reviewer*/ None);
+    let authority = manager.authority.lock().unwrap().clone().unwrap();
+    let router = manager.router.clone();
+    let (tx, events) = async_channel::bounded(1);
+    tx.send(Event {
+        id: "queued".into(),
+        msg: EventMsg::ShutdownComplete,
+    })
+    .await
+    .unwrap();
+    let mut pending = Box::pin(router.request_user_interaction(
+        Some(tx),
+        &authority,
+        "server".into(),
+        ElicitationRequest::Form {
+            meta: None,
+            message: "Continue".into(),
+            requested_schema: json!({"type": "object"}),
+        },
+    ));
+    assert!(futures::poll!(&mut pending).is_pending());
+    router.close().await;
+    assert_eq!(router.requests.lock().unwrap().pending.len(), 1);
+    assert_eq!(events.recv().await.unwrap().id, "queued");
+    assert!(futures::poll!(&mut pending).is_pending());
+    let EventMsg::ElicitationRequest(request) = events.recv().await.unwrap().msg else {
+        panic!("bounded request must publish after capacity becomes available");
+    };
+    let ProtocolRequestId::String(id) = request.id else {
+        panic!("expected generated token");
+    };
+    router
+        .resolve(
+            "server".into(),
+            RequestId::String(id.into()),
+            approved_response(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pending.await.unwrap(), approved_response());
+    assert!(events.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn abandonment_closed_receiver_cleans_up_without_delivery_or_replay() {
+    let (manager, _, _) = verification_fixture(AskForApproval::OnRequest, /*reviewer*/ None);
+    let authority = manager.authority.lock().unwrap().clone().unwrap();
+    let router = manager.router.clone();
+    for close_before_publication in [true, false] {
+        let (tx, events) = async_channel::unbounded();
+        if close_before_publication {
+            events.close();
+        }
+        let mut pending = Box::pin(router.request_user_interaction(
+            Some(tx),
+            &authority,
+            "server".into(),
+            ElicitationRequest::Form {
+                meta: None,
+                message: "Continue".into(),
+                requested_schema: json!({"type": "object"}),
+            },
+        ));
+        if close_before_publication {
+            assert!(pending.await.is_err());
+        } else {
+            assert!(futures::poll!(&mut pending).is_pending());
+            assert!(matches!(
+                events.recv().await.unwrap().msg,
+                EventMsg::ElicitationRequest(_)
+            ));
+            events.close();
+            drop(pending);
+        }
+        assert!(router.requests.lock().unwrap().pending.is_empty());
+        assert!(events.try_recv().is_err());
+    }
+}
+
+#[tokio::test]
+async fn abandonment_close_joins_elected_actions_and_rejects_retained_router_admission() {
+    let (manager, _, _) = verification_fixture(AskForApproval::OnRequest, /*reviewer*/ None);
+    let authority = manager.authority.lock().unwrap().clone().unwrap();
+    let router = manager.router.clone();
+    let retained_router = router.clone();
+    let (tx, events) = async_channel::unbounded();
+    let request = ElicitationRequest::Form {
+        meta: None,
+        message: "Continue".into(),
+        requested_schema: json!({"type": "object"}),
+    };
+    let mut pending = Box::pin(router.request_user_interaction(
+        Some(tx.clone()),
+        &authority,
+        "server".into(),
+        request.clone(),
+    ));
+    assert!(futures::poll!(&mut pending).is_pending());
+    let EventMsg::ElicitationRequest(published) = events.recv().await.unwrap().msg else {
+        panic!("expected published request");
+    };
+    let ProtocolRequestId::String(id) = &published.id else {
+        panic!("expected generated token");
+    };
+    let key = (
+        published.server_name.clone(),
+        RequestId::String(id.clone().into()),
+    );
+    let (responder, terminal_action) = router.take_responder(&key).unwrap().unwrap();
+    let mut close = Box::pin(router.close());
+    assert!(futures::poll!(&mut close).is_pending());
+    drop(close);
+    let mut repeated_close = Box::pin(retained_router.close());
+    assert!(futures::poll!(&mut repeated_close).is_pending());
+    assert!(
+        retained_router
+            .request_user_interaction(
+                Some(tx.clone()),
+                &authority,
+                "server".into(),
+                request.clone(),
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("router closed")
+    );
+    assert!(events.try_recv().is_err());
+    emit_abandonment(&key, responder.abandonment_events.as_ref());
+    drop(responder);
+    drop(terminal_action);
+    repeated_close.await;
+    assert!(pending.await.is_err());
+    let EventMsg::ElicitationAbandoned(abandoned) = events.recv().await.unwrap().msg else {
+        panic!("close must wait for the winning remover to enqueue abandonment");
+    };
+    assert_eq!(
+        abandoned,
+        ElicitationAbandonedEvent {
+            server_name: published.server_name,
+            id: published.id,
+        }
+    );
+    router.close().await;
+    assert!(
+        retained_router
+            .request_user_interaction(Some(tx), &authority, "server".into(), request,)
+            .await
+            .is_err()
+    );
+    assert!(events.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn abandonment_close_invalidates_a_published_responder_before_returning() {
+    let (manager, _, _) = verification_fixture(AskForApproval::OnRequest, /*reviewer*/ None);
+    let authority = manager.authority.lock().unwrap().clone().unwrap();
+    let router = manager.router.clone();
+    let (tx, events) = async_channel::unbounded();
+    let mut pending = Box::pin(router.request_user_interaction(
+        Some(tx),
+        &authority,
+        "server".into(),
+        ElicitationRequest::Form {
+            meta: None,
+            message: "Continue".into(),
+            requested_schema: json!({"type": "object"}),
+        },
+    ));
+    assert!(futures::poll!(&mut pending).is_pending());
+    let EventMsg::ElicitationRequest(published) = events.recv().await.unwrap().msg else {
+        panic!("expected request");
+    };
+    router.close().await;
+    assert!(pending.await.is_err());
+    let EventMsg::ElicitationAbandoned(abandoned) = events.try_recv().unwrap().msg else {
+        panic!("close must enqueue abandonment before returning");
+    };
+    assert_eq!(
+        abandoned,
+        ElicitationAbandonedEvent {
+            server_name: published.server_name,
+            id: published.id,
+        }
+    );
+    assert!(events.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn abandonment_resolve_reports_failed_response_delivery_once() {
+    let router = ElicitationRequestRouter::default();
+    let (tx, events) = async_channel::unbounded();
+    let (response, receiver) = tokio::sync::oneshot::channel();
+    let key = (
+        "server".to_string(),
+        RequestId::String("published-token".into()),
+    );
+    router.requests.lock().unwrap().pending.insert(
+        key.clone(),
+        ElicitationResponder {
+            response,
+            abandonment_events: Some(tx),
+        },
+    );
+    drop(receiver);
+    assert!(
+        router
+            .resolve(key.0, key.1, approved_response())
+            .await
+            .is_err()
+    );
+    router.close().await;
+    let EventMsg::ElicitationAbandoned(abandoned) = events.try_recv().unwrap().msg else {
+        panic!("failed oneshot delivery must abandon the published request");
+    };
+    assert_eq!(
+        abandoned,
+        ElicitationAbandonedEvent {
+            server_name: "server".into(),
+            id: ProtocolRequestId::String("published-token".into()),
+        }
+    );
+    assert!(events.try_recv().is_err());
+}
+
 struct RecordingReviewer {
     calls: AtomicUsize,
     active_elicitations: Arc<AtomicUsize>,
@@ -189,7 +492,7 @@ async fn permission_elicitation_preserves_automatic_review_decisions() {
             assert_eq!(reviewer.calls.load(Relaxed), expected_reviews);
             assert_eq!(reviewer.active_elicitations.load(Relaxed), 0);
             assert!(events.is_empty());
-            assert!(manager.router.requests.lock().unwrap().is_empty());
+            assert!(manager.router.requests.lock().unwrap().pending.is_empty());
         }
     }
 }
@@ -254,7 +557,7 @@ async fn elicitation_without_an_automatic_decision_prompts() {
             assert_eq!(reviewer.active_elicitations.load(Relaxed), 0);
         }
         assert!(events.is_empty());
-        assert!(manager.router.requests.lock().unwrap().is_empty());
+        assert!(manager.router.requests.lock().unwrap().pending.is_empty());
     }
 }
 
@@ -320,6 +623,7 @@ fn closed_event_channel_immediately_cleans_up_pending_elicitation() {
             .requests
             .lock()
             .expect("pending request router should be available")
+            .pending
             .is_empty()
     );
     assert_eq!(active_elicitations.load(Relaxed), 0);
@@ -716,7 +1020,7 @@ async fn user_verification_cancels_for_an_event_receiver_without_host_activation
         },
     );
     assert!(events.try_recv().is_err());
-    assert!(manager.router.requests.lock().unwrap().is_empty());
+    assert!(manager.router.requests.lock().unwrap().pending.is_empty());
 }
 
 #[tokio::test]
@@ -748,7 +1052,7 @@ async fn user_verification_drops_pending_response_when_the_request_is_cancelled(
     assert_eq!(active_elicitations.load(Relaxed), 1);
     pending.abort();
     assert!(pending.await.unwrap_err().is_cancelled());
-    assert!(manager.router.requests.lock().unwrap().is_empty());
+    assert!(manager.router.requests.lock().unwrap().pending.is_empty());
     assert_eq!(active_elicitations.load(Relaxed), 0);
 }
 

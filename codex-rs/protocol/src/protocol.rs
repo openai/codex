@@ -19,6 +19,7 @@ use crate::ResponseItemId;
 use crate::SanitizedGitUrl;
 use crate::SessionId;
 use crate::ThreadId;
+use crate::approvals::ElicitationAbandonedEvent;
 use crate::approvals::ElicitationRequestEvent;
 use crate::capabilities::SelectedCapabilityRoot;
 use crate::config_types::ApprovalsReviewer;
@@ -1535,6 +1536,9 @@ pub enum EventMsg {
     DynamicToolCallResponse(DynamicToolCallResponseEvent),
 
     ElicitationRequest(ElicitationRequestEvent),
+
+    /// An unanswered MCP responder was abandoned at its original unbounded source.
+    ElicitationAbandoned(ElicitationAbandonedEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 

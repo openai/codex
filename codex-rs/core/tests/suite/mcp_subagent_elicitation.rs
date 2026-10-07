@@ -1,4 +1,4 @@
-//! MCP server elicitations reach subagents and preserve automatic approval and review.
+//! MCP server elicitations preserve approval policy and signal abandonment before shutdown.
 
 use anyhow::Result;
 use codex_core::StartThreadOptions;
@@ -75,12 +75,14 @@ pub(super) enum Caller {
 pub(super) enum RequestKind {
     BrowserAuth,
     FormInput,
+    ShutdownFormInput,
     Permission,
     StrictReview,
 }
 
 #[test_case(Caller::FullAccessSubagent, RequestKind::BrowserAuth; "full_access_subagent_preserves_automatic_approval")]
 #[test_case(Caller::Root, RequestKind::BrowserAuth; "root_browser_auth_remains_interactive")]
+#[test_case(Caller::Root, RequestKind::ShutdownFormInput; "pending_root_form_is_abandoned_before_shutdown")]
 #[test_case(Caller::Subagent, RequestKind::FormInput; "subagent_receives_form_input")]
 #[test_case(Caller::Subagent, RequestKind::Permission; "subagent_permission_remains_interactive")]
 #[test_case(Caller::FullAccessSubagent, RequestKind::Permission; "full_access_subagent_automatically_approves_permission")]
@@ -118,7 +120,7 @@ pub(super) async fn mcp_server_elicitation_scenario(
                 "fields": [{"id": "password", "label": "Password", "type": "password", "required": true}]
             });
         }
-        RequestKind::FormInput => {
+        RequestKind::FormInput | RequestKind::ShutdownFormInput => {
             elicitation["requestedSchema"]["properties"] = json!({"answer": {"type": "string"}});
         }
         RequestKind::Permission | RequestKind::StrictReview => {
@@ -255,6 +257,39 @@ pub(super) async fn mcp_server_elicitation_scenario(
             follow_up.requests().is_empty(),
             "the tool must wait for input"
         );
+        if matches!(request_kind, RequestKind::ShutdownFormInput) {
+            thread.submit(Op::Shutdown).await?;
+            let EventMsg::ElicitationAbandoned(abandoned) = wait_for_event(&thread, |event| {
+                matches!(
+                    event,
+                    EventMsg::ElicitationAbandoned(_) | EventMsg::ShutdownComplete
+                )
+            })
+            .await
+            else {
+                panic!("abandonment must precede shutdown completion");
+            };
+            assert_eq!(
+                abandoned,
+                codex_protocol::approvals::ElicitationAbandonedEvent {
+                    server_name: request.server_name,
+                    id: request.id,
+                }
+            );
+            assert!(matches!(
+                wait_for_event(&thread, |event| {
+                    matches!(
+                        event,
+                        EventMsg::ElicitationAbandoned(_) | EventMsg::ShutdownComplete
+                    )
+                })
+                .await,
+                EventMsg::ShutdownComplete
+            ));
+            assert!(follow_up.requests().is_empty());
+            test.codex.shutdown_and_wait().await?;
+            return Ok(tool_call.requests());
+        }
         thread
             .submit(Op::ResolveElicitation {
                 server_name: request.server_name,

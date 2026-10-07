@@ -448,6 +448,14 @@ pub enum ElicitationRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ElicitationAbandonedEvent {
+    pub server_name: String,
+    /// Original Core-generated response token of the unanswered request.
+    #[ts(type = "string | number")]
+    pub id: RequestId,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ElicitationRequestEvent {
     /// Turn ID that this elicitation belongs to, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]

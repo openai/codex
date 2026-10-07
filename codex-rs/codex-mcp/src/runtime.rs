@@ -83,6 +83,7 @@ pub struct McpRuntimeInput {
     pub ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
     pub mcp_servers: HashMap<String, EffectiveMcpServer>,
     pub submit_id: String,
+    /// Unbounded sources receive abandonment notifications; bounded sources retain request-only behavior.
     pub tx_event: Option<Sender<Event>>,
     pub startup_cancellation_token: CancellationToken,
     pub runtime_context: McpRuntimeContext,
@@ -778,6 +779,7 @@ impl McpRuntime {
     }
 
     pub async fn shutdown(&self) {
+        self.elicitation_router.close().await;
         self.latest_connections().shutdown().await;
     }
 }
