@@ -1,6 +1,7 @@
-//! Checks the save boundary between a private Guardian decision and the reviewed action.
+//! Checks Guardian persistence boundaries without blocking unrelated turn progress.
 
 use codex_core::TurnInputRequest;
+use codex_core::TurnInputSubmission;
 use codex_core::config::Constrained;
 use codex_history::RolloutItem;
 use codex_protocol::ThreadId;
@@ -10,6 +11,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::turn_input::TurnInput;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::AppendThreadItemsParams;
 use codex_thread_store::ArchiveThreadParams;
@@ -30,6 +32,8 @@ use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreFuture;
 use codex_thread_store::UpdateThreadMetadataParams;
 use core_test_support::responses;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -57,6 +61,7 @@ struct GatedReviewerStore {
     inner: InMemoryThreadStore,
     reviewer: Mutex<ReviewerSaves>,
     saves: mpsc::UnboundedSender<PendingSave>,
+    reads: Option<mpsc::UnboundedSender<oneshot::Sender<()>>>,
 }
 
 macro_rules! delegate_store_methods {
@@ -102,6 +107,20 @@ impl ThreadStore for GatedReviewerStore {
         context: PersistContext,
     ) -> ThreadStoreFuture<'_, ()> {
         self.inner.persist_thread(thread_id, context)
+    }
+
+    fn load_latest_model_context(
+        &self,
+        params: LoadThreadHistoryParams,
+    ) -> ThreadStoreFuture<'_, StoredModelContext> {
+        Box::pin(async move {
+            if let Some(reads) = &self.reads {
+                let (complete, completed) = oneshot::channel();
+                reads.send(complete).expect("read receiver");
+                completed.await.expect("release the sender read");
+            }
+            ThreadStore::load_latest_model_context(&self.inner, params).await
+        })
     }
 
     fn flush_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
@@ -152,6 +171,7 @@ async fn guardian_saves_each_completed_review_before_releasing_its_action() -> a
         inner: InMemoryThreadStore::default(),
         reviewer: Mutex::new(ReviewerSaves::default()),
         saves,
+        reads: None,
     });
     let test = test_codex()
         .with_thread_store(store)
@@ -238,5 +258,97 @@ async fn guardian_saves_each_completed_review_before_releasing_its_action() -> a
     .await;
     assert_eq!(mock.requests().len(), 5);
     test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sender_history_read_does_not_block_turn_completion() -> anyhow::Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let (finish, gate) = oneshot::channel();
+    let (streaming, _) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: Some(gate),
+            body: responses::sse(vec![responses::ev_completed("first")]),
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![responses::ev_completed("delivery")]),
+        }],
+    ])
+    .await;
+    let (saves, _pending_saves) = mpsc::unbounded_channel();
+    let (reads, mut pending_reads) = mpsc::unbounded_channel();
+    let store = Arc::new(GatedReviewerStore {
+        inner: InMemoryThreadStore::default(),
+        reviewer: Mutex::new(ReviewerSaves::default()),
+        saves,
+        reads: Some(reads),
+    });
+    let base_url = format!("{}/v1", streaming.uri());
+    let test = test_codex()
+        .with_thread_store(store.clone())
+        .with_config(move |config| config.model_provider.base_url = Some(base_url))
+        .build_with_auto_env(&server)
+        .await?;
+    let first = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Inspect staging.".to_owned(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    streaming.wait_for_request_count(/*count*/ 1).await;
+    let source = ThreadId::new();
+    let delivery: ResponseItem = serde_json::from_value(json!({
+        "type": "function_call_output", "id": "delivery",
+        "name": "send_message", "namespace": "cloud_threads",
+        "output": format!("<codex_delegation><source_thread_id>{source}</source_thread_id><input>Inspect.</input></codex_delegation>"),
+    }))?;
+    let codex = Arc::clone(&test.codex);
+    let admission = tokio::spawn(async move {
+        codex
+            .start_or_steer_turn(TurnInputRequest::new(TurnInput::ResponseItem(delivery)))
+            .await
+    });
+    let read = timeout(Duration::from_secs(/*secs*/ 3), pending_reads.recv())
+        .await?
+        .expect("sender read");
+    finish.send(()).expect("finish first turn");
+    // This must finish before the five-second sender-read timeout. Completion and
+    // cancellation both need the active-turn lock; submission-loop interrupts are serial.
+    timeout(
+        Duration::from_secs(/*secs*/ 3),
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        }),
+    )
+    .await?;
+    read.send(()).expect("release sender read");
+    let accepted = timeout(Duration::from_secs(/*secs*/ 3), admission).await???;
+    assert_ne!(accepted, first);
+    let TurnInputSubmission::Started { turn_id, .. } = accepted else {
+        panic!("delivery must start a new turn after the first finishes");
+    };
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let history = test.codex.conversation_history_snapshot().await;
+    let evidence = history
+        .retained_context()
+        .expect("retained context")
+        .sender_user_messages()
+        .expect("explicit missing sender evidence");
+    assert_eq!(evidence.receiver_turn_id, turn_id);
+    assert_eq!(evidence.receiver_message_id, "delivery");
+    assert!(
+        evidence
+            .text
+            .contains("No sender user messages are available.")
+    );
+    assert_eq!(store.inner.calls().await.load_latest_model_context, 1);
+    test.codex.shutdown_and_wait().await?;
+    streaming.shutdown().await;
     Ok(())
 }

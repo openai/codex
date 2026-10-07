@@ -1,16 +1,20 @@
 //! Captures genuine sender instructions and assistant context for host-delivered task messages.
 //! Only turn-input admission calls this, before queueing; ordinary tool results and
-//! quoted delegation text cannot establish sender provenance. Lookup stays in this host.
+//! quoted delegation text cannot establish sender provenance. Unloaded senders are read
+//! through the host's authenticated thread store, without resuming their runtime.
 
-use crate::context::ContextualUserFragment;
 use crate::context::GuardianSenderExchange;
 use crate::context::GuardianSenderMessages;
+use crate::context_manager::ContextManager;
 use codex_guardian_context::GuardianRootMessage;
 use codex_history::RetainedContextEntry;
 use codex_history::RetainedContextOrder;
-use codex_history::SenderUserMessages;
+use codex_history::RolloutItem;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
+use codex_thread_store::LoadThreadHistoryParams;
+use codex_utils_output_truncation::TruncationPolicy;
+use std::time::Duration;
 
 use super::LocalAgentRuntime;
 
@@ -19,8 +23,7 @@ impl LocalAgentRuntime {
         &self,
         item: &ResponseItem,
         receiver_thread_id: ThreadId,
-        receiver_turn_id: &str,
-    ) -> Option<SenderUserMessages> {
+    ) -> Option<GuardianSenderMessages> {
         let ResponseItem::FunctionCallOutput {
             id: Some(id),
             call_id: None,
@@ -58,14 +61,55 @@ impl LocalAgentRuntime {
         let mut fragment = GuardianSenderMessages {
             source: source_thread_id,
             delivery: id.to_string(),
+            from_storage: false,
             messages: Vec::new(),
         };
         if let Some(source_thread_id) = source_thread_id
             && let Ok(manager) = self.upgrade()
-            && let Ok(sender) = manager.get_thread(source_thread_id).await
         {
-            let history = sender.conversation_history_snapshot().await;
-            if let Some(context) = history.retained_context() {
+            let context = match manager.get_thread(source_thread_id).await {
+                Ok(sender) => sender
+                    .conversation_history_snapshot()
+                    .await
+                    .retained_context()
+                    .cloned(),
+                Err(_) => {
+                    // The store owns authorization, including cross-worker tenant boundaries.
+                    // Bound the read so unavailable storage cannot stall turn admission.
+                    let stored = tokio::time::timeout(
+                        Duration::from_secs(/*secs*/ 5),
+                        manager.load_latest_model_context(LoadThreadHistoryParams {
+                            thread_id: source_thread_id,
+                            include_archived: true,
+                        }),
+                    )
+                    .await;
+                    match stored {
+                        Ok(Ok(stored)) if stored.thread_id == source_thread_id => {
+                            let meta = stored.items.iter().find_map(|item| match item {
+                                RolloutItem::SessionMeta(meta) => Some(&meta.meta),
+                                _ => None,
+                            });
+                            meta.filter(|meta| {
+                                meta.id == source_thread_id && !meta.source.is_internal()
+                            })
+                            .map(|meta| {
+                                fragment.from_storage = true;
+                                ContextManager::reconstruct_rollout(
+                                    &stored.items,
+                                    meta.history_mode,
+                                    ContextManager::new(),
+                                    // Tool bodies are not sender authorization evidence.
+                                    TruncationPolicy::Bytes(0),
+                                )
+                                .retained_context
+                            })
+                        }
+                        Ok(Ok(_)) | Ok(Err(_)) | Err(_) => None,
+                    }
+                }
+            };
+            if let Some(context) = context {
                 let mut exchanges = Vec::new();
                 let mut assistant = None;
                 for (order, entry) in context.ordered_entries() {
@@ -100,12 +144,6 @@ impl LocalAgentRuntime {
                 fragment.messages.reverse();
             }
         }
-        let mut snapshot = SenderUserMessages {
-            receiver_turn_id: receiver_turn_id.to_owned(),
-            receiver_message_id: id.to_string(),
-            text: fragment.render(),
-        };
-        snapshot.bound();
-        Some(snapshot)
+        Some(fragment)
     }
 }

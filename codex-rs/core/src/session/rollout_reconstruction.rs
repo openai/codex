@@ -5,14 +5,15 @@ use codex_history::ResponseItemEnvelope;
 use codex_history::TurnAttribution;
 use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_utils_output_truncation::TruncationPolicy;
 use uuid::Uuid;
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
 // the resume/fork hydration metadata derived from the same replay.
 #[derive(Debug, PartialEq)]
-pub(super) struct RolloutReconstruction {
+pub(crate) struct RolloutReconstruction {
     pub(super) history: Vec<ResponseItemEnvelope>,
-    pub(super) retained_context: codex_history::RetainedContext,
+    pub(crate) retained_context: codex_history::RetainedContext,
     pub(super) guardian_history: Option<codex_history::GuardianHistoryCheckpoint>,
     pub(super) last_started_turn_id: Option<String>,
     pub(super) previous_turn_settings: Option<PreviousTurnSettings>,
@@ -190,6 +191,26 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> RolloutReconstruction {
+        ContextManager::reconstruct_rollout(
+            rollout_items,
+            turn_context.history_mode,
+            ContextManager::for_session(
+                &turn_context.session_source,
+                &turn_context.config.features,
+            ),
+            turn_context.model_info().truncation_policy.into(),
+        )
+    }
+}
+
+impl ContextManager {
+    /// Replays stored history without starting a session or acquiring its writer.
+    pub(crate) fn reconstruct_rollout(
+        rollout_items: &[RolloutItem],
+        history_mode: ThreadHistoryMode,
+        mut history: Self,
+        truncation_policy: TruncationPolicy,
+    ) -> RolloutReconstruction {
         // Select the compaction and suffix that can affect reconstruction.
         let has_legacy_compaction_without_window_number =
             rollout_items.iter().any(|item| {
@@ -207,7 +228,7 @@ impl Session {
                 _ => None,
             })
         };
-        let input_checkpoint = select_input_compaction(rollout_items, turn_context.history_mode);
+        let input_checkpoint = select_input_compaction(rollout_items, history_mode);
         let replay_items = input_checkpoint.map_or(rollout_items, |checkpoint| checkpoint.suffix);
         let resume_metadata =
             input_checkpoint.and_then(|checkpoint| checkpoint.compacted.resume_metadata.as_ref());
@@ -469,10 +490,6 @@ impl Session {
         .unwrap_or(u64::MAX);
 
         // Build model-visible history from the selected compaction and its newer suffix.
-        let mut history = ContextManager::for_session(
-            &turn_context.session_source,
-            &turn_context.config.features,
-        );
         let mut saw_legacy_compaction_without_replacement_history = false;
         if let Some(checkpoint) = history_checkpoint
             && let Some(items) = &checkpoint.compacted.replacement_history
@@ -494,17 +511,11 @@ impl Session {
                     history.record_retained_context(event);
                 }
                 RolloutItem::ResponseItem(response_item) => {
-                    history.replay_annotated_item(
-                        response_item,
-                        turn_context.model_info().truncation_policy.into(),
-                    );
+                    history.replay_annotated_item(response_item, truncation_policy);
                 }
                 RolloutItem::InterAgentCommunication(communication) => {
                     let response_item = communication.to_model_input_item();
-                    history.record_items(
-                        std::iter::once(&response_item),
-                        turn_context.model_info().truncation_policy.into(),
-                    );
+                    history.record_items(std::iter::once(&response_item), truncation_policy);
                 }
                 RolloutItem::InterAgentCommunicationMetadata { .. } => {}
                 RolloutItem::Compacted(compacted) => {

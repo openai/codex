@@ -10,6 +10,7 @@
 //! Host shutdown admission is checked before reserving or starting a new turn.
 //! Parent-delegated subagent input bypasses drain; automatic starts remain gated.
 //! Realtime drain refusals are returned to the fanout for ordered session teardown.
+//! Sender evidence is read without the active-turn lock and bound to the accepted turn.
 
 use super::TurnInput;
 use super::session::Session;
@@ -19,11 +20,14 @@ use super::thread_settings;
 use super::turn_context::NewTurnContextOptions;
 use super::turn_context::TurnContext;
 use crate::WithTurnExtensionData;
+use crate::context::ContextualUserFragment;
+use crate::context::GuardianSenderMessages;
 use crate::state::ActiveTurn;
 use crate::state::TurnState;
 use crate::tasks::RegularTask;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
+use codex_history::SenderUserMessages;
 use codex_history::UserInputOrigin;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::error::CodexErr;
@@ -356,9 +360,11 @@ async fn start_or_steer(
         start,
     )
     .await?;
+    let sender_messages = capture_sender_user_messages(session, &mut input).await;
     match session
         .steer_input(
             &mut input,
+            sender_messages.as_ref(),
             additional_context.clone(),
             /*expected_turn_id*/ None,
             settings.required_active_final_output_json_schema(),
@@ -416,8 +422,16 @@ async fn start_or_steer(
             }
             let mut task_input = merge_additional_context_input(session, additional_context).await;
             if has_explicit_input {
-                task_input
-                    .push(pending_turn_input(session, input, &turn_context.sub_id, origin).await);
+                task_input.push(
+                    pending_turn_input(
+                        session,
+                        input,
+                        sender_messages.as_ref(),
+                        &turn_context.sub_id,
+                        origin,
+                    )
+                    .await,
+                );
             }
             session
                 .spawn_task(Arc::clone(&turn_context), task_input, RegularTask::new())
@@ -447,7 +461,7 @@ async fn start_if_idle(
         turn_extension_init,
     } = request;
     let TurnInputRequest {
-        input,
+        mut input,
         thread_settings,
         start,
         additional_context,
@@ -559,13 +573,23 @@ async fn start_if_idle(
         .await;
 
     let mut task_input = merge_additional_context_input(session, additional_context).await;
+    let sender_messages = capture_sender_user_messages(session, &mut input).await;
     match kind {
         TurnStartKind::User => {
             session.clear_connector_selection().await;
             if let SubmittedTurnInput::UserInput { content, .. } = &input {
                 turn_context.session_telemetry.user_prompt(content);
             }
-            task_input.push(pending_turn_input(session, input, &turn_context.sub_id, origin).await);
+            task_input.push(
+                pending_turn_input(
+                    session,
+                    input,
+                    sender_messages.as_ref(),
+                    &turn_context.sub_id,
+                    origin,
+                )
+                .await,
+            );
         }
         TurnStartKind::Automatic | TurnStartKind::Recovery => {
             // Empty automatic user input resumes sampling without a new message.
@@ -575,7 +599,14 @@ async fn start_if_idle(
                     .extend_pending_input_for_turn_state(
                         turn_state.as_ref(),
                         vec![
-                            pending_turn_input(session, input, &turn_context.sub_id, origin).await,
+                            pending_turn_input(
+                                session,
+                                input,
+                                sender_messages.as_ref(),
+                                &turn_context.sub_id,
+                                origin,
+                            )
+                            .await,
                         ],
                     )
                     .await;
@@ -627,6 +658,7 @@ async fn steer(
     match session
         .steer_input(
             &mut input,
+            /*sender_messages*/ None,
             additional_context,
             Some(expected_turn_id.as_str()),
             settings.required_active_final_output_json_schema(),
@@ -755,9 +787,14 @@ impl Session {
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
     )]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "sender evidence is prepared separately before acquiring the admission lock"
+    )]
     async fn steer_input(
         &self,
         input: &mut SubmittedTurnInput,
+        sender_messages: Option<&GuardianSenderMessages>,
         additional_context: BTreeMap<String, AdditionalContextEntry>,
         expected_turn_id: Option<&str>,
         required_final_output_json_schema: Option<&Value>,
@@ -832,7 +869,10 @@ impl Session {
                     },
                 }
             }
-            input => pending_turn_input(self, input.clone(), active_turn_id, origin).await,
+            input => {
+                pending_turn_input(self, input.clone(), sender_messages, active_turn_id, origin)
+                    .await
+            }
         };
         pending_input.push(input);
         self.input_queue
@@ -863,9 +903,28 @@ async fn merge_additional_context_input(
         .collect()
 }
 
+async fn capture_sender_user_messages(
+    session: &Session,
+    input: &mut SubmittedTurnInput,
+) -> Option<GuardianSenderMessages> {
+    let SubmittedTurnInput::ResponseItem(
+        item @ ResponseItem::FunctionCallOutput { call_id: None, .. },
+    ) = input
+    else {
+        return None;
+    };
+    Session::assign_missing_response_item_id(item);
+    session
+        .services
+        .local_agent_runtime
+        .capture_sender_user_messages(item, session.thread_id)
+        .await
+}
+
 async fn pending_turn_input(
     session: &Session,
     input: SubmittedTurnInput,
+    sender_messages: Option<&GuardianSenderMessages>,
     turn_id: &str,
     origin: UserInputOrigin,
 ) -> TurnInput {
@@ -878,19 +937,19 @@ async fn pending_turn_input(
                 origin,
             },
         },
-        SubmittedTurnInput::ResponseItem(mut item)
+        SubmittedTurnInput::ResponseItem(item)
             if matches!(
                 &item,
                 ResponseItem::FunctionCallOutput { call_id: None, .. }
             ) =>
         {
-            Session::assign_missing_response_item_id(&mut item);
-            let metadata = if let Some(messages) = session
-                .services
-                .local_agent_runtime
-                .capture_sender_user_messages(&item, session.thread_id, turn_id)
-                .await
-            {
+            let metadata = if let Some(fragment) = sender_messages {
+                let mut messages = SenderUserMessages {
+                    receiver_turn_id: turn_id.to_owned(),
+                    receiver_message_id: fragment.delivery.clone(),
+                    text: fragment.render(),
+                };
+                messages.bound();
                 Some(CodexHarnessMetadata {
                     user_input_order: Some(session.reserve_user_input_order().await),
                     sender_user_messages: Some(Box::new(messages)),

@@ -109,6 +109,9 @@ mod mailbox_preemption;
 #[path = "scenarios_partial_answers.rs"]
 mod partial_answers;
 
+#[path = "scenarios_guardian_sender_context.rs"]
+mod guardian_sender_context;
+
 #[path = "scenarios_guardian_extra_policy.rs"]
 mod guardian_extra_policy;
 
