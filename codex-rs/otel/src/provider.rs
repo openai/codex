@@ -341,9 +341,9 @@ impl OtelProvider {
     pub fn trace_export_filter(meta: &tracing::Metadata<'_>) -> bool {
         let target = meta.target();
         if meta.is_span() {
-            // h2 creates explicit-root spans that escape the SDK's telemetry suppression.
-            // Exporting them would make OTLP transport generate more OTLP exports.
-            target != "h2" && !target.starts_with("h2::")
+            // The exporter uses h2 and Tokio. Their root spans escape the
+            // SDK's suppression and would generate further OTLP exports.
+            !matches!(target.split("::").next(), Some("h2" | "tokio" | "runtime"))
         } else {
             is_trace_safe_target(target)
         }

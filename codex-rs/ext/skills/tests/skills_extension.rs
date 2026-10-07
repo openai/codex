@@ -1509,10 +1509,15 @@ async fn overlapping_executor_catalogs_render_their_own_roots() -> TestResult {
     // the refresh callsite as globally disabled before this subscriber reaches it.
     let _interest_cache_guard =
         tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
-    let subscriber = tracing_subscriber::registry().with(PauseAfterRefresh {
-        entered: Mutex::new(Some(entered)),
-        resume: Mutex::new(resume),
-    });
+    let subscriber = tracing_subscriber::registry().with(
+        PauseAfterRefresh {
+            entered: Mutex::new(Some(entered)),
+            resume: Mutex::new(resume),
+        }
+        .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
+            metadata.name() == "skills.executor.refresh_executor_catalog"
+        })),
+    );
     let a = tokio::spawn(render(root_a).with_subscriber(subscriber));
     tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 10), paused).await??;
     let b = render(root_b).await;

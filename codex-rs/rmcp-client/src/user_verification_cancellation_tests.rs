@@ -59,8 +59,8 @@ impl InProcessTransportFactory for ElicitationTestTransport {
     }
 }
 
-#[tokio::test]
 #[traced_test]
+#[tokio::test]
 async fn recovered_connections_accept_elicitations_with_previously_cancelled_ids()
 -> anyhow::Result<()> {
     for params in [
