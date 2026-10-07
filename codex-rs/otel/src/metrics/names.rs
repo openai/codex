@@ -77,6 +77,13 @@ pub const THREAD_SKILLS_TRUNCATED_METRIC: &str = "codex.thread.skills.truncated"
 pub const THREAD_TOOLS_NAMESPACES_TOTAL_METRIC: &str = "codex.thread.tools.namespaces_total";
 pub const THREAD_TOOLS_FRAGMENT_BYTES_METRIC: &str = "codex.thread.tools.fragment_bytes";
 
+/// Finalized tool registrations per sampling request, tagged by exposure and tool_mode.
+pub const TOOL_REGISTRATIONS_METRIC: &str = "codex.tools.registered";
+pub const TOOL_REGISTRATIONS_METRIC_BUCKETS: &[f64] = &[
+    0.0, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 50.0, 75.0, 100.0, 150.0, 200.0, 300.0, 500.0, 750.0,
+    1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0,
+];
+
 /// Logarithmic boundaries up to 32,768 for tools bytes and namespace counts.
 pub static THREAD_TOOLS_METRIC_BUCKETS: LazyLock<[f64; 511]> =
     LazyLock::new(|| context_log_buckets(/*max_exponent*/ 15.0));

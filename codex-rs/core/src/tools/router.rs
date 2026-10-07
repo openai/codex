@@ -13,9 +13,13 @@ use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
+use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
 #[cfg(test)]
 use crate::tools::spec_plan::finalize_tool_router;
+use codex_otel::SessionTelemetry;
+use codex_otel::TOOL_REGISTRATIONS_METRIC;
+use codex_otel::TOOL_REGISTRATIONS_METRIC_BUCKETS;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 #[cfg(test)]
@@ -32,6 +36,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 pub use crate::tools::context::ToolCallSource;
+
+const EXPOSURE_DIRECT: &str = "direct";
+const EXPOSURE_DIRECT_MODEL_ONLY: &str = "direct_model_only";
+const EXPOSURE_DEFERRED: &str = "deferred";
+const EXPOSURE_DEFERRED_MODEL_ONLY: &str = "deferred_model_only";
+const EXPOSURE_CODE_MODE_ONLY: &str = "code_mode_only";
+const EXPOSURE_HIDDEN: &str = "hidden";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolCall {
@@ -379,6 +390,48 @@ impl ToolRouter {
         self.registry
             .dispatch_any_with_state(invocation, call_state)
             .await
+    }
+}
+
+/// Records the registered inventory once per sampling request, before transport retries.
+/// Registrations do not imply model visibility or reachability; hosted tools are excluded.
+pub(crate) fn record_registration_metrics(router: &ToolRouter, telemetry: &SessionTelemetry) {
+    let mut direct = 0usize;
+    let mut direct_model_only = 0usize;
+    let mut deferred = 0usize;
+    let mut deferred_model_only = 0usize;
+    let mut code_mode_only = 0usize;
+    let mut hidden = 0usize;
+    for tool in router.registry.entries() {
+        match tool.exposure {
+            ToolExposure::Direct => direct += 1,
+            ToolExposure::DirectModelOnly => direct_model_only += 1,
+            ToolExposure::Deferred => deferred += 1,
+            ToolExposure::DeferredModelOnly => deferred_model_only += 1,
+            ToolExposure::CodeModeOnly => code_mode_only += 1,
+            ToolExposure::Hidden => hidden += 1,
+        }
+    }
+
+    let tool_mode = match router.tool_mode {
+        ToolMode::Direct => "direct",
+        ToolMode::CodeMode => "code_mode",
+        ToolMode::CodeModeOnly => "code_mode_only",
+    };
+    for (exposure, count) in [
+        (EXPOSURE_DIRECT, direct),
+        (EXPOSURE_DIRECT_MODEL_ONLY, direct_model_only),
+        (EXPOSURE_DEFERRED, deferred),
+        (EXPOSURE_DEFERRED_MODEL_ONLY, deferred_model_only),
+        (EXPOSURE_CODE_MODE_ONLY, code_mode_only),
+        (EXPOSURE_HIDDEN, hidden),
+    ] {
+        telemetry.histogram_with_boundaries(
+            TOOL_REGISTRATIONS_METRIC,
+            i64::try_from(count).unwrap_or(i64::MAX),
+            TOOL_REGISTRATIONS_METRIC_BUCKETS,
+            &[("exposure", exposure), ("tool_mode", tool_mode)],
+        );
     }
 }
 
