@@ -7,8 +7,8 @@ use std::sync::atomic::Ordering;
 static AVAILABILITY_RECORDED: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn record_availability_once() {
-    // Probe actual PSEC create/close support; symbol presence alone also
-    // succeeds on transitional Windows builds where MXC is not enabled.
+    // Record the SDK's cached PSEC API-set check. Creation and request-specific
+    // capability checks happen when launching the MXC command.
     let available = codex_mxc_sandbox::is_available();
     if let Some(metrics) = codex_otel::global()
         && !AVAILABILITY_RECORDED.swap(true, Ordering::Relaxed)

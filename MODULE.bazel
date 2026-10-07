@@ -137,6 +137,10 @@ osx.frameworks(names = [
     "UniformTypeIdentifiers",
     "VideoToolbox",
 ])
+osx.libraries(names = [
+    "libproc",
+    "libsandbox",
+])
 use_repo(osx, "macos_sdk")
 
 # Needed to disable xcode...
@@ -474,23 +478,24 @@ crate.annotation(
     workspace_cargo_toml = "rust/runfiles/Cargo.toml",
 )
 
-# MXC keeps its Rust workspace below the repository root.
-[
-    crate.annotation(
-        crate = name,
-        workspace_cargo_toml = "src/Cargo.toml",
-    )
-    for name in [
-        "appcontainer_common",
-        "learning_mode_core",
-        "learning_mode_windows",
-        "mxc_config_contract",
-        "mxc_telemetry",
-        "process_security_environment_spec",
-        "sandbox_spec",
-        "wxc_common",
-    ]
-]
+# MXC's resource compiler lookup needs an explicit path for Windows GNU targets.
+crate.annotation(
+    build_script_deps = [
+        "@crates//:cc-1.2.55",
+        "@crates//:winresource-0.1.31",
+    ],
+    build_script_env = {
+        "RC_PATH": "$(execpath @llvm//tools:llvm-rc)",
+    },
+    build_script_tools = [
+        "@llvm//tools:clang",
+        "@llvm//tools:llvm-rc",
+    ],
+    crate = "mxc-sdk",
+    patch_args = ["-p1"],
+    patches = ["//patches:mxc-sdk_utf8_resources.patch"],
+    workspace_cargo_toml = "src/Cargo.toml",
+)
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 

@@ -86,12 +86,12 @@ pub fn create_command_args(args: CreateMxcCommandArgsParams<'_>) -> Result<Vec<S
     Ok(vec![CODEX_WINDOWS_MXC_ARG1.to_owned()])
 }
 
-/// Whether the executor can create a native MXC process security environment.
+/// Whether the executor exposes MXC's process security-environment API set.
 /// This deliberately excludes MXC's older AppContainer fallback backends.
 pub fn is_available() -> bool {
     #[cfg(windows)]
     {
-        appcontainer_common::base_container_runner::BaseContainerRunner::is_process_security_environment_usable()
+        mxc_sdk::process_container_common::base_container_runner::BaseContainerRunner::is_base_container_api_present()
     }
     #[cfg(not(windows))]
     {

@@ -12,6 +12,7 @@ use codex_protocol::protocol::FileSystemSpecialPath;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use codex_windows_sandbox::resolve_windows_deny_read_paths;
+use mxc_sdk::mxc_common as wxc_common;
 use thiserror::Error;
 use wxc_common::cmdline::CommandLineContext;
 use wxc_common::cmdline::CommandLineError;
@@ -266,7 +267,7 @@ pub(super) fn build_request(
             .to_str()
             .ok_or(PolicyError::NonUnicodeCommandCwd)?
             .to_owned(),
-        env,
+        env: (!env.is_empty()).then_some(env),
         policy: ContainerPolicy {
             capabilities: vec!["registryRead".to_owned()],
             readwrite_paths: unicode_paths(write)?,

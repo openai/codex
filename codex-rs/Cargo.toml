@@ -322,12 +322,9 @@ codex-windows-sandbox-test-support = { path = "windows-sandbox-rs/tests/support"
 core_test_support = { path = "core/tests/common" }
 
 # External
-learning_mode_windows = { git = "https://github.com/microsoft/mxc", rev = "6cd3d58f05d3447e67109cfb75e042803b843ca4" }
-wxc_common = { git = "https://github.com/microsoft/mxc", rev = "6cd3d58f05d3447e67109cfb75e042803b843ca4" }
 age = "0.12.1"
 ansi-to-tui = "8.0.1"
 anyhow = "1"
-appcontainer_common = { git = "https://github.com/microsoft/mxc", rev = "6cd3d58f05d3447e67109cfb75e042803b843ca4" }
 arboard = { version = "3", features = ["wayland-data-control"] }
 arc-swap = "1.9.0"
 assert_cmd = "2"
@@ -414,6 +411,7 @@ maplit = "1.0.2"
 memchr = "2.7.6"
 mime_guess = "2.0.5"
 multimap = "0.10.0"
+mxc-sdk = { git = "https://github.com/microsoft/mxc", rev = "a846837d827b496fc4a08dfe60554515758c6647" }
 notify = "8.2.0"
 nucleo = { git = "https://github.com/helix-editor/nucleo.git", rev = "4253de9faabb4e5c6d81d946a5e35a90f87347ee" }
 once_cell = "1.20.2"
