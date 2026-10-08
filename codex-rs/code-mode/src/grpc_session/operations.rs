@@ -130,11 +130,15 @@ impl SessionInner {
             {
                 request.metadata_mut().insert("traceparent", traceparent);
             }
-            let mut stream =
-                deadline::request(&self, "execution", Duration::ZERO, client.execute(request))
-                    .await?
-                    .into_inner();
-            let first = deadline::request(
+            let mut stream = deadline::session_request(
+                &self,
+                "execution",
+                Duration::ZERO,
+                client.execute(request),
+            )
+            .await?
+            .into_inner();
+            let first = deadline::session_request(
                 &self,
                 "execution starting event",
                 Duration::ZERO,
@@ -217,7 +221,7 @@ impl SessionInner {
         let outcome = tokio::select! {
             biased;
             _ = response_tx.closed() => return,
-            outcome = deadline::request(
+            outcome = deadline::session_request(
                 &self,
                 "execution outcome",
                 runtime_timeout,
@@ -317,7 +321,8 @@ impl SessionInner {
                 grpc::yield_observation_request::Observation::WaitId(wait_id),
             )
         });
-        let response = deadline::request(self, "wait", runtime_timeout, client.wait(request)).await;
+        let response =
+            deadline::session_request(self, "wait", runtime_timeout, client.wait(request)).await;
         drop(watcher);
         cancellation.disarm();
         self.prune_wait_slots();
@@ -351,7 +356,7 @@ impl SessionInner {
     pub(super) async fn terminate(&self, cell_id: CellId) -> Result<WaitOutcome, String> {
         self.require_open()?;
         let mut client = self.client();
-        let response = deadline::request(
+        let response = deadline::session_request(
             self,
             "termination",
             Duration::ZERO,

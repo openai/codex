@@ -193,6 +193,8 @@ impl SessionInner {
         tokio::select! {
             biased;
             _ = cancellation.cancelled() => {}
+            // NotFound can mean an invocation in a live session was canceled.
+            // Check cancellation before treating a completion error as fatal.
             result = deadline::request(
                 self,
                 "tool invocation completion",
@@ -266,3 +268,7 @@ impl SessionInner {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "callbacks_tests.rs"]
+mod tests;

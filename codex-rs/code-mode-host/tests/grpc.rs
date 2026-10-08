@@ -52,6 +52,8 @@ mod large_tool_delegate;
 mod network_policy_tests;
 #[path = "support/recording_delegate.rs"]
 mod recording_delegate;
+#[path = "grpc/session_recovery_tests.rs"]
+mod session_recovery_tests;
 
 use host::HostHarness;
 use large_tool_delegate::LargeToolResultDelegate;

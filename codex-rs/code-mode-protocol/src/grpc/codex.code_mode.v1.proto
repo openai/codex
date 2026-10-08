@@ -5,6 +5,10 @@ package codex.code_mode.v1;
 // Hosts stateful JavaScript execution and delegates nested tool calls to the
 // session owner. Large tool inputs and outputs stay off the session event
 // stream so independent HTTP/2 streams can make progress concurrently.
+//
+// Execute (including its stream), Wait, and Terminate reserve NOT_FOUND for an
+// unknown session_id. Clients may retire the session binding on this status.
+// Missing cells use WaitResponse.missing_cell instead.
 service CodeModeHost {
   // Opens a session lease. The first event is always SessionOpened; dropping
   // this stream closes the session and terminates its active cells.
@@ -19,6 +23,7 @@ service CodeModeHost {
 
   // Each result receives its own HTTP/2 stream, preventing a large response
   // from blocking unrelated tool completions or session control events.
+  // NOT_FOUND may identify a missing invocation rather than a missing session.
   rpc CompleteToolCall(CompleteToolCallRequest)
       returns (CompleteToolCallResponse);
   rpc AcknowledgeNotification(AcknowledgeNotificationRequest)

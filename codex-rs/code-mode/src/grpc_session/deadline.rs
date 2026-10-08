@@ -42,6 +42,25 @@ pub(super) async fn request<T>(
     }
 }
 
+/// Invalidates the session on RPCs where `NotFound` means the session is missing.
+pub(super) async fn session_request<T>(
+    session: &SessionInner,
+    operation: &str,
+    runtime_timeout: Duration,
+    rpc: impl Future<Output = Result<T, tonic::Status>>,
+) -> Result<T, String> {
+    request(session, operation, runtime_timeout, async {
+        let result = rpc.await;
+        if let Err(error) = &result
+            && error.code() == tonic::Code::NotFound
+        {
+            session.fail(failure(operation, error));
+        }
+        result
+    })
+    .await
+}
+
 pub(super) fn failure(operation: &str, error: impl Display) -> String {
     let mut message = format!("gRPC code-mode {operation} failed: {error}");
     if message.len() > MAX_ERROR_BYTES {
