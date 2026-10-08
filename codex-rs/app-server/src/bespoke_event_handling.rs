@@ -498,7 +498,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                     ))
                     .await;
             }
-            RealtimeEvent::SessionUpdated { .. } => {}
+            RealtimeEvent::SessionUpdated {
+                realtime_session_id,
+                ..
+            } => outgoing.track_realtime_session_updated(realtime_session_id),
             RealtimeEvent::InputAudioSpeechStarted(event) => {
                 let notification = ThreadRealtimeItemAddedNotification {
                     thread_id: conversation_id.to_string(),

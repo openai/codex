@@ -180,6 +180,7 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 const MAX_TOOL_RESPONSE_ENTRIES: usize = 256;
+const MAX_RECENT_VOICE_SESSION_WINDOWS: usize = 16;
 
 pub(crate) const MAX_PLUGIN_MEASUREMENTS_PER_BATCH: usize = 100;
 const MAX_PLUGIN_MEASUREMENT_DIMENSIONS: usize = 8;
@@ -228,9 +229,17 @@ struct ThreadAnalyticsState {
     connection_id: Option<u64>,
     metadata: Option<ThreadMetadataState>,
     originator: Option<String>,
-    active_voice_session_id: Option<String>,
+    active_voice_session: Option<VoiceSessionWindow>,
+    recent_voice_sessions: VecDeque<VoiceSessionWindow>,
     active_turn_id: Option<String>,
     pending_voice_handoffs: VecDeque<Option<String>>,
+}
+
+#[derive(Clone)]
+struct VoiceSessionWindow {
+    session_id: Option<String>,
+    started_at: u64,
+    closed_at: Option<u64>,
 }
 
 impl ThreadAnalyticsState {
@@ -243,6 +252,25 @@ impl ThreadAnalyticsState {
             app_server_client.product_client_id.clone_from(originator);
         }
         app_server_client
+    }
+
+    fn active_voice_session_id(&self) -> Option<String> {
+        self.active_voice_session
+            .as_ref()
+            .and_then(|session| session.session_id.clone())
+    }
+
+    fn voice_session_id_at(&self, timestamp: u64) -> Option<String> {
+        self.active_voice_session
+            .iter()
+            .chain(self.recent_voice_sessions.iter().rev())
+            .find(|session| {
+                session.started_at <= timestamp
+                    && session
+                        .closed_at
+                        .is_none_or(|closed_at| timestamp <= closed_at)
+            })
+            .and_then(|session| session.session_id.clone())
     }
 }
 
@@ -621,8 +649,27 @@ impl AnalyticsReducer {
                 if thread.active_turn_id.is_none() {
                     thread
                         .pending_voice_handoffs
-                        .push_back(thread.active_voice_session_id.clone());
+                        .push_back(thread.active_voice_session_id());
                 }
+            }
+            AnalyticsFact::RealtimeSessionStarted {
+                thread_id,
+                realtime_session_id,
+                started_at,
+            } => {
+                self.start_voice_session(thread_id, realtime_session_id, started_at);
+            }
+            AnalyticsFact::RealtimeSessionUpdated {
+                thread_id,
+                realtime_session_id,
+            } => {
+                self.set_active_voice_session_id(thread_id, Some(realtime_session_id));
+            }
+            AnalyticsFact::RealtimeSessionClosed {
+                thread_id,
+                closed_at,
+            } => {
+                self.close_voice_session(&thread_id, closed_at);
             }
             AnalyticsFact::Custom(input) => match input {
                 CustomAnalyticsFact::ArtifactOperation(input) => {
@@ -2119,26 +2166,21 @@ impl AnalyticsReducer {
                 self.pending_mcp_tool_elicitations
                     .retain(|(key, _)| key.thread_id != notification.thread_id);
                 if let Some(thread) = self.threads.get_mut(&notification.thread_id) {
-                    thread.active_voice_session_id = None;
+                    thread.active_voice_session = None;
+                    thread.recent_voice_sessions.clear();
                     thread.active_turn_id = None;
                     thread.pending_voice_handoffs.clear();
                 }
             }
             ServerNotification::ThreadRealtimeStarted(notification) => {
-                let thread = self.threads.entry(notification.thread_id).or_default();
-                thread.active_voice_session_id =
-                    notification.realtime_session_id.filter(|id| !id.is_empty());
-                if let Some(turn_id) = &thread.active_turn_id {
-                    self.turns
-                        .entry(turn_id.clone())
-                        .or_default()
-                        .voice_session_id = thread.active_voice_session_id.clone();
-                }
+                self.start_voice_session(
+                    notification.thread_id,
+                    notification.realtime_session_id,
+                    now_unix_seconds(),
+                );
             }
             ServerNotification::ThreadRealtimeClosed(notification) => {
-                if let Some(thread) = self.threads.get_mut(&notification.thread_id) {
-                    thread.active_voice_session_id = None;
-                }
+                self.close_voice_session(&notification.thread_id, now_unix_seconds());
             }
             ServerNotification::TurnStarted(notification) => {
                 let voice_session_id = {
@@ -2147,7 +2189,7 @@ impl AnalyticsReducer {
                     thread
                         .pending_voice_handoffs
                         .pop_front()
-                        .unwrap_or_else(|| thread.active_voice_session_id.clone())
+                        .unwrap_or_else(|| thread.active_voice_session_id())
                 };
                 let turn_state = self.turns.entry(notification.turn.id).or_default();
                 turn_state.voice_session_id = voice_session_id;
@@ -2304,20 +2346,85 @@ impl AnalyticsReducer {
         else {
             return;
         };
+        let voice_session_id = thread_state
+            .voice_session_id_at(input.started_at)
+            .or_else(|| {
+                self.turns
+                    .get(&input.turn_id)
+                    .and_then(|turn| turn.voice_session_id.clone())
+            });
+        let mut event_params = codex_compaction_event_params(
+            input,
+            thread_metadata.session_id.clone(),
+            thread_state.app_server_client(connection_state),
+            connection_state.runtime.clone(),
+            thread_metadata.thread_source.clone(),
+            thread_metadata.subagent_source.clone(),
+            thread_metadata.parent_thread_id.clone(),
+        );
+        event_params.voice_session_id = voice_session_id;
         out.push(TrackEventRequest::Compaction(Box::new(
             CodexCompactionEventRequest {
                 event_type: "codex_compaction_event",
-                event_params: codex_compaction_event_params(
-                    input,
-                    thread_metadata.session_id.clone(),
-                    thread_state.app_server_client(connection_state),
-                    connection_state.runtime.clone(),
-                    thread_metadata.thread_source.clone(),
-                    thread_metadata.subagent_source.clone(),
-                    thread_metadata.parent_thread_id.clone(),
-                ),
+                event_params,
             },
         )));
+    }
+
+    fn set_active_voice_session_id(
+        &mut self,
+        thread_id: String,
+        realtime_session_id: Option<String>,
+    ) {
+        let thread = self.threads.entry(thread_id).or_default();
+        let realtime_session_id = realtime_session_id.filter(|id| !id.is_empty());
+        let Some(session) = thread.active_voice_session.as_mut() else {
+            return;
+        };
+        session.session_id.clone_from(&realtime_session_id);
+        if let Some(turn_id) = &thread.active_turn_id {
+            self.turns
+                .entry(turn_id.clone())
+                .or_default()
+                .voice_session_id = realtime_session_id;
+        }
+    }
+
+    fn start_voice_session(
+        &mut self,
+        thread_id: String,
+        realtime_session_id: Option<String>,
+        started_at: u64,
+    ) {
+        self.close_voice_session(&thread_id, started_at);
+        let realtime_session_id = realtime_session_id.filter(|id| !id.is_empty());
+        let thread = self.threads.entry(thread_id).or_default();
+        thread.active_voice_session = Some(VoiceSessionWindow {
+            session_id: realtime_session_id.clone(),
+            started_at,
+            closed_at: None,
+        });
+        if let Some(turn_id) = &thread.active_turn_id {
+            self.turns
+                .entry(turn_id.clone())
+                .or_default()
+                .voice_session_id = realtime_session_id;
+        }
+    }
+
+    fn close_voice_session(&mut self, thread_id: &str, closed_at: u64) {
+        let Some(thread) = self.threads.get_mut(thread_id) else {
+            return;
+        };
+        if let Some(mut session) = thread.active_voice_session.take() {
+            session.closed_at = Some(closed_at);
+            if session.session_id.is_some() {
+                if thread.recent_voice_sessions.len() >= MAX_RECENT_VOICE_SESSION_WINDOWS {
+                    thread.recent_voice_sessions.pop_front();
+                }
+                thread.recent_voice_sessions.push_back(session);
+            }
+        }
     }
 
     fn ingest_goal(&mut self, input: CodexGoalEvent, out: &mut Vec<TrackEventRequest>) {

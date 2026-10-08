@@ -17,6 +17,7 @@ use crate::reducer::AnalyticsReducer;
 use crate::tests::support::sample_app_server_client_metadata;
 use crate::tests::support::sample_runtime_metadata;
 use crate::tests::support::sample_thread_resume_response_with_source;
+use crate::tests::support::sample_turn_started_notification;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
@@ -31,38 +32,40 @@ use serde_json::json;
 
 #[test]
 fn compaction_event_serializes_expected_shape() {
+    let mut event_params = crate::events::codex_compaction_event_params(
+        CodexCompactionEvent {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            trigger: CompactionTrigger::Auto,
+            reason: CompactionReason::ContextLimit,
+            implementation: CompactionImplementation::ResponsesCompactionV2,
+            phase: CompactionPhase::MidTurn,
+            strategy: CompactionStrategy::Memento,
+            status: CompactionStatus::Completed,
+            codex_error_kind: None,
+            codex_error_http_status_code: None,
+            usage_limit_window_minutes: None,
+            active_context_tokens_before: 120_000,
+            active_context_tokens_after: 18_000,
+            retained_image_count: None,
+            compaction_summary_tokens: None,
+            cached_input_tokens: None,
+            cache_write_input_tokens: Some(456),
+            started_at: 100,
+            completed_at: 106,
+            duration_ms: Some(6543),
+        },
+        "session-thread-1".to_string(),
+        sample_app_server_client_metadata(),
+        sample_runtime_metadata(),
+        Some(ThreadSource::User),
+        /*subagent_source*/ None,
+        /*parent_thread_id*/ None,
+    );
+    event_params.voice_session_id = Some("voice-session-1".to_string());
     let event = TrackEventRequest::Compaction(Box::new(CodexCompactionEventRequest {
         event_type: "codex_compaction_event",
-        event_params: crate::events::codex_compaction_event_params(
-            CodexCompactionEvent {
-                thread_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
-                trigger: CompactionTrigger::Auto,
-                reason: CompactionReason::ContextLimit,
-                implementation: CompactionImplementation::ResponsesCompactionV2,
-                phase: CompactionPhase::MidTurn,
-                strategy: CompactionStrategy::Memento,
-                status: CompactionStatus::Completed,
-                codex_error_kind: None,
-                codex_error_http_status_code: None,
-                usage_limit_window_minutes: None,
-                active_context_tokens_before: 120_000,
-                active_context_tokens_after: 18_000,
-                retained_image_count: None,
-                compaction_summary_tokens: None,
-                cached_input_tokens: None,
-                cache_write_input_tokens: Some(456),
-                started_at: 100,
-                completed_at: 106,
-                duration_ms: Some(6543),
-            },
-            "session-thread-1".to_string(),
-            sample_app_server_client_metadata(),
-            sample_runtime_metadata(),
-            Some(ThreadSource::User),
-            /*subagent_source*/ None,
-            /*parent_thread_id*/ None,
-        ),
+        event_params,
     }));
 
     let payload = serde_json::to_value(&event).expect("serialize compaction event");
@@ -97,6 +100,7 @@ fn compaction_event_serializes_expected_shape() {
                 "phase": "mid_turn",
                 "strategy": "memento",
                 "status": "completed",
+                "voice_session_id": "voice-session-1",
                 "codex_error_kind": null,
                 "codex_error_http_status_code": null,
                 "usage_limit_window_minutes": null,
@@ -123,7 +127,7 @@ fn compaction_implementation_serializes_remote_v2() {
 }
 
 #[tokio::test]
-async fn compaction_event_ingests_custom_fact() {
+async fn compaction_events_keep_authoritative_voice_session_across_consecutive_calls() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
     let parent_thread_id =
@@ -184,10 +188,77 @@ async fn compaction_event_ingests_custom_fact() {
 
     reducer
         .ingest(
+            AnalyticsFact::RealtimeSessionStarted {
+                thread_id: "thread-1".to_string(),
+                realtime_session_id: None,
+                started_at: 100,
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::RealtimeSessionUpdated {
+                thread_id: "thread-1".to_string(),
+                realtime_session_id: "voice-session-1".to_string(),
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_started_notification(
+                "thread-1",
+                "turn-compact-1",
+            ))),
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::RealtimeSessionClosed {
+                thread_id: "thread-1".to_string(),
+                closed_at: 150,
+            },
+            &mut events,
+        )
+        .await;
+
+    reducer
+        .ingest(
+            AnalyticsFact::RealtimeSessionStarted {
+                thread_id: "thread-1".to_string(),
+                realtime_session_id: None,
+                started_at: 200,
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::RealtimeSessionUpdated {
+                thread_id: "thread-1".to_string(),
+                realtime_session_id: "voice-session-2".to_string(),
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_started_notification(
+                "thread-1",
+                "turn-compact-2",
+            ))),
+            &mut events,
+        )
+        .await;
+
+    reducer
+        .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(Box::new(
                 CodexCompactionEvent {
                     thread_id: "thread-1".to_string(),
-                    turn_id: "turn-compact".to_string(),
+                    turn_id: "turn-compact-1".to_string(),
                     trigger: CompactionTrigger::Manual,
                     reason: CompactionReason::UserRequested,
                     implementation: CompactionImplementation::Responses,
@@ -203,8 +274,8 @@ async fn compaction_event_ingests_custom_fact() {
                     compaction_summary_tokens: None,
                     cached_input_tokens: None,
                     cache_write_input_tokens: None,
-                    started_at: 100,
-                    completed_at: 101,
+                    started_at: 110,
+                    completed_at: 210,
                     duration_ms: Some(1200),
                 },
             ))),
@@ -212,12 +283,55 @@ async fn compaction_event_ingests_custom_fact() {
         )
         .await;
 
+    reducer
+        .ingest(
+            AnalyticsFact::RealtimeSessionClosed {
+                thread_id: "thread-1".to_string(),
+                closed_at: 250,
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(Box::new(
+                CodexCompactionEvent {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-compact-2".to_string(),
+                    trigger: CompactionTrigger::Auto,
+                    reason: CompactionReason::ContextLimit,
+                    implementation: CompactionImplementation::ResponsesCompactionV2,
+                    phase: CompactionPhase::MidTurn,
+                    strategy: CompactionStrategy::Memento,
+                    status: CompactionStatus::Completed,
+                    codex_error_kind: None,
+                    codex_error_http_status_code: None,
+                    usage_limit_window_minutes: None,
+                    active_context_tokens_before: 100_000,
+                    active_context_tokens_after: 20_000,
+                    retained_image_count: None,
+                    compaction_summary_tokens: None,
+                    cached_input_tokens: None,
+                    cache_write_input_tokens: None,
+                    started_at: 210,
+                    completed_at: 251,
+                    duration_ms: Some(800),
+                },
+            ))),
+            &mut events,
+        )
+        .await;
+
     let payload = serde_json::to_value(&events).expect("serialize events");
-    assert_eq!(payload.as_array().expect("events array").len(), 1);
+    assert_eq!(payload.as_array().expect("events array").len(), 2);
     assert_eq!(payload[0]["event_type"], "codex_compaction_event");
     assert_eq!(payload[0]["event_params"]["session_id"], "session-thread-1");
     assert_eq!(payload[0]["event_params"]["thread_id"], "thread-1");
-    assert_eq!(payload[0]["event_params"]["turn_id"], "turn-compact");
+    assert_eq!(payload[0]["event_params"]["turn_id"], "turn-compact-1");
+    assert_eq!(
+        payload[0]["event_params"]["voice_session_id"],
+        "voice-session-1"
+    );
     assert_eq!(
         payload[0]["event_params"]["codex_error_kind"],
         json!("context_window_exceeded")
@@ -257,4 +371,10 @@ async fn compaction_event_ingests_custom_fact() {
     assert_eq!(payload[0]["event_params"]["phase"], "standalone_turn");
     assert_eq!(payload[0]["event_params"]["strategy"], "memento");
     assert_eq!(payload[0]["event_params"]["status"], "failed");
+    assert_eq!(payload[1]["event_params"]["turn_id"], "turn-compact-2");
+    assert_eq!(
+        payload[1]["event_params"]["voice_session_id"],
+        "voice-session-2"
+    );
+    assert_eq!(payload[1]["event_params"]["status"], "completed");
 }

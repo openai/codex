@@ -582,6 +582,13 @@ impl AnalyticsEventsClient {
         )));
     }
 
+    pub fn track_realtime_session_updated(&self, thread_id: String, realtime_session_id: String) {
+        self.record_fact(AnalyticsFact::RealtimeSessionUpdated {
+            thread_id,
+            realtime_session_id,
+        });
+    }
+
     pub fn track_guardian_v2_event(&self, event: GuardianV2Event) {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::GuardianV2(
             Box::new(event),
@@ -811,6 +818,24 @@ impl AnalyticsEventsClient {
 
     /// Records analytics-relevant notifications without cloning ignored variants.
     pub fn track_notification(&self, notification: &ServerNotification) {
+        match notification {
+            ServerNotification::ThreadRealtimeStarted(started) => {
+                self.record_fact(AnalyticsFact::RealtimeSessionStarted {
+                    thread_id: started.thread_id.clone(),
+                    realtime_session_id: started.realtime_session_id.clone(),
+                    started_at: crate::now_unix_seconds(),
+                });
+                return;
+            }
+            ServerNotification::ThreadRealtimeClosed(closed) => {
+                self.record_fact(AnalyticsFact::RealtimeSessionClosed {
+                    thread_id: closed.thread_id.clone(),
+                    closed_at: crate::now_unix_seconds(),
+                });
+                return;
+            }
+            _ => {}
+        }
         if let ServerNotification::ThreadRealtimeItemAdded(handoff) = notification {
             if handoff.item.get("type").and_then(serde_json::Value::as_str)
                 == Some("handoff_request")
@@ -826,8 +851,6 @@ impl AnalyticsEventsClient {
             ServerNotification::ThreadArchived(_)
                 | ServerNotification::ThreadClosed(_)
                 | ServerNotification::ThreadUnarchived(_)
-                | ServerNotification::ThreadRealtimeStarted(_)
-                | ServerNotification::ThreadRealtimeClosed(_)
                 | ServerNotification::TurnStarted(_)
                 | ServerNotification::TurnCompleted(_)
                 | ServerNotification::TurnDiffUpdated(_)

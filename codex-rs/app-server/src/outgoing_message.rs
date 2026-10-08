@@ -196,6 +196,12 @@ impl ThreadScopedOutgoingMessageSender {
             );
     }
 
+    pub(crate) fn track_realtime_session_updated(&self, realtime_session_id: String) {
+        self.outgoing
+            .analytics_events_client
+            .track_realtime_session_updated(self.thread_id.to_string(), realtime_session_id);
+    }
+
     pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
         self.outgoing
             .analytics_events_client
