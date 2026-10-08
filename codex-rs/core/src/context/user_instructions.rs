@@ -1,5 +1,6 @@
 use super::ContextualUserFragment;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ContentItemMetadata;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UserInstructions {
@@ -8,6 +9,10 @@ pub(crate) struct UserInstructions {
 }
 
 impl ContextualUserFragment for UserInstructions {
+    fn content_metadata(&self) -> ContentItemMetadata {
+        ContentItemMetadata::agents_md()
+    }
+
     fn content_kind(&self) -> ContentItemKind {
         ContentItemKind("agents_md.instructions".to_string())
     }

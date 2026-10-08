@@ -46,6 +46,8 @@ use image::Luma;
 use image::Rgba;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
+use serde_json::from_value;
+use serde_json::json;
 use test_case::test_case;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
@@ -1264,6 +1266,10 @@ fn for_prompt_strips_media_when_model_does_not_support_it() {
                         ContentItemKind("audio.unsupported".to_string()),
                         ContentItemKind("user.text".to_string()),
                     ]),
+                    content_item_metadata: from_value(json!([
+                        {}, {"harness_injected": true}, {"harness_injected": true}, {}
+                    ]))
+                    .unwrap(),
                     ..Default::default()
                 },
             ),

@@ -1,3 +1,4 @@
+use crate::HookContext;
 use codex_protocol::ThreadId;
 use codex_protocol::items::HookPromptFragment;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -32,7 +33,7 @@ impl Default for AdditionalContextLimit {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AdditionalContext {
-    pub text: String,
+    pub context: HookContext,
     pub limit: AdditionalContextLimit,
 }
 
@@ -61,7 +62,7 @@ impl HookOutputSpiller {
             .await
     }
 
-    async fn maybe_spill_text_with_limit(
+    pub(crate) async fn maybe_spill_text_with_limit(
         &self,
         text: String,
         limit: AdditionalContextLimit,
@@ -93,13 +94,11 @@ impl HookOutputSpiller {
     pub(crate) async fn maybe_spill_additional_contexts(
         &self,
         contexts: Vec<AdditionalContext>,
-    ) -> Vec<String> {
+    ) -> Vec<HookContext> {
         let mut spilled = Vec::with_capacity(contexts.len());
-        for context in contexts {
-            spilled.push(
-                self.maybe_spill_text_with_limit(context.text, context.limit)
-                    .await,
-            );
+        for AdditionalContext { mut context, limit } in contexts {
+            context.text = self.maybe_spill_text_with_limit(context.text, limit).await;
+            spilled.push(context);
         }
         spilled
     }
@@ -113,6 +112,7 @@ impl HookOutputSpiller {
             spilled.push(HookPromptFragment {
                 text: self.maybe_spill_text(fragment.text).await,
                 hook_run_id: fragment.hook_run_id,
+                metadata: fragment.metadata,
             });
         }
         spilled

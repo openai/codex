@@ -3,6 +3,8 @@ use chrono::Utc;
 
 use super::ContextualUserFragment;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ContentItemMetadata;
+use codex_protocol::models::ContentItemNamespace;
 
 pub(crate) struct CurrentTimeReminder {
     current_time: DateTime<Utc>,
@@ -21,6 +23,10 @@ impl CurrentTimeReminder {
 }
 
 impl ContextualUserFragment for CurrentTimeReminder {
+    fn content_metadata(&self) -> ContentItemMetadata {
+        ContentItemMetadata::tool(Some(ContentItemNamespace::Clock))
+    }
+
     fn content_kind(&self) -> ContentItemKind {
         ContentItemKind("current_time.reminder".to_string())
     }
@@ -49,6 +55,10 @@ impl CurrentTimeUnavailable {
 }
 
 impl ContextualUserFragment for CurrentTimeUnavailable {
+    fn content_metadata(&self) -> ContentItemMetadata {
+        ContentItemMetadata::tool(Some(ContentItemNamespace::Clock))
+    }
+
     fn content_kind(&self) -> ContentItemKind {
         ContentItemKind("current_time.unavailable".to_string())
     }

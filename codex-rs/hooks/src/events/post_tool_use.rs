@@ -40,7 +40,7 @@ pub struct PostToolUseRequest {
 pub struct PostToolUseOutcome {
     pub hook_events: Vec<HookCompletedEvent>,
     pub should_block: bool,
-    pub additional_contexts: Vec<String>,
+    pub additional_contexts: Vec<crate::HookContext>,
     pub feedback_message: Option<String>,
 }
 
@@ -206,6 +206,7 @@ fn parse_completed(
                             &mut additional_contexts_for_model,
                             handler,
                             additional_context,
+                            &run_result.context_metadata,
                         );
                     }
                     if handler.can_apply_control_effects() {
@@ -391,7 +392,9 @@ mod tests {
             PostToolUseHandlerData {
                 should_block: false,
                 additional_contexts_for_model: vec![AdditionalContext {
-                    text: "Remember the bash cleanup note.".to_string(),
+                    context: crate::HookContext::harness(
+                        "Remember the bash cleanup note.".to_string()
+                    ),
                     limit: AdditionalContextLimit::from_config(Some(17)),
                 }],
                 feedback_messages_for_model: Vec::new(),
@@ -608,6 +611,7 @@ mod tests {
 
     fn run_result(exit_code: Option<i32>, stdout: &str, stderr: &str) -> HandlerRunResult {
         HandlerRunResult {
+            context_metadata: codex_protocol::models::ContentItemMetadata::harness(),
             started_at: 1_700_000_000,
             completed_at: 1_700_000_001,
             duration_ms: 12,

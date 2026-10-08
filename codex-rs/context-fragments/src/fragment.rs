@@ -1,6 +1,7 @@
 use crate::AnnotatedContent;
+use crate::message_from_parts;
 use codex_protocol::models::ContentItemKind;
-use codex_protocol::models::InternalChatMessageMetadataPassthrough;
+use codex_protocol::models::ContentItemMetadata;
 use codex_protocol::models::ResponseItem;
 
 /// A rendered contextual fragment and the role that owns its annotated content.
@@ -35,20 +36,7 @@ impl RenderedFragment {
 impl From<RenderedFragment> for ResponseItem {
     fn from(fragment: RenderedFragment) -> Self {
         let (role, annotated_content) = fragment.into_parts();
-        let (content, content_kind) = annotated_content.into_parts();
-
-        Self::Message {
-            id: None,
-            role: role.to_string(),
-            content: vec![content],
-            phase: None,
-            internal_chat_message_metadata_passthrough: Some(
-                InternalChatMessageMetadataPassthrough {
-                    content_item_kinds: Some(vec![content_kind]),
-                    ..Default::default()
-                },
-            ),
-        }
+        message_from_parts(role, vec![annotated_content])
     }
 }
 
@@ -63,6 +51,22 @@ impl From<RenderedFragment> for ResponseItem {
 /// arbitrary text.
 pub trait ContextualUserFragment {
     fn role(&self) -> &'static str;
+
+    /// Attribution is supplied when the fragment is produced, never inferred from rendered text.
+    fn content_metadata(&self) -> ContentItemMetadata {
+        ContentItemMetadata::harness()
+    }
+
+    /// Binds producer attribution before this fragment is rendered or persisted.
+    fn with_metadata(self, metadata: ContentItemMetadata) -> AttributedFragment<Self>
+    where
+        Self: Sized,
+    {
+        AttributedFragment {
+            fragment: self,
+            metadata,
+        }
+    }
 
     /// Returns a stable `<feature>.<name>` classification, using `generic` for shared fragments.
     fn content_kind(&self) -> ContentItemKind;
@@ -97,7 +101,7 @@ pub trait ContextualUserFragment {
     fn render_fragment(&self) -> RenderedFragment {
         RenderedFragment::new(
             self.role(),
-            AnnotatedContent::input_text(self.render(), self.content_kind()),
+            AnnotatedContent::text(self.render(), self.content_kind(), self.content_metadata()),
         )
     }
 
@@ -110,6 +114,36 @@ pub trait ContextualUserFragment {
 
     fn into_boxed_response_item(self: Box<Self>) -> ResponseItem {
         ResponseItem::from(self.render_fragment())
+    }
+}
+
+/// A contextual fragment with attribution supplied by its producer.
+pub struct AttributedFragment<F> {
+    fragment: F,
+    metadata: ContentItemMetadata,
+}
+
+impl<F: ContextualUserFragment> ContextualUserFragment for AttributedFragment<F> {
+    fn role(&self) -> &'static str {
+        self.fragment.role()
+    }
+    fn content_kind(&self) -> ContentItemKind {
+        self.fragment.content_kind()
+    }
+    fn markers(&self) -> (&'static str, &'static str) {
+        self.fragment.markers()
+    }
+    fn type_markers() -> (&'static str, &'static str) {
+        F::type_markers()
+    }
+    fn body(&self) -> String {
+        self.fragment.body()
+    }
+    fn render(&self) -> String {
+        self.fragment.render()
+    }
+    fn content_metadata(&self) -> ContentItemMetadata {
+        self.metadata.clone()
     }
 }
 

@@ -205,7 +205,11 @@ async fn app_server_uses_configured_notes_backend_for_context_window_hints(
         })
         .count();
     assert_eq!(bridge_calls, usize::from(!use_history_notes_extension));
-    let developer_messages = request.message_input_texts("developer");
+    let developer_messages: Vec<_> = request
+        .message_input_text_groups("developer")
+        .into_iter()
+        .map(|parts| parts.concat())
+        .collect();
     let context_window = developer_messages
         .iter()
         .find(|text| text.contains("<context_window>"))

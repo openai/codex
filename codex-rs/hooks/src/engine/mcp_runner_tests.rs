@@ -15,6 +15,7 @@ use crate::engine::ConfiguredHandler;
 use crate::engine::ConfiguredHandlerKind;
 use crate::mcp::HookMcpCall;
 use crate::mcp::HookMcpExecutor;
+use crate::mcp::HookMcpOutput;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookSource;
 use codex_utils_absolute_path::test_support::PathBufExt;
@@ -26,10 +27,13 @@ struct RecordingExecutor {
 }
 
 impl HookMcpExecutor for RecordingExecutor {
-    fn execute(&self, call: HookMcpCall) -> BoxFuture<'_, anyhow::Result<String>> {
+    fn execute(&self, call: HookMcpCall) -> BoxFuture<'_, anyhow::Result<HookMcpOutput>> {
         async move {
             self.calls.lock().expect("lock calls").push(call);
-            Ok(self.output.clone())
+            Ok(HookMcpOutput {
+                text: self.output.clone(),
+                source_tool_namespace: Some("security".into()),
+            })
         }
         .boxed()
     }

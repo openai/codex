@@ -38,6 +38,7 @@ fn executed_tool_call_metadata_field_bytes(
     } else if metadata.turn_id.is_some()
         || metadata.create_time.is_some()
         || metadata.content_item_kinds.is_some()
+        || metadata.content_item_metadata.is_some()
     {
         bytes + 1
     } else {

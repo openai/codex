@@ -76,8 +76,9 @@ fn model_token_budget_config() -> ModelTokenBudgetConfig {
 fn token_budget_contexts(request: &ResponsesRequest) -> Vec<String> {
     let context_window_prefix = format!("{CONTEXT_WINDOW_OPEN_TAG}\n");
     request
-        .message_input_texts("developer")
+        .message_input_text_groups("developer")
         .into_iter()
+        .map(|parts| parts.concat())
         .filter(|text| text.starts_with(&context_window_prefix))
         .collect()
 }

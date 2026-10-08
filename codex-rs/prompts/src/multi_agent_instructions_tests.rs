@@ -3,6 +3,7 @@
 use super::*;
 use codex_context_fragments::AnnotatedContent;
 use codex_context_fragments::RenderedFragment;
+use codex_protocol::models::ContentItemMetadata;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -32,9 +33,10 @@ fn role_segment_filters_base_and_appends_bundled_guidance() {
             instructions.render_fragment(),
             RenderedFragment::new(
                 "developer",
-                AnnotatedContent::input_text(
+                AnnotatedContent::text(
                     expected_text,
                     ContentItemKind("multi_agent.role_instructions".to_string()),
+                    ContentItemMetadata::harness(),
                 ),
             ),
         );

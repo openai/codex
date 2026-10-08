@@ -165,10 +165,11 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
         .await;
     assert_eq!(
         hints,
-        vec![PromptFragment::new(
+        vec![PromptFragment::tool(
             PromptSlot::ContextWindow,
             THREAD_HINT,
             ContentItemKind("notes.thread_hint".to_string()),
+            "notes".to_string(),
         )]
     );
 

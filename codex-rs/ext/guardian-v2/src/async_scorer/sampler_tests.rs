@@ -258,6 +258,9 @@ fn assert_classifier_instructions(request: &serde_json::Value) {
             }],
             "internal_chat_message_metadata_passthrough": {
                 "content_item_kinds": ["guardian.classifier_instructions"],
+                "content_item_metadata": [{
+                    "provenance": {"type": "harness", "hook": false},
+                }],
             },
         })
     );

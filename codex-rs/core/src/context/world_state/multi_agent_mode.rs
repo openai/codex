@@ -7,6 +7,8 @@ use super::multi_agent_usage_hint::MultiAgentUsageHintState;
 use crate::context::ContextualUserFragment;
 use crate::context::multi_agent_mode_instructions::MultiAgentModeInstructions;
 use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::models::ContentItemMetadata;
+use codex_protocol::models::ContentItemNamespace;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use serde::Deserialize;
@@ -20,6 +22,8 @@ pub(crate) struct MultiAgentModeState {
     mode: Option<MultiAgentMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     usage_hint_hash: Option<WorldStateHash>,
+    #[serde(skip)]
+    namespace: Option<ContentItemNamespace>,
 }
 
 impl MultiAgentModeState {
@@ -33,7 +37,13 @@ impl MultiAgentModeState {
                 mode @ (MultiAgentMode::ExplicitRequestOnly | MultiAgentMode::Proactive) => mode,
             }),
             usage_hint_hash: None,
+            namespace: None,
         }
+    }
+
+    pub(crate) fn with_namespace(mut self, namespace: ContentItemNamespace) -> Self {
+        self.namespace = Some(namespace);
+        self
     }
 
     pub(crate) fn with_usage_hint(mut self, usage_hint: &MultiAgentUsageHintState) -> Self {
@@ -81,8 +91,10 @@ impl WorldStateSection for MultiAgentModeState {
             }
         };
 
-        let fragment = MultiAgentModeInstructions::from_mode(mode)
-            .map(|instructions| Box::new(instructions) as Box<dyn ContextualUserFragment>);
+        let fragment = MultiAgentModeInstructions::from_mode(mode).map(|instructions| {
+            Box::new(instructions.with_metadata(ContentItemMetadata::tool(self.namespace.clone())))
+                as Box<dyn ContextualUserFragment>
+        });
         (
             Some(self.clone()),
             WorldStateUpdate::optional_boxed_fragment(fragment),

@@ -3,8 +3,12 @@ use super::world_state::PreviousSectionState;
 use super::world_state::WorldStateSection;
 use crate::context::world_state::SectionTransition;
 use crate::context::world_state::WorldStateUpdate;
+use codex_context_fragments::AnnotatedContent;
+use codex_context_fragments::message_from_parts;
 use codex_protocol::AgentPath;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CONTEXT_WINDOW_CLOSE_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_OPEN_TAG;
@@ -17,7 +21,6 @@ pub(crate) struct TokenBudgetContext {
     first_window_id: Uuid,
     previous_window_id: Option<Uuid>,
     window_id: Uuid,
-    thread_hint: Option<String>,
 }
 
 impl TokenBudgetContext {
@@ -26,15 +29,38 @@ impl TokenBudgetContext {
         first_window_id: Uuid,
         previous_window_id: Option<Uuid>,
         window_id: Uuid,
-        thread_hint: Option<String>,
     ) -> Self {
         Self {
             agent_path,
             first_window_id,
             previous_window_id,
             window_id,
-            thread_hint,
         }
+    }
+
+    /// Wraps tool hints without losing their source or changing the concatenated prompt text.
+    pub(crate) fn render_with_hints(&self, hints: Vec<AnnotatedContent>) -> ResponseItem {
+        if hints.is_empty() {
+            return ContextualUserFragment::into(self.clone());
+        }
+        let mut content = vec![AnnotatedContent::text(
+            format!("{CONTEXT_WINDOW_OPEN_TAG}{}", self.body()),
+            self.content_kind(),
+            self.content_metadata(),
+        )];
+        for mut part in hints {
+            let ContentItem::InputText { text } = part.content_mut() else {
+                unreachable!("context-window hints are text prompt fragments");
+            };
+            text.push('\n');
+            content.push(part);
+        }
+        content.push(AnnotatedContent::text(
+            CONTEXT_WINDOW_CLOSE_TAG,
+            self.content_kind(),
+            self.content_metadata(),
+        ));
+        message_from_parts(self.role(), content)
     }
 }
 
@@ -65,9 +91,6 @@ impl ContextualUserFragment for TokenBudgetContext {
         ];
         if let Some(previous_window_id) = self.previous_window_id {
             lines.push(format!("Previous context window id: {previous_window_id}"));
-        }
-        if let Some(thread_hint) = &self.thread_hint {
-            lines.push(thread_hint.clone());
         }
         format!("\n{}\n", lines.join("\n"))
     }

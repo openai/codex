@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::bail;
 use codex_hooks::HookMcpCall;
 use codex_hooks::HookMcpExecutor;
+use codex_hooks::HookMcpOutput;
 use codex_mcp::McpRuntime;
 use codex_protocol::ThreadId;
 use futures::FutureExt;
@@ -16,7 +17,7 @@ pub(crate) struct CoreHookMcpExecutor {
 }
 
 impl HookMcpExecutor for CoreHookMcpExecutor {
-    fn execute(&self, call: HookMcpCall) -> BoxFuture<'_, anyhow::Result<String>> {
+    fn execute(&self, call: HookMcpCall) -> BoxFuture<'_, anyhow::Result<HookMcpOutput>> {
         async move {
             let mut metadata = call.metadata.unwrap_or_default();
             metadata.insert(
@@ -24,7 +25,7 @@ impl HookMcpExecutor for CoreHookMcpExecutor {
                 Value::String(self.thread_id.to_string()),
             );
 
-            let result = self
+            let call_result = self
                 .runtime
                 .latest_call_tool(
                     &call.server,
@@ -36,6 +37,7 @@ impl HookMcpExecutor for CoreHookMcpExecutor {
                     /*wait_for_server*/ false,
                 )
                 .await?;
+            let result = call_result.result;
             let text = result
                 .content
                 .iter()
@@ -50,7 +52,10 @@ impl HookMcpExecutor for CoreHookMcpExecutor {
                 bail!("MCP tool returned an error: {text}");
             }
 
-            Ok(text)
+            Ok(HookMcpOutput {
+                text,
+                source_tool_namespace: call_result.source_tool_namespace,
+            })
         }
         .boxed()
     }

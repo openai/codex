@@ -1,4 +1,5 @@
 mod config_rules;
+mod context;
 mod declarations;
 mod engine;
 pub(crate) mod events;
@@ -52,6 +53,7 @@ pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 9] = [
     "SubagentStop",
 ];
 
+pub use context::HookContext;
 pub use events::compact::PostCompactRequest;
 pub use events::compact::PreCompactOutcome;
 pub use events::compact::PreCompactRequest;
@@ -79,6 +81,7 @@ pub use events::user_prompt_submit::UserPromptSubmitRequest;
 pub use legacy_notify::legacy_notify_json;
 pub use mcp::HookMcpCall;
 pub use mcp::HookMcpExecutor;
+pub use mcp::HookMcpOutput;
 pub use registry::HookListOutcome;
 pub use registry::Hooks;
 pub use registry::HooksConfig;

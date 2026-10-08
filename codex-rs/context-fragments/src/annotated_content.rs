@@ -1,23 +1,37 @@
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ContentItemMetadata;
 use codex_protocol::models::ResponseItem;
 
-/// Model-visible content paired with its harness-owned classification.
+/// Content, classification and attribution travel together through edits and truncation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnnotatedContent {
     content: ContentItem,
     kind: ContentItemKind,
+    metadata: ContentItemMetadata,
 }
 
 impl AnnotatedContent {
     /// Creates content and its classification together.
     pub fn new(content: ContentItem, kind: ContentItemKind) -> Self {
-        Self { content, kind }
+        Self {
+            content,
+            kind,
+            metadata: ContentItemMetadata::default(),
+        }
     }
 
-    /// Creates model-visible input text and its classification together.
-    pub fn input_text(text: impl Into<String>, kind: ContentItemKind) -> Self {
-        Self::new(ContentItem::InputText { text: text.into() }, kind)
+    /// Creates text with the attribution supplied by its producer.
+    pub fn text(
+        text: impl Into<String>,
+        kind: ContentItemKind,
+        metadata: ContentItemMetadata,
+    ) -> Self {
+        Self {
+            content: ContentItem::InputText { text: text.into() },
+            kind,
+            metadata,
+        }
     }
 
     /// Returns the model-visible content.
@@ -35,16 +49,29 @@ impl AnnotatedContent {
         &self.kind
     }
 
-    /// Separates the content from its classification at an API boundary.
-    pub fn into_parts(self) -> (ContentItem, ContentItemKind) {
-        (self.content, self.kind)
+    /// Separates content and its positional annotations at an API boundary.
+    pub fn into_parts(self) -> (ContentItem, ContentItemKind, ContentItemMetadata) {
+        (self.content, self.kind, self.metadata)
     }
 }
 
-/// Takes a message's content together with its positional classifications.
+/// Assembles a message without separating its content from its attribution.
+pub fn message_from_parts(role: impl Into<String>, parts: Vec<AnnotatedContent>) -> ResponseItem {
+    let mut item = ResponseItem::Message {
+        id: None,
+        role: role.into(),
+        content: Vec::new(),
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    set_annotated_content(&mut item, parts);
+    item
+}
+
+/// Takes a message's content together with its classification and source metadata.
 ///
 /// Legacy messages, including persisted rollouts, may not have classifications.
-/// Missing entries are classified as unknown so the message remains usable.
+/// Missing entries have unknown classification and source so the message remains usable.
 pub fn to_annotated_content(item: &mut ResponseItem) -> Option<Vec<AnnotatedContent>> {
     let ResponseItem::Message {
         content,
@@ -59,6 +86,10 @@ pub fn to_annotated_content(item: &mut ResponseItem) -> Option<Vec<AnnotatedCont
         .as_mut()
         .and_then(|metadata| metadata.content_item_kinds.take())
         .unwrap_or_default();
+    let metadata = internal_chat_message_metadata_passthrough
+        .as_mut()
+        .and_then(|metadata| metadata.content_item_metadata.take())
+        .unwrap_or_default();
 
     Some(
         std::mem::take(content)
@@ -66,12 +97,21 @@ pub fn to_annotated_content(item: &mut ResponseItem) -> Option<Vec<AnnotatedCont
             .zip(kinds.into_iter().chain(std::iter::repeat_with(|| {
                 ContentItemKind("unknown".to_string())
             })))
-            .map(|(content, kind)| AnnotatedContent::new(content, kind))
+            .zip(
+                metadata
+                    .into_iter()
+                    .chain(std::iter::repeat_with(ContentItemMetadata::default)),
+            )
+            .map(|((content, kind), metadata)| AnnotatedContent {
+                content,
+                kind,
+                metadata,
+            })
             .collect(),
     )
 }
 
-/// Replaces a message's content and positional classifications together.
+/// Replaces content and its positional annotations together.
 pub fn set_annotated_content(
     item: &mut ResponseItem,
     annotated_content: Vec<AnnotatedContent>,
@@ -85,14 +125,22 @@ pub fn set_annotated_content(
         return None;
     };
 
-    let (updated_content, content_item_kinds): (Vec<_>, Vec<_>) = annotated_content
-        .into_iter()
-        .map(AnnotatedContent::into_parts)
-        .unzip();
+    let mut updated_content = Vec::with_capacity(annotated_content.len());
+    let mut content_item_kinds = Vec::with_capacity(annotated_content.len());
+    let mut content_item_metadata = Vec::with_capacity(annotated_content.len());
+    for annotated in annotated_content {
+        let (content, kind, metadata) = annotated.into_parts();
+        updated_content.push(content);
+        content_item_kinds.push(kind);
+        content_item_metadata.push(metadata);
+    }
     *content = updated_content;
-    internal_chat_message_metadata_passthrough
-        .get_or_insert_default()
-        .content_item_kinds = Some(content_item_kinds);
+    let metadata = internal_chat_message_metadata_passthrough.get_or_insert_default();
+    metadata.content_item_kinds = Some(content_item_kinds);
+    metadata.content_item_metadata = content_item_metadata
+        .iter()
+        .any(|metadata| metadata != &ContentItemMetadata::default())
+        .then_some(content_item_metadata);
 
     Some(())
 }

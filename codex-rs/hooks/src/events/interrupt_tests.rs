@@ -117,6 +117,7 @@ fn handler() -> ConfiguredHandler {
 
 fn run_result(exit_code: Option<i32>, stdout: &str, stderr: &str) -> HandlerRunResult {
     HandlerRunResult {
+        context_metadata: codex_protocol::models::ContentItemMetadata::harness(),
         started_at: 1,
         completed_at: 2,
         duration_ms: 1,

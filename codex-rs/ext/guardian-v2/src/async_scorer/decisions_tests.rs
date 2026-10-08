@@ -4,6 +4,7 @@ use codex_context_fragments::ContextualUserFragment;
 use codex_guardian_context::TrustedTool;
 use codex_http_client::HttpClientBuilder;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ContentItemMetadata;
 use pretty_assertions::assert_eq;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -17,7 +18,11 @@ use wiremock::matchers::path;
 fn adapter_rejects_unsupported_evidence() {
     let rubric = RenderedFragment::new(
         "developer",
-        AnnotatedContent::input_text("Classify risk.", ContentItemKind("guardian.test".into())),
+        AnnotatedContent::text(
+            "Classify risk.",
+            ContentItemKind("guardian.test".into()),
+            ContentItemMetadata::harness(),
+        ),
     );
     let user: ResponseItem = serde_json::from_value(json!({"type":"message", "role":"user", "content":[
         {"type":"input_text", "text":"Authorized task"}, {"type":"input_text", "text":"Planned action"}
@@ -53,7 +58,11 @@ fn adapter_rejects_unsupported_evidence() {
 fn adapter_preserves_trusted_tool_authority_and_scope() {
     let rubric = RenderedFragment::new(
         "developer",
-        AnnotatedContent::input_text("Classify risk.", ContentItemKind("guardian.test".into())),
+        AnnotatedContent::text(
+            "Classify risk.",
+            ContentItemKind("guardian.test".into()),
+            ContentItemMetadata::harness(),
+        ),
     );
     let tool = TrustedTool {
         server: "example".into(),
@@ -123,7 +132,11 @@ async fn http_contract_and_untrusted_response_validation() {
     let mut request = super::super::sampler::tests::sample_request("turn");
     request.instructions = RenderedFragment::new(
         "developer",
-        AnnotatedContent::input_text("Classify risk", ContentItemKind("guardian.test".into())),
+        AnnotatedContent::text(
+            "Classify risk",
+            ContentItemKind("guardian.test".into()),
+            ContentItemMetadata::harness(),
+        ),
     );
     let body = json!({"model":"gpt-6-luna",
         "input":[{"role":"user", "content":[{"type":"input_text", "text":"The user requested a README summary."}]}],

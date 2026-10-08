@@ -52,6 +52,9 @@ pub use executed_tool_calls::bound_executed_tool_calls_for_message;
 pub use executed_tool_calls::executed_tool_call_metadata_bytes;
 pub use executed_tool_calls::normalize_executed_tool_call_arguments;
 pub use item_metadata::ContentItemKind;
+pub use item_metadata::ContentItemMetadata;
+pub use item_metadata::ContentItemNamespace;
+pub use item_metadata::ContentItemProvenance;
 
 /// Controls the per-command sandbox override requested by a shell-like tool call.
 #[derive(
@@ -974,6 +977,12 @@ pub struct InternalChatMessageMetadataPassthrough {
     #[schemars(skip)]
     #[ts(skip)]
     pub content_item_kinds: Option<Vec<ContentItemKind>>,
+    /// Positional source attribution for `content`; missing historical entries are Unknown.
+    #[serde_as(deserialize_as = "serde_with::DefaultOnError")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub content_item_metadata: Option<Vec<ContentItemMetadata>>,
     // Ignore input values so requests and rollout reloads cannot fake tool call records.
     // A resumed thread can record new calls, but cannot prove old calls from this payload.
     /// Host-owned Code Mode cell shared by its `exec` and subsequent `wait` outputs.
@@ -1409,7 +1418,7 @@ impl ResponseItem {
         }
     }
 
-    /// Removes content item classifications while preserving other passthrough metadata.
+    /// Removes content item classifications and attribution, preserving other metadata.
     pub fn clear_content_item_kinds(&mut self) {
         let Some(metadata) = self.internal_chat_message_metadata_passthrough_mut() else {
             return;
@@ -1419,8 +1428,21 @@ impl ResponseItem {
         };
 
         metadata_value.content_item_kinds = None;
+        metadata_value.content_item_metadata = None;
         if metadata_value == &InternalChatMessageMetadataPassthrough::default() {
             *metadata = None;
+        }
+    }
+
+    /// Removes per-content attribution for endpoints that do not yet accept it.
+    pub fn clear_content_item_metadata(&mut self) {
+        if let Some(metadata) = self.internal_chat_message_metadata_passthrough_mut()
+            && let Some(value) = metadata
+        {
+            value.content_item_metadata = None;
+            if value == &InternalChatMessageMetadataPassthrough::default() {
+                *metadata = None;
+            }
         }
     }
 

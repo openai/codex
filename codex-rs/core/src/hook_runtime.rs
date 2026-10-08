@@ -75,7 +75,7 @@ use crate::turn_metadata::ExecutionMetadata;
 
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
-    pub additional_contexts: Vec<String>,
+    pub additional_contexts: Vec<codex_hooks::HookContext>,
 }
 
 pub(crate) enum PreToolUseHookResult {
@@ -718,7 +718,7 @@ pub(crate) async fn record_pending_input(
     turn_context: &Arc<TurnContext>,
     model_info: &ModelInfo,
     pending_input: TurnInput,
-    additional_contexts: Vec<String>,
+    additional_contexts: Vec<codex_hooks::HookContext>,
     persist_context: PersistContext,
 ) {
     match pending_input {
@@ -790,7 +790,10 @@ pub(crate) async fn drain_async_hook_results(
             .entries
             .iter()
             .filter(|entry| entry.kind == HookOutputEntryKind::Context)
-            .map(|entry| entry.text.clone())
+            .map(|entry| codex_hooks::HookContext {
+                text: entry.text.clone(),
+                metadata: codex_protocol::models::ContentItemMetadata::command_hook(),
+            })
             .collect::<Vec<_>>();
 
         if before_user_prompt {
@@ -849,7 +852,7 @@ impl HookRuntimeOutcome {
 pub(crate) async fn record_additional_contexts(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    additional_contexts: Vec<String>,
+    additional_contexts: Vec<codex_hooks::HookContext>,
 ) {
     let developer_messages = additional_context_messages(additional_contexts);
     if developer_messages.is_empty() {
@@ -864,7 +867,9 @@ pub(crate) async fn record_additional_contexts(
     .await;
 }
 
-fn additional_context_messages(additional_contexts: Vec<String>) -> Vec<ResponseItem> {
+fn additional_context_messages(
+    additional_contexts: Vec<codex_hooks::HookContext>,
+) -> Vec<ResponseItem> {
     additional_contexts
         .into_iter()
         .map(HookAdditionalContext::new)
@@ -1104,8 +1109,8 @@ mod tests {
     #[test]
     fn additional_context_messages_stay_separate_and_ordered() {
         let messages = additional_context_messages(vec![
-            "first tide note".to_string(),
-            "second tide note".to_string(),
+            codex_hooks::HookContext::harness("first tide note".to_string()),
+            codex_hooks::HookContext::harness("second tide note".to_string()),
         ]);
 
         assert_eq!(messages.len(), 2);

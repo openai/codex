@@ -20,6 +20,8 @@ use image::ImageBuffer;
 use image::ImageFormat;
 use image::Rgba;
 use pretty_assertions::assert_eq;
+use serde_json::from_value;
+use serde_json::json;
 
 use super::*;
 
@@ -138,6 +140,7 @@ async fn preparation_preserves_small_image_bytes_and_replaces_remote_urls() {
                     content_item_kinds: Some(vec![ContentItemKind(
                         "images.preparation_error".to_string()
                     )]),
+                    content_item_metadata: from_value(json!([{"harness_injected": true}])).unwrap(),
                     ..Default::default()
                 }
             ),
@@ -413,6 +416,8 @@ async fn resize_notices_count_file_backed_images_and_skip_failed_images() {
                 ContentItemKind("images.preparation_error".to_string()),
                 ContentItemKind("user.image".to_string()),
             ]),
+            content_item_metadata: from_value(json!([{}, {}, {"harness_injected": true}, {}]))
+                .unwrap(),
             ..Default::default()
         }),
     );
@@ -467,6 +472,7 @@ async fn resize_notices_count_file_backed_images_and_skip_failed_images() {
                     content_item_kinds: Some(vec![ContentItemKind(
                         "images.resize_notice".to_string()
                     )]),
+                    content_item_metadata: from_value(json!([{"harness_injected": true}])).unwrap(),
                     ..Default::default()
                 },
             ),
@@ -520,6 +526,7 @@ async fn resize_notices_count_file_backed_images_and_skip_failed_images() {
                     content_item_kinds: Some(vec![ContentItemKind(
                         "images.resize_notice".to_string()
                     )]),
+                    content_item_metadata: from_value(json!([{"harness_injected": true}])).unwrap(),
                     ..Default::default()
                 },
             ),

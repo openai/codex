@@ -17,7 +17,7 @@ fn rendered_classifier_text(config: &GuardianV2Config, policy: &str) -> String {
     let (_, content) = config
         .render_classifier_instructions(policy, "")
         .into_parts();
-    let (ContentItem::InputText { text }, _) = content.into_parts() else {
+    let (ContentItem::InputText { text }, _, _) = content.into_parts() else {
         panic!("classifier instructions must be text");
     };
     text
@@ -53,7 +53,7 @@ fn extra_policy_reaches_templated_and_legacy_classifier_instructions() {
             let (_, content) = config
                 .render_classifier_instructions(policy, extra_policy)
                 .into_parts();
-            let (ContentItem::InputText { text }, _) = content.into_parts() else {
+            let (ContentItem::InputText { text }, _, _) = content.into_parts() else {
                 panic!("classifier instructions must be text");
             };
             assert_eq!(
