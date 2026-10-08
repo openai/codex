@@ -96,7 +96,7 @@ impl From<GuardianReviewSessionOutcome> for GuardianReviewOutcome {
     fn from(outcome: GuardianReviewSessionOutcome) -> Self {
         match outcome {
             GuardianReviewSessionOutcome::Completed(Ok(Some(message))) => {
-                match crate::parse_guardian_assessment(Some(&message)) {
+                match crate::parse_guardian_assessment(&message) {
                     Ok(assessment) => Self::Completed(assessment),
                     Err(error) => Self::Error(GuardianReviewError::parse(error)),
                 }

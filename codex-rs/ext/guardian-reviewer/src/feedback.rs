@@ -63,7 +63,7 @@ impl<'a> FailedReviewFeedback<'a> {
         }
         let (status, decision) = match outcome {
             GuardianReviewSessionOutcome::Completed(Ok(Some(decision))) => {
-                match parse_guardian_assessment(Some(decision)) {
+                match parse_guardian_assessment(decision) {
                     Ok(assessment) if assessment.outcome == GuardianAssessmentOutcome::Allow => {
                         return None;
                     }
