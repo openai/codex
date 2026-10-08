@@ -408,6 +408,9 @@ pub fn restore_after_exit() -> Result<()> {
     if let Err(err) = terminal_stderr::finish() {
         first_error.get_or_insert(err);
     }
+    if let Err(err) = crate::iterm_session_status::clear_iterm_session_status() {
+        first_error.get_or_insert(err);
+    }
 
     match first_error {
         Some(err) => Err(err),
@@ -996,6 +999,7 @@ impl Tui {
             let _ = self.enter_alt_screen();
         }
 
+        crate::iterm_session_status::invalidate_iterm_session_status();
         self.resume_events();
         self.schedule_screen_size_recheck(Duration::ZERO);
         output

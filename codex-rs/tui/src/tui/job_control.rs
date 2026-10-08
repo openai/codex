@@ -69,7 +69,12 @@ impl SuspendContext {
         }
         let y = self.suspend_cursor_y.load(Ordering::Relaxed);
         let _ = execute!(stdout(), MoveTo(0, y), Show);
-        suspend_process()?;
+        if let Err(err) = crate::iterm_session_status::clear_iterm_session_status() {
+            tracing::debug!(error = %err, "failed to clear iTerm2 session status before suspend");
+        }
+        let suspend_result = suspend_process();
+        crate::iterm_session_status::invalidate_iterm_session_status();
+        suspend_result?;
         super::reapply_raw_mode_after_resume()?;
 
         // The shell writes its job-control status and the resumed command after `fg`, so the

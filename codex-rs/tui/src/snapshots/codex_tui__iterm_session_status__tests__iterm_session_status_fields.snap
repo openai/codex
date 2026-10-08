@@ -1,0 +1,8 @@
+---
+source: tui/src/iterm_session_status_tests.rs
+assertion_line: 36
+expression: snapshot
+---
+\u{1b}]21337;status=Idle;indicator=#00d75f;status-color=;detail=\u{7}
+\u{1b}]21337;status=Working;indicator=#ff9500;status-color=;detail=\u{7}
+\u{1b}]21337;status=Waiting;indicator=#5f87ff;status-color=;detail=\u{7}

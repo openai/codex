@@ -1181,6 +1181,15 @@ impl ChatWidget {
         }
         self.refresh_status_line_if_workspace_headline_due();
         self.refresh_thread_usage_if_settlement_due();
+        self.refresh_iterm_session_status();
+    }
+
+    pub(crate) fn refresh_iterm_session_status(&self) {
+        if let Err(err) = crate::iterm_session_status::set_iterm_session_status(
+            self.desired_iterm_session_status(),
+        ) {
+            tracing::debug!(error = %err, "failed to set iTerm2 session status");
+        }
     }
 
     fn flush_active_cell(&mut self) {

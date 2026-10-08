@@ -8,6 +8,7 @@ use crate::bottom_pane::status_line_from_segments;
 use crate::branch_summary;
 use crate::chatwidget::limit_label_for_window;
 use crate::chatwidget::rate_limits::get_limits_duration;
+use crate::iterm_session_status::ItermSessionStatus;
 use crate::legacy_core::config::Config;
 use crate::model_catalog::LUNA_RESERVE_MODEL;
 use crate::status::format_credit_micros;
@@ -319,6 +320,16 @@ impl ChatWidget {
 
     fn terminal_title_requires_action(&self) -> bool {
         self.bottom_pane.terminal_title_requires_action()
+    }
+
+    pub(super) fn desired_iterm_session_status(&self) -> ItermSessionStatus {
+        if self.terminal_title_requires_action() {
+            ItermSessionStatus::Waiting
+        } else if self.bottom_pane.is_task_running() || !self.unified_exec_processes.is_empty() {
+            ItermSessionStatus::Working
+        } else {
+            ItermSessionStatus::Idle
+        }
     }
 
     pub(super) fn terminal_title_shows_action_required(&self) -> bool {
