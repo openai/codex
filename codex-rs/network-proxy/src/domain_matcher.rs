@@ -1,6 +1,7 @@
-//! Network-domain wildcards over Unicode scalar values, independent of filesystem semantics.
+//! Network-domain wildcards over UTF-8 bytes, independent of filesystem semantics.
 //! Construction validates and normalizes patterns and expands domain prefixes.
-//! Callers normalize candidate hosts before matching.
+//! Callers normalize candidate hosts before matching. No IDNA conversion is performed.
+//! Byte matching preserves the historical globset wildcard semantics.
 
 use anyhow::Result;
 use anyhow::bail;
@@ -18,7 +19,7 @@ pub(crate) enum GlobalWildcard {
 
 #[derive(Clone)]
 pub struct DomainPatternSet {
-    patterns: Arc<[Vec<char>]>,
+    patterns: Arc<[Vec<u8>]>,
 }
 
 impl DomainPatternSet {
@@ -65,14 +66,14 @@ impl DomainPatternSet {
             // - "example.com": match the exact host
             // - "*.example.com": match any subdomain (not the apex)
             // - "**.example.com": match the apex and any subdomain
-            // - "api?.example.com": match exactly one Unicode scalar value after "api"
+            // - "api?.example.com": match exactly one byte after "api"
             // - "*": match every host when explicitly enabled for allowlist compilation
             for candidate in expand_domain_pattern(&pattern) {
                 if !seen.insert(candidate.clone()) {
                     continue;
                 }
                 ensure!(!candidate.is_empty(), "domain pattern is empty");
-                compiled.push(candidate.chars().collect());
+                compiled.push(candidate.into_bytes());
             }
         }
         Ok(Self {
@@ -81,8 +82,8 @@ impl DomainPatternSet {
     }
 
     pub fn is_match(&self, host: impl AsRef<str>) -> bool {
-        let host: Vec<char> = host.as_ref().chars().collect();
-        self.patterns.iter().any(|pattern| matches(pattern, &host))
+        let host = host.as_ref().as_bytes();
+        self.patterns.iter().any(|pattern| matches(pattern, host))
     }
 }
 
@@ -186,16 +187,16 @@ fn expand_domain_pattern(pattern: &str) -> Vec<String> {
 
 // Only the latest star needs retrying: it can absorb any extension that an earlier star could.
 // Its retry position advances monotonically, bounding work by O(pattern length * host length).
-fn matches(pattern: &[char], host: &[char]) -> bool {
+fn matches(pattern: &[u8], host: &[u8]) -> bool {
     let (mut p, mut h) = (0, 0);
     let mut star = None;
     while h < host.len() {
         match pattern.get(p) {
-            Some('*') => {
+            Some(b'*') => {
                 star = Some((p + 1, h));
                 p += 1;
             }
-            Some(c) if *c == '?' || c.eq_ignore_ascii_case(&host[h]) => {
+            Some(c) if *c == b'?' || c.eq_ignore_ascii_case(&host[h]) => {
                 p += 1;
                 h += 1;
             }
@@ -209,7 +210,7 @@ fn matches(pattern: &[char], host: &[char]) -> bool {
             },
         }
     }
-    pattern[p..].iter().all(|c| *c == '*')
+    pattern[p..].iter().all(|c| *c == b'*')
 }
 
 #[cfg(test)]

@@ -5,19 +5,36 @@ use crate::policy::normalize_host;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn unicode_wildcards_count_scalars_not_bytes_or_graphemes() {
+fn unicode_wildcards_preserve_utf8_byte_matching() {
     for (pattern, host, expected) in [
-        ("api?.com", "apié.com", true),
-        ("api?.com", "api😀.com", true),
-        ("api??.com", "apié.com", false),
-        ("api?.com", "apie\u{301}.com", false),
-        ("api??.com", "apie\u{301}.com", true),
-        ("*.例?.com", "a.例子.com", true),
-        ("*.例?.com", "例子.com", false),
-        ("**.例?.com", "例子.com", true),
+        ("api?.com", "api1.com", true),
+        ("api??.com", "apié.com", true),
+        ("api????.com", "api😀.com", true),
+        ("api???.com", "apie\u{301}.com", true),
+        ("api?*.com", "apié.com", true),
+        ("*.例???.com", "a.例子.com", true),
+        ("*.例???.com", "例子.com", false),
+        ("**.例???.com", "例子.com", true),
+        ("büch?.de", "büch1.de", true),
+        ("bücher.de", "bücher.de", true),
+        ("bücher.de", "xn--bcher-kva.de", false),
+        ("xn--*.de", "xn--bcher-kva.de", true),
         ("É.com", "é.com", false),
         ("É.COM", "É.com", true),
     ] {
+        let mut legacy = globset::GlobSetBuilder::new();
+        for expanded in expand_domain_pattern(&normalize_pattern(pattern)) {
+            legacy.add(
+                globset::GlobBuilder::new(&expanded)
+                    .case_insensitive(true)
+                    .build()
+                    .unwrap(),
+            );
+        }
+        assert_eq!(
+            legacy.build().unwrap().is_match(normalize_host(host)),
+            expected
+        );
         for compile in [compile_allowlist, compile_denylist] {
             assert_eq!(
                 compile(&[pattern.to_string()])
@@ -105,7 +122,7 @@ fn bracketed_patterns_preserve_port_and_trailing_dot_normalization() {
 
 #[test]
 fn matcher_agrees_with_independent_dynamic_program_for_short_inputs() {
-    fn words(alphabet: &[char], max_len: usize) -> Vec<Vec<char>> {
+    fn words(alphabet: &[u8], max_len: usize) -> Vec<Vec<u8>> {
         let mut all = vec![vec![]];
         let mut level = vec![vec![]];
         for _ in 0..max_len {
@@ -123,23 +140,23 @@ fn matcher_agrees_with_independent_dynamic_program_for_short_inputs() {
         }
         all
     }
-    fn reference(pattern: &[char], host: &[char]) -> bool {
+    fn reference(pattern: &[u8], host: &[u8]) -> bool {
         let mut rows = vec![vec![false; host.len() + 1]; pattern.len() + 1];
         rows[0][0] = true;
         for (p, c) in pattern.iter().enumerate() {
-            rows[p + 1][0] = *c == '*' && rows[p][0];
+            rows[p + 1][0] = *c == b'*' && rows[p][0];
             for (h, candidate) in host.iter().enumerate() {
-                rows[p + 1][h + 1] = if *c == '*' {
+                rows[p + 1][h + 1] = if *c == b'*' {
                     rows[p][h + 1] || rows[p + 1][h]
                 } else {
-                    rows[p][h] && (*c == '?' || c.eq_ignore_ascii_case(candidate))
+                    rows[p][h] && (*c == b'?' || c.eq_ignore_ascii_case(candidate))
                 };
             }
         }
         rows[pattern.len()][host.len()]
     }
-    for pattern in words(&['a', 'é', '?', '*'], /*max_len*/ 4) {
-        for host in words(&['a', 'é'], /*max_len*/ 5) {
+    for pattern in words(&[b'a', 0xc3, 0xa9, b'?', b'*'], /*max_len*/ 4) {
+        for host in words(&[b'a', 0xc3, 0xa9], /*max_len*/ 5) {
             assert_eq!(
                 matches(&pattern, &host),
                 reference(&pattern, &host),
@@ -151,17 +168,13 @@ fn matcher_agrees_with_independent_dynamic_program_for_short_inputs() {
 
 #[test]
 fn adversarial_retries_and_empty_boundaries() {
-    let pattern: Vec<char> = format!("*{}b", "a".repeat(1024)).chars().collect();
-    let host = vec!['a'; 4096];
+    let pattern = format!("*{}b", "a".repeat(1024)).into_bytes();
+    let host = vec![b'a'; 4096];
     assert!(!matches(&pattern, &host));
-    let pattern: Vec<char> = format!("{}b", "*a".repeat(1024)).chars().collect();
+    let pattern = format!("{}b", "*a".repeat(1024)).into_bytes();
     assert!(!matches(&pattern, &host));
     assert_eq!(
-        (
-            matches(&[], &[]),
-            matches(&['*'], &[]),
-            matches(&['?'], &[])
-        ),
+        (matches(&[], &[]), matches(b"*", &[]), matches(b"?", &[])),
         (true, true, false)
     );
     assert!(!compile_allowlist(&[]).unwrap().is_match("host"));
