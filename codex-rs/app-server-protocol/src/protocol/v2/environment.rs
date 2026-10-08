@@ -43,6 +43,10 @@ pub struct EnvironmentAddParams {
     #[ts(type = "string | null")]
     #[ts(optional = nullable)]
     pub auth_bearer_token: Option<RedactedString>,
+    /// Optional X-Request-ID for the direct WebSocket upgrade, including reconnects.
+    /// Requires a secure transport or a loopback destination.
+    #[ts(optional = nullable)]
+    pub websocket_request_id: Option<String>,
     /// Optional WebSocket connection timeout. The server default applies when omitted.
     #[ts(type = "number | null")]
     #[ts(optional = nullable)]

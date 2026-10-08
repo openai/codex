@@ -247,7 +247,7 @@ async fn websocket_upgrade_handler(
         return (err.status_code(), err.message()).into_response();
     }
     info!(%peer_addr, "exec-server websocket client connected");
-    websocket
+    let mut response = websocket
         .on_upgrade(move |stream| async move {
             state
                 .processor
@@ -260,7 +260,13 @@ async fn websocket_upgrade_handler(
                 )
                 .await;
         })
-        .into_response()
+        .into_response();
+    if let Some(request_id) = headers.get("x-request-id") {
+        response
+            .headers_mut()
+            .insert("x-request-id", request_id.clone());
+    }
+    response
 }
 
 #[cfg(test)]

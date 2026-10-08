@@ -37,6 +37,11 @@ impl EnvironmentRequestProcessor {
                         format!("Bearer {}", token.into_inner()),
                     )
                 })
+                .chain(
+                    params
+                        .websocket_request_id
+                        .map(|request_id| ("X-Request-ID".to_string(), request_id)),
+                )
                 .collect(),
         };
         self.environment_manager
