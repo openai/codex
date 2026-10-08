@@ -2,4 +2,4 @@
 source: tui/src/chatwidget/tests/slash_commands.rs
 expression: "render_bottom_popup(&chat, 80).lines().next().unwrap()"
 ---
-› /daybreak  Learn about broader access for cybersecurity work
+› /daybreak  Enable broader access for cybersecurity work

@@ -88,7 +88,7 @@ impl App {
         let daybreak_enabled = self.chat_widget.daybreak_enabled
             && !self.chat_widget.side_conversation_active()
             && !self.side_threads.contains_key(&thread_id);
-        let eligible_account = self.chat_widget.daybreak_turn_eligible(daybreak_enabled);
+        let eligible_account = self.chat_widget.daybreak_account_eligible();
         if let Err(message) = crate::daybreak::program_for_turn(
             &self.chat_widget.model_catalog().models,
             &model,

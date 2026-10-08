@@ -2272,7 +2272,10 @@ async fn slash_daybreak_offers_an_application_when_unavailable() {
     chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![model]));
     chat.has_chatgpt_account = false;
     chat.status_account_display = Some(StatusAccountDisplay::ApiKey);
+    chat.set_feature_enabled(Feature::ApiKeyCyberAccessPrograms, /*enabled*/ true);
     chat.set_daybreak_enabled(/*enabled*/ false);
+    chat.bottom_pane
+        .set_composer_text(String::new(), Vec::new(), Vec::new());
     chat.bottom_pane
         .set_composer_text("/daybreak".to_string(), Vec::new(), Vec::new());
     assert_chatwidget_snapshot!(
@@ -2281,6 +2284,20 @@ async fn slash_daybreak_offers_an_application_when_unavailable() {
             .lines()
             .next()
             .unwrap()
+    );
+    chat.set_daybreak_enabled(/*enabled*/ true);
+    chat.set_feature_enabled(Feature::ApiKeyCyberAccessPrograms, /*enabled*/ false);
+    chat.bottom_pane
+        .set_composer_text(String::new(), Vec::new(), Vec::new());
+    chat.bottom_pane
+        .set_composer_text("/daybreak".to_string(), Vec::new(), Vec::new());
+    insta::assert_snapshot!(
+        render_bottom_popup(&chat, /*width*/ 80)
+            .lines()
+            .filter(|line| line.contains("broader access"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        @""
     );
     chat.has_chatgpt_account = true;
     chat.status_account_display = None;

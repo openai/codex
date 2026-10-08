@@ -196,17 +196,32 @@ async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {
         /*has_chatgpt_account*/ false,
         /*has_codex_backend_auth*/ false,
     );
-    assert!(
-        !app.chat_widget
-            .set_feature_enabled(Feature::ApiKeyCyberAccessPrograms, /*enabled*/ false,)
-    );
-    app.submit_thread_op(&mut server, thread_id, turn.clone())
-        .await?;
-    app.chat_widget.set_daybreak_enabled(/*enabled*/ false);
-    app.submit_thread_op(&mut server, thread_id, turn).await?;
+    assert!(!app.chat_widget.daybreak_enabled);
+    for (cli_daybreak, api_key_cyber_access_programs, enabled) in [
+        (false, false, true),
+        (false, true, true),
+        (true, false, true),
+        (true, true, true),
+        (true, true, false),
+    ] {
+        app.chat_widget
+            .set_feature_enabled(Feature::CliDaybreak, cli_daybreak);
+        app.chat_widget.set_feature_enabled(
+            Feature::ApiKeyCyberAccessPrograms,
+            api_key_cyber_access_programs,
+        );
+        app.chat_widget.set_daybreak_enabled(enabled);
+        app.submit_thread_op(&mut server, thread_id, turn.clone())
+            .await?;
+    }
     let turns = recorded_params(&requests, "turn/start");
-    assert_eq!(turns[5]["cyberAccessProgram"], "daybreakBlue");
-    assert!(turns[6]["cyberAccessProgram"].is_null());
+    assert_eq!(
+        turns[5..]
+            .iter()
+            .map(|turn| turn["cyberAccessProgram"].as_str())
+            .collect::<Vec<_>>(),
+        vec![None, None, None, Some("daybreakBlue"), Some("standard")]
+    );
     while events.try_recv().is_ok() {}
 
     let missing_thread_id = ThreadId::new();

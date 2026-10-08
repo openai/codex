@@ -40,16 +40,21 @@ fn error_notification(
 
 #[tokio::test]
 async fn misalignment_continuation_requires_current_review_and_submits_once() -> Result<()> {
-    for (reject, preserve, daybreak, rollout_enabled) in [
-        (false, false, false, true),
-        (false, true, true, true),
-        (true, false, false, true),
-        (false, false, false, false),
-        (false, true, true, false),
+    for (reject, preserve, daybreak, rollout_enabled, has_chatgpt_account) in [
+        (false, false, false, true, true),
+        (false, true, true, true, true),
+        (true, false, false, true, true),
+        (false, false, false, false, true),
+        (false, true, true, false, true),
+        // Continuations submit directly rather than via the normal turn-start path.
+        (false, false, false, true, false),
+        (false, true, true, true, false),
     ] {
         let (mut app, mut rx, _) = make_test_app_with_channels().await;
         app.chat_widget
             .set_feature_enabled(Feature::CliDaybreak, rollout_enabled);
+        app.chat_widget
+            .set_feature_enabled(Feature::ApiKeyCyberAccessPrograms, !has_chatgpt_account);
         let (mut server, requests, proxy) = start_recording_app_server(
             &app.config,
             /*blocked_thread_list*/ None,
@@ -70,8 +75,10 @@ async fn misalignment_continuation_requires_current_review_and_submits_once() ->
         app.chat_widget.handle_thread_session(session);
         if !reject {
             app.chat_widget.update_account_state(
-                /*status_account_display*/ None, /*plan_type*/ None,
-                /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ true,
+                (!has_chatgpt_account).then_some(crate::status::StatusAccountDisplay::ApiKey),
+                /*plan_type*/ None,
+                has_chatgpt_account,
+                /*has_codex_backend_auth*/ has_chatgpt_account,
             );
             app.chat_widget.open_model_popup();
             let request_id = std::iter::from_fn(|| rx.try_recv().ok())

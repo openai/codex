@@ -6,25 +6,35 @@ use crate::chatwidget::rate_limits::RATE_LIMIT_SWITCH_PROMPT_VIEW_ID;
 
 impl ChatWidget {
     pub(crate) fn set_daybreak_enabled(&mut self, enabled: bool) {
-        self.daybreak_enabled = enabled && self.config.features.enabled(Feature::CliDaybreak);
+        self.daybreak_enabled = enabled && self.daybreak_feature_enabled();
         self.bottom_pane
             .set_daybreak_command_description(self.daybreak_command_description());
     }
 
-    /// UI eligibility only; the catalog and server still determine model/program access.
-    pub(crate) fn daybreak_account_eligible(&self) -> bool {
+    fn daybreak_feature_enabled(&self) -> bool {
+        // Preserve a resumed preference while account state is still unknown. Once an API-key
+        // account is known, both flags must be enabled before using that preference.
         self.config.features.enabled(Feature::CliDaybreak)
+            && (self.has_chatgpt_account
+                || !matches!(
+                    self.status_account_display,
+                    Some(StatusAccountDisplay::ApiKey)
+                )
+                || self
+                    .config
+                    .features
+                    .enabled(Feature::ApiKeyCyberAccessPrograms))
+    }
+
+    /// UI and turn-selection eligibility; the catalog and server still determine program access.
+    pub(crate) fn daybreak_account_eligible(&self) -> bool {
+        self.daybreak_feature_enabled()
             && self.config.model_provider_id == "openai"
             && (self.has_chatgpt_account
                 || matches!(
                     self.status_account_display,
                     Some(StatusAccountDisplay::ApiKey)
                 ))
-    }
-
-    /// API-key turns need no explicit program while Daybreak is off.
-    pub(crate) fn daybreak_turn_eligible(&self, enabled: bool) -> bool {
-        self.daybreak_account_eligible() && (self.has_chatgpt_account || enabled)
     }
 
     pub(super) fn daybreak_command_description(&self) -> Option<&'static str> {
@@ -112,7 +122,10 @@ impl ChatWidget {
             );
         }
         let enabled = self.config.features.enabled(feature);
-        if feature == Feature::CliDaybreak {
+        if matches!(
+            feature,
+            Feature::CliDaybreak | Feature::ApiKeyCyberAccessPrograms
+        ) {
             self.set_daybreak_enabled(self.daybreak_enabled);
             self.refresh_status_surfaces();
         }

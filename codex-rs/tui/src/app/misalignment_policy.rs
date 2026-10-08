@@ -117,7 +117,7 @@ impl App {
         let enabled = self.chat_widget.daybreak_enabled
             && !self.chat_widget.side_conversation_active()
             && !self.side_threads.contains_key(&review.thread_id);
-        let eligible_account = self.chat_widget.daybreak_turn_eligible(enabled);
+        let eligible_account = self.chat_widget.daybreak_account_eligible();
         let cyber_access_program = match crate::daybreak::program_for_turn(
             &self.chat_widget.model_catalog().models,
             self.chat_widget.current_model(),
