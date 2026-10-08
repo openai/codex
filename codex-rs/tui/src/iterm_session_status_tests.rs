@@ -12,17 +12,18 @@ use super::NO_EMITTED_STATUS;
 use super::SessionStatusState;
 use super::SetItermSessionStatus;
 use super::iterm_session_status_supported;
+use super::sanitize_iterm_session_detail;
 
 #[test]
 fn encodes_session_status_fields() {
     let mut encoded = Vec::new();
-    for status in [
-        ItermSessionStatus::Idle,
-        ItermSessionStatus::Working,
-        ItermSessionStatus::Waiting,
+    for (status, detail) in [
+        (ItermSessionStatus::Idle, ""),
+        (ItermSessionStatus::Working, "Reading source"),
+        (ItermSessionStatus::Waiting, ""),
     ] {
         let mut value = String::new();
-        SetItermSessionStatus(status)
+        SetItermSessionStatus(status, detail)
             .write_ansi(&mut value)
             .expect("encode iTerm2 session status");
         encoded.push(value);
@@ -34,6 +35,18 @@ fn encodes_session_status_fields() {
         .collect::<Vec<_>>()
         .join("\n");
     insta::assert_snapshot!("iterm_session_status_fields", snapshot);
+}
+
+#[test]
+fn detail_is_safe_bounded_osc_text() {
+    assert_eq!(
+        sanitize_iterm_session_detail("  Read a\\b; c\n\u{202e}\x1b  "),
+        "Read a\\\\b\\; c"
+    );
+    assert_eq!(
+        sanitize_iterm_session_detail(&"x".repeat(/*n*/ 300)),
+        "x".repeat(/*n*/ 240)
+    );
 }
 
 #[test]
@@ -53,34 +66,39 @@ fn clear_empties_every_owned_field() {
 fn cache_changes_only_after_a_successful_write() {
     let state = SessionStatusState::new();
     let mut emitted = Vec::new();
-
     state
-        .update(ItermSessionStatus::Working as u8, || {
+        .update(ItermSessionStatus::Working as u8, "Thinking", || {
             Err(io::Error::other("write failed"))
         })
         .expect_err("failed write should be returned");
 
     state
-        .update(ItermSessionStatus::Working as u8, || {
+        .update(ItermSessionStatus::Working as u8, "Thinking", || {
             emitted.push(ItermSessionStatus::Working as u8);
             Ok(())
         })
         .expect("retry status write");
     state
-        .update(ItermSessionStatus::Working as u8, || {
+        .update(ItermSessionStatus::Working as u8, "Thinking", || {
             emitted.push(ItermSessionStatus::Waiting as u8);
             Ok(())
         })
         .expect("deduplicate status write");
+    state
+        .update(ItermSessionStatus::Working as u8, "Reading", || {
+            emitted.push(ItermSessionStatus::Working as u8);
+            Ok(())
+        })
+        .expect("emit changed detail");
     state.invalidate();
     state
-        .update(ItermSessionStatus::Working as u8, || {
+        .update(ItermSessionStatus::Working as u8, "Thinking", || {
             emitted.push(ItermSessionStatus::Working as u8);
             Ok(())
         })
         .expect("re-emit status after terminal handoff");
     state
-        .update(NO_EMITTED_STATUS, || {
+        .update(NO_EMITTED_STATUS, "", || {
             emitted.push(NO_EMITTED_STATUS);
             Ok(())
         })
@@ -89,6 +107,7 @@ fn cache_changes_only_after_a_successful_write() {
     assert_eq!(
         emitted,
         [
+            ItermSessionStatus::Working as u8,
             ItermSessionStatus::Working as u8,
             ItermSessionStatus::Working as u8,
             NO_EMITTED_STATUS,

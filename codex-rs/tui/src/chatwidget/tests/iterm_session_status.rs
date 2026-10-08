@@ -54,3 +54,30 @@ async fn session_status_follows_existing_lifecycle_state() {
         [Idle, Working, Waiting, Working, Idle, Working, Idle]
     );
 }
+
+#[tokio::test]
+async fn session_status_detail_uses_only_foreground_activity() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let detail =
+        |chat: &ChatWidget, status| chat.iterm_session_detail(status).map(ToString::to_string);
+
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    let generic = detail(&chat, Working);
+    chat.set_status_header("Reading source".to_string());
+    let working = detail(&chat, Working);
+    let waiting = detail(&chat, Waiting);
+    chat.bottom_pane.set_task_running(/*running*/ false);
+    let idle = detail(&chat, Idle);
+    let background = detail(&chat, Working);
+
+    let details = [generic, working, waiting, idle, background]
+        .map(|detail| detail.unwrap_or_else(|| "-".to_string()))
+        .join("\n");
+    insta::assert_snapshot!(details, @r"
+    -
+    Reading source
+    -
+    -
+    -
+    ");
+}

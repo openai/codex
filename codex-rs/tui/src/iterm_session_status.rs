@@ -1,9 +1,9 @@
 //! Emits coarse Codex lifecycle state through iTerm2's OSC 21337 protocol.
 //!
 //! This first integration is intentionally limited to direct iTerm2 sessions.
-//! The payload uses fixed strings, so it needs no dynamic text escaping or
-//! throttling. A process-wide cache matches the terminal session's ownership
-//! and prevents stale per-thread state when the active chat changes.
+//! The payload includes bounded activity text from the existing TUI status.
+//! A process-wide cache matches the terminal session's ownership and prevents
+//! stale state when the active chat changes.
 
 use std::fmt;
 use std::io;
@@ -24,29 +24,42 @@ static SESSION_STATUS_STATE: SessionStatusState = SessionStatusState::new();
 static ITERM_SESSION_STATUS_SUPPORTED: OnceLock<bool> = OnceLock::new();
 
 struct SessionStatusState {
-    last_emitted: Mutex<u8>,
+    last_emitted: Mutex<EmittedSessionStatus>,
+}
+
+struct EmittedSessionStatus {
+    status: u8,
+    detail: String,
 }
 
 impl SessionStatusState {
     const fn new() -> Self {
         Self {
-            last_emitted: Mutex::new(NO_EMITTED_STATUS),
+            last_emitted: Mutex::new(EmittedSessionStatus {
+                status: NO_EMITTED_STATUS,
+                detail: String::new(),
+            }),
         }
     }
 
-    fn update(&self, status: u8, emit: impl FnOnce() -> io::Result<()>) -> io::Result<()> {
+    fn update(
+        &self,
+        status: u8,
+        detail: &str,
+        emit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
         // Keep the terminal write and cache mutation together so panic-hook cleanup cannot
         // interleave with a draw from another thread.
         let mut last_emitted = self
             .last_emitted
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if *last_emitted == status {
+        if last_emitted.status == status && last_emitted.detail == detail {
             return Ok(());
         }
-
         emit()?;
-        *last_emitted = status;
+        last_emitted.status = status;
+        detail.clone_into(&mut last_emitted.detail);
         Ok(())
     }
 
@@ -55,8 +68,8 @@ impl SessionStatusState {
             .last_emitted
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if *last_emitted != NO_EMITTED_STATUS {
-            *last_emitted = INVALIDATED_EMITTED_STATUS;
+        if last_emitted.status != NO_EMITTED_STATUS {
+            last_emitted.status = INVALIDATED_EMITTED_STATUS;
         }
     }
 }
@@ -87,7 +100,10 @@ impl ItermSessionStatus {
     }
 }
 
-pub(crate) fn set_iterm_session_status(status: ItermSessionStatus) -> io::Result<()> {
+pub(crate) fn set_iterm_session_status(
+    status: ItermSessionStatus,
+    detail: Option<&str>,
+) -> io::Result<()> {
     if cfg!(test) {
         return Ok(());
     }
@@ -102,13 +118,14 @@ pub(crate) fn set_iterm_session_status(status: ItermSessionStatus) -> io::Result
         return Ok(());
     }
 
-    SESSION_STATUS_STATE.update(status as u8, || {
-        execute!(stdout(), SetItermSessionStatus(status))
+    let detail = sanitize_iterm_session_detail(detail.unwrap_or_default());
+    SESSION_STATUS_STATE.update(status as u8, &detail, || {
+        execute!(stdout(), SetItermSessionStatus(status, &detail))
     })
 }
 
 pub(crate) fn clear_iterm_session_status() -> io::Result<()> {
-    SESSION_STATUS_STATE.update(NO_EMITTED_STATUS, || {
+    SESSION_STATUS_STATE.update(NO_EMITTED_STATUS, "", || {
         execute!(stdout(), ClearItermSessionStatus)
     })
 }
@@ -119,6 +136,21 @@ pub(crate) fn clear_iterm_session_status() -> io::Result<()> {
 /// lifecycle state did not change during the handoff.
 pub(crate) fn invalidate_iterm_session_status() {
     SESSION_STATUS_STATE.invalidate();
+}
+
+fn sanitize_iterm_session_detail(detail: &str) -> String {
+    let detail = crate::terminal_title::sanitize_terminal_title(
+        detail,
+        crate::terminal_title::TitleEncoding::Unicode,
+    );
+    let mut escaped = String::with_capacity(detail.len());
+    for ch in detail.chars() {
+        if matches!(ch, ';' | '\\') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 fn iterm_session_status_supported(
@@ -133,15 +165,16 @@ fn iterm_session_status_supported(
 }
 
 #[derive(Clone, Copy, Debug)]
-struct SetItermSessionStatus(ItermSessionStatus);
+struct SetItermSessionStatus<'a>(ItermSessionStatus, &'a str);
 
-impl Command for SetItermSessionStatus {
+impl Command for SetItermSessionStatus<'_> {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         write!(
             f,
-            "\x1b]21337;status={};indicator={};status-color=;detail=\x07",
+            "\x1b]21337;status={};indicator={};status-color=;detail={}\x07",
             self.0.label(),
             self.0.indicator(),
+            self.1,
         )
     }
 

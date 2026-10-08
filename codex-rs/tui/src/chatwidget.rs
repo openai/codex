@@ -1185,8 +1185,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn refresh_iterm_session_status(&self) {
+        let status = self.desired_iterm_session_status();
         if let Err(err) = crate::iterm_session_status::set_iterm_session_status(
-            self.desired_iterm_session_status(),
+            status,
+            self.iterm_session_detail(status),
         ) {
             tracing::debug!(error = %err, "failed to set iTerm2 session status");
         }

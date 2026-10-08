@@ -332,6 +332,12 @@ impl ChatWidget {
         }
     }
 
+    pub(super) fn iterm_session_detail(&self, status: ItermSessionStatus) -> Option<&str> {
+        (status == ItermSessionStatus::Working && self.bottom_pane.is_task_running())
+            .then_some(self.status_state.current_status.header.as_str())
+            .filter(|detail| *detail != "Working")
+    }
+
     pub(super) fn terminal_title_shows_action_required(&self) -> bool {
         self.terminal_title_requires_action() && self.terminal_title_uses_activity()
     }
