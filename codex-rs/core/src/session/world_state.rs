@@ -140,10 +140,16 @@ impl Session {
             String::new()
         };
         let mut world_state = WorldState::default();
+        let extension_metrics = super::extension_metrics::from_session_telemetry(
+            step_context.session_telemetry.clone(),
+        );
         if incremental_tools {
             let specs = step_context.tool_router.model_visible_specs();
             let definitions = codex_tools::create_tools_json_for_responses_lite(&specs)?;
-            world_state.add_section(TopLevelToolsState::new(definitions)?);
+            world_state.add_section(TopLevelToolsState::new(
+                definitions,
+                Some(Arc::clone(&extension_metrics)),
+            )?);
             world_state.add_section(BaseInstructionsState(base_instructions));
         }
         world_state.add_section(ModelInstructionsState::new(
@@ -305,9 +311,6 @@ impl Session {
         world_state.add_section(PluginsInstructionsState::new(
             plugins_usage_instructions_available,
         ));
-        let extension_metrics = super::extension_metrics::from_session_telemetry(
-            step_context.session_telemetry.clone(),
-        );
         if turn_context
             .config
             .features
