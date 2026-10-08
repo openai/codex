@@ -125,11 +125,11 @@ impl App {
         app_server: &mut AppServerSession,
         destination: Option<ThreadId>,
     ) {
-        self.shutdown_side_threads(app_server).await;
         let thread_ids: Vec<_> = self.thread_event_channels.keys().copied().collect();
         for thread_id in thread_ids {
             if self.voice_owner_thread_id() == Some(thread_id)
                 || destination == Some(thread_id)
+                || self.side_threads.contains_key(&thread_id)
                 || self
                     .agents_overview
                     .dispatched_requests

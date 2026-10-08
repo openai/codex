@@ -690,25 +690,6 @@ impl App {
                     }
                 }
             };
-            if !previous_running_thread_ids.is_empty() {
-                for side_thread_id in Vec::from_iter(self.side_threads.keys().copied()) {
-                    let discarded = match startup_draft.as_deref_mut() {
-                        Some(draft) => {
-                            draft
-                                .run_until(
-                                    tui,
-                                    self.discard_side_thread(app_server, side_thread_id),
-                                )
-                                .await?
-                        }
-                        None => self.discard_side_thread(app_server, side_thread_id).await,
-                    };
-                    if !discarded {
-                        let _ = app_server.thread_unsubscribe(root_thread_id).await;
-                        return Ok(AppRunControl::Continue);
-                    }
-                }
-            }
             for (thread_id, requests) in previous_pending_requests {
                 self.agents_overview
                     .dispatched_requests
@@ -849,6 +830,7 @@ impl App {
             for thread_id in previous_thread_ids {
                 if previous_running_thread_ids.is_empty()
                     && thread_id != root_thread_id
+                    && !self.side_threads.contains_key(&thread_id)
                     && self.voice_owner_thread_id() != Some(thread_id)
                     && Some(thread_id) != previous_displayed_thread_id
                     && !self.agents_overview.blank_sessions.contains_key(&thread_id)
@@ -868,7 +850,7 @@ impl App {
             || (self.thread_unavailable(root_thread_id)
                 && !self.chat_widget.is_external_writer_view())
         {
-            self.select_agent_thread_and_discard_side(tui, app_server, root_thread_id)
+            self.select_agent_thread(tui, app_server, root_thread_id)
                 .await?;
         }
         let read_only = self.chat_widget.is_external_writer_view();

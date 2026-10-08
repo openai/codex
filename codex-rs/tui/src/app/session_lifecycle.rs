@@ -808,7 +808,7 @@ impl App {
         }
         if voice_owner.is_some() {
             for (thread_id, channel) in &self.thread_event_channels {
-                if Some(*thread_id) != voice_owner {
+                if Some(*thread_id) != voice_owner && !self.side_threads.contains_key(thread_id) {
                     for request in channel.store.lock().await.pending_replay_requests() {
                         self.pending_app_server_requests
                             .resolve_notification(&thread_id.to_string(), request.id());
@@ -817,7 +817,9 @@ impl App {
             }
         }
         self.thread_event_listener_tasks.retain(|id, task| {
-            if Some(*id) == voice_owner || self.agents_overview.dispatched_requests.contains_key(id)
+            if Some(*id) == voice_owner
+                || self.side_threads.contains_key(id)
+                || self.agents_overview.dispatched_requests.contains_key(id)
             {
                 true
             } else {
@@ -826,14 +828,13 @@ impl App {
             }
         });
         self.thread_event_channels
-            .retain(|id, _| Some(*id) == voice_owner);
+            .retain(|id, _| Some(*id) == voice_owner || self.side_threads.contains_key(id));
         self.pending_realtime_speech_replay.clear();
         self.pending_realtime_transcript_replay.clear();
         self.realtime_replay_order.clear();
         self.pending_server_profiles.clear();
         self.agents_overview.activity.clear();
         self.agent_navigation.clear();
-        self.side_threads.clear();
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
@@ -842,6 +843,16 @@ impl App {
         self.pending_primary_events.clear();
         if voice_owner.is_none() {
             self.pending_app_server_requests.clear();
+            let side_thread_ids: Vec<_> = self.side_threads.keys().copied().collect();
+            for thread_id in side_thread_ids {
+                if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+                    for request in channel.store.lock().await.pending_replay_requests() {
+                        let _ = self
+                            .pending_app_server_requests
+                            .note_server_request(&request);
+                    }
+                }
+            }
         }
         self.pending_startup_thread_start = false;
         self.pending_server_version_notice = None;

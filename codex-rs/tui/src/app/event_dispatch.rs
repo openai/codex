@@ -2961,7 +2961,7 @@ impl App {
                 );
             }
             AppEvent::SelectAgentThread(thread_id) => {
-                self.select_agent_thread_and_discard_side(tui, app_server, thread_id)
+                self.select_agent_thread(tui, app_server, thread_id)
                     .await?;
             }
             AppEvent::StartSide {
@@ -3579,6 +3579,16 @@ impl App {
                 // its shutdown completion does not trigger agent failover.
                 self.pending_shutdown_exit_thread_id =
                     self.active_thread_id.or(self.chat_widget.thread_id());
+                if !self.side_threads.is_empty()
+                    && tokio::time::timeout(
+                        SHUTDOWN_FIRST_EXIT_TIMEOUT,
+                        self.shutdown_side_threads(app_server),
+                    )
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("timed out waiting for side-conversation shutdown");
+                }
                 if self.pending_shutdown_exit_thread_id.is_some()
                     || self.voice_owner_thread_id().is_some()
                 {

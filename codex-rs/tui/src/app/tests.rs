@@ -857,6 +857,13 @@ async fn reset_thread_event_state_aborts_listener_tasks() {
 
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
+    let side_thread_id = ThreadId::new();
+    let side_request = exec_approval_request(
+        side_thread_id,
+        "turn-1",
+        "call-1",
+        /*approval_id*/ None,
+    );
     let (started_tx, started_rx) = tokio::sync::oneshot::channel();
     let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
     let handle = tokio::spawn(async move {
@@ -865,6 +872,21 @@ async fn reset_thread_event_state_aborts_listener_tasks() {
         std::future::pending::<()>().await;
     });
     app.thread_event_listener_tasks.insert(thread_id, handle);
+    app.thread_event_listener_tasks
+        .insert(side_thread_id, tokio::spawn(std::future::pending()));
+    app.thread_event_channels.insert(
+        side_thread_id,
+        ThreadEventChannel::new(THREAD_EVENT_CHANNEL_CAPACITY),
+    );
+    app.thread_event_channels[&side_thread_id]
+        .store
+        .lock()
+        .await
+        .push_request(side_request.clone());
+    app.side_threads
+        .insert(side_thread_id, SideThreadState::new(thread_id));
+    app.pending_app_server_requests
+        .note_server_request(&side_request);
     app.pending_server_profiles.insert(
         thread_id,
         PermissionProfileSelection {
@@ -880,7 +902,19 @@ async fn reset_thread_event_state_aborts_listener_tasks() {
 
     app.reset_thread_event_state().await;
 
-    assert_eq!(app.thread_event_listener_tasks.is_empty(), true);
+    assert_eq!(
+        app.thread_event_listener_tasks
+            .keys()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![side_thread_id]
+    );
+    assert!(app.thread_event_channels.contains_key(&side_thread_id));
+    assert!(app.side_threads.contains_key(&side_thread_id));
+    assert!(
+        app.pending_app_server_requests
+            .contains_server_request(&side_request)
+    );
     assert!(app.pending_server_profiles.is_empty());
     time::timeout(Duration::from_millis(50), dropped_rx)
         .await
@@ -2890,6 +2924,17 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         )
         .expect("create source rollout"),
     )?;
+    let other_thread_id = ThreadId::from_string(
+        &app_test_support::create_fake_rollout(
+            config.codex_home.as_path(),
+            "2025-01-06T12-00-00",
+            "2025-01-06T12:00:00Z",
+            "Other task",
+            Some(config.model_provider_id.as_str()),
+            /*git_info*/ None,
+        )
+        .expect("create other rollout"),
+    )?;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&config)).await?;
     let started = app_server
         .resume_thread(
@@ -2969,6 +3014,19 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
             app.chat_widget.config_ref()
         ))
     );
+    app.select_agents_overview_thread(&mut tui, &mut app_server, other_thread_id)
+        .await?;
+    app.select_agents_overview_thread(&mut tui, &mut app_server, parent_thread_id)
+        .await?;
+    Box::pin(app.handle_start_side(
+        &mut tui,
+        &mut app_server,
+        parent_thread_id,
+        /*user_message*/ None,
+    ))
+    .await?;
+    assert_eq!(app.active_thread_id, Some(side_thread_id));
+    assert_eq!(app.side_threads.len(), 1);
     app.select_agent_thread(&mut tui, &mut app_server, parent_thread_id)
         .await?;
     app.select_permission_profile(
@@ -5651,7 +5709,7 @@ async fn side_restore_user_message_puts_inline_question_back_in_composer() {
 }
 
 #[tokio::test]
-async fn side_discard_selection_keeps_current_side_thread() {
+async fn side_discard_selection_only_closes_the_active_side() {
     let mut app = make_test_app().await;
     let parent_thread_id = ThreadId::new();
     let side_thread_id = ThreadId::new();
@@ -5671,7 +5729,7 @@ async fn side_discard_selection_keeps_current_side_thread() {
     app.active_thread_id = Some(parent_thread_id);
     assert_eq!(
         app.side_thread_to_discard_after_switch(ThreadId::new()),
-        Some(side_thread_id)
+        None
     );
     assert_eq!(
         app.side_thread_to_discard_after_switch(side_thread_id),
