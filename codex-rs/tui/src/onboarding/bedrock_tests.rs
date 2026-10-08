@@ -3,30 +3,14 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn gov_cloud_guidance_requires_acknowledgement() {
-    let mut state = BedrockState::discovering(RequestId::Integer(1));
-    state.view = BedrockView::CheckingGovCloud(RequestId::Integer(2));
-    insta::assert_snapshot!("gov_cloud_checking", render_visible(&state));
-    assert!(
-        state
-            .handle_key_event(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .is_none()
-    );
-
-    state.view = BedrockView::GovCloudWarning(Arc::default());
+    let mut state = BedrockState::guidance();
     insta::assert_snapshot!("gov_cloud_warning", render_visible(&state));
-    assert!(
-        state
-            .handle_key_event(&KeyEvent::new_with_kind(
-                KeyCode::Enter,
-                KeyModifiers::NONE,
-                KeyEventKind::Repeat,
-            ))
-            .is_none()
-    );
-    assert!(matches!(
-        state.handle_key_event(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        Some(BedrockAction::ContinueAfterGovCloudWarning)
-    ));
+    assert!(!state.handle_guidance_key_event(&KeyEvent::new_with_kind(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        KeyEventKind::Repeat,
+    )));
+    assert!(state.handle_guidance_key_event(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
 
     let area = Rect::new(0, 0, 72, 24);
     let mut buffer = Buffer::empty(area);
@@ -41,8 +25,7 @@ fn gov_cloud_guidance_requires_acknowledgement() {
 
 #[test]
 fn gov_cloud_guidance_scrolls_in_short_panes() {
-    let mut state = BedrockState::discovering(RequestId::Integer(1));
-    state.view = BedrockView::GovCloudWarning(Arc::default());
+    let mut state = BedrockState::guidance();
     let area = Rect::new(0, 0, 24, 6);
     let initial = render_visible_at(&state, area);
     insta::assert_snapshot!("gov_cloud_warning_short", initial);
@@ -57,22 +40,20 @@ fn gov_cloud_guidance_scrolls_in_short_panes() {
             seen.extend(buffer.content.iter().map(ratatui::buffer::Cell::symbol));
             assert!(render_visible_at(&state, area).contains("Acknowledge"));
             assert!(
-                state
-                    .handle_key_event(&KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
-                    .is_none()
+                !state.handle_guidance_key_event(&KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
             );
         }
         assert!(seen.contains("Using Codex with AWS"));
         assert!(seen.contains("proceeding."));
         assert!(seen.contains(GOV_CLOUD_GUIDANCE_URL));
         for _ in 0..20 {
-            state.handle_key_event(&KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+            state.handle_guidance_key_event(&KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
             render_visible_at(&state, area);
         }
         assert!(render_visible_at(&state, area).starts_with("Using Codex with AWS"));
     }
     assert_eq!(render_visible_at(&state, area), initial);
-    state.handle_key_event(&KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    state.handle_guidance_key_event(&KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     render_visible(&state);
     assert_eq!(render_visible_at(&state, area), initial);
 }

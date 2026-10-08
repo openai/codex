@@ -3279,6 +3279,10 @@
           "description": "Tracks whether the user has acknowledged the full access warning prompt.",
           "type": "boolean"
         },
+        "hide_gov_cloud_guidance": {
+          "description": "Tracks whether the user has acknowledged the AWS GovCloud guidance.",
+          "type": "boolean"
+        },
         "hide_gpt-5.1-codex-max_migration_prompt": {
           "description": "Tracks whether the user has seen the gpt-5.1-codex-max migration prompt",
           "type": "boolean"

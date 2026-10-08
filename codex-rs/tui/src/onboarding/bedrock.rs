@@ -1,4 +1,4 @@
-//! Amazon Bedrock credential discovery, setup, and post-login checks within authentication.
+//! Amazon Bedrock credential setup and the startup GovCloud guidance screen.
 
 use super::auth::AuthModeWidget;
 use super::auth::SignInState;
@@ -6,6 +6,7 @@ use super::auth::onboarding_request_id;
 use super::keys;
 use crate::key_hint::KeyBindingListExt;
 use crate::wrapping::word_wrap_lines;
+use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::AwsCredentialType;
 use codex_app_server_protocol::BedrockAwsProfile;
 use codex_app_server_protocol::BedrockCheckGovCloudRequirementsParams;
@@ -61,7 +62,6 @@ enum BedrockView {
     },
     EnvironmentInstructions,
     Configuring(RequestId),
-    CheckingGovCloud(RequestId),
     // Render-clamped scroll offset shared with the auth widget's cloned state.
     GovCloudWarning(Arc<AtomicUsize>),
 }
@@ -98,10 +98,31 @@ enum BedrockMethod {
 enum BedrockAction {
     BackToAuth,
     Configure(BedrockCredential, String),
-    ContinueAfterGovCloudWarning,
 }
 
 impl BedrockState {
+    pub(super) fn guidance() -> Self {
+        Self {
+            view: BedrockView::GovCloudWarning(Arc::default()),
+            highlighted: 0,
+            profiles: Vec::new(),
+            environment_credentials: Vec::new(),
+        }
+    }
+
+    pub(super) fn handle_guidance_key_event(&mut self, key_event: &KeyEvent) -> bool {
+        let BedrockView::GovCloudWarning(scroll) = &self.view else {
+            return false;
+        };
+        let offset = scroll.load(Ordering::Relaxed);
+        if keys::MOVE_UP.is_pressed(*key_event) {
+            scroll.store(offset.saturating_sub(1), Ordering::Relaxed);
+        } else if keys::MOVE_DOWN.is_pressed(*key_event) {
+            scroll.store(offset.saturating_add(1), Ordering::Relaxed);
+        }
+        key_event.kind == KeyEventKind::Press && keys::CONFIRM.is_pressed(*key_event)
+    }
+
     fn discovering(request_id: RequestId) -> Self {
         Self {
             view: BedrockView::Discovering(request_id),
@@ -225,21 +246,6 @@ impl BedrockState {
     }
 
     fn handle_key_event(&mut self, key_event: &KeyEvent) -> Option<BedrockAction> {
-        match &self.view {
-            BedrockView::CheckingGovCloud(_) => return None,
-            BedrockView::GovCloudWarning(scroll) => {
-                let offset = scroll.load(Ordering::Relaxed);
-                if keys::MOVE_UP.is_pressed(*key_event) {
-                    scroll.store(offset.saturating_sub(1), Ordering::Relaxed);
-                } else if keys::MOVE_DOWN.is_pressed(*key_event) {
-                    scroll.store(offset.saturating_add(1), Ordering::Relaxed);
-                }
-                return (key_event.kind == KeyEventKind::Press
-                    && keys::CONFIRM.is_pressed(*key_event))
-                .then_some(BedrockAction::ContinueAfterGovCloudWarning);
-            }
-            _ => {}
-        }
         if keys::CANCEL.is_pressed(*key_event) {
             let leave_wizard = matches!(
                 self.view,
@@ -372,9 +378,6 @@ impl BedrockState {
         ];
         let mut footer = Vec::new();
         match &self.view {
-            BedrockView::CheckingGovCloud(_) => {
-                lines = vec!["Checking for AWS GovCloud...".dim().into()];
-            }
             BedrockView::GovCloudWarning(_) => {
                 lines = vec!["Using Codex with AWS GovCloud".bold().into(), "".into()];
                 lines.push(Line::from(vec![
@@ -493,10 +496,7 @@ impl BedrockState {
                 self.render_methods(&mut lines);
             }
         }
-        if !matches!(
-            self.view,
-            BedrockView::Discovering(_) | BedrockView::CheckingGovCloud(_)
-        ) {
+        if !matches!(self.view, BedrockView::Discovering(_)) {
             footer.push("".into());
             if !matches!(self.view, BedrockView::Configuring(_)) {
                 footer.push(Line::from(vec![
@@ -676,44 +676,21 @@ impl BedrockState {
     }
 }
 
-fn start_gov_cloud_check(
-    request_handle: codex_app_server_client::AppServerRequestHandle,
-    sign_in_state: std::sync::Arc<std::sync::RwLock<SignInState>>,
-    request_frame: crate::tui::FrameRequester,
-    state: &mut BedrockState,
-) {
-    let request_id = onboarding_request_id();
-    state.highlighted = 0;
-    state.view = BedrockView::CheckingGovCloud(request_id.clone());
-    tokio::spawn(async move {
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(/*secs*/ 15),
-            request_handle.request_typed::<BedrockCheckGovCloudRequirementsResponse>(
-                ClientRequest::BedrockCheckGovCloudRequirements {
-                    request_id: request_id.clone(),
-                    params: BedrockCheckGovCloudRequirementsParams {},
-                },
-            ),
-        )
-        .await;
-        let mut guard = sign_in_state
-            .write()
-            .unwrap_or_else(PoisonError::into_inner);
-        let SignInState::Bedrock(state) = &mut *guard else {
-            return;
-        };
-        if !matches!(&state.view, BedrockView::CheckingGovCloud(active) if *active == request_id) {
-            return;
-        }
-        match result {
-            Ok(Ok(response)) if response.is_gov_cloud => {
-                state.view = BedrockView::GovCloudWarning(Arc::default());
-            }
-            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => *guard = SignInState::BedrockConfigured,
-        }
-        drop(guard);
-        request_frame.schedule_frame();
-    });
+pub(crate) async fn check_gov_cloud(request_handle: AppServerRequestHandle) -> bool {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(/*secs*/ 15),
+        request_handle.request_typed::<BedrockCheckGovCloudRequirementsResponse>(
+            ClientRequest::BedrockCheckGovCloudRequirements {
+                request_id: onboarding_request_id(),
+                params: BedrockCheckGovCloudRequirementsParams {},
+            },
+        ),
+    )
+    .await
+    {
+        Ok(Ok(response)) => response.is_gov_cloud,
+        Ok(Err(_)) | Err(_) => false,
+    }
 }
 
 impl AuthModeWidget {
@@ -786,9 +763,6 @@ impl AuthModeWidget {
                     let fallback = state.clone();
                     drop(guard);
                     self.start_bedrock_setup(credential, region, fallback);
-                }
-                Some(BedrockAction::ContinueAfterGovCloudWarning) => {
-                    *guard = SignInState::BedrockConfigured;
                 }
                 None => {}
             }
@@ -906,14 +880,8 @@ impl AuthModeWidget {
             match result {
                 Ok(()) => {
                     *error.write().unwrap_or_else(PoisonError::into_inner) = None;
-                    if let SignInState::Bedrock(state) = &mut *guard {
-                        start_gov_cloud_check(
-                            request_handle,
-                            sign_in_state.clone(),
-                            request_frame.clone(),
-                            state,
-                        );
-                    }
+                    // Startup shows GovCloud guidance after the selected provider is reloaded.
+                    *guard = SignInState::BedrockConfigured;
                 }
                 Err(err) => {
                     *error.write().unwrap_or_else(PoisonError::into_inner) =

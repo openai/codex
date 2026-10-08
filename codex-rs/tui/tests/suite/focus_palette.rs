@@ -24,6 +24,8 @@ const FOCUS_PROBE_INPUT: &str = "focus-palette-24527";
 
 #[path = "external_editor_tests.rs"]
 mod external_editor;
+#[path = "gov_cloud_guidance_tests.rs"]
+mod gov_cloud_guidance;
 #[path = "tui_mode_picker_tests.rs"]
 mod tui_mode_picker;
 

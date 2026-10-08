@@ -1,5 +1,6 @@
 mod auth;
 mod bedrock;
+pub(crate) use bedrock::check_gov_cloud;
 mod keys;
 pub(crate) mod onboarding_screen;
 mod trust_directory;
