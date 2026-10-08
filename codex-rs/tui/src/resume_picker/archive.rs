@@ -83,6 +83,7 @@ impl PickerState {
         if self.archive_state != (ArchiveState::Pending { thread_id }) {
             return;
         }
+        self.chord_matcher.cancel();
         self.archive_state = ArchiveState::Idle;
 
         if let Err(error) = result {
@@ -154,6 +155,7 @@ impl PickerState {
         if self.archive_state != (ArchiveState::Restoring { thread_id }) {
             return None;
         }
+        self.chord_matcher.cancel();
         self.archive_state = ArchiveState::Idle;
 
         match result {

@@ -4712,6 +4712,7 @@
               "copy": null,
               "find_transcript": null,
               "focus_activity": null,
+              "leader": null,
               "open_agents": null,
               "open_external_editor": null,
               "open_transcript": null,
@@ -5515,6 +5516,14 @@
           ],
           "description": "Focus activity groups in the owned transcript to inspect their details."
         },
+        "leader": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Prefix for persistent, context-aware shortcut menus."
+        },
         "open_agents": {
           "allOf": [
             {
@@ -5710,6 +5719,7 @@
             "copy": null,
             "find_transcript": null,
             "focus_activity": null,
+            "leader": null,
             "open_agents": null,
             "open_external_editor": null,
             "open_transcript": null,

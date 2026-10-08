@@ -10,7 +10,7 @@ connecting:
   status line stays visible
 
 listening:
- voice ● listening                                      ⌃x mute     /voice stop
+ voice ● listening                                      f9 mute     /voice stop
    mic ▁▁▁▁▁▁  codex ▁▁▁▁▁▁
 
 › Ask Codex to do anything
@@ -18,7 +18,7 @@ listening:
   status line stays visible
 
 speaking:
- voice ● speaking                                       ⌃x mute     /voice stop
+ voice ● speaking                                       f9 mute     /voice stop
    mic ▁▁▇▇▇▇  codex ▁▁████
 
 › Ask Codex to do anything
@@ -26,7 +26,7 @@ speaking:
   status line stays visible
 
 muted:
- voice ◌ muted                                          ⌃x unmute   /voice stop
+ voice ◌ muted                                          f9 unmute   /voice stop
    mic ▁▁▁▁▁▁  codex ▁▁▇▇▇▇
 
 › Ask Codex to do anything
@@ -34,7 +34,7 @@ muted:
   status line stays visible
 
 transcript:
- voice ● speaking                                       ⌃x mute     /voice stop
+ voice ● speaking                                       f9 mute     /voice stop
    mic ▁▁▄▄▄▄  codex ▁▁▄▄▄▄
 
 › Ask Codex to do anything
@@ -42,7 +42,7 @@ transcript:
   status line stays visible
 
 interrupted:
- voice ● heard                                          ⌃x mute     /voice stop
+ voice ● heard                                          f9 mute     /voice stop
    mic ▁▁▄▄▄▄  codex ▁▁▄▄▄▄
 
 › Ask Codex to do anything

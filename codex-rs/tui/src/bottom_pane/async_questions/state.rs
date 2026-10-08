@@ -149,7 +149,8 @@ impl AsyncQuestions {
         }
     }
 
-    pub(crate) fn resolve_answers(&mut self, question_ids: &[String]) {
+    /// Return whether resolving these answers changed the expanded question's input target.
+    pub(crate) fn resolve_answers(&mut self, question_ids: &[String]) -> bool {
         // History can arrive before live questions or before restoring local drafts.
         self.state.answered_ids.extend(question_ids.iter().cloned());
         // Older desktop replies identify the whole source message instead of one question.
@@ -158,9 +159,10 @@ impl AsyncQuestions {
                 || question_ids.contains(&question.message_id)
         };
         if !self.state.pending.iter().any(answered) {
-            return;
+            return false;
         }
         let current_answered = self.current_answer().is_some_and(answered);
+        let displayed_answer_changed = self.expanded && current_answered;
         if current_answered {
             self.composer.flush_pending_input();
         }
@@ -183,6 +185,7 @@ impl AsyncQuestions {
             self.restore_current_draft();
             self.composer.reset_vim_mode();
         }
+        displayed_answer_changed
     }
 
     pub(crate) fn accept_answer(&mut self) {

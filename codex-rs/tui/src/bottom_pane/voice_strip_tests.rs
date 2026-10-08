@@ -55,7 +55,7 @@ fn active_dashboard_preserves_live_colors_controls_and_width() {
     assert!(actual.starts_with(" voice "));
     assert!(actual.lines().nth(1).unwrap().starts_with("   mic "));
     insta::assert_snapshot!(actual, @"
-    voice ● listening     ⌃x mute     /voice stop
+    voice ● listening     f9 mute     /voice stop
       mic ▆▅▄▃▂▁  codex ▁▃▄▅▆█
     ");
     assert_eq!(buffer[(7, 0)].fg, Color::Red);
@@ -63,7 +63,7 @@ fn active_dashboard_preserves_live_colors_controls_and_width() {
     assert_eq!(buffer[(22, 1)].fg, Color::Magenta);
     assert!(actual.contains("/voice stop"));
     let (compact, buffer) = rows(&strip, /*width*/ 37);
-    assert!(compact.contains("⌃x mute") && compact.contains("/voice stop"));
+    assert!(compact.contains("f9 mute") && compact.contains("/voice stop"));
     assert_eq!(buffer[(36, 0)].symbol(), " ");
     let (narrow, buffer) = rows(&strip, /*width*/ 22);
     assert!(narrow.contains("/voice stop"));
@@ -89,7 +89,7 @@ fn connecting_and_muted_indicators_follow_actual_capture() {
     strip.state.animations = false;
     let (connecting, buffer) = rows(&strip, /*width*/ 45);
     assert!(connecting.contains("voice ◌ connecting"));
-    assert!(!connecting.contains("⌃x mute"));
+    assert!(!connecting.contains("f9 mute"));
     assert_ne!(buffer[(7, 0)].fg, Color::Red);
     strip.state.microphone_live = true;
     let (_, buffer) = rows(&strip, /*width*/ 45);

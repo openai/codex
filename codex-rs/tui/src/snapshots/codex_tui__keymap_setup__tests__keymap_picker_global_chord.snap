@@ -5,7 +5,7 @@ expression: "render_picker(params, 120)"
 
   Keymap
   All configurable shortcuts.
-  151 actions, 1 customized, 6 unbound.
+  152 actions, 1 customized, 6 unbound.
 
    All   Common   Customized (1)   Unbound (6)   App   Composer   Editor   Vim   Navigation   Agents   Approval      ›
 
@@ -21,6 +21,7 @@ expression: "render_picker(params, 120)"
   Global       - Toggle Vim Mode            unbound
   Global         Toggle Raw Output          alt-r
   Global         Toggle Side Conversation   ctrl-/
+  Global       - Leader                     unbound
   Chat           Interrupt Turn             esc
   Chat           Decrease Reasoning Effort  alt-,, shift-down
   Chat           Increase Reasoning Effort  alt-., shift-up
@@ -30,10 +31,9 @@ expression: "render_picker(params, 120)"
   Chat           Prompt Stack Back          shift-right, alt-down
   Chat           Skip Question              ctrl-]
   Chat           Toggle Voice               f8
-  Chat         - Toggle Voice Mute          unbound
+  Chat           Toggle Voice Mute          f9
   Composer       Submit                     enter
   Composer       Queue                      tab
   Composer       Toggle Shortcuts           ?, shift-?
-  Composer       History Search Previous    ctrl-r
 ↓
   left/right group · enter edit shortcut · * custom · - unbound · esc close

@@ -72,7 +72,7 @@ async fn voice_composer_preserves_normal_colors_across_microphone_states() {
                 .join("\n");
             insta::assert_snapshot!(rows, @"
             0:
-            1:  voice ● listening     ⌃x mute     /voice stop
+            1:  voice ● listening     f9 mute     /voice stop
             2:    mic ▁▁▁▁▁▁  codex ▁▁▁▁▁▁
             3:
             4: › typed
@@ -357,7 +357,7 @@ async fn narrow_voice_footer_keeps_the_stop_control_before_meters() {
 
     let footer = render_bottom_popup(&chat, /*width*/ 46);
     assert!(footer.contains("voice ● speaking"));
-    assert!(footer.contains("⌃x mute"));
+    assert!(footer.contains("f9 mute"));
     assert!(footer.contains("/voice stop"));
     chat.realtime_conversation.speaker_active_until = None;
     chat.realtime_conversation.speaker_level = 1;
@@ -375,7 +375,7 @@ async fn narrow_voice_footer_keeps_the_stop_control_before_meters() {
     assert_eq!(chat.realtime_conversation.speaker_active_until, None);
     let interrupted = render_bottom_popup(&chat, /*width*/ 45);
     assert!(interrupted.contains("voice ● heard"));
-    assert!(interrupted.contains("⌃x mute"));
+    assert!(interrupted.contains("f9 mute"));
     assert!(interrupted.contains("/voice stop"));
     chat.realtime_conversation.interruption_acknowledged_until =
         Some(std::time::Instant::now() - super::super::INTERRUPTION_ACKNOWLEDGMENT);
@@ -605,15 +605,15 @@ async fn clipped_voice_composer_keeps_the_draft_and_cursor_visible() {
 
     insta::assert_snapshot!(layouts.join("\n\n"), @"
     5 rows:
-    voice ● listening     ⌃x mute     /voice stop
+    voice ● listening     f9 mute     /voice stop
     › typed
 
     6 rows:
-    voice ● listening     ⌃x mute     /voice stop
+    voice ● listening     f9 mute     /voice stop
     › typed
 
     8 rows:
-    voice ● listening     ⌃x mute     /voice stop
+    voice ● listening     f9 mute     /voice stop
     › typed
     ");
 }

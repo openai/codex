@@ -104,6 +104,7 @@ async fn thread_projection_preserves_executor_order_and_unavailable_selections()
             vec![unavailable.clone(), ready.clone()],
             vec![ready.clone(), unavailable.clone()],
         ] {
+            // These synthetic executor selections have no capability roots.
             let selections = requests
                 .iter()
                 .cloned()

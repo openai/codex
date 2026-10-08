@@ -4,6 +4,7 @@ expression: snapshot
 ---
 unbound:
 Set key | Capture a key for this unbound action | enabled
+Use leader... | Capture the key that follows the configured leader | enabled
 Set key chord | Capture two consecutive keys for this action | enabled
 Remove custom binding | Restore the default keymap binding | enabled
 Back to shortcuts | Return to the shortcut list | enabled
@@ -11,6 +12,7 @@ Back to shortcuts | Return to the shortcut list | enabled
 single:
 Replace binding | Capture a replacement key for `ctrl-enter` | enabled
 Add alternate binding | Keep `ctrl-enter` and add another key | enabled
+Use leader... | Capture the key that follows the configured leader | enabled
 Replace with key chord | Replace `ctrl-enter` with a two-stroke key chord | enabled
 Add alternate key chord | Keep `ctrl-enter` and add a two-stroke key chord | enabled
 Remove custom binding | Restore the default keymap binding | enabled
@@ -20,6 +22,7 @@ multi:
 Replace one binding... | Choose which existing binding to replace | enabled
 Replace all bindings | Replace `ctrl-enter, alt-shift-enter` with one key | enabled
 Add alternate binding | Keep `ctrl-enter, alt-shift-enter` and add another key | enabled
+Use leader... | Capture the key that follows the configured leader | enabled
 Replace with key chord | Replace `ctrl-enter, alt-shift-enter` with a two-stroke key chord | enabled
 Add alternate key chord | Keep `ctrl-enter, alt-shift-enter` and add a two-stroke key chord | enabled
 Remove custom binding | Restore the default keymap binding | enabled

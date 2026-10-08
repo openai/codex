@@ -113,6 +113,11 @@ async fn run_startup_hooks_review_app(
             return Ok(StartupHooksReviewOutcome::Continue);
         };
         tui.screen_size_for_event(&event)?;
+        if matches!(&event, TuiEvent::Paste(_) | TuiEvent::FocusLost)
+            || matches!(&event, TuiEvent::Mouse(mouse) if mouse.kind != crossterm::event::MouseEventKind::Moved)
+        {
+            chord_matcher.cancel();
+        }
         match event {
             TuiEvent::Key(key_event) => {
                 let key_event = match chord_matcher.advance(

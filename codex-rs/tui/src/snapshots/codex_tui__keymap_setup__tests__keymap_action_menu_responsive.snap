@@ -13,10 +13,11 @@ expression: snapshot
 
 › 1. Replace binding
   2. Add alternate binding
-  3. Replace with key chord
-  4. Add alternate key chord
+  3. Use leader...
+  4. Replace with key chord
+  5. Add alternate key chord
   –  Remove custom binding (disabled)
-  5. Back to shortcuts
+  6. Back to shortcuts
 
   Changes write the root `tui.keymap.*`
   override.
@@ -35,13 +36,16 @@ expression: snapshot
                                        for `ctrl-t`
   2. Add alternate binding             Keep `ctrl-t` and add
                                        another key
-  3. Replace with key chord            Replace `ctrl-t` with a
+  3. Use leader...                     Capture the key that
+                                       follows the configured
+                                       leader
+  4. Replace with key chord            Replace `ctrl-t` with a
                                        two-stroke key chord
-  4. Add alternate key chord           Keep `ctrl-t` and add a
+  5. Add alternate key chord           Keep `ctrl-t` and add a
                                        two-stroke key chord
   –  Remove custom binding (disabled)  No custom root override
                                        to remove
-  5. Back to shortcuts                 Return to the shortcut
+  6. Back to shortcuts                 Return to the shortcut
                                        list
 
   Changes write the root `tui.keymap.*` override.
@@ -58,10 +62,11 @@ expression: snapshot
 
 › 1. Replace binding                   Capture a replacement key for `ctrl-t`
   2. Add alternate binding             Keep `ctrl-t` and add another key
-  3. Replace with key chord            Replace `ctrl-t` with a two-stroke key chord
-  4. Add alternate key chord           Keep `ctrl-t` and add a two-stroke key chord
+  3. Use leader...                     Capture the key that follows the configured leader
+  4. Replace with key chord            Replace `ctrl-t` with a two-stroke key chord
+  5. Add alternate key chord           Keep `ctrl-t` and add a two-stroke key chord
   –  Remove custom binding (disabled)  No custom root override to remove
-  5. Back to shortcuts                 Return to the shortcut list
+  6. Back to shortcuts                 Return to the shortcut list
 
   Changes write the root `tui.keymap.*` override.
   enter select · esc back

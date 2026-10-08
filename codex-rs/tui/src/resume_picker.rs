@@ -596,6 +596,11 @@ async fn run_session_picker_with_loader(
             Some(ev) = tui_events.next() => {
                 alt.tui.clipboard.poll();
                 let screen_size = alt.tui.screen_size_for_event(&ev)?;
+                if matches!(&ev, TuiEvent::Paste(_) | TuiEvent::FocusLost)
+                    || matches!(&ev, TuiEvent::Mouse(mouse) if mouse.kind != crossterm::event::MouseEventKind::Moved)
+                {
+                    state.chord_matcher.cancel();
+                }
                 let ev = if let TuiEvent::Key(key) = ev {
                     let Some(key) = state.route_key_chord(key) else {
                         continue;
@@ -1156,6 +1161,7 @@ impl PickerState {
         if let Overlay::Transcript(view) = &mut overlay {
             view.set_keymap_bindings(&self.keymap);
         }
+        self.chord_matcher.cancel();
         self.overlay = Some(overlay);
         self.pending_transcript_open = None;
         self.transcript_loading_frame_shown = false;
@@ -1576,6 +1582,7 @@ impl PickerState {
                     self.transcript_cells
                         .insert(thread_id, SessionTranscriptState::Failed);
                     if self.pending_transcript_open == Some(thread_id) {
+                        self.chord_matcher.cancel();
                         self.pending_transcript_cancellation = None;
                         self.pending_transcript_open = None;
                         self.transcript_loading_frame_shown = false;
@@ -1652,6 +1659,7 @@ impl PickerState {
     }
 
     fn apply_filter(&mut self) {
+        self.chord_matcher.cancel();
         let base_iter = self
             .all_rows
             .iter()

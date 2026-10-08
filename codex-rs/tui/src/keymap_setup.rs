@@ -9,8 +9,8 @@
 //!
 //! The flow is intentionally split into three steps: choose an action, choose
 //! whether to replace/add/remove a binding, then capture either one terminal
-//! key event or a bounded two-stroke key chord. Validation happens after
-//! capture by reusing runtime keymap resolution, so conflict rules stay
+//! key event, a bounded two-stroke chord, or the key following the configured
+//! leader. Validation reuses runtime keymap resolution, so conflict rules stay
 //! centralized in `keymap.rs` instead of being duplicated in the UI.
 //!
 //! This module does not persist config files directly. It emits app events with
@@ -249,7 +249,35 @@ pub(crate) fn build_keymap_action_menu_params(
             ));
         }
     }
-    if active_binding_count == 0 {
+    if action != "leader" {
+        let leader_available = !runtime_keymap.chords.leader.is_empty();
+        items.push(SelectionItem {
+            name: "Use leader...".to_string(),
+            description: Some("Capture the key that follows the configured leader".to_string()),
+            disabled_reason: (!leader_available).then(|| "The leader is unbound".to_string()),
+            actions: vec![open_capture_action(
+                context.clone(),
+                action.clone(),
+                KeymapEditIntent::ReplaceAll,
+                KeymapCaptureMode::LeaderChord,
+            )],
+            ..Default::default()
+        });
+        if !leader_available {
+            items.push(SelectionItem {
+                name: "Configure leader...".to_string(),
+                description: Some("Set a leader before assigning this shortcut".to_string()),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenKeymapActionMenu {
+                        context: "global".to_string(),
+                        action: "leader".to_string(),
+                    });
+                })],
+                ..Default::default()
+            });
+        }
+    }
+    if action != "leader" && active_binding_count == 0 {
         items.push(action_menu_item(
             "Set key chord",
             "Capture two consecutive keys for this action".to_string(),
@@ -258,7 +286,7 @@ pub(crate) fn build_keymap_action_menu_params(
             KeymapEditIntent::ReplaceAll,
             KeymapCaptureMode::Chord,
         ));
-    } else {
+    } else if action != "leader" {
         items.push(action_menu_item(
             "Replace with key chord",
             format!("Replace `{current_binding}` with a two-stroke key chord"),
@@ -358,6 +386,8 @@ pub(crate) fn build_keymap_replace_binding_menu_params(
                     ..Default::default()
                 },
             ]
+            .into_iter()
+            .take(if action == "leader" { 1 } else { 2 })
         })
         .collect();
 
@@ -378,7 +408,9 @@ pub(crate) fn build_keymap_conflict_params(
     error: String,
     runtime_keymap: &RuntimeKeymap,
 ) -> SelectionViewParams {
-    let capture_mode = if key.contains(' ') {
+    let capture_mode = if key.starts_with("leader ") {
+        KeymapCaptureMode::LeaderChord
+    } else if key.contains(' ') {
         KeymapCaptureMode::Chord
     } else {
         KeymapCaptureMode::SingleKey

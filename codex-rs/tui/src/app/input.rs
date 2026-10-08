@@ -69,6 +69,9 @@ impl App {
         tui: &mut tui::Tui,
         key_event: KeyEvent,
     ) -> Option<KeyEvent> {
+        if self.chat_widget.take_key_chord_reset() {
+            self.cancel_pending_key_chord();
+        }
         self.transcript_view.set_keymap_bindings(&self.keymap);
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
             overlay.set_keymap_bindings(&self.keymap);
@@ -174,6 +177,9 @@ impl App {
     }
 
     pub(super) fn expire_pending_key_chord(&mut self) {
+        if self.chat_widget.take_key_chord_reset() {
+            self.cancel_pending_key_chord();
+        }
         let contexts = self.active_keymap_contexts();
         if self.key_chord_matcher.expire(contexts) {
             self.set_key_chord_hint_override(/*items*/ None);

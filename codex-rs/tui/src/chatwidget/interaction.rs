@@ -61,6 +61,10 @@ impl ChatWidget {
         self.bottom_pane.keymap_contexts()
     }
 
+    pub(crate) fn take_key_chord_reset(&mut self) -> bool {
+        std::mem::take(&mut self.bottom_pane.key_chord_reset_requested)
+    }
+
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) -> KeyEventAction {
         if self.handle_startup_submission_key(key_event) {
             return KeyEventAction::None;

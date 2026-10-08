@@ -8,7 +8,7 @@ use pretty_assertions::assert_eq;
 #[test]
 fn voice_mute_resolves_custom_bindings_unbinding_and_visible_hints() {
     for (config, expected) in [
-        ("", Some("⌃x")),
+        ("", Some("f9")),
         ("[chat]\ntoggle_voice_mute = 'f8'", Some("f8")),
         ("[chat]\ntoggle_voice_mute = []", None),
         ("[chat]\ntoggle_voice_mute = 'ctrl-x m'", Some("⌃x m")),
@@ -27,9 +27,9 @@ fn voice_mute_resolves_custom_bindings_unbinding_and_visible_hints() {
 #[test]
 fn voice_mute_default_yields_to_existing_shortcuts_and_chord_prefixes() {
     for config in [
-        "[editor]\nkill_line_end = 'ctrl-x'",
-        "[global]\ncopy = 'ctrl-x'",
-        "[global]\nopen_transcript = 'ctrl-x ctrl-t'",
+        "[editor]\nkill_line_end = 'f9'",
+        "[global]\ncopy = 'f9'",
+        "[global]\nopen_transcript = 'f9 ctrl-t'",
     ] {
         let config = toml::from_str::<TuiKeymap>(config).unwrap();
         let runtime = RuntimeKeymap::from_config(&config).expect("existing binding stays valid");

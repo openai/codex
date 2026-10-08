@@ -221,7 +221,7 @@ async fn voice_mute_shortcut_reaches_the_active_widget() -> Result<()> {
     app.handle_tui_event(
         &mut tui,
         &mut server,
-        tui::TuiEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+        tui::TuiEvent::Key(KeyEvent::new(KeyCode::F(9), KeyModifiers::NONE)),
     )
     .await?;
     // The fixture has no microphone handle, so reaching mute reports that limitation.

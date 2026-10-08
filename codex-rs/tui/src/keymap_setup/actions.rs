@@ -97,6 +97,7 @@ pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
     gated_action("global", "Global", "toggle_fast_mode", "Turn Fast mode on or off.", KeymapActionFeature::FastMode),
     action("global", "Global", "toggle_raw_output", "Toggle raw scrollback mode."),
     action("global", "Global", "toggle_side_conversation", "Switch between a side conversation and its parent."),
+    action("global", "Global", "leader", "Set the prefix used by shared leader shortcuts."),
     action("chat", "Chat", "interrupt_turn", "Interrupt the active turn."),
     action("chat", "Chat", "decrease_reasoning_effort", "Decrease reasoning effort."),
     action("chat", "Chat", "increase_reasoning_effort", "Increase reasoning effort."),
@@ -272,6 +273,7 @@ pub(super) fn binding_slot<'a>(
     action: &str,
 ) -> Option<&'a mut Option<KeybindingsSpec>> {
     match (context, action) {
+        ("global", "leader") => Some(&mut keymap.global.leader),
         ("global", "open_agents") => Some(&mut keymap.global.open_agents),
         ("global", "open_transcript") => Some(&mut keymap.global.open_transcript),
         ("global", "find_transcript") => Some(&mut keymap.global.find_transcript),
@@ -448,6 +450,23 @@ pub(super) fn format_action_binding_summary(
     let specs = specs
         .into_iter()
         .filter(|spec| seen.insert(spec.clone()))
+        .map(|spec| {
+            let Some(completion) = spec.strip_prefix("leader ") else {
+                return spec;
+            };
+            let resolved = runtime_keymap
+                .chords
+                .leader
+                .iter()
+                .filter_map(|prefix| super::binding_to_config_key_spec(*prefix).ok())
+                .map(|prefix| format!("{prefix} {completion}"))
+                .collect::<Vec<_>>();
+            if resolved.is_empty() {
+                format!("{spec} (inactive)")
+            } else {
+                format!("{spec} ({})", resolved.join(", "))
+            }
+        })
         .collect::<Vec<_>>();
     if specs.is_empty() {
         "unbound".to_string()

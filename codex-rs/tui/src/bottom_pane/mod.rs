@@ -4,6 +4,8 @@
 //! [`BottomPaneView`]s (popups/modals) that temporarily replace the composer for focused
 //! interactions like selection lists. Centered views retain earlier views as a backdrop,
 //! while input remains routed exclusively to the top of the stack.
+//! Modal insertion, replacement, and dismissal invalidate pending key chords, including when a
+//! deferred prompt appears or an approval queue advances without changing keymap contexts.
 //!
 //! Input routing is layered: `BottomPane` decides which local surface receives a key (view vs
 //! composer), while higher-level intent such as "interrupt" or "quit" is decided by the parent
@@ -288,6 +290,7 @@ pub(crate) struct BottomPane {
 
     /// Stack of views displayed instead of the composer (e.g. popups/modals).
     view_stack: Vec<Box<dyn BottomPaneView>>,
+    pub(crate) key_chord_reset_requested: bool,
     warnings_view: Option<warnings_view::WarningsView>,
     /// A keep press can close the viewer; its remaining repeats must not edit the draft.
     pub(crate) suppress_warning_keep_repeat: bool,
@@ -376,6 +379,7 @@ impl BottomPane {
         Self {
             composer,
             view_stack: Vec::new(),
+            key_chord_reset_requested: false,
             warnings_view: None,
             suppress_warning_keep_repeat: false,
             questions: None,
@@ -715,6 +719,7 @@ impl BottomPane {
     }
 
     fn push_view(&mut self, view: Box<dyn BottomPaneView>) {
+        self.key_chord_reset_requested = true;
         self.view_stack.push(view);
         self.schedule_active_view_frame();
         self.request_redraw();
@@ -744,6 +749,7 @@ impl BottomPane {
     }
 
     fn on_view_stack_depth_decreased(&mut self) {
+        self.key_chord_reset_requested = true;
         if self.view_stack.is_empty() {
             self.on_active_view_complete();
         }
@@ -1061,6 +1067,7 @@ impl BottomPane {
             self.on_active_view_complete();
         }
         if needs_redraw || view_complete {
+            self.key_chord_reset_requested = true;
             self.request_redraw();
         }
     }
@@ -1510,6 +1517,7 @@ impl BottomPane {
         view.dismiss_after_child_accept = self.view_stack[index].dismiss_after_child_accept();
         self.view_stack[index] = Box::new(view);
         if replaces_active_view {
+            self.key_chord_reset_requested = true;
             self.schedule_active_view_frame();
         }
         self.request_redraw();
@@ -1618,6 +1626,7 @@ impl BottomPane {
             return false;
         }
 
+        self.key_chord_reset_requested = true;
         self.view_stack.pop();
         self.request_redraw();
         true
@@ -1636,6 +1645,7 @@ impl BottomPane {
         let removed_active_view = index + 1 == self.view_stack.len();
         self.view_stack.remove(index);
         if removed_active_view {
+            self.key_chord_reset_requested = true;
             self.schedule_active_view_frame();
         }
         self.request_redraw();
