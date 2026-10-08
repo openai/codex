@@ -669,8 +669,12 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
 
 #[cfg(unix)]
 async fn credential_snapshot_proxy() -> Result<crate::config::StartedNetworkProxy> {
-    let mut network_config = NetworkProxyConfig::default();
+    let mut network_config = NetworkProxyConfig {
+        enabled: true,
+        ..NetworkProxyConfig::default()
+    };
     network_config.set_credential_broker_enabled(/*enabled*/ true);
+    network_config.set_allowed_domains(vec!["*".to_string()]);
     network_config.allow_local_binding = Some(true);
     network_config.credential_providers.insert(
         "local".to_string(),

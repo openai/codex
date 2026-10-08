@@ -1399,7 +1399,8 @@ impl Session {
                 .user_shell_override
                 .clone()
                 .unwrap_or_else(shell::default_user_shell);
-            let credential_broker_available = config.features.enabled(Feature::NetworkProxy)
+            let credential_broker_available = (config.features.enabled(Feature::NetworkProxy)
+                || config.features.enabled(Feature::CredentialMasking))
                 && config
                     .config_layer_stack
                     .requirements()
@@ -1407,12 +1408,13 @@ impl Session {
                     .as_ref()
                     .is_none_or(|network| network.value.enabled != Some(false));
             let credential_broker_configured = credential_broker_available
-                && effective_config
-                    .get("features")
-                    .and_then(|features| features.get("network_proxy"))
-                    .and_then(|network_proxy| network_proxy.get("credential_broker"))
-                    .and_then(TomlValue::as_bool)
-                    .unwrap_or(false);
+                && (config.features.enabled(Feature::CredentialMasking)
+                    || effective_config
+                        .get("features")
+                        .and_then(|features| features.get("network_proxy"))
+                        .and_then(|network_proxy| network_proxy.get("credential_broker"))
+                        .and_then(TomlValue::as_bool)
+                        .unwrap_or(false));
             let credential_broker_active = credential_broker_configured
                 && config
                     .permissions

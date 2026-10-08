@@ -399,7 +399,11 @@ pub async fn load_config_layers_state(
                 return Err(err);
             }
         };
-        apply_credential_broker_requirements(&mut project_trust_context, &config_requirements_toml);
+        apply_credential_broker_requirements(
+            &mut project_trust_context,
+            &config_requirements_toml,
+            &trusted_broker_config,
+        );
         let project_layers = load_project_layers(
             fs,
             &cwd,
@@ -991,16 +995,32 @@ enum CredentialBrokerProjectState {
 fn apply_credential_broker_requirements(
     context: &mut ProjectTrustContext,
     requirements: &crate::ConfigRequirementsWithSources,
+    trusted_broker_config: &TomlValue,
 ) {
-    if context.credential_broker == CredentialBrokerProjectState::Unconfigured {
-        return;
-    }
-    let enabled = requirements
+    let credential_masking_enabled = requirements
         .feature_requirements
         .as_ref()
-        .and_then(|requirements| requirements.entries.get("network_proxy"))
+        .and_then(|requirements| requirements.entries.get("credential_masking"))
         .copied()
-        .unwrap_or(context.credential_broker == CredentialBrokerProjectState::Enabled);
+        .or_else(|| {
+            trusted_broker_config
+                .get("features")
+                .and_then(|features| features.get("credential_masking"))
+                .and_then(TomlValue::as_bool)
+        })
+        .unwrap_or(false);
+    if !credential_masking_enabled
+        && context.credential_broker == CredentialBrokerProjectState::Unconfigured
+    {
+        return;
+    }
+    let enabled = credential_masking_enabled
+        || requirements
+            .feature_requirements
+            .as_ref()
+            .and_then(|requirements| requirements.entries.get("network_proxy"))
+            .copied()
+            .unwrap_or(context.credential_broker == CredentialBrokerProjectState::Enabled);
     context.credential_broker = if enabled
         && requirements
             .network
@@ -1171,7 +1191,11 @@ fn sanitize_project_config(
         {
             ignored_keys.push("features.multi_agent_v2.message_board_remote".to_string());
         }
-        for key in ["respect_system_proxy", "system_proxy_fallback"] {
+        for key in [
+            "respect_system_proxy",
+            "system_proxy_fallback",
+            "credential_masking",
+        ] {
             if features.remove(key).is_some() {
                 ignored_keys.push(format!("features.{key}"));
             }

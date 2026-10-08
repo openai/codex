@@ -1,4 +1,3 @@
-use super::CredentialBrokerProjectState;
 use super::apply_credential_broker_requirements;
 use super::credential_broker_trusted_config;
 use super::discover_project_layers;
@@ -150,23 +149,30 @@ pub(super) async fn load_local_config_layers_with_overrides(
         &user_file,
     )
     .await?;
-    if trust_context.credential_broker != CredentialBrokerProjectState::Unconfigured {
-        let broker_requirements = requirements.clone().project(&[
-            vec!["features".to_string(), "network_proxy".to_string()],
-            vec![
-                "feature_requirements".to_string(),
-                "network_proxy".to_string(),
-            ],
-            vec!["experimental_network".to_string(), "enabled".to_string()],
-        ]);
-        let effective_requirements =
-            compose_requirements(broker_requirements.layers.into_iter().map(|layer| {
-                RequirementsLayerEntry::from_toml_value(layer.source, layer.toml)
-                    .with_base_dir(layer.base_dir)
-            }))?
-            .unwrap_or_default();
-        apply_credential_broker_requirements(&mut trust_context, &effective_requirements);
-    }
+    let broker_requirements = requirements.clone().project(&[
+        vec!["features".to_string(), "network_proxy".to_string()],
+        vec!["features".to_string(), "credential_masking".to_string()],
+        vec![
+            "feature_requirements".to_string(),
+            "network_proxy".to_string(),
+        ],
+        vec![
+            "feature_requirements".to_string(),
+            "credential_masking".to_string(),
+        ],
+        vec!["experimental_network".to_string(), "enabled".to_string()],
+    ]);
+    let effective_requirements =
+        compose_requirements(broker_requirements.layers.into_iter().map(|layer| {
+            RequirementsLayerEntry::from_toml_value(layer.source, layer.toml)
+                .with_base_dir(layer.base_dir)
+        }))?
+        .unwrap_or_default();
+    apply_credential_broker_requirements(
+        &mut trust_context,
+        &effective_requirements,
+        &trusted_broker_config,
+    );
     let project_layers = discover_project_layers(
         fs,
         cwd,

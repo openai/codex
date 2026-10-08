@@ -185,6 +185,140 @@ fn disabled_credential_broker_preserves_project_shell_settings() {
     );
 }
 
+#[tokio::test]
+async fn credential_masking_preserves_project_protections_in_both_loaders() {
+    use CredentialBrokerProjectState::Disabled;
+    use CredentialBrokerProjectState::Enabled;
+    use CredentialBrokerProjectState::Unconfigured;
+
+    for (features, requirements, broker_state) in [
+        (
+            "[features]\ncredential_masking=true\nnetwork_proxy=true",
+            "",
+            Enabled,
+        ),
+        (
+            "[features]\ncredential_masking=true\n[features.network_proxy]\nenabled=true",
+            "",
+            Enabled,
+        ),
+        (
+            "[features]\ncredential_masking=true",
+            "[experimental_network]\nenabled=true",
+            Enabled,
+        ),
+        (
+            "[features]\ncredential_masking=true\nnetwork_proxy=false",
+            "",
+            Enabled,
+        ),
+        (
+            "[features]\ncredential_masking=false\nnetwork_proxy=true",
+            "[features]\ncredential_masking=true",
+            Enabled,
+        ),
+        (
+            "[features]\ncredential_masking=true\nnetwork_proxy=true",
+            "[features]\ncredential_masking=false",
+            Unconfigured,
+        ),
+        (
+            "[features]\ncredential_masking=false\n[features.network_proxy]\nenabled=true\ncredential_broker=true",
+            "[features]\ncredential_masking=false",
+            Enabled,
+        ),
+        (
+            "[features]\ncredential_masking=true\nnetwork_proxy=true",
+            "[experimental_network]\nenabled=false",
+            Disabled,
+        ),
+        (
+            "[features]\ncredential_masking=false\nnetwork_proxy=true",
+            "[features]\ncredential_masking=true\n[experimental_network]\nenabled=false",
+            Disabled,
+        ),
+        (
+            "[features]\ncredential_masking=false\n[features.network_proxy]\nenabled=true\ncredential_broker=true",
+            "[experimental_network]\nenabled=false",
+            Disabled,
+        ),
+        (
+            "[features]\ncredential_masking=true\nnetwork_proxy=true",
+            "[features]\nnetwork_proxy=false\n[experimental_network]\nenabled=true",
+            Enabled,
+        ),
+    ] {
+        let tmp = tempdir().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let project = tmp.path().join("project");
+        let dot_codex = project.join(".codex");
+        std::fs::create_dir_all(&codex_home).expect("create Codex home");
+        std::fs::create_dir_all(&dot_codex).expect("create project config directory");
+        std::fs::write(project.join(".project-root"), "").expect("write project marker");
+        let project_key = TomlValue::String(project_trust_key(&project)).to_string();
+        std::fs::write(
+            codex_home.join(CONFIG_TOML_FILE),
+            format!("project_root_markers=['.project-root']\n[projects.{project_key}]\ntrust_level='trusted'\n{features}"),
+        )
+        .expect("write trusted config");
+        let project_config = "[features]\ncredential_masking=false\nnetwork_proxy=false\nshell_snapshot=false\n\
+            [shell_environment_policy]\nexperimental_use_profile=true\n\
+            [shell_environment_policy.set]\nGH_HOST='untrusted.example'\nGH_TOKEN='project-value'\n\
+            ZDOTDIR='/project-startup'\nBASH_ENV='/project-startup'\nUNCHANGED='allowed'";
+        std::fs::write(dot_codex.join(CONFIG_TOML_FILE), project_config)
+            .expect("write project config");
+        let requirements_path = tmp.path().join("requirements.toml");
+        std::fs::write(&requirements_path, requirements).expect("write requirements");
+        let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+        overrides.system_config_path = Some(tmp.path().join("missing-system.toml"));
+        overrides.system_requirements_path = Some(requirements_path);
+        let cwd = AbsolutePathBuf::from_absolute_path(&project).expect("absolute cwd");
+        let stack = load_config_layers_state(
+            &TestFileSystem,
+            &codex_home,
+            Some(cwd.clone()),
+            &[],
+            overrides.clone(),
+            &crate::NoopThreadConfigLoader,
+        )
+        .await
+        .expect("load config stack");
+        let local = local::load_local_config_layers_with_overrides(
+            &TestFileSystem,
+            &codex_home,
+            &cwd,
+            &overrides,
+        )
+        .await
+        .expect("load local layers");
+        let expected = match broker_state {
+            Enabled => {
+                "[features]\n[shell_environment_policy]\n[shell_environment_policy.set]\nUNCHANGED='allowed'".to_string()
+            }
+            Disabled => project_config
+                .replace("credential_masking=false\n", "")
+                .replace("network_proxy=false\n", ""),
+            Unconfigured => project_config.replace("credential_masking=false\n", ""),
+        };
+        let expected: TomlValue = toml::from_str(&expected).expect("expected project config");
+        let project_layer = stack
+            .all_layers_low_to_high()
+            .find(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+            .expect("project config layer");
+        assert_eq!(project_layer.config, expected, "{features}; {requirements}");
+        let local_project_layer = local
+            .config
+            .layers
+            .iter()
+            .find(|layer| matches!(layer.source, ConfigLayerSource::Project { .. }))
+            .expect("local project config layer");
+        assert_eq!(
+            local_project_layer.toml, expected,
+            "{features}; {requirements}"
+        );
+    }
+}
+
 #[test]
 fn project_environment_filters_preserve_child_policy() {
     for project_config in [
@@ -1058,8 +1192,12 @@ async fn local_layers_keep_raw_paths_order_and_legacy_requirements() {
 }
 
 #[test]
-fn project_config_cannot_change_system_proxy_routing() {
-    for key in ["respect_system_proxy", "system_proxy_fallback"] {
+fn project_config_cannot_change_system_proxy_routing_or_credential_masking() {
+    for key in [
+        "respect_system_proxy",
+        "system_proxy_fallback",
+        "credential_masking",
+    ] {
         for enabled in [false, true] {
             let mut config: TomlValue =
                 toml::from_str(&format!("[features]\n{key} = {enabled}\nplugins = true"))

@@ -209,6 +209,8 @@ pub enum Feature {
     UnboundedConnectionRetries,
     /// Start the managed network proxy for sandboxed sessions.
     NetworkProxy,
+    /// Mask credentials and inject them through an already enabled network proxy.
+    CredentialMasking,
     /// Enable managed worktree creation and repository-aware sessions.
     Worktrees,
     /// Respect host system proxy settings for Codex-owned network clients.
@@ -1412,6 +1414,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Apply network proxy restrictions to sandboxed sessions that already have network access.",
             announcement: "NEW: Network proxy can now be enabled from /experimental. Restart Codex after enabling it.",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CredentialMasking,
+        key: "credential_masking",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

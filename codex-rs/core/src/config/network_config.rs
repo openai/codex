@@ -105,9 +105,9 @@ impl PreparedNetworkConfig {
             {
                 apply_network_proxy_feature_config(&mut configured_proxy, config);
             }
-            configured_proxy.set_credential_broker_openai_base_url(credential_broker_base_url);
             configured_proxy.enabled = true;
         }
+        configured_proxy.set_credential_broker_openai_base_url(credential_broker_base_url);
         Self { configured_proxy }
     }
 

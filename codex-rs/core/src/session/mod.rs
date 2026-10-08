@@ -1946,7 +1946,14 @@ impl Session {
     ) -> ConstraintResult<Option<SessionSettingsCommit>> {
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let windows_sandbox_changed;
-        let (commit, previous_config, new_config, permission_profile_changed, mcp_inputs_changed) = {
+        let (
+            commit,
+            previous_config,
+            new_config,
+            permission_profile_changed,
+            mcp_inputs_changed,
+            credential_masking_warning,
+        ) = {
             let mut state = self.state.lock().await;
             let updated = match self.apply_session_settings(&state.session_configuration, &updates)
             {
@@ -1961,6 +1968,18 @@ impl Session {
                 return Ok(None);
             }
 
+            let credential_masking_warning = updated
+                .original_config_do_not_use
+                .credential_masking_warning(&updated.permission_profile())
+                .filter(|warning| {
+                    Some(*warning)
+                        != state
+                            .session_configuration
+                            .original_config_do_not_use
+                            .credential_masking_warning(
+                                &state.session_configuration.permission_profile(),
+                            )
+                });
             let previous_config = notify_config_contributors
                 .then(|| self.build_effective_session_config(&state.session_configuration));
             let previous_permission_profile = state.session_configuration.permission_profile();
@@ -2003,6 +2022,7 @@ impl Session {
                 new_config,
                 permission_profile_changed,
                 mcp_inputs_changed,
+                credential_masking_warning,
             )
         };
         if windows_sandbox_changed {
@@ -2016,6 +2036,16 @@ impl Session {
         if permission_profile_changed {
             self.refresh_managed_network_proxy_for_current_permission_profile()
                 .await;
+        }
+        if let Some(message) = credential_masking_warning {
+            warn!("{message}");
+            self.send_event_raw(Event {
+                id: INITIAL_SUBMIT_ID.to_owned(),
+                msg: EventMsg::Warning(WarningEvent {
+                    message: message.to_string(),
+                }),
+            })
+            .await;
         }
         if mcp_inputs_changed {
             self.schedule_mcp_prewarm();

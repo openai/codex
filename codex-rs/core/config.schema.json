@@ -854,6 +854,9 @@
             "context_management": {
               "$ref": "#/definitions/FeatureToml_for_ContextManagementConfigToml"
             },
+            "credential_masking": {
+              "type": "boolean"
+            },
             "current_time_reminder": {
               "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
             },
@@ -7124,6 +7127,9 @@
         },
         "context_management": {
           "$ref": "#/definitions/FeatureToml_for_ContextManagementConfigToml"
+        },
+        "credential_masking": {
+          "type": "boolean"
         },
         "current_time_reminder": {
           "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"

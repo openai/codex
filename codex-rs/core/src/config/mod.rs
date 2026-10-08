@@ -152,7 +152,6 @@ use std::time::Duration;
 
 use crate::config::permissions::BUILT_IN_READ_ONLY_PROFILE;
 use crate::config::permissions::BUILT_IN_WORKSPACE_PROFILE;
-use crate::config::permissions::apply_network_proxy_feature_config;
 use crate::config::permissions::default_builtin_permission_profile_name;
 use crate::config::permissions::network_proxy_config_for_profile_selection;
 use crate::config::permissions::validate_user_permission_profile_names;
@@ -587,7 +586,19 @@ fn build_network_proxy_spec(
     network_requirements: Option<Sourced<codex_config::NetworkConstraints>>,
     permission_profile: &PermissionProfile,
     environment_overrides: &HashMap<String, String>,
+    features: &ManagedFeatures,
+    feature_settings: Option<&FeaturesToml>,
 ) -> std::io::Result<Option<NetworkProxySpec>> {
+    if features.enabled(Feature::CredentialMasking) {
+        configured_network_proxy_config.set_credential_broker_enabled(/*enabled*/ true);
+        if let Some(credentials) = network_proxy_toml_config(feature_settings)
+            .and_then(|network_proxy| network_proxy.credentials.as_ref())
+        {
+            configured_network_proxy_config
+                .credential_providers
+                .clone_from(credentials);
+        }
+    }
     configured_network_proxy_config.configure_credential_broker_environment(environment_overrides);
     PreparedNetworkConfig {
         configured_proxy: configured_network_proxy_config,
@@ -4206,6 +4217,8 @@ impl Config {
             network_requirements,
             &network_permission_profile,
             &shell_environment_policy.r#set,
+            &features,
+            cfg.features.as_ref(),
         )?;
         let mut helper_readable_roots: Vec<_> = std::env::var_os("PATH")
             .as_deref()
@@ -4318,7 +4331,7 @@ impl Config {
         )
         .map_err(std::io::Error::from)?;
         let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
-        let config = Self {
+        let mut config = Self {
             plugins: cfg.plugins,
             prefer_mxc,
             model,
@@ -4617,6 +4630,10 @@ impl Config {
                 .unwrap_or_default(),
             otel,
         };
+        if let Some(message) = config.credential_masking_warning(config.permissions.permission_profile()) {
+            tracing::warn!("{message}");
+            config.startup_warnings.push(message.to_string());
+        }
         Ok(config)
         })
         .await
@@ -4726,51 +4743,84 @@ impl Config {
     ) -> std::io::Result<Option<NetworkProxySpec>> {
         let profile_allows_network_proxy =
             profile_allows_configured_network_proxy(permission_profile);
+        let cfg: ConfigToml = self
+            .config_layer_stack
+            .effective_config()
+            .try_into()
+            .map_err(|err| {
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!(
+                        "failed to read effective config for selected permission profile: {err}"
+                    ),
+                )
+            })?;
         let configured_network_proxy_config = if profile_allows_network_proxy {
-            let cfg: ConfigToml = self
-                .config_layer_stack
-                .effective_config()
-                .try_into()
-                .map_err(|err| {
-                    std::io::Error::new(
-                        ErrorKind::InvalidInput,
-                        format!(
-                            "failed to read effective config for selected permission profile: {err}"
-                        ),
-                    )
-                })?;
             let permissions = merge_managed_permission_profiles(
                 cfg.permissions.as_ref(),
                 self.config_layer_stack.requirements_toml(),
             )?;
-            let mut configured_network_proxy_config = network_proxy_config_for_profile_selection(
+            network_proxy_config_for_profile_selection(
                 permissions.as_ref(),
                 active_permission_profile.id.as_str(),
-            )?;
-            if self.features.enabled(Feature::NetworkProxy)
-                && permission_profile.network_sandbox_policy().is_enabled()
-            {
-                if let Some(network_proxy) = network_proxy_toml_config(cfg.features.as_ref()) {
-                    apply_network_proxy_feature_config(
-                        &mut configured_network_proxy_config,
-                        network_proxy,
-                    );
-                }
-                configured_network_proxy_config
-                    .set_credential_broker_openai_base_url(cfg.openai_base_url.as_deref());
-                configured_network_proxy_config.enabled = true;
-            }
-            configured_network_proxy_config
+            )?
         } else {
             NetworkProxyConfig::default()
         };
-
+        let prepared_network = PreparedNetworkConfig::from_inputs(NetworkConfigInputs {
+            configured_proxy: configured_network_proxy_config,
+            feature_enabled: profile_allows_network_proxy
+                && self.features.enabled(Feature::NetworkProxy),
+            features: cfg.features.as_ref(),
+            candidate_permission_profile: permission_profile,
+            credential_broker_base_url: cfg.openai_base_url.as_deref(),
+        });
         build_network_proxy_spec(
-            configured_network_proxy_config,
+            prepared_network.configured_proxy,
             self.config_layer_stack.requirements().network.clone(),
             permission_profile,
             &self.permissions.shell_environment_policy.r#set,
+            &self.features,
+            cfg.features.as_ref(),
         )
+    }
+
+    pub(crate) fn credential_masking_warning(
+        &self,
+        permission_profile: &PermissionProfile,
+    ) -> Option<&'static str> {
+        if !self.features.enabled(Feature::CredentialMasking) {
+            return None;
+        }
+        // The session bypasses the configured proxy for unsandboxed execution,
+        // even when managed requirements keep the proxy spec enabled.
+        if matches!(permission_profile, PermissionProfile::Disabled) {
+            return Some(
+                "Credential masking is inactive because sandboxing is disabled. Commands will receive unmasked credentials. Select a sandboxed permission profile to use credential masking.",
+            );
+        }
+        if self
+            .permissions
+            .network
+            .as_ref()
+            .is_some_and(NetworkProxySpec::credential_broker_enabled)
+        {
+            return None;
+        }
+        if self
+            .permissions
+            .network
+            .as_ref()
+            .is_some_and(NetworkProxySpec::enabled)
+        {
+            Some(
+                "Credential masking is inactive because shell environment overrides contain conflicting case-insensitive provider keys. Commands will receive unmasked credentials. Remove the conflicting entries from `shell_environment_policy.set`.",
+            )
+        } else {
+            Some(
+                "Credential masking is inactive because the network proxy is disabled. Commands will receive unmasked credentials. Enable `features.network_proxy` or configure managed network requirements to use credential masking.",
+            )
+        }
     }
 
     pub fn bundled_skills_enabled(&self) -> bool {

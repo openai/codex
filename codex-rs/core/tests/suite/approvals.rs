@@ -2,6 +2,8 @@
 
 use anyhow::Context;
 use anyhow::Result;
+#[cfg(unix)]
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::CodexThread;
 use codex_core::TurnInputRequest;
@@ -17,6 +19,8 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+#[cfg(unix)]
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -3115,12 +3119,23 @@ ZDOTDIR = "{}"
 #[test_case("failed")]
 #[test_case("heredoc")]
 #[test_case("enabled")]
+#[test_case("flat_feature")]
+#[test_case("flat_profile_transition")]
+#[test_case("flat_yolo")]
+#[test_case("flat_yolo_profile_transition")]
+#[test_case("flat_yolo_unnamed_transition")]
+#[test_case("flat_yolo_legacy_transition")]
+#[test_case("flat_managed")]
+#[test_case("flat_no_proxy")]
+#[test_case("flat_disabled_proxy")]
+#[test_case("flat_policy_without_proxy")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn brokered_shell_snapshot_fallback(mode: &'static str) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     const REAL_GITHUB_TOKEN: &str =
         "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const REAL_CUSTOM_TOKEN: &str = "custom_abcdefghijklmnopqrstuvwx";
 
     let Some(bash) = codex_core::shell::get_shell(codex_core::shell::ShellType::Bash) else {
         return Ok(());
@@ -3139,17 +3154,58 @@ async fn brokered_shell_snapshot_fallback(mode: &'static str) -> Result<()> {
              EOF\n}\nexport -f brokered_heredoc\n"
                 .to_string()
         } else {
-            "shopt -s extglob expand_aliases\nexport CORP_REGION=west\ncorp_auth() { case \"$CORP_REGION\" in @(west|east)) printf '%s\\n' \"$CORP_REGION\" \"$GH_TOKEN\" ;; esac; }\nalias corp_login=corp_auth\n".to_string()
+            let mut startup = "shopt -s extglob expand_aliases\nexport CORP_REGION=west\ncorp_auth() { case \"$CORP_REGION\" in @(west|east)) printf '%s\\n' \"$CORP_REGION\" \"$GH_TOKEN\" ;; esac; }\nalias corp_login=corp_auth\n".to_string();
+            if mode == "flat_managed" {
+                startup.push_str(&format!("export CUSTOM_API_KEY='{REAL_CUSTOM_TOKEN}'\n"));
+            }
+            startup
         },
     )?;
 
+    let features = match mode {
+        "flat_feature"
+        | "flat_profile_transition"
+        | "flat_disabled_proxy"
+        | "flat_yolo"
+        | "flat_yolo_profile_transition"
+        | "flat_yolo_unnamed_transition"
+        | "flat_yolo_legacy_transition" => "credential_masking = true, network_proxy = true",
+        "flat_managed" => concat!(
+            "credential_masking = true, network_proxy = { enabled = false, ",
+            "credentials = { custom = { env = [\"CUSTOM_API_KEY\"], ",
+            "patterns = [\"custom_[a-z]{24}\"], ",
+            "url_prefixes = [\"https://custom.example.test\"] } } }",
+        ),
+        "flat_no_proxy" | "flat_policy_without_proxy" => "credential_masking = true",
+        _ => "network_proxy = { enabled = true, credential_broker = true }",
+    };
+    let network_enabled = !matches!(mode, "flat_no_proxy" | "flat_policy_without_proxy");
+    let cloud_config_bundle = match mode {
+        "flat_no_proxy" | "flat_profile_transition" => {
+            CloudConfigBundleFixture::loader_with_enterprise_requirement("")
+        }
+        "flat_disabled_proxy" => CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            "[experimental_network]\nenabled = false",
+        ),
+        "flat_policy_without_proxy" => {
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                "[experimental_network]\nallow_local_binding = true",
+            )
+        }
+        _ => managed_network_requirements_loader(),
+    };
     let home = Arc::new(TempDir::new()?);
+    let default_permissions = if mode == "flat_yolo" {
+        ":danger-full-access"
+    } else {
+        "brokered"
+    };
     fs::write(
         home.path().join("config.toml"),
         format!(
-            r#"default_permissions = "brokered"
-features = {{ network_proxy = {{ enabled = true, credential_broker = true }} }}
-permissions = {{ brokered = {{ extends = ":workspace", network = {{ enabled = true, allow_local_binding = true }} }} }}
+            r#"default_permissions = "{default_permissions}"
+features = {{ {features} }}
+permissions = {{ brokered = {{ extends = ":workspace", network = {{ enabled = {network_enabled}, allow_local_binding = true }} }} }}
 
 [shell_environment_policy.set]
 BASH_ENV = "{}"
@@ -3179,9 +3235,15 @@ GH_TOKEN = "{REAL_GITHUB_TOKEN}"
     let mut builder = test_codex()
         .with_home(home)
         .with_user_shell(bash)
-        .with_cloud_config_bundle(managed_network_requirements_loader())
+        .with_cloud_config_bundle(cloud_config_bundle)
         .with_config(move |config| {
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            if mode == "flat_managed" {
+                config
+                    .features
+                    .enable(Feature::ShellSnapshotV2)
+                    .expect("test config should allow executor-owned shell snapshots");
+            }
             if mode == "disabled" {
                 config.features.disable(Feature::ShellSnapshot)
             } else {
@@ -3190,6 +3252,80 @@ GH_TOKEN = "{REAL_GITHUB_TOKEN}"
             .expect("test config should allow ShellSnapshot override");
         });
     let test = builder.build(&server).await?;
+    if mode.starts_with("flat_yolo") {
+        assert!(
+            test.config.permissions.network.is_some(),
+            "managed requirements retain the configured proxy in YOLO mode"
+        );
+        assert_eq!(
+            test.config
+                .startup_warnings
+                .iter()
+                .any(|warning| warning.starts_with("Credential masking is inactive")),
+            mode == "flat_yolo",
+        );
+        if mode != "flat_yolo" {
+            test.codex
+                .update_thread_settings(ThreadSettingsOverrides {
+                    permission_profile: (mode != "flat_yolo_legacy_transition")
+                        .then_some(PermissionProfile::Disabled),
+                    active_permission_profile: (mode == "flat_yolo_profile_transition").then_some(
+                        ActivePermissionProfile {
+                            id: ":danger-full-access".to_string(),
+                            extends: None,
+                        },
+                    ),
+                    sandbox_policy: (mode == "flat_yolo_legacy_transition")
+                        .then_some(SandboxPolicy::DangerFullAccess),
+                    ..Default::default()
+                })
+                .await?;
+        }
+        let warning = wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::Warning(warning) if warning.message.starts_with("Credential masking is inactive"))
+        })
+        .await;
+        let EventMsg::Warning(warning) = warning else {
+            panic!("expected credential masking warning");
+        };
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(warning.message, @r"Credential masking is inactive because sandboxing is disabled. Commands will receive unmasked credentials. Select a sandboxed permission profile to use credential masking.");
+        }
+    }
+    if mode == "flat_profile_transition" {
+        assert!(
+            !test
+                .config
+                .startup_warnings
+                .iter()
+                .any(|warning| warning.starts_with("Credential masking is inactive"))
+        );
+        test.codex
+            .update_thread_settings(ThreadSettingsOverrides {
+                permission_profile: Some(PermissionProfile::read_only()),
+                active_permission_profile: Some(ActivePermissionProfile::read_only()),
+                ..Default::default()
+            })
+            .await?;
+    }
+    if matches!(
+        mode,
+        "flat_no_proxy"
+            | "flat_disabled_proxy"
+            | "flat_policy_without_proxy"
+            | "flat_profile_transition"
+    ) {
+        let warning = wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::Warning(warning) if warning.message.starts_with("Credential masking is inactive"))
+        })
+        .await;
+        let EventMsg::Warning(warning) = warning else {
+            panic!("expected credential masking warning");
+        };
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(warning.message, @r"Credential masking is inactive because the network proxy is disabled. Commands will receive unmasked credentials. Enable `features.network_proxy` or configure managed network requirements to use credential masking.");
+        }
+    }
 
     let call_id = "escalated-brokered-shell-startup";
     let command = if mode == "heredoc" {
@@ -3198,7 +3334,9 @@ GH_TOKEN = "{REAL_GITHUB_TOKEN}"
         format!(
             "cat {snapshot_dir}/*.sh > captured-snapshot && brokered_heredoc && printf '%s\\n' \"$GH_TOKEN\""
         )
-    } else if mode == "enabled" {
+    } else if mode == "flat_managed" {
+        "corp_login && printf '%s\\n' \"$CUSTOM_API_KEY\"".to_string()
+    } else if matches!(mode, "enabled" | "flat_feature") {
         "corp_login".to_string()
     } else {
         "printenv GH_TOKEN".to_string()
@@ -3327,13 +3465,18 @@ GH_TOKEN = "{REAL_GITHUB_TOKEN}"
         assert!(snapshot.contains("Authorization: ${GH_TOKEN}"));
         return Ok(());
     }
-    if mode == "enabled" {
+    if matches!(mode, "enabled" | "flat_feature" | "flat_managed") {
         assert_eq!(result.exit_code, Some(0), "command failed: {result:?}");
         let values = result.stdout.lines().collect::<Vec<_>>();
-        assert_eq!(values.len(), 2);
+        assert_eq!(values.len(), if mode == "flat_managed" { 3 } else { 2 });
         assert_eq!(values[0], "west");
         assert!(values[1].starts_with("ghp_"));
         assert_ne!(values[1], REAL_GITHUB_TOKEN);
+        if mode == "flat_managed" {
+            assert!(values[2].starts_with("custom_"));
+            assert_eq!(values[2].len(), REAL_CUSTOM_TOKEN.len());
+            assert_ne!(values[2], REAL_CUSTOM_TOKEN);
+        }
         return Ok(());
     }
     assert_eq!(
