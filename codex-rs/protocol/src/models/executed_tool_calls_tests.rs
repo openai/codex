@@ -225,7 +225,7 @@ fn tool_call_completeness_is_host_only_and_fail_closed() -> Result<()> {
                     .executed_tool_call_metadata()
                     .unwrap()
                     .tool_calls_complete),
-                [None, (!same_cell).then_some(true)],
+                [Some(true), Some(true)],
             );
         }
     }
@@ -529,7 +529,7 @@ fn message_budget_removes_generic_fields_before_resources_in_the_same_output() {
 }
 
 #[test]
-fn message_budget_preserves_names_and_turn_metadata_and_invalidates_shared_cell_completion() {
+fn message_budget_preserves_call_inventory_when_arguments_are_truncated() {
     let arguments = serde_json::json!({"payload": "é".repeat(256)});
     let argument_bytes = serde_json::to_vec(&arguments).unwrap().len();
     let mut exec = output("exec");
@@ -555,11 +555,11 @@ fn message_budget_preserves_names_and_turn_metadata_and_invalidates_shared_cell_
         .iter()
         .map(executed_tool_call_metadata_bytes)
         .sum::<usize>();
-    // The middle case needs the sibling wait's completeness bytes to fit after
-    // truncating only the first call; the second call's arguments must survive.
+    // The first two cases fit after truncating only the first call's arguments;
+    // the second call's arguments and both completion claims must survive.
     for budget in [
         original_metadata_bytes - 64,
-        original_metadata_bytes - (argument_bytes - 32),
+        original_metadata_bytes - (argument_bytes - 128),
         0,
     ] {
         let mut items = original.clone();
@@ -576,9 +576,6 @@ fn message_budget_preserves_names_and_turn_metadata_and_invalidates_shared_cell_
                     argument_bytes - (original_metadata_bytes - budget),
                     /*omitted_calls*/ None,
                 );
-            for item in &mut expected {
-                item.clear_tool_calls_complete();
-            }
         }
         bound_executed_tool_calls_for_message(&mut items, budget);
         assert_eq!(items, expected);
@@ -591,6 +588,29 @@ fn message_budget_preserves_names_and_turn_metadata_and_invalidates_shared_cell_
             serde_json::to_vec(&original).unwrap().len()
                 - serde_json::to_vec(&items).unwrap().len(),
             original_metadata_bytes - bounded_metadata_bytes,
+        );
+    }
+}
+
+#[test]
+fn inventory_loss_still_clears_completeness() {
+    for (omitted_calls, original_name_bytes) in [(Some(1), None), (None, Some(20))] {
+        let mut call = ExecutedToolCall::new("test_tool".to_string(), serde_json::json!({}));
+        call.set_truncation_with_name(
+            /*original_bytes*/ 9_000,
+            /*max_bytes*/ 0,
+            omitted_calls,
+            original_name_bytes,
+        );
+        let mut item = output("call");
+        item.append_executed_tool_calls(vec![call]);
+        item.mark_tool_calls_complete();
+        normalize_executed_tool_call_arguments(std::slice::from_mut(&mut item));
+        assert_eq!(
+            item.executed_tool_call_metadata()
+                .unwrap()
+                .tool_calls_complete,
+            None
         );
     }
 }

@@ -57,14 +57,14 @@ pub(super) fn tool_call_metadata(mut item: Value) -> Value {
 #[test_case(false; "http")]
 #[test_case(true; "websocket")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn message_budget_sheds_inventory_without_changing_tool_results_or_history(
+async fn message_budget_sheds_arguments_without_losing_inventory_completeness(
     websocket: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let message_limit = 15 * 1024 * 1024;
     let call_count = 16;
     // Each argument fits 8 KiB and all observations fit Direct's 1 MiB budget.
-    // Only the final message budget should shed this inventory. HTTP includes
+    // Only the final message budget should shed recorded arguments. HTTP includes
     // the original call arguments; a WebSocket delta already has those upstream.
     let arguments = json!({"plan": [{"step": "x".repeat(7 * 1024), "status": "in_progress"}]});
     assert!(arguments.to_string().len() < 8 * 1024);
@@ -284,6 +284,7 @@ async fn message_budget_sheds_inventory_without_changing_tool_results_or_history
                             "max_bytes": max_bytes,
                         }},
                     }],
+                    "tool_calls_complete": true,
                 })
             );
             truncated_arguments += 1;
@@ -629,7 +630,7 @@ async fn direct_function_and_tool_search_mark_complete_attempts(
                 .get("_codex_executed_tool_call_truncated")
                 .is_some()
         );
-        assert!(metadata.get("tool_calls_complete").is_none());
+        assert_eq!(metadata["tool_calls_complete"], true);
     }
     for index in 0..budget_calls {
         let output = request.function_call_output(&format!("plan-budget-{index}"));

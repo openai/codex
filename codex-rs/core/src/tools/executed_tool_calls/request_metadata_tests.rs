@@ -928,10 +928,10 @@ fn tool_call_completeness_survives_waits_without_changing_deltas() {
             } else if index == 3 {
                 recorder.finish_cell_recording(&cell_id);
             }
-            if index < 2 || index == 3 && !truncated {
+            if index < 2 || index == 3 {
                 expected_output.set_tool_call_cell_id("exec");
             }
-            if index == 3 && !truncated {
+            if index == 3 {
                 expected_output.mark_tool_calls_complete();
             }
             expected.push(expected_output);
@@ -1156,7 +1156,7 @@ fn completeness_rejects_direct_id_collision_and_late_calls() {
 }
 
 #[test]
-fn newly_normalized_arguments_keep_later_wait_incomplete() {
+fn newly_normalized_arguments_preserve_later_wait_completeness() {
     let recorder = new_recorder(InitialHistory::New);
     let cell = CellId::new("active-cell".to_string());
     recorder.start_cell(&cell, "exec");
@@ -1195,7 +1195,7 @@ fn newly_normalized_arguments_keep_later_wait_incomplete() {
     recorder.finish_cell_recording(&cell);
     let mut wait = [wait_input("wait", &cell), output("wait")];
     recorder.attach_to_prompt(&mut wait, &mut HashMap::new());
-    assert_eq!(tool_calls_complete(&wait[1]), None);
+    assert_eq!(tool_calls_complete(&wait[1]), Some(true));
 }
 
 #[test]
@@ -1360,6 +1360,8 @@ fn late_truncated_metadata_survives_subsequent_waits() {
         recorder.finish_cell_recording(&cell);
         history.extend([wait_input("wait-2", &cell), output("wait-2")]);
         expected.extend([wait_input("wait-2", &cell), output("wait-2")]);
+        expected[5].set_tool_call_cell_id("exec");
+        expected[5].mark_tool_calls_complete();
         recorder.attach_pending_to_prompt(&mut history, &mut retry_cache);
         assert_eq!(history, expected);
     }
@@ -1385,15 +1387,19 @@ fn late_truncated_metadata_survives_close_before_first_attachment() {
     let mut expected = history.clone();
     expected[1].append_executed_tool_calls(vec![call]);
     expected[1].set_tool_call_cell_id("exec");
+    expected[1].mark_tool_calls_complete();
     for wait in ["wait-1", "wait-2"] {
         recorder.finish_cell_recording(&cell);
         recorder.register_cell(&cell, wait);
         history.extend([wait_input(wait, &cell), output(wait)]);
-        expected.extend([wait_input(wait, &cell), output(wait)]);
+        let mut expected_output = output(wait);
+        expected_output.set_tool_call_cell_id("exec");
+        expected_output.mark_tool_calls_complete();
+        expected.extend([wait_input(wait, &cell), expected_output]);
         let mut request = history.clone();
         recorder.attach_pending_to_prompt(&mut request, &mut retry_cache);
         assert_eq!(request, expected);
-        assert_eq!(tool_calls_complete(&request[1]), None);
+        assert_eq!(tool_calls_complete(&request[1]), Some(true));
     }
 }
 
@@ -1765,7 +1771,7 @@ fn finished_cells_without_more_waits_do_not_block_new_calls() {
 fn wire_inventory_loss_keeps_later_wait_incomplete() {
     for (scenario, expect_complete) in [
         ("metadata_only", true),
-        ("arguments", false),
+        ("arguments", true),
         ("name", false),
         ("removed", false),
     ] {

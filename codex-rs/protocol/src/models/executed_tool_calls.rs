@@ -71,9 +71,21 @@ impl InternalChatMessageMetadataPassthrough {
                 })
         })
     }
+
+    /// Compares the complete ordered call inventory, independently of recorded arguments.
+    pub fn has_same_tool_call_inventory(&self, calls: &[ExecutedToolCall]) -> bool {
+        self.executed_tool_calls.as_ref().is_some_and(|recorded| {
+            recorded.len() == calls.len()
+                && recorded.iter().zip(calls).all(|(recorded, call)| {
+                    recorded.name == call.name
+                        && recorded.has_complete_inventory()
+                        && call.has_complete_inventory()
+                })
+        })
+    }
 }
 
-/// Bounds recorded arguments and clears completion when any call in a cell is truncated.
+/// Bounds recorded arguments, preserving completion unless calls or tool names were lost.
 /// Returns cells whose arguments were newly truncated. Ordinary tool-call arguments and
 /// outputs are not changed.
 pub fn normalize_executed_tool_call_arguments(items: &mut [ResponseItem]) -> HashSet<String> {
@@ -86,7 +98,7 @@ pub fn normalize_executed_tool_call_arguments(items: &mut [ResponseItem]) -> Has
         else {
             continue;
         };
-        let mut truncated = false;
+        let mut inventory_lost = false;
         let mut newly_truncated = false;
         for call in metadata.executed_tool_calls.iter_mut().flatten() {
             let argument_bytes = serde_json::to_vec(&call.arguments)
@@ -101,9 +113,9 @@ pub fn normalize_executed_tool_call_arguments(items: &mut [ResponseItem]) -> Has
                 );
                 newly_truncated = true;
             }
-            truncated |= call.truncation().is_some();
+            inventory_lost |= !call.has_complete_inventory();
         }
-        if truncated {
+        if inventory_lost {
             metadata.tool_calls_complete = None;
             damaged_cells.extend(metadata.cell_id.clone());
         }
@@ -134,12 +146,7 @@ pub fn bound_executed_tool_calls_for_message(
     if metadata_bytes(items) > max_metadata_bytes {
         let overage_bytes = shed_result_sources(items, max_metadata_bytes);
         if overage_bytes > 0 {
-            truncate_call_arguments_to_fit(
-                items,
-                max_metadata_bytes,
-                overage_bytes,
-                &mut damaged_cells,
-            );
+            truncate_call_arguments_to_fit(items, max_metadata_bytes, overage_bytes);
         }
         remaining_bytes = metadata_bytes(items);
     }
@@ -310,7 +317,6 @@ fn truncate_call_arguments_to_fit(
     items: &mut [ResponseItem],
     max_metadata_bytes: usize,
     mut overage_bytes: usize,
-    damaged_cells: &mut HashSet<String>,
 ) {
     // A large outgoing message should not lose the other tool names in a
     // cell when replacing one call's arguments is enough to make it fit.
@@ -344,17 +350,12 @@ fn truncate_call_arguments_to_fit(
                 if truncated_bytes < original_bytes {
                     call.arguments = truncated;
                     arguments_changed = true;
-                    metadata.tool_calls_complete = None;
-                    damaged_cells.extend(metadata.cell_id.clone());
                     break;
                 }
             }
             if !arguments_changed {
                 break;
             }
-            // Losing one call's arguments invalidates every output in that
-            // cell. Count those removed fields before trimming another call.
-            clear_damaged_cell_completeness(items, damaged_cells);
             overage_bytes = metadata_bytes(items).saturating_sub(max_metadata_bytes);
         }
     }
@@ -378,12 +379,19 @@ fn distribute_remaining_budget(
         let item_budget = remaining_bytes / remaining_items;
         if item_bytes > item_budget {
             // Remember the cell before a too-small share removes its metadata entirely.
-            damaged_cells.extend(
-                item.executed_tool_call_metadata()
-                    .and_then(|metadata| metadata.cell_id.clone()),
-            );
-            item.clear_tool_calls_complete();
+            let cell_id = item
+                .executed_tool_call_metadata()
+                .and_then(|metadata| metadata.cell_id.clone());
             item.bound_executed_tool_calls_with_budget(item_budget);
+            if item.executed_tool_call_metadata().is_none_or(|metadata| {
+                metadata
+                    .executed_tool_calls
+                    .as_ref()
+                    .is_none_or(|calls| !calls.iter().all(ExecutedToolCall::has_complete_inventory))
+            }) {
+                item.clear_tool_calls_complete();
+                damaged_cells.extend(cell_id);
+            }
         }
         remaining_bytes = remaining_bytes.saturating_sub(executed_tool_call_metadata_bytes(item));
         remaining_items -= 1;
@@ -618,6 +626,14 @@ impl ExecutedToolCall {
         }
     }
 
+    /// Whether this entry retains its invocation and full tool name, regardless of arguments.
+    pub fn has_complete_inventory(&self) -> bool {
+        self.truncation().is_none_or(|truncation| {
+            truncation.omitted_calls.unwrap_or_default() == 0
+                && truncation.original_name_bytes.is_none()
+        })
+    }
+
     fn set_truncation(
         &mut self,
         original_bytes: usize,
@@ -686,7 +702,7 @@ impl ResponseItem {
         }
     }
 
-    /// Discards a completion claim when the host cannot retain its full evidence.
+    /// Discards a completion claim when the host cannot retain the full call inventory.
     pub fn clear_tool_calls_complete(&mut self) {
         if let Some(metadata) = self
             .internal_chat_message_metadata_passthrough_mut()

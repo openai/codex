@@ -27,7 +27,7 @@ impl ExecutedToolCalls {
         retry_cache: &mut ExecutedToolCallCache,
         request_kind: RequestKind,
     ) {
-        let recording = {
+        {
             let mut state = self.lock_state();
             let Some(state) = state.as_mut() else {
                 // Disabling capture also stops replaying Direct records from history.
@@ -38,7 +38,7 @@ impl ExecutedToolCalls {
                 if let Some(call) = item.id().and_then(|id| state.direct_calls.get(id)) {
                     item.clear_executed_tool_calls();
                     item.append_executed_tool_calls(vec![call.clone()]);
-                    if matches!(call.arguments(), ExecutedToolCallArguments::Raw(_)) {
+                    if call.has_complete_inventory() {
                         item.mark_tool_calls_complete();
                     }
                 }
@@ -53,23 +53,11 @@ impl ExecutedToolCalls {
                 state.direct_calls.retain(|id, _| output_ids.contains(id));
             }
             Self::attach_pending_to_prompt_with_state(state, items, retry_cache, request_kind);
-            Arc::downgrade(&state.recording)
-        };
-
-        // Existing history can contain arguments recorded by an older client. Keep the
-        // per-call limit, and prevent newly truncated cells from claiming completeness
-        // on a later wait. Do the serialization outside the recorder lock.
-        let truncated_origins = normalize_executed_tool_call_arguments(items);
-        if !truncated_origins.is_empty() {
-            let mut state = self.lock_state();
-            if let Some(state) = state.as_mut()
-                && recording.ptr_eq(&Arc::downgrade(&state.recording))
-            {
-                for origin in truncated_origins {
-                    state.invalidate_origin(&origin);
-                }
-            }
         }
+
+        // Argument truncation preserves inventory completeness; omitted calls or
+        // names still invalidate completion across the cell's outputs.
+        normalize_executed_tool_call_arguments(items);
     }
 
     fn attach_pending_to_prompt_with_state(

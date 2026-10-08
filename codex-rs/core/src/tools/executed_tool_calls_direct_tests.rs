@@ -278,5 +278,5 @@ async fn direct_budget_counts_the_encoded_argument_before_it_enters_history() {
         arguments["_codex_executed_tool_call_truncated"]["original_bytes"],
         wire_bytes,
     );
-    assert!(metadata.get("tool_calls_complete").is_none());
+    assert_eq!(metadata["tool_calls_complete"], true);
 }

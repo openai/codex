@@ -1653,11 +1653,10 @@ await new Promise(() => {});
                     .iter()
                     .all(|item| item["call_id"] != "call-1")
             );
-            assert!(
-                final_request.function_call_output("call-2")
-                    ["internal_chat_message_metadata_passthrough"]
-                    .get("tool_calls_complete")
-                    .is_none()
+            assert_eq!(
+                final_request.function_call_output("call-2")["internal_chat_message_metadata_passthrough"]
+                    ["tool_calls_complete"],
+                true
             );
         }
     }
@@ -3597,7 +3596,7 @@ async fn code_mode_complete_call_survives_unrelated_truncation() -> Result<()> {
                 .get("_codex_executed_tool_call_truncated")
                 .is_some()))
     );
-    assert!(overflow.get("tool_calls_complete").is_none());
+    assert_eq!(overflow["tool_calls_complete"], true);
 
     let complete =
         &request.custom_tool_call_output("call-2")["internal_chat_message_metadata_passthrough"];
@@ -9164,7 +9163,7 @@ text(JSON.stringify({
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_oversized_websocket_yield_keeps_later_wait_incomplete() -> Result<()> {
+async fn code_mode_argument_truncation_preserves_later_wait_completeness() -> Result<()> {
     skip_if_no_network!(Ok(()));
     const LIMIT: usize = 15 * 1024 * 1024;
     const PROMPT: &str = "Record a call, yield, then stop";
@@ -9309,7 +9308,7 @@ await new Promise(() => {});
     let terminal = find_output(&terminal_request, "wait-a");
     assert_eq!(
         terminal["internal_chat_message_metadata_passthrough"].get("tool_calls_complete"),
-        None
+        Some(&Value::Bool(true))
     );
 
     // Compare ordinary outputs against the live session history. No actual

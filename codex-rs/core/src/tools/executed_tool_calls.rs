@@ -294,7 +294,7 @@ impl ExecutedToolCalls {
     }
 
     /// A later wait cannot claim a complete inventory if an earlier wire copy
-    /// lost recorded calls or arguments from the same Code Mode cell.
+    /// lost recorded calls or tool names from the same Code Mode cell.
     pub(crate) fn invalidate_wire_inventory_loss(
         &self,
         original: &[ResponseItem],
@@ -321,7 +321,7 @@ impl ExecutedToolCalls {
             };
             if bounded
                 .executed_tool_call_metadata()
-                .is_none_or(|bounded| !bounded.has_same_tool_calls(calls))
+                .is_none_or(|bounded| !bounded.has_same_tool_call_inventory(calls))
             {
                 state.invalidate_origin(origin);
             }
@@ -415,7 +415,7 @@ impl ExecutedToolCalls {
         if let Some(id) = item.id() {
             state.direct_calls.insert(id.clone(), call.clone());
         }
-        let complete = matches!(call.arguments(), ExecutedToolCallArguments::Raw(_));
+        let complete = call.has_complete_inventory();
         item.append_executed_tool_calls(vec![call]);
         if complete {
             item.mark_tool_calls_complete();
@@ -580,12 +580,14 @@ impl ExecutedToolCalls {
             ExecutedToolCallArguments::Truncated { .. }
         );
         cell.observed_truncated_call |= truncated;
-        cell.completion =
-            if cell.completion == CellCompletion::Recording && !duplicate_call_id && !truncated {
-                CellCompletion::Recording
-            } else {
-                CellCompletion::Incomplete
-            };
+        cell.completion = if cell.completion == CellCompletion::Recording
+            && !duplicate_call_id
+            && call.has_complete_inventory()
+        {
+            CellCompletion::Recording
+        } else {
+            CellCompletion::Incomplete
+        };
         cell.pending_calls.insert(call_id, call);
         if !duplicate_call_id {
             state.pending_nested_calls += 1;
