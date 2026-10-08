@@ -975,6 +975,7 @@ interrupt_message = false
             windows: Some(WindowsRequirementsToml {
                 allowed_sandbox_implementations: None,
                 allow_mxc: None,
+                require_mxc: None,
             }),
             additional_developer_instructions: None,
             guardian_policy_config: Some("Use the managed guardian policy.".to_string()),

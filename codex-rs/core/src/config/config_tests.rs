@@ -11094,8 +11094,12 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
     Ok(())
 }
 
+#[test_case::test_case(false; "optional")]
+#[test_case::test_case(true; "required")]
 #[tokio::test]
-async fn local_mxc_preference_preserves_configured_backend() -> anyhow::Result<()> {
+async fn local_mxc_preference_preserves_configured_backend(
+    require_mxc: bool,
+) -> anyhow::Result<()> {
     use codex_sandboxing::SandboxType::WindowsMxc;
     use codex_sandboxing::SandboxType::WindowsRestrictedToken as RestrictedToken;
 
@@ -11122,16 +11126,53 @@ async fn local_mxc_preference_preserves_configured_backend() -> anyhow::Result<(
             codex_home.path().join(CONFIG_TOML_FILE),
             toml::to_string(&cfg)?,
         )?;
-        let mut config = ConfigBuilder::without_managed_config_for_tests()
+        let loaded = ConfigBuilder::without_managed_config_for_tests()
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(codex_home.path().to_path_buf()))
             .cloud_config_bundle(
                 CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
-                    "[windows]\nallow_mxc = {allow_mxc}\n"
+                    "[windows]\nallow_mxc = {allow_mxc}\nrequire_mxc = {require_mxc}\n"
                 )),
             )
             .build()
             .await?;
+        let mut config = Config::rebuild_with_session_layers(
+            &loaded.config_layer_stack,
+            loaded.cwd.to_path_buf(),
+            &loaded.config_layer_stack,
+            loaded.codex_home.clone(),
+            /*default_zsh_path*/ None,
+        )
+        .await?;
+        let mut caller_config = config.clone();
+        caller_config.config_layer_stack = ConfigLayerStack::default();
+        caller_config.prefer_mxc = false;
+        caller_config.permissions.windows_sandbox_type = RestrictedToken;
+        assert_eq!(
+            caller_config
+                .validate_windows_mxc_requirement_from(&config)
+                .is_err(),
+            cfg!(windows) && require_mxc,
+        );
+        let result = config.validate_windows_mxc_requirement();
+        caller_config.config_layer_stack = config.config_layer_stack.clone();
+        assert_eq!(
+            config
+                .resolve_runtime_refresh(&caller_config, RuntimeConfigRefresh::Mcp)
+                .is_err(),
+            result.is_err(),
+        );
+        if cfg!(windows)
+            && require_mxc
+            && mode != "mxc"
+            && !(prefer && binding && allow_mxc && codex_sandboxing::windows_mxc_available())
+        {
+            let error = result.expect_err("MXC must already be selected");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(error.to_string().contains("windows.require_mxc = true"));
+            continue;
+        }
+        result?;
         assert_eq!(
             config_allows_mxc(
                 &config

@@ -1,5 +1,6 @@
 //! Resolves refreshable MCP inputs without rebuilding unrelated session configuration.
 //! Existing sessions refresh ordinary MCP state without gaining enterprise authority.
+//! Validate the retained backend after applying the refreshable requirements.
 
 use crate::config::Config;
 use crate::config::ManagedFeatures;
@@ -168,6 +169,7 @@ impl Config {
         if enterprise_retired {
             config.disable_mcp_enterprise_auth();
         }
+        config.validate_windows_mxc_requirement()?;
         Ok(config)
     }
 

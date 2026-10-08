@@ -872,6 +872,8 @@ pub struct WindowsRequirementsToml {
     pub allowed_sandbox_implementations: Option<Vec<WindowsSandboxImplementationToml>>,
     /// False blocks both explicit MXC configuration and automatic selection.
     pub allow_mxc: Option<bool>,
+    /// Require MXC as the selected local Windows backend.
+    pub require_mxc: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -883,7 +885,9 @@ pub enum WindowsSandboxImplementationToml {
 
 impl WindowsRequirementsToml {
     pub fn is_empty(&self) -> bool {
-        self.allowed_sandbox_implementations.is_none() && self.allow_mxc.is_none()
+        self.allowed_sandbox_implementations.is_none()
+            && self.allow_mxc.is_none()
+            && self.require_mxc.is_none()
     }
 }
 
@@ -1927,6 +1931,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                     WindowsRequirementsToml {
                         allowed_sandbox_implementations: Some(implementations),
                         allow_mxc: _,
+                        require_mxc: _,
                     },
                 source: requirement_source,
             }) => {
@@ -1973,6 +1978,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                     WindowsRequirementsToml {
                         allowed_sandbox_implementations: None,
                         allow_mxc: _,
+                        require_mxc: _,
                     },
                 ..
             })
@@ -2850,6 +2856,7 @@ mod tests {
         let windows = WindowsRequirementsToml {
             allowed_sandbox_implementations: Some(vec![WindowsSandboxImplementationToml::Elevated]),
             allow_mxc: None,
+            require_mxc: Some(true),
         };
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
@@ -3804,6 +3811,9 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn deserialize_allowed_windows_sandbox_implementations() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str("[windows]\nrequire_mxc = true")?;
+        assert!(!requirements.is_empty());
+
         let toml_str = r#"
             [windows]
             allowed_sandbox_implementations = ["elevated"]

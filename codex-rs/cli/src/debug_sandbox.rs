@@ -754,7 +754,9 @@ async fn build_debug_sandbox_config_with_loader_overrides(
             .codex_home(codex_home.clone())
             .fallback_cwd(Some(codex_home));
     }
-    builder.build().await
+    let config = builder.build().await?;
+    config.validate_windows_mxc_requirement()?;
+    Ok(config)
 }
 
 fn config_uses_permission_profiles(config: &Config) -> bool {

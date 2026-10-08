@@ -399,6 +399,10 @@ impl ConfigManager {
             cwd,
         )
         .await
+        .and_then(|config| {
+            config.validate_windows_mxc_requirement()?;
+            Ok(config)
+        })
     }
 
     /// Reload sources using the task's session flags before materializing config.
@@ -437,6 +441,10 @@ impl ConfigManager {
             Some(cwd.to_path_buf()),
         )
         .await
+        .and_then(|config| {
+            config.validate_windows_mxc_requirement()?;
+            Ok(config)
+        })
     }
 
     #[instrument(level = "trace", skip_all)]

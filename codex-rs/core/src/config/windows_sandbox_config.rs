@@ -1,6 +1,7 @@
 //! Configured Windows sandbox modes and the effective local backend.
 //! Keep the configured backend for remote inheritance; apply the local rollout
 //! using the preference resolved during config loading.
+//! Validate MXC requirements only after bootstrap has loaded the complete config.
 
 use super::Config;
 use super::EffectivePermissionSelection;
@@ -19,6 +20,35 @@ use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxType;
 
 impl Config {
+    /// Reject a non-MXC selection without changing the final configuration.
+    /// Call after cloud configuration loads and outside config-recovery fallbacks.
+    pub fn validate_windows_mxc_requirement(&self) -> std::io::Result<()> {
+        self.validate_windows_mxc_requirement_from(self)
+    }
+
+    /// Check this execution config against separately loaded managed requirements.
+    pub fn validate_windows_mxc_requirement_from(
+        &self,
+        policy_config: &Self,
+    ) -> std::io::Result<()> {
+        if cfg!(windows)
+            && policy_config
+                .config_layer_stack
+                .requirements_toml()
+                .windows
+                .as_ref()
+                .and_then(|windows| windows.require_mxc)
+                == Some(true)
+            && self.effective_local_windows_sandbox_type() != SandboxType::WindowsMxc
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "windows.require_mxc = true requires MXC to be selected on this Windows host",
+            ));
+        }
+        Ok(())
+    }
+
     /// Configured backend, without the local rollout preference. Remote executors inherit this.
     pub fn windows_sandbox_type_from_config(&self) -> SandboxType {
         self.permissions.windows_sandbox_type

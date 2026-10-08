@@ -553,6 +553,7 @@ impl Session {
     }
 
     async fn spawn_internal(args: SessionSpawnArgs) -> CodexResult<(Arc<Self>, SessionIo)> {
+        args.config.validate_windows_mxc_requirement()?;
         let SessionSpawnArgs {
             startup,
             config,
