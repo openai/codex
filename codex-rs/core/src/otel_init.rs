@@ -67,13 +67,15 @@ pub fn build_provider(
 
     let exporter = to_otel_exporter(&config.otel.exporter);
     let trace_exporter = to_otel_exporter(&config.otel.trace_exporter);
-    let metrics_exporter = if config
-        .analytics_enabled
-        .unwrap_or(default_analytics_enabled)
+    // Analytics consent controls the built-in exporter, not explicit OTLP collectors.
+    let metrics_exporter = if matches!(config.otel.metrics_exporter, Kind::Statsig)
+        && !config
+            .analytics_enabled
+            .unwrap_or(default_analytics_enabled)
     {
-        to_otel_exporter(&config.otel.metrics_exporter)
-    } else {
         OtelExporter::None
+    } else {
+        to_otel_exporter(&config.otel.metrics_exporter)
     };
 
     let originator = originator();

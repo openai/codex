@@ -246,7 +246,8 @@ pub enum HistoryPersistence {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AnalyticsConfigToml {
-    /// When `false`, disables analytics across Codex product surfaces in this profile.
+    /// When `false`, disables OpenAI analytics across Codex product surfaces in this profile.
+    /// Custom OTLP metrics exporters remain enabled; set `otel.metrics_exporter = "none"` to disable them.
     pub enabled: Option<bool>,
 }
 
@@ -641,7 +642,8 @@ pub struct OtelConfigToml {
     /// Optional trace exporter
     pub trace_exporter: Option<OtelExporterKind>,
 
-    /// Optional metrics exporter
+    /// Metrics exporter. Defaults to `statsig`, which follows `analytics.enabled`.
+    /// Custom OTLP exporters are independent of `analytics.enabled`; `none` disables metrics export.
     pub metrics_exporter: Option<OtelExporterKind>,
 
     /// Attributes to add to every exported trace span.

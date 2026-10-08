@@ -198,7 +198,7 @@ sandbox_mode = "workspace-write"
 windows.sandbox = "unelevated"
 tui.disable_paste_burst = true
 [otel]
-metrics_exporter = {{ otlp-http = {{ endpoint = "{}/metrics", protocol = "json" }} }}
+metrics_exporter = "none"
 [model_providers.local]
 name = "local test"
 base_url = "{}/v1"
@@ -210,7 +210,6 @@ trust_level = "trusted"
 "#,
             server.uri(),
             backend == "daemon",
-            server.uri(),
             server.uri(),
             serde_json::to_string(&source)?,
             serde_json::to_string(&launcher)?
@@ -408,7 +407,15 @@ trust_level = "trusted"
             args.extend(["--cd".into(), source.join(".codex").display().to_string()]);
         }
         if analytics {
-            args.extend(["-c".into(), "analytics.enabled=true".into()]);
+            args.extend([
+                "-c".into(),
+                "analytics.enabled=true".into(),
+                "-c".into(),
+                format!(
+                    "otel.metrics_exporter={{otlp-http={{endpoint=\"{}/metrics\",protocol=\"json\"}}}}",
+                    server.uri()
+                ),
+            ]);
         }
         args.push(prompt.into());
         if previous.is_empty() {
@@ -674,7 +681,7 @@ trust_level = "trusted"
             }
             assert_eq!(tags, expected_tags);
         } else {
-            assert!(metrics.is_empty(), "analytics disabled");
+            assert!(metrics.is_empty(), "metrics exporter disabled");
         }
         let (body, checkout, metadata) = observed
             .with_context(|| {

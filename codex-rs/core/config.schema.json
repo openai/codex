@@ -117,7 +117,7 @@
       "description": "Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.",
       "properties": {
         "enabled": {
-          "description": "When `false`, disables analytics across Codex product surfaces in this profile.",
+          "description": "When `false`, disables OpenAI analytics across Codex product surfaces in this profile. Custom OTLP metrics exporters remain enabled; set `otel.metrics_exporter = \"none\"` to disable them.",
           "type": "boolean"
         }
       },
@@ -3430,7 +3430,7 @@
               "$ref": "#/definitions/OtelExporterKind"
             }
           ],
-          "description": "Optional metrics exporter"
+          "description": "Metrics exporter. Defaults to `statsig`, which follows `analytics.enabled`. Custom OTLP exporters are independent of `analytics.enabled`; `none` disables metrics export."
         },
         "span_attributes": {
           "additionalProperties": {
@@ -6839,7 +6839,7 @@
           "$ref": "#/definitions/AnalyticsConfigToml"
         }
       ],
-      "description": "When `false`, disables analytics across Codex product surfaces in this machine. Defaults to `true`."
+      "description": "When `enabled` is `false`, disables OpenAI analytics across Codex product surfaces on this machine. Custom OTLP metrics exporters are controlled by `otel.metrics_exporter`. When unset, the default depends on the client."
     },
     "approval_policy": {
       "allOf": [

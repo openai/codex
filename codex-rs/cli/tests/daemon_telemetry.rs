@@ -1,4 +1,4 @@
-//! Foreground updates honor app-server consent and never claim unconfirmed installation.
+//! Foreground updates honor explicit metrics exporters and never claim unconfirmed installation.
 
 use anyhow::Context as _;
 use pretty_assertions::assert_eq;
@@ -8,12 +8,13 @@ use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 
 #[tokio::test]
-async fn foreground_update_respects_consent_and_reports_unconfirmed() -> anyhow::Result<()> {
-    for (analytics_config, analytics_default_enabled, expected_requests) in [
-        ("", false, 0),
-        ("", true, 1),
-        ("analytics.enabled = true\n", false, 1),
-        ("analytics.enabled = false\n", true, 0),
+async fn foreground_update_honors_metrics_exporter_and_reports_unconfirmed() -> anyhow::Result<()> {
+    for (analytics_config, analytics_default_enabled, metrics_enabled) in [
+        ("", false, true),
+        ("", true, true),
+        ("analytics.enabled = true\n", false, true),
+        ("analytics.enabled = false\n", true, true),
+        ("analytics.enabled = true\n", true, false),
     ] {
         let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
         let server = MockServer::start().await;
@@ -39,6 +40,9 @@ async fn foreground_update_respects_consent_and_reports_unconfirmed() -> anyhow:
         if analytics_default_enabled {
             command.arg("--analytics-default-enabled");
         }
+        if !metrics_enabled {
+            command.args(["-c", "otel.metrics_exporter=\"none\""]);
+        }
         let output = command
             .args(["daemon", "update", "--from-cli", "--yes"])
             .output()
@@ -48,8 +52,8 @@ async fn foreground_update_respects_consent_and_reports_unconfirmed() -> anyhow:
             .received_requests()
             .await
             .context("metric requests")?;
-        assert_eq!(requests.len(), expected_requests);
-        if expected_requests == 0 {
+        assert_eq!(requests.len(), usize::from(metrics_enabled));
+        if !metrics_enabled {
             continue;
         }
         let body: Value = serde_json::from_slice(&requests[0].body)?;
