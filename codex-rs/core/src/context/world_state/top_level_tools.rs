@@ -1,6 +1,6 @@
 //! Diffs the one-level Responses Lite catalog: namespaces of callable tools and built-ins.
 //! Missing state starts a fresh catalog; this section does not migrate legacy history.
-//! Incremental hints decorate emitted declarations only, leaving catalog hashes unchanged.
+//! One developer notice precedes each incremental namespace batch; catalog hashes are unchanged.
 //! Whole namespace removals subsume their members in the removal notice.
 //! Metrics count rendered tool redefinitions, excluding namespace headers and initial catalogs.
 
@@ -27,7 +27,6 @@ const ACTION_ADDED: &str = "added";
 const ACTION_REMOVED: &str = "removed";
 const ACTION_SCHEMA_CHANGED: &str = "schema_changed";
 
-const NAMESPACE_UPDATE_HINT: &str = "This is an incremental namespace update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one.";
 const REMOVED_TOOLS_HEADER: &str = "The following tools are no longer available. Do not call them:";
 const REMOVED_NAMESPACES_HEADER: &str = "The following namespaces are no longer available. Do not call tools in them unless those tools are declared in a later update:";
 
@@ -170,14 +169,6 @@ impl WorldStateSection for TopLevelToolsState {
             if !changed_members.is_empty() {
                 let mut namespace = definition.clone();
                 namespace["tools"] = Value::Array(changed_members);
-                if previous.is_some_and(|previous| previous.contains_key(name)) {
-                    let description = definition["description"].as_str().unwrap_or_default();
-                    namespace["description"] = Value::String(if description.is_empty() {
-                        NAMESPACE_UPDATE_HINT.to_string()
-                    } else {
-                        format!("{description}\n{NAMESPACE_UPDATE_HINT}")
-                    });
-                }
                 tools.push(namespace);
             } else if changed(name) {
                 // Namespace declarations require a member. Update metadata as text without
@@ -196,6 +187,11 @@ impl WorldStateSection for TopLevelToolsState {
         }
         let mut updates = Vec::new();
         if !tools.is_empty() {
+            if previous.is_some() && tools.iter().any(|tool| tool["type"] == "namespace") {
+                updates.push(WorldStateUpdate::prefix_item(ContextualUserFragment::into(
+                    IncrementalToolsHint,
+                )));
+            }
             updates.push(WorldStateUpdate::prefix_item(
                 ResponseItem::AdditionalTools {
                     id: None,
@@ -242,6 +238,35 @@ impl WorldStateSection for TopLevelToolsState {
         counts.record(self.metrics.as_deref());
         // Persist the empty map too: it is a known empty catalog, not missing state.
         (Some(self.hashes.clone()), updates)
+    }
+}
+
+/// Guidance for an appended catalog batch, retained or discarded with its declarations.
+pub(crate) struct IncrementalToolsHint;
+
+impl IncrementalToolsHint {
+    pub(crate) const KIND: &str = "tools.incremental_update";
+}
+
+impl ContextualUserFragment for IncrementalToolsHint {
+    fn role(&self) -> &'static str {
+        "developer"
+    }
+
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind(Self::KIND.to_string())
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("", "")
+    }
+
+    fn body(&self) -> String {
+        "This is an incremental tools update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one.".to_string()
     }
 }
 

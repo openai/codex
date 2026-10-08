@@ -69,7 +69,7 @@ async fn legacy_resume_switches_only_after_window_replacement(token_budget: bool
         ]));
     }
     replies.extend(
-        (1..=4).map(|i| responses::sse(vec![responses::ev_completed(&format!("after-{i}"))])),
+        (1..=5).map(|i| responses::sse(vec![responses::ev_completed(&format!("after-{i}"))])),
     );
     let mock = responses::mount_sse_sequence(&server, replies).await;
     let initial = builder(/*incremental_tools*/ false, token_budget)
@@ -118,6 +118,19 @@ async fn legacy_resume_switches_only_after_window_replacement(token_budget: bool
         .submit_turn("Enable planning and remove shell tools after migration.")
         .await?;
     changed.submit_turn("Continue with the same tools.").await?;
+    let resumed_update = builder(/*incremental_tools*/ true, token_budget)
+        .with_config(|config| {
+            config.update_plan_enabled = true;
+            config
+                .features
+                .disable(Feature::ShellTool)
+                .expect("disable shell");
+        })
+        .restart_with_auto_env(&server, &changed)
+        .await?;
+    resumed_update
+        .submit_turn("Resume with the same updated tools.")
+        .await?;
     let requests = mock.requests();
     insta::assert_snapshot!(
         if token_budget {
@@ -126,7 +139,7 @@ async fn legacy_resume_switches_only_after_window_replacement(token_budget: bool
             "legacy_resume_remote_compaction"
         },
         context_snapshot::format_request_history_snapshot(
-            "A resumed legacy window retains its generated prefix; the next window records tools and instructions once, then emits only tool changes after resume.",
+            "A resumed legacy window retains its generated prefix; rebuilding the next window emits no incremental notice. A later update appends one developer notice, changed definitions, then the removal notice. Unchanged turns and another restart preserve that pair without duplication.",
             &requests,
             &ContextSnapshotOptions::default()
                 .rewrite_known_segments()
@@ -166,6 +179,7 @@ async fn disable_incremental_tools_at_next_window() -> Result<()> {
     initial.submit_turn("Begin with all tools.").await?;
     let disabled_builder = || {
         session_builder(/*enabled*/ false).with_config(|config| {
+            config.update_plan_enabled = true;
             config
                 .features
                 .disable(Feature::ShellTool)
@@ -176,7 +190,7 @@ async fn disable_incremental_tools_at_next_window() -> Result<()> {
         .restart_with_auto_env(&server, &initial)
         .await?;
     disabled
-        .submit_turn("Disable incremental tools and remove shell tools in the existing window.")
+        .submit_turn("Disable incremental tools, enable planning, and remove shell tools in the existing window.")
         .await?;
     disabled.codex.submit(Op::Compact).await?;
     wait_for_event(&disabled.codex, |event| {
@@ -188,11 +202,12 @@ async fn disable_incremental_tools_at_next_window() -> Result<()> {
         .restart_with_auto_env(&server, &disabled)
         .await?;
     resumed.submit_turn("Resume with the same tools.").await?;
+    let requests = mock.requests();
     insta::assert_snapshot!(
         "disable_incremental_tools",
         context_snapshot::format_request_history_snapshot(
             "Disabling incremental tools preserves updates in the existing window; after compaction the generated catalog survives resume.",
-            &mock.requests(),
+            &requests,
             &ContextSnapshotOptions::default()
                 .rewrite_known_segments()
                 .include_request_settings(),

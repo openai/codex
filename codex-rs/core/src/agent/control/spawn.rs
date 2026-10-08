@@ -20,6 +20,7 @@ use crate::context::DeveloperInstructions;
 use crate::context::ManagedDeveloperInstructions;
 use crate::context::MultiAgentModeInstructions;
 use crate::context::MultiAgentRoleInstructions;
+use crate::context::world_state::IncrementalToolsHint;
 use crate::context::world_state::PersistentModeState;
 use crate::session::multi_agents::resolve_usage_hints;
 use crate::thread_manager::StartThreadOptions;
@@ -1150,7 +1151,10 @@ impl LocalAgentControl {
                     return false;
                 };
                 content.retain_mut(|content_item| {
-                    if content_item.kind().as_str() == BaseInstructionsFragment::KIND {
+                    if matches!(
+                        content_item.kind().as_str(),
+                        BaseInstructionsFragment::KIND | IncrementalToolsHint::KIND
+                    ) {
                         return preserve_context_baselines;
                     }
                     let ContentItem::InputText { text } = content_item.content_mut() else {

@@ -1,0 +1,63 @@
+---
+source: core/tests/suite/scenarios_incremental_tools.rs
+expression: "context_snapshot::format_request_history_snapshot(if use_responses_lite\n{\n    \"Tool definitions enter history in one batch; a catalog change appends one developer notice before only the changed exec definition, without modifying namespace descriptions. The next unchanged turn appends only user input.\"\n} else\n{\n    \"Regular Responses requests carry the full current tool catalog without an incremental notice; changed execution instructions replace the catalog on subsequent requests.\"\n}, &requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: Regular Responses requests carry the full current tool catalog without an incremental notice; changed execution instructions replace the catalog on subsequent requests.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-5.4"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+  tools (9; hash=b0011e3ae8ca7fd2):
+    - custom/exec: Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided JavaScript code in...; hash=3b60611486072e76
+    - function/wait: Waits on a yielded `exec` cell and returns new output or completion. - Use `wait` only after `exe...; args=[cell_id, max_tokens, terminate, yield_time_ms]; hash=6692d8f6c55be489
+    - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.  exec tool dec...; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=759843fc2a7d41a0
+    - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.  exec tool decla...; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=e6405481b30a43c1
+    - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
+    - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=11c5b5ed4fb972e8
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=1b87dd8874f6fa10
+    - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+    - web_search; hash=e214d4db1bc49e89
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Begin work.
+-- request 2 (turn) --
+04:message/user:
+    Continue with the same tools.
+
+## Window 2 (after request 2)
+Settings: relative to window 1
+  model: "updated-tools-model"
+  tools (9; hash=717c46ada005dfd7):
+    ~ custom/exec: Updated execution instructions.  Some deferred nested tools may be omitted from this description....; hash=7af6961848c10849
+-- request 3 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Begin work.
+04:message/user:
+    Continue with the same tools.
+05:message/developer:
+    <MODEL_SWITCH>
+06:message/user:
+    Continue with the updated execution instructions.
+-- request 4 (turn) --
+07:message/user:
+    Continue with the same updated tools.

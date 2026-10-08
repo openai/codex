@@ -228,7 +228,13 @@ fn empty_catalog_is_persisted_and_can_add_tools_again() {
         })]
     );
     let (_, updates) = original.render_diff(PreviousSectionState::Known(&snapshot.unwrap()));
-    assert_eq!(merge_world_state_updates(updates), vec![item(definitions)]);
+    assert_eq!(
+        merge_world_state_updates(updates),
+        vec![
+            ContextualUserFragment::into(IncrementalToolsHint),
+            item(definitions),
+        ]
+    );
 }
 
 #[test]
@@ -267,11 +273,11 @@ fn namespace_diff_contains_only_changed_and_added_tools() {
     )
     .unwrap();
     let (snapshot, updates) = current.render_diff(PreviousSectionState::Known(&snapshot));
-    let mut expected = namespace("functions", vec![changed, added]);
-    expected["description"] = json!(format!("Tools.\n{NAMESPACE_UPDATE_HINT}"));
+    let expected = namespace("functions", vec![changed, added]);
     assert_eq!(
         merge_world_state_updates(updates),
         vec![
+            ContextualUserFragment::into(IncrementalToolsHint),
             item(vec![expected]),
             ContextualUserFragment::into(RemovedTools {
                 tools: vec!["functions.removed".to_string()],
@@ -281,6 +287,38 @@ fn namespace_diff_contains_only_changed_and_added_tools() {
     );
     assert!(
         current
+            .render_diff(PreviousSectionState::Known(&snapshot.unwrap()))
+            .1
+            .is_empty()
+    );
+}
+
+#[test]
+fn new_namespaces_share_one_notice_before_their_declarations() {
+    let original = namespace("original", vec![declaration("lookup")]);
+    let state = TopLevelToolsState::new(vec![original.clone()], /*metrics*/ None).unwrap();
+    let previous = state.render_diff(PreviousSectionState::Absent).0.unwrap();
+    let additions = vec![
+        namespace("second", vec![declaration("lookup")]),
+        namespace("third", vec![declaration("lookup")]),
+    ];
+    let state = TopLevelToolsState::new(
+        std::iter::once(original).chain(additions.clone()).collect(),
+        /*metrics*/ None,
+    )
+    .unwrap();
+    let (snapshot, updates) = state.render_diff(PreviousSectionState::Known(&previous));
+    let (prefix, remaining) = super::super::split_prefix_updates(updates);
+    assert_eq!(
+        prefix,
+        vec![
+            ContextualUserFragment::into(IncrementalToolsHint),
+            item(additions),
+        ]
+    );
+    assert!(remaining.is_empty());
+    assert!(
+        state
             .render_diff(PreviousSectionState::Known(&snapshot.unwrap()))
             .1
             .is_empty()
@@ -337,13 +375,13 @@ fn tool_type_change_keeps_the_callable_name_available() {
         .unwrap();
     let custom = json!({"type": "custom", "name": "lookup", "description": "Look up a value.",
         "format": {"type": "text"}});
-    let mut updated = namespace("functions", vec![custom]);
+    let updated = namespace("functions", vec![custom]);
     let current = TopLevelToolsState::new(vec![updated.clone()], /*metrics*/ None).unwrap();
     let (_, updates) = current.render_diff(PreviousSectionState::Known(&snapshot));
-    updated["description"] = json!(format!("Tools.\n{NAMESPACE_UPDATE_HINT}"));
     assert_eq!(
         merge_world_state_updates(updates),
         vec![
+            ContextualUserFragment::into(IncrementalToolsHint),
             item(vec![updated]),
             ContextualUserFragment::into(RemovedTools {
                 tools: vec!["functions.removed".to_string()],

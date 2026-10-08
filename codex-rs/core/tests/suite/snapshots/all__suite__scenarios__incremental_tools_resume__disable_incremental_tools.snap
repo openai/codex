@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios_incremental_tools_resume.rs
-expression: "context_snapshot::format_request_history_snapshot(\"Disabling incremental tools preserves updates in the existing window; after compaction the generated catalog survives resume.\",\n&mock.requests(),\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+expression: "context_snapshot::format_request_history_snapshot(\"Disabling incremental tools preserves updates in the existing window; after compaction the generated catalog survives resume.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
 Scenario: Disabling incremental tools preserves updates in the existing window; after compaction the generated catalog survives resume.
 
@@ -34,21 +34,27 @@ Settings:
     Begin with all tools.
 -- request 2 (turn) --
 05:message/developer:
+    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
+06:additional_tools/developer (1; hash=b7fd89abae4195ad):
+        - namespace/functions; hash=174a13d856a6951d
+          - function/update_plan
+07:message/developer:
     The following tools are no longer available. Do not call them:
     - functions.exec_command
     - functions.write_stdin
-06:message/user:
+08:message/user:
     <ENVIRONMENT_CONTEXT>
-07:message/user:
-    Disable incremental tools and remove shell tools in the existing window.
+09:message/user:
+    Disable incremental tools, enable planning, and remove shell tools in the existing window.
 -- request 3 (compaction) --
-08:compaction_trigger
+10:compaction_trigger
 
 ## Window 2 (after request 3: input diverged at item 00)
 Settings: same as window 1
 -- request 4 (turn) --
-00:additional_tools/developer (2; hash=2155c287c22bb8e8):
-        - namespace/functions; hash=cc7ea9ff03477840
+00:additional_tools/developer (2; hash=434a400f3708d1bc):
+        - namespace/functions; hash=36c9912d971c5be8
+          - function/update_plan
           - function/request_user_input
           - custom/apply_patch
           - function/view_image
@@ -62,7 +68,7 @@ Settings: same as window 1
 04:message/user:
     <ENVIRONMENT_CONTEXT>
 05:message/user:
-    Disable incremental tools and remove shell tools in the existing window.
+    Disable incremental tools, enable planning, and remove shell tools in the existing window.
 06:compaction:encrypted=true; chars=17; hash=6c10f5e81c1f8e16
 07:message/user:
     Continue in the new window.

@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/scenarios_incremental_tools_resume.rs
-expression: "context_snapshot::format_request_history_snapshot(\"A resumed legacy window retains its generated prefix; the next window records tools and instructions once, then emits only tool changes after resume.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+expression: "context_snapshot::format_request_history_snapshot(\"A resumed legacy window retains its generated prefix; rebuilding the next window emits no incremental notice. A later update appends one developer notice, changed definitions, then the removal notice. Unchanged turns and another restart preserve that pair without duplication.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
-Scenario: A resumed legacy window retains its generated prefix; the next window records tools and instructions once, then emits only tool changes after resume.
+Scenario: A resumed legacy window retains its generated prefix; rebuilding the next window emits no incremental notice. A later update appends one developer notice, changed definitions, then the removal notice. Unchanged turns and another restart preserve that pair without duplication.
 
 ## Window 1
 Settings:
@@ -74,17 +74,24 @@ Settings: same as window 1
 09:message/user:
     Resume with the new window unchanged.
 -- request 6 (turn) --
-10:additional_tools/developer (1; hash=6334fc838872158e):
-        - namespace/functions: This is an incremental namespace update. Previously declared tools remain available for direct ca...; hash=1099660be7ddd67e
+10:message/developer:
+    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
+11:additional_tools/developer (1; hash=845cf7662dc8512b):
+        - namespace/functions; hash=0c787fbffa4d7ddf
           - function/update_plan
-11:message/developer:
+12:message/developer:
     The following tools are no longer available. Do not call them:
     - functions.exec_command
     - functions.write_stdin
-12:message/user:
-    <ENVIRONMENT_CONTEXT>
 13:message/user:
+    <ENVIRONMENT_CONTEXT>
+14:message/user:
     Enable planning and remove shell tools after migration.
 -- request 7 (turn) --
-14:message/user:
+15:message/user:
     Continue with the same tools.
+-- request 8 (turn) --
+16:message/user:
+    <ENVIRONMENT_CONTEXT>
+17:message/user:
+    Resume with the same updated tools.

@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/scenarios_incremental_tools.rs
-expression: "context_snapshot::format_request_history_snapshot(\"Tool definitions enter history in one batch; a catalog change appends only the changed exec definition with an incremental namespace hint. The next unchanged turn appends no tool definitions.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+expression: "context_snapshot::format_request_history_snapshot(\"Tool definitions enter history in one batch; a catalog change appends one developer notice before only the changed exec definition, without modifying namespace descriptions. The next unchanged turn appends only user input.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
-Scenario: Tool definitions enter history in one batch; a catalog change appends only the changed exec definition with an incremental namespace hint. The next unchanged turn appends no tool definitions.
+Scenario: Tool definitions enter history in one batch; a catalog change appends one developer notice before only the changed exec definition, without modifying namespace descriptions. The next unchanged turn appends only user input.
 
 ## Window 1
 Settings:
@@ -62,13 +62,15 @@ Settings: relative to window 1
     Begin work.
 05:message/user:
     Continue with the same tools.
-06:additional_tools/developer (1; hash=fd00dfa0a0c11da2):
-        - namespace/functions: This is an incremental namespace update. Previously declared tools remain available for direct ca...; hash=dd09638a0d29d0ca
+06:message/developer:
+    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
+07:additional_tools/developer (1; hash=26cd263a29587cc7):
+        - namespace/functions; hash=771cad2ff250d2f3
           - custom/exec
-07:message/developer:
+08:message/developer:
     <MODEL_SWITCH>
-08:message/user:
+09:message/user:
     Continue with the updated execution instructions.
 -- request 4 (turn) --
-09:message/user:
+10:message/user:
     Continue with the same updated tools.

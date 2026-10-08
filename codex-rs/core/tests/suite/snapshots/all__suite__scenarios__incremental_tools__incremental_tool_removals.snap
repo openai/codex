@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/scenarios_incremental_tools.rs
-expression: "context_snapshot::format_request_history_snapshot(\"MCP refreshes remove one tool, then its whole namespace, before restoring both tools. Standalone removal notices and the restored namespace append to history; unchanged turns do not repeat updates.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+expression: "context_snapshot::format_request_history_snapshot(\"MCP refreshes remove one tool, then its whole namespace, before restoring both tools. Removal notices append alone; restoration appends one developer notice before both namespace declarations. Unchanged turns do not repeat updates.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
-Scenario: MCP refreshes remove one tool, then its whole namespace, before restoring both tools. Standalone removal notices and the restored namespace append to history; unchanged turns do not repeat updates.
+Scenario: MCP refreshes remove one tool, then its whole namespace, before restoring both tools. Removal notices append alone; restoration appends one developer notice before both namespace declarations. Unchanged turns do not repeat updates.
 
 ## Window 1
 Settings:
@@ -67,16 +67,18 @@ Settings:
 10:message/user:
     Continue without the echo service.
 -- request 6 (turn) --
-11:additional_tools/developer (2; hash=817ef381d2e3ba83):
-        - namespace/functions: This is an incremental namespace update. Previously declared tools remain available for direct ca...; hash=b54767a7496e2119
+11:message/developer:
+    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
+12:additional_tools/developer (2; hash=ba0bceb82aa883e0):
+        - namespace/functions; hash=88d1efdc7cb932a8
           - function/list_mcp_resources
           - function/list_mcp_resource_templates
           - function/read_mcp_resource
         - namespace/mcp__echo_service: Echo service instructions.; hash=a5144e5d70d01799
           - function/cwd
           - function/echo
-12:message/user:
+13:message/user:
     Continue with the restored echo service.
 -- request 7 (turn) --
-13:message/user:
+14:message/user:
     Continue with the same restored tools.

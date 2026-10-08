@@ -25,6 +25,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::ManagedDeveloperInstructions;
 use crate::context::MultiAgentRoleInstructions;
 use crate::context::SubagentNotification;
+use crate::context::world_state::IncrementalToolsHint;
 use crate::init_state_db;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::session::SessionSettingsUpdate;
@@ -3187,7 +3188,9 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(marke
         role: "developer".to_string(),
         tools: vec![serde_json::json!({"type": "function", "name": "compacted_tool"})],
     };
+    let tools_update = ContextualUserFragment::into(IncrementalToolsHint);
     let replacement_history = vec![
+        tools_update.clone(),
         tool_declarations.clone(),
         ContextualUserFragment::into(crate::context::GuardianApprovedAction::new("parent-private-release".to_owned())),
         ResponseItem::Message {
@@ -3335,12 +3338,19 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(marke
         strip_response_item_ids(
             &history
                 .raw_items()
-                .filter(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
+                .filter(|item| {
+                    matches!(item, ResponseItem::AdditionalTools { .. })
+                        || matches!(item, ResponseItem::Message {
+                            internal_chat_message_metadata_passthrough: Some(metadata), ..
+                        } if metadata.content_item_kinds.as_ref().is_some_and(|kinds| {
+                            kinds.iter().any(|kind| kind.as_str() == IncrementalToolsHint::KIND)
+                        }))
+                })
                 .cloned()
                 .collect::<Vec<_>>()
         ),
-        vec![tool_declarations],
-        "full-history forks must retain declarations embedded in compaction checkpoints"
+        vec![tools_update, tool_declarations],
+        "full-history forks must retain tool update notices with declarations embedded in compaction checkpoints"
     );
     assert!(
         !history_contains_text(
@@ -3684,6 +3694,14 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         }));
+        rollout_items.push(rollout_response_item(ContextualUserFragment::into(
+            IncrementalToolsHint,
+        )));
+        rollout_items.push(rollout_response_item(ResponseItem::AdditionalTools {
+            id: None,
+            role: "developer".to_string(),
+            tools: vec![serde_json::json!({"type": "function", "name": "parent_tool"})],
+        }));
         rollout_items.push(RolloutItem::TurnContext(
             turn_context.to_turn_context_item(),
         ));
@@ -3739,6 +3757,23 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
         )
         .await
         .expect("read child checkpoint");
+        assert_eq!(
+            items
+                .iter()
+                .filter_map(|item| match item {
+                    RolloutItem::ResponseItem(envelope)
+                        if matches!(&envelope.item, ResponseItem::Message {
+                            internal_chat_message_metadata_passthrough: Some(metadata), ..
+                        } if metadata.content_item_kinds.as_ref().is_some_and(|kinds| {
+                            kinds.iter().any(|kind| kind.as_str() == IncrementalToolsHint::KIND)
+                        })) =>
+                        Some(envelope.item.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            Vec::<ResponseItem>::new(),
+            "{case}: a legacy compaction fork must drop notices for tool declarations it rebuilds"
+        );
         let inherited_state = items.into_iter().find_map(|item| match item {
             RolloutItem::Compacted(item) => item.resume_metadata,
             _ => None,

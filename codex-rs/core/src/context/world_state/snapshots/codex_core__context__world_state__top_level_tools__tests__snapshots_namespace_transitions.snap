@@ -65,10 +65,34 @@ None
 
 {"functions":"d0971b2901a1d91cd0773dd3014aacad18939724","functions.changed":"201818ec534c933aaf3e31e180ad44845f90de52","functions.removed":"ec12b15fd139075230b516c8cd7cbd0d656b9a38","functions.unchanged":"4d234d07035e05b331e0ca66127362f678bed9ce","other":"d3ba1afd5b23158d1baec4aba38ba2b8d376141b","other.lookup":"957791c1122ca973a75db93abc14a5ae32514005"} -> {"functions":"d0971b2901a1d91cd0773dd3014aacad18939724","functions.added":"5fc75ad4d08cd0b73ef983d58fed9272072e5ce7","functions.changed":"ebe9005f973a60ba4ee93b024d7021d21dc27826","functions.unchanged":"4d234d07035e05b331e0ca66127362f678bed9ce","other":"d3ba1afd5b23158d1baec4aba38ba2b8d376141b","other.lookup":"957791c1122ca973a75db93abc14a5ae32514005"} (item - prefix)
 {
+  "content": [
+    {
+      "text": "This is an incremental tools update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one.",
+      "type": "input_text"
+    }
+  ],
+  "internal_chat_message_metadata_passthrough": {
+    "content_item_kinds": [
+      "tools.incremental_update"
+    ],
+    "content_item_metadata": [
+      {
+        "provenance": {
+          "hook": false,
+          "type": "harness"
+        }
+      }
+    ]
+  },
+  "role": "developer",
+  "type": "message"
+}
+ (item - prefix)
+{
   "role": "developer",
   "tools": [
     {
-      "description": "Tools.\nThis is an incremental namespace update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one.",
+      "description": "Tools.",
       "name": "functions",
       "tools": [
         {
@@ -108,6 +132,30 @@ The following namespaces are no longer available. Do not call tools in them unle
 - functions
 
 {"other":"d3ba1afd5b23158d1baec4aba38ba2b8d376141b","other.lookup":"957791c1122ca973a75db93abc14a5ae32514005"} -> {"functions":"d0971b2901a1d91cd0773dd3014aacad18939724","functions.changed":"201818ec534c933aaf3e31e180ad44845f90de52","functions.removed":"ec12b15fd139075230b516c8cd7cbd0d656b9a38","functions.unchanged":"4d234d07035e05b331e0ca66127362f678bed9ce","other":"d3ba1afd5b23158d1baec4aba38ba2b8d376141b","other.lookup":"957791c1122ca973a75db93abc14a5ae32514005"} (item - prefix)
+{
+  "content": [
+    {
+      "text": "This is an incremental tools update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one.",
+      "type": "input_text"
+    }
+  ],
+  "internal_chat_message_metadata_passthrough": {
+    "content_item_kinds": [
+      "tools.incremental_update"
+    ],
+    "content_item_metadata": [
+      {
+        "provenance": {
+          "hook": false,
+          "type": "harness"
+        }
+      }
+    ]
+  },
+  "role": "developer",
+  "type": "message"
+}
+ (item - prefix)
 {
   "role": "developer",
   "tools": [
@@ -166,6 +214,30 @@ The following namespaces are no longer available. Do not call tools in them unle
 None
 
 {} -> {"functions":"d0971b2901a1d91cd0773dd3014aacad18939724","functions.restored":"56fbc7d43a57aab411e5352bfbb88a6df939fd4e","functions.unchanged":"4d234d07035e05b331e0ca66127362f678bed9ce"} (item - prefix)
+{
+  "content": [
+    {
+      "text": "This is an incremental tools update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one.",
+      "type": "input_text"
+    }
+  ],
+  "internal_chat_message_metadata_passthrough": {
+    "content_item_kinds": [
+      "tools.incremental_update"
+    ],
+    "content_item_metadata": [
+      {
+        "provenance": {
+          "hook": false,
+          "type": "harness"
+        }
+      }
+    ]
+  },
+  "role": "developer",
+  "type": "message"
+}
+ (item - prefix)
 {
   "role": "developer",
   "tools": [
