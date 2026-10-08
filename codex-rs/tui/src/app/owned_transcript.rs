@@ -87,7 +87,21 @@ impl App {
         };
         self.sync_owned_transcript(screen_size.width);
         let transcript_width = self.chat_widget.history_wrap_width(screen_size.width);
-        let composer_hint = self.composer_hint(transcript_width);
+        let composer_hint = if self
+            .chat_widget
+            .rendered_selection
+            .borrow()
+            .view
+            .has_active_interaction()
+        {
+            Some(
+                ratatui::text::Line::from("Selecting footer · esc cancel")
+                    .dim()
+                    .into(),
+            )
+        } else {
+            self.composer_hint(transcript_width)
+        };
         let now = Instant::now();
         let turn_tip = self.turn_tip(transcript_width, now, &tui.frame_requester());
         let working_tip = turn_tip
@@ -160,6 +174,7 @@ impl App {
         let mut blossom_tick = None;
         let mut transcript_bottom = available.saturating_sub(u16::from(composer_gap.is_none()));
         tui.draw(screen_size.height, |frame| {
+            chat_widget.rendered_selection.borrow_mut().areas.clear();
             ratatui::widgets::Clear.render(
                 Rect::new(/*x*/ 0, /*y*/ 0, screen_size.width, available),
                 frame.buffer,
@@ -270,6 +285,10 @@ impl App {
             .filter(|_| chat_widget.no_modal_or_popup_active());
             feedback_tick =
                 view.render_composer_gap(follow_area, composer_hint.as_ref(), frame.buffer, now);
+            chat_widget
+                .rendered_selection
+                .borrow_mut()
+                .render(frame.buffer);
             chat_widget.note_rendered_width(screen_size.width);
             let dialog = chat_widget.centered_dialog();
             let (foreground, foreground_area): (&dyn Renderable, Rect) =
@@ -576,27 +595,15 @@ impl App {
             }
             return self.handle_owned_backtrack_event(tui, event);
         };
-        let resume_following = matches!(action, ViewAction::CopyAndFollow(_));
-        let copy_on_select = matches!(action, ViewAction::CopyOnSelect(_));
-        match action {
-            ViewAction::Changed => {}
-            ViewAction::PrimarySelection(text) => self.transcript_view.publish_primary(tui, &text),
-            ViewAction::Copy(text)
-            | ViewAction::CopyOnSelect(text)
-            | ViewAction::CopyAndFollow(text) => {
-                let result = self.transcript_view.copy_selected_text(
-                    tui,
-                    &self.transcript_cells,
-                    &text,
-                    !copy_on_select,
-                );
-                if resume_following
-                    && matches!(result, Ok(crate::clipboard_copy::CopyStatus::Pending(_)))
-                {
-                    self.transcript_view.follow_pending_copy();
-                }
-            }
-            ViewAction::OpenLink(url) => self.open_url_in_browser(url),
+        if let Some((characters, result)) = self.transcript_view.copy_action(
+            tui,
+            &self.transcript_cells,
+            &action,
+            crate::clipboard_copy::CopyFormat::Markdown,
+        ) {
+            self.transcript_view.show_copy_feedback(&result, characters);
+        } else if let ViewAction::OpenLink(url) = action {
+            self.open_url_in_browser(url);
         }
         self.request_owned_history(tui, app_server);
         tui.frame_requester().schedule_frame();

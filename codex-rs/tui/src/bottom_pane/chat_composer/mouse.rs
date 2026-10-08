@@ -62,6 +62,10 @@ impl ChatComposer {
         Some((char_count, result))
     }
 
+    pub(crate) fn clear_mouse_selection(&mut self) {
+        self.draft.textarea.set_cursor(self.draft.textarea.cursor());
+    }
+
     pub(crate) fn end_mouse_drag(&mut self) {
         self.draft.textarea.end_mouse_drag();
     }

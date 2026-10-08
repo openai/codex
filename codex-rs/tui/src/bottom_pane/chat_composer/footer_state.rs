@@ -70,6 +70,8 @@ pub(crate) enum CommandPopupPlacement {
 pub(crate) struct ComposerRenderOptions<'a> {
     /// Fullscreen limits the composer independently of activity and modal views.
     pub(crate) max_height: Option<u16>,
+    pub(crate) rendered_selection:
+        Option<&'a std::cell::RefCell<crate::rendered_selection::RenderedSelection>>,
     /// Reserve a shared hint row independently of whether it currently contains a notice.
     pub(crate) composer_gap: Option<&'a crate::bottom_pane::ComposerGap>,
     pub(crate) working_tip: Option<&'a crate::turn_tip::TurnTip>,
@@ -365,6 +367,7 @@ pub(super) struct FooterState {
     pub(super) show_transcript_key: Option<ShortcutHint>,
     pub(super) show_warnings_key: Option<ShortcutHint>,
     pub(super) warning_notice_area: std::cell::Cell<Option<Rect>>,
+    pub(super) selection_revision: std::cell::Cell<(usize, bool)>,
     pub(super) find_transcript_key: Option<ShortcutHint>,
     pub(super) focus_activity_key: Option<ShortcutHint>,
     pub(super) insert_newline_key: Option<ShortcutHint>,

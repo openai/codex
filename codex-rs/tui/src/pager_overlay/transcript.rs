@@ -452,32 +452,20 @@ impl TranscriptOverlay {
 
     fn apply_action(&mut self, tui: &mut tui::Tui, action: ViewAction) {
         self.notice = None;
-        let resume_following = matches!(action, ViewAction::CopyAndFollow(_));
-        let copy_on_select = matches!(action, ViewAction::CopyOnSelect(_));
-        match action {
-            ViewAction::Changed => {}
-            ViewAction::PrimarySelection(text) => self.view.publish_primary(tui, &text),
-            ViewAction::Copy(text)
-            | ViewAction::CopyOnSelect(text)
-            | ViewAction::CopyAndFollow(text) => {
-                let result = self
-                    .view
-                    .copy_selected_text(tui, &self.cells, &text, !copy_on_select);
-                if resume_following
-                    && matches!(result, Ok(crate::clipboard_copy::CopyStatus::Pending(_)))
-                {
-                    self.view.follow_pending_copy();
-                }
-                self.notice = Some(match result {
-                    Ok(status) => status.message("selection"),
-                    Err(error) => error,
-                });
-            }
-            ViewAction::OpenLink(url) => {
-                if let Err(error) = webbrowser::open(&url) {
-                    self.notice = Some(format!("Could not open link: {error}"));
-                }
-            }
+        if let Some((_, result)) = self.view.copy_action(
+            tui,
+            &self.cells,
+            &action,
+            crate::clipboard_copy::CopyFormat::Markdown,
+        ) {
+            self.notice = Some(match result {
+                Ok(status) => status.message("selection"),
+                Err(error) => error,
+            });
+        } else if let ViewAction::OpenLink(url) = action
+            && let Err(error) = webbrowser::open(&url)
+        {
+            self.notice = Some(format!("Could not open link: {error}"));
         }
     }
 

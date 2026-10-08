@@ -284,38 +284,6 @@ impl TranscriptView {
         }
     }
 
-    /// Both transcript surfaces honor the same automatic-copy and plaintext PRIMARY semantics.
-    pub(crate) fn copy_selected_text(
-        &mut self,
-        tui: &mut Tui,
-        cells: &[Arc<dyn HistoryCell>],
-        text: &str,
-        clear_selection: bool,
-    ) -> CopyResult {
-        let publish_primary = !clear_selection && self.primary_selection;
-        let mut primary_owner = None;
-        let result =
-            self.copy_selected_text_with(cells, text, clear_selection, |copy_text, format| {
-                if publish_primary {
-                    let (result, owner) = tui.clipboard.select(
-                        copy_text.into(),
-                        format,
-                        CopyDestination::ClipboardAndPrimary(text.into()),
-                        tui.frame_requester(),
-                    );
-                    primary_owner = Some(owner);
-                    result
-                } else {
-                    tui.clipboard
-                        .copy(copy_text.into(), format, tui.frame_requester())
-                }
-            });
-        if publish_primary && let Some(selection) = &mut self.selection {
-            selection.primary_owner = primary_owner;
-        }
-        result
-    }
-
     /// Hide or cancel deferred publication without relinquishing the existing X11 selection.
     pub(crate) fn cancel_primary(&mut self) {
         if let Some(selection) = &mut self.selection {
@@ -403,6 +371,66 @@ impl TranscriptView {
             | Err(_) => {}
         }
         result
+    }
+
+    /// Apply selection copy keys consistently in owned, overlay and rendered-region views.
+    /// Plain UI regions keep their visible text; transcript copies retain Markdown metadata.
+    /// PRIMARY is always plaintext, and automatic copies update both X11 selections.
+    pub(crate) fn copy_action(
+        &mut self,
+        tui: &mut Tui,
+        cells: &[Arc<dyn HistoryCell>],
+        action: &ViewAction,
+        format: crate::clipboard_copy::CopyFormat,
+    ) -> Option<(usize, CopyResult)> {
+        use crate::clipboard_copy::CopyFormat;
+        use crate::clipboard_copy::CopyStatus;
+
+        let text = match action {
+            ViewAction::Copy(text)
+            | ViewAction::CopyOnSelect(text)
+            | ViewAction::CopyAndFollow(text) => text.as_str(),
+            ViewAction::PrimarySelection(text) => {
+                self.publish_primary(tui, text);
+                return None;
+            }
+            ViewAction::Changed | ViewAction::OpenLink(_) => return None,
+        };
+        let clear_selection = !matches!(action, ViewAction::CopyOnSelect(_));
+        let publish_primary = !clear_selection && self.primary_selection;
+        let mut primary_owner = None;
+        let result =
+            self.copy_selected_text_with(cells, text, clear_selection, |rich, rich_format| {
+                let (copy_text, format) = match format {
+                    CopyFormat::PlainText => (text, CopyFormat::PlainText),
+                    CopyFormat::Markdown => (rich, rich_format),
+                    CopyFormat::MarkdownSelection(source) => {
+                        (text, CopyFormat::MarkdownSelection(source))
+                    }
+                };
+                if publish_primary {
+                    let (result, owner) = tui.clipboard.select(
+                        copy_text.into(),
+                        format,
+                        CopyDestination::ClipboardAndPrimary(text.into()),
+                        tui.frame_requester(),
+                    );
+                    primary_owner = Some(owner);
+                    result
+                } else {
+                    tui.clipboard
+                        .copy(copy_text.into(), format, tui.frame_requester())
+                }
+            });
+        if publish_primary && let Some(selection) = &mut self.selection {
+            selection.primary_owner = primary_owner;
+        }
+        if matches!(action, ViewAction::CopyAndFollow(_))
+            && matches!(result, Ok(CopyStatus::Pending(_)))
+        {
+            self.follow_pending_copy();
+        }
+        Some((text.chars().count(), result))
     }
 
     pub(crate) fn follow_pending_copy(&mut self) {

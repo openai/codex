@@ -1780,6 +1780,72 @@ async fn fullscreen_composer_remote_images_leave_an_editable_prompt_row() -> Res
         "fullscreen_prompt_remote_images",
         normalize_snapshot_paths(frames.join("\n\n"))
     );
+
+    tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn footer_selection_defers_warning_clicks_and_preserves_the_draft() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    app.local_settings.tui.copy_on_select = CopyOnSelect::Never;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let size = tui.terminal.size()?;
+    app.chat_widget
+        .apply_external_edit("draft stays here".into());
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(history_cell::new_warning_event("Example warning".into())),
+    );
+    app.render_owned_transcript(&mut tui, size)?;
+    let draft = app.chat_widget.capture_thread_input_state();
+    let cursor = tui.terminal.last_known_cursor_pos;
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    let badge = buffer
+        .area
+        .positions()
+        .find(|position| buffer[*position].symbol() == "⚠")
+        .unwrap();
+    for event in [
+        mouse(Down(Left), badge.x, badge.y),
+        mouse(Drag(Left), badge.x + 11, badge.y),
+        mouse(Up(Left), badge.x + 11, badge.y),
+    ] {
+        assert!(app.handle_rendered_selection_event(&mut tui, &event)?);
+        assert!(!app.chat_widget.keymap_contexts().is_warnings());
+    }
+    app.render_owned_transcript(&mut tui, size)?;
+    assert_eq!(
+        (
+            app.chat_widget.capture_thread_input_state(),
+            tui.terminal.last_known_cursor_pos
+        ),
+        (draft, cursor)
+    );
+    {
+        let mut selection = app.chat_widget.rendered_selection.borrow_mut();
+        let crate::rendered_selection::RenderedSelection { view, cells, .. } = &mut *selection;
+        assert!(view.selected_text(cells).unwrap().contains("warning"));
+    }
+    insta::assert_snapshot!(
+        "fullscreen_footer_selection",
+        normalize_snapshot_paths(buffer_text(
+            crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal)
+        ))
+    );
+    assert!(app.handle_rendered_selection_event(
+        &mut tui,
+        &TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+    )?);
+    // Dismissal consumes the first Escape, and a stationary click still opens the warning viewer.
+    for event in [
+        mouse(Down(Left), badge.x + 2, badge.y),
+        mouse(Up(Left), badge.x + 2, badge.y),
+    ] {
+        assert!(app.handle_rendered_selection_event(&mut tui, &event)?);
+    }
+    assert!(app.chat_widget.keymap_contexts().is_warnings());
     tui.set_owned_screen(/*owned*/ false)?;
     Ok(())
 }

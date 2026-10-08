@@ -1802,6 +1802,10 @@ impl BottomPane {
         self.can_launch_external_editor()
     }
 
+    pub(crate) fn clear_composer_selection(&mut self) {
+        self.composer.clear_mouse_selection();
+    }
+
     pub(crate) fn end_composer_drag(&mut self) {
         self.composer.end_mouse_drag();
     }

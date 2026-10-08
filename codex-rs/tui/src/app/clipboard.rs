@@ -39,6 +39,12 @@ impl App {
                 self.transcript_view
                     .show_copy_feedback(&completion.1, characters);
             }
+            {
+                let mut selection = self.chat_widget.rendered_selection.borrow_mut();
+                let crate::rendered_selection::RenderedSelection { view, cells, .. } =
+                    &mut *selection;
+                view.finish_copy(cells, completion, current);
+            }
             let follow =
                 self.transcript_view
                     .finish_copy(&self.transcript_cells, completion, current);

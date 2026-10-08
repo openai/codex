@@ -345,7 +345,7 @@ impl TranscriptView {
         Some(ViewAction::Changed)
     }
 
-    fn handle_selection_key(
+    pub(crate) fn handle_selection_key(
         &mut self,
         key: KeyEvent,
         cells: &[Arc<dyn HistoryCell>],
