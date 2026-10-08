@@ -365,6 +365,8 @@ pub enum Feature {
     GuardianEnhancedNodeReplTranscripts,
     /// Include completed node_repl or cua_repl Code Mode response images in Guardian reviews.
     GuardianNodeReplTranscriptImages,
+    /// Trust connector identities from the plugin service orchestrator in Guardian V2.
+    GuardianTrustOrchestratorConnectors,
     /// Give Guardian access to the root conversation's message history tools.
     GuardianConversationHistoryTools,
     /// Enable Guardian V2 automatic approval reviews.
@@ -1811,6 +1813,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GuardianNodeReplTranscriptImages,
         key: "guardian_node_repl_transcript_images",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GuardianTrustOrchestratorConnectors,
+        key: "guardian_trust_orchestrator_connectors",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

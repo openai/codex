@@ -3,6 +3,9 @@ use std::path::Path;
 use anyhow::Result;
 use codex_extension_api::McpToolInfo;
 use codex_extension_api::McpToolSource;
+use codex_features::Feature;
+use codex_guardian_context::TrustedTool;
+use codex_guardian_context::TrustedToolSource;
 use codex_login::CodexAuth;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
@@ -35,11 +38,11 @@ fn mcp_tool(server: &str, connector_id: Option<&str>) -> Result<McpToolInfo> {
     }))?)
 }
 
-fn expected_context(tool: &McpToolInfo, source: &Path) -> codex_guardian_context::TrustedTool {
-    codex_guardian_context::TrustedTool {
+fn expected_context(tool: &McpToolInfo, source: &Path) -> TrustedTool {
+    TrustedTool {
         server: tool.server_name.clone(),
         connector_id: tool.connector_id.clone(),
-        source: source.display().to_string(),
+        source: TrustedToolSource::UserConfiguration(source.display().to_string()),
     }
 }
 
@@ -79,6 +82,33 @@ async fn trusts_only_tools_configured_in_codex_home() -> Result<()> {
         );
         assert_eq!(
             trusted_tool_context(&unrelated, &source, &test.thread_manager, &test.config).await,
+            None,
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rejects_blank_orchestrator_connector_ids() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    let mut config = test.config.clone();
+    config
+        .features
+        .enable(Feature::GuardianTrustOrchestratorConnectors)?;
+    for connector_id in [Some(""), Some(" \t\n "), None] {
+        let tool = mcp_tool("codex_apps", connector_id)?;
+        assert_eq!(
+            trusted_tool_context(
+                &tool,
+                &McpToolSource::Connector,
+                &test.thread_manager,
+                &config,
+            )
+            .await,
             None,
         );
     }

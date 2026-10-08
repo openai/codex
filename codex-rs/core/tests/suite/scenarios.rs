@@ -118,6 +118,9 @@ mod guardian_sender_context;
 #[path = "scenarios_guardian_extra_policy.rs"]
 mod guardian_extra_policy;
 
+#[path = "scenarios_guardian_orchestrator_connector.rs"]
+mod guardian_orchestrator_connector;
+
 #[path = "scenarios_guardian_conversation_history_tests.rs"]
 mod guardian_conversation_history;
 

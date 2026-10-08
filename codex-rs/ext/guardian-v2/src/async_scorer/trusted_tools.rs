@@ -1,4 +1,4 @@
-//! Verifies home ownership of the exact MCP tool under review.
+//! Verifies a trusted source for the exact MCP tool under review.
 //! Bounded rendering and trusted delivery belong to the shared context section.
 
 use std::path::Path;
@@ -7,7 +7,9 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_extension_api::McpToolInfo;
 use codex_extension_api::McpToolSource;
+use codex_features::Feature;
 use codex_guardian_context::TrustedTool;
+use codex_guardian_context::TrustedToolSource;
 
 #[derive(Clone, Copy)]
 enum PluginCapability {
@@ -21,6 +23,22 @@ pub(crate) async fn trusted_tool_context(
     manager: &ThreadManager,
     config: &Config,
 ) -> Option<TrustedTool> {
+    if source == &McpToolSource::Connector
+        && tool
+            .connector_id
+            .as_deref()
+            .is_some_and(|connector_id| !connector_id.trim().is_empty())
+        && config
+            .features
+            .enabled(Feature::GuardianTrustOrchestratorConnectors)
+    {
+        return Some(TrustedTool {
+            server: tool.server_name.clone(),
+            connector_id: tool.connector_id.clone(),
+            source: TrustedToolSource::PluginServiceOrchestrator,
+        });
+    }
+
     let codex_home = config.codex_home.as_path().canonicalize().ok()?;
     let plugins = match source {
         McpToolSource::Connector => Some(
@@ -73,7 +91,7 @@ pub(crate) async fn trusted_tool_context(
     Some(TrustedTool {
         server: tool.server_name.clone(),
         connector_id: tool.connector_id.clone(),
-        source,
+        source: TrustedToolSource::UserConfiguration(source),
     })
 }
 

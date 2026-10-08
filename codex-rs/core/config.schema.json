@@ -938,6 +938,9 @@
             "guardian_root_handoff_context": {
               "type": "boolean"
             },
+            "guardian_trust_orchestrator_connectors": {
+              "type": "boolean"
+            },
             "guardianv2": {
               "$ref": "#/definitions/FeatureToml_for_GuardianV2ConfigToml"
             },
@@ -7194,6 +7197,9 @@
           "type": "boolean"
         },
         "guardian_root_handoff_context": {
+          "type": "boolean"
+        },
+        "guardian_trust_orchestrator_connectors": {
           "type": "boolean"
         },
         "guardianv2": {

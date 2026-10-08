@@ -219,7 +219,7 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
     let tool = super::TrustedTool {
         server: "local".into(),
         connector_id: None,
-        source: "debug-secret/config.toml".into(),
+        source: super::TrustedToolSource::UserConfiguration("debug-secret/config.toml".into()),
     };
     let repl_items = [codex_protocol::user_input::UserInput::Text {
         text: "debug-secret result".into(),

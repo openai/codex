@@ -2,6 +2,7 @@ use super::*;
 use codex_context_fragments::AnnotatedContent;
 use codex_context_fragments::ContextualUserFragment;
 use codex_guardian_context::TrustedTool;
+use codex_guardian_context::TrustedToolSource;
 use codex_http_client::HttpClientBuilder;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ContentItemMetadata;
@@ -67,7 +68,7 @@ fn adapter_preserves_trusted_tool_authority_and_scope() {
     let tool = TrustedTool {
         server: "example".into(),
         connector_id: None,
-        source: "/home/user/.codex/config.toml".into(),
+        source: TrustedToolSource::UserConfiguration("/home/user/.codex/config.toml".into()),
     };
     let trusted = ResponseItem::from(tool.render_fragment());
     let user: ResponseItem =
