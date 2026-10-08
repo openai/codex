@@ -4,6 +4,7 @@ exports_files([
     "llvm_rusty_v8_custom_libcxx.patch",
     "llvm_windows_arm64_powl.patch",
     "llvm_windows_mingw_compat.patch",
+    "mxc-sdk_utf8_resources.patch",
     "rules_rust_build_script_tools_transition.patch",
     "rules_rust_compiler_thp.patch",
     "rules_rust_process_wrapper_param_file.patch",

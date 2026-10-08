@@ -1,0 +1,7 @@
+diff --git a/src/mxc-sdk/build/build_mxc_build_common.rs b/src/mxc-sdk/build/build_mxc_build_common.rs
+--- a/src/mxc-sdk/build/build_mxc_build_common.rs
++++ b/src/mxc-sdk/build/build_mxc_build_common.rs
+@@ -104,2 +104,3 @@ fn embed_version_info_for_binary_windows(
+     let output = compiler
++        .arg("/c65001")
+         .arg("/nologo")
