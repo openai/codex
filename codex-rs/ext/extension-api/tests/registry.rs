@@ -79,7 +79,6 @@ fn mcp_context_preserves_selected_executor_order_and_unavailability() {
             workspace_roots: Vec::new(),
             selected_capability_roots: Default::default(),
             config: EnvironmentConfigState::Pending,
-            selected_capability_roots: Default::default(),
         },
         TurnEnvironmentSelection {
             environment_id: "ready-secondary".to_owned(),
@@ -87,7 +86,6 @@ fn mcp_context_preserves_selected_executor_order_and_unavailability() {
             workspace_roots: Vec::new(),
             selected_capability_roots: Default::default(),
             config: EnvironmentConfigState::FromThread,
-            selected_capability_roots: Default::default(),
         },
     ];
     let context = McpServerContributionContext::global(&config);
