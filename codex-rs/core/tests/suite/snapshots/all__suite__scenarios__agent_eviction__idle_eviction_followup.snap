@@ -1,0 +1,167 @@
+---
+source: core/tests/suite/scenarios_agent_eviction_tests.rs
+assertion_line: 183
+expression: "format!(\"{history}\\n\\nResumed worker mailbox:\\n{mailbox}\")"
+---
+Scenario: A parent delegates an API migration, queues a note while the worker is idle, and follows up after idle eviction. The same worker resumes with its earlier answer and the unread note. Complete model streams are grouped as parent, then worker.
+
+## Window 1
+-- request 1 (turn) --
+00:additional_tools/developer (2; hash=122dc70cb8c7e8f0):
+        - namespace/functions; hash=f859506569b16c70
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer:
+    You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
+
+    At the start of your turn, you are the active agent.
+    You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.
+    All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
+
+    You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task an...message to a running agent without triggering a turn. [hash=7d40ff8b58977202]
+    Child agents can also spawn their own sub-agents.
+    <OMITTED 16 LINES; ~234 TOKENS; hash=b2e94283a8c22327>
+    - All agents use the same current working directory.
+    - As a result, edits made by one agent are immediately visible to all other agents.
+
+    When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
+
+    There are 2 available concurrency slots, meaning that up to 2 agents can be active at once, including you.
+
+    Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d...uctions; when doing so, set `fork_turns` to `"none"`. [hash=18ccf7e93ecabab9]
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user:
+    Run spawn_agent for the API migration.
+-- request 2 (turn) --
+07:function_call/collaboration.spawn_agent:{"fork_turns":"none","message":"Check who owns the API migration.","task_name":"worker"}
+08:function_call_output:{"task_name":"/root/worker"}
+-- request 3 (turn) --
+09:message/user:
+    Run send_message for the API migration.
+-- request 4 (turn) --
+10:function_call/collaboration.send_message:{"message":"Use the new API for the migration.","target":"worker"}
+11:function_call_output:
+12:agent_message
+-- request 5 (turn) --
+13:message/user:
+    Run followup_task for the API migration.
+-- request 6 (turn) --
+14:function_call/collaboration.followup_task:{"message":"Continue the migration with the queued note.","target":"worker"}
+15:function_call_output:
+
+## Window 2 (after request 6: input diverged at item 03)
+-- request 7 (turn) --
+00:additional_tools/developer (2; hash=122dc70cb8c7e8f0):
+        - namespace/functions; hash=f859506569b16c70
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer:
+    You are an agent in a team of agents collaborating to complete a task.
+
+    You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. All ag...nd capable, and have access to the same set of tools. [hash=876a93c54d3f61d6]
+
+    You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task an... `send_message` to pass a message to a running agent. [hash=824c12425c7626dc]
+    Child agents can also spawn their own sub-agents.
+
+    When you provide a response in the final channel, that content is immediately delivered back to your parent agent.
+    <OMITTED 15 LINES; ~225 TOKENS; hash=fa366829bdb214be>
+    - All agents use the same current working directory.
+    - As a result, edits made by one agent are immediately visible to all other agents.
+
+    When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
+
+    There are 2 available concurrency slots, meaning that up to 2 agents can be active at once, including you.
+
+    Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d...uctions; when doing so, set `fork_turns` to `"none"`. [hash=18ccf7e93ecabab9]
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:agent_message
+-- request 8 (turn) --
+07:function_call/client_echo:{"message":"Mira owns the API migration."}
+08:function_call_output:Mira owns the API migration.
+-- request 9 (turn) --
+09:message/assistant:
+    Mira owns the API migration.
+10:agent_message
+11:agent_message
+-- request 10 (turn) --
+12:function_call/client_echo:{"message":"I will continue with Mira using the new API."}
+13:function_call_output:I will continue with Mira using the new API.
+
+Resumed worker mailbox:
+[
+  {
+    "author": "/root",
+    "content": [
+      {
+        "text": "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n",
+        "type": "input_text"
+      },
+      {
+        "encrypted_content": "Check who owns the API migration.",
+        "type": "encrypted_content"
+      }
+    ],
+    "recipient": "/root/worker",
+    "type": "agent_message"
+  },
+  {
+    "author": "/root",
+    "content": [
+      {
+        "text": "Message Type: MESSAGE\nTask name: /root/worker\nSender: /root\nPayload:\n",
+        "type": "input_text"
+      },
+      {
+        "encrypted_content": "Use the new API for the migration.",
+        "type": "encrypted_content"
+      }
+    ],
+    "recipient": "/root/worker",
+    "type": "agent_message"
+  },
+  {
+    "author": "/root",
+    "content": [
+      {
+        "text": "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n",
+        "type": "input_text"
+      },
+      {
+        "encrypted_content": "Continue the migration with the queued note.",
+        "type": "encrypted_content"
+      }
+    ],
+    "recipient": "/root/worker",
+    "type": "agent_message"
+  }
+]

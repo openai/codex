@@ -106,6 +106,9 @@ mod agent_message_board;
 #[path = "scenarios_mailbox_preemption_tests.rs"]
 mod mailbox_preemption;
 
+#[path = "scenarios_agent_eviction_tests.rs"]
+mod agent_eviction;
+
 #[path = "scenarios_partial_answers.rs"]
 mod partial_answers;
 
