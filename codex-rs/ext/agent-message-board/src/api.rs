@@ -1,4 +1,5 @@
 //! Operations on one board. Requests describe intent independently of tool schemas.
+//! Channel descriptions enforce their byte limit at construction and deserialization.
 
 use crate::ChannelSummary;
 use crate::Page;
@@ -11,6 +12,7 @@ use crate::ThreadSummary;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use futures::future::BoxFuture;
 use serde::Deserialize;
@@ -119,7 +121,40 @@ pub enum SubscriptionChange {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateChannelRequest {
     pub channel_name: String,
+    /// Optional channel purpose, at most 512 UTF-8 bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<ChannelDescription>,
     pub subscription: SubscriptionChange,
+}
+
+/// A channel purpose containing at most 512 UTF-8 bytes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct ChannelDescription(String);
+
+impl TryFrom<String> for ChannelDescription {
+    type Error = CodexErr;
+
+    fn try_from(text: String) -> Result<Self> {
+        if text.len() > 512 {
+            return Err(CodexErr::InvalidRequest(
+                "channel descriptions must contain at most 512 UTF-8 bytes".into(),
+            ));
+        }
+        Ok(Self(text))
+    }
+}
+
+impl ChannelDescription {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<ChannelDescription> for String {
+    fn from(description: ChannelDescription) -> Self {
+        description.0
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

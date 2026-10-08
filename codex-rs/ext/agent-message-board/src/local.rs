@@ -4,7 +4,9 @@
 //! Live handles in this process share one connection pool per database path.
 //! Accepted posts survive runtime unload and process restart, but cannot recreate
 //! a board after its root has been permanently deleted.
+//! Opening storage adds optional channel metadata without invalidating older readers.
 
+use crate::ChannelDescription;
 use crate::ChannelSummary;
 use crate::CreateChannelRequest;
 use crate::MessageBoardHost;
@@ -61,7 +63,7 @@ static POOLS: LazyLock<Mutex<HashMap<PathBuf, Weak<SqlitePool>>>> = LazyLock::ne
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS deleted_boards (board TEXT PRIMARY KEY NOT NULL);
 CREATE TABLE IF NOT EXISTS channels (
- board TEXT NOT NULL, name TEXT NOT NULL, name_search TEXT NOT NULL, created_at TEXT NOT NULL, timestamp INTEGER NOT NULL, author TEXT NOT NULL,
+ board TEXT NOT NULL, name TEXT NOT NULL, name_search TEXT NOT NULL, created_at TEXT NOT NULL, timestamp INTEGER NOT NULL, author TEXT NOT NULL, description TEXT,
  PRIMARY KEY(board,name)
 );
 CREATE TABLE IF NOT EXISTS posts (
@@ -128,10 +130,27 @@ impl LocalAgentMessageBoard {
                 .open_read_write_pool(&path)
                 .await
                 .map_err(storage_error)?;
-            sqlx::raw_sql(SCHEMA)
-                .execute(&pool)
+            let mut tx = pool
+                .begin_with("BEGIN IMMEDIATE")
                 .await
                 .map_err(storage_error)?;
+            sqlx::raw_sql(SCHEMA)
+                .execute(&mut *tx)
+                .await
+                .map_err(storage_error)?;
+            let has_description: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('channels') WHERE name='description')",
+            )
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+            if !has_description {
+                sqlx::query("ALTER TABLE channels ADD COLUMN description TEXT")
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(storage_error)?;
+            }
+            tx.commit().await.map_err(storage_error)?;
             let pool = Arc::new(pool);
             pools.insert(path, Arc::downgrade(&pool));
             pool
@@ -152,8 +171,14 @@ impl LocalAgentMessageBoard {
         let author = self.host.agent_path(caller).await?;
         let now = self.host.current_time(caller).await?;
         let mut tx = self.begin_write().await?;
-        self.insert_channel(&mut tx, &request.channel_name, &author, now)
-            .await?;
+        self.insert_channel(
+            &mut tx,
+            &request.channel_name,
+            request.description.as_ref().map(ChannelDescription::as_str),
+            &author,
+            now,
+        )
+        .await?;
         if request.subscription == SubscriptionChange::Subscribe {
             self.subscribe(
                 &mut tx,
@@ -234,7 +259,8 @@ impl LocalAgentMessageBoard {
             }
             PostDestination::NewChannel(channel) => {
                 validate_channel(channel)?;
-                self.insert_channel(&mut tx, channel, &author, now).await?;
+                self.insert_channel(&mut tx, channel, /*description*/ None, &author, now)
+                    .await?;
                 self.subscribe(
                     &mut tx,
                     &SubscriptionTarget::Channel(channel.clone()),
@@ -398,11 +424,12 @@ impl LocalAgentMessageBoard {
         &self,
         conn: &mut SqliteConnection,
         name: &str,
+        description: Option<&str>,
         author: &AgentPath,
         now: DateTime<Utc>,
     ) -> Result<()> {
-        let inserted = sqlx::query("INSERT OR IGNORE INTO channels(board,name,name_search,created_at,timestamp,author) VALUES(?,?,?,?,?,?)")
-            .bind(self.identity.to_string()).bind(name).bind(default_case_fold_str(name)).bind(now.to_rfc3339()).bind(now.timestamp_micros()).bind(author.to_string())
+        let inserted = sqlx::query("INSERT OR IGNORE INTO channels(board,name,name_search,created_at,timestamp,author,description) VALUES(?,?,?,?,?,?,?)")
+            .bind(self.identity.to_string()).bind(name).bind(default_case_fold_str(name)).bind(now.to_rfc3339()).bind(now.timestamp_micros()).bind(author.to_string()).bind(description)
             .execute(conn).await.map_err(storage_error)?.rows_affected();
         if inserted == 0 {
             return Err(invalid("channel already exists"));
@@ -465,7 +492,7 @@ impl LocalAgentMessageBoard {
         name: &str,
     ) -> Result<ChannelSummary> {
         let row = sqlx::query(
-            "SELECT c.created_at,c.author,
+            "SELECT c.created_at,c.author,c.description,
              (SELECT COUNT(*) FROM posts p WHERE p.board=c.board AND p.channel=c.name) AS message_count,
              (SELECT p.id FROM posts p WHERE p.board=c.board AND p.channel=c.name ORDER BY p.timestamp DESC,p.seq DESC LIMIT 1) AS last_message_id
              FROM channels c WHERE c.board=? AND c.name=?",
@@ -478,6 +505,7 @@ impl LocalAgentMessageBoard {
         .ok_or_else(|| invalid("channel not found in this board"))?;
         Ok(ChannelSummary {
             channel_name: name.to_string(),
+            description: row.get("description"),
             created_at: DateTime::parse_from_rfc3339(row.get("created_at"))
                 .map_err(storage_error)?
                 .with_timezone(&Utc),

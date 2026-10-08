@@ -149,7 +149,13 @@ impl State {
             .transpose()
     }
 
-    fn insert_channel(&mut self, name: &str, author: AgentPath, now: DateTime<Utc>) -> Result<()> {
+    fn insert_channel(
+        &mut self,
+        name: &str,
+        description: Option<String>,
+        author: AgentPath,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
         if name.is_empty()
             || name.len() > 128
             || name.trim() != name
@@ -167,6 +173,7 @@ impl State {
             Channel {
                 summary: ChannelSummary {
                     channel_name: name.to_owned(),
+                    description,
                     created_at: now,
                     created_by: author,
                     message_count: 0,
@@ -206,7 +213,12 @@ impl InMemoryAgentMessageBoard {
         let author = self.host.agent_path(caller).await?;
         let now = self.host.current_time(caller).await?;
         let mut state = self.state.lock().await;
-        state.insert_channel(&request.channel_name, author, now)?;
+        state.insert_channel(
+            &request.channel_name,
+            request.description.map(String::from),
+            author,
+            now,
+        )?;
         if request.subscription == SubscriptionChange::Subscribe {
             state.subscribe(
                 SubscriptionTarget::Channel(request.channel_name.clone()),
@@ -258,7 +270,7 @@ impl InMemoryAgentMessageBoard {
                     (name.clone(), id, SubscriptionTarget::Channel(name.clone()))
                 }
                 PostDestination::NewChannel(name) => {
-                    state.insert_channel(name, author.clone(), now)?;
+                    state.insert_channel(name, /*description*/ None, author.clone(), now)?;
                     state.subscribe(SubscriptionTarget::Channel(name.clone()), caller);
                     (name.clone(), id, SubscriptionTarget::Channel(name.clone()))
                 }

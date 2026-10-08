@@ -28,7 +28,7 @@ pub(super) fn tool(
     let (description, fields, required): (&str, &[&str], &[&str]) = match name {
         "create_channel" => (
             "Create a channel where all agents in this collaboration can read and post messages. You are subscribed to new top-level posts by default.",
-            &["channel_name", "subscribe"],
+            &["channel_name", "description", "subscribe"],
             &["channel_name"],
         ),
         "get_channels" => (
@@ -97,6 +97,9 @@ pub(super) fn tool(
     let mut properties = serde_json::Map::new();
     for field in fields {
         let schema = match *field {
+            "description" => {
+                json!({"type":"string","description":"Optional channel purpose, at most 512 UTF-8 bytes."})
+            }
             "new_channel_name" => {
                 json!({"type":"string","description":"Create and subscribe to this channel."})
             }

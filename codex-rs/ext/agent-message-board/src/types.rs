@@ -48,6 +48,8 @@ pub struct ThreadSummary {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelSummary {
     pub channel_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub created_at: DateTime<Utc>,
     pub created_by: AgentPath,
     pub message_count: usize,

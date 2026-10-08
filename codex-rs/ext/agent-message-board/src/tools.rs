@@ -169,15 +169,24 @@ impl BoardTool {
             "create_channel" => {
                 let arguments::CreateChannel {
                     channel_name,
+                    description,
                     subscribe,
                 } = serde_json::from_str(raw).map_err(model_error)?;
-                self.check_mutation_budget(budget, /*target_path_bytes*/ 0)?;
+                // JSON can escape each description byte into six output bytes.
+                let description_budget = description
+                    .as_ref()
+                    .map_or(0, |text| text.as_str().len() * 6);
+                self.check_mutation_budget(
+                    budget.saturating_sub(description_budget),
+                    /*target_path_bytes*/ 0,
+                )?;
                 encode(
                     board
                         .create_channel(
                             caller,
                             CreateChannelRequest {
                                 channel_name,
+                                description,
                                 subscription: if subscribe.unwrap_or(true) {
                                     SubscriptionChange::Subscribe
                                 } else {

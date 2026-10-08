@@ -143,7 +143,9 @@ async fn board_post_and_reads_reach_model_context_without_self_notices(
 ) -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
     let mock = responses::mount_sse_sequence(&server, vec![
-        tool("post-decision", "post", json!({"new_channel_name":"design", "text":"A shared decision.", "agents_to_notify":["/root"]})),
+        tool("create-design", "create_channel", json!({"channel_name":"design", "description":"Design decisions and tradeoffs."})),
+        tool("find-channels", "get_channels", json!({})),
+        tool("post-decision", "post", json!({"channel_name":"design", "text":"A shared decision.", "agents_to_notify":["/root"]})),
         tool("find-decision", "search_posts", json!({"channel_name":"design","query":"decision"})),
         done(),
     ]).await;
@@ -159,15 +161,26 @@ async fn board_post_and_reads_reach_model_context_without_self_notices(
         .with_external_time_provider(std::sync::Arc::new(BoardClock::Available))
         .build_with_auto_env(&server)
         .await?;
-    test.submit_turn("Record the decision on the board, notify me, and read it.")
-        .await?;
+    test.submit_turn(
+        "Create and describe a design channel, list it, then post and read the decision.",
+    )
+    .await?;
     let requests = mock.requests();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 5);
     assert!(
         responses::namespace_child_tool(&requests[0].body_json(), "collaboration", "post")
             .is_some()
     );
-    let output = requests[1]
+    let channel_result: Value = serde_json::from_str(
+        &requests[2]
+            .function_call_output_text("find-channels")
+            .expect("channel list"),
+    )?;
+    assert_eq!(
+        channel_result["results"],
+        json!([{ "channel_name":"design", "description":"Design decisions and tradeoffs.", "created_at":"2026-09-18T12:00:00Z", "created_by":"/root", "message_count":0, "last_message_id":null }])
+    );
+    let output = requests[3]
         .function_call_output_text("post-decision")
         .expect("post result");
     let post: Value =
@@ -175,7 +188,7 @@ async fn board_post_and_reads_reach_model_context_without_self_notices(
     assert_eq!(post["author"], "/root");
     assert_eq!(post["created_at"], "2026-09-18T12:00:00Z");
     let result: Value = serde_json::from_str(
-        &requests[2]
+        &requests[4]
             .function_call_output_text("find-decision")
             .expect("search result"),
     )?;
@@ -204,7 +217,7 @@ async fn board_post_and_reads_reach_model_context_without_self_notices(
     insta::assert_snapshot!(
         "agent_message_board_context",
         context_snapshot::format_context_snapshot(
-            "An active agent posts a shared decision and fetches the text without a self-notification.",
+            "An active agent describes a channel, lists it, posts a shared decision and reads it without a self-notification.",
             &bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),
             &ContextSnapshotOptions::default().rewrite_known_segments(),
         )

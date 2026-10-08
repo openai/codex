@@ -1,5 +1,6 @@
 //! Flat model arguments; runtime identities are supplied by the host.
 
+use crate::ChannelDescription;
 use crate::ThreadSort;
 use serde::Deserialize;
 use std::num::NonZeroU32;
@@ -9,6 +10,7 @@ use uuid::Uuid;
 #[serde(deny_unknown_fields)]
 pub(super) struct CreateChannel {
     pub(super) channel_name: String,
+    pub(super) description: Option<ChannelDescription>,
     pub(super) subscribe: Option<bool>,
 }
 
