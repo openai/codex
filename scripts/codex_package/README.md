@@ -64,6 +64,24 @@ binary instead of rebuilding it.
 Release jobs should likewise pass `--code-mode-host-bin` so the package contains
 the signed host executable beside the signed entrypoint.
 
+On Linux and macOS, the builder strips symbols from the **package copies** of
+source-built release-profile entrypoint and code-mode host binaries. Cargo outputs
+retain their symbols for debugging. The default `--strip auto` also preserves
+development/profiling builds and prebuilt inputs
+byte-for-byte, including signatures. Use `--strip all` to also strip prebuilt
+entrypoint/host copies, or `--strip none` to keep symbols in every package copy.
+Strip before production signing; `--strip all` is not appropriate for inputs
+whose release signatures must be preserved. Windows MSVC symbols are separate
+PDB files and are not included in the package.
+
+macOS uses `xcrun strip -S -x`, matching the release pipeline and preserving
+executable ad-hoc signatures. Linux uses `llvm-strip`, a target-prefixed GNU
+strip, or native GNU strip when the host architecture matches. For cross builds,
+install `llvm-strip` or pass `--strip-tool /path/to/target-strip`. Missing tools
+or strip failures fail the build; use `--strip none` to deliberately opt out.
+Third-party resources are copied unchanged. In particular, never strip `bwrap`
+after its integrity digest has been embedded in Codex.
+
 Release jobs that already built package resource binaries should also pass the
 corresponding resource flags: `--bwrap-bin` for Linux packages, and
 `--codex-command-runner-bin` plus `--codex-windows-sandbox-setup-bin` for

@@ -3,6 +3,8 @@
 from pathlib import Path
 import hashlib
 import json
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -15,9 +17,81 @@ from codex_package.layout import validate_package_dir
 from codex_package.targets import PACKAGE_VARIANTS
 from codex_package.targets import PackageInputs
 from codex_package.targets import TARGET_SPECS
+from codex_package.targets import default_target
 
 
 class PackageLayoutTest(unittest.TestCase):
+    @unittest.skipIf(sys.platform == "win32", "MSVC symbols are separate PDB files")
+    def test_strip_policy_preserves_inputs_and_runs_packaged_executables(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "input-executable"
+            # System executables may already be stripped. Compile with debug
+            # information so a no-op strip cannot pass this regression test.
+            subprocess.run(
+                ["cc", "-g", "-O0", "-x", "c", "-", "-o", str(source)],
+                input=r"""#include <stdio.h>
+int main(void) {
+    fputs("package-ok", stdout);
+    return 0;
+}
+""",
+                text=True,
+                check=True,
+                capture_output=True,
+            )
+            original = source.read_bytes()
+            target = default_target()
+            for mode in ("auto", "all", "none"):
+                with self.subTest(mode=mode):
+                    package = root / mode
+                    command = [
+                        sys.executable,
+                        str(
+                            Path(__file__).resolve().parents[1]
+                            / "build_codex_package.py"
+                        ),
+                        "--target",
+                        target,
+                        "--cargo-profile",
+                        "release",
+                        "--package-dir",
+                        str(package),
+                        "--strip",
+                        mode,
+                    ]
+                    flags = [
+                        "--entrypoint-bin",
+                        "--code-mode-host-bin",
+                        "--rg-bin",
+                        "--zsh-bin",
+                    ]
+                    if "linux" in target:
+                        flags.append("--bwrap-bin")
+                    for flag in flags:
+                        command.extend((flag, str(source)))
+                    if mode != "all":
+                        # Preserved prebuilt inputs must not even need a strip tool.
+                        command.extend(("--strip-tool", str(root / "absent-strip")))
+                    subprocess.run(command, check=True, capture_output=True)
+                    for name in ("codex", "codex-code-mode-host"):
+                        executable = package / "bin" / name
+                        self.assertEqual(
+                            subprocess.check_output([str(executable)]),
+                            b"package-ok",
+                        )
+                        if mode != "all":
+                            self.assertEqual(executable.read_bytes(), original)
+                        else:
+                            self.assertLess(executable.stat().st_size, len(original))
+                    self.assertEqual(source.read_bytes(), original)
+                    for resource in ("codex-path/rg", "codex-resources/zsh/bin/zsh"):
+                        self.assertEqual((package / resource).read_bytes(), original)
+                    if "linux" in target:
+                        self.assertEqual(
+                            (package / "codex-resources/bwrap").read_bytes(), original
+                        )
+
     def test_winget_preserves_signed_files_and_voice_hashes(self) -> None:
         for target in ("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"):
             with self.subTest(target=target), tempfile.TemporaryDirectory() as temp:

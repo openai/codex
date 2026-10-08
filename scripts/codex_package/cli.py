@@ -11,6 +11,7 @@ from .layout import build_package_dir
 from .layout import prepare_package_dir
 from .layout import validate_package_dir
 from .ripgrep import resolve_rg_bin
+from .symbols import strip_binary
 from .targets import PACKAGE_VARIANTS
 from .targets import TARGET_SPECS
 from .targets import PackageInputs
@@ -108,6 +109,21 @@ def create_parser() -> argparse.ArgumentParser:
         help=(
             "Cargo profile for source-built package artifacts. Use release for release packages."
         ),
+    )
+    parser.add_argument(
+        "--strip",
+        choices=("auto", "all", "none"),
+        default="auto",
+        help=(
+            "Strip Unix first-party package binaries: auto strips source-built "
+            "release-profile inputs, all also strips other profiles and prebuilt "
+            "inputs, none preserves symbols. "
+            "Original inputs and third-party resources are never modified."
+        ),
+    )
+    parser.add_argument(
+        "--strip-tool",
+        help="Target-compatible strip executable override, for example llvm-strip.",
     )
     parser.add_argument(
         "--entrypoint-bin",
@@ -236,6 +252,16 @@ def assemble_package(args: argparse.Namespace) -> Path:
     )
     prepare_package_dir(package_dir, force=args.force)
     build_package_dir(package_dir, args.package_version, variant, spec, inputs)
+    for filename, prebuilt in (
+        (variant.entrypoint_name(spec), args.entrypoint_bin),
+        (f"codex-code-mode-host{spec.exe_suffix}", args.code_mode_host_bin),
+    ):
+        if args.strip == "all" or (
+            args.strip == "auto"
+            and args.cargo_profile == "release"
+            and prebuilt is None
+        ):
+            strip_binary(package_dir / "bin" / filename, spec, tool=args.strip_tool)
     validate_package_dir(
         package_dir, variant, spec, include_zsh=inputs.zsh_bin is not None
     )
