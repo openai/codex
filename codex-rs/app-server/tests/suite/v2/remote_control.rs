@@ -19,6 +19,7 @@ use codex_app_server::PluginStartupTasks;
 use codex_app_server::RemoteControlStartupMode;
 use codex_app_server::run_main_with_transport_options;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RemoteControlClient;
@@ -713,6 +714,84 @@ async fn rpc_updates_durable_preference_but_ephemeral_does_not() -> Result<()> {
         Some(false)
     );
 
+    assert!(
+        !codex_home
+            .path()
+            .join("app-server-daemon/settings.json")
+            .exists()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_rpc_persists_unless_daemon_lock_is_busy() -> Result<()> {
+    use super::daemon_update_recovery::connect_daemon_client;
+    use super::daemon_update_recovery::request;
+    use super::daemon_update_recovery::spawn_server;
+    use serde_json::json;
+
+    let home = TempDir::new()?;
+    let mut backend = BlockingRemoteControlBackend::start(home.path()).await?;
+    let socket = home.path().join("control/server.sock");
+    let settings_file = home.path().join("app-server-daemon/settings.json");
+    let _server = spawn_server(home.path(), &socket)?;
+    let mut client = connect_daemon_client(
+        &socket,
+        InitializeCapabilities {
+            experimental_api: true,
+            ..Default::default()
+        },
+    )
+    .await?;
+    let enable = request(
+        &mut client,
+        /*id*/ 2,
+        "remoteControl/enable",
+        json!(null),
+    );
+    let enroll = async {
+        timeout(DEFAULT_TIMEOUT, backend.wait_for_enroll_request()).await??;
+        backend.complete_enrollment()
+    };
+    tokio::try_join!(enable, enroll)?;
+    let mut settings = tokio::fs::read(&settings_file).await?;
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&settings)?,
+        json!({"remoteControlEnabled": true})
+    );
+    for (id, method, ephemeral) in [
+        (3, "remoteControl/disable", true),
+        (4, "remoteControl/disable", false),
+        (5, "remoteControl/enable", true),
+    ] {
+        request(&mut client, id, method, json!({"ephemeral": ephemeral})).await?;
+        let updated = tokio::fs::read(&settings_file).await?;
+        if ephemeral {
+            assert_eq!(updated, settings);
+        } else {
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&updated)?,
+                json!({"remoteControlEnabled": false})
+            );
+        }
+        settings = updated;
+    }
+    // A lifecycle operation holding daemon.lock must not block the RPC or
+    // allow it to overwrite other settings being changed by the daemon.
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(settings_file.with_file_name("daemon.lock"))?;
+    lock.lock()?;
+    request(
+        &mut client,
+        /*id*/ 6,
+        "remoteControl/enable",
+        json!(null),
+    )
+    .await?;
+    assert_eq!(tokio::fs::read(&settings_file).await?, settings);
     Ok(())
 }
 

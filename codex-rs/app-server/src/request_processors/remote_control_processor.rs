@@ -15,17 +15,26 @@ use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_app_server_protocol::RemoteControlPairingStatusParams;
 use codex_app_server_protocol::RemoteControlPairingStatusResponse;
 use codex_app_server_protocol::RemoteControlStatusReadResponse;
+use codex_core::path_utils::write_atomically;
+use serde_json::Map;
+use serde_json::Value;
+use std::fs;
+use std::fs::OpenOptions;
+use std::fs::TryLockError;
 use std::io;
+use std::path::PathBuf;
 
 #[derive(Clone)]
 pub(crate) struct RemoteControlRequestProcessor {
     remote_control_handle: Option<RemoteControlHandle>,
+    pub(crate) daemon_settings_file: Option<PathBuf>,
 }
 
 impl RemoteControlRequestProcessor {
     pub(crate) fn new(remote_control_handle: Option<RemoteControlHandle>) -> Self {
         Self {
             remote_control_handle,
+            daemon_settings_file: None,
         }
     }
 
@@ -43,6 +52,11 @@ impl RemoteControlRequestProcessor {
                 .await
                 .map_err(map_update_error)?
         };
+        if !ephemeral {
+            self.persist_daemon_preference(/*enabled*/ true)
+                .await
+                .map_err(map_update_error)?;
+        }
         Ok(RemoteControlEnableResponse::from(status))
     }
 
@@ -60,7 +74,45 @@ impl RemoteControlRequestProcessor {
                 .await
                 .map_err(map_update_error)?
         };
+        if !ephemeral {
+            self.persist_daemon_preference(/*enabled*/ false)
+                .await
+                .map_err(map_update_error)?;
+        }
         Ok(RemoteControlDisableResponse::from(status))
+    }
+
+    async fn persist_daemon_preference(&self, enabled: bool) -> io::Result<()> {
+        let Some(path) = self.daemon_settings_file.clone() else {
+            return Ok(());
+        };
+        tokio::task::spawn_blocking(move || {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let lock = OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(path.with_file_name("daemon.lock"))?;
+            // The daemon may be waiting for this RPC during shutdown. Never wait
+            // for it: a concurrent lifecycle operation wins over RPC persistence.
+            match lock.try_lock() {
+                Ok(()) => {}
+                Err(TryLockError::WouldBlock) => return Ok(()),
+                Err(TryLockError::Error(err)) => return Err(err),
+            }
+            let mut settings: Map<String, Value> = match fs::read(&path) {
+                Ok(contents) => serde_json::from_slice(&contents)?,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => Map::new(),
+                Err(err) => return Err(err),
+            };
+            settings.insert("remoteControlEnabled".to_string(), Value::Bool(enabled));
+            write_atomically(&path, &serde_json::to_string_pretty(&settings)?)
+        })
+        .await
+        .map_err(io::Error::other)?
     }
 
     pub(crate) fn status_read(&self) -> Result<RemoteControlStatusReadResponse, JSONRPCErrorError> {
