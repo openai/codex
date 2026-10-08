@@ -19,6 +19,7 @@ impl WindowsSandboxRequestProcessor {
         config: Arc<Config>,
         config_manager: ConfigManager,
     ) -> Self {
+        codex_core::windows_sandbox::log_windows_sandbox_startup(&config);
         Self {
             outgoing,
             config,

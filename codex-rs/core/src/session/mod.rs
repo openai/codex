@@ -903,6 +903,7 @@ impl Session {
         session_configuration
             .validate(&environment_selections)
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+        crate::windows_sandbox::log_windows_sandbox_startup(&config);
 
         // Generate a unique ID for the lifetime of this session.
         let session_source_clone = session_configuration.session_source.clone();
@@ -1933,6 +1934,7 @@ impl Session {
         should_commit: impl FnOnce(&SessionConfiguration, &SessionConfiguration) -> bool + Send,
     ) -> ConstraintResult<Option<SessionSettingsCommit>> {
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
+        let windows_sandbox_changed;
         let (commit, previous_config, new_config, permission_profile_changed, mcp_inputs_changed) = {
             let mut state = self.state.lock().await;
             let updated = match self.apply_session_settings(&state.session_configuration, &updates)
@@ -1962,6 +1964,8 @@ impl Session {
                 self.mark_mcp_runtime_dirty();
             }
             // Save new environment defaults for future turns. The running turn keeps its own.
+            windows_sandbox_changed =
+                state.session_configuration.windows_sandbox_level != updated.windows_sandbox_level;
             state.session_configuration = updated;
             if root_service_tier_changed {
                 self.services.agent_control.propagate_config_update(
@@ -1990,6 +1994,13 @@ impl Session {
                 mcp_inputs_changed,
             )
         };
+        if windows_sandbox_changed {
+            crate::windows_sandbox::log_windows_sandbox_change(
+                commit.configuration.codex_home.as_path(),
+                commit.configuration.windows_sandbox_type,
+                commit.configuration.windows_sandbox_level,
+            );
+        }
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         if permission_profile_changed {
             self.refresh_managed_network_proxy_for_current_permission_profile()

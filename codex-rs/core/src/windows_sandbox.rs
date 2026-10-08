@@ -1,3 +1,5 @@
+//! Windows sandbox configuration, runtime policy, and lifecycle diagnostics.
+
 use crate::config::Config;
 use crate::config::edit::ConfigEditsBuilder;
 use codex_config::config_toml::ConfigToml;
@@ -17,6 +19,67 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
+
+/// Records local MXC availability and the selected backend at startup.
+pub fn log_windows_sandbox_startup(config: &Config) {
+    #[cfg(windows)]
+    {
+        let sandbox_dir = codex_windows_sandbox::sandbox_dir(config.codex_home.as_path());
+        let _ = std::fs::create_dir_all(&sandbox_dir);
+        let available = codex_sandboxing::windows_mxc_available();
+        codex_windows_sandbox::log_note(
+            &format!("MXC availability: {available}"),
+            Some(&sandbox_dir),
+        );
+        log_windows_sandbox_selection(
+            config.codex_home.as_path(),
+            config.effective_local_windows_sandbox_type(),
+            WindowsSandboxLevel::from_config(config),
+        );
+    }
+    #[cfg(not(windows))]
+    let _ = config;
+}
+
+/// Records the local backend after an accepted selection change.
+pub(crate) fn log_windows_sandbox_change(
+    codex_home: &Path,
+    sandbox_type: SandboxType,
+    sandbox_level: WindowsSandboxLevel,
+) {
+    #[cfg(windows)]
+    {
+        let codex_home = codex_home.to_owned();
+        tokio::task::spawn_blocking(move || {
+            log_windows_sandbox_selection(&codex_home, sandbox_type, sandbox_level);
+        });
+    }
+    #[cfg(not(windows))]
+    let _ = (codex_home, sandbox_type, sandbox_level);
+}
+
+#[cfg(windows)]
+fn log_windows_sandbox_selection(
+    codex_home: &Path,
+    sandbox_type: SandboxType,
+    sandbox_level: WindowsSandboxLevel,
+) {
+    let backend = if sandbox_type == SandboxType::WindowsMxc {
+        "mxc"
+    } else {
+        match sandbox_level {
+            WindowsSandboxLevel::Disabled => "disabled",
+            WindowsSandboxLevel::RestrictedToken => "unelevated",
+            WindowsSandboxLevel::Elevated => "elevated",
+        }
+    };
+    let sandbox_dir = codex_windows_sandbox::sandbox_dir(codex_home);
+    let _ = std::fs::create_dir_all(&sandbox_dir);
+    codex_windows_sandbox::log_note(
+        &format!("Windows sandbox selection: {backend}"),
+        Some(&sandbox_dir),
+    );
+}
 
 /// Selects local binding policy from the sandbox and executor OS.
 pub fn local_binding_policy_for_sandbox(
