@@ -23,6 +23,8 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentRequest;
 use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::apps_test_server::AppsTestServer;
@@ -31,6 +33,7 @@ use core_test_support::apps_test_server::recorded_apps_tool_calls;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::sse;
@@ -43,10 +46,12 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use test_case::test_case;
@@ -111,6 +116,81 @@ async fn thread_plugin_selection_disables_executor_hooks_without_disabling_their
             .context("standalone tool call")?["params"]["name"],
         "js"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn executor_stop_hook_uses_plugin_policy_refreshed_during_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let fixture = executor_plugin_hook_fixture(
+        test_codex().with_config(|config| {
+            config
+                .features
+                .enable(Feature::DefaultModeRequestUserInput)
+                .expect("enable request_user_input");
+        }),
+        &[("computer-use@openai-bundled", computer_use_hook_manifest())],
+        vec![
+            sse_response(sse(vec![
+                ev_function_call(
+                    "pause",
+                    "request_user_input",
+                    r#"{"questions":[{"id":"continue","header":"Continue","question":"Continue?","options":[{"label":"Yes","description":"Finish."},{"label":"No","description":"Stop."}]}]}"#,
+                ),
+                ev_completed("paused-step"),
+            ])),
+            completed_turn_response("finished-turn"),
+        ],
+    )
+    .await?;
+    fixture.attach().await?;
+    fixture
+        .test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Ask before finishing this turn".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let request = wait_for_event_match(&fixture.test.codex, |event| match event {
+        EventMsg::RequestUserInput(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+
+    let current_config = fixture.test.codex.config().await;
+    let mut config = (*current_config).clone();
+    config.config_layer_stack = config.config_layer_stack.with_user_config(
+        &config.codex_home.join("config.toml"),
+        toml::from_str("[plugins._default]\nenabled = false")?,
+    )?;
+    let _ = fixture
+        .test
+        .codex
+        .refresh_runtime_config(current_config, config)
+        .await;
+    fixture
+        .test
+        .codex
+        .submit(Op::UserInputAnswer {
+            id: request.turn_id,
+            response: RequestUserInputResponse {
+                answers: HashMap::from([(
+                    "continue".to_string(),
+                    RequestUserInputAnswer {
+                        answers: vec!["Yes".to_string()],
+                    },
+                )]),
+            },
+        })
+        .await?;
+    wait_for_event(&fixture.test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(fixture.responses.requests().len(), 2);
+    assert_eq!(fixture.calls().await?, Vec::<Value>::new());
     Ok(())
 }
 

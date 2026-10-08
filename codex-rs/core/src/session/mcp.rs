@@ -690,8 +690,7 @@ impl Session {
 
     pub(crate) async fn refresh_mcp_servers_now(
         &self,
-        turn_context: &TurnContext,
-        refresh_config: &Config,
+        added_servers: HashMap<String, McpServerConfig>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
         let Ok(_refresh) = self.mcp_refresh.acquire().await else {
@@ -699,24 +698,29 @@ impl Session {
             return;
         };
         let auth = self.services.auth_manager.auth().await;
-        let disabled_plugin_ids = {
+        {
             let mut state = self.state.lock().await;
             let mut config = (*state.session_configuration.original_config_do_not_use).clone();
-            config.mcp_servers = refresh_config.mcp_servers.clone();
+            let mut servers = config.mcp_servers.get().clone();
+            for (name, server) in added_servers {
+                servers.entry(name).or_insert(server);
+            }
+            if let Err(err) = config.mcp_servers.set(servers) {
+                warn!("failed to refresh MCP dependencies for mentioned skills: {err}");
+                return;
+            }
             state.session_configuration.original_config_do_not_use = Arc::new(config);
-            state.active_disabled_plugin_ids.clone()
-        };
+        }
         let ready_selected_capability_roots = self
             .services
             .mcp_runtime
             .current_ready_selected_capability_roots();
         let environments = self.services.turn_environments.snapshot().await;
         let environment_selections = environments.all_selections();
-        let mut desired = self.latest_mcp_desired_state(auth, environments).await;
-        desired.config = Arc::new(refresh_config.clone());
+        let desired = self.latest_mcp_desired_state(auth, environments).await;
         let executor_capability_discovery = self
             .executor_capability_discovery_for_step(
-                refresh_config,
+                &desired.config,
                 &ready_selected_capability_roots,
                 &desired.environments,
             )
@@ -725,7 +729,7 @@ impl Session {
             .services
             .mcp_manager
             .runtime_config_for_step(
-                refresh_config,
+                &desired.config,
                 &self.services.mcp_thread_init,
                 &self.services.thread_extension_data,
                 McpThreadIdentity {
@@ -733,9 +737,9 @@ impl Session {
                         .services
                         .mcp_runtime
                         .current_auth_matches(desired.auth.as_ref()),
-                    session_source: &turn_context.session_source,
-                    originator: &turn_context.originator,
-                    disabled_plugin_ids: &disabled_plugin_ids,
+                    session_source: &desired.session_source,
+                    originator: &desired.originator,
+                    disabled_plugin_ids: &desired.disabled_plugin_ids,
                     environments: McpEnvironmentScope::Selected(&environment_selections),
                 },
                 &ready_selected_capability_roots,

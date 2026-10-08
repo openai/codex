@@ -130,7 +130,8 @@ fn discovers_allowlisted_executor_plugin_hook_sources() {
         manifest,
     );
 
-    let sources = executor_plugin_hook_sources(&snapshot, |_, _| None);
+    let sources =
+        executor_plugin_hook_sources(&snapshot, &PluginsConfigToml::default(), |_, _| None);
     let mut interrupt_source = expected_source(/*index*/ 1);
     interrupt_source.hooks.interrupt = std::mem::take(&mut interrupt_source.hooks.stop);
     let mut stop_and_interrupt_source = expected_source(/*index*/ 2);
@@ -144,6 +145,22 @@ fn discovers_allowlisted_executor_plugin_hook_sources() {
             stop_and_interrupt_source,
         ]
     );
+    for (config, expected) in [
+        (
+            "[_default]\nenabled = false\n[\"computer-use@other-marketplace\"]\nenabled = true",
+            Vec::new(),
+        ),
+        (
+            "[_default]\nenabled = false\n[\"computer-use@openai-bundled\"]\nenabled = true",
+            sources,
+        ),
+    ] {
+        let config = toml::from_str(config).expect("plugin policy");
+        assert_eq!(
+            executor_plugin_hook_sources(&snapshot, &config, |_, _| None),
+            expected
+        );
+    }
 }
 
 #[test]
@@ -165,7 +182,7 @@ fn discovers_unified_computer_use_cleanup_hooks() {
     *server = "cua_repl".to_string();
 
     assert_eq!(
-        executor_plugin_hook_sources(&snapshot, |_, _| None),
+        executor_plugin_hook_sources(&snapshot, &PluginsConfigToml::default(), |_, _| None),
         vec![expected]
     );
 }
@@ -202,7 +219,7 @@ fn filters_mixed_handlers_without_rewriting_allowed_groups() {
     );
 
     assert_eq!(
-        executor_plugin_hook_sources(&snapshot, |_, _| None),
+        executor_plugin_hook_sources(&snapshot, &PluginsConfigToml::default(), |_, _| None),
         vec![expected]
     );
 }
@@ -234,7 +251,7 @@ fn preserves_allowlisted_executor_plugin_hook_options() {
     expected.hooks.interrupt = expected.hooks.stop.clone();
 
     assert_eq!(
-        executor_plugin_hook_sources(&snapshot, |_, _| None),
+        executor_plugin_hook_sources(&snapshot, &PluginsConfigToml::default(), |_, _| None),
         vec![expected]
     );
 }
@@ -378,11 +395,15 @@ fn resolves_apps_hook_metadata_from_the_registered_connector() {
             }))
             .expect("listed tool")
         });
-        let actual = executor_plugin_hook_sources(&snapshot, |server, tool| {
-            tool_info
-                .as_ref()
-                .filter(|info| info.server_name == server && info.tool.name == tool)
-        });
+        let actual = executor_plugin_hook_sources(
+            &snapshot,
+            &PluginsConfigToml::default(),
+            |server, tool| {
+                tool_info
+                    .as_ref()
+                    .filter(|info| info.server_name == server && info.tool.name == tool)
+            },
+        );
         let expected = if admitted {
             vec![expected.clone()]
         } else {
@@ -454,7 +475,7 @@ fn ignores_unallowlisted_executor_plugin_hooks() {
         );
 
         assert_eq!(
-            executor_plugin_hook_sources(&snapshot, |_, _| None),
+            executor_plugin_hook_sources(&snapshot, &PluginsConfigToml::default(), |_, _| None),
             Vec::<ExecutorPluginHookSource>::new(),
             "{name}"
         );
@@ -474,7 +495,7 @@ fn ignores_file_backed_executor_plugin_hooks() {
     );
 
     assert_eq!(
-        executor_plugin_hook_sources(&file_backed, |_, _| None),
+        executor_plugin_hook_sources(&file_backed, &PluginsConfigToml::default(), |_, _| None),
         Vec::<ExecutorPluginHookSource>::new()
     );
 }

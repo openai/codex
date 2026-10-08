@@ -94,6 +94,7 @@ impl PluginRequestProcessor {
 
             next_cursor = page.next_page_token;
             remote_results.reserve(page.plugins.len());
+            let plugin_policy = &config.plugins;
             for plugin in page.plugins {
                 let plugin_id = PluginId::parse(&plugin.id).map_err(|err| {
                     internal_error(format!("invalid remote plugin search result id: {err}"))
@@ -114,7 +115,7 @@ impl PluginRequestProcessor {
                     continue;
                 }
                 remote_results.push(plugin_search_result(
-                    remote_plugin_summary_to_info(plugin),
+                    remote_plugin_summary_to_info(plugin, plugin_policy),
                     plugin_id.marketplace_name,
                     /*marketplace_path*/ None,
                 ));

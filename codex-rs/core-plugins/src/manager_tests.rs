@@ -122,6 +122,9 @@ fn plugins_config_input_with_requirements(
 ) -> PluginsConfigInput {
     PluginsConfigInput::new(
         config_layer_stack_with_requirements(codex_home, user_config, requirements),
+        toml::from_str::<codex_config::config_toml::ConfigToml>(user_config)
+            .unwrap()
+            .plugins,
         String::new(),
         /*plugins_enabled*/ true,
         /*remote_plugin_enabled*/ false,
@@ -163,6 +166,7 @@ fn curated_repo_sync_stays_deferred_for_remote_chatgpt_catalog() {
     let tmp = TempDir::new().unwrap();
     let config = PluginsConfigInput::new(
         unrestricted_config_layer_stack(),
+        Default::default(),
         "openai".to_string(),
         /*plugins_enabled*/ true,
         /*remote_plugin_enabled*/ true,
@@ -2987,6 +2991,11 @@ async fn plugin_cache_reuses_effective_configurations() {
     let config = |session_config| {
         PluginsConfigInput::new(
             stack(session_config),
+            stack(session_config)
+                .effective_config()
+                .try_into::<codex_config::config_toml::ConfigToml>()
+                .unwrap()
+                .plugins,
             String::new(),
             /*plugins_enabled*/ true,
             /*remote_plugin_enabled*/ false,
@@ -3035,6 +3044,113 @@ enabled = false"#,
             .collect::<Vec<_>>(),
         vec![None, None],
     );
+}
+
+#[tokio::test]
+async fn plugin_defaults_resolve_remote_enablement_and_separate_cache_entries() {
+    let codex_home = TempDir::new().unwrap();
+    let cache_root = codex_home
+        .path()
+        .join("plugins/cache/openai-curated-remote");
+    for name in ["sample", "other"] {
+        write_plugin(&cache_root, &format!("{name}/local"), name);
+        write_file(
+            &cache_root.join(format!("{name}/local/.app.json")),
+            &format!(r#"{{"apps":{{"{name}":{{"id":"connector_{name}"}}}}}}"#),
+        );
+    }
+    let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+    let manager = test_plugins_manager_with_options(
+        codex_home.path().to_path_buf(),
+        Some(Product::Codex),
+        Some(AuthMode::Chatgpt),
+    );
+    manager.write_remote_installed_plugins_cache(vec![
+        remote_installed_plugin("sample"),
+        remote_installed_plugin("other"),
+    ]);
+
+    let assert_active_plugins = |loaded: &PluginLoadOutcome, expected_names: Vec<&str>| {
+        assert_eq!(
+            loaded
+                .capability_summaries()
+                .iter()
+                .map(|summary| summary.config_name.as_str())
+                .collect::<Vec<_>>(),
+            expected_names
+        );
+        assert_eq!(
+            loaded.effective_plugin_skill_roots().len(),
+            expected_names.len()
+        );
+        assert_eq!(loaded.effective_apps().len(), expected_names.len());
+        assert!(loaded.plugins().iter().all(|plugin| plugin.error.is_none()));
+    };
+
+    let sample = "sample@openai-curated-remote";
+    let other = "other@openai-curated-remote";
+    for (policy, expected_names) in [
+        ("", vec![other, sample]),
+        ("[plugins._default]\nenabled = false", Vec::new()),
+        (
+            "[plugins._default]\nenabled = false\n[plugins.\"sample@openai-curated-remote\"]\nenabled = true",
+            vec![sample],
+        ),
+        (
+            "[plugins._default]\nenabled = true\n[plugins.\"sample@openai-curated-remote\"]\nenabled = false",
+            vec![other],
+        ),
+        (
+            "[plugins._default]\nenabled = false\n[plugins.\"sample@openai-curated-remote\".mcp_servers.example]\ndefault_tools_approval_mode = 'approve'",
+            Vec::new(),
+        ),
+        // Without the new default, legacy remote account enablement still wins.
+        (
+            "[plugins.\"sample@openai-curated-remote\"]\nenabled = false",
+            vec![other, sample],
+        ),
+    ] {
+        write_file(&config_path, policy);
+        let config = load_config(codex_home.path(), codex_home.path()).await;
+        let loaded = manager.plugins_for_config(&config).await;
+        assert_active_plugins(&loaded, expected_names);
+    }
+
+    // Marketplace filtering removes these raw entries from the configured map,
+    // but remote discovery still supplies the installed bundle. Its raw policy
+    // must distinguish cache entries as host enablement changes.
+    for enabled in [true, false] {
+        let mut restricted_config = plugins_config_input_with_requirements(
+            codex_home.path(),
+            &format!(
+                "[plugins._default]\nenabled = false\n[plugins.\"sample@openai-curated-remote\"]\nenabled = {enabled}"
+            ),
+            "[marketplaces]\nrestrict_to_allowed_sources = true",
+        );
+        restricted_config.remote_plugin_enabled = true;
+        assert!(
+            configured_plugins_from_stack(
+                &restricted_config.config_layer_stack,
+                codex_home.path(),
+            )
+            .is_empty()
+        );
+        let loaded = manager.plugins_for_config(&restricted_config).await;
+        let expected = if enabled { vec![sample] } else { Vec::new() };
+        assert_active_plugins(&loaded, expected);
+    }
+
+    let mut disabled_plugin = remote_installed_plugin("sample");
+    disabled_plugin.enabled = false;
+    disabled_plugin.availability = codex_app_server_protocol::PluginAvailability::DisabledByAdmin;
+    manager.write_remote_installed_plugins_cache(vec![disabled_plugin]);
+    write_file(
+        &config_path,
+        "[plugins._default]\nenabled = false\n[plugins.\"sample@openai-curated-remote\"]\nenabled = true",
+    );
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let loaded = manager.plugins_for_config(&config).await;
+    assert_active_plugins(&loaded, Vec::new());
 }
 
 #[tokio::test]
@@ -3177,10 +3293,11 @@ fn loaded_plugins_cache_evicts_least_recently_used_configuration() {
             configured_plugins: HashMap::from([(
                 format!("plugin-{index}@test"),
                 PluginConfig {
-                    enabled: true,
+                    enabled: Some(true),
                     mcp_servers: HashMap::new(),
                 },
             )]),
+            plugin_policy: PluginsConfigToml::default(),
             skill_config_rules: SkillConfigRules::default(),
             remote_global_catalog_active: false,
             auth_identity: None,
@@ -3225,6 +3342,7 @@ fn loaded_plugins_cache_invalidation_rejects_stale_load_completion() {
     let manager = test_plugins_manager(codex_home.path().to_path_buf());
     let cache_key = PluginLoadCacheKey {
         configured_plugins: HashMap::new(),
+        plugin_policy: PluginsConfigToml::default(),
         skill_config_rules: SkillConfigRules::default(),
         remote_global_catalog_active: false,
         auth_identity: None,
@@ -3252,6 +3370,7 @@ async fn plugins_for_config_discards_in_flight_load_after_account_change() {
     );
     let config = PluginsConfigInput::new(
         unrestricted_config_layer_stack(),
+        Default::default(),
         String::new(),
         /*plugins_enabled*/ true,
         /*remote_plugin_enabled*/ true,
@@ -7010,6 +7129,11 @@ async fn load_plugins_uses_project_config_files() {
 
     let plugins = load_plugins_from_layer_stack(
         &stack,
+        &stack
+            .effective_config()
+            .try_into::<codex_config::config_toml::ConfigToml>()
+            .unwrap()
+            .plugins,
         crate::remote_plugin_id_resolver::RemoteInstalledPluginsSnapshot::default(),
         &PluginStore::new(codex_home.path().to_path_buf()),
         /*plugin_skill_snapshots*/ None,

@@ -716,7 +716,101 @@ async fn astra_kickoff_with_skills_plugins_and_remote_compaction() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context() -> Result<()> {
+async fn astra_plugin_policy_limits_visible_skills() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    write_scenario_capabilities(&home)?;
+    fs::rename(
+        home.path().join("plugins/cache/test"),
+        home.path().join("plugins/cache/openai-curated-remote"),
+    )?;
+    fs::write(
+        home.path().join("config.toml"),
+        r#"[features]
+plugins = true
+remote_plugin = true
+[skills.bundled]
+enabled = false
+[plugins._default]
+enabled = false
+[plugins."calendar@openai-curated-remote"]
+enabled = true
+"#,
+    )?;
+    let installed_plugins = ["calendar", "notes"].map(|name| json!({
+        "id": format!("plugins~Plugin_{name}"),
+        "name": name,
+        "scope": "GLOBAL",
+        "status": "ENABLED",
+        "installation_policy": "AVAILABLE",
+        "authentication_policy": "ON_USE",
+        "release": { "version": "local", "display_name": name, "description": name, "interface": {} },
+        "enabled": true,
+    }));
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/ps/plugins/installed"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "plugins": installed_plugins,
+            "pagination": { "next_page_token": null },
+        })))
+        .mount(&server)
+        .await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_response_created("skills-response"),
+            ev_assistant_message("skills", "The calendar agenda skill is available."),
+            ev_completed("skills-response"),
+        ])],
+    )
+    .await;
+    let chatgpt_base_url = server.uri();
+    let test = test_codex()
+        .with_model("gpt-6-astra")
+        .with_home(home)
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_extensions(skills_extensions())
+        .with_config(move |config| {
+            configure_scenario_catalog(config);
+            config.chatgpt_base_url = chatgpt_base_url;
+            config.workspace_roots = vec![config.cwd.clone()];
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let auth = test.thread_manager.auth_manager().auth().await;
+    test.thread_manager
+        .plugins_manager()
+        .reconcile_remote_installed_plugins(&test.config.plugins_config_input(), auth.as_ref())
+        .await?;
+    test.submit_turn("Plan a team kickoff. Which planning skills are available?")
+        .await?;
+
+    let requests = mock.requests();
+    insta::assert_snapshot!(
+        "astra_plugin_policy_limits_visible_skills",
+        context_snapshot::format_request_history_snapshot(
+            "Astra sees the permitted calendar plugin and standalone skills, but not the unlisted notes plugin.",
+            &requests,
+            &ContextSnapshotOptions::default().include_request_settings(),
+        )
+    );
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum ExecutorPluginDisablement {
+    ThreadSelection,
+    ConfigRefresh,
+}
+
+#[test_case::test_case(ExecutorPluginDisablement::ThreadSelection; "thread_selection")]
+#[test_case::test_case(ExecutorPluginDisablement::ConfigRefresh; "config_refresh")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context(
+    disablement: ExecutorPluginDisablement,
+) -> Result<()> {
     use codex_extension_api::ContextContributor;
     use codex_extension_api::ExtensionFuture;
     use codex_extension_api::SelectedPluginSnapshot;
@@ -736,9 +830,11 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context() ->
             input: WorldStateContributionInput<'a>,
         ) -> ExtensionFuture<'a, Vec<WorldStateSectionContribution>> {
             Box::pin(async move {
-                let first = self.first.lock().unwrap().take();
+                let first = self.first.lock().expect("world state pause lock").take();
                 if let Some(first) = first {
-                    first.send(input.turn_id.to_string()).unwrap();
+                    first
+                        .send(input.turn_id.to_string())
+                        .expect("world state pause receiver");
                     self.resume.notified().await;
                 }
                 Vec::new()
@@ -851,7 +947,10 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context() ->
     let mut thread_extension_init = ExtensionDataInit::new();
     thread_extension_init.insert(vec![selected_root(
         "plugin-skills",
-        PathUri::from_host_native_path(plugin_root)?,
+        PathUri::from_host_native_path(match disablement {
+            ExecutorPluginDisablement::ThreadSelection => plugin_root,
+            ExecutorPluginDisablement::ConfigRefresh => plugin_root.join("skills"),
+        })?,
     )]);
     let mut first_environment = test.executor_environment().selection().clone();
     let mut environment_config = environment_config_for_selection(&test.config, &first_environment);
@@ -867,7 +966,12 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context() ->
         .start_thread(StartThreadOptions {
             environments: Some(vec![first_environment.into_request()]),
             thread_extension_init,
-            disabled_plugin_ids: Some(vec!["plugin-skills".to_string()]),
+            disabled_plugin_ids: match disablement {
+                ExecutorPluginDisablement::ThreadSelection => {
+                    Some(vec!["plugin-skills".to_string()])
+                }
+                ExecutorPluginDisablement::ConfigRefresh => None,
+            },
             ..StartThreadOptions::new(test.config.clone())
         })
         .await?
@@ -890,6 +994,20 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context() ->
         })
         .await?;
     assert_eq!(outcome.await?, TurnSettingsUpdateOutcome::Applied);
+    if matches!(disablement, ExecutorPluginDisablement::ConfigRefresh) {
+        let current_config = thread.config().await;
+        let mut next_config = (*current_config).clone();
+        next_config.config_layer_stack = next_config.config_layer_stack.with_user_config(
+            &next_config.codex_home.join("config.toml"),
+            toml::from_str("[plugins._default]\nenabled = false")?,
+        )?;
+        assert_eq!(
+            thread
+                .refresh_runtime_config(current_config, next_config)
+                .await,
+            codex_core::ConfigRefreshOutcome::Published
+        );
+    }
     // Refresh shared MCP for the new roots (there is no Apps server in this test), then
     // replace its plugin list before the next step captures it or needs another refresh.
     let _ = thread.refresh_codex_apps_tools().await;
@@ -911,6 +1029,15 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context() ->
         .expect("first step's skills.list output");
     assert!(first_step_tool.contains("active-helper"));
     assert!(!first_step_tool.contains("next-helper"));
+    let plugin_was_enabled = matches!(disablement, ExecutorPluginDisablement::ConfigRefresh);
+    assert_eq!(
+        first_step_tool.contains("disabled-plugin-helper"),
+        plugin_was_enabled
+    );
+    assert_eq!(
+        requests[0].body_contains_text("disabled-plugin-helper"),
+        plugin_was_enabled
+    );
     let developer_texts = requests[1].message_input_texts("developer");
     let latest_skills = developer_texts
         .iter()
@@ -919,6 +1046,7 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context() ->
         .expect("second step's skills section");
     assert!(latest_skills.contains("next-helper"));
     assert!(!latest_skills.contains("active-helper"));
+    assert!(!latest_skills.contains("disabled-plugin-helper"));
     let mut bodies = requests
         .iter()
         .map(core_test_support::responses::ResponsesRequest::body_json)
@@ -926,7 +1054,9 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context() ->
     for body in &mut bodies {
         let input = body["input"].to_string();
         assert!(!input.contains("retired-helper"));
-        assert!(!input.contains("disabled-plugin-helper"));
+        if !plugin_was_enabled {
+            assert!(!input.contains("disabled-plugin-helper"));
+        }
         // Normalize opaque skill locators before snapshot truncation and hashing.
         body["input"] = serde_json::from_str(&input.replace(&skill_files, "<SKILLS_ROOT>/"))?;
         // Cargo and Bazel can serialize the JSON inside the tool output in different key orders.
@@ -940,10 +1070,20 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context() ->
         }
     }
     let entries = bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>();
-    insta::assert_snapshot!(
-        "astra_disabled_executor_skills",
-        context_snapshot::format_context_snapshot(
+    let (snapshot_name, description) = match disablement {
+        ExecutorPluginDisablement::ThreadSelection => (
+            "astra_disabled_executor_skills",
             "Astra keeps disabled skills hidden and uses each step's selected skills after the environment changes during preparation.",
+        ),
+        ExecutorPluginDisablement::ConfigRefresh => (
+            "astra_executor_plugin_policy_refresh",
+            "Astra applies refreshed plugin policy to the next step while preserving earlier authorized skill context and tool output.",
+        ),
+    };
+    insta::assert_snapshot!(
+        snapshot_name,
+        context_snapshot::format_context_snapshot(
+            description,
             &entries,
             &ContextSnapshotOptions::default().include_request_settings(),
         )

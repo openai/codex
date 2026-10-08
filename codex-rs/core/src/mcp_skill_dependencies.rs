@@ -155,8 +155,8 @@ async fn maybe_install_mcp_dependencies(
     }
 
     let (_, runtime_context) = sess.runtime_mcp_config_and_context(config).await;
-    for (name, server_config) in added {
-        let http_client = match runtime_context.resolve_http_client(&name, &server_config) {
+    for (name, server_config) in &added {
+        let http_client = match runtime_context.resolve_http_client(name, server_config) {
             Ok(http_client) => http_client,
             Err(err) => {
                 warn!("failed to resolve MCP dependency runtime for {name}: {err}");
@@ -190,7 +190,7 @@ async fn maybe_install_mcp_dependencies(
             oauth_config.discovered_scopes.clone(),
         );
         let oauth_client_config = server_config.oauth.as_ref();
-        let oauth_credential_name = server_config.oauth_credential_name(&name);
+        let oauth_credential_name = server_config.oauth_credential_name(name);
         let callback_port = server_config.oauth_callback_port(config.mcp_oauth_callback_port);
         let first_attempt = perform_oauth_login(
             oauth_credential_name.as_ref(),
@@ -238,18 +238,7 @@ async fn maybe_install_mcp_dependencies(
         }
     }
 
-    let mut refresh_config = config.clone();
-    let mut configured_servers = config.mcp_servers.get().clone();
-    for (name, server_config) in &servers {
-        configured_servers
-            .entry(name.clone())
-            .or_insert_with(|| server_config.clone());
-    }
-    if let Err(err) = refresh_config.mcp_servers.set(configured_servers) {
-        warn!("failed to refresh MCP dependencies for mentioned skills: {err}");
-        return;
-    }
-    sess.refresh_mcp_servers_now(turn_context, &refresh_config, elicitation_reviewer)
+    sess.refresh_mcp_servers_now(added.into_iter().collect(), elicitation_reviewer)
         .await;
 }
 

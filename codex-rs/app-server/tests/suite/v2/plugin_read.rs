@@ -61,16 +61,21 @@ use wiremock::matchers::query_param;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[test_case(Some("skills/setup/SKILL.md"), true, true, true; "enabled matching skill")]
-#[test_case(Some("skills/setup/SKILL.md"), false, true, false; "disabled plugin")]
-#[test_case(Some("skills/setup/SKILL.md"), true, false, false; "disabled skill")]
-#[test_case(None, true, true, false; "missing declaration")]
-#[test_case(Some("skills/missing/SKILL.md"), true, true, false; "unmatched declaration")]
+#[test_case(Some("skills/setup/SKILL.md"), "enabled = true", true, "", true, true; "enabled matching skill")]
+#[test_case(Some("skills/setup/SKILL.md"), "enabled = false", true, "", false, false; "disabled plugin")]
+#[test_case(Some("skills/setup/SKILL.md"), "enabled = true", false, "", true, false; "disabled skill")]
+#[test_case(None, "enabled = true", true, "", true, false; "missing declaration")]
+#[test_case(Some("skills/missing/SKILL.md"), "enabled = true", true, "", true, false; "unmatched declaration")]
+#[test_case(Some("skills/setup/SKILL.md"), "", true, "", true, true; "legacy empty entry")]
+#[test_case(Some("skills/setup/SKILL.md"), "", true, "[plugins._default]\nenabled = false", false, false; "default disabled empty entry")]
+#[test_case(Some("skills/setup/SKILL.md"), "enabled = true", true, "[plugins._default]\nenabled = false", true, true; "explicitly enabled overrides default")]
 #[tokio::test]
 async fn plugin_read_selects_local_onboarding_skill(
     onboarding_path: Option<&str>,
-    plugin_enabled: bool,
+    plugin_settings: &str,
     skill_enabled: bool,
+    plugin_default: &str,
+    expected_plugin_enabled: bool,
     expect_onboarding: bool,
 ) -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -106,8 +111,10 @@ async fn plugin_read_selects_local_onboarding_skill(
             r#"[features]
 plugins = true
 
+{plugin_default}
+
 [plugins."demo-plugin@codex-curated"]
-enabled = {plugin_enabled}
+{plugin_settings}
 
 [[skills.config]]
 name = "demo-plugin:setup"
@@ -146,7 +153,7 @@ enabled = {skill_enabled}
         ),
         enabled: skill_enabled,
     };
-    assert_eq!(response.plugin.summary.enabled, plugin_enabled);
+    assert_eq!(response.plugin.summary.enabled, expected_plugin_enabled);
     assert!(response.plugin.skills.contains(&setup_skill));
     assert_eq!(
         response.plugin.onboarding_skill,
@@ -155,18 +162,20 @@ enabled = {skill_enabled}
     Ok(())
 }
 
-#[test_case(Some("setup"), true, true, "AVAILABLE", true; "enabled matching skill")]
-#[test_case(Some("setup"), false, true, "AVAILABLE", false; "disabled plugin")]
-#[test_case(Some("setup"), true, false, "AVAILABLE", false; "disabled skill")]
-#[test_case(None, true, true, "AVAILABLE", false; "missing declaration")]
-#[test_case(Some("missing"), true, true, "AVAILABLE", false; "unmatched declaration")]
-#[test_case(Some("setup"), true, true, "DISABLED_BY_ADMIN", false; "unavailable plugin")]
+#[test_case(Some("setup"), true, true, "AVAILABLE", None, true; "enabled matching skill")]
+#[test_case(Some("setup"), false, true, "AVAILABLE", None, false; "disabled plugin")]
+#[test_case(Some("setup"), true, false, "AVAILABLE", None, false; "disabled skill")]
+#[test_case(None, true, true, "AVAILABLE", None, false; "missing declaration")]
+#[test_case(Some("missing"), true, true, "AVAILABLE", None, false; "unmatched declaration")]
+#[test_case(Some("setup"), true, true, "DISABLED_BY_ADMIN", None, false; "unavailable plugin")]
+#[test_case(Some("setup"), true, true, "AVAILABLE", Some(false), false; "default disabled")]
 #[tokio::test]
 async fn plugin_read_selects_remote_onboarding_skill(
     onboarding_name: Option<&str>,
     plugin_enabled: bool,
     skill_enabled: bool,
     status: &str,
+    default_enabled: Option<bool>,
     expect_onboarding: bool,
 ) -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -223,8 +232,11 @@ async fn plugin_read_selects_remote_onboarding_skill(
         })))
         .mount(&server)
         .await;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
+    let mut builder = TestAppServer::builder().with_codex_home(codex_home.path());
+    if let Some(enabled) = default_enabled {
+        builder = builder.with_args(&["-c", &format!("plugins._default.enabled={enabled}")]);
+    }
+    let mut mcp = builder
         .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
         .await?;
@@ -246,7 +258,10 @@ async fn plugin_read_selects_remote_onboarding_skill(
         path: None,
         enabled: skill_enabled,
     };
-    assert_eq!(response.plugin.summary.enabled, plugin_enabled);
+    assert_eq!(
+        response.plugin.summary.enabled,
+        plugin_enabled && default_enabled.unwrap_or(true)
+    );
     assert!(response.plugin.skills.contains(&setup_skill));
     assert_eq!(
         response.plugin.onboarding_skill,

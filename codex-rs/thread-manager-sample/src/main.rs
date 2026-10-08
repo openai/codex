@@ -239,6 +239,7 @@ async fn new_config(
         application_network_policy: Default::default(),
         application_auth_route_config: Some(auth_config.auth_route_config.clone()),
         config_layer_stack,
+        plugins: Default::default(),
         startup_warnings: Vec::new(),
         bypass_hook_trust: false,
         model,

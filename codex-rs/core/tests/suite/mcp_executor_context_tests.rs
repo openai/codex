@@ -38,6 +38,7 @@ impl McpServerContributor<Config> for ExecutorSelectionRecorder {
     fn selected_plugins<'a>(
         &'a self,
         context: McpServerContributionContext<'a, Config>,
+        _plugins_config: &'a codex_config::types::PluginsConfigToml,
     ) -> ExtensionFuture<'a, Vec<SelectedPlugin<'a>>> {
         Box::pin(async move {
             self.plugin_contexts

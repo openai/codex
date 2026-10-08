@@ -1788,14 +1788,21 @@ async fn reload_user_config_layer_updates_effective_apps_config() {
     assert_eq!(app.destructive_enabled, Some(false));
 }
 
+#[test_case("[shell_environment_policy]\nexclude = [\"SECRET_*\", 17]"; "shell policy")]
+#[test_case("[plugins._default]\nenabled = false\n[plugins.\"sample@openai-curated-remote\"]\nenabled = \"false\""; "plugin policy")]
 #[tokio::test]
-async fn reload_user_config_layer_keeps_previous_config_for_malformed_shell_policy() {
+async fn reload_user_config_layer_keeps_previous_config_for_malformed_policy(
+    malformed_policy: &str,
+) {
     let (session, _turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
     std::fs::create_dir_all(&codex_home).expect("create codex home");
     let config_toml_path = codex_home.join(CONFIG_TOML_FILE);
-    std::fs::write(&config_toml_path, "[apps.calendar]\nenabled = false\n")
-        .expect("write valid user config");
+    std::fs::write(
+        &config_toml_path,
+        "[apps.calendar]\nenabled = false\n[plugins._default]\nenabled = false\n",
+    )
+    .expect("write valid user config");
     session.reload_user_config_layer().await;
     let previous_config = session
         .get_config()
@@ -1806,25 +1813,19 @@ async fn reload_user_config_layer_keeps_previous_config_for_malformed_shell_poli
 
     std::fs::write(
         &config_toml_path,
-        r#"
-[apps.calendar]
-enabled = true
-
-[shell_environment_policy]
-exclude = ["SECRET_*", 17]
-"#,
+        format!("[apps.calendar]\nenabled = true\n{malformed_policy}\n"),
     )
     .expect("write malformed user config");
 
     session.reload_user_config_layer().await;
 
-    let current_config = session
-        .get_config()
-        .await
+    let config = session.get_config().await;
+    let current_config = config
         .config_layer_stack
         .effective_user_config()
         .expect("current user config");
     assert_eq!(current_config, previous_config);
+    assert!(!config.plugins.allows_plugin("sample@openai-curated-remote"));
 }
 
 #[tokio::test]
@@ -10085,8 +10086,7 @@ async fn step_context_keeps_its_mcp_runtime_for_tools() -> anyhow::Result<()> {
         .capture_step_context(turn_context, &CancellationToken::new())
         .await?;
 
-    let mut refresh_config = step_context.turn.config.as_ref().clone();
-    refresh_config.mcp_servers.set(HashMap::from([(
+    let mut added_servers = HashMap::from([(
         "newer".to_string(),
         McpServerConfig {
             auth: Default::default(),
@@ -10115,20 +10115,47 @@ async fn step_context_keeps_its_mcp_runtime_for_tools() -> anyhow::Result<()> {
             oauth_resource: None,
             tools: HashMap::new(),
         },
-    )]))?;
+    )]);
+    let ordinary: McpServerConfig = serde_json::from_value(json!({
+        "url": "https://ordinary.example/mcp",
+        "enabled": false,
+    }))?;
+    let mut current_config = session.get_config().await.as_ref().clone();
+    current_config.plugins = toml::from_str("[_default]\nenabled = false\n")?;
+    current_config
+        .mcp_servers
+        .set(HashMap::from([("ordinary".to_string(), ordinary.clone())]))?;
     session
-        .refresh_mcp_servers_now(
-            step_context.turn.as_ref(),
-            &refresh_config,
-            /*elicitation_reviewer*/ None,
-        )
+        .state
+        .lock()
+        .await
+        .session_configuration
+        .original_config_do_not_use = Arc::new(current_config.clone());
+    let mut stale_ordinary = ordinary;
+    stale_ordinary.enabled = true;
+    added_servers.insert("ordinary".to_string(), stale_ordinary);
+    let mut expected_servers = codex_mcp::configured_mcp_servers(step_context.mcp.config());
+    expected_servers.extend(current_config.mcp_servers.get().clone());
+    expected_servers.insert("newer".to_string(), added_servers["newer"].clone());
+    session
+        .refresh_mcp_servers_now(added_servers, /*elicitation_reviewer*/ None)
         .await;
 
     let next_step = session
         .capture_step_context(Arc::clone(&step_context.turn), &CancellationToken::new())
         .await
         .expect("a fresh cancellation token cannot be cancelled");
-    assert!(codex_mcp::configured_mcp_servers(next_step.mcp.config()).contains_key("newer"));
+    assert_eq!(
+        codex_mcp::configured_mcp_servers(next_step.mcp.config()),
+        expected_servers
+    );
+    assert_eq!(next_step.mcp.config().plugins, current_config.plugins);
+    assert_eq!(session.get_config().await.plugins, current_config.plugins);
+    assert_eq!(
+        step_context.mcp.config().plugins,
+        step_context.turn.config.plugins
+    );
+    assert_ne!(step_context.mcp.config().plugins, current_config.plugins);
 
     session.mark_mcp_runtime_dirty();
     session.refresh_mcp_if_dirty().await;
@@ -10138,7 +10165,11 @@ async fn step_context_keeps_its_mcp_runtime_for_tools() -> anyhow::Result<()> {
         .current_binding()
         .await
         .expect("refreshed runtime should be available");
-    assert!(codex_mcp::configured_mcp_servers(current.config()).contains_key("newer"));
+    assert_eq!(
+        codex_mcp::configured_mcp_servers(current.config()),
+        expected_servers
+    );
+    assert_eq!(current.config().plugins, current_config.plugins);
 
     let router = &step_context.tool_router;
     assert!(
@@ -10147,6 +10178,33 @@ async fn step_context_keeps_its_mcp_runtime_for_tools() -> anyhow::Result<()> {
             .iter()
             .any(|name| name.to_string() == "list_mcp_resources")
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_dependency_refresh_preserves_current_server_constraints() -> anyhow::Result<()> {
+    let (session, _) = make_session_and_context().await;
+    let mut config = session.get_config().await.as_ref().clone();
+    config.mcp_servers = crate::config::Constrained::allow_only(config.mcp_servers.get().clone());
+    let config = Arc::new(config);
+    session
+        .state
+        .lock()
+        .await
+        .session_configuration
+        .original_config_do_not_use = Arc::clone(&config);
+
+    session
+        .refresh_mcp_servers_now(
+            HashMap::from([(
+                "dependency".to_string(),
+                serde_json::from_value(json!({"command": "missing-test-mcp-server"}))?,
+            )]),
+            /*elicitation_reviewer*/ None,
+        )
+        .await;
+
+    assert!(Arc::ptr_eq(&session.get_config().await, &config));
     Ok(())
 }
 

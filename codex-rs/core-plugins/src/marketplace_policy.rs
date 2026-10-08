@@ -21,10 +21,12 @@ use codex_config::RequirementSource;
 use codex_config::types::MarketplaceConfig;
 use codex_config::types::MarketplaceSourceType;
 use codex_config::types::PluginConfig;
+use codex_config::types::PluginsConfigToml;
 use codex_plugin::PluginId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path::paths_match_after_normalization;
 use regex::Regex;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
@@ -236,6 +238,9 @@ pub(crate) fn policy_filtered_plugin_config(
         .and_then(toml::Value::as_table_mut)
     {
         plugins.retain(|plugin_key, _| {
+            if plugin_key == "_default" {
+                return true;
+            }
             let Ok(plugin_id) = PluginId::parse(plugin_key) else {
                 return !policy.is_restricted();
             };
@@ -301,8 +306,8 @@ pub(crate) fn configured_plugins_from_stack(
     let Some(plugins_value) = effective_config.get("plugins") else {
         return HashMap::new();
     };
-    match plugins_value.clone().try_into() {
-        Ok(plugins) => plugins,
+    match PluginsConfigToml::deserialize(plugins_value.clone()) {
+        Ok(plugins) => plugins.plugins,
         Err(err) => {
             tracing::warn!("invalid plugins config: {err}");
             HashMap::new()

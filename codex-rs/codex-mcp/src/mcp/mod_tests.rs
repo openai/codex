@@ -101,6 +101,7 @@ pub(crate) fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         approval_policy: Constrained::allow_any(AskForApproval::OnRequest),
         permission_profile: PermissionProfile::default(),
         config_layer_stack: codex_config::ConfigLayerStack::default(),
+        plugins: Default::default(),
         approvals_reviewer: codex_config::types::ApprovalsReviewer::default(),
         environment_cwds: HashMap::new(),
         environment_use_mxc: HashMap::new(),

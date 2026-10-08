@@ -1577,6 +1577,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
     struct InitialDataRecorder {
         lifecycle_observed: Arc<std::sync::Mutex<Vec<(String, String)>>>,
         mcp_observed: Arc<std::sync::Mutex<Vec<(String, SessionSource)>>>,
+        mcp_loaded: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl codex_extension_api::ThreadLifecycleContributor<Config> for InitialDataRecorder {
@@ -1617,6 +1618,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         fn selected_plugins<'a>(
             &'a self,
             context: codex_extension_api::McpServerContributionContext<'a, Config>,
+            _plugins_config: &'a codex_config::types::PluginsConfigToml,
         ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::SelectedPlugin<'a>>>
         {
             Box::pin(async move {
@@ -1652,16 +1654,19 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                 let source_environment_id = environment_id.clone();
                 server.environment_id = source_environment_id.clone();
                 server.enabled = false;
-                let plugin_id = format!("plugin-{}", selected_root.id);
+                let selected_root_id = selected_root.id;
+                let plugin_id = format!("plugin-{selected_root_id}");
+                let mcp_loaded = Arc::clone(&self.mcp_loaded);
                 vec![codex_extension_api::SelectedPlugin {
-                    selected_root_id: selected_root.id.clone(),
+                    selected_root_id: selected_root_id.clone(),
                     plugin_id: plugin_id.clone(),
                     mcp: Box::pin(async move {
+                        mcp_loaded.fetch_add(1, Ordering::Relaxed);
                         codex_extension_api::SelectedPluginContribution {
                             plugin_display_name: plugin_id,
                             source_environment_id,
-                            connector_ids: vec![format!("{}-connector", selected_root.id)],
-                            servers: vec![(selected_root.id, server)],
+                            connector_ids: vec![format!("{selected_root_id}-connector")],
+                            servers: vec![(selected_root_id, server)],
                         }
                     }),
                 }]
@@ -1685,9 +1690,11 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
 
     let lifecycle_observed = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mcp_observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mcp_loaded = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let recorder = Arc::new(InitialDataRecorder {
         lifecycle_observed: Arc::clone(&lifecycle_observed),
         mcp_observed: Arc::clone(&mcp_observed),
+        mcp_loaded: Arc::clone(&mcp_loaded),
     });
     let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
     extensions.thread_lifecycle_contributor(recorder.clone());
@@ -1859,7 +1866,29 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             .get("originator"),
         Some(&"codex_work_desktop".to_string())
     );
-    for disabled_plugin_ids in [vec!["plugin-selected-a".to_string()], vec![]] {
+    for (policy, disabled_plugin_ids, selected_enabled, expected_mcp_loads) in [
+        ("", vec!["plugin-selected-a".to_string()], false, 1),
+        ("", vec![], true, 1),
+        ("[plugins._default]\nenabled = false", vec![], false, 0),
+        (
+            "[plugins._default]\nenabled = false\n[plugins.plugin-selected-a]\nenabled = true",
+            vec![],
+            true,
+            1,
+        ),
+    ] {
+        let mut config = config.clone();
+        config.config_layer_stack = config
+            .config_layer_stack
+            .with_user_config(
+                &config.codex_home.join("config.toml").abs(),
+                toml::from_str(policy).expect("plugin policy"),
+            )
+            .expect("plugin policy layers");
+        config.plugins = toml::from_str::<codex_config::config_toml::ConfigToml>(policy)
+            .unwrap()
+            .plugins;
+        let loaded_before = mcp_loaded.load(Ordering::Relaxed);
         let projection = first_session
             .services
             .mcp_manager
@@ -1882,7 +1911,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             .await;
         assert_eq!(
             projection.selected_plugins.disabled_plugin_roots,
-            if disabled_plugin_ids.is_empty() {
+            if selected_enabled {
                 vec![]
             } else {
                 vec!["selected-a".to_string()]
@@ -1890,7 +1919,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         );
         assert_eq!(
             selected_servers(&projection.config).contains_key("selected-a"),
-            disabled_plugin_ids.is_empty()
+            selected_enabled
         );
         assert_eq!(
             projection
@@ -1902,7 +1931,11 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         );
         assert_eq!(
             projection.selected_plugins.plugins.len(),
-            usize::from(disabled_plugin_ids.is_empty())
+            usize::from(selected_enabled)
+        );
+        assert_eq!(
+            mcp_loaded.load(Ordering::Relaxed) - loaded_before,
+            expected_mcp_loads
         );
     }
 }

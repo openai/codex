@@ -3626,7 +3626,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "default": true,
+          "description": "Explicit activation override. Omission inherits the installed-plugin default.",
           "type": "boolean"
         },
         "mcp_servers": {
@@ -3676,6 +3676,34 @@
           },
           "description": "Per-tool policy settings keyed by tool name.",
           "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "PluginsConfigToml": {
+      "additionalProperties": {
+        "$ref": "#/definitions/PluginConfig"
+      },
+      "description": "Plugin activation and capability settings loaded from configuration layers.",
+      "properties": {
+        "_default": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PluginsDefaultConfig"
+            }
+          ],
+          "description": "Defaults for installed plugin activation. Omission preserves source enablement. Explicit plugin enablement settings override this default, but cannot enable an installation disabled by its source."
+        }
+      },
+      "type": "object"
+    },
+    "PluginsDefaultConfig": {
+      "additionalProperties": false,
+      "description": "Default activation settings for installed plugins.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -7802,12 +7830,13 @@
       "$ref": "#/definitions/ReasoningEffort"
     },
     "plugins": {
-      "additionalProperties": {
-        "$ref": "#/definitions/PluginConfig"
-      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/PluginsConfigToml"
+        }
+      ],
       "default": {},
-      "description": "User-level plugin config entries keyed by plugin name.",
-      "type": "object"
+      "description": "Default and per-plugin settings keyed by exact `<plugin>@<marketplace>` IDs."
     },
     "profile": {
       "description": "Profile to use from the `profiles` map.",

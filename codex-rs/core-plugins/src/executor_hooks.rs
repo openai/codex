@@ -2,6 +2,7 @@
 
 use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
 use codex_config::HookHandlerConfig;
+use codex_config::types::PluginsConfigToml;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
@@ -28,11 +29,15 @@ use crate::manifest::parse_plugin_manifest_uri;
 /// hooks from the bundled cleanup allowlist and the remote Browser plugin.
 pub fn executor_plugin_hook_sources<'a>(
     snapshot: &ExecutorCapabilityDiscoverySnapshot,
+    plugins_config: &PluginsConfigToml,
     lookup_enabled_tool: impl Fn(&str, &str) -> Option<&'a ToolInfo>,
 ) -> Vec<ExecutorPluginHookSource> {
     let mut sources = Vec::new();
 
     for entry in snapshot.roots() {
+        if !plugins_config.allows_plugin(&entry.selected_root.id) {
+            continue;
+        }
         let Ok(plugin_id) = PluginId::parse(&entry.selected_root.id) else {
             continue;
         };

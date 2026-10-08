@@ -18,6 +18,7 @@ use wiremock::matchers::path;
 fn repeated_service_configs_and_early_clones_share_one_lazy_pool() {
     let input = PluginsConfigInput::new(
         ConfigLayerStack::default(),
+        Default::default(),
         "openai".to_string(),
         /*plugins_enabled*/ true,
         /*remote_plugin_enabled*/ true,
@@ -38,6 +39,7 @@ fn repeated_service_configs_and_early_clones_share_one_lazy_pool() {
         .collect();
     let new_input = PluginsConfigInput::new(
         input.config_layer_stack.clone(),
+        input.plugins.clone(),
         input.model_provider_id.clone(),
         input.plugins_enabled,
         input.remote_plugin_enabled,
@@ -85,6 +87,7 @@ async fn reused_pool_uses_current_endpoint_product_and_authentication() {
     }
     let mut input = PluginsConfigInput::new(
         ConfigLayerStack::default(),
+        Default::default(),
         "openai".to_string(),
         /*plugins_enabled*/ true,
         /*remote_plugin_enabled*/ true,

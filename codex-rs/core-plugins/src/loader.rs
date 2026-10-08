@@ -30,6 +30,7 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::PluginConfig;
 use codex_config::types::PluginMcpServerConfig;
+use codex_config::types::PluginsConfigToml;
 use codex_connectors::parse_plugin_app_config;
 use codex_connectors::parse_plugin_app_config_value;
 use codex_mcp::parse_agent_plugin_mcp_config;
@@ -54,6 +55,7 @@ use codex_utils_plugins::PluginSkillRoot;
 use codex_utils_plugins::SkillDiscoveryMode;
 use codex_utils_plugins::find_plugin_manifest_path;
 use codex_utils_plugins::migrated_command_skills_root;
+use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -131,8 +133,11 @@ pub(crate) fn log_plugin_load_errors(plugins: &[LoadedPlugin<McpServerConfig>]) 
 
 /// Load configured plugins without applying auth-dependent runtime policies.
 #[instrument(level = "trace", skip_all)]
+// Keep validated policy with the existing snapshot inputs instead of reparsing layers.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn load_plugins_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
+    plugin_policy: &codex_config::types::PluginsConfigToml,
     remote_installed_plugins_snapshot: RemoteInstalledPluginsSnapshot,
     store: &PluginStore,
     plugin_skill_snapshots: Option<&SkillRootSnapshots<PluginSkillRoot>>,
@@ -147,6 +152,7 @@ pub(crate) async fn load_plugins_from_layer_stack(
     } = remote_installed_plugins_snapshot;
     load_plugins_from_layer_stack_with_scope(
         config_layer_stack,
+        plugin_policy,
         extra_plugins,
         store,
         remote_global_catalog_active,
@@ -163,17 +169,22 @@ pub(crate) async fn load_plugins_from_layer_stack(
 
 async fn load_plugins_from_layer_stack_with_scope(
     config_layer_stack: &ConfigLayerStack,
+    plugin_policy: &codex_config::types::PluginsConfigToml,
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
     remote_global_catalog_active: bool,
     scope: PluginLoadScope<'_>,
 ) -> Vec<LoadedPlugin<McpServerConfig>> {
-    let configured_plugins = merge_configured_plugins_with_remote_installed(
+    let mut configured_plugins = merge_configured_plugins_with_remote_installed(
         configured_plugins_from_stack(config_layer_stack, store.codex_home().as_path()),
         extra_plugins,
         store,
         remote_global_catalog_active,
     );
+    for (plugin_id, plugin) in &mut configured_plugins {
+        plugin.enabled =
+            Some(plugin.enabled.unwrap_or(true) && plugin_policy.allows_plugin(plugin_id));
+    }
     let mut configured_plugins: Vec<_> = configured_plugins.into_iter().collect();
     configured_plugins.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
@@ -202,6 +213,7 @@ async fn load_plugins_from_layer_stack_with_scope(
 /// Load hooks from enabled plugins without loading their skills, MCP servers, or apps.
 pub async fn load_plugin_hooks_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
+    plugin_policy: &codex_config::types::PluginsConfigToml,
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
     target_curated_marketplace: TargetCuratedMarketplace,
@@ -209,6 +221,7 @@ pub async fn load_plugin_hooks_from_layer_stack(
 ) -> PluginHookLoadOutcome {
     let mut plugins = load_plugins_from_layer_stack_with_scope(
         config_layer_stack,
+        plugin_policy,
         extra_plugins,
         store,
         remote_global_catalog_active,
@@ -365,7 +378,7 @@ pub fn remote_installed_plugins_to_config(
             Some((
                 plugin_id.as_key(),
                 PluginConfig {
-                    enabled: plugin.enabled,
+                    enabled: Some(plugin.enabled),
                     mcp_servers: HashMap::new(),
                 },
             ))
@@ -736,8 +749,8 @@ fn configured_plugins_from_config_value(
     let Some(plugins_value) = user_config.get("plugins") else {
         return HashMap::new();
     };
-    match plugins_value.clone().try_into() {
-        Ok(plugins) => plugins,
+    match PluginsConfigToml::deserialize(plugins_value.clone()) {
+        Ok(plugins) => plugins.plugins,
         Err(err) => {
             warn!("invalid plugins config: {err}");
             HashMap::new()
@@ -846,7 +859,7 @@ async fn load_plugin(
         plugin_namespace: None,
         manifest_description: None,
         root,
-        enabled: plugin.enabled,
+        enabled: plugin.enabled.unwrap_or(true),
         skill_roots: Vec::new(),
         skill_discovery_mode: SkillDiscoveryMode::Recursive,
         disabled_skill_paths: HashSet::new(),
@@ -858,7 +871,7 @@ async fn load_plugin(
         error: None,
     };
 
-    if !plugin.enabled {
+    if !loaded_plugin.enabled {
         return loaded_plugin;
     }
 
@@ -1419,16 +1432,6 @@ pub async fn load_configured_plugin_mcp_servers(
         .map(|plugin| &plugin.mcp_servers);
 
     load_plugin_mcp_servers_with_policy(plugin_root, auth_mode, plugin_policy).await
-}
-
-/// Resolves effective per-plugin MCP policies without validating opaque selected-root IDs.
-pub fn configured_plugin_mcp_server_policies(
-    config_layer_stack: &ConfigLayerStack,
-) -> HashMap<String, HashMap<String, PluginMcpServerConfig>> {
-    configured_plugins_from_config_value(&config_layer_stack.effective_config())
-        .into_iter()
-        .map(|(plugin_id, plugin)| (plugin_id, plugin.mcp_servers))
-        .collect()
 }
 
 /// Applies user policy without widening the selected plugin's declared restrictions.

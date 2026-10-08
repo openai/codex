@@ -7,6 +7,7 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_config::config_toml::ConfigToml;
 use codex_plugin::PluginId;
 use codex_utils_plugins::AGENT_PLUGIN_SCHEMA_URI;
 use pretty_assertions::assert_eq;
@@ -278,6 +279,11 @@ async fn installed_agent_plugin_uses_isolated_data_root_for_stdio_mcp() {
 
     let plugins = load_plugins_from_layer_stack(
         &stack,
+        &stack
+            .effective_config()
+            .try_into::<codex_config::config_toml::ConfigToml>()
+            .unwrap()
+            .plugins,
         RemoteInstalledPluginsSnapshot::default(),
         &store,
         /*plugin_skill_snapshots*/ None,
@@ -370,29 +376,30 @@ fn configured_plugins_from_stack_merges_enabled_effective_layers() {
             (
                 "base".to_string(),
                 PluginConfig {
-                    enabled: true,
+                    enabled: Some(true),
                     mcp_servers: HashMap::new(),
                 },
             ),
             (
                 "profile".to_string(),
                 PluginConfig {
-                    enabled: true,
+                    enabled: Some(true),
                     mcp_servers: project_mcp_servers.clone(),
                 },
             ),
             (
                 "system".to_string(),
                 PluginConfig {
-                    enabled: true,
+                    enabled: Some(true),
                     mcp_servers: HashMap::new(),
                 },
             ),
         ])
     );
+    let config: ConfigToml = stack.effective_config().try_into().expect("plugin config");
     assert_eq!(
-        configured_plugin_mcp_server_policies(&stack).get("profile"),
-        Some(&project_mcp_servers)
+        config.plugins.plugins["profile"].mcp_servers,
+        project_mcp_servers
     );
 }
 
@@ -420,8 +427,8 @@ async fn legacy_ema_policy_disables_installed_and_selected_plugin_servers() {
             ConfigRequirementsToml::default(),
         )
         .expect("legacy policy stack");
-        let policies = configured_plugin_mcp_server_policies(&stack);
-        let policy = policies.get("plugin@market").expect("plugin policy");
+        let config: ConfigToml = stack.effective_config().try_into().expect("plugin config");
+        let policy = &config.plugins.plugins["plugin@market"].mcp_servers;
         let installed = load_plugin_mcp_servers_with_policy(
             &plugin_root,
             /*auth_mode*/ None,
@@ -536,6 +543,11 @@ enabled = true
 
     let full = load_plugins_from_layer_stack(
         &stack,
+        &stack
+            .effective_config()
+            .try_into::<codex_config::config_toml::ConfigToml>()
+            .unwrap()
+            .plugins,
         RemoteInstalledPluginsSnapshot::default(),
         &store,
         /*plugin_skill_snapshots*/ None,
@@ -546,6 +558,11 @@ enabled = true
     .await;
     let hooks_only = load_plugins_from_layer_stack_with_scope(
         &stack,
+        &stack
+            .effective_config()
+            .try_into::<codex_config::config_toml::ConfigToml>()
+            .unwrap()
+            .plugins,
         HashMap::new(),
         &store,
         /*remote_global_catalog_active*/ false,
@@ -587,6 +604,78 @@ enabled = true
     assert!(hooks_only_valid.skill_roots.is_empty());
     assert!(hooks_only_valid.mcp_servers.is_empty());
     assert!(hooks_only_valid.apps.is_empty());
+
+    for (policy, active, extra_plugins) in [
+        (
+            "[plugins._default]\nenabled = false\n[plugins.\"valid@test\"]\nenabled = true",
+            true,
+            // Typed policy must also veto enabled entries from the original source map.
+            configured_plugins_from_stack(&stack, temp_dir.path()),
+        ),
+        (
+            "[plugins.\"valid@test\".mcp_servers.example]\nenabled = true",
+            true,
+            HashMap::new(),
+        ),
+        (
+            "[plugins._default]\nenabled = false\n[plugins.\"valid@test\".mcp_servers.example]\ndefault_tools_approval_mode = 'approve'",
+            false,
+            HashMap::new(),
+        ),
+    ] {
+        let stack = ConfigLayerStack::default()
+            .with_user_config(
+                &user_config_path(&temp_dir, "inherited.toml"),
+                toml::from_str(policy).expect("plugin policy"),
+            )
+            .expect("valid inherited config");
+        let policy = stack
+            .effective_config()
+            .try_into::<ConfigToml>()
+            .expect("plugin config")
+            .plugins;
+        let plugins = load_plugins_from_layer_stack(
+            &stack,
+            &policy,
+            RemoteInstalledPluginsSnapshot::default(),
+            &store,
+            /*plugin_skill_snapshots*/ None,
+            Some(Product::Codex),
+            /*remote_global_catalog_active*/ false,
+            test_skill_root_loader().as_ref(),
+        )
+        .await;
+        let plugin = &plugins[0];
+        assert_eq!(
+            (
+                plugin.is_active(),
+                !plugin.skill_roots.is_empty(),
+                !plugin.mcp_servers.is_empty(),
+                !plugin.apps.is_empty()
+            ),
+            (active, active, active, active),
+        );
+        let hooks = load_plugin_hooks_from_layer_stack(
+            &stack,
+            &policy,
+            extra_plugins,
+            &store,
+            TargetCuratedMarketplace::OpenAi,
+            /*remote_global_catalog_active*/ false,
+        )
+        .await;
+        assert_eq!(
+            hooks,
+            PluginHookLoadOutcome {
+                hook_sources: if active {
+                    hooks_only_valid.hook_sources.clone()
+                } else {
+                    Vec::new()
+                },
+                hook_load_warnings: Vec::new(),
+            },
+        );
+    }
 }
 
 #[test]

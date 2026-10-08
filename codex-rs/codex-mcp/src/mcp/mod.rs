@@ -156,6 +156,7 @@ pub struct McpConfig {
     pub permission_profile: PermissionProfile,
     /// Configuration layers used to evaluate Apps tool policy and reviewer selection.
     pub config_layer_stack: ConfigLayerStack,
+    pub plugins: codex_config::types::PluginsConfigToml,
     /// Default reviewer used when an Apps tool has no reviewer override.
     pub approvals_reviewer: ApprovalsReviewer,
     /// Working directories for the exact environment handles used by this runtime.

@@ -237,7 +237,7 @@ async fn account_change_clears_hosted_plugins_before_waiting_for_executor() -> a
         &config, &init, &thread, "test", &roots, /*executor_capability_discovery*/ None,
     )
     .with_auth_changed(/*auth_changed*/ true);
-    let mut loading = std::pin::pin!(contributor.selected_plugins(context));
+    let mut loading = std::pin::pin!(contributor.selected_plugins(context, &config.plugins));
     assert!(futures::poll!(&mut loading).is_pending());
     assert_eq!(state.cloud_catalog(), None);
     Ok(())

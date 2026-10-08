@@ -2,6 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use codex_config::types::PluginsConfigToml;
 use codex_context_fragments::ContextualUserFragment;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -92,10 +93,12 @@ pub trait McpServerContributor<C: Sync>: Send + Sync {
     /// Declares executor plugins, including those without MCP servers or connectors. Each
     /// declaration identifies the plugin once; its deferred MCP data cannot change that identity.
     /// Return plugins in precedence order: across contributors in registration order, the first
-    /// plugin wins if several provide the same server.
+    /// plugin wins if several provide the same server. Use the supplied plugin policy for both
+    /// admission and deferred projection; a step's policy may be newer than its other config.
     fn selected_plugins<'a>(
         &'a self,
         _context: McpServerContributionContext<'a, C>,
+        _plugins_config: &'a PluginsConfigToml,
     ) -> ExtensionFuture<'a, Vec<SelectedPlugin<'a>>> {
         Box::pin(async { Vec::new() })
     }

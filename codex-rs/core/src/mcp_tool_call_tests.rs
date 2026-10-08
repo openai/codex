@@ -2621,10 +2621,15 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_serve
 }
 
 #[tokio::test]
-async fn maybe_persist_mcp_tool_approval_writes_plugin_mcp_policy() {
+async fn maybe_persist_mcp_tool_approval_preserves_plugin_default_activation() {
     let (session, turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
-    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    write_sample_plugin_mcp(codex_home.as_path());
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        "[features]\nplugins = true\n",
+    )
+    .expect("seed config");
     let key = McpToolApprovalKey {
         server: "sample".to_string(),
         plugin_id: Some("sample@test".to_string()),
@@ -2639,6 +2644,7 @@ async fn maybe_persist_mcp_tool_approval_writes_plugin_mcp_policy() {
     let parsed: ConfigToml = toml::from_str(&contents).expect("parse config");
     let tool = parsed
         .plugins
+        .plugins
         .get("sample@test")
         .and_then(|plugin| plugin.mcp_servers.get("sample"))
         .and_then(|server| server.tools.get("search"))
@@ -2652,7 +2658,41 @@ async fn maybe_persist_mcp_tool_approval_writes_plugin_mcp_policy() {
         }
     );
     assert!(contents.contains(r#"[plugins."sample@test".mcp_servers.sample.tools.search]"#));
+    assert_eq!(parsed.plugins.plugins["sample@test"].enabled, None);
     assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
+
+    let config = session.get_config().await;
+    let servers = codex_mcp::configured_mcp_servers(
+        &config
+            .to_mcp_config(session.services.plugins_manager.as_ref())
+            .await,
+    );
+    assert_eq!(&servers["sample"].tools["search"], tool);
+
+    ConfigEditsBuilder::for_config(&config)
+        .with_edits([ConfigEdit::SetPath {
+            segments: vec![
+                "plugins".to_string(),
+                "_default".to_string(),
+                "enabled".to_string(),
+            ],
+            value: value(false),
+        }])
+        .apply()
+        .await
+        .expect("disable plugins by default");
+    session.reload_user_config_layer().await;
+
+    let config = session.get_config().await;
+    assert_eq!(config.plugins.plugins, parsed.plugins.plugins);
+    assert!(
+        codex_mcp::configured_mcp_servers(
+            &config
+                .to_mcp_config(session.services.plugins_manager.as_ref())
+                .await,
+        )
+        .is_empty()
+    );
 }
 
 #[tokio::test]

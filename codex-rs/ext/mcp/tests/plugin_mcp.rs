@@ -15,8 +15,11 @@ use codex_core_plugins::PluginProvider;
 use codex_core_plugins::PluginProviderError;
 use codex_core_plugins::PluginProviderFuture;
 use codex_core_plugins::PluginSourceLocation;
+use codex_exec_server::CapabilityRootDiscovery;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorCapabilityDiscoveryCache;
+use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionDataInit;
@@ -187,6 +190,226 @@ async fn selected_plugin_package_is_contributed_without_servers_or_connectors() 
             connector_ids: Vec::new(),
         })
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn denied_malformed_plugin_retains_identity_without_capabilities() -> TestResult {
+    let default_off = "[plugins._default]\nenabled = false\n";
+    for (manifest, discovery_enabled, expected_denied) in [
+        (Some(b"{".as_slice()), false, true),
+        (None, false, false),
+        (None, true, false),
+        (
+            Some(br#"{"name":"denied","mcpServers":{"unexpected":{"command":"unexpected-command"}}}"#.as_slice()),
+            true,
+            true,
+        ),
+        (Some(b"{".as_slice()), true, true),
+        (Some(b"\xff".as_slice()), true, true),
+    ] {
+        let codex_home = tempfile::tempdir()?;
+        let plugin_root = tempfile::tempdir()?;
+        let skills_root = plugin_root.path().join("skills");
+        fs::create_dir_all(&skills_root)?;
+        if let Some(manifest) = manifest {
+            fs::create_dir_all(plugin_root.path().join(".codex-plugin"))?;
+            fs::write(plugin_root.path().join(".codex-plugin/plugin.json"), manifest)?;
+        } else {
+            // A nested package does not own its containing skill root.
+            fs::create_dir_all(plugin_root.path().join("nested/.codex-plugin"))?;
+            fs::write(
+                plugin_root.path().join("nested/.codex-plugin/plugin.json"),
+                r#"{"name":"nested"}"#,
+            )?;
+        }
+        fs::write(codex_home.path().join("config.toml"), default_off)?;
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .build()
+            .await?;
+        config.features.set_enabled(Feature::ExecutorCapabilityDiscovery, discovery_enabled)?;
+
+        let expected = if expected_denied {
+            vec![(
+                ("selected-root".to_string(), "selected-root".to_string()),
+                Vec::new(),
+                Vec::new(),
+            )]
+        } else {
+            Vec::new()
+        };
+        for selected_root in [plugin_root.path(), skills_root.as_path()] {
+            let contributions = raw_selected_plugin_contributions(&config, selected_root).await?;
+            assert_eq!(
+                contributions
+                    .into_iter()
+                    .map(|(root_id, plugin_id, contribution)| (
+                        (root_id, plugin_id),
+                        contribution.servers,
+                        contribution.connector_ids,
+                    ))
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn selected_root_ownership_retries_errors_and_caches_success() -> TestResult {
+    let codex_home = tempfile::tempdir()?;
+    let plugin_root = tempfile::tempdir()?;
+    let standalone_root = tempfile::tempdir()?;
+    let skills_root = plugin_root.path().join("skills");
+    fs::create_dir_all(&skills_root)?;
+    fs::create_dir_all(plugin_root.path().join(".codex-plugin"))?;
+    let manifest = plugin_root.path().join(".codex-plugin/plugin.json");
+    fs::write(&manifest, r#"{"name":"example"}"#)?;
+    fs::write(plugin_root.path().join(".mcp.json"), "{")?;
+    let selected_roots = [
+        ("selected-root", plugin_root.path()),
+        ("owned-subfolder", skills_root.as_path()),
+        ("standalone", standalone_root.path()),
+    ]
+    .into_iter()
+    .map(|(id, path)| {
+        Ok(SelectedCapabilityRoot {
+            id: id.to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                path: PathUri::from_host_native_path(path)?,
+            },
+        })
+    })
+    .collect::<anyhow::Result<Vec<_>>>()?;
+    let mut builder = ExtensionRegistryBuilder::new();
+    codex_mcp_extension::install_plugins(
+        &mut builder,
+        Arc::new(EnvironmentManager::default_for_tests()),
+    );
+    let registry = builder.build();
+    let thread_init = ExtensionDataInit::new();
+    let thread_store = ExtensionData::new_with_init("test-thread", thread_init.clone());
+    let default_off = "[plugins._default]\nenabled = false\n";
+    let standalone = &selected_roots[2];
+    let CapabilityRootLocation::Environment { path, .. } = &standalone.location;
+    let sandbox_contexts = HashMap::from([(
+        LOCAL_ENVIRONMENT_ID.to_string(),
+        FileSystemSandboxContext::from_permission_profile(Default::default(), path.clone()),
+    )]);
+
+    for (phase, enabled_root, expected) in [
+        (0, None, vec![("standalone", vec![])]),
+        (1, None, vec![]),
+        (2, Some("owned-subfolder"), vec![("selected-root", vec![])]),
+        (
+            3,
+            None,
+            vec![("selected-root", vec![]), ("owned-subfolder", vec![])],
+        ),
+        (
+            4,
+            None,
+            vec![("selected-root", vec![]), ("owned-subfolder", vec![])],
+        ),
+        (
+            5,
+            Some("selected-root"),
+            vec![
+                ("selected-root", vec!["probe"]),
+                ("owned-subfolder", vec![]),
+            ],
+        ),
+    ] {
+        if phase == 4 {
+            // Stable ownership must survive refresh without probing these files again.
+            fs::remove_file(&manifest)?;
+            fs::create_dir_all(standalone_root.path().join(".codex-plugin"))?;
+            fs::write(
+                standalone_root.path().join(".codex-plugin/plugin.json"),
+                "{",
+            )?;
+        } else if phase == 5 {
+            fs::write(&manifest, r#"{"name":"example"}"#)?;
+            fs::write(
+                plugin_root.path().join(".mcp.json"),
+                r#"{"mcpServers":{"probe":{"command":"probe-command"}}}"#,
+            )?;
+            fs::remove_file(standalone_root.path().join(".codex-plugin/plugin.json"))?;
+        }
+        let policy = enabled_root.map_or_else(
+            || default_off.to_string(),
+            |id| format!("{default_off}[plugins.{id}]\nenabled = true\n"),
+        );
+        fs::write(codex_home.path().join("config.toml"), policy)?;
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .build()
+            .await?;
+        // A warning requires metadata probing, which the test filesystem cannot sandbox.
+        // Complete discovery retries ownership under the same sandbox, root, and policy.
+        let discovery = (phase < 2).then(|| {
+            ExecutorCapabilityDiscoverySnapshot::new(
+                std::slice::from_ref(standalone),
+                vec![Ok(Arc::new(CapabilityRootDiscovery {
+                    id: standalone.id.clone(),
+                    path: path.clone(),
+                    plugin: None,
+                    skills: Vec::new(),
+                    namespace_manifests: Vec::new(),
+                    warnings: if phase == 0 {
+                        vec!["ownership metadata unavailable".to_string()]
+                    } else {
+                        Vec::new()
+                    },
+                    error: None,
+                }))],
+                sandbox_contexts.clone(),
+            )
+        });
+        let selected = registry.mcp_server_contributors()[0]
+            .selected_plugins(
+                McpServerContributionContext::for_step(
+                    &config,
+                    &thread_init,
+                    &thread_store,
+                    "test_originator",
+                    &selected_roots,
+                    discovery.as_ref(),
+                ),
+                &config.plugins,
+            )
+            .await;
+        let mut actual = Vec::new();
+        for plugin in selected {
+            let contribution = plugin.mcp.await;
+            actual.push((
+                plugin.selected_root_id,
+                contribution
+                    .servers
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>(),
+                contribution.connector_ids,
+            ));
+        }
+        assert_eq!(
+            actual,
+            expected
+                .into_iter()
+                .map(|(id, servers)| (
+                    id.to_string(),
+                    servers.into_iter().map(str::to_string).collect::<Vec<_>>(),
+                    Vec::new(),
+                ))
+                .collect::<Vec<_>>(),
+            "phase {phase}",
+        );
+    }
     Ok(())
 }
 
@@ -439,14 +662,17 @@ async fn raw_selected_plugin_contributions(
     };
 
     let selected = registry.mcp_server_contributors()[0]
-        .selected_plugins(McpServerContributionContext::for_step(
-            config,
-            &thread_init,
-            &thread_store,
-            "test_originator",
-            &selected_capability_roots,
-            executor_capability_discovery.as_ref(),
-        ))
+        .selected_plugins(
+            McpServerContributionContext::for_step(
+                config,
+                &thread_init,
+                &thread_store,
+                "test_originator",
+                &selected_capability_roots,
+                executor_capability_discovery.as_ref(),
+            ),
+            &config.plugins,
+        )
         .await;
     let mut contributions = Vec::new();
     for plugin in selected {

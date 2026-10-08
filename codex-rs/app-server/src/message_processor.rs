@@ -1609,7 +1609,8 @@ impl MessageProcessor {
                 self.catalog_processor.skills_config_write(params).await
             }
             ClientRequest::PluginInstall { params, .. } => {
-                self.plugin_processor.plugin_install(params).await
+                // Keep installation and auth setup state off the shared request dispatcher stack.
+                Box::pin(self.plugin_processor.plugin_install(params)).await
             }
             ClientRequest::PluginUninstall { params, .. } => {
                 self.plugin_processor.plugin_uninstall(params).await

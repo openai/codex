@@ -332,9 +332,9 @@ fn executor_hook_sources_for_step(step_context: &StepContext) -> Vec<ExecutorPlu
         .executor_capability_discovery
         .as_deref()
         .map(|snapshot| {
-            let app_tool_policy =
-                AppToolPolicyEvaluator::new(&step_context.mcp.config().config_layer_stack);
-            executor_plugin_hook_sources(snapshot, |server, tool| {
+            let config = step_context.mcp.config();
+            let app_tool_policy = AppToolPolicyEvaluator::new(&config.config_layer_stack);
+            executor_plugin_hook_sources(snapshot, &config.plugins, |server, tool| {
                 step_context
                     .mcp
                     .tool_info(server, tool)

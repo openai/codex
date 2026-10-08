@@ -1,4 +1,4 @@
-//! File-reload integration regressions; pure authority resolution is tested with Config.
+//! Runtime-refresh regressions; pure authority resolution is tested with Config.
 
 use super::*;
 use pretty_assertions::assert_eq;
@@ -126,4 +126,79 @@ async fn reload_user_config_layer_resolves_paths_without_resetting_runtime_setti
     assert_eq!(config.model, initial.model);
     assert_eq!(config.notify, initial.notify);
     assert_eq!(runtime_servers(&session).await, original_servers);
+}
+
+#[tokio::test]
+async fn hook_refresh_retries_current_plugin_policy_after_owner_replacement() -> anyhow::Result<()>
+{
+    let (session, _) = make_session_and_context().await;
+    let home = session.codex_home().await;
+    let file = home.join(CONFIG_TOML_FILE);
+    let source = tempfile::tempdir()?;
+    std::fs::create_dir_all(source.path().join(".codex-plugin"))?;
+    std::fs::write(
+        source.path().join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample","hooks":{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo sample"}]}]}}}"#,
+    )?;
+    codex_core_plugins::store::PluginStore::new(home.to_path_buf()).install(
+        AbsolutePathBuf::try_from(source.path().to_path_buf())?,
+        codex_plugin::PluginId::parse("sample@test")?,
+    )?;
+    let user_config = "[features]\nplugins = true\nhooks = true\n[plugins.\"sample@test\"]\n";
+    std::fs::write(&file, user_config)?;
+    let mut initial = load_latest_config_for_session(&session).await;
+    initial.bypass_hook_trust = true;
+    let initial = Arc::new(initial);
+    session
+        .state
+        .lock()
+        .await
+        .session_configuration
+        .original_config_do_not_use = Arc::clone(&initial);
+    session.refresh_hooks(Arc::clone(&initial)).await;
+    let request = codex_hooks::SessionStartRequest {
+        session_id: session.thread_id,
+        cwd: initial.cwd.clone(),
+        transcript_path: None,
+        model: "gpt-5.2".to_string(),
+        permission_mode: "default".to_string(),
+        target: codex_hooks::StartHookTarget::SessionStart {
+            source: codex_hooks::SessionStartSource::Startup,
+        },
+    };
+    assert_eq!(session.hooks().preview_session_start(&request).len(), 1);
+
+    let mut incoming = initial.as_ref().clone();
+    incoming.config_layer_stack = initial.config_layer_stack.with_user_config(
+        &file,
+        toml::from_str(&format!(
+            "{user_config}[plugins._default]\nenabled = false\n"
+        ))?,
+    )?;
+    let denied = Arc::new(initial.resolve_runtime_refresh(&incoming, RuntimeConfigRefresh::User)?);
+    // A concurrent refresh publishes its policy before its hook rebuild completes.
+    session
+        .state
+        .lock()
+        .await
+        .session_configuration
+        .original_config_do_not_use = Arc::clone(&denied);
+    assert_eq!(session.hooks().preview_session_start(&request).len(), 1);
+
+    session.disable_mcp_enterprise_auth().await;
+
+    let published = session.get_config().await;
+    assert!(!Arc::ptr_eq(&published, &denied));
+    assert_eq!(published.plugins, denied.plugins);
+    assert_eq!(session.hooks().preview_session_start(&request).len(), 1);
+
+    // Complete the pending deny rebuild after its owner was replaced.
+    session.refresh_hooks(denied).await;
+    assert!(Arc::ptr_eq(&session.get_config().await, &published));
+    assert!(session.hooks().preview_session_start(&request).is_empty());
+
+    // Finishing a hook rebuild from the previous allow policy must not restore it.
+    session.refresh_hooks(initial).await;
+    assert!(session.hooks().preview_session_start(&request).is_empty());
+    Ok(())
 }

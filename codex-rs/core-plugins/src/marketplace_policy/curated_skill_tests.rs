@@ -82,7 +82,12 @@ async fn curated_git_requirements_control_plugin_skills() -> Result<()> {
         )
         .await?;
         let config = PluginsConfigInput::new(
-            config_layer_stack,
+            config_layer_stack.clone(),
+            config_layer_stack
+                .effective_config()
+                .try_into::<codex_config::config_toml::ConfigToml>()
+                .unwrap()
+                .plugins,
             "openai".to_string(),
             /*plugins_enabled*/ true,
             /*remote_plugin_enabled*/ false,

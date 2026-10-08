@@ -616,6 +616,9 @@ pub struct Config {
     /// requirements).
     pub config_layer_stack: ConfigLayerStack,
 
+    /// Plugin settings resolved with this snapshot, before capability admission.
+    pub plugins: codex_config::types::PluginsConfigToml,
+
     /// Warnings collected during config load that should be shown on startup.
     pub startup_warnings: Vec<String>,
 
@@ -1741,6 +1744,7 @@ impl Config {
     pub fn plugins_config_input(&self) -> PluginsConfigInput {
         PluginsConfigInput::new(
             self.config_layer_stack.clone(),
+            self.plugins.clone(),
             self.model_provider_id.clone(),
             self.features.enabled(Feature::Plugins),
             self.features.enabled(Feature::RemotePlugin),
@@ -1865,6 +1869,7 @@ impl Config {
             approval_policy: self.permissions.approval_policy.clone(),
             permission_profile: self.permissions.permission_profile().clone(),
             config_layer_stack: self.config_layer_stack.clone(),
+            plugins: self.plugins.clone(),
             approvals_reviewer: self.approvals_reviewer,
             environment_cwds: HashMap::new(),
             environment_use_mxc: HashMap::new(),
@@ -4313,6 +4318,7 @@ impl Config {
         .map_err(std::io::Error::from)?;
         let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
         let config = Self {
+            plugins: cfg.plugins,
             prefer_mxc,
             model,
             daybreak_enabled: cfg.daybreak.unwrap_or(false),
