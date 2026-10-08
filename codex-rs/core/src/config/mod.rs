@@ -1869,6 +1869,7 @@ impl Config {
             environment_cwds: HashMap::new(),
             environment_use_mxc: HashMap::new(),
             server_permission_profiles: HashMap::new(),
+            codex_self_exe: self.codex_self_exe.clone(),
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             use_legacy_landlock: self.features.use_legacy_landlock(),
             apps_enabled: self.features.enabled(Feature::Apps),

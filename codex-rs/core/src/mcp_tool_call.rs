@@ -876,6 +876,10 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     // TODO(anp): Build this metadata from the server's captured
     // TurnEnvironment::sandbox_context instead of the runtime-wide Landlock value.
     let sandbox_state = serde_json::to_value(SandboxState {
+        codex_executable: prepared_call
+            .sandbox_codex_executable()
+            .await
+            .map(AbsolutePathBuf::into_path_buf),
         permission_profile: prepared_call.permission_profile().clone(),
         codex_linux_sandbox_exe: prepared_call.config().codex_linux_sandbox_exe.clone(),
         sandbox_cwd,

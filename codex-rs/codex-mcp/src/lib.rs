@@ -122,6 +122,7 @@ mod resource_client;
 mod resource_origin;
 pub(crate) mod rmcp_client;
 pub(crate) mod runtime;
+mod sandbox_executable;
 pub(crate) mod server;
 mod tool_catalog_cache;
 pub(crate) mod tools;

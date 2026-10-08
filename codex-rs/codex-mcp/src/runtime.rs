@@ -784,9 +784,35 @@ impl McpRuntime {
     }
 }
 
+/// Opaque sandbox state forwarded unchanged to `codex sandbox --sandbox-state-json`.
+/// Servers advertise `codex/sandbox-state-meta` to receive it on tool calls.
+///
+/// `codexExecutable` is the one field servers may interpret: invoke that absolute
+/// path with `sandbox --sandbox-state-json <the original JSON object> -- <command>`.
+/// Do not deserialize and reconstruct the opaque state in a consumer: doing so
+/// can discard future policy fields. The state describes the issuing call, so a
+/// long-lived subprocess must retain its launch state and must not be reused for
+/// a different policy without an explicit lifecycle decision.
+///
+/// MCP probes the host's existing re-exec binary once to verify this contract.
+/// Standalone binaries without the capability omit it; HTTP and remote-executor
+/// servers receive no host-local path even when the host has a full CLI.
+/// Older clients omit the field and older CLI consumers ignore it when decoding.
+/// Servers that require it must fail closed or require an explicit operator
+/// opt-out, never silently search PATH or execute an unsandboxed command.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxState {
+    /// Absolute path to a full Codex CLI on the MCP server's host, supporting
+    /// `sandbox --sandbox-state-json`. Consumers may read this field to launch
+    /// the CLI, but must forward the entire state unchanged.
+    ///
+    /// Absent for older clients, embeddings without a full CLI, and transports
+    /// or remote environments where a usable server-host executable is unknown.
+    /// Also omitted when the OS path cannot be represented as a JSON string.
+    /// Absence does not authorize an unsandboxed fallback or a PATH lookup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_executable: Option<PathBuf>,
     pub permission_profile: PermissionProfile,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub sandbox_cwd: PathUri,
@@ -1161,6 +1187,7 @@ mod tests {
         )
         .expect("current directory should convert to a URI");
         let sandbox_state = SandboxState {
+            codex_executable: None,
             permission_profile: PermissionProfile::workspace_write(),
             codex_linux_sandbox_exe: None,
             sandbox_cwd,
@@ -1204,10 +1231,20 @@ mod tests {
         );
 
         let deserialized: SandboxState =
-            serde_json::from_value(serialized).expect("deserialize sandbox state");
+            serde_json::from_value(serialized.clone()).expect("deserialize legacy sandbox state");
+        assert_eq!(deserialized, sandbox_state);
+
+        let executable = std::env::current_exe().expect("absolute executable path");
+        let mut extended = serialized;
+        extended["codexExecutable"] = serde_json::json!(executable);
+        extended["futureField"] = serde_json::json!({"preservedByOpaqueConsumers": true});
+        let deserialized: SandboxState = serde_json::from_value(extended).expect("extended state");
         assert_eq!(
-            deserialized.permission_profile,
-            sandbox_state.permission_profile
+            deserialized,
+            SandboxState {
+                codex_executable: Some(executable),
+                ..sandbox_state
+            }
         );
     }
 

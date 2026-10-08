@@ -3,5 +3,6 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "codex-mcp",
     crate_name = "codex_mcp",
+    extra_binaries = ["//codex-rs/cli:codex"],
     test_data_extra = glob(["src/**/snapshots/**"]),
 )
