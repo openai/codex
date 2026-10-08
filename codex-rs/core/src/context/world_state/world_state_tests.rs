@@ -192,14 +192,11 @@ fn extension_owned_section_uses_its_stable_id_as_content_kind_feature() {
     world_state.add_extension_section(WorldStateSectionContribution::new("extension_test", |_| {
         (
             Some(json!({"value": "after"})),
-            Some(
-                RenderedWorldStateFragment::new(
-                    "developer",
-                    ("<extension_test>", "</extension_test>"),
-                    "after",
-                )
-                .with_metadata(codex_protocol::models::ContentItemMetadata::skills()),
-            ),
+            Some(RenderedWorldStateFragment::new(
+                "developer",
+                ("<extension_test>", "</extension_test>"),
+                "after",
+            )),
         )
     }));
 
@@ -214,10 +211,9 @@ fn extension_owned_section_uses_its_stable_id_as_content_kind_feature() {
             .collect::<Vec<_>>(),
         vec![(
             "developer",
-            AnnotatedContent::text(
+            AnnotatedContent::input_text(
                 "<extension_test>after</extension_test>",
                 ContentItemKind("extension_test.instructions".to_string()),
-                codex_protocol::models::ContentItemMetadata::skills(),
             ),
         )]
     );

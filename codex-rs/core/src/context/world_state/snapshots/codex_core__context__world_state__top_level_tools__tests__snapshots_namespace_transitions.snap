@@ -74,14 +74,6 @@ None
   "internal_chat_message_metadata_passthrough": {
     "content_item_kinds": [
       "tools.incremental_update"
-    ],
-    "content_item_metadata": [
-      {
-        "provenance": {
-          "hook": false,
-          "type": "harness"
-        }
-      }
     ]
   },
   "role": "developer",
@@ -142,14 +134,6 @@ The following namespaces are no longer available. Do not call tools in them unle
   "internal_chat_message_metadata_passthrough": {
     "content_item_kinds": [
       "tools.incremental_update"
-    ],
-    "content_item_metadata": [
-      {
-        "provenance": {
-          "hook": false,
-          "type": "harness"
-        }
-      }
     ]
   },
   "role": "developer",
@@ -224,14 +208,6 @@ None
   "internal_chat_message_metadata_passthrough": {
     "content_item_kinds": [
       "tools.incremental_update"
-    ],
-    "content_item_metadata": [
-      {
-        "provenance": {
-          "hook": false,
-          "type": "harness"
-        }
-      }
     ]
   },
   "role": "developer",

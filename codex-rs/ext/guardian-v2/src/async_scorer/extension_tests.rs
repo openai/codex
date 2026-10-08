@@ -1379,9 +1379,6 @@ classifier_instructions = "Predict future violations.\n# Security Policy\n{{ ten
             "role": "developer",
             "internal_chat_message_metadata_passthrough": {
                 "content_item_kinds": ["guardian.classifier_instructions"],
-                "content_item_metadata": [{
-                    "provenance": {"type": "harness", "hook": false},
-                }],
             },
             "content": [{
                 "type": "input_text",
@@ -1424,9 +1421,6 @@ max_classifier_instruction_tokens = 256
             "role": "developer",
             "internal_chat_message_metadata_passthrough": {
                 "content_item_kinds": ["guardian.classifier_instructions"],
-                "content_item_metadata": [{
-                    "provenance": {"type": "harness", "hook": false},
-                }],
             },
             "content": [{
                 "type": "input_text",
@@ -1511,9 +1505,6 @@ max_recent_non_user_entries = 8
             "role": "developer",
             "internal_chat_message_metadata_passthrough": {
                 "content_item_kinds": ["guardian.classifier_instructions"],
-                "content_item_metadata": [{
-                    "provenance": {"type": "harness", "hook": false},
-                }],
             },
             "content": [{
                 "type": "input_text",
@@ -1946,9 +1937,6 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
             "role": "developer",
             "internal_chat_message_metadata_passthrough": {
                 "content_item_kinds": ["guardian.classifier_instructions"],
-                "content_item_metadata": [{
-                    "provenance": {"type": "harness", "hook": false},
-                }],
             },
             "content": [{
                 "type": "input_text",
@@ -2130,9 +2118,6 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
             "role": "developer",
             "internal_chat_message_metadata_passthrough": {
                 "content_item_kinds": ["guardian.classifier_instructions"],
-                "content_item_metadata": [{
-                    "provenance": {"type": "harness", "hook": false},
-                }],
             },
             "content": [{
                 "type": "input_text",
@@ -2828,9 +2813,6 @@ async fn contributor_uses_catalog_policy_without_a_configured_override() -> Resu
             "role": "developer",
             "internal_chat_message_metadata_passthrough": {
                 "content_item_kinds": ["guardian.classifier_instructions"],
-                "content_item_metadata": [{
-                    "provenance": {"type": "harness", "hook": false},
-                }],
             },
             "content": [{
                 "type": "input_text",
@@ -2877,9 +2859,6 @@ async fn contributor_preserves_uncapped_classifier_instructions() -> Result<()> 
             "role": "developer",
             "internal_chat_message_metadata_passthrough": {
                 "content_item_kinds": ["guardian.classifier_instructions"],
-                "content_item_metadata": [{
-                    "provenance": {"type": "harness", "hook": false},
-                }],
             },
             "content": [{
                 "type": "input_text",

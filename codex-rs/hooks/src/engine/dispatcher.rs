@@ -146,8 +146,7 @@ pub(crate) async fn execute_handlers_with_metadata<T: 'static>(
         pending.push(async move {
             let result =
                 execute_handler(engine, &handler, &input_json, cwd, /*metadata*/ None).await;
-            let parsed = parse(&handler, result, turn_id);
-            (configured_order, parsed)
+            (configured_order, parse(&handler, result, turn_id))
         });
     }
 

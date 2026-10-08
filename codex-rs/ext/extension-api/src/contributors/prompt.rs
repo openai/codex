@@ -1,10 +1,8 @@
-//! Extension prompt placement with content and producer attribution kept together.
+// All this file should be replaced by the existing fragment implementation ofc
 
 use codex_context_fragments::AnnotatedContent;
 use codex_context_fragments::RenderedFragment;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
-use codex_protocol::models::ContentItemMetadata;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PromptSlot {
@@ -14,35 +12,20 @@ pub enum PromptSlot {
     ContextWindow,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PromptFragment {
     slot: PromptSlot,
-    content: AnnotatedContent,
+    text: String,
+    content_kind: ContentItemKind,
 }
 
 impl PromptFragment {
-    /// Creates harness-provided context for the given slot.
+    /// Creates a prompt fragment for the given slot.
     pub fn new(slot: PromptSlot, text: impl Into<String>, content_kind: ContentItemKind) -> Self {
         Self {
             slot,
-            content: AnnotatedContent::text(text, content_kind, ContentItemMetadata::harness()),
-        }
-    }
-
-    /// Creates tool-supplied context without changing its prompt placement.
-    pub fn tool(
-        slot: PromptSlot,
-        text: impl Into<String>,
-        content_kind: ContentItemKind,
-        namespace: String,
-    ) -> Self {
-        Self {
-            slot,
-            content: AnnotatedContent::text(
-                text,
-                content_kind,
-                ContentItemMetadata::tool(Some(namespace.into())),
-            ),
+            text: text.into(),
+            content_kind,
         }
     }
 
@@ -63,25 +46,20 @@ impl PromptFragment {
 
     /// Returns the model-visible text.
     pub fn text(&self) -> &str {
-        let ContentItem::InputText { text } = self.content.content() else {
-            unreachable!("prompt fragments contain text");
-        };
-        text
+        &self.text
     }
 
     /// Returns the producer-owned classification of the model-visible text.
     pub fn content_kind(&self) -> &ContentItemKind {
-        self.content.kind()
-    }
-
-    /// Consumes the placement wrapper when assembling a shared context message.
-    pub fn into_content(self) -> AnnotatedContent {
-        self.content
+        &self.content_kind
     }
 }
 
 impl From<PromptFragment> for RenderedFragment {
     fn from(fragment: PromptFragment) -> Self {
-        Self::new("developer", fragment.content)
+        Self::new(
+            "developer",
+            AnnotatedContent::input_text(fragment.text, fragment.content_kind),
+        )
     }
 }

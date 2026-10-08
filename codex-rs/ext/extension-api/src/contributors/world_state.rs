@@ -3,7 +3,6 @@ use std::sync::Arc;
 use codex_exec_server_protocol::ExecutorCapabilityDiscoverySnapshot;
 use codex_protocol::ThreadId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
-use codex_protocol::models::ContentItemMetadata;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use serde_json::Value;
@@ -48,7 +47,6 @@ pub struct RenderedWorldStateFragment {
     role: &'static str,
     markers: (&'static str, &'static str),
     body: String,
-    metadata: ContentItemMetadata,
 }
 
 impl RenderedWorldStateFragment {
@@ -61,18 +59,7 @@ impl RenderedWorldStateFragment {
             role,
             markers,
             body: body.into(),
-            metadata: ContentItemMetadata::harness(),
         }
-    }
-
-    /// Attach the producer's source before the harness assembles the context message.
-    pub fn with_metadata(mut self, metadata: ContentItemMetadata) -> Self {
-        self.metadata = metadata;
-        self
-    }
-
-    pub fn metadata(&self) -> &ContentItemMetadata {
-        &self.metadata
     }
 
     pub fn role(&self) -> &'static str {

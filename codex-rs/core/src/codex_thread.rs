@@ -1209,7 +1209,6 @@ impl CodexThread {
                 /*requested_timeout*/ None, /*wait_for_server*/ true,
             )
             .await
-            .map(|call| call.result)
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {

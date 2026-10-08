@@ -145,11 +145,10 @@ impl ContextContributor for HistoryNotesExtension {
             if text.is_empty() {
                 return Vec::new();
             }
-            vec![PromptFragment::tool(
+            vec![PromptFragment::new(
                 PromptSlot::ContextWindow,
                 text,
                 ContentItemKind("notes.thread_hint".to_string()),
-                "notes".to_string(),
             )]
         })
     }

@@ -716,9 +716,6 @@ fn build_compacted_history_with_limit(
                 content.clone()
             } else {
                 // Rebuild only the text fallback; never clone discarded media.
-                if let Some(metadata) = &mut passthrough {
-                    metadata.content_item_metadata = None;
-                }
                 if let Some(kinds) = passthrough
                     .as_mut()
                     .and_then(|metadata| metadata.content_item_kinds.as_mut())

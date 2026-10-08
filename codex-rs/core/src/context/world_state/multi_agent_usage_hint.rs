@@ -6,15 +6,12 @@ use super::WorldStateUpdate;
 use crate::context::ContextualUserFragment;
 use crate::context::MultiAgentRoleInstructions;
 use crate::context::MultiAgentUsageHint;
-use codex_protocol::models::ContentItemMetadata;
-use codex_protocol::models::ContentItemNamespace;
 
 /// Configured or model-owned multi-agent instructions currently visible to the model.
 #[derive(Clone, Debug)]
 pub(crate) struct MultiAgentUsageHintState {
     instructions: MultiAgentRoleInstructions,
     pub(super) fingerprint: WorldStateHash,
-    namespace: Option<ContentItemNamespace>,
 }
 
 impl MultiAgentUsageHintState {
@@ -23,13 +20,7 @@ impl MultiAgentUsageHintState {
         Self {
             instructions,
             fingerprint,
-            namespace: None,
         }
-    }
-
-    pub(crate) fn with_namespace(mut self, namespace: ContentItemNamespace) -> Self {
-        self.namespace = Some(namespace);
-        self
     }
 }
 
@@ -52,14 +43,11 @@ impl WorldStateSection for MultiAgentUsageHintState {
             PreviousSectionState::Unknown => None,
             PreviousSectionState::Known(_) | PreviousSectionState::Absent => {
                 if self.instructions.markers().0.is_empty() {
-                    Some(Box::new(
-                        MultiAgentUsageHint::new(&self.instructions.body())
-                            .with_metadata(ContentItemMetadata::tool(self.namespace.clone())),
-                    ))
-                } else {
-                    Some(Box::new(self.instructions.clone().with_metadata(
-                        ContentItemMetadata::tool(self.namespace.clone()),
+                    Some(Box::new(MultiAgentUsageHint::new(
+                        &self.instructions.body(),
                     )))
+                } else {
+                    Some(Box::new(self.instructions.clone()))
                 }
             }
         };

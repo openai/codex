@@ -34,7 +34,6 @@ use codex_prompts::ResolvedModelMessages;
 use codex_prompts::render_model_instructions;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructionsProvenance;
-use codex_protocol::models::ContentItemNamespace;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::ToolName;
 
@@ -174,6 +173,7 @@ impl Session {
                 window_ids.first_window_id,
                 window_ids.previous_window_id,
                 window_ids.window_id,
+                /*thread_hint*/ None,
             ));
         }
         let guidance = step_context
@@ -354,20 +354,11 @@ impl Session {
                 world_state.add_extension_section(section);
             }
         }
-        let v2_namespace = turn_context
-            .config
-            .multi_agent_v2
-            .tool_namespace
-            .clone()
-            .map(ContentItemNamespace::from)
-            .unwrap_or(ContentItemNamespace::Functions);
         let mut multi_agent_mode = MultiAgentModeState::new(
             super::multi_agents::effective_multi_agent_mode(step_context),
-        )
-        .with_namespace(v2_namespace.clone());
+        );
         if let Some(usage_hint_text) = super::multi_agents::usage_hint_text(step_context) {
-            let usage_hint =
-                MultiAgentUsageHintState::new(usage_hint_text).with_namespace(v2_namespace.clone());
+            let usage_hint = MultiAgentUsageHintState::new(usage_hint_text);
             multi_agent_mode = multi_agent_mode.with_usage_hint(&usage_hint);
             world_state.add_section(usage_hint);
         }
@@ -404,12 +395,7 @@ impl Session {
                 )
             } else {
                 ModelCatalogState::default()
-            }
-            .with_namespace(match turn_context.multi_agent_version {
-                MultiAgentVersion::Disabled => None,
-                MultiAgentVersion::V1 => Some(ContentItemNamespace::MultiAgentV1),
-                MultiAgentVersion::V2 => Some(v2_namespace),
-            }),
+            },
         );
         if !crate::guardian::is_basic_session_source(&turn_context.session_source) {
             world_state.add_section(ManagedDeveloperInstructionsState::new(

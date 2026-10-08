@@ -136,12 +136,8 @@ fn catalog_role_updates_remain_separate_from_active_mode() {
     assert_eq!(
         updates,
         vec![
-            ContextualUserFragment::into(current_role.with_metadata(
-                codex_protocol::models::ContentItemMetadata::tool(/*namespace*/ None)
-            )),
-            ContextualUserFragment::into(expected_mode.with_metadata(
-                codex_protocol::models::ContentItemMetadata::tool(/*namespace*/ None)
-            )),
+            ContextualUserFragment::into(current_role),
+            ContextualUserFragment::into(expected_mode),
         ],
     );
 }

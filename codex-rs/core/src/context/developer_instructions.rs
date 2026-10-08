@@ -1,6 +1,5 @@
 use super::ContextualUserFragment;
 use codex_protocol::models::ContentItemKind;
-use codex_protocol::models::ContentItemMetadata;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DeveloperInstructions {
@@ -16,10 +15,6 @@ impl DeveloperInstructions {
 }
 
 impl ContextualUserFragment for DeveloperInstructions {
-    fn content_metadata(&self) -> ContentItemMetadata {
-        ContentItemMetadata::developer_instructions(/*from_additional_requirements*/ false)
-    }
-
     fn content_kind(&self) -> ContentItemKind {
         ContentItemKind("generic.developer_instructions".to_string())
     }

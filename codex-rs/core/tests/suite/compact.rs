@@ -5787,7 +5787,6 @@ async fn remote_v2_compaction_refreshes_instructions_and_preserves_them_on_cold_
     )?;
     let mut builder = test_codex()
         .with_home(Arc::clone(&home))
-        .with_model_info_override("gpt-5.5", |model| model.use_responses_lite = true)
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let test = builder.build(&server).await?;
 
@@ -5847,7 +5846,6 @@ async fn remote_v2_compaction_refreshes_instructions_and_preserves_them_on_cold_
     let resumed_cwd = test.config.cwd.clone();
     let mut resume_builder = test_codex()
         .with_home(Arc::clone(&home))
-        .with_model_info_override("gpt-5.5", |model| model.use_responses_lite = true)
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| config.cwd = resumed_cwd);
     let resumed = resume_builder
@@ -5863,7 +5861,7 @@ async fn remote_v2_compaction_refreshes_instructions_and_preserves_them_on_cold_
     assert_single_instruction_fragment(&requests[3], &new_fragment);
     let resumed_input = requests[3].input();
     assert_eq!(
-        resumed_input.get(2..=replacement_history.len() + 1),
+        resumed_input.get(1..=replacement_history.len()),
         Some(replacement_history.as_slice()),
         "remote-v2 cold resume should replay persisted replacement history verbatim"
     );

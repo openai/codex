@@ -4,7 +4,6 @@ use super::*;
 use crate::context::ContextualUserFragment;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
-use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -45,7 +44,6 @@ fn fragment(role: &'static str, text: &'static str) -> TestFragment {
 }
 
 fn message(role: &str, texts: &[&str]) -> ResponseItem {
-    let provenance = serde_json::from_value(json!({"harness_injected": true})).unwrap();
     ResponseItem::Message {
         id: None,
         role: role.to_string(),
@@ -57,7 +55,6 @@ fn message(role: &str, texts: &[&str]) -> ResponseItem {
             .collect(),
         phase: None,
         internal_chat_message_metadata_passthrough: Some(InternalChatMessageMetadataPassthrough {
-            content_item_metadata: Some(vec![provenance; texts.len()]),
             content_item_kinds: Some(
                 texts
                     .iter()

@@ -28,7 +28,6 @@ use codex_protocol::mcp::MCP_APP_UI_EXTENSION_ID;
 use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
-use codex_protocol::models::ContentItemMetadata;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
@@ -3075,7 +3074,6 @@ fn multi_agent_v2_interrupted_marker_uses_developer_input_message() {
                     content_item_kinds: Some(vec![ContentItemKind(
                         "generic.turn_aborted".to_string()
                     )]),
-                    content_item_metadata: Some(vec![ContentItemMetadata::harness()]),
                     ..Default::default()
                 }
             ),

@@ -8,15 +8,12 @@ use super::SectionTransition;
 use super::WorldStateContextFragment;
 use super::WorldStateSection;
 use super::WorldStateUpdate;
-use crate::context::ContextualUserFragment;
 use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::RenderedWorldStateFragment;
 use codex_otel::THREAD_TOOLS_FRAGMENT_BYTES_METRIC;
 use codex_otel::THREAD_TOOLS_METRIC_BUCKETS;
 use codex_otel::THREAD_TOOLS_NAMESPACES_TOTAL_METRIC;
 use codex_protocol::models::ContentItemKind;
-use codex_protocol::models::ContentItemMetadata;
-use codex_protocol::models::ContentItemNamespace;
 use codex_protocol::protocol::TOOLS_CLOSE_TAG;
 use codex_protocol::protocol::TOOLS_OPEN_TAG;
 use std::collections::BTreeMap;
@@ -141,19 +138,14 @@ impl WorldStateSection for ToolsState {
         record_fragment_metrics(self.metrics.as_ref(), previous, &rendered);
         (
             Some(current),
-            vec![WorldStateUpdate::fragment(
-                WorldStateContextFragment {
-                    fragment: RenderedWorldStateFragment::new(
-                        "developer",
-                        (TOOLS_OPEN_TAG, TOOLS_CLOSE_TAG),
-                        rendered.body,
-                    ),
-                    content_kind: ContentItemKind("tools.deferred_namespaces".to_string()),
-                }
-                .with_metadata(ContentItemMetadata::tool(Some(
-                    ContentItemNamespace::ToolSearch,
-                ))),
-            )],
+            vec![WorldStateUpdate::fragment(WorldStateContextFragment {
+                fragment: RenderedWorldStateFragment::new(
+                    "developer",
+                    (TOOLS_OPEN_TAG, TOOLS_CLOSE_TAG),
+                    rendered.body,
+                ),
+                content_kind: ContentItemKind("tools.deferred_namespaces".to_string()),
+            })],
         )
     }
 }

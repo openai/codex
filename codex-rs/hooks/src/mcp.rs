@@ -15,16 +15,10 @@ pub struct HookMcpCall {
     pub timeout: Duration,
 }
 
-/// Text returned by an MCP hook and the callable namespace that supplied it.
-pub struct HookMcpOutput {
-    pub text: String,
-    pub source_tool_namespace: Option<String>,
-}
-
 /// Executes already-connected MCP tools on behalf of hooks without coupling this crate to core.
 ///
 /// Implementations own server readiness, policy enforcement, timeout handling, and elicitation.
 pub trait HookMcpExecutor: Send + Sync {
     /// Returns text that is interpreted using ordinary command-hook output semantics.
-    fn execute(&self, call: HookMcpCall) -> BoxFuture<'_, anyhow::Result<HookMcpOutput>>;
+    fn execute(&self, call: HookMcpCall) -> BoxFuture<'_, anyhow::Result<String>>;
 }

@@ -84,7 +84,7 @@ pub struct SessionStartOutcome {
     pub hook_events: Vec<HookCompletedEvent>,
     pub should_stop: bool,
     pub stop_reason: Option<String>,
-    pub additional_contexts: Vec<crate::HookContext>,
+    pub additional_contexts: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -267,7 +267,6 @@ fn parse_completed(
                             &mut additional_contexts_for_model,
                             handler,
                             additional_context,
-                            &run_result.context_metadata,
                         );
                     }
                     let _ = parsed.universal.suppress_output;
@@ -309,7 +308,6 @@ fn parse_completed(
                         &mut additional_contexts_for_model,
                         handler,
                         additional_context,
-                        &run_result.context_metadata,
                     );
                 }
             }
@@ -388,7 +386,7 @@ mod tests {
                 should_stop: false,
                 stop_reason: None,
                 additional_contexts_for_model: vec![AdditionalContext {
-                    context: crate::HookContext::harness("hello from hook".to_string()),
+                    text: "hello from hook".to_string(),
                     limit: AdditionalContextLimit::from_config(Some(7)),
                 }],
             }
@@ -421,7 +419,7 @@ mod tests {
                 should_stop: true,
                 stop_reason: Some("pause".to_string()),
                 additional_contexts_for_model: vec![AdditionalContext {
-                    context: crate::HookContext::harness("do not inject".to_string()),
+                    text: "do not inject".to_string(),
                     limit: Default::default(),
                 }],
             }
@@ -488,7 +486,7 @@ mod tests {
                 should_stop: false,
                 stop_reason: None,
                 additional_contexts_for_model: vec![AdditionalContext {
-                    context: crate::HookContext::harness("hello from subagent hook".to_string()),
+                    text: "hello from subagent hook".to_string(),
                     limit: AdditionalContextLimit::from_config(Some(4_096)),
                 }],
             }
@@ -522,7 +520,7 @@ mod tests {
                 should_stop: false,
                 stop_reason: None,
                 additional_contexts_for_model: vec![AdditionalContext {
-                    context: crate::HookContext::harness("child context".to_string()),
+                    text: "child context".to_string(),
                     limit: Default::default(),
                 }],
             }
@@ -563,7 +561,6 @@ mod tests {
 
     fn run_result(exit_code: Option<i32>, stdout: &str, stderr: &str) -> HandlerRunResult {
         HandlerRunResult {
-            context_metadata: codex_protocol::models::ContentItemMetadata::harness(),
             started_at: 1,
             completed_at: 2,
             duration_ms: 1,

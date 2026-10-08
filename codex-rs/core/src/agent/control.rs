@@ -11,7 +11,6 @@ use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::config::Config;
 use crate::config::RolloutBudgetConfig;
-use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::emit_subagent_session_started;
@@ -33,8 +32,6 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::SubAgentActivityItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ContentItemMetadata;
-use codex_protocol::models::ContentItemNamespace;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::Event;
@@ -553,27 +550,11 @@ impl LocalAgentControl {
             let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
                 return;
             };
-            let config = parent_thread.config().await;
-            let namespace = match parent_thread
-                .multi_agent_version()
-                .unwrap_or_else(|| config.multi_agent_version_from_features())
-            {
-                MultiAgentVersion::Disabled => None,
-                MultiAgentVersion::V1 => Some(ContentItemNamespace::MultiAgentV1),
-                MultiAgentVersion::V2 => Some(
-                    config
-                        .multi_agent_v2
-                        .tool_namespace
-                        .clone()
-                        .map(ContentItemNamespace::from)
-                        .unwrap_or(ContentItemNamespace::Functions),
-                ),
-            };
             parent_thread
-                .inject_fragment_without_turn(
-                    SubagentNotification::new(child_reference.as_str(), status)
-                        .with_metadata(ContentItemMetadata::tool(namespace)),
-                )
+                .inject_fragment_without_turn(SubagentNotification::new(
+                    child_reference.as_str(),
+                    status,
+                ))
                 .await;
         };
         tokio::spawn(async move {

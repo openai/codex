@@ -40,7 +40,7 @@ pub struct PreToolUseOutcome {
     pub hook_events: Vec<HookCompletedEvent>,
     pub should_block: bool,
     pub block_reason: Option<String>,
-    pub additional_contexts: Vec<crate::HookContext>,
+    pub additional_contexts: Vec<String>,
     pub updated_input: Option<Value>,
 }
 
@@ -229,7 +229,6 @@ fn parse_completed(
                             &mut additional_contexts_for_model,
                             handler,
                             additional_context,
-                            &run_result.context_metadata,
                         );
                     }
                     if handler.can_apply_control_effects() {
@@ -531,7 +530,7 @@ mod tests {
                 should_block: true,
                 block_reason: Some("do not run that".to_string()),
                 additional_contexts_for_model: vec![AdditionalContext {
-                    context: crate::HookContext::harness("remember this".to_string()),
+                    text: "remember this".to_string(),
                     limit: Default::default(),
                 }],
                 updated_input: None,
@@ -631,7 +630,7 @@ mod tests {
                 should_block: true,
                 block_reason: Some("do not run that".to_string()),
                 additional_contexts_for_model: vec![AdditionalContext {
-                    context: crate::HookContext::harness("nope".to_string()),
+                    text: "nope".to_string(),
                     limit: AdditionalContextLimit::from_config(Some(13)),
                 }],
                 updated_input: None,
@@ -793,7 +792,6 @@ mod tests {
 
     fn run_result(exit_code: Option<i32>, stdout: &str, stderr: &str) -> HandlerRunResult {
         HandlerRunResult {
-            context_metadata: codex_protocol::models::ContentItemMetadata::harness(),
             started_at: 1,
             completed_at: 2,
             duration_ms: 1,

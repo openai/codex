@@ -283,10 +283,9 @@ async fn prepare_message_content(
                 Ok(_) => {}
                 Err(error) => {
                     warn!(%error, "failed to prepare message image");
-                    *item = AnnotatedContent::text(
+                    *item = AnnotatedContent::input_text(
                         error.placeholder(),
                         ContentItemKind("images.preparation_error".to_string()),
-                        codex_protocol::models::ContentItemMetadata::harness(),
                     );
                 }
             }

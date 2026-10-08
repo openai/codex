@@ -390,11 +390,10 @@ fn parse_completed(
     };
     let continuation_fragments = continuation_prompt
         .map(|prompt| {
-            vec![HookPromptFragment {
-                text: prompt,
-                hook_run_id: completed.run.id.clone(),
-                metadata: run_result.context_metadata,
-            }]
+            vec![HookPromptFragment::from_single_hook(
+                prompt,
+                completed.run.id.clone(),
+            )]
         })
         .unwrap_or_default();
 
@@ -498,7 +497,6 @@ mod tests {
                 continuation_fragments: vec![HookPromptFragment {
                     text: "retry with tests".to_string(),
                     hook_run_id: parsed.completed.run.id.clone(),
-                    metadata: codex_protocol::models::ContentItemMetadata::harness(),
                 }],
             }
         );
@@ -576,7 +574,6 @@ mod tests {
                 continuation_fragments: vec![HookPromptFragment {
                     text: "retry with tests".to_string(),
                     hook_run_id: parsed.completed.run.id.clone(),
-                    metadata: codex_protocol::models::ContentItemMetadata::harness(),
                 }],
             }
         );
@@ -714,7 +711,6 @@ mod tests {
 
     fn run_result(exit_code: Option<i32>, stdout: &str, stderr: &str) -> HandlerRunResult {
         HandlerRunResult {
-            context_metadata: codex_protocol::models::ContentItemMetadata::harness(),
             started_at: 1,
             completed_at: 2,
             duration_ms: 1,

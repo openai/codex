@@ -43,6 +43,7 @@ use super::dispatcher::hook_handler_type_label;
 use super::dispatcher::hook_scope_label;
 use super::dispatcher::hook_source_label;
 use super::dispatcher::scope_for_event;
+use crate::output_spill::AdditionalContext;
 use crate::output_spill::HookOutputSpiller;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookCompletedEvent;
@@ -140,17 +141,21 @@ impl CommandHookRuntime {
             for entry in std::mem::take(&mut hook_result.run.entries) {
                 match entry.kind {
                     HookOutputEntryKind::Context => {
-                        let text = runtime
+                        if let Some(text) = runtime
                             .output_spiller
-                            .maybe_spill_text_with_limit(
-                                entry.text,
-                                handler.additional_context_limit,
-                            )
-                            .await;
-                        entries.push(HookOutputEntry {
-                            kind: HookOutputEntryKind::Context,
-                            text,
-                        });
+                            .maybe_spill_additional_contexts(vec![AdditionalContext {
+                                text: entry.text,
+                                limit: handler.additional_context_limit,
+                            }])
+                            .await
+                            .into_iter()
+                            .next()
+                        {
+                            entries.push(HookOutputEntry {
+                                kind: HookOutputEntryKind::Context,
+                                text,
+                            });
+                        }
                     }
                     HookOutputEntryKind::Warning => warnings.push(entry),
                     HookOutputEntryKind::Error => entries.push(entry),
@@ -366,7 +371,6 @@ fn finish_command_run(
 ) -> HandlerRunResult {
     Span::current().record("hook.command_outcome", completion.outcome);
     HandlerRunResult {
-        context_metadata: codex_protocol::models::ContentItemMetadata::command_hook(),
         started_at,
         completed_at: chrono::Utc::now().timestamp(),
         duration_ms: started.elapsed().as_millis().try_into().unwrap_or(i64::MAX),

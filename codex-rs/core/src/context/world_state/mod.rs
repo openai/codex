@@ -278,10 +278,6 @@ struct WorldStateContextFragment {
 }
 
 impl ContextualUserFragment for WorldStateContextFragment {
-    fn content_metadata(&self) -> codex_protocol::models::ContentItemMetadata {
-        self.fragment.metadata().clone()
-    }
-
     fn content_kind(&self) -> ContentItemKind {
         self.content_kind.clone()
     }

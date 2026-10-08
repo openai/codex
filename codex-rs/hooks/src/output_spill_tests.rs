@@ -60,15 +60,15 @@ async fn additional_contexts_apply_limits_individually() -> Result<()> {
     let output = spiller
         .maybe_spill_additional_contexts(vec![
             AdditionalContext {
-                context: crate::HookContext::harness(limited_text.clone()),
+                text: limited_text.clone(),
                 limit: AdditionalContextLimit::from_config(Some(1)),
             },
             AdditionalContext {
-                context: crate::HookContext::harness(unlimited_text.clone()),
+                text: unlimited_text.clone(),
                 limit: AdditionalContextLimit::from_config(Some(0)),
             },
             AdditionalContext {
-                context: crate::HookContext::harness(unlimited_text.clone()),
+                text: unlimited_text.clone(),
                 limit: AdditionalContextLimit::from_config(Some(usize::MAX)),
             },
         ])
@@ -76,8 +76,8 @@ async fn additional_contexts_apply_limits_individually() -> Result<()> {
     let [limited_output, zero_limit_output, high_limit_output] = output.as_slice() else {
         panic!("expected one output for each additional context");
     };
-    assert!(limited_output.text.contains("Full hook output saved to:"));
-    assert_eq!(&zero_limit_output.text, &unlimited_text);
-    assert_eq!(&high_limit_output.text, &unlimited_text);
+    assert!(limited_output.contains("Full hook output saved to:"));
+    assert_eq!(zero_limit_output, &unlimited_text);
+    assert_eq!(high_limit_output, &unlimited_text);
     Ok(())
 }

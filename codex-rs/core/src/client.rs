@@ -996,12 +996,6 @@ impl ModelClient {
             prefix.push(instructions);
         }
         input.splice(0..0, prefix);
-        if !model_info.use_responses_lite {
-            // Only RLite accepts per-content attribution until the Responses API schema expands.
-            for item in &mut input {
-                item.clear_content_item_metadata();
-            }
-        }
         if !is_openai {
             for item in &mut input {
                 item.clear_internal_chat_message_metadata_passthrough();

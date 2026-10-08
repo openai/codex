@@ -131,7 +131,6 @@ pub(crate) enum ConfiguredHandlerKind {
 
 #[derive(Debug)]
 pub(crate) struct HandlerRunResult {
-    pub context_metadata: codex_protocol::models::ContentItemMetadata,
     pub started_at: i64,
     pub completed_at: i64,
     pub duration_ms: i64,

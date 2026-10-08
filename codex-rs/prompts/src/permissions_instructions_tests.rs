@@ -4,7 +4,6 @@ use super::*;
 use crate::ResolvedModelMessages;
 use codex_context_fragments::AnnotatedContent;
 use codex_context_fragments::RenderedFragment;
-use codex_protocol::models::ContentItemMetadata;
 use codex_protocol::openai_models::ApprovalMessages;
 use codex_protocol::openai_models::PermissionMessages;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -739,10 +738,9 @@ fn preserves_supplied_path_spellings_and_order() {
         instructions.render_fragment(),
         RenderedFragment::new(
             "developer",
-            AnnotatedContent::text(
+            AnnotatedContent::input_text(
                 format!("<permissions instructions>{expected_body}</permissions instructions>"),
                 ContentItemKind("permissions.instructions".to_string()),
-                ContentItemMetadata::harness(),
             ),
         ),
     );

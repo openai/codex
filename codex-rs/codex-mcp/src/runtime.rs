@@ -75,13 +75,6 @@ pub enum McpStartupPolicy {
     LazyWhenCached,
 }
 
-/// A host-requested tool result and its identity in the published MCP catalog.
-pub struct McpToolCallResult {
-    pub result: CallToolResult,
-    /// None when no retained binding identifies the tool. This is not MCP wire metadata.
-    pub source_tool_namespace: Option<String>,
-}
-
 /// Configuration and owning-thread state needed to materialize an MCP runtime.
 pub struct McpRuntimeInput {
     pub startup_policy: McpStartupPolicy,
@@ -650,18 +643,6 @@ impl McpRuntime {
         self.latest_connections().list_all_tools().await
     }
 
-    pub async fn latest_read_resource(
-        &self,
-        server: &str,
-        params: ReadResourceRequestParams,
-    ) -> anyhow::Result<ReadResourceResult> {
-        self.latest_connections()
-            .read_resource(server, params)
-            .await
-    }
-
-    /// Calls a tool for the host and reports its callable namespace from the same runtime.
-    /// Missing cached identity never blocks execution; its namespace remains unknown.
     #[allow(clippy::too_many_arguments)]
     pub async fn latest_call_tool(
         &self,
@@ -672,23 +653,8 @@ impl McpRuntime {
         meta: Option<serde_json::Value>,
         requested_timeout: Option<Duration>,
         wait_for_server: bool,
-    ) -> anyhow::Result<McpToolCallResult> {
-        let current = self.current.load_full();
-        // Attribution must never delay a successful call. The binding is immutable;
-        // if it does not describe this host-only tool, keep its namespace unknown.
-        let namespace = current
-            .cached_binding
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .and_then(|cached| cached.binding.upgrade())
-            .and_then(|binding| {
-                binding
-                    .tool_info(server, tool)
-                    .map(|info| info.callable_namespace.clone())
-            });
-        let result = current
-            .connections
+    ) -> anyhow::Result<CallToolResult> {
+        self.latest_connections()
             .call_tool(
                 server,
                 tool,
@@ -698,11 +664,17 @@ impl McpRuntime {
                 requested_timeout,
                 wait_for_server,
             )
-            .await?;
-        Ok(McpToolCallResult {
-            result,
-            source_tool_namespace: namespace,
-        })
+            .await
+    }
+
+    pub async fn latest_read_resource(
+        &self,
+        server: &str,
+        params: ReadResourceRequestParams,
+    ) -> anyhow::Result<ReadResourceResult> {
+        self.latest_connections()
+            .read_resource(server, params)
+            .await
     }
 
     pub async fn latest_wait_for_server_ready(&self, server: &str, timeout: Duration) -> bool {

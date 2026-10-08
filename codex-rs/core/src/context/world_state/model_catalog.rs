@@ -12,8 +12,6 @@ use crate::agent::child_config::model_supports_multi_agent_backend;
 use crate::context::ContextualUserFragment;
 use crate::context::environment_context::push_xml_escaped_text;
 use codex_protocol::models::ContentItemKind;
-use codex_protocol::models::ContentItemMetadata;
-use codex_protocol::models::ContentItemNamespace;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::MultiAgentVersion;
 
@@ -26,7 +24,6 @@ const OMITTED_NOTICE: &str = "Additional model choices omitted.\n";
 #[derive(Clone, Default)]
 pub(crate) struct ModelCatalogState {
     catalog: String,
-    namespace: Option<ContentItemNamespace>,
 }
 
 impl ModelCatalogState {
@@ -85,23 +82,11 @@ impl ModelCatalogState {
             catalog.push_str(&escaped);
             catalog.push('\n');
         }
-        Self {
-            catalog,
-            namespace: None,
-        }
-    }
-
-    pub(crate) fn with_namespace(mut self, namespace: Option<ContentItemNamespace>) -> Self {
-        self.namespace = namespace;
-        self
+        Self { catalog }
     }
 }
 
 impl ContextualUserFragment for ModelCatalogState {
-    fn content_metadata(&self) -> ContentItemMetadata {
-        ContentItemMetadata::tool(self.namespace.clone())
-    }
-
     fn content_kind(&self) -> ContentItemKind {
         ContentItemKind("multi_agent.model_catalog".to_string())
     }

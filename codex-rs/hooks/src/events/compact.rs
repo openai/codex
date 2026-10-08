@@ -542,7 +542,6 @@ mod tests {
 
     fn run_result(exit_code: Option<i32>, stdout: &str, stderr: &str) -> HandlerRunResult {
         HandlerRunResult {
-            context_metadata: codex_protocol::models::ContentItemMetadata::harness(),
             started_at: 1_700_000_000,
             completed_at: 1_700_000_001,
             duration_ms: 12,

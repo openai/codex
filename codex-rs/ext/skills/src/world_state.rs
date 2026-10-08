@@ -1,7 +1,6 @@
 use codex_extension_api::PreviousWorldStateSection;
 use codex_extension_api::RenderedWorldStateFragment;
 use codex_extension_api::WorldStateSectionContribution;
-use codex_protocol::models::ContentItemMetadata;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use serde::Serialize;
@@ -83,7 +82,7 @@ pub(crate) fn executor_skills_world_state_section(
                             "developer",
                             (SKILLS_INSTRUCTIONS_OPEN_TAG, SKILLS_INSTRUCTIONS_CLOSE_TAG),
                             "\n## Skills update\nThe previously listed selected-environment skills are available again.\n",
-                        ).with_metadata(ContentItemMetadata::skills())),
+                        )),
                     );
                 }
             }
@@ -103,7 +102,7 @@ pub(crate) fn executor_skills_world_state_section(
                     "developer",
                     (SKILLS_INSTRUCTIONS_OPEN_TAG, SKILLS_INSTRUCTIONS_CLOSE_TAG),
                     body,
-                ).with_metadata(ContentItemMetadata::skills())),
+                )),
             )
     })
     .with_legacy_matcher(|role, text| {
@@ -188,14 +187,11 @@ fn skills_world_state_section(
 
         (
             Some(snapshot.clone()),
-            Some(
-                RenderedWorldStateFragment::new(
-                    "developer",
-                    (SKILLS_INSTRUCTIONS_OPEN_TAG, SKILLS_INSTRUCTIONS_CLOSE_TAG),
-                    body,
-                )
-                .with_metadata(ContentItemMetadata::skills()),
-            ),
+            Some(RenderedWorldStateFragment::new(
+                "developer",
+                (SKILLS_INSTRUCTIONS_OPEN_TAG, SKILLS_INSTRUCTIONS_CLOSE_TAG),
+                body,
+            )),
         )
     });
     match retained_body {
