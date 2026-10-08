@@ -165,13 +165,13 @@ Local UI clients use five methods. They require the existing
 `unavailable/providerUnavailable` on unsupported platforms or without the required
 ChatGPT account identity.
 
-| Method | Params | Result |
-| --- | --- | --- |
-| `userVerification/status` | `{}` | `{credentialId, unavailableReason, unavailableMessage}` |
-| `userVerification/enroll` | `{}` | `{credentialId, algorithm?, publicKey?}` |
-| `userVerification/delete` | `{}` | `{}` |
-| `userVerification/verify` | `{challenge, title, description}` | `{proof: {credentialId, signature}}` |
-| `userVerification/cancel` | `{requestId}` | `{}` |
+| Method                    | Params                            | Result                                                  |
+| ------------------------- | --------------------------------- | ------------------------------------------------------- |
+| `userVerification/status` | `{}`                              | `{credentialId, unavailableReason, unavailableMessage}` |
+| `userVerification/enroll` | `{}`                              | `{credentialId, algorithm?, publicKey?}`                |
+| `userVerification/delete` | `{}`                              | `{}`                                                    |
+| `userVerification/verify` | `{challenge, title, description}` | `{proof: {credentialId, signature}}`                    |
+| `userVerification/cancel` | `{requestId}`                     | `{}`                                                    |
 
 Status reads local readiness without prompting or contacting a backend. A null
 `unavailableReason` means local checks passed, not that registration is valid.
@@ -277,6 +277,7 @@ the entire network configuration.
 - `thread/attachmentOwner/list` — find stored threads with an exact attachment type and identity key, with cursor pagination and an optional archive filter.
 - `thread/attachment/remove` — remove an attachment by its thread, attachment type, and identity key; returns `{}`.
 - `thread/attachment/updated` — notification broadcast after an attachment is created or removed; contains the thread, attachment identity, attachment id, and operation.
+
 ### Example: Manage stored thread attachments
 
 Attachments record the resources currently associated with a thread, independently of conversation history. Clients can add, remove, and list attachments for one stored thread at a time without resuming those threads. Adding or removing an attachment does not create or delete the underlying resource or rewrite history. An attachment is idempotently identified by its thread, `attachmentType`, and `identityKey`. For pull requests, clients should reuse the canonical application identity `JSON.stringify([canonicalHostname, lowercaseOwner, lowercaseRepository, pullRequestNumber])` so addition and removal agree across surfaces.

@@ -221,12 +221,12 @@ Use `turn(...)` when you need low-level turn control (`stream()`, `steer()`,
 
 These options have the same behavior on sync and async `run(...)` and `turn(...)`:
 
-| Option | Behavior |
-| --- | --- |
-| `personality: Personality \| None = None` | `Personality.friendly` and `Personality.pragmatic` are deprecated and no longer select a style. See [deprecated personality selection](#deprecated-personality-selection). |
-| `service_tier: str | None = None` | Sets the thread's service tier for this and subsequent turns. |
-| `turn_service_tier: str | None = None` | Overrides the tier for a newly started turn only. `None` inherits the thread setting; `"default"` selects standard speed. Does not change the thread default and is ignored when input joins an active turn. |
-| `source: str | None = None` | Labels the caller that initiated a new turn, such as `"review_ui"`. This is metadata; it does not schedule work or grant authority. Ignored when input joins an active turn. |
+| Option                                    | Behavior                                                                                                                                                                                                     |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `personality: Personality \| None = None` | `Personality.friendly` and `Personality.pragmatic` are deprecated and no longer select a style. See [deprecated personality selection](#deprecated-personality-selection).                                   |
+| `service_tier: str \| None = None`        | Sets the thread's service tier for this and subsequent turns.                                                                                                                                                |
+| `turn_service_tier: str \| None = None`   | Overrides the tier for a newly started turn only. `None` inherits the thread setting; `"default"` selects standard speed. Does not change the thread default and is ignored when input joins an active turn. |
+| `source: str \| None = None`              | Labels the caller that initiated a new turn, such as `"review_ui"`. This is metadata; it does not schedule work or grant authority. Ignored when input joins an active turn.                                 |
 
 `ExternalMessage`, `turn_service_tier`, `source`, and explicit `include_turns`
 on resume/fork require Codex CLI 0.151.0 or newer. The SDK raises `CodexError`
@@ -325,11 +325,11 @@ message = ExternalMessage(
 result = thread.run(message)
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `tool_name: str` | Required, nonempty name of the tool or application delivering the message. |
-| `content` | Required text, or a sequence of structured content dictionaries or generated `FunctionCallOutputContentItem` models. Structured image content requires inline data URLs. |
-| `namespace: str | None = None` | Optional namespace for the tool name. |
+| Field                           | Meaning                                                                                                                                                                  |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tool_name: str`                | Required, nonempty name of the tool or application delivering the message.                                                                                               |
+| `content`                       | Required text, or a sequence of structured content dictionaries or generated `FunctionCallOutputContentItem` models. Structured image content requires inline data URLs. |
+| `namespace: str \| None = None` | Optional namespace for the tool name.                                                                                                                                    |
 
 Pass one `ExternalMessage` as the complete input to `run(...)` or `turn(...)`.
 It starts a turn when the thread is idle or joins an active regular turn. It

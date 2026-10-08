@@ -19,7 +19,7 @@ runs:
         release_tag="rusty-v8-v${version}"
         base_url="https://github.com/openai/codex/releases/download/${release_tag}"
         binding_dir="${RUNNER_TEMP}/rusty_v8"
-        
+
         profile="ptrcomp_sandbox_release"
 
         if [[ "$TARGET" == *-pc-windows-msvc ]]; then

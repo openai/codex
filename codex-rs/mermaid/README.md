@@ -6,13 +6,13 @@ production dependency is needed.
 
 ## Supported subsets
 
-| Family | Supported syntax |
-| --- | --- |
-| `flowchart`, `graph` | TD/TB (default), BT, LR, RL; rectangle `[label]`, decision `{label}`, and stadium `([label])` nodes; solid `-->`/`---`/`<-->` and dashed `-.->`/`-.-`/`<-.->` edges; pipe labels and spaced directed infix labels (`-- text -->`, `-. text .->`); `&` fan-out/fan-in, chains, branches, merges, loops |
-| `sequenceDiagram` | Implicit participants, `participant`/`actor`, aliases, `->`, `->>`, `-->`, `-->>`, `-x`, `--x`, self-messages, `Note over A[,B]`, nested `loop`/`alt`/`opt`/`critical`/`break`, one labeled `else` per `alt` |
-| `stateDiagram-v2`, `stateDiagram` | Flat states, `state "label" as ID`, descriptions, directed transitions with optional labels, initial/final `[*]`, direction declarations |
-| `classDiagram` | `class ID`, multiline member bodies, `ID : member`, solid/dashed links, association, inheritance, composition, aggregation, dependency, realization, quoted endpoint cardinalities, relationship labels, direction declarations |
-| `erDiagram` | Entities, multiline attribute bodies, `type name [PK, FK, UK] ["comment"]`, all four endpoint cardinalities, identifying/non-identifying relationships, relationship labels, direction declarations |
+| Family                            | Supported syntax                                                                                                                                                                                                                                                                                      |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `flowchart`, `graph`              | TD/TB (default), BT, LR, RL; rectangle `[label]`, decision `{label}`, and stadium `([label])` nodes; solid `-->`/`---`/`<-->` and dashed `-.->`/`-.-`/`<-.->` edges; pipe labels and spaced directed infix labels (`-- text -->`, `-. text .->`); `&` fan-out/fan-in, chains, branches, merges, loops |
+| `sequenceDiagram`                 | Implicit participants, `participant`/`actor`, aliases, `->`, `->>`, `-->`, `-->>`, `-x`, `--x`, self-messages, `Note over A[,B]`, nested `loop`/`alt`/`opt`/`critical`/`break`, one labeled `else` per `alt`                                                                                          |
+| `stateDiagram-v2`, `stateDiagram` | Flat states, `state "label" as ID`, descriptions, directed transitions with optional labels, initial/final `[*]`, direction declarations                                                                                                                                                              |
+| `classDiagram`                    | `class ID`, multiline member bodies, `ID : member`, solid/dashed links, association, inheritance, composition, aggregation, dependency, realization, quoted endpoint cardinalities, relationship labels, direction declarations                                                                       |
+| `erDiagram`                       | Entities, multiline attribute bodies, `type name [PK, FK, UK] ["comment"]`, all four endpoint cardinalities, identifying/non-identifying relationships, relationship labels, direction declarations                                                                                                   |
 
 Identifiers are ASCII letters followed by letters, digits, or underscores. Text
 supports ordinary Unicode and CJK. Full-line `%%` comments and
@@ -75,7 +75,6 @@ Run `just test -p codex-mermaid --lib`. Coverage includes complex snapshots for 
 family, relationship endpoints, all ER cardinalities, width/error bounds,
 truncated input, and reconstruction of every edge in all 512 directed three-node
 graphs in each of the four layout directions.
-
 
 `render_spans` returns the same layout as lines of semantic `Node`, `Edge`, and
 `Text` spans. Callers apply their own theme; the crate never emits ANSI escapes.

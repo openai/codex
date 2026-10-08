@@ -257,11 +257,11 @@ what it can reasonably guarantee.
   - the HTTP proxy listener clamps non-loopback binds unless explicitly enabled via
     `dangerously_allow_non_loopback_proxy`
 - when unix socket proxying is enabled, all proxy listeners are forced to loopback to avoid turning the
-    proxy into a remote bridge into local daemons.
+  proxy into a remote bridge into local daemons.
 - `dangerously_allow_all_unix_sockets = true` bypasses the unix socket allowlist entirely (still
   macOS-only and absolute-path-only). Use only in tightly controlled environments.
 - `enabled` is enforced at runtime; when false the proxy no-ops and does not bind listeners.
-Limitations:
+  Limitations:
 
 - DNS rebinding is hard to fully prevent without pinning the resolved IP(s) all the way down to the
   transport layer. If your threat model includes hostile DNS, enforce network egress at a lower

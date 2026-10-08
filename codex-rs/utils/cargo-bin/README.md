@@ -7,6 +7,7 @@ behavior consistent in local and remote builds on all platforms. Bazel sets
 `runfiles` crate to resolve runfiles via that manifest.
 
 Function behavior:
+
 - `cargo_bin`: reads `CARGO_BIN_EXE_*` environment variables (set by Cargo or
   Bazel) and resolves them via the runfiles manifest when `RUNFILES_MANIFEST_FILE`
   is present. When not under runfiles, it only accepts absolute paths from
@@ -16,5 +17,6 @@ Function behavior:
   falls back to a `CARGO_MANIFEST_DIR`-relative path for Cargo runs.
 
 Background:
+
 - https://bazel.build/docs/runfiles
 - https://bazel.build/docs/runfiles#runfiles-manifest

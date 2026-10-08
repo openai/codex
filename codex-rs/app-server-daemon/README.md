@@ -49,9 +49,11 @@ Eligible managed daemons check for updates after five minutes, then hourly by
 default. Edit `CODEX_HOME/app-server-daemon/settings.json` to change this:
 
 ```json
-{"remoteControlEnabled": false,
- "shutdownGraceSeconds": 60,
- "updater": {"autoUpdateEnabled": false, "updateIntervalMinutes": 120}}
+{
+  "remoteControlEnabled": false,
+  "shutdownGraceSeconds": 60,
+  "updater": { "autoUpdateEnabled": false, "updateIntervalMinutes": 120 }
+}
 ```
 
 Positive minute intervals have no configured cap. `daemon restart` applies the
@@ -114,11 +116,11 @@ compatible dedicated package before stopping the legacy updater and daemon,
 selecting the new package, and restarting only a previously running daemon.
 The old CLI package files and selection remain unchanged.
 
-| Situation | What starts | Does this daemon fetch new binaries? | Does a running app-server eventually move to a newer binary on its own? |
-| --- | --- | --- | --- |
-| Latest-channel installer has run; `start` or `bootstrap` is used with automatic updates enabled | Managed binary and detached updater when supported | When supported, the platform's installer runs on the configured cadence. | When supported, the running server restarts with the new binary before the updater replaces itself. |
-| Installer selected an explicit release; `bootstrap` is used | Managed binary only | No; the selected release stays pinned. | No; an explicit restart uses the selected binary. |
-| Another tool updates the managed binary | A fresh start or explicit restart uses it; a running server is reused. | Yes, when a latest-channel updater is running, on the configured cadence. | An updater that was running through the change compares binary contents on its next successful installer pass and refreshes the server first. |
+| Situation                                                                                       | What starts                                                            | Does this daemon fetch new binaries?                                      | Does a running app-server eventually move to a newer binary on its own?                                                                       |
+| ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Latest-channel installer has run; `start` or `bootstrap` is used with automatic updates enabled | Managed binary and detached updater when supported                     | When supported, the platform's installer runs on the configured cadence.  | When supported, the running server restarts with the new binary before the updater replaces itself.                                           |
+| Installer selected an explicit release; `bootstrap` is used                                     | Managed binary only                                                    | No; the selected release stays pinned.                                    | No; an explicit restart uses the selected binary.                                                                                             |
+| Another tool updates the managed binary                                                         | A fresh start or explicit restart uses it; a running server is reused. | Yes, when a latest-channel updater is running, on the configured cadence. | An updater that was running through the change compares binary contents on its next successful installer pass and refreshes the server first. |
 
 ### Managed packages
 

@@ -16,7 +16,8 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { inspect, promisify } from "node:util";
 
-const DEFAULT_MANUAL_URL = "https://developers.openai.com/codex/codex-manual.md";
+const DEFAULT_MANUAL_URL =
+  "https://developers.openai.com/codex/codex-manual.md";
 const DEFAULT_CACHE_DIR_NAME = "openai-docs-cache";
 const CACHE_FILE_NAME = "codex-manual.md";
 const OUTLINE_FILE_NAME = "codex-manual.outline.md";
@@ -79,7 +80,7 @@ const parseCurlHeaders = (rawHeaders) => {
   const statusMatch = /^HTTP\/\S+\s+(\d{3})/.exec(statusLine);
   if (!statusMatch) {
     throw new ManualFetchError(
-      `Could not parse HTTP status from curl response: ${statusLine}`
+      `Could not parse HTTP status from curl response: ${statusLine}`,
     );
   }
 
@@ -103,7 +104,7 @@ const tempFilePath = (cacheDir, suffix) =>
     cacheDir,
     `.fetch-codex-manual-${process.pid}-${Date.now()}-${Math.random()
       .toString(16)
-      .slice(2)}${suffix}`
+      .slice(2)}${suffix}`,
   );
 
 const requestManualWithCurl = async (url, { cacheDir, method, timeoutMs }) => {
@@ -166,7 +167,7 @@ const requestManualWithCurl = async (url, { cacheDir, method, timeoutMs }) => {
 const requestManualWithFetch = async (url, { method, timeoutMs }) => {
   if (typeof fetch !== "function") {
     throw new ManualFetchError(
-      "Native fetch is unavailable in this Node runtime."
+      "Native fetch is unavailable in this Node runtime.",
     );
   }
 
@@ -177,7 +178,7 @@ const requestManualWithFetch = async (url, { method, timeoutMs }) => {
         headers: { "User-Agent": USER_AGENT },
         signal,
       }),
-    timeoutMs
+    timeoutMs,
   );
 };
 
@@ -199,7 +200,7 @@ const requestManual = async (url, { cacheDir, method, timeoutMs }) => {
       const response = await transport();
       if (!response.ok) {
         throw new ManualFetchError(
-          `${method} ${url} failed with HTTP ${response.status}.`
+          `${method} ${url} failed with HTTP ${response.status}.`,
         );
       }
       return response;
@@ -307,7 +308,10 @@ const manualLines = (manual) => {
 };
 
 const sectionTitle = (rawTitle) =>
-  rawTitle.replace(/\s+#+\s*$/, "").replace(/\s+/g, " ").trim();
+  rawTitle
+    .replace(/\s+#+\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
 
 const buildOutline = (manual) => {
   const lines = manualLines(manual);
@@ -366,7 +370,8 @@ const buildOutline = (manual) => {
   };
 };
 
-const outlineMarkdown = (outline) => `# Codex Manual Outline\n\n${outline.text}\n`;
+const outlineMarkdown = (outline) =>
+  `# Codex Manual Outline\n\n${outline.text}\n`;
 
 const manualStatusLine = (status) =>
   status.cacheStatus === "hit"
@@ -413,7 +418,7 @@ const fetchCodexManual = async ({
   const resolvedCacheDir = await resolveCacheDir(cacheDir);
   if (!resolvedCacheDir) {
     throw new ManualFetchError(
-      "Manual cache directory is unavailable; pass --cache-dir to override or use OpenAI Docs MCP fallback."
+      "Manual cache directory is unavailable; pass --cache-dir to override or use OpenAI Docs MCP fallback.",
     );
   }
   await mkdir(resolvedCacheDir, { recursive: true });
@@ -460,7 +465,7 @@ const fetchCodexManual = async ({
   const getHeaderSha256 = readHeaderSha(getResponse);
   if (getHeaderSha256 !== expectedSha256) {
     throw new ManualFetchError(
-      `${HASH_HEADER} changed between HEAD and GET for ${manualUrl}.`
+      `${HASH_HEADER} changed between HEAD and GET for ${manualUrl}.`,
     );
   }
 
@@ -469,7 +474,7 @@ const fetchCodexManual = async ({
   const manualHashMatches = actualSha256 === expectedSha256;
   if (!manualHashMatches) {
     throw new ManualFetchError(
-      `${HASH_HEADER} did not match the fetched manual body for ${manualUrl}.`
+      `${HASH_HEADER} did not match the fetched manual body for ${manualUrl}.`,
     );
   }
 

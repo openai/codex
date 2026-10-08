@@ -12,6 +12,7 @@ Typed clients for Codex/OpenAI APIs built on top of the generic transport in `co
 The public interface of this crate is intentionally small and uniform:
 
 - **Responses endpoint**
+
   - Input:
     - `ResponsesApiRequest` for the request body (`model`, `input`, `tools`, `parallel_tool_calls`, reasoning/text controls).
     - `ResponsesOptions` for transport/header concerns (`conversation_id`, `session_source`, `extra_headers`, `compression`, `turn_state`).

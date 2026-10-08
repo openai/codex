@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -11,7 +11,9 @@
     />
     <style>
       :root {
-        --font-use: "SF Pro", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --font-use:
+          "SF Pro", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
         --gray-0: #ffffff;
         --gray-50: #f9f9f9;
         --gray-100: #ededed;
@@ -88,7 +90,9 @@
       .message {
         margin: 0;
         color: var(--text-secondary, #5d5d5d);
-        font-feature-settings: "liga" off, "clig" off;
+        font-feature-settings:
+          "liga" off,
+          "clig" off;
         font-size: 14px;
         font-style: normal;
         font-weight: 400;
@@ -108,7 +112,9 @@
         color: var(--interactive-label-secondary-default, #0d0d0d);
         cursor: pointer;
         font-family: var(--font-use, "SF Pro");
-        font-feature-settings: "liga" off, "clig" off;
+        font-feature-settings:
+          "liga" off,
+          "clig" off;
         font-size: 14px;
         font-style: normal;
         font-weight: 510;
@@ -161,7 +167,9 @@
     <div class="wordmark" aria-label="ChatGPT">ChatGPT</div>
     <main>
       <div class="content">
-        <p class="message" id="status-message">You&rsquo;re signed in and may close this tab</p>
+        <p class="message" id="status-message">
+          You&rsquo;re signed in and may close this tab
+        </p>
         <button class="button" type="button" id="open-codex">
           <svg
             class="codex-mark"
@@ -181,7 +189,10 @@
         </button>
         <div class="setup-box" id="setup-box">
           <p class="setup-title">Finish setting up your API organization</p>
-          <p class="setup-description">Add a payment method to use your organization. Redirecting in <span id="countdown">3</span>s...</p>
+          <p class="setup-description">
+            Add a payment method to use your organization. Redirecting in
+            <span id="countdown">3</span>s...
+          </p>
         </div>
       </div>
     </main>
@@ -191,7 +202,8 @@
         const params = new URLSearchParams(window.location.search);
         const preview = params.get("preview") === "true";
         const needsSetup = params.get("needs_setup") === "true";
-        const platformUrl = params.get("platform_url") || "https://platform.openai.com";
+        const platformUrl =
+          params.get("platform_url") || "https://platform.openai.com";
         const orgId = params.get("org_id");
         const projectId = params.get("project_id");
         const planType = params.get("plan_type");
@@ -203,7 +215,9 @@
           window.location.href = CODEX_URL;
         }
 
-        document.getElementById("open-codex").addEventListener("click", openCodex);
+        document
+          .getElementById("open-codex")
+          .addEventListener("click", openCodex);
         if (!preview) {
           setTimeout(openCodex, 250);
         }

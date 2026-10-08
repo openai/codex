@@ -233,13 +233,13 @@ metrics.shutdown()?; // flushes in-memory exporter
 failed sends. It carries existing session tags plus `mode` (`incremental`/`full`),
 `phase` (`warmup`/`generation`), and `reason`:
 
-| Reason | Meaning |
-| --- | --- |
-| `incremental` | Send the previous response ID and new input. |
-| `no_previous_request` | First request from a fresh client. |
-| `restored_history` | First request after loading resumed or forked history. |
-| `connection_closed` | Full input after observing the previous socket closed. |
-| `other` | Full input for another reason, such as changed input/settings or unavailable response state. |
+| Reason                | Meaning                                                                                      |
+| --------------------- | -------------------------------------------------------------------------------------------- |
+| `incremental`         | Send the previous response ID and new input.                                                 |
+| `no_previous_request` | First request from a fresh client.                                                           |
+| `restored_history`    | First request after loading resumed or forked history.                                       |
+| `connection_closed`   | Full input after observing the previous socket closed.                                       |
+| `other`               | Full input for another reason, such as changed input/settings or unavailable response state. |
 
 Per-socket backend metrics label a resend after reconnect as `initial`; this client
 metric retains the first reset reason through reconnect failures and turn boundaries.

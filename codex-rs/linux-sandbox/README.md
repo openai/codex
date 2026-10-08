@@ -22,6 +22,7 @@ it cannot create the required user namespaces, so Codex rejects sandboxed shell
 commands that would enter the bubblewrap path.
 
 **Current Behavior**
+
 - Legacy `SandboxPolicy` / `sandbox_mode` configs remain supported.
 - Bubblewrap is the default filesystem sandbox.
 - If `bwrap` is present on `PATH` outside the current working directory, the
@@ -108,4 +109,5 @@ commands that would enter the bubblewrap path.
   remain in force. The default `isolate` mode retains PID isolation.
 
 **Notes**
+
 - The CLI surface is `codex sandbox`; the host OS selects the sandbox backend.
