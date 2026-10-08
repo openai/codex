@@ -6,6 +6,8 @@ use crate::agent::agent_status_from_event;
 use crate::agent::api::AgentControl;
 use crate::agent::api::AgentInfo;
 use crate::agent::api::AgentInput;
+use crate::agent::api::AgentTarget;
+use crate::agent::api::SendRequest;
 use crate::agent::api::SpawnRequest;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::types::AgentMessage;
@@ -102,8 +104,10 @@ use codex_utils_path_uri::PathUri;
 use core_test_support::responses::strip_response_item_ids;
 use pretty_assertions::assert_eq;
 use std::future::Future;
+use std::future::poll_fn;
 use std::sync::RwLock;
 use std::task::Context;
+use std::task::Poll;
 use std::task::Waker;
 use tempfile::TempDir;
 use tokio::time::Duration;
@@ -1006,6 +1010,128 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
 #[tokio::test]
 async fn ensure_v2_child_loaded_preserves_evicted_parent_authority() {
     check_v2_agent_reload(V2ReloadRoute::NestedParent).await;
+}
+
+#[tokio::test]
+async fn cancelled_v2_send_finishes_reload_registration() {
+    let (home, mut config) = test_config().await;
+    config.features.enable(Feature::MultiAgentV2).unwrap();
+    config.features.enable(Feature::Sqlite).unwrap();
+    // The root leaves exactly one resident child slot available.
+    config.multi_agent_v2.max_concurrent_threads_per_session = 2;
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let (parent_id, parent) = harness.start_paginated_thread().await;
+    let control = parent
+        .session
+        .services
+        .local_agent_runtime
+        .control(parent.session.session_id());
+    let child =
+        spawn_v2_reload_test_child(&control, harness.config.clone(), &parent, "worker").await;
+    let child_id = child.thread_id;
+    let thread = harness.manager.get_thread(child_id).await.unwrap();
+    thread
+        .inject_response_items(vec![assistant_message(
+            "child persisted",
+            Some(MessagePhase::FinalAnswer),
+        )])
+        .await
+        .unwrap();
+    // The existing fixture has no task runner to finish its initial turn.
+    thread.session.mark_interrupted();
+    *thread.session.active_turn.lock().await = None;
+    assert_eq!(
+        harness.manager.try_evict_v2_thread(thread).await.unwrap(),
+        ThreadEvictionOutcome::Evicted,
+    );
+    assert!(
+        control
+            .runtime
+            .registry
+            .evicted_environments(child_id)
+            .is_some()
+    );
+
+    let followup_request = |message: &str| SendRequest {
+        caller: parent_id,
+        target: AgentTarget::Id(child_id),
+        resume_config: harness.config.clone(),
+        input: AgentInput::Message {
+            message: AgentMessage::Plaintext(message.to_string()),
+            mode: MessageDeliveryMode::TriggerTurn,
+        },
+        start_options: Default::default(),
+    };
+    let mut created = harness.manager.subscribe_thread_created();
+    let state = control.runtime.upgrade().unwrap();
+    let mut send = control.send(followup_request("cancelled follow-up"));
+    let (reloaded, pin_blocker) = poll_fn(|cx| {
+        assert!(send.as_mut().poll(cx).is_pending());
+        let Ok(threads) = state.threads.try_read() else {
+            return Poll::Pending;
+        };
+        let Some(reloaded) = threads.get(&child_id).cloned() else {
+            return Poll::Pending;
+        };
+        // On this single-thread runtime, intercept publication before the detached
+        // registration task can acquire its residency pin.
+        let pin_blocker = Arc::clone(&reloaded.residency_gate)
+            .try_write_owned()
+            .expect("reload registration has not acquired its pin yet");
+        Poll::Ready((reloaded, pin_blocker))
+    })
+    .await;
+    tokio::task::yield_now().await;
+    assert!(matches!(
+        created.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+    ));
+    drop(send);
+    drop(pin_blocker);
+
+    assert_eq!(
+        timeout(Duration::from_secs(5), created.recv())
+            .await
+            .expect("cancelled sender must not cancel reload registration")
+            .unwrap(),
+        child_id,
+    );
+    assert_eq!(
+        control.runtime.registry.evicted_environments(child_id),
+        None
+    );
+    // Evict and reload again with the single child slot. This also catches a leaked
+    // pin or pending residency reservation left behind by the cancelled sender.
+    assert_eq!(
+        harness.manager.try_evict_v2_thread(reloaded).await.unwrap(),
+        ThreadEvictionOutcome::Evicted,
+    );
+    let receipt = control
+        .send(followup_request("follow-up after cancellation"))
+        .await
+        .expect("follow-up should reload the same child after cancellation");
+    assert_eq!(receipt.thread_id, child_id);
+    let messages: Vec<_> = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .filter_map(|(thread_id, op)| match op {
+            Op::InterAgentCommunication { communication, .. } if thread_id == child_id => {
+                Some(communication)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        messages,
+        vec![InterAgentCommunication::new(
+            AgentPath::root(),
+            child.metadata.agent_path.unwrap(),
+            Vec::new(),
+            "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\nfollow-up after cancellation".to_string(),
+            /*trigger_turn*/ true,
+        )],
+    );
 }
 
 #[derive(Clone, Copy)]
