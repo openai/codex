@@ -30,6 +30,7 @@ use codex_protocol::SanitizedGitUrl;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::PersistContext;
 use std::ops::ControlFlow;
@@ -446,13 +447,13 @@ fn validate_dynamic_tools(tools: &[DynamicToolSpec]) -> Result<(), String> {
 #[derive(Clone)]
 pub(crate) struct ThreadRequestProcessor {
     pub(super) auth_manager: Arc<AuthManager>,
-    pub(super) thread_manager: Arc<ThreadManager>,
+    pub(crate) thread_manager: Arc<ThreadManager>,
     pub(super) outgoing: Arc<OutgoingMessageSender>,
     pub(super) arg0_paths: Arg0DispatchPaths,
     pub(super) config: Arc<Config>,
     pub(super) config_manager: ConfigManager,
     pub(super) thread_store: Arc<dyn ThreadStore>,
-    pub(super) pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
+    pub(crate) pending_thread_unloads: PendingThreadUnloads,
     pub(super) thread_state_manager: ThreadStateManager,
     pub(super) thread_watch_manager: ThreadWatchManager,
     pub(super) thread_list_state_permit: Arc<Semaphore>,
@@ -492,7 +493,7 @@ impl ThreadRequestProcessor {
         config: Arc<Config>,
         config_manager: ConfigManager,
         thread_store: Arc<dyn ThreadStore>,
-        pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
+        pending_thread_unloads: PendingThreadUnloads,
         thread_state_manager: ThreadStateManager,
         thread_watch_manager: ThreadWatchManager,
         thread_list_state_permit: Arc<Semaphore>,
@@ -1007,7 +1008,6 @@ impl ThreadRequestProcessor {
     }
 
     async fn finalize_thread_teardown(&self, thread_id: ThreadId) {
-        self.pending_thread_unloads.lock().await.remove(&thread_id);
         self.outgoing
             .cancel_requests_for_thread(thread_id, /*error*/ None)
             .await;
@@ -1017,6 +1017,7 @@ impl ThreadRequestProcessor {
         self.thread_watch_manager
             .remove_thread(&thread_id.to_string())
             .await;
+        self.pending_thread_unloads.lock().await.remove(&thread_id);
     }
 
     async fn thread_unsubscribe_response_inner(
@@ -3621,12 +3622,54 @@ impl ThreadRequestProcessor {
         self.thread_watch_manager.subscribe_running_turn_count()
     }
 
-    /// Best-effort: ensure initialized connections are subscribed to this thread.
+    /// Best-effort: start the lifecycle listener and subscribe initialized connections.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "listener state creation must be serialized against pending unloads"
+    )]
     pub(crate) async fn try_attach_thread_listener(
         &self,
         thread_id: ThreadId,
         connection_ids: Vec<ConnectionId>,
     ) {
+        if connection_ids.is_empty() {
+            let result = loop {
+                let pending = self.pending_thread_unloads.lock().await;
+                if let Some(unload) = pending.get(&thread_id) {
+                    // A replacement can be published before the old listener finishes cleanup.
+                    let mut completion = unload.subscribe();
+                    drop(pending);
+                    let _ = completion.changed().await;
+                    continue;
+                }
+                let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+                    return;
+                };
+                // Only persisted V2 children can reload after idle eviction.
+                if thread.multi_agent_version() != Some(MultiAgentVersion::V2)
+                    || thread.config().await.ephemeral
+                {
+                    return;
+                }
+                self.thread_watch_manager
+                    .upsert_thread(&thread_id.to_string())
+                    .await;
+                let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+                let result = self
+                    .ensure_listener_task_running(thread_id, thread, thread_state)
+                    .await;
+                drop(pending);
+                break result;
+            };
+            if let Err(err) = result {
+                warn!(
+                    "failed to start listener for thread {thread_id}: {message}",
+                    message = err.message
+                );
+            }
+            return;
+        }
+
         let mut raw_events_enabled = false;
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
             let config_snapshot = thread.config_snapshot().await;
@@ -3669,7 +3712,7 @@ impl ThreadRequestProcessor {
                 .pending_thread_unloads
                 .lock()
                 .await
-                .contains(&thread_id)
+                .contains_key(&thread_id)
         {
             return Err(invalid_request(format!(
                 "thread {thread_id} is closing; retry thread/resume after the thread is closed"
@@ -3782,7 +3825,7 @@ impl ThreadRequestProcessor {
                 .pending_thread_unloads
                 .lock()
                 .await
-                .contains(&resumed.conversation_id)
+                .contains_key(&resumed.conversation_id)
         {
             return Err(invalid_request(format!(
                 "thread {} is closing; retry thread/resume after the thread is closed",

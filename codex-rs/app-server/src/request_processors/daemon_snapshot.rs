@@ -16,7 +16,7 @@ impl ThreadRequestProcessor {
         let mut snapshot = RecoverySnapshot::default();
         for thread_id in self.thread_manager.list_thread_ids().await {
             let pending_unloads = self.pending_thread_unloads.lock().await;
-            if pending_unloads.contains(&thread_id) {
+            if pending_unloads.contains_key(&thread_id) {
                 continue;
             }
             let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {

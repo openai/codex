@@ -344,7 +344,8 @@ pub struct ConfigToml {
     pub background_terminal_max_timeout: Option<u64>,
 
     /// Seconds a thread must have no subscribers and no activity before app-server
-    /// unloads it. Defaults to 60; zero unloads immediately. Changes require a server restart.
+    /// unloads it. Defaults to 1800 (30 minutes); zero unloads immediately.
+    /// Changes require a server restart.
     pub thread_unload_delay_secs: Option<u64>,
 
     /// Deprecated: ignored.

@@ -12,7 +12,7 @@ pub(super) struct ListenerTaskContext {
     pub(super) thread_manager: Arc<ThreadManager>,
     pub(super) thread_state_manager: ThreadStateManager,
     pub(super) outgoing: Arc<OutgoingMessageSender>,
-    pub(super) pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
+    pub(super) pending_thread_unloads: PendingThreadUnloads,
     pub(super) thread_watch_manager: ThreadWatchManager,
     pub(super) codex_home: PathBuf,
     pub(super) thread_unload_delay: Duration,
@@ -160,7 +160,7 @@ pub(super) async fn ensure_conversation_listener(
     };
     let (thread_state, result) = {
         let pending_thread_unloads = listener_task_context.pending_thread_unloads.lock().await;
-        if pending_thread_unloads.contains(&conversation_id) {
+        if pending_thread_unloads.contains_key(&conversation_id) {
             return Err(invalid_request(format!(
                 "thread {conversation_id} is closing; retry after the thread is closed"
             )));
@@ -394,13 +394,67 @@ pub(super) async fn ensure_listener_task_running(
                     }
                     {
                         let mut pending_thread_unloads = pending_thread_unloads.lock().await;
-                        if pending_thread_unloads.contains(&conversation_id) {
+                        if pending_thread_unloads.contains_key(&conversation_id) {
                             continue;
                         }
                         if !unloading_state.should_unload_now() {
                             continue;
                         }
-                        pending_thread_unloads.insert(conversation_id);
+                        pending_thread_unloads.insert(conversation_id, watch::channel(()).0);
+                    }
+                    if is_v2_child {
+                        let eviction = thread_manager.try_evict_v2_thread(Arc::clone(&conversation));
+                        tokio::pin!(eviction);
+                        let result = match tokio::time::timeout(
+                            Duration::from_secs(/*secs*/ 10), &mut eviction,
+                        ).await {
+                            Ok(result) => result,
+                            Err(_) => {
+                                warn!(event.name = "codex.app_server.thread_shutdown_slow", "thread {conversation_id} shutdown is taking longer than expected; continuing to wait");
+                                eviction.await
+                            }
+                        };
+                        let outcome = match result {
+                            Ok(ThreadEvictionOutcome::Busy) => {
+                                pending_thread_unloads.lock().await.remove(&conversation_id);
+                                unloading_state.note_thread_activity_observed();
+                                continue;
+                            }
+                            Ok(outcome @ (ThreadEvictionOutcome::Evicted | ThreadEvictionOutcome::NotCurrent)) => outcome,
+                            Err(err) => {
+                                warn!("failed to evict thread {conversation_id}: {err}");
+                                pending_thread_unloads.lock().await.remove(&conversation_id);
+                                unloading_state.note_thread_activity_observed();
+                                continue;
+                            }
+                        };
+                        {
+                            let mut pending = pending_thread_unloads.lock().await;
+                            if !thread_state_manager.remove_unsubscribed_listener(
+                                conversation_id, &thread_state, listener_generation,
+                            ).await {
+                                pending.remove(&conversation_id);
+                                break;
+                            }
+                        }
+                        // Release the status receiver before removing its watch entry.
+                        drop(unloading_state);
+                        outgoing_for_task
+                            .cancel_requests_for_thread(conversation_id, /*error*/ None)
+                            .await;
+                        // A runtime removed by someone else may already have a replacement.
+                        if outcome == ThreadEvictionOutcome::Evicted {
+                            thread_watch_manager
+                                .remove_thread(&conversation_id.to_string())
+                                .await;
+                            outgoing_for_task
+                                .send_server_notification(ServerNotification::ThreadClosed(
+                                    ThreadClosedNotification { thread_id: conversation_id.to_string() },
+                                ))
+                                .await;
+                        }
+                        pending_thread_unloads.lock().await.remove(&conversation_id);
+                        return;
                     }
                     if is_v2_child {
                         let eviction = thread_manager.try_evict_v2_thread(Arc::clone(&conversation));
@@ -491,7 +545,7 @@ pub(super) async fn wait_for_thread_shutdown(thread: &Arc<CodexThread>) -> Threa
 pub(super) async fn unload_thread_without_subscribers(
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
-    pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
+    pending_thread_unloads: PendingThreadUnloads,
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
     thread_id: ThreadId,
@@ -564,7 +618,7 @@ pub(super) async fn handle_thread_listener_command(
     thread_state: &Arc<Mutex<ThreadState>>,
     thread_watch_manager: &ThreadWatchManager,
     outgoing: &Arc<OutgoingMessageSender>,
-    pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
+    pending_thread_unloads: &PendingThreadUnloads,
     listener_command: ThreadListenerCommand,
 ) {
     match listener_command {
@@ -658,7 +712,7 @@ pub(super) async fn handle_pending_thread_resume_request(
     thread_state: &Arc<Mutex<ThreadState>>,
     thread_watch_manager: &ThreadWatchManager,
     outgoing: &Arc<OutgoingMessageSender>,
-    pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
+    pending_thread_unloads: &PendingThreadUnloads,
     mut pending: crate::thread_state::PendingThreadResumeRequest,
 ) {
     let (active_turn_metadata, active_turn) = {
@@ -777,7 +831,7 @@ pub(super) async fn handle_pending_thread_resume_request(
 
     {
         let pending_thread_unloads = pending_thread_unloads.lock().await;
-        if pending_thread_unloads.contains(&conversation_id) {
+        if pending_thread_unloads.contains_key(&conversation_id) {
             drop(pending_thread_unloads);
             outgoing
                 .send_error(
