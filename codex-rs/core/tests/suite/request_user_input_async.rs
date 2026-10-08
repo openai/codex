@@ -33,6 +33,77 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use test_case::test_case;
 
+#[test_case(SessionSource::Exec, None, true, false; "root_without_capability")]
+#[test_case(SessionSource::Exec, Some("send_user_message_async"), true, true; "legacy_capability_enabled")]
+#[test_case(SessionSource::Exec, Some("send_user_message_async"), false, false; "legacy_capability_disabled")]
+#[test_case(SessionSource::Exec, Some("request_user_input_async"), true, true; "current_capability_enabled")]
+#[test_case(SessionSource::Exec, Some("request_user_input_async"), false, false; "current_capability_disabled")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::Other("test".to_string())), Some("request_user_input_async"), true, false; "subagent")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn async_question_registration_respects_user_input_setting(
+    session_source: SessionSource,
+    catalog_tool: Option<&'static str>,
+    enabled: bool,
+    expect_question_tool: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let test = test_codex()
+        .with_model_info_override("gpt-5.2", move |model| {
+            model.tool_mode = Some(ToolMode::CodeModeOnly);
+            model.experimental_supported_tools = catalog_tool
+                .into_iter()
+                .chain(["send_message_to_user_async"])
+                .map(str::to_string)
+                .collect();
+        })
+        .with_config(move |config| {
+            config.experimental_request_user_input_enabled = enabled;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let is_root = !session_source.is_non_root_agent();
+    let thread = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            session_source: Some(session_source),
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?
+        .thread;
+    thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Report progress.".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let body = responses.single_request().body_json();
+    let tools = body["tools"].as_array().expect("request tools");
+    assert_eq!(
+        tools
+            .iter()
+            .filter(|tool| tool["name"] == "request_user_input_async")
+            .count(),
+        usize::from(expect_question_tool),
+    );
+    assert_eq!(
+        tools
+            .iter()
+            .filter(|tool| tool["name"] == "send_message_to_user_async")
+            .count(),
+        usize::from(is_root),
+    );
+    Ok(())
+}
+
 #[test_case(SessionSource::Exec, false, false; "root_without_tool")]
 #[test_case(SessionSource::Exec, true, true; "root_with_tool")]
 #[test_case(SessionSource::SubAgent(SubAgentSource::Other("test".to_string())), true, false; "subagent")]
