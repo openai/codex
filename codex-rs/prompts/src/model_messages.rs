@@ -204,6 +204,17 @@ impl<'a> ResolvedModelMessages<'a> {
             .as_ref()
     }
 
+    /// Selects per-function guidance restricted to the default `functions` namespace.
+    pub fn functions_namespace_functions_description_prefixes(
+        &self,
+    ) -> Option<&'a std::collections::BTreeMap<String, String>> {
+        self.catalog_messages?
+            .tools
+            .as_ref()?
+            .functions_namespace_functions_description_prefixes
+            .as_ref()
+    }
+
     /// Selects Code Mode messages; bundled text and runtime composition belong to the tool owner.
     pub fn code_mode(&self) -> Option<&'a CodeModeToolMessages> {
         self.catalog_messages?.tools.as_ref()?.code_mode.as_ref()

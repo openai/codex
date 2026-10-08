@@ -580,9 +580,18 @@ pub struct ConfirmationPolicies {
     pub computer_use: Option<String>,
 }
 
-/// Model-owned tool messages and indirect namespace guidance.
+/// Model-owned tool messages and description prefixes.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ToolMessages {
+    /// Prefixes for individual functions in the `functions` namespace, keyed by unqualified name.
+    /// Applies to direct declarations, Code Mode, and tool search, including custom tools.
+    /// Values are trimmed; empty values and unavailable functions add nothing. The trimmed
+    /// values for available functions plus separating blank lines must fit in 256 UTF-8 bytes
+    /// in total. This bounds the added text, not the complete definition or its token count.
+    /// Other namespaces are never affected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub functions_namespace_functions_description_prefixes:
+        Option<std::collections::BTreeMap<String, String>>,
     /// Optional guidance for indirectly presented tools; missing or empty adds no prefix.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indirect_description_prefixes: Option<IndirectDescriptionPrefixes>,
@@ -597,6 +606,7 @@ pub struct ToolMessages {
 }
 
 /// Plain-text prefixes for Code Mode documentation, ALL_TOOLS, and loaded tool-search namespaces.
+/// Flat indirect entries carry these before any per-function prefix.
 /// Values are trimmed, and selectors for the same final namespace must agree, including empty values.
 /// Empty values add no prefix; unregistered targets are ignored.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]

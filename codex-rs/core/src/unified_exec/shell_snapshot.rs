@@ -38,7 +38,7 @@ impl Session {
         if !self.features().enabled(Feature::ShellSnapshotV2)
             || step_context
                 .tool_router
-                .tool_runtime(&ToolName::plain("exec_command"))
+                .registered_tool(&ToolName::plain("exec_command"))
                 .is_none()
         {
             return None;

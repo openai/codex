@@ -11,7 +11,7 @@ use crate::tools::context::ToolPayload;
 #[cfg(test)]
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::registry::AnyToolResult;
-use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
@@ -249,8 +249,8 @@ impl ToolRouter {
             .unwrap_or(false)
     }
 
-    pub(crate) fn tool_runtime(&self, tool_name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
-        self.registry.tool(tool_name)
+    pub(crate) fn registered_tool(&self, tool_name: &ToolName) -> Option<&RegisteredTool> {
+        self.registry.registered_tool(tool_name)
     }
 
     #[instrument(level = "trace", skip_all, err)]
