@@ -5,9 +5,11 @@ use assert_cmd::prelude::*;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_exec_command_call_with_args;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use pretty_assertions::assert_eq;
 use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
@@ -89,6 +91,101 @@ async fn test_apply_patch_tool() -> anyhow::Result<()> {
     let final_path = tmp_path.join("test.md");
     let contents = std::fs::read_to_string(&final_path).expect("final file should be readable");
     assert_eq!(contents, "Final text\n");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn nested_apply_patch_alias_works_with_restricted_reads() -> anyhow::Result<()> {
+    use core_test_support::skip_if_no_network;
+    use core_test_support::skip_if_sandbox;
+    use core_test_support::test_codex_exec::test_codex_exec;
+
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    #[cfg(target_os = "linux")]
+    if super::sandbox::linux_sandbox_test_env().await.is_none() {
+        return Ok(());
+    }
+    let test = test_codex_exec();
+    let binary = codex_utils_cargo_bin::cargo_bin("codex-exec")?.canonicalize()?;
+    let binary_dir = serde_json::to_string(binary.parent().expect("binary directory"))?;
+    let codex_home = serde_json::to_string(test.home_path())?;
+    fs::write(
+        test.home_path().join("config.toml"),
+        format!(
+            r#"default_permissions = "aliases"
+approval_policy = "never"
+[features]
+shell_snapshot = false
+shell_snapshot_v2 = false
+[permissions.aliases.filesystem]
+":minimal" = "read"
+":project_roots" = "write"
+{binary_dir} = "read"
+{codex_home} = "none"
+"#
+        ),
+    )?;
+    fs::write(
+        test.home_path().join("outside-workspace.txt"),
+        "must remain unreadable to the script",
+    )?;
+    fs::write(
+        test.cwd_path().join("patch.sh"),
+        "if cat \"$HOME/outside-workspace.txt\" >/dev/null 2>&1; then exit 99; fi\napply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: patched.txt\n+through the nested alias\n*** End Patch\nPATCH\n",
+    )?;
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_exec_command_call_with_args(
+                    "nested-patch",
+                    &serde_json::json!({
+                        "cmd": "/bin/sh patch.sh",
+                        "shell": "/bin/sh",
+                        "login": false,
+                        "yield_time_ms": 10_000,
+                    }),
+                ),
+                ev_completed("response-1"),
+            ]),
+            sse(vec![ev_completed("response-2")]),
+        ],
+    )
+    .await;
+    let run = test.cmd_with_server(&server)
+        .env("HOME", test.home_path())
+        .env_remove("CODEX_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .arg("--skip-git-repo-check")
+        .arg("-c")
+        .arg("default_permissions=\"aliases\"")
+        .arg("-c")
+        .arg("approvals_reviewer=\"user\"")
+        .arg("-c")
+        .arg("model_provider=\"test\"")
+        .arg("-c")
+        .arg(format!(
+            "model_providers.test={{name=\"test\",base_url={:?},wire_api=\"responses\",requires_openai_auth=false,supports_websockets=false}}",
+            format!("{}/v1", server.uri())
+        ))
+        .arg("run the patch script")
+        .assert()
+        .success();
+    let output = mock
+        .function_call_output_text("nested-patch")
+        .expect("tool output");
+    assert!(
+        output.contains("Process exited with code 0"),
+        "{output}\n{}",
+        String::from_utf8_lossy(&run.get_output().stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(test.cwd_path().join("patched.txt"))?,
+        "through the nested alias\n"
+    );
     Ok(())
 }
 

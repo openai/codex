@@ -1,16 +1,13 @@
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellInvocation;
-use crate::shell::ShellType;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
-use codex_exec_server::Environment;
 use codex_protocol::models::AdditionalPermissionProfile;
-use codex_tools::UnifiedExecShellMode;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -100,7 +97,6 @@ fn post_unified_exec_tool_use_payload(
 pub(crate) fn get_command(
     args: &ExecCommandArgs,
     session_shell: Arc<Shell>,
-    shell_mode: &UnifiedExecShellMode,
     allow_login_shell: bool,
 ) -> Result<ResolvedCommand, String> {
     let use_login_shell = match args.login {
@@ -113,24 +109,11 @@ pub(crate) fn get_command(
         None => allow_login_shell,
     };
 
-    let shell = match shell_mode {
-        UnifiedExecShellMode::Direct => args
-            .shell
-            .as_ref()
-            .map(|shell_str| get_shell_by_model_provided_path(&PathBuf::from(shell_str)))
-            .unwrap_or_else(|| session_shell.as_ref().clone()),
-        UnifiedExecShellMode::ZshFork(zsh_fork_config) => {
-            if args.shell.is_some() {
-                return Err(
-                    "`shell` is not supported for local zsh-fork exec; omit `shell` to use zsh-fork, or target a remote environment where `shell` is supported.".to_string(),
-                );
-            }
-            Shell {
-                shell_type: ShellType::Zsh,
-                shell_path: zsh_fork_config.shell_zsh_path.as_path().to_path_buf(),
-            }
-        }
-    };
+    let shell = args
+        .shell
+        .as_ref()
+        .map(|shell_str| get_shell_by_model_provided_path(&PathBuf::from(shell_str)))
+        .unwrap_or_else(|| session_shell.as_ref().clone());
     Ok(ResolvedCommand {
         command: shell.derive_exec_args(&args.cmd, use_login_shell),
         shell: ShellInvocation {
@@ -138,17 +121,6 @@ pub(crate) fn get_command(
             use_login_shell,
         },
     })
-}
-
-pub(crate) fn shell_mode_for_environment(
-    turn_shell_mode: &UnifiedExecShellMode,
-    environment: &Environment,
-) -> UnifiedExecShellMode {
-    if environment.is_remote() {
-        UnifiedExecShellMode::Direct
-    } else {
-        turn_shell_mode.clone()
-    }
 }
 
 #[cfg(test)]

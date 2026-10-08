@@ -147,8 +147,6 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
                 has_trigger: trigger.is_some(),
             },
             GuardianApprovalRequest::WriteStdin { .. } => PlannedActionKind::TerminalInput,
-            #[cfg(unix)]
-            GuardianApprovalRequest::Execve { .. } => PlannedActionKind::Command,
             GuardianApprovalRequest::ExecCommand { .. }
             | GuardianApprovalRequest::ApplyPatch { .. }
             | GuardianApprovalRequest::McpToolCall { .. }

@@ -5611,7 +5611,6 @@ async fn rebuild_with_session_layers_refreshes_requirements() -> std::io::Result
         thread_config.cwd.to_path_buf(),
         &refreshed_layer_stack,
         codex_home.abs(),
-        /*default_zsh_path*/ None,
     )
     .await?;
 
@@ -5727,7 +5726,6 @@ async fn rebuild_with_session_layers_refreshes_plugin_derived_mcp_config() -> an
         thread_config.cwd.to_path_buf(),
         &refreshed_layer_stack,
         codex_home.abs(),
-        /*default_zsh_path*/ None,
     )
     .await?;
     let plugins_manager =
@@ -6033,25 +6031,6 @@ async fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<
             other => panic!("expected workspace-write policy, got {other:?}"),
         }
     }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn default_zsh_path_sets_runtime_zsh_path() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let default_zsh_path = codex_home.path().join("packaged-zsh");
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides {
-            default_zsh_path: Some(default_zsh_path.abs()),
-            ..Default::default()
-        },
-        codex_home.abs(),
-    )
-    .await?;
-    assert_eq!(config.zsh_path, Some(default_zsh_path));
 
     Ok(())
 }
@@ -11635,7 +11614,6 @@ async fn feature_requirements_can_still_disable_unified_exec() -> std::io::Resul
 [features]
 unified_exec = false
 shell_tool = true
-unified_exec_zsh_fork = false
 use_xaa = false
 "#,
             ),
@@ -11645,7 +11623,6 @@ use_xaa = false
 
     assert!(!config.features.enabled(Feature::UnifiedExec));
     assert!(config.features.enabled(Feature::ShellTool));
-    assert!(!config.features.enabled(Feature::UnifiedExecZshFork));
     assert!(!config.features.enabled(Feature::UseXaa));
     assert!(
         !config
@@ -11660,13 +11637,8 @@ use_xaa = false
         .features
         .enable(Feature::UnifiedExec)
         .expect("managed feature mutations should normalize successfully");
-    config
-        .features
-        .enable(Feature::UnifiedExecZshFork)
-        .expect("managed feature updates should preserve administrator policy");
     assert!(!config.features.enabled(Feature::UnifiedExec));
     assert!(config.features.enabled(Feature::ShellTool));
-    assert!(!config.features.enabled(Feature::UnifiedExecZshFork));
 
     Ok(())
 }
@@ -11830,6 +11802,8 @@ shell_tool = false
 
 #[test_case::test_case(Feature::Personality; "personality")]
 #[test_case::test_case(Feature::GuardianThreadContext; "guardian thread context")]
+#[test_case::test_case(Feature::ShellZshFork; "shell zsh fork")]
+#[test_case::test_case(Feature::UnifiedExecZshFork; "unified exec zsh fork")]
 fn retired_feature_requirements_do_not_pin_configured_values(
     feature: Feature,
 ) -> std::io::Result<()> {
@@ -11876,7 +11850,7 @@ fn retired_feature_requirements_do_not_pin_configured_values(
             (
                 Features::with_defaults().enabled(feature),
                 false,
-                usize::from(feature == Feature::GuardianThreadContext),
+                usize::from(feature != Feature::Personality),
             ),
         );
     }

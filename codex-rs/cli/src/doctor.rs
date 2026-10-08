@@ -664,7 +664,6 @@ fn config_overrides_from_interactive(
             .flatten(),
         codex_self_exe: arg0_paths.codex_self_exe.clone(),
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
-        main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         show_raw_agent_reasoning: interactive.oss.then_some(true),
         additional_writable_roots: interactive.add_dir.clone(),
         ..Default::default()
@@ -3229,7 +3228,7 @@ mod tests {
         let arg0_paths = Arg0DispatchPaths {
             codex_self_exe: Some(PathBuf::from("/bin/codex")),
             codex_linux_sandbox_exe: Some(PathBuf::from("/bin/codex-linux-sandbox")),
-            main_execve_wrapper_exe: Some(PathBuf::from("/bin/codex-execve-wrapper")),
+            ..Default::default()
         };
 
         let overrides = config_overrides_from_interactive(&interactive, &arg0_paths);
@@ -3248,10 +3247,6 @@ mod tests {
         assert_eq!(
             overrides.codex_linux_sandbox_exe,
             arg0_paths.codex_linux_sandbox_exe
-        );
-        assert_eq!(
-            overrides.main_execve_wrapper_exe,
-            arg0_paths.main_execve_wrapper_exe
         );
     }
 

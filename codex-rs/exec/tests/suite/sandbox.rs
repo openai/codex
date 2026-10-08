@@ -101,7 +101,7 @@ pub(super) async fn spawn_command_under_sandbox(
 /// under the production Landlock path and skip when enforcement is unavailable
 /// (for example on kernels or container profiles where Landlock is not
 /// enforced).
-async fn linux_sandbox_test_env() -> Option<HashMap<String, String>> {
+pub(super) async fn linux_sandbox_test_env() -> Option<HashMap<String, String>> {
     let command_cwd = AbsolutePathBuf::current_dir().ok()?;
     let sandbox_cwd = command_cwd.clone();
     let permission_profile = PermissionProfile::read_only();

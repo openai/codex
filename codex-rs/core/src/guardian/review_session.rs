@@ -214,8 +214,6 @@ pub struct GuardianReviewSessionReuseKey {
     cwd: PathUri,
     mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
     codex_linux_sandbox_exe: Option<PathBuf>,
-    main_execve_wrapper_exe: Option<PathBuf>,
-    zsh_path: Option<PathBuf>,
     features: ManagedFeatures,
     environment_ids: Vec<String>,
 }
@@ -259,8 +257,6 @@ impl GuardianReviewSessionReuseKey {
             cwd: PathUri::from_abs_path(&spawn_config.cwd),
             mcp_servers: spawn_config.mcp_servers.clone(),
             codex_linux_sandbox_exe: spawn_config.codex_linux_sandbox_exe.clone(),
-            main_execve_wrapper_exe: spawn_config.main_execve_wrapper_exe.clone(),
-            zsh_path: spawn_config.zsh_path.clone(),
             features: spawn_config.features.clone(),
             environment_ids: Vec::new(),
         }

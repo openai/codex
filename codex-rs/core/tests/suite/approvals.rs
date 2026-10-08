@@ -54,10 +54,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
-use core_test_support::zsh_fork::build_zsh_fork_test;
-use core_test_support::zsh_fork::restrictive_workspace_write_profile;
-use core_test_support::zsh_fork::zsh_fork_runtime;
-use core_test_support::zsh_fork::zsh_fork_test_builder;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
@@ -2741,7 +2737,6 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
 }
 
 #[cfg(unix)]
-#[test_case("zsh_fork", false, false; "zsh_fork_unsupported")]
 #[test_case("direct", false, false; "explicit_zsh")]
 #[test_case("direct", true, false; "non_login_in_login_enabled_session")]
 #[test_case("direct", true, true; "login_startup")]
@@ -2776,14 +2771,8 @@ async fn shell_startup_credentials_are_brokered(
         AskForApproval::Never
     };
     let global_startup = matches!(shell_mode, "filtered_startup" | "startup_override");
-    let direct = shell_mode == "direct" || global_startup || request_extra_permissions;
 
-    let builder = if shell_mode == "zsh_fork" {
-        let Some(runtime) = zsh_fork_runtime("zsh-fork credential broker environment test")? else {
-            return Ok(());
-        };
-        zsh_fork_test_builder(runtime, AskForApproval::Never)
-    } else {
+    let builder = {
         let Some(zsh) = codex_core::shell::get_shell(codex_core::shell::ShellType::Zsh) else {
             return Ok(());
         };
@@ -2876,7 +2865,7 @@ ZDOTDIR = "{}"
     let mut builder = builder
         .with_home(home)
         .with_cloud_config_bundle(managed_network_requirements_loader());
-    if direct && !allow_login_shell {
+    if !allow_login_shell {
         let Some(bash) = codex_core::shell::get_shell(codex_core::shell::ShellType::Bash) else {
             return Ok(());
         };
@@ -2915,12 +2904,6 @@ ZDOTDIR = "{}"
             .features
             .enable(Feature::ShellSnapshot)
             .expect("test config should allow ShellSnapshot override");
-        if direct {
-            config
-                .features
-                .disable(Feature::ShellZshFork)
-                .expect("test config should allow direct shell execution");
-        }
     });
     let server = start_mock_server().await;
     let mut test = builder.build(&server).await?;
@@ -2940,14 +2923,14 @@ ZDOTDIR = "{}"
         None
     };
     let snapshot_dir = test.home.path().join("shell_snapshots");
-    let workdir = if (allow_login_shell && !login) || shell_mode == "zsh_fork" {
+    let workdir = if allow_login_shell && !login {
         test.cwd.path().to_path_buf()
     } else {
         let workdir = test.cwd.path().join("brokered-subdirectory");
         fs::create_dir(&workdir)?;
         workdir
     };
-    let call_id = "zsh-fork-brokered-github-credential";
+    let call_id = "shell-brokered-github-credential";
     let command = r#"printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$GH_HOST" "$GH_ENTERPRISE_TOKEN" "$CUSTOM_HOST" "$CUSTOM_API_KEY" "$CODEX_NETWORK_PROXY_CREDENTIAL_BROKER_ACTIVE" "$PWD" "$BROKERED_STARTUP_CWD" "${LOGIN_SNAPSHOT_READY-unset}" "$AUTH_HEADER""#;
     let command = format!(
         "APP_SETTING=production; EXCLUDED_SETTING=denied; [ \"$(/usr/bin/printenv APP_SETTING)\" = production ] || exit 1; if /usr/bin/printenv EXCLUDED_SETTING >/dev/null; then exit 1; fi; {command}"
@@ -2960,28 +2943,19 @@ ZDOTDIR = "{}"
     };
     let snapshot_dir_arg = shlex::try_join([snapshot_dir.to_string_lossy().as_ref()])?;
     let command = format!("{command}; /bin/cat {snapshot_dir_arg}/*.sh > captured-snapshot");
-    let mut arguments = if direct {
-        let Some(zsh) = codex_core::shell::get_shell(codex_core::shell::ShellType::Zsh) else {
-            return Ok(());
-        };
-        json!({
-            "cmd": command,
-            "shell": startup_shell.map_or_else(
-                || zsh.derive_exec_args("", /*use_login_shell*/ false)[0].clone(),
-                |path| path.display().to_string(),
-            ),
-            "workdir": workdir,
-            "login": login,
-            "yield_time_ms": 10_000,
-        })
-    } else {
-        json!({
-            "cmd": command,
-            "workdir": workdir,
-            "login": login,
-            "yield_time_ms": 10_000,
-        })
+    let Some(zsh) = codex_core::shell::get_shell(codex_core::shell::ShellType::Zsh) else {
+        return Ok(());
     };
+    let mut arguments = json!({
+        "cmd": command,
+        "shell": startup_shell.map_or_else(
+            || zsh.derive_exec_args("", /*use_login_shell*/ false)[0].clone(),
+            |path| path.display().to_string(),
+        ),
+        "workdir": workdir,
+        "login": login,
+        "yield_time_ms": 10_000,
+    });
     if request_extra_permissions {
         let approved_dir = test.home.path().join("approved-command");
         fs::create_dir(&approved_dir)?;
@@ -2993,13 +2967,13 @@ ZDOTDIR = "{}"
         &server,
         vec![
             sse(vec![
-                ev_response_created("resp-zsh-fork-broker-1"),
+                ev_response_created("resp-shell-broker-1"),
                 event,
-                ev_completed("resp-zsh-fork-broker-1"),
+                ev_completed("resp-shell-broker-1"),
             ]),
             sse(vec![
-                ev_assistant_message("msg-zsh-fork-broker", "done"),
-                ev_completed("resp-zsh-fork-broker-2"),
+                ev_assistant_message("msg-shell-broker", "done"),
+                ev_completed("resp-shell-broker-2"),
             ]),
         ],
     )
@@ -3039,13 +3013,6 @@ ZDOTDIR = "{}"
     }
 
     let output = responses.requests()[1].function_call_output(call_id);
-    if shell_mode == "zsh_fork" {
-        let output = output.to_string();
-        assert!(output.contains("credential brokerage does not yet support shell_zsh_fork"));
-        assert!(!workdir.join("captured-snapshot").exists());
-        assert!(!output.contains(REAL_GITHUB_TOKEN));
-        return Ok(());
-    }
     let result = parse_result(&output);
     assert_eq!(result.exit_code, Some(0), "command failed: {result:?}");
     if let Some(metrics) = metrics {
@@ -3221,10 +3188,6 @@ GH_TOKEN = "{REAL_GITHUB_TOKEN}"
                 config.features.enable(Feature::ShellSnapshot)
             }
             .expect("test config should allow ShellSnapshot override");
-            config
-                .features
-                .disable(Feature::ShellZshFork)
-                .expect("test config should allow direct shell execution");
         });
     let test = builder.build(&server).await?;
 
@@ -3439,7 +3402,6 @@ ENV = "{}"
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
             config.permissions.allow_login_shell = true;
             config.features.enable(Feature::ShellSnapshot).unwrap();
-            config.features.disable(Feature::ShellZshFork).unwrap();
             if !credential_startup {
                 config
                     .permissions
@@ -3501,259 +3463,6 @@ ENV = "{}"
             "west"
         ]
     );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[cfg(unix)]
-async fn env_zsh_script_spawned_by_python_can_request_escalation_under_zsh_fork() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let Some(runtime) = zsh_fork_runtime("zsh-fork env zsh nested escalation test")? else {
-        return Ok(());
-    };
-
-    let approval_policy = AskForApproval::OnRequest;
-    let permission_profile = restrictive_workspace_write_profile();
-    let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
-    let outside_path = outside_dir.path().join("zsh-fork-env-zsh-escalated.txt");
-    let outside_path_arg = shlex::try_join([outside_path.to_string_lossy().as_ref()])?;
-    let rules = r#"prefix_rule(pattern=["touch"], decision="prompt")"#.to_string();
-
-    let server = start_mock_server().await;
-    let outside_path_for_hook = outside_path.clone();
-    let test = build_zsh_fork_test(
-        &server,
-        runtime,
-        approval_policy,
-        permission_profile.clone(),
-        move |home| {
-            let _ = fs::remove_file(&outside_path_for_hook);
-            let rules_dir = home.join("rules");
-            fs::create_dir_all(&rules_dir).unwrap();
-            fs::write(rules_dir.join("default.rules"), &rules).unwrap();
-        },
-    )
-    .await?;
-
-    let script_path = test.cwd.path().join("runs-under-env-zsh");
-    codex_utils_cargo_bin::write_executable(
-        &script_path,
-        &format!(
-            "#!/usr/bin/env zsh\ntouch {outside_path_arg}\nprint -r -- nested-env-zsh-complete\n"
-        ),
-    )?;
-
-    let script_literal = serde_json::to_string(script_path.to_string_lossy().as_ref())?;
-    let python_script = format!(
-        "import subprocess; subprocess.run([{script_literal}], check=True, close_fds=False)"
-    );
-    let command = shlex::try_join(["python3", "-c", python_script.as_str()])?;
-
-    let call_id = "zsh-fork-env-zsh-nested-escalation";
-    let event = shell_event(
-        call_id,
-        &command,
-        /*timeout_ms*/ 30_000,
-        SandboxPermissions::UseDefault,
-    )?;
-    let _ = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-zsh-fork-env-zsh-1"),
-            event,
-            ev_completed("resp-zsh-fork-env-zsh-1"),
-        ]),
-    )
-    .await;
-    let results = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_assistant_message("msg-zsh-fork-env-zsh-1", "done"),
-            ev_completed("resp-zsh-fork-env-zsh-2"),
-        ]),
-    )
-    .await;
-
-    let session_model = test.session_configured.model.clone();
-    let (sandbox_policy, permission_profile) =
-        turn_permission_fields(permission_profile, test.cwd.path());
-    test.codex
-        .start_or_steer_turn(
-            TurnInputRequest::user_input(vec![UserInput::Text {
-                text: "run nested env zsh script through python".into(),
-                text_elements: Vec::new(),
-            }])
-            .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_requests(test.config.cwd.clone())),
-                approval_policy: Some(approval_policy),
-                approvals_reviewer: Some(ApprovalsReviewer::User),
-                sandbox_policy: Some(sandbox_policy),
-                permission_profile,
-                collaboration_mode: Some(CollaborationMode {
-                    mode: ModeKind::Default,
-                    settings: Settings {
-                        model: session_model,
-                        reasoning_effort: None,
-                        developer_instructions: None,
-                    },
-                }),
-                ..Default::default()
-            }),
-        )
-        .await?;
-
-    let approval_event = wait_for_event_with_timeout(
-        &test.codex,
-        |event| {
-            matches!(
-                event,
-                EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
-            )
-        },
-        Duration::from_secs(10),
-    )
-    .await;
-    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
-        panic!("expected nested zsh script to request approval before completion");
-    };
-    assert!(
-        approval.command.iter().any(|arg| arg.ends_with("/touch"))
-            && approval
-                .command
-                .iter()
-                .any(|arg| arg == outside_path.to_string_lossy().as_ref()),
-        "expected approval for nested touch command, got: {:?}",
-        approval.command
-    );
-
-    test.codex
-        .submit(Op::ExecApproval {
-            id: approval.effective_approval_id(),
-            turn_id: None,
-            decision: ReviewDecision::Approved,
-        })
-        .await?;
-
-    wait_for_completion(&test).await;
-
-    let result = parse_result(&results.single_request().function_call_output(call_id));
-    assert_eq!(
-        result.exit_code.unwrap_or(0),
-        0,
-        "nested env zsh script should complete successfully: {}",
-        result.stdout
-    );
-    assert!(
-        result.stdout.contains("nested-env-zsh-complete"),
-        "nested script did not report completion: {}",
-        result.stdout
-    );
-    assert!(
-        outside_path.exists(),
-        "approved nested touch should create the out-of-workspace file"
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[cfg(unix)]
-async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let Some(runtime) = zsh_fork_runtime("zsh-fork prefix rule unsandboxed test")? else {
-        return Ok(());
-    };
-
-    let approval_policy = AskForApproval::Never;
-    let permission_profile = restrictive_workspace_write_profile();
-    let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
-    let outside_path = outside_dir
-        .path()
-        .join("zsh-fork-prefix-rule-unsandboxed.txt");
-    let command = format!("touch {outside_path:?}");
-    let rules = r#"prefix_rule(pattern=["touch"], decision="allow")"#.to_string();
-
-    let server = start_mock_server().await;
-    let outside_path_for_hook = outside_path.clone();
-    let test = build_zsh_fork_test(
-        &server,
-        runtime,
-        approval_policy,
-        permission_profile.clone(),
-        move |home| {
-            let _ = fs::remove_file(&outside_path_for_hook);
-            let rules_dir = home.join("rules");
-            fs::create_dir_all(&rules_dir).unwrap();
-            fs::write(rules_dir.join("default.rules"), &rules).unwrap();
-        },
-    )
-    .await?;
-
-    let call_id = "zsh-fork-prefix-rule-unsandboxed";
-    let event = shell_event(
-        call_id,
-        &command,
-        /*timeout_ms*/ 1_000,
-        SandboxPermissions::UseDefault,
-    )?;
-    let _ = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-zsh-fork-prefix-1"),
-            event,
-            ev_completed("resp-zsh-fork-prefix-1"),
-        ]),
-    )
-    .await;
-    let results = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_assistant_message("msg-zsh-fork-prefix-1", "done"),
-            ev_completed("resp-zsh-fork-prefix-2"),
-        ]),
-    )
-    .await;
-
-    let session_model = test.session_configured.model.clone();
-    let (sandbox_policy, permission_profile) =
-        turn_permission_fields(permission_profile, test.cwd.path());
-    test.codex
-        .start_or_steer_turn(
-            TurnInputRequest::user_input(vec![UserInput::Text {
-                text: "run allowed touch under zsh fork".into(),
-                text_elements: Vec::new(),
-            }])
-            .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(local_requests(test.config.cwd.clone())),
-                approval_policy: Some(approval_policy),
-                approvals_reviewer: Some(ApprovalsReviewer::User),
-                sandbox_policy: Some(sandbox_policy),
-                permission_profile,
-                collaboration_mode: Some(CollaborationMode {
-                    mode: ModeKind::Default,
-                    settings: Settings {
-                        model: session_model,
-                        reasoning_effort: None,
-                        developer_instructions: None,
-                    },
-                }),
-                ..Default::default()
-            }),
-        )
-        .await?;
-
-    wait_for_completion_without_approval(&test).await;
-
-    let result = parse_result(&results.single_request().function_call_output(call_id));
-    assert_eq!(result.exit_code.unwrap_or(0), 0);
-    assert!(
-        outside_path.exists(),
-        "expected matched prefix_rule to rerun touch unsandboxed; output: {}",
-        result.stdout
-    );
-
     Ok(())
 }
 
@@ -3885,9 +3594,13 @@ async fn explicit_escalation_with_denied_reads(decision: Option<ReviewDecision>)
         .with_config(move |config| {
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
             config.features.enable(Feature::UnifiedExec).unwrap();
-            config.features.disable(Feature::ShellZshFork).unwrap();
-            let mut file_system =
-                restrictive_workspace_write_profile().file_system_sandbox_policy();
+            let mut file_system = PermissionProfile::workspace_write_with(
+                &[],
+                NetworkSandboxPolicy::Restricted,
+                /*exclude_tmpdir_env_var*/ true,
+                /*exclude_slash_tmp*/ true,
+            )
+            .file_system_sandbox_policy();
             file_system.entries.push(FileSystemSandboxEntry::new(
                 config.cwd.join("secret.txt").into(),
                 FileSystemAccessMode::Deny,
@@ -3953,217 +3666,6 @@ async fn explicit_escalation_with_denied_reads(decision: Option<ReviewDecision>)
         assert_eq!(fs::read_to_string(workspace_marker)?, "ran");
     }
     assert_eq!(outside_marker.exists(), approved);
-    Ok(())
-}
-
-/// Verifies that zsh-fork applies an inner script's allow rule even when the
-/// model invokes an outer wrapper, and that the escalated script retains the
-/// named profile needed to reconstruct the original sandbox remotely without
-/// dropping managed enterprise requirements. The script treats the inherited
-/// environment value as untrusted and accepts only explicitly allowlisted
-/// profile names before passing one to `codex sandbox -P`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[cfg(unix)]
-async fn zsh_fork_inner_allowed_script_inherits_active_permission_profile() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let Some(runtime) = zsh_fork_runtime("zsh-fork remote sandbox wrapper test")? else {
-        return Ok(());
-    };
-
-    const HOST: &str = "builder.example.com";
-    let approval_policy = AskForApproval::OnRequest;
-    let script_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
-    let wrapper_path = script_dir.path().join("remote-bash");
-    let remote_bash_path = script_dir.path().join("remote_bash.py");
-    let outside_path = script_dir.path().join("remote-bash-unsandboxed-marker");
-    let outside_path_literal = serde_json::to_string(&outside_path.to_string_lossy())?;
-    codex_utils_cargo_bin::write_executable(
-        &remote_bash_path,
-        &format!(
-            r#"#!/usr/bin/env python3
-import argparse
-import os
-from pathlib import Path
-import re
-import shlex
-import sys
-
-ALLOWED_HOSTS = ("builder.example.com",)
-ALLOWED_PROFILES = (":workspace",)
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Print an ssh command that recreates the current Codex sandbox remotely."
-    )
-    parser.add_argument("--host", required=True)
-    try:
-        separator = sys.argv.index("--")
-    except ValueError:
-        parser.error("the remote command must follow --")
-    args = parser.parse_args(sys.argv[1:separator])
-    args.command = sys.argv[separator + 1:]
-    if not args.command:
-        parser.error("the remote command must not be empty")
-    if not re.fullmatch(r"[a-z0-9.-]+", args.host) or args.host not in ALLOWED_HOSTS:
-        parser.error("host is not allowlisted")
-    return args
-
-
-def main():
-    args = parse_args()
-    profile_name = os.environ.get("CODEX_PERMISSION_PROFILE")
-    if not profile_name:
-        raise SystemExit("CODEX_PERMISSION_PROFILE must not be empty")
-    if profile_name not in ALLOWED_PROFILES:
-        raise SystemExit("CODEX_PERMISSION_PROFILE is not allowlisted")
-
-    shell_command = shlex.join(args.command)
-    sandbox_command = shlex.join(
-        [
-            "codex",
-            "sandbox",
-            "-P",
-            profile_name,
-            "--include-managed-config",
-            "--",
-            "bash",
-            "-lc",
-            shell_command,
-        ]
-    )
-    print(shlex.join(["ssh", args.host, sandbox_command]))
-
-    # Test-only proof that this inner script was allowed to run unsandboxed.
-    Path({outside_path_literal}).write_text("unsandboxed", encoding="utf-8")
-
-
-if __name__ == "__main__":
-    main()
-"#
-        ),
-    )?;
-    let remote_bash_exec = shlex::try_join([remote_bash_path.to_string_lossy().as_ref()])?;
-    codex_utils_cargo_bin::write_executable(
-        &wrapper_path,
-        &format!(
-            r#"#!/usr/bin/env zsh
-exec {remote_bash_exec} "$@"
-"#
-        ),
-    )?;
-
-    let remote_bash_pattern = serde_json::to_string(&remote_bash_path.to_string_lossy())?;
-    let rules = format!(r#"prefix_rule(pattern=[{remote_bash_pattern}], decision="allow")"#);
-    let server = start_mock_server().await;
-    let mut builder =
-        zsh_fork_test_builder(runtime, approval_policy).with_pre_build_hook(move |home| {
-            fs::write(
-                home.join("config.toml"),
-                WORKSPACE_PERMISSION_PROFILE_CONFIG,
-            )
-            .expect("write config");
-            let rules_dir = home.join("rules");
-            fs::create_dir_all(&rules_dir).expect("create rules dir");
-            fs::write(rules_dir.join("default.rules"), rules).expect("write rules");
-        });
-    let test = builder.build(&server).await?;
-    assert!(!outside_path.starts_with(test.config.cwd.as_path()));
-    assert_active_workspace_permission_profile(&test);
-
-    let command = shlex::try_join([
-        wrapper_path.to_string_lossy().as_ref(),
-        "--host",
-        HOST,
-        "--",
-        "printf",
-        "%s",
-        "hello world",
-    ])?;
-    let call_id = "zsh-fork-remote-sandbox-wrapper";
-    let event = shell_event(
-        call_id,
-        &command,
-        /*timeout_ms*/ 30_000,
-        SandboxPermissions::UseDefault,
-    )?;
-    let _ = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-zsh-fork-remote-wrapper-1"),
-            event,
-            ev_completed("resp-zsh-fork-remote-wrapper-1"),
-        ]),
-    )
-    .await;
-    let results = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_assistant_message("msg-zsh-fork-remote-wrapper-1", "done"),
-            ev_completed("resp-zsh-fork-remote-wrapper-2"),
-        ]),
-    )
-    .await;
-
-    submit_turn_preserving_active_permission_profile(
-        &test,
-        "run the remote sandbox wrapper",
-        approval_policy,
-    )
-    .await?;
-    wait_for_completion_without_approval(&test).await;
-
-    let result = parse_result(&results.single_request().function_call_output(call_id));
-    assert_eq!(
-        result.exit_code.unwrap_or(0),
-        0,
-        "the inner remote_bash.py script should run successfully: {}",
-        result.stdout
-    );
-    let ssh_argv = shlex::split(result.stdout.trim()).context("parse printed ssh command")?;
-    assert_eq!(
-        ssh_argv.len(),
-        3,
-        "expected ssh HOST LONG_COMMAND, got: {}",
-        result.stdout
-    );
-    assert_eq!(
-        ssh_argv[..2],
-        ["ssh", HOST],
-        "remote_bash.py should target only the allowlisted host"
-    );
-    let sandbox_argv = shlex::split(&ssh_argv[2]).context("parse remote sandbox command")?;
-    assert_eq!(
-        sandbox_argv.len(),
-        9,
-        "expected codex sandbox ... bash -lc CMD"
-    );
-    assert_eq!(
-        sandbox_argv[..8],
-        [
-            "codex",
-            "sandbox",
-            "-P",
-            BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
-            "--include-managed-config",
-            "--",
-            "bash",
-            "-lc",
-        ],
-        "remote_bash.py should use the allowlisted inherited profile and managed configuration to reconstruct the Codex sandbox"
-    );
-    let command_argv = shlex::split(&sandbox_argv[8]).context("parse remote bash command")?;
-    assert_eq!(
-        command_argv,
-        ["printf", "%s", "hello world"],
-        "remote_bash.py should preserve every argument after --"
-    );
-    assert!(
-        outside_path.exists(),
-        "the inner allowlisted script should run outside the :workspace sandbox"
-    );
-
     Ok(())
 }
 

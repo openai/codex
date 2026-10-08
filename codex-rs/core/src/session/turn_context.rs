@@ -367,7 +367,6 @@ pub struct TurnContext {
     // so owner-provided environment settings govern the remaining sandbox decisions.
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) available_models: Vec<ModelPreset>,
-    pub(crate) unified_exec_shell_mode: UnifiedExecShellMode,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
@@ -415,7 +414,6 @@ impl TurnContext {
         config: Arc<Config>,
         step_settings: Arc<ResolvedStepSettings>,
         available_models: Vec<ModelPreset>,
-        unified_exec_shell_mode: UnifiedExecShellMode,
         turn_metadata_state: Arc<TurnMetadataState>,
     ) -> Self {
         let session_telemetry = step_settings.telemetry(&self.session_telemetry);
@@ -444,7 +442,6 @@ impl TurnContext {
             originator: self.originator.clone(),
             initial_environments: self.initial_environments.clone(),
             available_models,
-            unified_exec_shell_mode,
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             app_server_client_name: self.app_server_client_name.clone(),
@@ -853,7 +850,6 @@ impl TurnContext {
             network: self.network.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
             available_models,
-            unified_exec_shell_mode: self.unified_exec_shell_mode.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
@@ -1023,9 +1019,6 @@ impl Session {
         provider: SharedModelProvider,
         session_configuration: &SessionConfiguration,
         multi_agent_version: MultiAgentVersion,
-        user_shell: &shell::Shell,
-        shell_zsh_path: Option<&PathBuf>,
-        main_execve_wrapper_exe: Option<&PathBuf>,
         per_turn_config: Config,
         step_settings: Arc<ResolvedStepSettings>,
         models_manager: &SharedModelsManager,
@@ -1039,12 +1032,6 @@ impl Session {
         let session_telemetry_for_context = step_settings.telemetry(session_telemetry);
         let session_source = session_configuration.session_source.clone();
         let available_models = models_manager.try_list_models().unwrap_or_default();
-        let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
-            per_turn_config.features.get(),
-            crate::tools::tool_user_shell_type(user_shell),
-            shell_zsh_path,
-            main_execve_wrapper_exe,
-        );
 
         let mut per_turn_config = per_turn_config;
         let configured_token_budget = per_turn_config.token_budget.clone();
@@ -1134,7 +1121,6 @@ impl Session {
             network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
             available_models,
-            unified_exec_shell_mode,
             final_output_json_schema: None,
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
@@ -1350,9 +1336,6 @@ impl Session {
             session_configuration.provider.clone(),
             &session_configuration,
             multi_agent_version,
-            self.services.user_shell.as_ref(),
-            self.services.shell_zsh_path.as_ref(),
-            self.services.main_execve_wrapper_exe.as_ref(),
             per_turn_config,
             step_settings,
             &self.services.models_manager,

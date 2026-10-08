@@ -80,7 +80,6 @@ async fn interrupted_one_shot_launch_failure_completes_and_persists() -> Result<
             ),
         )
         .with_config(|config| {
-            config.features.disable(Feature::ShellZshFork).unwrap();
             config.features.disable(Feature::ShellSnapshot).unwrap();
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
             config

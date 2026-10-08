@@ -960,7 +960,6 @@ async fn request_user_input_stays_direct_in_code_mode_only() {
 async fn shell_family_registers_only_unified_exec_tools() {
     let plan = probe(|turn| {
         set_features(turn, &[Feature::ShellTool]);
-        set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
         update_turn_settings_for_test(turn, |settings| {
             Arc::make_mut(&mut settings.model_info).shell_type = ConfigShellToolType::UnifiedExec;
         });
@@ -984,7 +983,6 @@ async fn exec_command_guidance_follows_executor_platform_and_fallbacks() {
     ] {
         let plan = probe(|turn| {
             set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
-            set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
             update_turn_settings_for_test(turn, |settings| {
                 Arc::make_mut(&mut settings.model_info).shell_type =
                     ConfigShellToolType::UnifiedExec;
@@ -1079,40 +1077,6 @@ async fn dynamic_tools_cannot_reclaim_the_reserved_exec_command_name() {
         plan.namespace_function_names("client"),
         &["exec_command".to_string()]
     );
-}
-
-#[tokio::test]
-async fn shell_zsh_fork_keeps_unified_exec_available() {
-    let without_composition = probe(|turn| {
-        set_features(turn, &[Feature::ShellTool]);
-        set_feature(turn, Feature::ShellZshFork, /*enabled*/ true);
-        set_feature(turn, Feature::UnifiedExecZshFork, /*enabled*/ false);
-        update_turn_settings_for_test(turn, |settings| {
-            Arc::make_mut(&mut settings.model_info).shell_type = ConfigShellToolType::UnifiedExec;
-        });
-    })
-    .await;
-
-    without_composition.assert_visible_contains(&["exec_command", "write_stdin"]);
-    without_composition.assert_registered_contains(&["exec_command", "write_stdin"]);
-
-    let composed = probe(|turn| {
-        set_features(
-            turn,
-            &[
-                Feature::ShellTool,
-                Feature::ShellZshFork,
-                Feature::UnifiedExecZshFork,
-            ],
-        );
-        update_turn_settings_for_test(turn, |settings| {
-            Arc::make_mut(&mut settings.model_info).shell_type = ConfigShellToolType::UnifiedExec;
-        });
-    })
-    .await;
-
-    composed.assert_visible_contains(&["exec_command", "write_stdin"]);
-    composed.assert_registered_contains(&["exec_command", "write_stdin"]);
 }
 
 #[tokio::test]
@@ -1804,7 +1768,6 @@ async fn unified_tool_runtimes_preserve_source_order_and_collision_priority() {
     let plan = probe_with(
         |turn| {
             set_features(turn, &[Feature::ShellTool]);
-            set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
             update_turn_settings_for_test(turn, |settings| {
                 Arc::make_mut(&mut settings.model_info).shell_type =
                     ConfigShellToolType::UnifiedExec;

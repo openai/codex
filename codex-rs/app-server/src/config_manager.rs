@@ -240,7 +240,6 @@ impl ConfigManager {
             cwd.to_path_buf(),
             &layers,
             codex_home,
-            /*default_zsh_path*/ None,
         )
         .await?;
         self.apply_network_policy(&mut config);
@@ -266,7 +265,6 @@ impl ConfigManager {
             cwd.to_path_buf(),
             &refreshed_layers,
             AbsolutePathBuf::from_absolute_path(&self.codex_home)?,
-            /*default_zsh_path*/ None,
         )
         .await?;
         self.apply_network_policy(&mut config);
@@ -434,7 +432,6 @@ impl ConfigManager {
                 cwd: Some(cwd.to_path_buf()),
                 default_permissions: Some(permission_profile),
                 codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
-                main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
                 ..Default::default()
             },
             Some(cwd.to_path_buf()),
@@ -548,7 +545,6 @@ impl ConfigManager {
     fn apply_arg0_paths(&self, config: &mut Config) {
         config.codex_self_exe = self.arg0_paths.codex_self_exe.clone();
         config.codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
-        config.main_execve_wrapper_exe = self.arg0_paths.main_execve_wrapper_exe.clone();
     }
 
     #[cfg(test)]

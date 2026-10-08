@@ -1,7 +1,6 @@
 use super::shell_approval_command;
 use crate::shell::Shell;
 use crate::shell::ShellType;
-use codex_tools::UnifiedExecShellMode;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 
@@ -37,10 +36,7 @@ fn parent_directory_traversal_is_not_a_trusted_system_shell() {
         "ls".to_string(),
     ];
 
-    assert_eq!(
-        shell_approval_command(&command, &shell, &UnifiedExecShellMode::Direct),
-        &command[..1],
-    );
+    assert_eq!(shell_approval_command(&command, &shell), &command[..1],);
 }
 
 #[cfg(windows)]
@@ -65,7 +61,7 @@ fn windows_shell_identity_is_case_insensitive() {
         let command = vec![executable, "-Command".to_string(), "echo safe".to_string()];
 
         assert_eq!(
-            shell_approval_command(&command, &configured_shell, &UnifiedExecShellMode::Direct),
+            shell_approval_command(&command, &configured_shell),
             command.as_slice(),
         );
     }

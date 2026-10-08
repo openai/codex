@@ -1,7 +1,4 @@
 use super::*;
-use crate::config::Config;
-use crate::config::ConfigOverrides;
-use codex_config::config_toml::ConfigToml;
 use codex_config::permissions_toml::FilesystemPermissionToml;
 use codex_config::permissions_toml::FilesystemPermissionsToml;
 use codex_config::permissions_toml::NetworkDomainPermissionToml;
@@ -17,11 +14,29 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathConvention;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use tempfile::TempDir;
+
+#[test]
+fn active_arg0_helper_dir_selects_only_the_first_session_alias_directory() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let arg0_root = home.path().join("tmp/arg0");
+    let active = arg0_root.join("codex-arg0-active");
+    let paths = std::env::join_paths([
+        home.path().join("bin"),
+        arg0_root.clone(),
+        arg0_root.join("unrelated"),
+        active.clone(),
+        arg0_root.join("codex-arg0-parent"),
+    ])?;
+    assert_eq!(
+        active_arg0_helper_dir(home.path(), &paths),
+        Some(AbsolutePathBuf::from_absolute_path(active)?)
+    );
+    Ok(())
+}
 
 #[test]
 fn windows_verbatim_path_prefix_does_not_count_as_glob_syntax() {
@@ -33,74 +48,6 @@ fn windows_verbatim_path_prefix_does_not_count_as_glob_syntax() {
         r"\\?\D:\c\x\worktrees\2508\**\*.env",
         /*is_windows*/ true,
     ));
-}
-
-#[tokio::test]
-async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let cwd = temp_dir.path().join("workspace");
-    let codex_home = temp_dir.path().join(".codex");
-    let zsh_path = temp_dir.path().join("runtime").join("zsh");
-    let arg0_root = codex_home.join("tmp").join("arg0");
-    let allowed_arg0_dir = arg0_root.join("codex-arg0-session");
-    let sibling_arg0_dir = arg0_root.join("codex-arg0-other-session");
-    let execve_wrapper = allowed_arg0_dir.join("codex-execve-wrapper");
-    std::fs::create_dir_all(&cwd)?;
-    std::fs::create_dir_all(zsh_path.parent().expect("zsh path should have parent"))?;
-    std::fs::create_dir_all(&allowed_arg0_dir)?;
-    std::fs::create_dir_all(&sibling_arg0_dir)?;
-    std::fs::write(&zsh_path, "")?;
-    std::fs::write(&execve_wrapper, "")?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some("workspace".to_string()),
-            permissions: Some(PermissionsToml {
-                entries: BTreeMap::from([(
-                    "workspace".to_string(),
-                    PermissionProfileToml {
-                        description: None,
-                        extends: None,
-                        workspace_roots: None,
-                        filesystem: Some(FilesystemPermissionsToml {
-                            glob_scan_max_depth: None,
-                            entries: BTreeMap::new(),
-                        }),
-                        network: None,
-                    },
-                )]),
-            }),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.clone()),
-            default_zsh_path: Some(AbsolutePathBuf::try_from(zsh_path.clone())?),
-            main_execve_wrapper_exe: Some(execve_wrapper),
-            ..Default::default()
-        },
-        AbsolutePathBuf::from_absolute_path(&codex_home)?,
-    )
-    .await?;
-
-    let expected_zsh = AbsolutePathBuf::try_from(zsh_path)?;
-    let expected_allowed_arg0_dir = AbsolutePathBuf::try_from(allowed_arg0_dir)?;
-    let expected_sibling_arg0_dir = AbsolutePathBuf::try_from(sibling_arg0_dir)?;
-    let policy = config.permissions.file_system_sandbox_policy();
-
-    assert!(
-        policy.can_read_local_path_with_cwd(expected_zsh.as_path(), &cwd),
-        "expected zsh helper path to be readable, policy: {policy:?}"
-    );
-    assert!(
-        policy.can_read_local_path_with_cwd(expected_allowed_arg0_dir.as_path(), &cwd),
-        "expected active arg0 helper dir to be readable, policy: {policy:?}"
-    );
-    assert!(
-        !policy.can_read_local_path_with_cwd(expected_sibling_arg0_dir.as_path(), &cwd),
-        "expected sibling arg0 helper dir to remain unreadable, policy: {policy:?}"
-    );
-
-    Ok(())
 }
 
 #[test]

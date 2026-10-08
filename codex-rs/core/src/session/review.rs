@@ -32,12 +32,6 @@ pub(super) async fn spawn_review_thread(
     let _ = review_features.disable(Feature::WebSearchCached);
     let _ = review_features.disable(Feature::Goals);
     let review_web_search_mode = WebSearchMode::Disabled;
-    let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
-        review_features.get(),
-        crate::tools::tool_user_shell_type(sess.services.user_shell.as_ref()),
-        sess.services.shell_zsh_path.as_ref(),
-        sess.services.main_execve_wrapper_exe.as_ref(),
-    );
 
     let review_prompt = resolved.prompt.clone();
     let model_info = review_model_info.clone();
@@ -142,7 +136,6 @@ pub(super) async fn spawn_review_thread(
         per_turn_config,
         step_settings,
         available_models,
-        unified_exec_shell_mode,
         turn_metadata_state,
     );
 

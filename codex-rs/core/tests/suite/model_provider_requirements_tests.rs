@@ -183,11 +183,6 @@ X-Managed = "required"
                 overridden.cwd.to_path_buf(),
                 &overridden.config_layer_stack,
                 overridden.codex_home.clone(),
-                overridden
-                    .zsh_path
-                    .clone()
-                    .map(codex_utils_absolute_path::AbsolutePathBuf::try_from)
-                    .transpose()?,
             )
             .await?;
             assert_eq!(rebuilt.model_provider, test.config.model_provider);

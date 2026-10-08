@@ -218,8 +218,6 @@
 //codex-rs/sandboxing:sandboxing-unit-tests	74
 //codex-rs/secrets:secrets-unit-tests	57
 //codex-rs/shell-command:shell-command-unit-tests	60
-//codex-rs/shell-escalation:codex-execve-wrapper-bin-unit-tests	62
-//codex-rs/shell-escalation:shell-escalation-unit-tests	60
 //codex-rs/skills:skills-unit-tests	59
 //codex-rs/state:state-unit-tests	242
 //codex-rs/test-binary-support:test-binary-support-unit-tests	48

@@ -21,7 +21,7 @@ pub(super) fn script(shell_type: ShellType) -> String {
         ShellType::Zsh => {
             r#"(
   unsetopt rcquotes
-  # The bundled Zsh does not include the zsh/parameter module.
+  # Some Zsh builds do not include the zsh/parameter module.
   for __codex_snapshot_export_name in ${(f)"$(typeset +x)"}; do
     case "$__codex_snapshot_export_name" in
       ""|[0-9]*|*[!A-Za-z0-9_]*|PWD|OLDPWD) continue ;;

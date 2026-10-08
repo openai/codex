@@ -37,27 +37,6 @@ use super::process_state::ProcessState;
 use crate::shell_snapshot::ShellSnapshotFile;
 
 const EARLY_EXIT_GRACE_PERIOD: Duration = Duration::from_millis(150);
-pub(crate) trait SpawnLifecycle: std::fmt::Debug + Send + Sync {
-    /// Returns file descriptors that must stay open across the child `exec()`.
-    ///
-    /// The returned descriptors must already be valid in the parent process and
-    /// stay valid until `after_spawn()` runs, which is the first point where
-    /// the parent may release its copies.
-    fn inherited_fds(&self) -> Vec<i32> {
-        Vec::new()
-    }
-
-    fn after_spawn(&mut self) {}
-}
-
-pub(crate) type SpawnLifecycleHandle = Box<dyn SpawnLifecycle>;
-
-#[derive(Debug, Default)]
-/// Spawn lifecycle that performs no extra setup around process launch.
-pub(crate) struct NoopSpawnLifecycle;
-
-impl SpawnLifecycle for NoopSpawnLifecycle {}
-
 /// Output pending model polling and the retained completion transcript.
 /// Append both under the same lock so cancellation cannot split an update.
 #[derive(Default)]
@@ -114,7 +93,6 @@ pub(crate) struct UnifiedExecProcess {
     output_task: Option<JoinHandle<()>>,
     sandbox_type: Option<SandboxType>,
     timed_out: AtomicBool,
-    _spawn_lifecycle: Option<SpawnLifecycleHandle>,
     // The shell may still need to replay this file after process startup returns.
     pub(crate) _shell_snapshot: Option<Arc<ShellSnapshotFile>>,
 }
@@ -130,11 +108,7 @@ impl std::fmt::Debug for UnifiedExecProcess {
 }
 
 impl UnifiedExecProcess {
-    fn new(
-        process_handle: ProcessHandle,
-        sandbox_type: Option<SandboxType>,
-        spawn_lifecycle: Option<SpawnLifecycleHandle>,
-    ) -> Self {
+    fn new(process_handle: ProcessHandle, sandbox_type: Option<SandboxType>) -> Self {
         let output = OutputHandles {
             output_buffer: Arc::new(Mutex::new(OutputBuffers::default())),
             output_notify: Arc::new(Notify::new()),
@@ -157,7 +131,6 @@ impl UnifiedExecProcess {
             output_task: None,
             sandbox_type,
             timed_out: AtomicBool::new(false),
-            _spawn_lifecycle: spawn_lifecycle,
             _shell_snapshot: None,
         }
     }
@@ -358,7 +331,6 @@ impl UnifiedExecProcess {
     pub(super) async fn from_spawned(
         spawned: SpawnedPty,
         sandbox_type: SandboxType,
-        spawn_lifecycle: SpawnLifecycleHandle,
     ) -> Result<Self, UnifiedExecError> {
         let SpawnedPty {
             session: process_handle,
@@ -370,7 +342,6 @@ impl UnifiedExecProcess {
         let mut managed = Self::new(
             ProcessHandle::Local(Box::new(process_handle)),
             Some(sandbox_type),
-            Some(spawn_lifecycle),
         );
         managed.output_task = Some(Self::spawn_local_output_task(
             output_rx,
@@ -419,7 +390,7 @@ impl UnifiedExecProcess {
         // Older peers do not report this field. In that case, skip local
         // classification rather than attributing a violation to a guessed backend.
         let sandbox_type = started.sandbox_type;
-        let mut managed = Self::new(process_handle, sandbox_type, /*spawn_lifecycle*/ None);
+        let mut managed = Self::new(process_handle, sandbox_type);
         let output_handles = managed.output_handles().clone();
         managed.output_task = Some(Self::spawn_exec_server_output_task(
             started,

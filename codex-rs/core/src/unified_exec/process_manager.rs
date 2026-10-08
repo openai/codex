@@ -65,7 +65,6 @@ use crate::unified_exec::generate_chunk_id;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 use crate::unified_exec::process::OutputBuffers;
 use crate::unified_exec::process::OutputHandles;
-use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
 use crate::unified_exec::shell_snapshot::shell_snapshot_request;
 use crate::unified_exec::take_plugin_metrics_sidecar;
@@ -1265,7 +1264,6 @@ impl UnifiedExecProcessManager {
         shell_snapshot: Option<codex_exec_server::ShellSnapshotRequest>,
         windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
         tty: bool,
-        spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, ToolError> {
         let mut request = if environment.is_remote() || shell_snapshot.is_some() {
@@ -1293,7 +1291,6 @@ impl UnifiedExecProcessManager {
             windows_sandbox_proxy_settings_mode,
             network_policy_decider,
             tty,
-            spawn_lifecycle,
             environment,
         )
         .await
@@ -1317,18 +1314,9 @@ impl UnifiedExecProcessManager {
         windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
         network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
         tty: bool,
-        mut spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
-        let inherited_fds = spawn_lifecycle.inherited_fds();
-
         if environment.is_remote() || request.exec_server_shell_snapshot.is_some() {
-            if !inherited_fds.is_empty() {
-                return Err(UnifiedExecError::create_process(
-                    "remote exec-server does not support inherited file descriptors".to_string(),
-                ));
-            }
-
             let backend = environment.get_exec_backend();
             let params = exec_server_params_for_request(
                 process_id,
@@ -1355,7 +1343,6 @@ impl UnifiedExecProcessManager {
                 None => backend.start(params).await,
             }
             .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-            spawn_lifecycle.after_spawn();
             return UnifiedExecProcess::from_exec_server_started(started).await;
         }
 
@@ -1422,13 +1409,12 @@ impl UnifiedExecProcessManager {
             windows_sandbox,
             tty,
             stdin_open: tty,
-            inherited_fds: codex_utils_pty::ChildFds::Inherited(&inherited_fds),
+            inherited_fds: codex_utils_pty::ChildFds::Inherited(&[]),
         })
         .await;
-        spawn_lifecycle.after_spawn();
         let spawned =
             spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-        UnifiedExecProcess::from_spawned(spawned, request.sandbox, spawn_lifecycle).await
+        UnifiedExecProcess::from_spawned(spawned, request.sandbox).await
     }
 
     #[tracing::instrument(
@@ -1467,7 +1453,7 @@ impl UnifiedExecProcessManager {
         };
         let shell_snapshot = shell_snapshot_request(request, &cwd, context);
         let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime = UnifiedExecRuntime::new(self, request.shell_mode.clone());
+        let mut runtime = UnifiedExecRuntime::new(self);
         let session_shell = context.session.user_shell();
         let configured_shell = request
             .turn_environment
@@ -1504,7 +1490,6 @@ impl UnifiedExecProcessManager {
                     allow_prefix_rules: context.step_context.turn.allow_prefix_rules(),
                 },
                 configured_shell,
-                &request.shell_mode,
                 command_platform,
             )
             .await;
@@ -1524,8 +1509,6 @@ impl UnifiedExecProcessManager {
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,
             additional_permissions: request.additional_permissions.clone(),
-            #[cfg(unix)]
-            additional_permissions_preapproved: request.additional_permissions_preapproved,
             justification: request.justification.clone(),
             exec_approval_requirement,
         };

@@ -8,7 +8,6 @@ use crate::tools::sandboxing::ExecApprovalRequirement;
 use codex_shell_command::is_dangerous_command::DangerousCommandPlatform;
 use codex_shell_command::powershell::extract_powershell_command;
 use codex_shell_command::powershell::parse_powershell_script_into_plain_commands;
-use codex_tools::UnifiedExecShellMode;
 use std::path::Path;
 
 impl ExecPolicyManager {
@@ -16,11 +15,10 @@ impl ExecPolicyManager {
         &self,
         mut request: ExecApprovalRequest<'_>,
         configured_shell: &Shell,
-        shell_mode: &UnifiedExecShellMode,
         command_platform: DangerousCommandPlatform,
     ) -> ExecApprovalRequirement {
         let command = request.command;
-        let executable = shell_approval_command(command, configured_shell, shell_mode);
+        let executable = shell_approval_command(command, configured_shell);
         if executable.len() == command.len() {
             return self
                 .create_exec_approval_requirement_for_command_platform(request, command_platform)
@@ -53,11 +51,7 @@ impl ExecPolicyManager {
     }
 }
 
-fn shell_approval_command<'a>(
-    command: &'a [String],
-    configured_shell: &Shell,
-    shell_mode: &UnifiedExecShellMode,
-) -> &'a [String] {
+fn shell_approval_command<'a>(command: &'a [String], configured_shell: &Shell) -> &'a [String] {
     let Some(executable) = command.first() else {
         return command;
     };
@@ -90,10 +84,7 @@ fn shell_approval_command<'a>(
     #[cfg(not(windows))]
     let is_configured_shell = executable_path == configured_shell.shell_path.as_path();
 
-    if is_configured_shell
-        || is_system_shell
-        || matches!(shell_mode, UnifiedExecShellMode::ZshFork(_))
-    {
+    if is_configured_shell || is_system_shell {
         command
     } else {
         // An unfamiliar executable can ignore its arguments, so evaluate the

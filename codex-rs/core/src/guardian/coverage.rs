@@ -8,8 +8,6 @@ impl GuardianApprovalRequest {
     pub(crate) fn guardian_scope(&self) -> GuardianScope {
         match self {
             Self::ExecCommand { .. } | Self::WriteStdin { .. } => GuardianScope::Shell,
-            #[cfg(unix)]
-            Self::Execve { .. } => GuardianScope::Shell,
             Self::ApplyPatch { .. } => GuardianScope::FileChanges,
             Self::McpToolCall { server, .. } => GuardianScope::for_mcp_server(server),
             Self::NetworkAccess { .. } => GuardianScope::Network,
@@ -22,8 +20,6 @@ impl ApprovalAction {
     pub(crate) fn guardian_scope(&self) -> GuardianScope {
         match self {
             Self::ExecCommand { .. } | Self::WriteStdin { .. } => GuardianScope::Shell,
-            #[cfg(unix)]
-            Self::Execve { .. } => GuardianScope::Shell,
             Self::ApplyPatch { .. } => GuardianScope::FileChanges,
             Self::McpToolCall {
                 server,

@@ -253,56 +253,6 @@ fn runtime_path_prepends_ignores_empty_path_entry() {
     );
 }
 
-#[cfg(unix)]
-#[test]
-fn apply_zsh_fork_path_prepend_uses_shell_parent() {
-    let mut env = HashMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
-    let mut runtime_path_prepends = RuntimePathPrepends::default();
-
-    apply_zsh_fork_path_prepend(
-        &mut env,
-        &mut runtime_path_prepends,
-        PathBuf::from("/package/codex-resources/zsh/bin/zsh").as_path(),
-    );
-
-    let expected = "/package/codex-resources/zsh/bin:/usr/bin:/bin";
-    assert_eq!(env.get("PATH").map(String::as_str), Some(expected));
-    assert_eq!(
-        runtime_path_prepends,
-        RuntimePathPrepends {
-            entries: vec!["/package/codex-resources/zsh/bin".to_string()]
-        }
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn apply_zsh_fork_path_prepend_moves_existing_shell_parent_to_front() {
-    let mut env = HashMap::from([(
-        "PATH".to_string(),
-        "/usr/bin:/package/codex-resources/zsh/bin:/bin:/package/codex-resources/zsh/bin"
-            .to_string(),
-    )]);
-    let mut runtime_path_prepends = RuntimePathPrepends::default();
-
-    apply_zsh_fork_path_prepend(
-        &mut env,
-        &mut runtime_path_prepends,
-        PathBuf::from("/package/codex-resources/zsh/bin/zsh").as_path(),
-    );
-
-    assert_eq!(
-        env.get("PATH").map(String::as_str),
-        Some("/package/codex-resources/zsh/bin:/usr/bin:/bin")
-    );
-    assert_eq!(
-        runtime_path_prepends,
-        RuntimePathPrepends {
-            entries: vec!["/package/codex-resources/zsh/bin".to_string()]
-        }
-    );
-}
-
 #[test]
 fn explicit_escalation_keeps_user_proxy_env_without_codex_marker() {
     let env = HashMap::from([
@@ -1762,56 +1712,6 @@ fn run_snapshot_path_probe_with_runtime_path_prepend(
         String::from_utf8_lossy(&output.stdout).into_owned(),
         package_path_dir,
     ))
-}
-
-#[cfg(unix)]
-#[test]
-fn maybe_wrap_shell_lc_with_snapshot_preserves_zsh_fork_path_prepend() {
-    let dir = tempdir().expect("create temp dir");
-    let snapshot_path = dir.path().join("snapshot.sh");
-    std::fs::write(
-        &snapshot_path,
-        "# Snapshot file\nexport PATH='/snapshot/bin'\n",
-    )
-    .expect("write snapshot");
-    let (session_shell, shell_snapshot) =
-        shell_with_snapshot(ShellType::Bash, "/bin/bash", snapshot_path.abs());
-    let command = vec![
-        "/bin/bash".to_string(),
-        "-lc".to_string(),
-        "printf '%s' \"$PATH\"".to_string(),
-    ];
-    let zsh_path = dir
-        .path()
-        .join("codex-resources")
-        .join("zsh")
-        .join("bin")
-        .join("zsh");
-    let zsh_bin_dir = zsh_path.parent().expect("zsh path should have parent");
-    let mut env = HashMap::from([("PATH".to_string(), "/worktree/bin".to_string())]);
-    let explicit_env_overrides = HashMap::new();
-    let mut runtime_path_prepends = RuntimePathPrepends::default();
-    apply_zsh_fork_path_prepend(&mut env, &mut runtime_path_prepends, zsh_path.as_path());
-    let rewritten = maybe_wrap_shell_lc_with_snapshot(
-        &command,
-        &session_shell,
-        Some(&shell_snapshot),
-        &explicit_env_overrides,
-        &env,
-        &runtime_path_prepends,
-    );
-    let output = Command::new(&rewritten[0])
-        .args(&rewritten[1..])
-        .env("PATH", env.get("PATH").expect("PATH should be set"))
-        .output()
-        .expect("run rewritten command");
-
-    assert!(output.status.success(), "command failed: {output:?}");
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        format!("{}:/snapshot/bin", zsh_bin_dir.display()),
-        "zsh fork path prepend should replay ahead of snapshot PATH"
-    );
 }
 
 #[test]

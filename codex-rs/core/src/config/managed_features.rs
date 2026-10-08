@@ -243,6 +243,15 @@ fn parse_feature_requirements(
         if key == Feature::Personality.key() {
             continue;
         }
+        if matches!(key.as_str(), "shell_zsh_fork" | "unified_exec_zsh_fork") {
+            push_feature_requirement_warning(
+                &mut startup_warnings,
+                format!(
+                    "Ignoring removed `features` requirement `{key}` from {source}; the patched zsh backend has been removed."
+                ),
+            );
+            continue;
+        }
         if key == Feature::GuardianThreadContext.key() {
             push_feature_requirement_warning(
                 &mut startup_warnings,

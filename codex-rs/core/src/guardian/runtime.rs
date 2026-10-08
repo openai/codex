@@ -28,9 +28,6 @@ impl From<GuardianApprovalRequest> for ReviewAction {
         let tool_call_id = match &request {
             // Stdin's display target is the launch; freshness belongs to this write.
             GuardianApprovalRequest::WriteStdin { approval_id, .. } => Some(approval_id.clone()),
-            // Intercepts retain the launch ID, not the current triggering call.
-            #[cfg(unix)]
-            GuardianApprovalRequest::Execve { .. } => None,
             GuardianApprovalRequest::ExecCommand { .. }
             | GuardianApprovalRequest::ApplyPatch { .. }
             | GuardianApprovalRequest::NetworkAccess { .. }

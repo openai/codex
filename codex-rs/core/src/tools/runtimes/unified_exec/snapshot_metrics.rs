@@ -6,7 +6,6 @@ use std::time::Instant;
 
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
-use codex_tools::UnifiedExecShellMode;
 
 use super::UnifiedExecRequest;
 use crate::config::Config;
@@ -17,11 +16,7 @@ pub(super) struct SnapshotMetrics {
 }
 
 impl SnapshotMetrics {
-    pub(super) fn start(
-        req: &UnifiedExecRequest,
-        config: &Config,
-        shell_mode: &UnifiedExecShellMode,
-    ) -> Option<Self> {
+    pub(super) fn start(req: &UnifiedExecRequest, config: &Config) -> Option<Self> {
         let brokered = config
             .permissions
             .network
@@ -33,7 +28,6 @@ impl SnapshotMetrics {
             || req.shell_snapshot.is_some()
             || req.turn_environment.environment.is_remote()
             || !config.features.enabled(Feature::ShellSnapshot)
-            || !matches!(shell_mode, UnifiedExecShellMode::Direct)
             || !req.shell.is_posix_login()
             || (req.cwd != req.turn_environment.selection.cwd && !brokered)
         {

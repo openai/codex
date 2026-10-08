@@ -15,7 +15,6 @@ codex-features = { workspace = true }
 codex-file-system = { workspace = true }
 codex-extension-items = { workspace = true }
 codex-protocol = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-string = { workspace = true }
@@ -29,7 +28,6 @@ rmcp = { workspace = true, default-features = false, features = [
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["raw_value"] }
 thiserror = { workspace = true }
-tracing = { workspace = true }
 urlencoding = { workspace = true }
 
 [dev-dependencies]

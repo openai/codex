@@ -2757,20 +2757,13 @@ async fn permission_config_reload_merges_session_layers() -> Result<()> {
     use codex_config::ConfigLayerSource;
     use codex_config::ConfigLayerStack;
     let tmp = tempdir()?;
-    let wrapper_dir = tmp.path().join("tmp/arg0/session");
-    std::fs::create_dir_all(&wrapper_dir)?;
-    let wrapper = wrapper_dir.join("codex-execve-wrapper");
-    std::fs::write(&wrapper, "")?;
     let service = ConfigManager::new(
         tmp.path().to_path_buf(),
         Vec::new(),
         LoaderOverrides::without_managed_config_for_tests(),
         /*strict_config*/ false,
         CloudConfigBundleLoader::default(),
-        codex_arg0::Arg0DispatchPaths {
-            main_execve_wrapper_exe: Some(wrapper),
-            ..Default::default()
-        },
+        codex_arg0::Arg0DispatchPaths::default(),
         std::sync::Arc::new(codex_config::NoopThreadConfigLoader),
     );
 
@@ -2814,17 +2807,6 @@ async fn permission_config_reload_merges_session_layers() -> Result<()> {
             .map(|profile| profile.id.as_str())
             .collect::<Vec<_>>(),
         vec!["first", "second"]
-    );
-    let policy = loaded.permissions.file_system_sandbox_policy();
-    assert_eq!(
-        (
-            policy.can_read_local_path_with_cwd(&wrapper_dir, loaded.cwd.as_path()),
-            policy.can_read_local_path_with_cwd(
-                &tmp.path().join("tmp/arg0/other"),
-                loaded.cwd.as_path()
-            ),
-        ),
-        (true, false),
     );
     Ok(())
 }

@@ -209,7 +209,6 @@ async fn stdin_reviews_escalated_terminal_with_denied_reads_before_delivering_in
             .enable(Feature::ExecPermissionApprovals)
             .unwrap();
         config.features.enable(Feature::UnifiedExec).unwrap();
-        config.features.disable(Feature::ShellZshFork).unwrap();
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         let mut file_system = PermissionProfile::read_only().file_system_sandbox_policy();
         file_system.entries.push(FileSystemSandboxEntry::new(

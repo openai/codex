@@ -76,19 +76,6 @@ async fn plugin_attribution_for_guardian_request(
                     .and_then(|cwd| turn.plugin_attribution_for_command(command, &cwd))
             }
         }
-        #[cfg(unix)]
-        GuardianApprovalRequest::Execve {
-            program, argv, cwd, ..
-        } => {
-            let command = if argv.is_empty() {
-                vec![program.clone()]
-            } else {
-                std::iter::once(program.clone())
-                    .chain(argv.iter().skip(1).cloned())
-                    .collect()
-            };
-            turn.plugin_attribution_for_command(&command, cwd)
-        }
         _ => None,
     }
 }

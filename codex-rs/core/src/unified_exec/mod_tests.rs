@@ -1,6 +1,5 @@
 use super::*;
 use crate::codex_thread::BackgroundTerminalInfo;
-use crate::environment_selection::TurnEnvironmentState;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::sandboxing::ExecRequest;
@@ -118,7 +117,6 @@ async fn exec_command_with_tty(
                 codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
                 /*network_policy_decider*/ None,
                 tty,
-                Box::new(NoopSpawnLifecycle),
                 turn.initial_environments
                     .primary()
                     .expect("turn environment")
@@ -216,17 +214,6 @@ async fn exec_command_with_tty(
         output_omitted_bytes,
         hook_command: Some(cmd.to_string()),
     })
-}
-
-#[derive(Debug)]
-struct TestSpawnLifecycle {
-    inherited_fds: Vec<i32>,
-}
-
-impl SpawnLifecycle for TestSpawnLifecycle {
-    fn inherited_fds(&self) -> Vec<i32> {
-        self.inherited_fds.clone()
-    }
 }
 
 struct BlockingTerminateExecProcess {
@@ -787,7 +774,6 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
             /*network_policy_decider*/ None,
             /*tty*/ false,
-            Box::new(NoopSpawnLifecycle),
             &environment,
         )
         .await?;
@@ -830,7 +816,6 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
             /*network_policy_decider*/ None,
             /*tty*/ true,
-            Box::new(NoopSpawnLifecycle),
             remote_test_env.environment(),
         )
         .await?;
@@ -847,56 +832,6 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
     .to_bytes_with_omission_marker();
 
     assert!(String::from_utf8_lossy(&collected).contains("remote-unified-exec"));
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()> {
-    skip_if_sandbox!(Ok(()));
-    skip_if_no_remote_env!(Ok(()));
-
-    let remote_test_env = remote_test_env().await?;
-    let (_, mut turn) = make_session_and_context().await;
-    let TurnEnvironmentState::Ready(environment) = &mut turn.initial_environments.environments[0]
-    else {
-        panic!("expected ready primary environment");
-    };
-    environment.environment = Arc::new(remote_test_env.environment().clone());
-
-    #[allow(deprecated)]
-    let cwd = turn.cwd.clone();
-    let request = test_exec_request(
-        &turn,
-        vec!["bash".to_string(), "-lc".to_string(), "echo ok".to_string()],
-        cwd,
-        shell_env(),
-    );
-
-    let manager = UnifiedExecProcessManager::default();
-    let err = manager
-        .open_session_with_prepared_exec_env(
-            /*process_id*/ 1234,
-            &request,
-            /*tool_ctx*/ None,
-            codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
-            /*network_policy_decider*/ None,
-            /*tty*/ true,
-            Box::new(TestSpawnLifecycle {
-                inherited_fds: vec![42],
-            }),
-            turn.initial_environments
-                .primary()
-                .expect("turn environment")
-                .environment
-                .as_ref(),
-        )
-        .await
-        .expect_err("expected inherited fd rejection");
-
-    assert_eq!(
-        err.to_string(),
-        "Failed to create unified exec process: remote exec-server does not support inherited file descriptors"
-    );
     Ok(())
 }
 

@@ -42,7 +42,6 @@ members = [
     "config-schema",
     "context-fragments",
     "shell-command",
-    "shell-escalation",
     "skills",
     "core",
     "core-api",
@@ -275,7 +274,6 @@ codex-rollout-trace = { path = "rollout-trace" }
 codex-sandboxing = { path = "sandboxing" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
-codex-shell-escalation = { path = "shell-escalation" }
 codex-skills-extension = { path = "ext/skills" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
@@ -480,7 +478,6 @@ symphonia = { version = "0.6.0", default-features = false, features = [
     "ogg",
     "wav",
 ] }
-socket2 = "0.6.1"
 # Keep SQLx versions in sync; when bumping, audit the SQLite constructor deny list in clippy.toml.
 sqlx = { version = "=0.9.0", default-features = false, features = [
     "chrono",

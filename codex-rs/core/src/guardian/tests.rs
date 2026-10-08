@@ -648,16 +648,6 @@ async fn approval_permissions_use_the_owning_environment() -> anyhow::Result<()>
             sandbox_permissions: SandboxPermissions::UseDefault,
             additional_permissions: None,
         },
-        #[cfg(unix)]
-        GuardianApprovalRequest::Execve {
-            id: "shell".to_string(),
-            environment_id: "secondary".to_string(),
-            source: codex_protocol::approvals::GuardianCommandSource::UnifiedExec,
-            program: "cat".to_string(),
-            argv: Vec::new(),
-            cwd,
-            additional_permissions: None,
-        },
     ];
     let mut missing_context = context.clone();
     missing_context.environments.environments.truncate(1);

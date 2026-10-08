@@ -88,7 +88,6 @@ use codex_tools::ToolExecutor;
 use codex_tools::ToolExposures;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use codex_tools::UnifiedExecShellMode;
 use codex_tools::can_request_original_image_detail;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::collect_request_plugin_install_entries;
@@ -1287,15 +1286,7 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
                 .environments
                 .turn_environments()
                 .any(|environment| environment.config().allow_login_shell),
-        include_shell_parameter: stable_environment_tools
-            || !matches!(
-                &turn_context.unified_exec_shell_mode,
-                UnifiedExecShellMode::ZshFork(_)
-            )
-            || context
-                .environments
-                .turn_environments()
-                .any(|environment| environment.environment.is_remote()),
+        include_shell_parameter: true,
         allow_tty: features.enabled(Feature::UnifiedExecTty),
         exec_permission_approvals_enabled,
         include_environment_id,

@@ -11,7 +11,6 @@ use codex_protocol::sandbox::SandboxOverride;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxablePreference;
 use codex_tools::ToolName;
-use codex_tools::UnifiedExecShellMode;
 use codex_utils_path_uri::PathUri;
 use tokio_util::task::AbortOnDropHandle;
 use uuid::Uuid;
@@ -57,10 +56,6 @@ impl Session {
                 .network
                 .as_ref()
                 .is_some_and(NetworkProxySpec::enabled)
-            || !matches!(
-                step_context.turn.unified_exec_shell_mode,
-                UnifiedExecShellMode::Direct
-            )
         {
             return None;
         }
@@ -180,7 +175,6 @@ pub(super) fn shell_snapshot_request(
     if !context.session.features().enabled(Feature::ShellSnapshotV2)
         || !request.turn_environment.shell_snapshot_v2_supported
         || request.turn_environment.selection.cwd != *cwd
-        || !matches!(request.shell_mode, UnifiedExecShellMode::Direct)
         || !request.shell.is_posix_login()
     {
         return None;

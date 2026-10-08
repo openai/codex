@@ -21,12 +21,9 @@ use crate::shell_snapshot::snapshot_read_permissions;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::RuntimePathPrepends;
-#[cfg(unix)]
-use crate::tools::runtimes::apply_zsh_fork_path_prepend;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::runtimes::prepare_powershell_command_for_windows_sandbox;
-use crate::tools::runtimes::zsh_fork;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalAction;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -38,10 +35,8 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::executor_windows_sandbox_selection;
 use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 use crate::tools::sandboxing::sandbox_permissions_preserving_denied_reads;
-use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::TerminalPermissions;
 use crate::unified_exec::TerminalSandboxSource;
-use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_core_plugins::PluginMetricsSidecar;
@@ -50,13 +45,11 @@ use codex_network_proxy::CREDENTIAL_BROKER_ACTIVE_ENV_KEY;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::error::CodexErr;
-use codex_protocol::error::SandboxErr;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxablePreference;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
-use codex_tools::UnifiedExecShellMode;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::io;
@@ -90,8 +83,6 @@ pub struct UnifiedExecRequest {
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
-    #[cfg(unix)]
-    pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
 }
@@ -113,7 +104,6 @@ pub struct UnifiedExecApprovalKey {
 /// unified-exec side while delegating process startup to the manager.
 pub struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecProcessManager,
-    shell_mode: UnifiedExecShellMode,
 }
 
 pub(crate) struct UnifiedExecAttempt {
@@ -157,11 +147,8 @@ fn build_unified_exec_sandbox_command(
 
 impl<'a> UnifiedExecRuntime<'a> {
     /// Creates a runtime bound to the shared unified-exec process manager.
-    pub fn new(manager: &'a UnifiedExecProcessManager, shell_mode: UnifiedExecShellMode) -> Self {
-        Self {
-            manager,
-            shell_mode,
-        }
+    pub fn new(manager: &'a UnifiedExecProcessManager) -> Self {
+        Self { manager }
     }
 }
 
@@ -301,24 +288,13 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                 .network
                 .as_ref()
                 .is_some_and(crate::config::NetworkProxySpec::credential_broker_enabled);
-        if credential_broker_available
-            && managed_network.is_some()
-            && matches!(self.shell_mode, UnifiedExecShellMode::ZshFork(_))
-        {
-            return Err(ToolError::Rejected(
-                "credential brokerage does not yet support shell_zsh_fork; disable shell_zsh_fork to use the broker".to_string(),
-            ));
-        }
         let shell = if credential_broker_available {
             requested_shell
         } else {
             environment_shell
         };
-        let snapshot_metrics = snapshot_metrics::SnapshotMetrics::start(
-            req,
-            &ctx.step_context.turn.config,
-            &self.shell_mode,
-        );
+        let snapshot_metrics =
+            snapshot_metrics::SnapshotMetrics::start(req, &ctx.step_context.turn.config);
         let shell_snapshot = if environment_is_remote
             || credential_broker_available
                 && launch_sandbox_permissions.requires_escalated_permissions()
@@ -510,13 +486,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                     &mut runtime_path_prepends,
                 );
             }
-            if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
-                apply_zsh_fork_path_prepend(
-                    &mut env,
-                    &mut runtime_path_prepends,
-                    zsh_fork_config.shell_zsh_path.as_path(),
-                );
-            }
             runtime_path_prepends
         };
         #[cfg(not(unix))]
@@ -666,78 +635,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
             permissions
         };
 
-        if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
-            let command = build_unified_exec_sandbox_command(
-                &command,
-                &req.cwd,
-                &env,
-                managed_network_context.clone(),
-                additional_permissions.clone(),
-            )
-            .map_err(|error| match error {
-                ToolError::Rejected(_) => {
-                    ToolError::Rejected("missing command line for PTY".to_string())
-                }
-                error @ ToolError::Codex(_) => error,
-            })?;
-            let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
-            let mut exec_env = attempt
-                .env_for(
-                    command,
-                    options,
-                    managed_network,
-                    Some(&req.turn_environment.selection.environment_id),
-                )
-                .await
-                .map_err(ToolError::Codex)?;
-            exec_env.exec_server_env_config = req.exec_server_env_config.clone();
-            match zsh_fork::maybe_prepare_unified_exec(req, attempt, ctx, exec_env, zsh_fork_config)
-                .await?
-            {
-                Some(prepared) => {
-                    if req.turn_environment.environment.is_remote() {
-                        return Err(ToolError::Rejected(
-                            "unified_exec zsh-fork is not supported for remote environments"
-                                .to_string(),
-                        ));
-                    }
-                    let process = self
-                        .manager
-                        .open_session_with_prepared_exec_env(
-                            req.process_id,
-                            &prepared.exec_request,
-                            Some(ctx),
-                            windows_sandbox_proxy_settings_mode,
-                            /*network_policy_decider*/ None,
-                            req.tty,
-                            prepared.spawn_lifecycle,
-                            req.turn_environment.environment.as_ref(),
-                        )
-                        .await
-                        .map_err(|err| match err {
-                            UnifiedExecError::SandboxDenied { output, .. } => {
-                                ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
-                                    output: Box::new(output),
-                                    network_policy_decision: None,
-                                }))
-                            }
-                            other => ToolError::Rejected(other.to_string()),
-                        });
-                    let mut process = with_launch_failure_events(process, req, ctx).await?;
-                    process._shell_snapshot = shell_snapshot;
-                    return Ok(UnifiedExecAttempt {
-                        process,
-                        metrics_sidecar,
-                        permissions,
-                    });
-                }
-                None => {
-                    tracing::warn!(
-                        "UnifiedExec ZshFork backend specified, but conditions for using it were not met, falling back to direct execution",
-                    );
-                }
-            }
-        }
         let command = build_unified_exec_sandbox_command(
             &command,
             &req.cwd,
@@ -767,7 +664,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                 req.shell_snapshot.clone(),
                 windows_sandbox_proxy_settings_mode,
                 req.tty,
-                Box::new(NoopSpawnLifecycle),
                 req.turn_environment.environment.as_ref(),
             )
             .await;
@@ -796,7 +692,6 @@ mod tests {
     use codex_protocol::protocol::EnvironmentConfig;
     use codex_protocol::protocol::EnvironmentConfigState;
     use codex_protocol::protocol::TurnEnvironmentSelection;
-    use codex_tools::ZshForkConfig;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
@@ -858,7 +753,7 @@ mod tests {
     #[tokio::test]
     async fn approval_key_includes_environment_id() {
         let manager = UnifiedExecProcessManager::default();
-        let runtime = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
+        let runtime = UnifiedExecRuntime::new(&manager);
         let mut request = test_request(
             SandboxPermissions::UseDefault,
             ExecApprovalRequirement::Skip {
@@ -889,7 +784,7 @@ mod tests {
         let sandbox_cwd = AbsolutePathBuf::try_from(sandbox_dir.path().to_path_buf())
             .expect("absolute sandbox temp dir");
         let manager = UnifiedExecProcessManager::default();
-        let runtime = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
+        let runtime = UnifiedExecRuntime::new(&manager);
         let request = UnifiedExecRequest {
             command: vec!["pwd".to_string()],
             shell: ShellInvocation {
@@ -912,8 +807,6 @@ mod tests {
             tty: false,
             sandbox_permissions: SandboxPermissions::UseDefault,
             additional_permissions: None,
-            #[cfg(unix)]
-            additional_permissions_preapproved: false,
             justification: None,
             exec_approval_requirement: ExecApprovalRequirement::Skip {
                 bypass_sandbox: false,
@@ -924,72 +817,6 @@ mod tests {
         assert_eq!(
             runtime.sandbox_cwd(&request),
             Some(&PathUri::from_abs_path(&sandbox_cwd))
-        );
-    }
-
-    #[tokio::test]
-    async fn zsh_fork_first_attempt_preserves_parent_sandbox_override() {
-        let manager = UnifiedExecProcessManager::default();
-        let request = test_request(
-            SandboxPermissions::RequireEscalated,
-            ExecApprovalRequirement::NeedsApproval {
-                reason: None,
-                proposed_execpolicy_amendment: None,
-            },
-        );
-        let direct_runtime = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
-        let zsh_fork_runtime = UnifiedExecRuntime::new(&manager, zsh_fork_mode());
-
-        assert_eq!(
-            direct_runtime.sandbox_permissions(&request),
-            SandboxPermissions::RequireEscalated,
-            "direct unified exec should preserve a parent require_escalated request"
-        );
-        assert_eq!(
-            zsh_fork_runtime.sandbox_permissions(&request),
-            SandboxPermissions::RequireEscalated,
-            "zsh-fork unified exec should preserve the same parent require_escalated request"
-        );
-    }
-
-    #[tokio::test]
-    async fn zsh_fork_first_attempt_preserves_additional_permissions_request() {
-        let manager = UnifiedExecProcessManager::default();
-        let request = test_request(
-            SandboxPermissions::WithAdditionalPermissions,
-            ExecApprovalRequirement::NeedsApproval {
-                reason: None,
-                proposed_execpolicy_amendment: None,
-            },
-        );
-        let zsh_fork_runtime = UnifiedExecRuntime::new(&manager, zsh_fork_mode());
-
-        assert_eq!(
-            zsh_fork_runtime.sandbox_permissions(&request),
-            SandboxPermissions::WithAdditionalPermissions,
-            "zsh-fork unified exec should keep bounded additional-permissions requests sandboxed"
-        );
-    }
-
-    #[tokio::test]
-    async fn zsh_fork_execpolicy_allow_preserves_parent_sandbox_override() {
-        let manager = UnifiedExecProcessManager::default();
-        let request = test_request(
-            SandboxPermissions::UseDefault,
-            ExecApprovalRequirement::Skip {
-                bypass_sandbox: true,
-                proposed_execpolicy_amendment: None,
-            },
-        );
-        let runtime = UnifiedExecRuntime::new(&manager, zsh_fork_mode());
-
-        assert_eq!(
-            runtime.exec_approval_requirement(&request),
-            Some(ExecApprovalRequirement::Skip {
-                bypass_sandbox: true,
-                proposed_execpolicy_amendment: None,
-            }),
-            "zsh-fork unified exec should preserve exec-policy allow decisions that bypass the sandbox"
         );
     }
 
@@ -1021,19 +848,8 @@ mod tests {
             tty: false,
             sandbox_permissions,
             additional_permissions: None,
-            #[cfg(unix)]
-            additional_permissions_preapproved: false,
             justification: None,
             exec_approval_requirement,
         }
-    }
-
-    fn zsh_fork_mode() -> UnifiedExecShellMode {
-        let cwd = std::env::current_dir().expect("read current dir");
-        UnifiedExecShellMode::ZshFork(ZshForkConfig {
-            shell_zsh_path: AbsolutePathBuf::try_from(cwd.join("zsh")).expect("absolute zsh path"),
-            main_execve_wrapper_exe: AbsolutePathBuf::try_from(cwd.join("execve-wrapper"))
-                .expect("absolute wrapper path"),
-        })
     }
 }

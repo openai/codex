@@ -5468,7 +5468,6 @@ async fn command_execution_notifications_include_process_id(
     MockResponsesConfig::new(&server.uri())
         .with_sandbox_mode("danger-full-access")
         .enable_feature(Feature::UnifiedExec)
-        .disable_feature(Feature::ShellZshFork)
         .disable_feature(Feature::ShellSnapshot)
         .write(codex_home.path())?;
 
@@ -5653,7 +5652,6 @@ async fn command_execution_notifications_include_trusted_plugin_id(
         .enable_feature(Feature::Plugins)
         .enable_feature(Feature::UnifiedExec)
         .disable_feature(Feature::RemotePlugin)
-        .disable_feature(Feature::ShellZshFork)
         .disable_feature(Feature::ShellSnapshot)
         .with_extra_config("[plugins.\"google-calendar@openai-api-curated\"]\nenabled = true")
         .write(codex_home.path())?;

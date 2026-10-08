@@ -1915,13 +1915,6 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
                 .enable(Feature::StableEnvironmentTools)
                 .expect("enable stable environment tools");
             assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
-            if cfg!(unix) {
-                assert!(config.features.enable(Feature::ShellZshFork).is_ok());
-                // Calls stop at environment/login validation, so these paths are never executed.
-                let executable = std::env::current_exe().expect("current executable");
-                config.zsh_path = Some(executable.clone());
-                config.main_execve_wrapper_exe = Some(executable);
-            }
             assert!(
                 config
                     .features

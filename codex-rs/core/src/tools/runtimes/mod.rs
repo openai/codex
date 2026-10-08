@@ -35,7 +35,6 @@ use std::path::Path;
 
 pub(crate) mod apply_patch;
 pub(crate) mod unified_exec;
-pub(crate) mod zsh_fork;
 
 const SNAPSHOT_ORIGINAL_BASH_ENV_ENV_KEY: &str = "CODEX_NETWORK_PROXY_SNAPSHOT_ORIGINAL_BASH_ENV";
 const SNAPSHOT_ORIGINAL_POSIX_ENV_ENV_KEY: &str = "CODEX_NETWORK_PROXY_SNAPSHOT_ORIGINAL_POSIX_ENV";
@@ -139,18 +138,6 @@ pub(crate) fn apply_package_path_prepend(
     };
 
     runtime_path_prepends.prepend(env, path_dir.as_path());
-}
-
-#[cfg(unix)]
-pub(crate) fn apply_zsh_fork_path_prepend(
-    env: &mut HashMap<String, String>,
-    runtime_path_prepends: &mut RuntimePathPrepends,
-    shell_zsh_path: &Path,
-) {
-    let Some(zsh_bin_dir) = shell_zsh_path.parent() else {
-        return;
-    };
-    runtime_path_prepends.prepend(env, zsh_bin_dir);
 }
 
 pub(crate) fn prepare_powershell_command_for_windows_sandbox(

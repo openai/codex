@@ -148,13 +148,9 @@ pub enum Feature {
     UnifiedExec,
     /// Allow unified exec commands to allocate an interactive terminal.
     UnifiedExecTty,
-    /// Route shell tool execution through the zsh exec bridge.
+    /// Removed compatibility flag for the retired patched zsh backend.
     ShellZshFork,
-    /// Allow unified exec to compose with the zsh exec bridge.
-    ///
-    /// This flag is only a composition gate. Enabling it by itself must not turn
-    /// on either `unified_exec` or `shell_zsh_fork` because those features have
-    /// separate rollout and enterprise controls.
+    /// Removed compatibility flag for the retired patched zsh backend.
     UnifiedExecZshFork,
     /// Removed compatibility flag. Transcript scrollback reflow on terminal resize is always on.
     TerminalResizeReflow,
@@ -639,6 +635,17 @@ impl Features {
                         Feature::WebSearchCached,
                     );
                 }
+                "shell_zsh_fork" => {
+                    self.record_legacy_usage_force("shell_zsh_fork", Feature::ShellZshFork);
+                    continue;
+                }
+                "unified_exec_zsh_fork" => {
+                    self.record_legacy_usage_force(
+                        "unified_exec_zsh_fork",
+                        Feature::UnifiedExecZshFork,
+                    );
+                    continue;
+                }
                 "transcript_v2" => {
                     self.record_legacy_usage_force("features.transcript_v2", Feature::TranscriptV2);
                     continue;
@@ -754,6 +761,10 @@ impl Features {
 fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>) {
     let canonical = feature.key();
     match feature {
+        Feature::ShellZshFork | Feature::UnifiedExecZshFork => (
+            format!("`[features].{canonical}` is deprecated and ignored."),
+            Some(format!("The patched zsh backend has been removed. Shell commands now use the standard shell executor. Remove `{canonical}` from [features] in config.toml or profile configuration files.")),
+        ),
         Feature::GuardianThreadContext => (
             "`[features.guardianv2].thread_context` is deprecated and ignored.".to_string(),
             Some("Thread-owned Guardian context is always enabled. Remove `thread_context` from [features.guardianv2] in config.toml, including profile overrides.".to_string()),
@@ -1048,14 +1059,14 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ShellZshFork,
         key: "shell_zsh_fork",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::UnifiedExecZshFork,
         key: "unified_exec_zsh_fork",
         stage: Stage::Removed,
-        default_enabled: true,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ShellSnapshot,

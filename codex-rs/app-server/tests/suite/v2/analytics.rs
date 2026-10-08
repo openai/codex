@@ -907,8 +907,6 @@ default_mode_request_user_input = true
 plugins = true
 remote_plugin = false
 unified_exec = true
-shell_zsh_fork = false
-unified_exec_zsh_fork = false
 
 [plugins."{METRICS_PLUGIN_ID}"]
 enabled = true

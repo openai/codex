@@ -1,0 +1,8 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: "render_lines(&cell.transcript_lines(80)).join(\"\\n\")"
+---
+⚠ `[features].shell_zsh_fork` is deprecated and ignored.
+The patched zsh backend has been removed. Shell commands now use the
+standard shell executor. Remove `shell_zsh_fork` from [features] in
+config.toml or profile configuration files.

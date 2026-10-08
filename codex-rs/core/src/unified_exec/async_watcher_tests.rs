@@ -9,7 +9,6 @@ use super::utf8_boundary;
 use crate::session::tests::make_session_and_context_with_rx;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecProcessManager;
-use crate::unified_exec::process::NoopSpawnLifecycle;
 use crate::unified_exec::process::OutputBuffers;
 use crate::unified_exec::process::UnifiedExecProcess;
 use codex_protocol::items::CommandExecutionStatus;
@@ -48,10 +47,7 @@ async fn streaming_output_harness() -> anyhow::Result<StreamingOutputHarness> {
         #[cfg(windows)]
         tty: false,
     });
-    let process = Arc::new(
-        UnifiedExecProcess::from_spawned(spawned, SandboxType::None, Box::new(NoopSpawnLifecycle))
-            .await?,
-    );
+    let process = Arc::new(UnifiedExecProcess::from_spawned(spawned, SandboxType::None).await?);
     let (session, turn, rx_event) = make_session_and_context_with_rx().await;
     let context = UnifiedExecContext::new(
         session,

@@ -2966,6 +2966,18 @@ fn deprecation_notice_renders_summary_with_details() {
 }
 
 #[test]
+fn legacy_zsh_migration_notice_snapshot() {
+    let mut features = codex_features::Features::default();
+    features.record_legacy_usage_force("shell_zsh_fork", codex_features::Feature::ShellZshFork);
+    let usage = features
+        .legacy_feature_usages()
+        .next()
+        .expect("migration notice");
+    let cell = new_deprecation_notice(usage.summary.clone(), usage.details.clone());
+    insta::assert_snapshot!(render_lines(&cell.transcript_lines(/*width*/ 80)).join("\n"));
+}
+
+#[test]
 fn agent_markdown_cell_renders_source_at_different_widths() {
     let source =
         "A long agent message that should wrap differently when the terminal width changes.\n";
