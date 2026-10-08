@@ -148,8 +148,13 @@ fn enable_current_time_reminder(
     });
 }
 
+#[test_case(true, SECOND_REMINDER; "default")]
+#[test_case(false, FIRST_REMINDER; "time_omitted")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn environment_context_uses_external_current_time_on_each_turn() -> Result<()> {
+async fn environment_context_time_follows_config(
+    include_time: bool,
+    expected_reminder: &str,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -163,9 +168,12 @@ async fn environment_context_uses_external_current_time_on_each_turn() -> Result
     .await;
     let time_provider = Arc::new(TestTimeProvider::default());
     let test = test_codex()
-        .with_config(|config| {
+        .with_config(move |config| {
             enable_current_time_reminder(config, /*interval*/ 0, CurrentTimeSource::External);
             config.include_environment_context = true;
+            if !include_time {
+                config.include_environment_context_time = false;
+            }
         })
         .with_external_time_provider(time_provider.clone())
         .build_with_auto_env(&server)
@@ -179,22 +187,32 @@ async fn environment_context_uses_external_current_time_on_each_turn() -> Result
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    for (request, timestamp) in requests
+    for (index, (request, timestamp)) in requests
         .iter()
         .zip([FIRST_TIME_UNIX_SECONDS, FIRST_TIME_UNIX_SECONDS + 86_400])
+        .enumerate()
     {
         assert!(request.has_content_kinds(&["environments.environment_context"]));
-        let current_date = DateTime::<Utc>::from_timestamp(timestamp, 0)
-            .expect("test timestamp should be valid")
-            .with_timezone(&Local)
-            .format("%Y-%m-%d")
-            .to_string();
-        assert!(request.message_input_texts("user").iter().any(|text| {
-            text.contains("<environment_context>")
-                && text.contains(&format!("<current_date>{current_date}</current_date>"))
-        }));
+        let text = request.message_input_texts("user").join("\n");
+        assert_eq!(
+            text.matches("<environment_context>").count(),
+            if include_time { index + 1 } else { 1 }
+        );
+        assert_eq!(text.contains("<current_date"), include_time);
+        assert_eq!(text.contains("<timezone"), include_time);
+        if include_time {
+            let current_date = DateTime::<Utc>::from_timestamp(timestamp, 0)
+                .expect("test timestamp should be valid")
+                .with_timezone(&Local)
+                .format("%Y-%m-%d")
+                .to_string();
+            assert!(text.contains(&format!("<current_date>{current_date}</current_date>")));
+        }
     }
-    assert_eq!(current_time_reminders(&requests[0]), vec![SECOND_REMINDER]);
+    assert_eq!(
+        current_time_reminders(&requests[0]),
+        vec![expected_reminder]
+    );
 
     Ok(())
 }

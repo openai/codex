@@ -11882,6 +11882,7 @@ async fn prompt_instruction_blocks_can_be_disabled_from_config() -> std::io::Res
 include_apps_instructions = false
 include_collaboration_mode_instructions = false
 include_environment_context = false
+include_environment_context_time = false
 
 [skills]
 include_instructions = false
@@ -11899,6 +11900,7 @@ include_instructions = false
     assert!(!config.include_collaboration_mode_instructions);
     assert!(!config.include_skill_instructions);
     assert!(!config.include_environment_context);
+    assert!(!config.include_environment_context_time);
     Ok(())
 }
 

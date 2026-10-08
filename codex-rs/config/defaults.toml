@@ -3,6 +3,7 @@ include_permissions_instructions = true
 include_apps_instructions = true
 include_collaboration_mode_instructions = true
 include_environment_context = true
+include_environment_context_time = true
 cli_auth_credentials_store = "file"
 mcp_oauth_credentials_store = "auto"
 project_doc_max_bytes = 32768

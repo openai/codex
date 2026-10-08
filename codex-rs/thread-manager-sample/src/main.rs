@@ -280,6 +280,7 @@ async fn new_config(
         cloud_skill_enabled: false,
         orchestrator_mcp_enabled: false,
         include_environment_context: false,
+        include_environment_context_time: true,
         compact_prompt: None,
         notify: None,
         tui_notifications: TuiNotificationSettings::default(),

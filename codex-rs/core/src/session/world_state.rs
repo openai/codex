@@ -264,15 +264,18 @@ impl Session {
             ));
         }
         if turn_context.config.include_environment_context {
-            let current_date = self
-                .read_clock_for_context(turn_context, "environment_date")
-                .await?
-                .map(|current_time| {
-                    current_time
-                        .with_timezone(&chrono::Local)
-                        .format("%Y-%m-%d")
-                        .to_string()
-                });
+            let current_date = if turn_context.config.include_environment_context_time {
+                self.read_clock_for_context(turn_context, "environment_date")
+                    .await?
+                    .map(|current_time| {
+                        current_time
+                            .with_timezone(&chrono::Local)
+                            .format("%Y-%m-%d")
+                            .to_string()
+                    })
+            } else {
+                None
+            };
             world_state.add_section(
                 EnvironmentsState::from_turn_context_with_environments(
                     turn_context,

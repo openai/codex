@@ -745,6 +745,9 @@ pub struct Config {
     /// Whether to inject the `<environment_context>` user block.
     pub include_environment_context: bool,
 
+    /// Whether environment context includes the current date and timezone.
+    pub include_environment_context_time: bool,
+
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
@@ -4047,6 +4050,7 @@ impl Config {
             .as_ref()
             .and_then(|skills| skills.max_context_tokens);
         let include_environment_context = cfg.include_environment_context.unwrap_or(true);
+        let include_environment_context_time = cfg.include_environment_context_time.unwrap_or(true);
         let guardian_policy_config =
             guardian_policy_config_from_requirements(config_layer_stack.requirements_toml())
                 .or_else(|| {
@@ -4356,6 +4360,7 @@ impl Config {
             cloud_skill_enabled,
             orchestrator_mcp_enabled,
             include_environment_context,
+            include_environment_context_time,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: match cli_auth_credentials_store {

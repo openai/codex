@@ -1283,6 +1283,9 @@
         "include_environment_context": {
           "type": "boolean"
         },
+        "include_environment_context_time": {
+          "type": "boolean"
+        },
         "include_permissions_instructions": {
           "type": "boolean"
         },
@@ -7583,6 +7586,10 @@
     },
     "include_environment_context": {
       "description": "Whether to inject the `<environment_context>` user block.",
+      "type": "boolean"
+    },
+    "include_environment_context_time": {
+      "description": "Whether environment context includes the current date and timezone.",
       "type": "boolean"
     },
     "include_permissions_instructions": {
