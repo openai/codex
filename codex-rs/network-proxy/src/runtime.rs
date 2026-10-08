@@ -3,6 +3,7 @@ use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
 use crate::config::ValidatedUnixSocketPath;
 use crate::credential_broker::CredentialBroker;
+use crate::domain_matcher::DomainPatternSet;
 use crate::mitm::MitmState;
 use crate::mitm_hook::HookEvaluation;
 use crate::mitm_hook::MitmHooksByHost;
@@ -23,7 +24,6 @@ use crate::state::validate_policy_against_constraints;
 use anyhow::Context;
 use anyhow::Result;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use globset::GlobSet;
 use opentelemetry::trace::SpanContext;
 use serde::Deserialize;
 use serde::Serialize;
@@ -178,8 +178,8 @@ pub struct ConfigState {
     pub(crate) executor_os: crate::Platform,
     pub config: NetworkProxyConfig,
     pub(crate) brokerage_created_default_allowlist: bool,
-    pub allow_set: GlobSet,
-    pub deny_set: GlobSet,
+    pub allow_set: DomainPatternSet,
+    pub deny_set: DomainPatternSet,
     pub mitm: Option<Arc<MitmState>>,
     pub mitm_hooks: MitmHooksByHost,
     pub constraints: NetworkProxyConstraints,
@@ -296,7 +296,7 @@ struct ExecutionAttribution {
 
 impl std::fmt::Debug for NetworkProxyState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Avoid logging internal state (config contents, derived globsets, etc.) which can be noisy
+        // Avoid logging internal state (config contents, compiled domain patterns, etc.) which can be noisy
         // and may contain sensitive paths.
         f.debug_struct("NetworkProxyState").finish_non_exhaustive()
     }
@@ -768,12 +768,12 @@ impl NetworkProxyState {
         //  1) explicit deny always wins
         //  2) local/private networking is opt-in (defense-in-depth)
         //  3) DNS requires an allowlist match or an approval
-        if globset_matches_host_or_unscoped(&deny_set, host_str) {
+        if domains_match_host_or_unscoped(&deny_set, host_str) {
             return Ok(HostBlockDecision::Blocked(HostBlockReason::Denied));
         }
 
         let is_authorized = authorization == HostAuthorization::Approved
-            || globset_matches_host_or_unscoped(&allow_set, host_str);
+            || domains_match_host_or_unscoped(&allow_set, host_str);
         if !allow_local_binding {
             // If the intent is "prevent access to local/internal networks", we must not rely solely
             // on string checks like `localhost` / `127.0.0.1`. Attackers can use DNS rebinding or
@@ -1244,7 +1244,7 @@ fn log_domain_list_changes(list_name: &str, previous: &[String], next: &[String]
     }
 }
 
-fn globset_matches_host_or_unscoped(set: &GlobSet, host: &str) -> bool {
+fn domains_match_host_or_unscoped(set: &DomainPatternSet, host: &str) -> bool {
     set.is_match(host) || unscoped_ip_literal(host).is_some_and(|ip| set.is_match(ip))
 }
 
@@ -1281,18 +1281,14 @@ pub(crate) fn network_proxy_state_for_policy(
     }
     let state = ConfigState {
         executor_os: crate::Platform::native(),
-        allow_set: crate::policy::compile_allowlist_globset(
-            &config.allowed_domains().unwrap_or_default(),
-        )
-        .unwrap(),
+        allow_set: crate::policy::compile_allowlist(&config.allowed_domains().unwrap_or_default())
+            .unwrap(),
         blocked: VecDeque::new(),
         blocked_total: 0,
         brokerage_created_default_allowlist,
         constraints: NetworkProxyConstraints::default(),
-        deny_set: crate::policy::compile_denylist_globset(
-            &config.denied_domains().unwrap_or_default(),
-        )
-        .unwrap(),
+        deny_set: crate::policy::compile_denylist(&config.denied_domains().unwrap_or_default())
+            .unwrap(),
         mitm: None,
         mitm_hooks: crate::mitm_hook::compile_mitm_hooks(&config).unwrap(),
         config,
@@ -1324,8 +1320,8 @@ mod tests {
     use super::*;
 
     use crate::config::NetworkProxyConfig;
-    use crate::policy::compile_allowlist_globset;
-    use crate::policy::compile_denylist_globset;
+    use crate::policy::compile_allowlist;
+    use crate::policy::compile_denylist;
     use crate::state::NetworkProxyConstraints;
     use crate::state::build_config_state;
     use crate::state::validate_policy_against_constraints;
@@ -2214,7 +2210,7 @@ mod tests {
     #[test]
     fn compile_globset_is_case_insensitive() {
         let patterns = vec!["ExAmPle.CoM".to_string()];
-        let set = compile_denylist_globset(&patterns).unwrap();
+        let set = compile_denylist(&patterns).unwrap();
         assert!(set.is_match("example.com"));
         assert!(set.is_match("EXAMPLE.COM"));
     }
@@ -2222,7 +2218,7 @@ mod tests {
     #[test]
     fn compile_globset_excludes_apex_for_subdomain_patterns() {
         let patterns = vec!["*.openai.com".to_string()];
-        let set = compile_denylist_globset(&patterns).unwrap();
+        let set = compile_denylist(&patterns).unwrap();
         assert!(set.is_match("api.openai.com"));
         assert!(!set.is_match("openai.com"));
         assert!(!set.is_match("evilopenai.com"));
@@ -2231,7 +2227,7 @@ mod tests {
     #[test]
     fn compile_globset_includes_apex_for_double_wildcard_patterns() {
         let patterns = vec!["**.openai.com".to_string()];
-        let set = compile_denylist_globset(&patterns).unwrap();
+        let set = compile_denylist(&patterns).unwrap();
         assert!(set.is_match("openai.com"));
         assert!(set.is_match("api.openai.com"));
         assert!(!set.is_match("evilopenai.com"));
@@ -2240,13 +2236,13 @@ mod tests {
     #[test]
     fn compile_globset_rejects_global_wildcard() {
         let patterns = vec!["*".to_string()];
-        assert!(compile_denylist_globset(&patterns).is_err());
+        assert!(compile_denylist(&patterns).is_err());
     }
 
     #[test]
     fn compile_globset_allows_global_wildcard_when_enabled() {
         let patterns = vec!["*".to_string()];
-        let set = compile_allowlist_globset(&patterns).unwrap();
+        let set = compile_allowlist(&patterns).unwrap();
         assert!(set.is_match("example.com"));
         assert!(set.is_match("api.openai.com"));
         assert!(set.is_match("localhost"));
@@ -2255,19 +2251,19 @@ mod tests {
     #[test]
     fn compile_globset_rejects_bracketed_global_wildcard() {
         let patterns = vec!["[*]".to_string()];
-        assert!(compile_denylist_globset(&patterns).is_err());
+        assert!(compile_denylist(&patterns).is_err());
     }
 
     #[test]
     fn compile_globset_rejects_double_wildcard_bracketed_global_wildcard() {
         let patterns = vec!["**.[*]".to_string()];
-        assert!(compile_denylist_globset(&patterns).is_err());
+        assert!(compile_denylist(&patterns).is_err());
     }
 
     #[test]
     fn compile_globset_dedupes_patterns_without_changing_behavior() {
         let patterns = vec!["example.com".to_string(), "example.com".to_string()];
-        let set = compile_denylist_globset(&patterns).unwrap();
+        let set = compile_denylist(&patterns).unwrap();
         assert!(set.is_match("example.com"));
         assert!(set.is_match("EXAMPLE.COM"));
         assert!(!set.is_match("not-example.com"));
@@ -2276,7 +2272,7 @@ mod tests {
     #[test]
     fn compile_globset_rejects_invalid_patterns() {
         let patterns = vec!["[".to_string()];
-        assert!(compile_denylist_globset(&patterns).is_err());
+        assert!(compile_denylist(&patterns).is_err());
     }
 
     #[test]
