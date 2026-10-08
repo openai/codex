@@ -1,5 +1,6 @@
 use super::AuthRequestTelemetryContext;
 use super::ModelClient;
+use super::NonIncrementalReason;
 use super::PendingUnauthorizedRetry;
 use super::Prompt;
 use super::UnauthorizedRecoveryExecution;
@@ -943,11 +944,75 @@ fn websocket_incremental_reuse_tracks_raw_result_metadata() -> anyhow::Result<()
                 continuation.items,
                 continuation.from_untraced_warmup,
             )),
-            expect_incremental.then_some(("previous-response".to_string(), vec![follow_up], false)),
+            if expect_incremental {
+                Ok(("previous-response".to_string(), vec![follow_up], false))
+            } else {
+                Err(NonIncrementalReason::InputMismatch {
+                    previous: "custom_tool_call_output",
+                    current: "custom_tool_call_output",
+                })
+            },
             "{scenario}",
         );
     }
     Ok(())
+}
+
+#[test]
+fn websocket_continuation_reports_unavailable_response_state() {
+    let client = test_model_client(SessionSource::Cli);
+    let request = client
+        .build_responses_request(
+            &Prompt::default(),
+            &test_model_info(),
+            /*effort*/ None,
+            codex_protocol::config_types::ReasoningSummary::None,
+            /*service_tier*/ None,
+            &test_responses_metadata_for_client(
+                &client,
+                /*turn_id*/ None,
+                format!("{}:0", client.state.thread_id),
+                /*parent_thread_id*/ None,
+                TestCodexResponsesRequestKind::Turn,
+            ),
+            /*include_internal*/ true,
+        )
+        .expect("build continuation request");
+    let mut session = client.new_session();
+    session.websocket_session.last_request = Some(request.clone());
+    assert_eq!(
+        session.prepare_websocket_request(&request).err(),
+        Some(NonIncrementalReason::NoPreviousResponse),
+    );
+
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    session.websocket_session.last_response_rx = Some(receiver);
+    assert_eq!(
+        session.prepare_websocket_request(&request).err(),
+        Some(NonIncrementalReason::NoPreviousResponse),
+    );
+    drop(sender);
+
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    drop(sender);
+    session.websocket_session.last_response_rx = Some(receiver);
+    assert_eq!(
+        session.prepare_websocket_request(&request).err(),
+        Some(NonIncrementalReason::NoPreviousResponse),
+    );
+
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    sender
+        .send(super::LastResponse {
+            response_id: String::new(),
+            items_added: Vec::new(),
+        })
+        .unwrap();
+    session.websocket_session.last_response_rx = Some(receiver);
+    assert_eq!(
+        session.prepare_websocket_request(&request).err(),
+        Some(NonIncrementalReason::NoPreviousResponseId),
+    );
 }
 
 #[tokio::test]

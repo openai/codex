@@ -1259,6 +1259,30 @@ pub enum ResponseItem {
 }
 
 impl ResponseItem {
+    /// Returns the wire type name for this response item.
+    pub fn item_type(&self) -> &'static str {
+        match self {
+            Self::AdditionalTools { .. } => "additional_tools",
+            Self::Message { .. } => "message",
+            Self::AgentMessage { .. } => "agent_message",
+            Self::Reasoning { .. } => "reasoning",
+            Self::LocalShellCall { .. } => "local_shell_call",
+            Self::FunctionCall { .. } => "function_call",
+            Self::ToolSearchCall { .. } => "tool_search_call",
+            Self::FunctionCallOutput { .. } => "function_call_output",
+            Self::CustomToolCall { .. } => "custom_tool_call",
+            Self::CustomToolCallOutput { .. } => "custom_tool_call_output",
+            Self::ToolSearchOutput { .. } => "tool_search_output",
+            Self::WebSearchCall { .. } => "web_search_call",
+            Self::ImageGenerationCall { .. } => "image_generation_call",
+            Self::Compaction { .. } => "compaction",
+            Self::ConfigurationUpdate { .. } => "configuration_update",
+            Self::CompactionTrigger { .. } => "compaction_trigger",
+            Self::ContextCompaction { .. } => "context_compaction",
+            Self::Other => "other",
+        }
+    }
+
     /// Returns whether this item is an ordinary user-role message.
     pub fn is_user_message(&self) -> bool {
         matches!(self, Self::Message { role, .. } if role == "user")

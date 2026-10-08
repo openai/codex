@@ -2240,12 +2240,36 @@ async fn responses_websocket_uses_previous_response_id_when_prefix_after_complet
     server.shutdown().await;
 }
 
+#[test_case::test_case(vec![message_item("different")], "input_mismatch", "message"; "rewritten")]
+#[test_case::test_case(
+    vec![ResponseItem::Compaction {
+        id: None,
+        encrypted_content: "compacted".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    }],
+    "input_mismatch",
+    "compaction"; "replaced"
+)]
+#[test_case::test_case(
+    vec![message_item("hello"), assistant_message_item("1", "changed output")],
+    "input_mismatch",
+    "message"; "rewritten server output"
+)]
+#[test_case::test_case(vec![message_item("hello")], "input_shortened", "none"; "missing server output")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_creates_on_non_prefix() {
+async fn responses_websocket_creates_on_non_prefix(
+    input: Vec<ResponseItem>,
+    reason: &str,
+    current_item_type: &str,
+) {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg_1", "assistant output"),
+            ev_completed("resp-1"),
+        ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
     .await;
@@ -2253,7 +2277,7 @@ async fn responses_websocket_creates_on_non_prefix() {
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
-    let prompt_two = prompt_with_input(vec![message_item("different")]);
+    let prompt_two = prompt_with_input(input);
 
     stream_until_complete(&mut client_session, &harness, &prompt_one).await;
     stream_until_complete(&mut client_session, &harness, &prompt_two).await;
@@ -2271,11 +2295,17 @@ async fn responses_websocket_creates_on_non_prefix() {
         serde_json::to_value(&prompt_two.input).unwrap()
     );
 
-    assert_continuation_metrics(
+    assert_continuation_metrics_with_item_types(
         &harness.session_telemetry,
         &[
-            (["full", "other", "generation"], 1),
-            (["full", "no_previous_request", "generation"], 1),
+            (
+                ["full", reason, "generation", "message", current_item_type],
+                1,
+            ),
+            (
+                ["full", "no_previous_request", "generation", "none", "none"],
+                1,
+            ),
         ],
     );
     server.shutdown().await;
@@ -2322,11 +2352,17 @@ async fn responses_websocket_creates_when_instructions_change() {
             .unwrap()
     );
 
-    assert_continuation_metrics(
+    assert_continuation_metrics_with_item_types(
         &harness.session_telemetry,
         &[
-            (["full", "no_previous_request", "generation"], 1),
-            (["full", "other", "generation"], 1),
+            (
+                ["full", "no_previous_request", "generation", "none", "none"],
+                1,
+            ),
+            (
+                ["full", "input_mismatch", "generation", "message", "message"],
+                1,
+            ),
         ],
     );
     server.shutdown().await;
@@ -2374,9 +2410,15 @@ async fn responses_websocket_v2_creates_with_previous_response_id_on_prefix() {
     server.shutdown().await;
 }
 
+#[test_case::test_case(None, Some(json!({"type": "object", "properties": {}})), "text_changed"; "output schema")]
+#[test_case::test_case(Some("changed-model"), None, "model_changed"; "model")]
+#[test_case::test_case(Some("changed-model"), Some(json!({"type": "object"})), "model_changed"; "first changed property")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_v2_creates_without_previous_response_id_when_non_input_fields_change()
-{
+async fn responses_websocket_v2_creates_without_previous_response_id_when_non_input_fields_change(
+    model: Option<&str>,
+    output_schema: Option<serde_json::Value>,
+    reason: &str,
+) {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
@@ -2389,10 +2431,21 @@ async fn responses_websocket_v2_creates_without_previous_response_id_when_non_in
     let mut session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let mut prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
-    prompt_two.output_schema = Some(json!({"type": "object", "properties": {}}));
+    prompt_two.output_schema = output_schema;
+    let mut model_info = harness.model_info.clone();
+    if let Some(model) = model {
+        model_info.slug = model.to_string();
+    }
 
     stream_until_complete(&mut session, &harness, &prompt_one).await;
-    stream_until_complete(&mut session, &harness, &prompt_two).await;
+    stream_until_complete_with_model_info(
+        &mut session,
+        &harness,
+        &prompt_two,
+        &model_info,
+        "resp-2",
+    )
+    .await;
 
     let connection = server.single_connection();
     assert_eq!(connection.len(), 2);
@@ -2405,6 +2458,13 @@ async fn responses_websocket_v2_creates_without_previous_response_id_when_non_in
         serde_json::to_value(&prompt_two.input).expect("serialize full input")
     );
 
+    assert_continuation_metrics(
+        &harness.session_telemetry,
+        &[
+            (["full", "no_previous_request", "generation"], 1),
+            (["full", reason, "generation"], 1),
+        ],
+    );
     server.shutdown().await;
 }
 
@@ -2880,6 +2940,17 @@ async fn responses_websocket_restored_history_metric(fork: bool) -> anyhow::Resu
 }
 
 fn assert_continuation_metrics(telemetry: &SessionTelemetry, expected: &[([&str; 3], u64)]) {
+    let expected = expected
+        .iter()
+        .map(|([mode, reason, phase], count)| ([*mode, *reason, *phase, "none", "none"], *count))
+        .collect::<Vec<_>>();
+    assert_continuation_metrics_with_item_types(telemetry, &expected);
+}
+
+fn assert_continuation_metrics_with_item_types(
+    telemetry: &SessionTelemetry,
+    expected: &[([&str; 5], u64)],
+) {
     use opentelemetry_sdk::metrics::data::AggregatedMetrics;
     use opentelemetry_sdk::metrics::data::MetricData;
 
@@ -2899,7 +2970,14 @@ fn assert_continuation_metrics(telemetry: &SessionTelemetry, expected: &[([&str;
     let mut actual: Vec<_> = sum
         .data_points()
         .map(|point| {
-            let tags = ["mode", "reason", "phase"].map(|key| {
+            let tags = [
+                "mode",
+                "reason",
+                "phase",
+                "previous_item_type",
+                "current_item_type",
+            ]
+            .map(|key| {
                 point
                     .attributes()
                     .find(|attr| attr.key.as_str() == key)
