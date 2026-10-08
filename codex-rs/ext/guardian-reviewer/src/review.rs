@@ -78,6 +78,16 @@ pub trait ReviewHost: Send + Sync {
 }
 
 impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
+    #[tracing::instrument(
+        name = "guardian_review",
+        level = "debug",
+        skip_all,
+        fields(
+            review_id = self.approval_id,
+            thread_id = %self.thread_id,
+            tool_call_id = self.tool_call_id,
+        )
+    )]
     fn review<'a>(
         &'a self,
         reason: GuardianReviewReason,

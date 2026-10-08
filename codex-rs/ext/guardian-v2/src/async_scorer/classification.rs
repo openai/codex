@@ -106,6 +106,19 @@ enum ClassificationOutcome {
 }
 
 impl Classification {
+    #[tracing::instrument(
+        name = "guardian_background_scoring",
+        level = "debug",
+        skip_all,
+        fields(
+            thread_id = %self.thread_id,
+            turn_id = %self.turn_id,
+            call_id = %self.call_id,
+            tool_call_index = self.tool_call_index,
+            context_mode = self.context_mode.as_str(),
+            retained_conversation = self.reservation.is_some(),
+        )
+    )]
     pub(super) async fn run(self) {
         let Self {
             reservation,

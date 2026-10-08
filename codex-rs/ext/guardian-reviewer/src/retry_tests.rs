@@ -137,6 +137,8 @@ async fn guardian_review_retry_wait_honors_cancellation() {
 
     let error = wait_before_guardian_retry(
         /*attempt_count*/ 1,
+        /*max_attempts*/ 3,
+        &GuardianReviewOutcome::Error(GuardianReviewError::StaleAuthorization),
         /*retry_not_before*/ None,
         Instant::now() + Duration::from_secs(/*secs*/ 1),
         Some(&cancel_token),
@@ -150,6 +152,8 @@ async fn guardian_review_retry_wait_honors_cancellation() {
 async fn guardian_review_retry_wait_honors_deadline() {
     let error = wait_before_guardian_retry(
         /*attempt_count*/ 1,
+        /*max_attempts*/ 3,
+        &GuardianReviewOutcome::Error(GuardianReviewError::StaleAuthorization),
         /*retry_not_before*/ None,
         Instant::now(),
         /*external_cancel*/ None,

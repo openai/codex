@@ -37,6 +37,18 @@ use super::score::GuardianV2ScoreProgress;
 use codex_protocol::openai_models::GuardianUnscoredAction as UnscoredAction;
 
 impl GuardianV2Extension {
+    #[tracing::instrument(
+        name = "guardian_scoring_observation",
+        level = "debug",
+        skip_all,
+        fields(
+            thread_id = input.thread_store.level_id(),
+            turn_id = input.turn_id,
+            call_id = input.call_id,
+            tool_name = %input.tool_name,
+            tool_call_index = tracing::field::Empty,
+        )
+    )]
     pub(super) async fn score_tool(&self, input: ToolStartInput<'_>) {
         // Polling a code cell does not introduce another action or age its score.
         if input.tool_name.is_default_namespace() && input.tool_name.name == "wait" {
@@ -129,6 +141,7 @@ impl GuardianV2Extension {
             }
             None => (score_progress.observe(&input), Ok(None)),
         };
+        tracing::Span::current().record("tool_call_index", tool_call_index);
         let reservation = match reservation {
             Ok(reservation) => reservation,
             Err(error) => {

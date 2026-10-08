@@ -56,8 +56,15 @@ where
             }
             _ => None,
         };
-        if let Some(error) =
-            wait_before_guardian_retry(attempt_count, retry_at, deadline, external_cancel).await
+        if let Some(error) = wait_before_guardian_retry(
+            attempt_count,
+            max_attempts,
+            &outcome,
+            retry_at,
+            deadline,
+            external_cancel,
+        )
+        .await
         {
             return (GuardianReviewOutcome::Error(error), analytics_result, None);
         }
@@ -67,6 +74,8 @@ where
 
 async fn wait_before_guardian_retry(
     attempt_count: i64,
+    max_attempts: i64,
+    outcome: &GuardianReviewOutcome,
     retry_not_before: Option<Instant>,
     deadline: Instant,
     external_cancel: Option<&CancellationToken>,
@@ -74,9 +83,34 @@ async fn wait_before_guardian_retry(
     let exponential_delay = 200.0 * 2.0_f64.powi(attempt_count.saturating_sub(1) as i32);
     let jitter = rand::rng().random_range(0.9..1.1);
     let retry_delay = Duration::from_millis((exponential_delay * jitter) as u64);
-    let retry_at = (Instant::now() + retry_delay)
-        .max(retry_not_before.unwrap_or_else(Instant::now))
-        .min(deadline);
+    let now = Instant::now();
+    let requested_retry_at = (now + retry_delay).max(retry_not_before.unwrap_or(now));
+    let retry_at = requested_retry_at.min(deadline);
+    let (failure_reason, error_info) = match outcome {
+        GuardianReviewOutcome::Error(error) => (
+            Some(error.failure_reason()),
+            if let GuardianReviewError::Session { error_info, .. } = error {
+                error_info.as_ref()
+            } else {
+                None
+            },
+        ),
+        GuardianReviewOutcome::CachedApproval | GuardianReviewOutcome::Completed(_) => (None, None),
+    };
+    tracing::debug!(
+        attempt_count,
+        next_attempt = attempt_count + 1,
+        max_attempts,
+        ?failure_reason,
+        ?error_info,
+        wait_ms = retry_at.saturating_duration_since(now).as_millis() as u64,
+        backoff_ms = retry_delay.as_millis() as u64,
+        retry_not_before_ms = retry_not_before
+            .map(|instant| instant.saturating_duration_since(now).as_millis() as u64),
+        remaining_budget_ms = deadline.saturating_duration_since(now).as_millis() as u64,
+        deadline_limited = requested_retry_at >= deadline,
+        "Guardian review retry scheduled"
+    );
     tokio::select! {
         _ = sleep_until(retry_at) => {
             (Instant::now() >= deadline).then_some(GuardianReviewError::Timeout)

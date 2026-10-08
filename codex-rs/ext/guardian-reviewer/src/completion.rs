@@ -82,21 +82,22 @@ pub fn complete_review(
         }
         GuardianReviewOutcome::Error(error) => {
             analytics.failure_reason = Some(error.failure_reason());
-            if matches!(error, GuardianReviewError::InputBudgetExceeded) && !require_guardian {
-                let rationale = format!("Automatic approval review failed: {INPUT_BUDGET_MESSAGE}");
-                analytics.decision = GuardianReviewDecision::Aborted;
-                analytics.terminal_status = GuardianReviewTerminalStatus::Aborted;
-                event.status = GuardianAssessmentStatus::Aborted;
-                event.rationale = Some(rationale.clone());
-                return ReviewCompletion {
-                    decision: None,
-                    event,
-                    warning: Some(rationale),
-                    analytics,
-                    assessment_outcome: None,
-                };
-            }
             match error {
+                GuardianReviewError::InputBudgetExceeded if !require_guardian => {
+                    let rationale =
+                        format!("Automatic approval review failed: {INPUT_BUDGET_MESSAGE}");
+                    analytics.decision = GuardianReviewDecision::Aborted;
+                    analytics.terminal_status = GuardianReviewTerminalStatus::Aborted;
+                    event.status = GuardianAssessmentStatus::Aborted;
+                    event.rationale = Some(rationale.clone());
+                    return ReviewCompletion {
+                        decision: None,
+                        event,
+                        warning: Some(rationale),
+                        analytics,
+                        assessment_outcome: None,
+                    };
+                }
                 GuardianReviewError::Timeout => {
                     let rationale = "Automatic approval review timed out while evaluating the requested approval.".to_string();
                     analytics.decision = GuardianReviewDecision::Denied;
