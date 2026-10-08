@@ -9,7 +9,12 @@ env:
 jobs:
   build-windows-binaries:
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
+    # Parallel Bazel artifacts are advisory while Cargo remains the release path.
+    continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: ${{ matrix.runs_on }}
+    environment:
+      name: bazel
+      deployment: false
     # Temporary increase from 90 minutes while Cargo and Bazel build paths coexist.
     # Reassess after the transition using Bazel release build timings.
     timeout-minutes: 120
@@ -301,6 +306,7 @@ jobs:
     needs:
       - build-windows-binaries
     name: Build Windows symbols - ${{ matrix.target }} - ${{ matrix.build-system }}
+    continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -361,6 +367,7 @@ jobs:
       - build-windows-binaries
       - build-windows-voice
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.build-system }}
+    continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: ${{ matrix.runs_on }}
     environment:
       name: azure-artifact-signing
