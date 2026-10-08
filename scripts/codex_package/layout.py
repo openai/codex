@@ -8,7 +8,6 @@ from pathlib import Path
 from .targets import PackageInputs
 from .targets import PackageVariant
 from .targets import TargetSpec
-from .zsh import ZSH_RESOURCE_PATH
 
 
 LAYOUT_VERSION = 1
@@ -58,13 +57,6 @@ def build_package_dir(
     )
     copy_executable(inputs.rg_bin, path_dir / spec.rg_name, is_windows=spec.is_windows)
 
-    if inputs.zsh_bin is not None:
-        copy_executable(
-            inputs.zsh_bin,
-            resources_dir / ZSH_RESOURCE_PATH,
-            is_windows=False,
-        )
-
     if inputs.bwrap_bin is not None:
         copy_executable(inputs.bwrap_bin, resources_dir / "bwrap", is_windows=False)
 
@@ -98,8 +90,6 @@ def validate_package_dir(
     package_dir: Path,
     variant: PackageVariant,
     spec: TargetSpec,
-    *,
-    include_zsh: bool,
 ) -> None:
     required_dirs = [
         Path("bin"),
@@ -139,11 +129,6 @@ def validate_package_dir(
         Path("codex-path") / spec.rg_name,
     ]
     executable_files = list(required_files)
-
-    if include_zsh:
-        zsh_path = Path("codex-resources") / ZSH_RESOURCE_PATH
-        required_files.append(zsh_path)
-        executable_files.append(zsh_path)
 
     if spec.is_linux:
         required_files.append(Path("codex-resources") / "bwrap")

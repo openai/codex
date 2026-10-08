@@ -17,7 +17,6 @@ from .targets import TARGET_SPECS
 from .targets import PackageInputs
 from .targets import default_target
 from .targets import resolve_input_path
-from .zsh import resolve_zsh_bin
 from .version import read_workspace_version
 
 
@@ -149,20 +148,6 @@ def create_parser() -> argparse.ArgumentParser:
             "targets, bwrap is built with Cargo."
         ),
     )
-    zsh_source = parser.add_mutually_exclusive_group()
-    zsh_source.add_argument(
-        "--zsh-manifest",
-        type=Path,
-        help=(
-            "Optional DotSlash manifest for the patched zsh fork instead of "
-            "scripts/codex_package/codex-zsh."
-        ),
-    )
-    zsh_source.add_argument(
-        "--zsh-bin",
-        type=Path,
-        help="Optional prebuilt zsh executable instead of fetching from a manifest.",
-    )
     parser.add_argument(
         "--codex-command-runner-bin",
         type=Path,
@@ -245,7 +230,6 @@ def assemble_package(args: argparse.Namespace) -> Path:
         entrypoint_bin=source_outputs.entrypoint_bin,
         code_mode_host_bin=source_outputs.code_mode_host_bin,
         rg_bin=resolve_rg_bin(spec, args.rg_bin),
-        zsh_bin=resolve_zsh_bin(spec, args.zsh_manifest, zsh_bin=args.zsh_bin),
         bwrap_bin=source_outputs.bwrap_bin,
         codex_command_runner_bin=source_outputs.codex_command_runner_bin,
         codex_windows_sandbox_setup_bin=source_outputs.codex_windows_sandbox_setup_bin,
@@ -262,9 +246,7 @@ def assemble_package(args: argparse.Namespace) -> Path:
             and prebuilt is None
         ):
             strip_binary(package_dir / "bin" / filename, spec, tool=args.strip_tool)
-    validate_package_dir(
-        package_dir, variant, spec, include_zsh=inputs.zsh_bin is not None
-    )
+    validate_package_dir(package_dir, variant, spec)
     return package_dir
 
 

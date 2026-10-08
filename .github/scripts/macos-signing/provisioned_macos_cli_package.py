@@ -19,7 +19,7 @@ CODE_SIGNING_ID = "codex"
 APP = Path("CodexCLI.app")
 EXECUTABLE = APP / "Contents/MacOS/codex"
 SIGNING = Path(__file__).resolve().parent
-HELPERS = ("bin/codex-code-mode-host", "codex-path/rg", "codex-resources/zsh/bin/zsh")
+HELPERS = ("bin/codex-code-mode-host", "codex-path/rg")
 LAUNCHER = """#!/bin/sh
 set -eu
 entry="$0"

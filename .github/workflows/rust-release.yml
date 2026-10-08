@@ -16,8 +16,6 @@ on:
 
 env:
   CODEX_REPO_ROOT: ${{ github.workspace }}
-  CODEX_ZSH_RELEASE_TAG: codex-zsh-v0.1.0
-  CODEX_ZSH_MANIFEST_SHA256: c534eab89dcea7e3d8a5e5b3f49c025c7c64cd4e4d9814ee24871de58a9359a1
 
 # The launcher uses this per-tag group as the migration boundary. Keep shared
 # publication jobs on the original queued group below when changing this.
@@ -415,17 +413,6 @@ jobs:
             cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
 
-      - name: Download packaged zsh manifest
-        if: ${{ runner.os != 'macOS' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsSL \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
-            -o "${RUNNER_TEMP}/codex-zsh"
-          bash "${GITHUB_WORKSPACE}/.github/scripts/verify-zsh-manifest.sh" \
-            "${RUNNER_TEMP}/codex-zsh" "$CODEX_ZSH_MANIFEST_SHA256"
-
       - name: Build Codex package archive
         if: ${{ runner.os != 'macOS' }}
         shell: bash
@@ -444,7 +431,6 @@ jobs:
             --bundle "$BUNDLE" \
             --entrypoint-dir "target/${TARGET}/release" \
             --archive-dir "dist/${TARGET}" \
-            --zsh-manifest "${RUNNER_TEMP}/codex-zsh" \
             "${voice_args[@]}"
 
       - name: Cosign Linux voice package archives
@@ -493,8 +479,7 @@ jobs:
             --target "${{ matrix.target }}" \
             --bundle primary \
             --entrypoint-dir "target/${{ matrix.target }}/release" \
-            --archive-dir "$wheel_archives" \
-            --zsh-manifest "${RUNNER_TEMP}/codex-zsh"
+            --archive-dir "$wheel_archives"
           wheel_archive="${wheel_archives}/codex-package-${{ matrix.target }}.tar.gz"
           python3 - "$wheel_archive" <<'PY'
           import sys
@@ -774,33 +759,22 @@ jobs:
           set -euo pipefail
 
           signed_root="${GITHUB_WORKSPACE}/signed-resources/${TARGET}"
-          zsh_manifest="${RUNNER_TEMP}/codex-zsh-${TARGET}"
           mkdir -p "$signed_root"
-          curl -fsSL \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
-            -o "$zsh_manifest"
-          bash "${GITHUB_WORKSPACE}/.github/scripts/verify-zsh-manifest.sh" \
-            "$zsh_manifest" "$CODEX_ZSH_MANIFEST_SHA256"
 
-          PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 - "$TARGET" "$signed_root" "$zsh_manifest" <<'PY'
+          PYTHONPATH="${GITHUB_WORKSPACE}/scripts" python3 - "$TARGET" "$signed_root" <<'PY'
           import shutil
           import sys
           from pathlib import Path
 
           from codex_package.ripgrep import fetch_rg
           from codex_package.targets import TARGET_SPECS
-          from codex_package.zsh import resolve_zsh_bin
 
           spec = TARGET_SPECS[sys.argv[1]]
           signed_root = Path(sys.argv[2])
-          zsh_bin = resolve_zsh_bin(spec, Path(sys.argv[3]))
-          if zsh_bin is None:
-              raise RuntimeError(f"Pinned zsh release is missing {spec.target}")
           shutil.copy2(fetch_rg(spec), signed_root / "rg")
-          shutil.copy2(zsh_bin, signed_root / "zsh")
           PY
 
-          for resource in rg zsh; do
+          for resource in rg; do
             binary="${signed_root}/${resource}"
             report_dir="${GITHUB_WORKSPACE}/macos-binary-signing-verification/${TARGET}/${resource}"
             mkdir -p "$report_dir"
@@ -1001,7 +975,7 @@ jobs:
             codesign --verify --strict --verbose=2 "$binary_path"
           done
 
-          for resource in rg zsh; do
+          for resource in rg; do
             resource_path="signed-resources/${{ matrix.target }}/${resource}"
             chmod 0755 "$resource_path"
             codesign --verify --strict --verbose=2 "$resource_path"
@@ -1041,7 +1015,6 @@ jobs:
             --entrypoint-dir "target/${TARGET}/release" \
             --archive-dir "dist/${TARGET}" \
             --rg-bin "signed-resources/${TARGET}/rg" \
-            --zsh-bin "signed-resources/${TARGET}/zsh" \
             ${voice_args[@]+"${voice_args[@]}"}
 
       - name: Build unsigned macOS DMG
@@ -1129,8 +1102,7 @@ jobs:
             --bundle primary \
             --entrypoint-dir "target/${{ matrix.target }}/release" \
             --archive-dir "$wheel_archives" \
-            --rg-bin "signed-resources/${{ matrix.target }}/rg" \
-            --zsh-bin "signed-resources/${{ matrix.target }}/zsh"
+            --rg-bin "signed-resources/${{ matrix.target }}/rg"
           wheel_archive="${wheel_archives}/codex-package-${{ matrix.target }}.tar.gz"
           python3 - "$wheel_archive" <<'PY'
           import sys
@@ -1436,8 +1408,7 @@ jobs:
           verify_signed_binary "${package_dir}/bin/codex-code-mode-host" "codex-code-mode-host"
 
           for resource in \
-            "${package_dir}/codex-path/rg" \
-            "${package_dir}/codex-resources/zsh/bin/zsh"
+            "${package_dir}/codex-path/rg"
           do
             chmod 0755 "$resource"
             lipo "$resource" -verify_arch "$expected_arch"

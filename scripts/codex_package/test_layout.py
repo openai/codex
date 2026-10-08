@@ -64,7 +64,6 @@ int main(void) {
                         "--entrypoint-bin",
                         "--code-mode-host-bin",
                         "--rg-bin",
-                        "--zsh-bin",
                     ]
                     if "linux" in target:
                         flags.append("--bwrap-bin")
@@ -85,8 +84,7 @@ int main(void) {
                         else:
                             self.assertLess(executable.stat().st_size, len(original))
                     self.assertEqual(source.read_bytes(), original)
-                    for resource in ("codex-path/rg", "codex-resources/zsh/bin/zsh"):
-                        self.assertEqual((package / resource).read_bytes(), original)
+                    self.assertEqual((package / "codex-path/rg").read_bytes(), original)
                     if "linux" in target:
                         self.assertEqual(
                             (package / "codex-resources/bwrap").read_bytes(), original
@@ -164,9 +162,7 @@ int main(void) {
                         package_dir = root / "package"
                         package_dir.mkdir()
                         rg_bin = touch_executable(root / "signed-rg")
-                        zsh_bin = touch_executable(root / "signed-zsh")
                         rg_bin.write_bytes(b"signed ripgrep binary")
-                        zsh_bin.write_bytes(b"signed zsh binary")
                         variant = PACKAGE_VARIANTS[variant_name]
                         spec = TARGET_SPECS[target]
                         inputs = PackageInputs(
@@ -177,31 +173,20 @@ int main(void) {
                                 root / "codex-code-mode-host"
                             ),
                             rg_bin=rg_bin,
-                            zsh_bin=zsh_bin,
                             bwrap_bin=None,
                             codex_command_runner_bin=None,
                             codex_windows_sandbox_setup_bin=None,
                         )
 
                         build_package_dir(package_dir, "1.2.3", variant, spec, inputs)
-                        validate_package_dir(
-                            package_dir, variant, spec, include_zsh=True
-                        )
+                        validate_package_dir(package_dir, variant, spec)
 
                         self.assertEqual(
                             {
                                 "rg": (package_dir / "codex-path" / "rg").read_bytes(),
-                                "zsh": (
-                                    package_dir
-                                    / "codex-resources"
-                                    / "zsh"
-                                    / "bin"
-                                    / "zsh"
-                                ).read_bytes(),
                             },
                             {
                                 "rg": b"signed ripgrep binary",
-                                "zsh": b"signed zsh binary",
                             },
                         )
 
@@ -214,7 +199,6 @@ int main(void) {
                 entrypoint_bin=touch_executable(root / "codex-app-server"),
                 code_mode_host_bin=touch_executable(root / "codex-code-mode-host"),
                 rg_bin=touch_executable(root / "rg"),
-                zsh_bin=None,
                 bwrap_bin=touch_executable(root / "bwrap"),
                 codex_command_runner_bin=None,
                 codex_windows_sandbox_setup_bin=None,
@@ -231,7 +215,6 @@ int main(void) {
                 package_dir,
                 PACKAGE_VARIANTS["codex-app-server"],
                 TARGET_SPECS["x86_64-unknown-linux-musl"],
-                include_zsh=False,
             )
 
             self.assertTrue((package_dir / "bin" / "codex-code-mode-host").is_file())

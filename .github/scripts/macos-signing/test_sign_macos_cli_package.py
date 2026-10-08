@@ -189,13 +189,13 @@ class MacosSigningTests(ProvisioningTestCase):
                 )
                 self.assertEqual(
                     ["--entitlements" in call for call in signing],
-                    [True, True, False, False],
+                    [True, True, False],
                 )
                 self.assertEqual(
                     [call[0] for call in calls if call[0].startswith("notarize")],
                     ["notarize_with_akv.py"]
                     if provisioned
-                    else ["notarize_macos_binary_with_akv.sh"] * 4,
+                    else ["notarize_macos_binary_with_akv.sh"] * 3,
                 )
                 self.assertEqual(
                     [call[1:] for call in calls if call[0] == "lipo"],

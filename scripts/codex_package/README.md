@@ -22,7 +22,6 @@ The builder creates a canonical Codex package directory:
 │   └── codex-code-mode-host[.exe]
 ├── codex-resources
 │   ├── bwrap                             # Linux only
-│   ├── zsh/bin/zsh                       # supported Unix targets only
 │   ├── codex-command-runner.exe          # Windows only
 │   └── codex-windows-sandbox-setup.exe   # Windows only
 └── codex-path
@@ -100,11 +99,3 @@ DotSlash manifest at `scripts/codex_package/rg`. Downloaded archives are cached
 under `$TMPDIR/codex-package/<target>-rg` and are reused only after the recorded
 size and SHA-256 digest have been verified. Pass `--rg-bin` to use a local
 ripgrep executable instead.
-
-The patched zsh fork used by `shell_zsh_fork` is fetched from the DotSlash
-manifest at `scripts/codex_package/codex-zsh` when the selected target has a
-matching prebuilt artifact. Downloaded archives are cached under
-`$TMPDIR/codex-package/<target>-zsh` and installed at
-`codex-resources/zsh/bin/zsh`. Pass `--zsh-bin` to package a prebuilt, signed
-executable, or `--zsh-manifest` to use a different DotSlash manifest, such as
-the manifest published with a standalone zsh artifact release.

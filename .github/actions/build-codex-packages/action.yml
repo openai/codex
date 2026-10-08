@@ -103,16 +103,6 @@ runs:
           cp "$underscored_pdb" "$expected_pdb"
         done
 
-    - name: Download packaged zsh manifest
-      if: ${{ runner.os != 'Windows' }}
-      shell: bash
-      working-directory: codex-rs
-      run: |
-        set -euo pipefail
-        curl -fsSL \
-          "https://github.com/openai/codex/releases/download/codex-zsh-v0.1.0/codex-zsh" \
-          -o "${RUNNER_TEMP}/codex-zsh"
-
     - name: Archive symbols and strip binaries
       shell: bash
       working-directory: codex-rs
@@ -160,8 +150,6 @@ runs:
             --codex-command-runner-bin "${release_dir}/codex-command-runner.exe"
             --codex-windows-sandbox-setup-bin "${release_dir}/codex-windows-sandbox-setup.exe"
           )
-        else
-          package_args+=(--zsh-manifest "${RUNNER_TEMP}/codex-zsh")
         fi
 
         python3 "${PACKAGE_SOURCE_ROOT}/scripts/build_codex_package.py" \
