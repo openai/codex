@@ -68,6 +68,10 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ListTool {
         skill_tool_name(TOOL_NAME)
     }
 
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
+
     fn spec(&self) -> ToolSpec {
         skill_function_tool::<ListArgs, ListResponse>(
             TOOL_NAME,

@@ -149,6 +149,10 @@ impl<'call> ToolExecutor<ToolCall<'call>> for GoalToolExecutor {
         })
     }
 
+    fn supports_parallel_tool_calls(&self) -> bool {
+        matches!(self.kind, GoalToolKind::Get)
+    }
+
     fn spec(&self) -> ToolSpec {
         match self.kind {
             GoalToolKind::Get => create_get_goal_tool(),

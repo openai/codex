@@ -11,6 +11,7 @@ struct FakeCloudSkillProvider {
     catalog: SkillCatalog,
     resources: std::collections::HashMap<String, String>,
     reads: Mutex<Vec<String>>,
+    read_barrier: Option<tokio::sync::Barrier>,
 }
 
 impl SkillProvider for FakeCloudSkillProvider {
@@ -42,6 +43,11 @@ impl SkillProvider for FakeCloudSkillProvider {
                 .get(request.resource.as_str())
                 .cloned()
                 .ok_or_else(|| SkillProviderError::new("unknown fake skill resource"))?;
+            if let Some(barrier) = &self.read_barrier {
+                tokio::time::timeout(Duration::from_secs(/*secs*/ 10), barrier.wait())
+                    .await
+                    .map_err(|_| SkillProviderError::new("skill reads did not overlap"))?;
+            }
             Ok(SkillReadResult {
                 resource: request.resource,
                 contents,
@@ -145,6 +151,7 @@ text({ names: result.skills.map(skill => skill.name), warnings: result.warnings,
                 warnings: Vec::new(),
             },
             reads: Mutex::default(),
+            read_barrier: None,
             resources: std::collections::HashMap::from([
                 (
                     MAIN_RESOURCE.to_string(),
@@ -493,6 +500,7 @@ async fn production_turn_aliases_discovered_singleton_cloud_root() -> Result<()>
                 SKILL_BODY.to_string(),
             )]),
             reads: Mutex::default(),
+            read_barrier: None,
         })),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
@@ -546,6 +554,99 @@ async fn production_turn_aliases_discovered_singleton_cloud_root() -> Result<()>
         "cloud instruction reads must remain available without host discovery: {user_text}"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_skill_reads_run_in_parallel() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const PACKAGE: &str = "skill://demo/parallel";
+    const READS: [(&str, &str, &str); 2] = [
+        (
+            "read-main",
+            "skill://demo/parallel/SKILL.md",
+            "Main instructions.",
+        ),
+        (
+            "read-reference",
+            "skill://demo/parallel/references/guide.md",
+            "Reference instructions.",
+        ),
+    ];
+    let server = responses::start_mock_server().await;
+    let mut extensions = ExtensionRegistryBuilder::new();
+    install_with_providers(
+        &mut extensions,
+        SkillProviders::new().with_cloud_provider(Arc::new(FakeCloudSkillProvider {
+            catalog: SkillCatalog {
+                entries: vec![SkillCatalogEntry::new(
+                    SkillPackageId(PACKAGE.to_string()),
+                    SkillAuthority::new(SkillSourceKind::Cloud, CODEX_APPS_MCP_SERVER_NAME),
+                    "demo:parallel",
+                    "Instructions and a reference.",
+                    SkillResourceId::new(READS[0].1),
+                )],
+                warnings: Vec::new(),
+            },
+            resources: READS
+                .iter()
+                .map(|(_, resource, contents)| (resource.to_string(), contents.to_string()))
+                .collect(),
+            reads: Mutex::default(),
+            // An exclusive scheduler lock prevents the second read from reaching this barrier.
+            read_barrier: Some(tokio::sync::Barrier::new(/*n*/ 2)),
+        })),
+        |config: &Config| SkillsExtensionConfig {
+            include_instructions: config.include_skill_instructions,
+            max_context_tokens: config.skill_max_context_tokens,
+            bundled_skills_enabled: false,
+            cloud_skill_enabled: true,
+            shadow_selection_enabled: false,
+        },
+    );
+    let chatgpt_base_url = server.uri();
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_exec_server_url("none")
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(move |config| {
+            config.chatgpt_base_url = chatgpt_base_url;
+            config.include_skill_instructions = true;
+            config.cloud_skill_enabled = true;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let mut calls = vec![ev_response_created("read-both")];
+    calls.extend(READS.map(|(call_id, resource, _)| {
+        responses::ev_function_call_with_namespace(
+            call_id,
+            "skills",
+            "read",
+            &json!({"package": PACKAGE, "resource": resource}).to_string(),
+        )
+    }));
+    calls.push(ev_completed("read-both"));
+    let response = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(calls),
+            sse(vec![ev_response_created("done"), ev_completed("done")]),
+        ],
+    )
+    .await;
+    test.submit_turn("Read both resources.").await?;
+
+    let requests = response.requests();
+    assert_eq!(requests.len(), 2);
+    for (call_id, resource, contents) in READS {
+        let output = requests[1]
+            .function_call_output_text(call_id)
+            .expect("each concurrent skill read should return its resource");
+        assert_eq!(
+            serde_json::from_str::<Value>(&output)?,
+            json!({"resource": resource, "contents": contents, "next_cursor": null})
+        );
+    }
     Ok(())
 }
 
@@ -612,6 +713,7 @@ async fn cloud_skill_can_read_referenced_resource_without_an_executor() -> Resul
             ),
         ]),
         reads: Mutex::default(),
+        read_barrier: None,
     });
     let mut extensions = ExtensionRegistryBuilder::new();
     install_with_providers(

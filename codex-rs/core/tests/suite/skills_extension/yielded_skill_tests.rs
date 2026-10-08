@@ -31,6 +31,7 @@ async fn yielded_skill_read_keeps_originating_turn_metadata() -> Result<()> {
                 "Yielded skill instructions.".to_string(),
             )]),
             reads: Mutex::default(),
+            read_barrier: None,
         })),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,

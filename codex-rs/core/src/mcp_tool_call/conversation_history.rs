@@ -94,6 +94,10 @@ impl<'call> ToolExecutor<ToolCall<'call>> for HistoryTool {
         ToolName::namespaced("user_message", &self.function.name)
     }
 
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
+
     fn spec(&self) -> ToolSpec {
         ToolSpec::Namespace(ResponsesApiNamespace {
             name: "user_message".to_owned(),

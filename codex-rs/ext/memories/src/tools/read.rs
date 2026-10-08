@@ -46,6 +46,10 @@ where
         memory_tool_name(READ_TOOL_NAME)
     }
 
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
+
     fn spec(&self) -> ToolSpec {
         memory_function_tool::<ReadArgs, ReadMemoryResponse>(
             READ_TOOL_NAME,

@@ -63,6 +63,10 @@ impl ToolExecutor<ToolInvocation> for GetContextRemainingHandler {
         ToolName::plain(GET_CONTEXT_REMAINING_TOOL_NAME)
     }
 
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
+
     fn spec(&self) -> ToolSpec {
         create_get_context_remaining_tool()
     }

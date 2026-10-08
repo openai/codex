@@ -61,6 +61,10 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
         skill_tool_name(TOOL_NAME)
     }
 
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
+
     fn spec(&self) -> ToolSpec {
         skill_function_tool::<ReadArgs, ReadResponse>(
             TOOL_NAME,

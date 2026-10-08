@@ -10,6 +10,10 @@ impl ToolExecutor<ToolInvocation> for Handler {
         ToolName::plain("list_agents")
     }
 
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
+
     fn spec(&self) -> ToolSpec {
         create_list_agents_tool()
     }

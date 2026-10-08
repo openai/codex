@@ -64,7 +64,7 @@ impl ToolExecutor<ToolInvocation> for ListAvailablePluginsToInstallHandler {
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
-        false
+        true
     }
 
     fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
@@ -117,13 +117,6 @@ mod tests {
     use super::*;
     use codex_tools::DiscoverableToolType;
     use pretty_assertions::assert_eq;
-
-    #[test]
-    fn list_tool_does_not_support_parallel_calls() {
-        assert!(
-            !ListAvailablePluginsToInstallHandler::new(Vec::new()).supports_parallel_tool_calls()
-        );
-    }
 
     #[test]
     fn result_truncates_candidate_descriptions() {

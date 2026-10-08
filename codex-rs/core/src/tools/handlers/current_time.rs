@@ -53,6 +53,10 @@ impl ToolExecutor<ToolInvocation> for CurrentTimeHandler {
         ToolName::namespaced(NAMESPACE, TOOL_NAME)
     }
 
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
+
     fn spec(&self) -> ToolSpec {
         ToolSpec::Namespace(ResponsesApiNamespace {
             name: NAMESPACE.to_string(),
