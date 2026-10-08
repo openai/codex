@@ -14,6 +14,7 @@ use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
+use codex_extension_api::SessionIsolation;
 use codex_extension_api::empty_extension_registry;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
@@ -1996,6 +1997,107 @@ async fn selected_capability_roots_round_trip_through_fork() {
         inherited_history.get_selected_capability_roots(),
         selected_roots
     );
+}
+
+/// Shared startup honors explicit root selections and only inherits roots when isolation permits.
+#[tokio::test]
+async fn selected_capability_roots_respect_startup_precedence_and_isolation() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let root = |id: &str| SelectedCapabilityRoot {
+        id: id.to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "local".to_string(),
+            path: PathUri::from_abs_path(&config.cwd),
+        },
+    };
+    let mut parent_init = ExtensionDataInit::new();
+    parent_init.insert(vec![root("parent")]);
+    let parent = manager
+        .start_thread(StartThreadOptions {
+            thread_extension_init: parent_init,
+            ..StartThreadOptions::new(config.clone())
+        })
+        .await
+        .expect("start parent");
+    let parent_environments = parent
+        .thread
+        .session
+        .services
+        .turn_environments
+        .snapshot()
+        .await;
+
+    for (isolation, explicit_roots, expected_roots) in [
+        (SessionIsolation::Inherit, None, vec![root("parent")]),
+        (
+            SessionIsolation::Inherit,
+            Some(vec![root("explicit")]),
+            vec![root("explicit")],
+        ),
+        (SessionIsolation::Inherit, Some(Vec::new()), Vec::new()),
+        (SessionIsolation::Isolated, None, vec![root("saved")]),
+        (
+            SessionIsolation::Isolated,
+            Some(vec![root("explicit")]),
+            vec![root("explicit")],
+        ),
+    ] {
+        let mut thread_extension_init = ExtensionDataInit::new();
+        thread_extension_init.insert(isolation);
+        if let Some(roots) = explicit_roots {
+            thread_extension_init.insert(roots);
+        }
+        let child = manager
+            .start_thread(StartThreadOptions {
+                initial_history: InitialHistory::Forked(vec![RolloutItem::SessionMeta(
+                    SessionMetaLine {
+                        meta: SessionMeta {
+                            selected_capability_roots: vec![root("saved")],
+                            ..SessionMeta::default()
+                        },
+                        git: None,
+                    },
+                )]),
+                inherited_environments: Some(parent_environments.clone()),
+                thread_extension_init,
+                ..StartThreadOptions::new(config.clone())
+            })
+            .await
+            .expect("start child");
+        assert_eq!(
+            child.thread.session.services.selected_capability_roots,
+            expected_roots
+        );
+        assert_eq!(
+            child
+                .thread
+                .session
+                .services
+                .turn_environments
+                .snapshot()
+                .await
+                .selected_capability_roots(),
+            expected_roots
+        );
+        child.thread.ensure_rollout_materialized().await;
+        child.thread.flush_rollout().await.expect("flush child");
+        let history = RolloutRecorder::get_rollout_history(
+            &child.thread.rollout_path().expect("child rollout path"),
+        )
+        .await
+        .expect("read child rollout");
+        assert_eq!(history.get_selected_capability_roots(), expected_roots);
+    }
 }
 
 #[tokio::test]

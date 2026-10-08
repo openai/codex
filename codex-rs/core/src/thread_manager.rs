@@ -1937,67 +1937,26 @@ impl ThreadManagerState {
         )
     }
 
-    /// Spawn a new thread with no history using a provided config.
-    pub(crate) async fn spawn_new_thread(
+    /// Start a newly spawned agent. Both history modes use the same options captured
+    /// from the spawning turn; only history ownership and persistence differ.
+    pub(crate) async fn spawn_child_thread(
         &self,
-        config: Config,
+        mut options: StartThreadOptions,
         agent_control: LocalAgentControl,
-    ) -> CodexResult<NewThread> {
-        Box::pin(self.spawn_new_thread_with_source(
-            config,
-            agent_control,
-            self.session_source.clone(),
-            /*history_mode*/ None,
-            /*dynamic_tools*/ Vec::new(),
-            /*parent_thread_id*/ None,
-            /*forked_from_thread_id*/ None,
-            /*thread_source*/ None,
-            /*metrics_service_name*/ None,
-            /*inherited_environments*/ None,
-            /*inherited_exec_policy*/ None,
-            /*environments*/ None,
-        ))
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn spawn_new_thread_with_source(
-        &self,
-        config: Config,
-        agent_control: LocalAgentControl,
-        session_source: SessionSource,
-        history_mode: Option<ThreadHistoryMode>,
-        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         parent_thread_id: Option<ThreadId>,
-        forked_from_thread_id: Option<ThreadId>,
-        thread_source: Option<ThreadSource>,
-        metrics_service_name: Option<String>,
-        inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
-        environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
-        let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
-        let options = StartThreadOptions {
-            history_mode,
-            session_source: Some(session_source),
-            thread_source,
-            metrics_service_name,
-            environments: environments.map(|selections| {
-                selections
-                    .into_iter()
-                    .map(TurnEnvironmentSelection::into_request)
-                    .collect()
-            }),
-            client_mcp_extensions,
-            dynamic_tools,
-            ..StartThreadOptions::new(config)
-        };
+        options.client_mcp_extensions =
+            self.client_mcp_extensions_for_child(parent_thread_id).await;
+        let forked = matches!(options.initial_history, InitialHistory::Forked(_));
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.auth_manager), agent_control);
         request.parent_thread_id = parent_thread_id;
-        request.forked_from_thread_id = forked_from_thread_id;
-        request.inherited_environments = inherited_environments;
         request.inherited_exec_policy = inherited_exec_policy;
+        if forked {
+            request.forked_from_thread_id = parent_thread_id;
+            request.fork_persistence = ForkPersistence::CopiedDeferred;
+        }
         Box::pin(self.spawn_thread(request)).await
     }
 
@@ -2040,48 +1999,6 @@ impl ThreadManagerState {
         request.parent_thread_id = parent_thread_id;
         request.inherited_environments = inherited_environments;
         request.inherited_instructions = inherited_instructions;
-        request.inherited_exec_policy = inherited_exec_policy;
-        Box::pin(self.spawn_thread(request)).await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn fork_thread_with_source(
-        &self,
-        config: Config,
-        initial_history: InitialHistory,
-        history_mode: Option<ThreadHistoryMode>,
-        agent_control: LocalAgentControl,
-        session_source: SessionSource,
-        thread_source: Option<ThreadSource>,
-        parent_thread_id: Option<ThreadId>,
-        forked_from_thread_id: Option<ThreadId>,
-        inherited_environments: Option<TurnEnvironmentSnapshot>,
-        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
-        environments: Option<Vec<TurnEnvironmentSelection>>,
-        thread_extension_init: ExtensionDataInit,
-    ) -> CodexResult<NewThread> {
-        let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
-        let options = StartThreadOptions {
-            initial_history,
-            history_mode,
-            session_source: Some(session_source),
-            thread_source,
-            environments: environments.map(|selections| {
-                selections
-                    .into_iter()
-                    .map(TurnEnvironmentSelection::into_request)
-                    .collect()
-            }),
-            thread_extension_init,
-            client_mcp_extensions,
-            ..StartThreadOptions::new(config)
-        };
-        let mut request =
-            ThreadSpawnRequest::new(options, Arc::clone(&self.auth_manager), agent_control);
-        request.fork_persistence = ForkPersistence::CopiedDeferred;
-        request.parent_thread_id = parent_thread_id;
-        request.forked_from_thread_id = forked_from_thread_id;
-        request.inherited_environments = inherited_environments;
         request.inherited_exec_policy = inherited_exec_policy;
         Box::pin(self.spawn_thread(request)).await
     }

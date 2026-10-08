@@ -84,12 +84,14 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -2194,10 +2196,98 @@ async fn ephemeral_spawn_does_not_persist_agent_graph_edge() {
     );
 }
 
+/// New children inherit omitted plugin choices independently of copied history;
+/// explicit choices, including an empty list, override the parent's selection.
+#[test_case::test_case(None, None, vec!["parent-plugin".to_string()]; "fresh inherits")]
+#[test_case::test_case(None, Some(vec!["child-plugin".to_string()]), vec!["child-plugin".to_string()]; "fresh overrides")]
+#[test_case::test_case(None, Some(Vec::new()), Vec::new(); "fresh clears")]
+#[test_case::test_case(Some(SpawnAgentForkMode::FullHistory), None, vec!["parent-plugin".to_string()]; "fork inherits")]
+#[test_case::test_case(Some(SpawnAgentForkMode::FullHistory), Some(vec!["child-plugin".to_string()]), vec!["child-plugin".to_string()]; "fork overrides")]
+#[test_case::test_case(Some(SpawnAgentForkMode::FullHistory), Some(Vec::new()), Vec::new(); "fork clears")]
 #[tokio::test]
-async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
+async fn spawn_agent_disabled_plugins_follow_parent_unless_overridden(
+    fork_mode: Option<SpawnAgentForkMode>,
+    disabled_plugin_ids: Option<Vec<String>>,
+    expected: Vec<String>,
+) {
     let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, parent_thread) = harness.start_paginated_thread().await;
+    let parent = harness
+        .manager
+        .start_thread(StartThreadOptions {
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            environments: Some(Vec::new()),
+            disabled_plugin_ids: Some(vec!["parent-plugin".to_string()]),
+            ..StartThreadOptions::new(harness.config.clone())
+        })
+        .await
+        .expect("start parent with a disabled plugin");
+    let parent_spawn_call_id = "spawn-plugin-child";
+    let parent_turn = parent.thread.session.new_default_turn().await;
+    parent
+        .thread
+        .session
+        .record_conversation_items(
+            parent_turn.as_ref(),
+            parent_turn.model_info(),
+            &[spawn_agent_call(parent_spawn_call_id)],
+        )
+        .await;
+    let child_thread_id = harness
+        .spawn_anonymous_child(
+            parent.thread_id,
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: fork_mode
+                    .as_ref()
+                    .map(|_| parent_spawn_call_id.to_string()),
+                fork_mode,
+                disabled_plugin_ids,
+                ..Default::default()
+            },
+        )
+        .await;
+    let child = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child should be registered");
+    assert_eq!(
+        child.thread_settings_snapshot().await.disabled_plugin_ids,
+        expected
+    );
+
+    harness
+        .control
+        .shutdown_live_agent(child_thread_id)
+        .await
+        .expect("shut down child");
+    parent
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shut down parent");
+}
+
+#[test_case::test_case(false; "parent in session source")]
+#[test_case::test_case(true; "parent in session source and options")]
+#[tokio::test]
+async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
+    include_parent_in_options: bool,
+) {
+    let harness = AgentControlHarness::new().await;
+    let client_mcp_extensions =
+        ClientMcpExtensions::new([(OPENAI_FORM_EXTENSION_ID.to_string(), serde_json::json!({}))]);
+    let parent = harness
+        .manager
+        .start_thread(StartThreadOptions {
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            environments: Some(Vec::new()),
+            client_mcp_extensions: client_mcp_extensions.clone(),
+            ..StartThreadOptions::new(harness.config.clone())
+        })
+        .await
+        .expect("start paginated parent");
+    let parent_thread_id = parent.thread_id;
+    let parent_thread = parent.thread;
     parent_thread
         .inject_response_items(vec![user_message("paginated parent context")])
         .await
@@ -2270,6 +2360,9 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
         .spawn_anonymous_child(
             parent_thread_id,
             SpawnAgentOptions {
+                // The source identifies the parent in both cases. Fork startup must
+                // resolve it before inheriting client MCP settings, not just for metadata.
+                parent_thread_id: include_parent_in_options.then_some(parent_thread_id),
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
                 ..Default::default()
@@ -2307,6 +2400,7 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
     assert_eq!(meta_line.meta.history_mode, ThreadHistoryMode::Paginated);
     assert_eq!(meta_line.meta.parent_thread_id, Some(parent_thread_id));
     assert_eq!(meta_line.meta.forked_from_id, Some(parent_thread_id));
+    assert_eq!(child_thread.client_mcp_extensions(), client_mcp_extensions);
     let prefix_end = usize::try_from(
         meta_line
             .meta
@@ -4582,6 +4676,7 @@ async fn spawn_thread_subagent_uses_role_specific_nickname_candidates() {
     assert_eq!(agent_nickname, Some("Atlas".to_string()));
 }
 
+/// Resume restores the child's saved metadata and roots even after its parent deselects an environment.
 #[tokio::test]
 async fn resume_thread_subagent_restores_stored_metadata() {
     let (home, config) = test_config().await;
@@ -4612,7 +4707,25 @@ async fn resume_thread_subagent_restores_stored_metadata() {
         manager,
         control,
     };
-    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+    let roots = vec![SelectedCapabilityRoot {
+        id: "saved-root".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            path: PathUri::from_abs_path(&harness.config.cwd),
+        },
+    }];
+    let mut thread_extension_init = ExtensionDataInit::new();
+    thread_extension_init.insert(roots.clone());
+    let parent = harness
+        .manager
+        .start_thread(StartThreadOptions {
+            thread_extension_init,
+            ..StartThreadOptions::new(harness.config.clone())
+        })
+        .await
+        .expect("start parent with roots");
+    let parent_thread_id = parent.thread_id;
+    let parent_thread = parent.thread;
     let agent_path = AgentPath::from_string("/root/explorer".to_string())
         .expect("test agent path should be valid");
 
@@ -4662,6 +4775,11 @@ async fn resume_thread_subagent_restores_stored_metadata() {
         .await
         .expect("child should initialize before shutdown");
     }
+    let original_environments = child_thread.environment_selections().await;
+    assert_eq!(
+        child_thread.session.services.selected_capability_roots,
+        roots
+    );
     let original_snapshot = child_thread.config_snapshot().await;
     let original_nickname = original_snapshot
         .session_source
@@ -4694,6 +4812,26 @@ async fn resume_thread_subagent_restores_stored_metadata() {
         .await
         .expect("child shutdown should submit");
 
+    parent_thread
+        .update_thread_settings(ThreadSettingsOverrides {
+            environments: Some(TurnEnvironmentRequests::new(
+                harness.config.cwd.clone(),
+                Vec::new(),
+            )),
+            ..Default::default()
+        })
+        .await
+        .expect("deselect parent environment");
+    // Resume inherits the parent's current attachments, so activate the accepted settings.
+    let parent_turn = parent_thread
+        .session
+        .new_turn_with_default_settings("parent-deselected".to_string(), Default::default())
+        .await;
+    assert_eq!(
+        parent_turn.initial_environments.selected_capability_roots(),
+        Vec::new()
+    );
+
     let resumed_thread_id = harness
         .control
         .resume_agent_from_rollout(
@@ -4711,13 +4849,42 @@ async fn resume_thread_subagent_restores_stored_metadata() {
         .expect("resume should succeed");
     assert_eq!(resumed_thread_id, child_thread_id);
 
-    let resumed_snapshot = harness
+    let resumed_thread = harness
         .manager
         .get_thread(resumed_thread_id)
         .await
-        .expect("resumed child thread should exist")
-        .config_snapshot()
+        .expect("resumed child thread should exist");
+    assert_eq!(
+        resumed_thread.session.services.selected_capability_roots,
+        roots
+    );
+    resumed_thread
+        .update_thread_settings(ThreadSettingsOverrides {
+            environments: Some(TurnEnvironmentRequests::new(
+                harness.config.cwd.clone(),
+                original_environments
+                    .clone()
+                    .into_iter()
+                    .map(TurnEnvironmentSelection::into_request)
+                    .collect(),
+            )),
+            ..Default::default()
+        })
+        .await
+        .expect("reselect child environment");
+    assert_eq!(
+        resumed_thread.environment_selections().await,
+        original_environments
+    );
+    let child_turn = resumed_thread
+        .session
+        .new_turn_with_default_settings("child-reselected".to_string(), Default::default())
         .await;
+    assert_eq!(
+        child_turn.initial_environments.selected_capability_roots(),
+        roots
+    );
+    let resumed_snapshot = resumed_thread.config_snapshot().await;
     let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: resumed_parent_thread_id,
         depth: resumed_depth,
@@ -4791,8 +4958,10 @@ async fn resume_agent_from_rollout_reads_archived_rollout_path() {
         .expect("resumed child shutdown should succeed");
 }
 
+#[test_case::test_case(vec!["child-plugin".to_string()]; "saved disabled plugin")]
+#[test_case::test_case(Vec::new(); "saved empty selection")]
 #[tokio::test]
-async fn resume_agent_from_paginated_rollout_loads_model_context() {
+async fn resume_agent_from_paginated_rollout_loads_model_context(disabled_plugin_ids: Vec<String>) {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_paginated_thread().await;
     let child_thread_id = harness
@@ -4800,6 +4969,7 @@ async fn resume_agent_from_paginated_rollout_loads_model_context() {
             parent_thread_id,
             SpawnAgentOptions {
                 parent_thread_id: Some(parent_thread_id),
+                disabled_plugin_ids: Some(disabled_plugin_ids.clone()),
                 ..Default::default()
             },
         )
@@ -4820,6 +4990,15 @@ async fn resume_agent_from_paginated_rollout_loads_model_context() {
         .await
         .expect("child shutdown should succeed");
 
+    // Resuming restores the child's saved selection even after its parent changes.
+    parent_thread
+        .update_thread_settings(ThreadSettingsOverrides {
+            disabled_plugin_ids: Some(vec!["parent-plugin".to_string()]),
+            ..Default::default()
+        })
+        .await
+        .expect("change parent plugin selection");
+
     let resumed_thread_id = harness
         .control
         .resume_agent_from_rollout(harness.config.clone(), child_thread_id, SessionSource::Exec)
@@ -4831,6 +5010,13 @@ async fn resume_agent_from_paginated_rollout_loads_model_context() {
         .get_thread(resumed_thread_id)
         .await
         .expect("resumed child thread should exist");
+    assert_eq!(
+        resumed_thread
+            .thread_settings_snapshot()
+            .await
+            .disabled_plugin_ids,
+        disabled_plugin_ids
+    );
     assert!(
         history_contains_text(
             resumed_thread.session.clone_history().await.raw_items(),

@@ -169,19 +169,17 @@ async fn spawn_v2_subagent(
     label: &str,
 ) -> crate::thread_manager::NewThread {
     state
-        .spawn_new_thread_with_source(
-            config,
+        .spawn_child_thread(
+            crate::thread_manager::StartThreadOptions {
+                session_source: Some(SessionSource::SubAgent(SubAgentSource::Other(
+                    label.to_string(),
+                ))),
+                thread_source: Some(ThreadSource::Subagent),
+                ..crate::thread_manager::StartThreadOptions::new(config)
+            },
             control.clone(),
-            SessionSource::SubAgent(SubAgentSource::Other(label.to_string())),
-            /*history_mode*/ None,
-            /*dynamic_tools*/ Vec::new(),
             Some(parent_thread_id),
-            /*forked_from_thread_id*/ None,
-            Some(ThreadSource::Subagent),
-            /*metrics_service_name*/ None,
-            /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
-            /*environments*/ None,
         )
         .await
         .expect("spawn v2 subagent")

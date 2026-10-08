@@ -53,6 +53,8 @@ mod exec_server_test_support;
 #[cfg(not(target_os = "windows"))]
 mod executor_mcp;
 mod executor_skills;
+#[path = "executor_skills_spawn_tests.rs"]
+mod executor_skills_spawn;
 mod experimental_api;
 mod experimental_feature_list;
 mod external_agent_config;

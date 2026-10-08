@@ -22,9 +22,9 @@ use crate::context::MultiAgentModeInstructions;
 use crate::context::MultiAgentRoleInstructions;
 use crate::context::world_state::PersistentModeState;
 use crate::session::multi_agents::resolve_usage_hints;
+use crate::thread_manager::StartThreadOptions;
 use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
-use codex_extension_api::ExtensionDataInit;
 use codex_features::Feature;
 use codex_history::ResponseItemEnvelope;
 use codex_prompts::ResolvedModelMessages;
@@ -35,21 +35,9 @@ use codex_thread_store::PersistContext;
 use codex_utils_path_uri::PathUri;
 use futures::StreamExt;
 use futures::stream;
-use std::time::Duration;
 use std::time::Instant;
 
 const AGENT_NAMES: &str = include_str!("../../../assets/agent/agent_names.txt");
-
-struct SpawnAgentThreadInheritance {
-    environments: Option<TurnEnvironmentSnapshot>,
-    exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
-}
-
-struct SpawnedThreadResult {
-    new_thread: crate::thread_manager::NewThread,
-    fork_context: Option<Duration>,
-    child_create: Duration,
-}
 
 /// Initial input delivered after a spawned agent acquires execution capacity.
 ///
@@ -690,11 +678,17 @@ impl LocalAgentControl {
         let membership = self.runtime.admit_start()?;
         let spawn_started_at = Instant::now();
         let state = self.runtime.upgrade()?;
+        // Resolve the parent before inheriting settings or copying attachments.
+        // Recovering it later from history only repairs the child's metadata.
+        let parent_thread_id = session_source
+            .as_ref()
+            .and_then(SessionSource::parent_thread_id)
+            .or(options.parent_thread_id);
         let multi_agent_version = state
             .effective_multi_agent_version_for_spawn(
                 &InitialHistory::New,
                 session_source.as_ref(),
-                options.parent_thread_id,
+                parent_thread_id,
                 /*forked_from_thread_id*/ None,
                 &config,
             )
@@ -734,18 +728,30 @@ impl LocalAgentControl {
             .runtime
             .registry
             .reserve_spawn_slot(reservation_max_threads)?;
-        let inheritance = SpawnAgentThreadInheritance {
-            environments: match &options.environments {
-                Some(environments) => Some(environments.clone()),
-                None => {
-                    self.inherited_environments_for_source(&state, session_source.as_ref())
-                        .await
-                }
-            },
-            exec_policy: self
-                .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
-                .await,
+        let inherited_environments = match &options.environments {
+            Some(environments) => Some(environments.clone()),
+            None => {
+                self.inherited_environments_for_source(&state, session_source.as_ref())
+                    .await
+            }
         };
+        // Omitted plugin choices follow the parent even when no history is copied.
+        // Explicit choices, including an empty list, belong to the spawning turn.
+        let mut disabled_plugin_ids = options.disabled_plugin_ids.clone();
+        if disabled_plugin_ids.is_none()
+            && let Some(parent_thread_id) = parent_thread_id
+            && let Ok(parent_thread) = state.get_thread(parent_thread_id).await
+        {
+            disabled_plugin_ids = Some(
+                parent_thread
+                    .thread_settings_snapshot()
+                    .await
+                    .disabled_plugin_ids,
+            );
+        }
+        let inherited_exec_policy = self
+            .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
+            .await;
         let (session_source, mut agent_metadata) = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -769,82 +775,69 @@ impl LocalAgentControl {
         };
         let notification_source = session_source.clone();
 
-        // The same `LocalAgentControl` is sent to spawn the thread.
-        let SpawnedThreadResult {
-            new_thread,
-            fork_context,
-            child_create,
-        } = match (session_source, options.fork_mode.as_ref(), inheritance) {
-            (Some(session_source), Some(_), inheritance) => Box::pin(self.spawn_forked_thread(
-                &state,
-                config,
-                session_source,
-                &options,
-                inheritance,
-                multi_agent_version,
-            ))
-            .await
-            .map_err(|err| err.with_agent_context(AgentErrorContext::ForkHistory))?,
-            (Some(session_source), None, inheritance) => {
-                let (history_mode, dynamic_tools) = if let Some(parent_thread_id) =
-                    options.parent_thread_id
+        // Capture child defaults once. Copying conversation history must not change
+        // the capabilities of the turn which requested the spawn.
+        let mut start_options = StartThreadOptions {
+            session_source: session_source.clone(),
+            thread_source: session_source.as_ref().map(|_| ThreadSource::Subagent),
+            environments: options.environments.as_ref().map(|snapshot| {
+                snapshot
+                    .inheritable_selections()
+                    .into_iter()
+                    .map(codex_protocol::protocol::TurnEnvironmentSelection::into_request)
+                    .collect()
+            }),
+            inherited_environments,
+            disabled_plugin_ids,
+            ..StartThreadOptions::new(config.clone())
+        };
+        let fork_context = match (session_source, options.fork_mode.as_ref()) {
+            (Some(session_source), Some(_)) => {
+                let fork_context_started_at = Instant::now();
+                let (initial_history, history_mode) = self
+                    .prepare_forked_history(
+                        &state,
+                        &session_source,
+                        &options,
+                        &config,
+                        multi_agent_version,
+                    )
+                    .await
+                    .map_err(|err| err.with_agent_context(AgentErrorContext::ForkHistory))?;
+                start_options.initial_history = initial_history;
+                start_options.history_mode = history_mode;
+                Some(fork_context_started_at.elapsed())
+            }
+            (Some(_), None) => {
+                if let Some(parent_thread_id) = parent_thread_id
                     && let Ok(parent_thread) = state.get_thread(parent_thread_id).await
                 {
-                    let history_mode = matches!(
+                    start_options.history_mode = matches!(
                         parent_thread.config_snapshot().await.history_mode,
                         ThreadHistoryMode::Paginated
                     )
                     .then_some(ThreadHistoryMode::Paginated);
-                    let dynamic_tools = if multi_agent_version == MultiAgentVersion::V2
+                    if multi_agent_version == MultiAgentVersion::V2
                         && config.features.enabled(Feature::MultiAgentV2DynamicTools)
                     {
-                        parent_thread.session.dynamic_tools().await
-                    } else {
-                        Vec::new()
-                    };
-                    (history_mode, dynamic_tools)
-                } else {
-                    (None, Vec::new())
-                };
-                let environments = options
-                    .environments
-                    .as_ref()
-                    .map(TurnEnvironmentSnapshot::inheritable_selections);
-                let child_create_started_at = Instant::now();
-                let new_thread = Box::pin(state.spawn_new_thread_with_source(
-                    config.clone(),
-                    self.clone(),
-                    session_source,
-                    history_mode,
-                    dynamic_tools,
-                    options.parent_thread_id,
-                    /*forked_from_thread_id*/ None,
-                    /*thread_source*/ Some(ThreadSource::Subagent),
-                    /*metrics_service_name*/ None,
-                    inheritance.environments,
-                    inheritance.exec_policy,
-                    environments,
-                ))
-                .await
-                .map_err(|err| err.with_agent_context(AgentErrorContext::ChildStartup))?;
-                SpawnedThreadResult {
-                    new_thread,
-                    fork_context: None,
-                    child_create: child_create_started_at.elapsed(),
+                        start_options.dynamic_tools = parent_thread.session.dynamic_tools().await;
+                    }
                 }
+                None
             }
-            (None, _, _) => {
-                let child_create_started_at = Instant::now();
-                let new_thread = Box::pin(state.spawn_new_thread(config.clone(), self.clone()))
-                    .await
-                    .map_err(|err| err.with_agent_context(AgentErrorContext::ChildStartup))?;
-                SpawnedThreadResult {
-                    new_thread,
-                    fork_context: None,
-                    child_create: child_create_started_at.elapsed(),
-                }
-            }
+            (None, _) => None,
         };
+        let child_create_started_at = Instant::now();
+        let new_thread = state
+            .spawn_child_thread(
+                start_options,
+                self.clone(),
+                parent_thread_id,
+                inherited_exec_policy,
+            )
+            .await
+            .map_err(|err| err.with_agent_context(AgentErrorContext::ChildStartup))?;
+        let child_create = child_create_started_at.elapsed();
         agent_metadata.agent_id = Some(new_thread.thread_id);
         let mut pending_spawn =
             PendingSpawn::new(Arc::clone(&state), new_thread.thread_id, membership);
@@ -1010,19 +1003,15 @@ impl LocalAgentControl {
         Ok((agent, config))
     }
 
-    async fn spawn_forked_thread(
+    /// Prepare copied history while leaving startup settings and timing with the caller.
+    async fn prepare_forked_history(
         &self,
         state: &Arc<ThreadManagerState>,
-        config: Config,
-        session_source: SessionSource,
+        session_source: &SessionSource,
         options: &SpawnAgentOptions,
-        inheritance: SpawnAgentThreadInheritance,
+        config: &Config,
         multi_agent_version: MultiAgentVersion,
-    ) -> CodexResult<SpawnedThreadResult> {
-        let SpawnAgentThreadInheritance {
-            environments: inherited_environments,
-            exec_policy: inherited_exec_policy,
-        } = inheritance;
+    ) -> CodexResult<(InitialHistory, Option<ThreadHistoryMode>)> {
         if options.fork_parent_spawn_call_id.is_none() {
             return Err(CodexErr::Fatal(
                 "spawn_agent fork requires a parent spawn call id".to_string(),
@@ -1035,14 +1024,13 @@ impl LocalAgentControl {
         }
         let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
-        }) = &session_source
+        }) = session_source
         else {
             return Err(CodexErr::Fatal(
                 "spawn_agent fork requires a thread-spawn session source".to_string(),
             ));
         };
 
-        let fork_context_started_at = Instant::now();
         let parent_thread_id = *parent_thread_id;
         let parent_thread = state.get_thread(parent_thread_id).await?;
         let (subagent_developer_instructions, parent_developer_instructions) = match (
@@ -1091,15 +1079,6 @@ impl LocalAgentControl {
                 })?
                 .items;
 
-        let selected_capability_roots = forked_rollout_items
-            .iter()
-            .find_map(|item| {
-                let RolloutItem::SessionMeta(meta_line) = item else {
-                    return None;
-                };
-                Some(meta_line.meta.selected_capability_roots.clone())
-            })
-            .unwrap_or_default();
         let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
             if multi_agent_version == MultiAgentVersion::V2 {
                 let parent_config = parent_thread.session.get_config().await;
@@ -1320,34 +1299,10 @@ impl LocalAgentControl {
                 subagent_usage_hint_message.into(),
             ));
         }
-        let mut thread_extension_init = ExtensionDataInit::new();
-        thread_extension_init.insert(selected_capability_roots);
-
-        let fork_context = fork_context_started_at.elapsed();
-        let child_create_started_at = Instant::now();
-        let new_thread = state
-            .fork_thread_with_source(
-                config.clone(),
-                InitialHistory::Forked(forked_rollout_items),
-                destination_history_mode,
-                self.clone(),
-                session_source,
-                /*thread_source*/ Some(ThreadSource::Subagent),
-                /*parent_thread_id*/ Some(parent_thread_id),
-                /*forked_from_thread_id*/ Some(parent_thread_id),
-                inherited_environments,
-                inherited_exec_policy,
-                /*environments*/ None,
-                thread_extension_init,
-            )
-            .await
-            .map_err(|err| err.with_agent_context(AgentErrorContext::ChildStartup))?;
-        let child_create = child_create_started_at.elapsed();
-        Ok(SpawnedThreadResult {
-            new_thread,
-            fork_context: Some(fork_context),
-            child_create,
-        })
+        Ok((
+            InitialHistory::Forked(forked_rollout_items),
+            destination_history_mode,
+        ))
     }
 
     /// Resume an existing agent thread from a recorded rollout file.
