@@ -47,6 +47,7 @@ use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPL
 use codex_core_plugins::remote::REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
@@ -876,7 +877,7 @@ impl ChatWidget {
             if can_remove_marketplace || can_upgrade_marketplace {
                 tab_footer_hints.push((
                     tab_id.clone(),
-                    plugins_popup_hint_line(
+                    self.plugins_popup_hint_line(
                         /*can_remove_marketplace*/ can_remove_marketplace,
                         /*can_upgrade_marketplace*/ can_upgrade_marketplace,
                     ),
@@ -922,7 +923,7 @@ impl ChatWidget {
         SelectionViewParams {
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(()),
-            footer_hint: Some(plugins_popup_hint_line(
+            footer_hint: Some(self.plugins_popup_hint_line(
                 /*can_remove_marketplace*/ false, /*can_upgrade_marketplace*/ false,
             )),
             tab_footer_hints,
@@ -930,6 +931,7 @@ impl ChatWidget {
             reserve_result_rows: true,
             initial_tab_id,
             is_searchable: true,
+            search_toggle_key: Some(crate::key_hint::plain(KeyCode::Tab)),
             search_placeholder: Some("Type to search plugins".to_string()),
             col_width_mode: ColumnWidthMode::AutoAllRows,
             row_display: SelectionRowDisplay::SingleLine,
@@ -1175,14 +1177,12 @@ impl ChatWidget {
                 && plugin.install_policy != PluginInstallPolicy::InstalledByDefault
                 && !disabled_by_admin;
             let selected_status_label = format!("{status_label:<status_label_width$}");
-            let selected_description = if can_toggle_plugin {
+            let selected_description = if can_toggle_plugin && self.plugin_toggle_key_available() {
                 let toggle_action = if plugin.enabled { "disable" } else { "enable" };
                 if can_view_details {
-                    format!(
-                        "{selected_status_label}   Space to {toggle_action}; Enter view details"
-                    )
+                    format!("{selected_status_label}   Tab to {toggle_action}; Enter view details")
                 } else {
-                    format!("{selected_status_label}   Space to {toggle_action}")
+                    format!("{selected_status_label}   Tab to {toggle_action}")
                 }
             } else if disabled_by_admin && can_view_details {
                 format!("{selected_status_label}   Press Enter to view plugin details")
@@ -1272,25 +1272,38 @@ impl ChatWidget {
         }
         items
     }
-}
 
-fn plugins_popup_hint_line(
-    can_remove_marketplace: bool,
-    can_upgrade_marketplace: bool,
-) -> Line<'static> {
-    let upgrade = crate::key_hint::ctrl(KeyCode::Char('u')).display_label();
-    let remove = crate::key_hint::ctrl(KeyCode::Char('r')).display_label();
-    match (can_remove_marketplace, can_upgrade_marketplace) {
-        (true, true) => Line::from(format!(
-            "{upgrade} upgrade · {remove} remove · space toggle · ←/→ tabs · enter details · esc close",
-        )),
-        (true, false) => Line::from(format!(
-            "{remove} remove · space toggle · ←/→ tabs · enter details · esc close"
-        )),
-        (false, true) => Line::from(format!(
-            "{upgrade} upgrade · space toggle · ←/→ tabs · enter details · esc close"
-        )),
-        (false, false) => Line::from("←/→ tabs · enter details · space toggle · esc close"),
+    fn plugin_toggle_key_available(&self) -> bool {
+        self.bottom_pane
+            .list_keymap()
+            .action_for(KeyEvent::from(KeyCode::Tab))
+            .is_none()
+    }
+
+    fn plugins_popup_hint_line(
+        &self,
+        can_remove_marketplace: bool,
+        can_upgrade_marketplace: bool,
+    ) -> Line<'static> {
+        let mut hints = Vec::new();
+        if can_upgrade_marketplace {
+            let upgrade = crate::key_hint::ctrl(KeyCode::Char('u')).display_label();
+            hints.push(format!("{upgrade} upgrade"));
+        }
+        if can_remove_marketplace {
+            let remove = crate::key_hint::ctrl(KeyCode::Char('r')).display_label();
+            hints.push(format!("{remove} remove"));
+        }
+        let toggle_key_available = self.plugin_toggle_key_available();
+        if (can_remove_marketplace || can_upgrade_marketplace) && toggle_key_available {
+            hints.push("tab toggle".to_string());
+        }
+        hints.extend(["←/→ tabs", "enter details"].map(str::to_string));
+        if !can_remove_marketplace && !can_upgrade_marketplace && toggle_key_available {
+            hints.push("tab toggle".to_string());
+        }
+        hints.push("esc close".to_string());
+        Line::from(hints.join(" · "))
     }
 }
 

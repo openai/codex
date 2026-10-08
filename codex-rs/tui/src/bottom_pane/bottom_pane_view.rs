@@ -69,6 +69,11 @@ pub(crate) trait BottomPaneView: Renderable {
         None
     }
 
+    /// Current query for searchable list views that preserve filtering across refreshes.
+    fn search_query(&self) -> Option<&str> {
+        None
+    }
+
     /// Apply a matching background suggestion when this view supports text prefills.
     fn apply_text_suggestion(
         &mut self,

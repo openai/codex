@@ -1157,17 +1157,17 @@ async fn plugins_popup_admin_disabled_installed_plugin_has_no_toggle_hint() {
             && popup.contains("Disabled")
             && popup.contains("Press Enter to view plugin details")
             && !popup.contains("Disabled by admin")
-            && !popup.contains("Space to disable"),
+            && !popup.contains("Tab to disable"),
         "expected admin-disabled installed row to omit toggle hint, got:\n{popup}"
     );
 
     while rx.try_recv().is_ok() {}
     let before = render_bottom_popup(&chat, /*width*/ 120);
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Tab));
     let after = render_bottom_popup(&chat, /*width*/ 120);
     assert!(
         rx.try_recv().is_err(),
-        "space should not toggle admin-disabled installed plugins"
+        "tab should not toggle admin-disabled installed plugins"
     );
     assert_eq!(after, before);
 }
@@ -1633,13 +1633,13 @@ async fn plugins_popup_refreshes_installed_counts_after_install() {
         "expected /plugins to refresh installed counts after install, got:\n{after}"
     );
     assert!(
-        after.contains("Installed   Space to disable; Enter view details"),
+        after.contains("Installed   Tab to disable; Enter view details"),
         "expected refreshed selected row copy to reflect the installed plugin state, got:\n{after}"
     );
 }
 
 #[tokio::test]
-async fn plugins_popup_space_toggles_installed_plugin_from_list() {
+async fn plugins_popup_toggle_keys_preserve_search_and_selection() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
@@ -1685,17 +1685,68 @@ async fn plugins_popup_space_toggles_installed_plugin_from_list() {
         other => panic!("expected SetPluginEnabled event, got {other:?}"),
     }
 
+    type_plugins_search_query(&mut chat, "dr");
+    chat.handle_key_event(KeyEvent::from(KeyCode::Tab));
+
+    match rx.try_recv() {
+        Ok(AppEvent::SetPluginEnabled {
+            cwd: event_cwd,
+            plugin_id,
+            enabled,
+        }) => {
+            assert_eq!(event_cwd, cwd);
+            assert_eq!(plugin_id, "plugin-drive");
+            assert!(enabled);
+        }
+        other => panic!("expected SetPluginEnabled event, got {other:?}"),
+    }
+
     chat.on_plugin_enabled_set(
         cwd,
         "plugin-drive".to_string(),
-        /*enabled*/ false,
+        /*enabled*/ true,
         Ok(()),
     );
 
     let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("plugins_popup_toggle_refresh_preserves_search", popup);
     assert!(
-        popup.contains("› [ ] Drive"),
-        "expected selected plugin row to stay selected after refresh, got:\n{popup}"
+        popup.lines().any(|line| line.trim() == "dr")
+            && popup.contains("› [*] Drive")
+            && popup.contains("Tab to disable"),
+        "expected the filtered plugin and search query to survive refresh, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_hides_tab_toggle_hint_when_tab_is_configured() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    let mut keymap = crate::keymap::RuntimeKeymap::defaults();
+    keymap.list.move_down = vec![crate::key_hint::plain(KeyCode::Tab)];
+    chat.bottom_pane.set_keymap_bindings(&keymap);
+
+    let popup = render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-drive",
+                "drive",
+                Some("Drive"),
+                Some("Document access."),
+                /*installed*/ true,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+        ])]),
+    );
+
+    assert_chatwidget_snapshot!("plugins_popup_custom_tab_binding_hides_toggle_hint", popup);
+    assert!(
+        popup.contains("Installed   Press Enter to view plugin details")
+            && !popup.contains("Tab to disable")
+            && !popup.contains("tab toggle"),
+        "expected configured Tab binding to hide unavailable toggle hints, got:\n{popup}"
     );
 }
 
