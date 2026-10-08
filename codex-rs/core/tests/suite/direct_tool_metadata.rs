@@ -538,6 +538,8 @@ async fn direct_function_and_tool_search_mark_complete_attempts(
     // These calls exceed the old request budget but stay below Direct's retained-history limit.
     let budget_arguments =
         json!({"plan": [{"step": "x".repeat(7 * 1024), "status": "in_progress"}]});
+    let oversized_arguments =
+        json!({"plan": [{"step": "x".repeat(9 * 1024), "status": "in_progress"}]});
     let budget_arguments_json = budget_arguments.to_string();
     assert!(budget_arguments_json.len() < 8 * 1024);
     if budget_calls > 0 {
@@ -549,7 +551,7 @@ async fn direct_function_and_tool_search_mark_complete_attempts(
         events.push(ev_function_call(
             "plan-oversized",
             "update_plan",
-            &json!({"plan": [{"step": "x".repeat(9 * 1024), "status": "in_progress"}]}).to_string(),
+            &oversized_arguments.to_string(),
         ));
     }
     for index in 0..budget_calls {
@@ -625,12 +627,13 @@ async fn direct_function_and_tool_search_mark_complete_attempts(
         assert_eq!(output["output"], json!("Plan updated"));
         let metadata = tool_call_metadata(output);
         metadata_bytes += serde_json::to_vec(&metadata)?.len();
-        assert!(
-            metadata["executed_tool_calls"][0]["arguments"]
-                .get("_codex_executed_tool_call_truncated")
-                .is_some()
+        assert_eq!(
+            metadata,
+            json!({
+                "executed_tool_calls": [{"name": "update_plan", "arguments": oversized_arguments}],
+                "tool_calls_complete": true,
+            }),
         );
-        assert_eq!(metadata["tool_calls_complete"], true);
     }
     for index in 0..budget_calls {
         let output = request.function_call_output(&format!("plan-budget-{index}"));

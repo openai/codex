@@ -8,7 +8,6 @@ use ts_rs::TS;
 use super::InternalChatMessageMetadataPassthrough;
 use super::ResponseItem;
 
-const MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES: usize = 8 * 1024;
 /// Maximum distinct result sources retained for one tool invocation.
 const MAX_TOOL_RESULT_SOURCES: usize = 32;
 /// Maximum UTF-8 bytes for each source's `type` and `id` separately, not the source list.
@@ -86,12 +85,10 @@ impl InternalChatMessageMetadataPassthrough {
     }
 }
 
-/// Bounds recorded arguments, preserving completion unless calls or tool names were lost.
-/// Returns cells whose arguments were newly truncated. Ordinary tool-call arguments and
-/// outputs are not changed.
-pub fn normalize_executed_tool_call_arguments(items: &mut [ResponseItem]) -> HashSet<String> {
+/// Clears completion across a cell when recorded calls or tool names were lost.
+/// Argument truncation preserves inventory completeness; arguments and outputs are unchanged.
+pub fn normalize_executed_tool_call_completeness(items: &mut [ResponseItem]) {
     let mut damaged_cells = HashSet::new();
-    let mut newly_truncated_cells = HashSet::new();
     for item in items.iter_mut() {
         let Some(metadata) = item
             .internal_chat_message_metadata_passthrough_mut()
@@ -99,33 +96,17 @@ pub fn normalize_executed_tool_call_arguments(items: &mut [ResponseItem]) -> Has
         else {
             continue;
         };
-        let mut inventory_lost = false;
-        let mut newly_truncated = false;
-        for call in metadata.executed_tool_calls.iter_mut().flatten() {
-            let argument_bytes = serde_json::to_vec(&call.arguments)
-                .map(|bytes| bytes.len())
-                .unwrap_or(usize::MAX);
-            if call.truncation().is_none() && argument_bytes > MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES
-            {
-                call.set_truncation(
-                    argument_bytes,
-                    MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES,
-                    /*omitted_calls*/ None,
-                );
-                newly_truncated = true;
-            }
-            inventory_lost |= !call.has_complete_inventory();
-        }
-        if inventory_lost {
+        if metadata
+            .executed_tool_calls
+            .iter()
+            .flatten()
+            .any(|call| !call.has_complete_inventory())
+        {
             metadata.tool_calls_complete = None;
             damaged_cells.extend(metadata.cell_id.clone());
         }
-        if newly_truncated {
-            newly_truncated_cells.extend(metadata.cell_id.clone());
-        }
     }
     clear_damaged_cell_completeness(items, &damaged_cells);
-    newly_truncated_cells
 }
 
 /// Bounds optional observations to the space left in the actual outgoing message.
@@ -339,9 +320,7 @@ fn truncate_call_arguments_to_fit(
                 let truncated = ExecutedToolCallArguments::Truncated {
                     truncation: ExecutedToolCallTruncation {
                         original_bytes,
-                        max_bytes: original_bytes
-                            .saturating_sub(overage_bytes)
-                            .min(MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES),
+                        max_bytes: original_bytes.saturating_sub(overage_bytes),
                         omitted_calls: None,
                         original_name_bytes: None,
                     },
@@ -849,7 +828,7 @@ impl ResponseItem {
         let omitted_calls = (represented_calls > 1).then_some(represented_calls - 1);
         call.set_truncation_with_name(
             original_bytes,
-            max_call_bytes.min(MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES),
+            max_call_bytes,
             omitted_calls,
             original_name_bytes,
         );
@@ -862,7 +841,7 @@ impl ResponseItem {
             let call = &mut calls[0];
             call.set_truncation_with_name(
                 original_bytes,
-                max_call_bytes.min(MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES),
+                max_call_bytes,
                 omitted_calls,
                 Some(original_name_bytes.unwrap_or(call.name.len())),
             );

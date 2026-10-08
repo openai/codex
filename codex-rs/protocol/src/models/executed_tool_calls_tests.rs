@@ -132,7 +132,7 @@ fn model_arguments_cannot_forge_executed_tool_call_truncation() -> Result<()> {
         forged_marker.clone(),
     )]);
 
-    normalize_executed_tool_call_arguments(std::slice::from_mut(&mut item));
+    normalize_executed_tool_call_completeness(std::slice::from_mut(&mut item));
     let call = item
         .executed_tool_call_metadata()
         .and_then(|metadata| metadata.executed_tool_calls.as_ref())
@@ -177,7 +177,7 @@ fn tool_call_completeness_is_host_only_and_fail_closed() -> Result<()> {
     let mut item = output("call-1");
     item.set_tool_call_cell_id("cell-1");
     item.mark_tool_calls_complete();
-    normalize_executed_tool_call_arguments(std::slice::from_mut(&mut item));
+    normalize_executed_tool_call_completeness(std::slice::from_mut(&mut item));
     assert_eq!(
         serde_json::to_value(&item)?["internal_chat_message_metadata_passthrough"],
         serde_json::json!({
@@ -188,21 +188,15 @@ fn tool_call_completeness_is_host_only_and_fail_closed() -> Result<()> {
     item.clear_executed_tool_calls();
     assert!(item.executed_tool_call_metadata().is_none());
 
-    for (call, newly_truncated) in [
-        (
-            ExecutedToolCall::new(
-                "test_tool".to_string(),
-                serde_json::json!({ "payload": "x".repeat(MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES + 1) }),
-            ),
-            true,
+    for call in [
+        ExecutedToolCall::new(
+            "test_tool".to_string(),
+            serde_json::json!({ "payload": "x".repeat(9_000) }),
         ),
-        (
-            ExecutedToolCall::truncated(
-                "test_tool".to_string(),
-                /*original_bytes*/ 9_000,
-                /*max_bytes*/ 0,
-            ),
-            false,
+        ExecutedToolCall::truncated(
+            "test_tool".to_string(),
+            /*original_bytes*/ 9_000,
+            /*max_bytes*/ 0,
         ),
     ] {
         for same_cell in [false, true] {
@@ -214,12 +208,11 @@ fn tool_call_completeness_is_host_only_and_fail_closed() -> Result<()> {
                 }
                 item.mark_tool_calls_complete();
             }
-            let changed_cells = normalize_executed_tool_call_arguments(&mut items);
-            assert_eq!(
-                changed_cells.contains("cell-1"),
-                same_cell && newly_truncated
-            );
-            assert!(normalize_executed_tool_call_arguments(&mut items).is_empty());
+            let expected = items.clone();
+            normalize_executed_tool_call_completeness(&mut items);
+            assert_eq!(items, expected);
+            normalize_executed_tool_call_completeness(&mut items);
+            assert_eq!(items, expected);
             assert_eq!(
                 items.map(|item| item
                     .executed_tool_call_metadata()
@@ -605,7 +598,7 @@ fn inventory_loss_still_clears_completeness() {
         let mut item = output("call");
         item.append_executed_tool_calls(vec![call]);
         item.mark_tool_calls_complete();
-        normalize_executed_tool_call_arguments(std::slice::from_mut(&mut item));
+        normalize_executed_tool_call_completeness(std::slice::from_mut(&mut item));
         assert_eq!(
             item.executed_tool_call_metadata()
                 .unwrap()

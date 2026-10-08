@@ -1548,7 +1548,7 @@ async fn code_mode_tool_call_completeness_is_private_and_opt_in(
     let code = if oversized {
         r#"
 const args = { barrier: { id: "", participants: 1 } };
-args.barrier.id = "x".repeat(8192 - JSON.stringify(args).length);
+args.barrier.id = "x".repeat(9000 - JSON.stringify(args).length);
 for (let index = 0; index < 17; index++) await tools.test_sync_tool(args);
 text("done");
 yield_control();
@@ -1577,12 +1577,17 @@ await new Promise(() => {});
     let calls = serde_json::json!([{ "name": "test_sync_tool", "arguments": {} }]);
     let complete = Value::Bool(true);
     if oversized {
-        assert!(
-            metadata["executed_tool_calls"]
-                .as_array()
-                .is_some_and(|calls| calls.iter().any(|call| call["arguments"]
-                    .get("_codex_executed_tool_call_truncated")
-                    .is_some()))
+        let mut arguments = serde_json::json!({ "barrier": { "id": "", "participants": 1 } });
+        arguments["barrier"]["id"] =
+            serde_json::json!("x".repeat(9000 - arguments.to_string().len()));
+        assert_eq!(
+            metadata["executed_tool_calls"],
+            serde_json::json!(vec![
+                serde_json::json!({
+                    "name": "test_sync_tool", "arguments": arguments,
+                });
+                17
+            ]),
         );
     } else {
         assert_eq!(
@@ -2976,7 +2981,7 @@ async fn code_mode_result_metadata_keeps_prepared_call_binding_across_runtime_re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_late_truncated_result_metadata_survives_waits() -> Result<()> {
+async fn code_mode_late_result_metadata_with_large_arguments_survives_waits() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let metadata = serde_json::json!({
@@ -3028,7 +3033,7 @@ async fn code_mode_late_truncated_result_metadata_survives_waits() -> Result<()>
         .context("first call did not reach the result gate")??;
 
     // The call may be dispatched after the first yield. Wait while its result is held so
-    // the request has already recorded the truncated call before accepting its metadata.
+    // the request has already recorded the call before accepting its metadata.
     let held = responses::mount_function_call_agent_response(
         &server,
         "call-2",
@@ -3044,16 +3049,16 @@ async fn code_mode_late_truncated_result_metadata_survives_waits() -> Result<()>
     let original_output = held_calls[0];
     let original_id = original_output["call_id"].as_str().unwrap().to_string();
     let original_type = original_output["type"].as_str().unwrap().to_string();
-    let truncated =
+    let recorded =
         &original_output["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0];
     assert!(
-        truncated["name"]
+        recorded["name"]
             .as_str()
             .unwrap()
             .ends_with(RESULT_METADATA_TOOL)
     );
-    assert!(truncated["arguments"]["_codex_executed_tool_call_truncated"].is_object());
-    assert!(truncated.get("tool_result_metadata").is_none());
+    assert_eq!(recorded["arguments"], arguments);
+    assert!(recorded.get("tool_result_metadata").is_none());
 
     release_tx.send(()).unwrap();
     let resumed = responses::mount_function_call_agent_response(
@@ -3096,7 +3101,7 @@ async fn code_mode_late_truncated_result_metadata_survives_waits() -> Result<()>
         let captured_calls =
             &captured_output["internal_chat_message_metadata_passthrough"]["executed_tool_calls"];
         assert_eq!(captured_calls.as_array().unwrap().len(), 1);
-        assert_eq!(captured_calls[0]["arguments"], truncated["arguments"]);
+        assert_eq!(captured_calls[0]["arguments"], recorded["arguments"]);
         assert_eq!(captured_calls[0]["tool_result_metadata"], metadata);
         assert_ne!(
             captured_output["internal_chat_message_metadata_passthrough"]["tool_calls_complete"],
@@ -3124,7 +3129,7 @@ async fn code_mode_late_truncated_result_metadata_survives_waits() -> Result<()>
             let original = terminal_request.call_output(&original_id, &original_type);
             assert_eq!(
                 original["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]["arguments"],
-                truncated["arguments"]
+                recorded["arguments"]
             );
             assert!(
                 original["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]
@@ -3548,7 +3553,7 @@ text("pressure ready");"#,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_complete_call_survives_unrelated_truncation() -> Result<()> {
+async fn code_mode_complete_calls_preserve_large_arguments() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -3589,12 +3594,11 @@ async fn code_mode_complete_call_survives_unrelated_truncation() -> Result<()> {
     let request = follow_up.single_request();
     let overflow =
         &request.custom_tool_call_output("call-1")["internal_chat_message_metadata_passthrough"];
-    assert!(
-        overflow["executed_tool_calls"]
-            .as_array()
-            .is_some_and(|calls| calls.iter().any(|call| call["arguments"]
-                .get("_codex_executed_tool_call_truncated")
-                .is_some()))
+    assert_eq!(
+        overflow["executed_tool_calls"],
+        serde_json::json!([{ "name": "test_sync_tool", "arguments": {
+            "barrier": { "id": "x".repeat(8192), "participants": 1 }
+        } }]),
     );
     assert_eq!(overflow["tool_calls_complete"], true);
 
@@ -9278,8 +9282,7 @@ async fn code_mode_argument_truncation_preserves_later_wait_completeness() -> Re
     probe.codex.shutdown_and_wait().await?;
     probe_server.shutdown().await;
 
-    // One 7 KiB invocation stays under the recorder's per-output argument
-    // budget. It pushes the yielded delta over the message budget only.
+    // One 7 KiB invocation pushes the yielded delta over the message budget.
     let padding = "x".repeat(LIMIT - base_bytes - 4 * 1024);
     let code = r#"
 await tools.test_sync_tool({ barrier: { id: "x".repeat(7000), participants: 1 } });

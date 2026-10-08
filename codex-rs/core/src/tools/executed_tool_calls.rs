@@ -28,7 +28,7 @@ use codex_protocol::models::ExecutedToolCallArguments;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ToolResultMetadata;
 use codex_protocol::models::executed_tool_call_metadata_bytes;
-use codex_protocol::models::normalize_executed_tool_call_arguments;
+use codex_protocol::models::normalize_executed_tool_call_completeness;
 use codex_protocol::openai_models::ToolMode;
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
@@ -46,8 +46,6 @@ mod seen_ids;
 
 use seen_ids::SeenIds;
 
-const MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES: usize = 8 * 1024;
-const MAX_EXECUTED_TOOL_CALL_FULL_ARGUMENT_BYTES_PER_OUTPUT: usize = 32 * 1024;
 const MAX_PENDING_EXECUTED_TOOL_CALLS: usize = 256;
 // Limits new Direct metadata retained in history and the append-only rollout
 // during one recorder lifetime. A new process cannot recover the exact prior
@@ -150,7 +148,6 @@ enum CellCompletion {
 #[derive(Default)]
 struct RecordedCell {
     pending_calls: IndexMap<String, ExecutedToolCall>,
-    pending_full_argument_bytes: usize,
     completion: CellCompletion,
     originating_call_id: Option<String>,
     truncated_metadata_binding_valid: bool,
@@ -365,17 +362,7 @@ impl ExecutedToolCalls {
             return None;
         }
         let permit = self.reserve_direct_call()?;
-        let (mut recorded, _) = recorded_call(call);
-        let argument_bytes = serialized_json_bytes(recorded.arguments()).unwrap_or(usize::MAX);
-        if matches!(recorded.arguments(), ExecutedToolCallArguments::Raw(_))
-            && argument_bytes > MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES
-        {
-            recorded = ExecutedToolCall::truncated(
-                recorded.name,
-                argument_bytes,
-                MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES,
-            );
-        }
+        let (recorded, _) = recorded_call(call);
         Some((recorded, permit))
     }
 
@@ -561,19 +548,10 @@ impl ExecutedToolCalls {
         if !unique_nested_id || duplicate_call_id {
             cell.truncated_metadata_binding_valid = false;
         }
-        let max_bytes = MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES.min(
-            MAX_EXECUTED_TOOL_CALL_FULL_ARGUMENT_BYTES_PER_OUTPUT
-                .saturating_sub(cell.pending_full_argument_bytes),
-        );
         let call = if at_pending_call_limit {
             ExecutedToolCall::truncated(call.name, original_bytes, /*max_bytes*/ 0)
-        } else if original_bytes <= max_bytes {
-            cell.pending_full_argument_bytes = cell
-                .pending_full_argument_bytes
-                .saturating_add(original_bytes);
-            call
         } else {
-            ExecutedToolCall::truncated(call.name, original_bytes, max_bytes)
+            call
         };
         let truncated = matches!(
             call.arguments(),
@@ -748,20 +726,16 @@ fn recorded_call(call: &ToolCall) -> (ExecutedToolCall, usize) {
         }
     };
     let name = codex_tools::code_mode_name_for_tool_name(&call.tool_name);
-    let recorded_call = if original_bytes > MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES {
-        ExecutedToolCall::truncated(name, original_bytes, MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES)
-    } else {
-        let arguments = match &call.payload {
-            ToolPayload::Function { arguments } => serde_json::from_str(arguments)
-                .unwrap_or_else(|_| JsonValue::String(arguments.clone())),
-            ToolPayload::Custom { input } => JsonValue::String(input.clone()),
-            ToolPayload::ToolSearch { arguments } => {
-                serde_json::to_value(arguments).unwrap_or_default()
-            }
-        };
-        ExecutedToolCall::new(name, arguments)
+    let arguments = match &call.payload {
+        ToolPayload::Function { arguments } => {
+            serde_json::from_str(arguments).unwrap_or_else(|_| JsonValue::String(arguments.clone()))
+        }
+        ToolPayload::Custom { input } => JsonValue::String(input.clone()),
+        ToolPayload::ToolSearch { arguments } => {
+            serde_json::to_value(arguments).unwrap_or_default()
+        }
     };
-    (recorded_call, original_bytes)
+    (ExecutedToolCall::new(name, arguments), original_bytes)
 }
 
 fn input_call_id(item: &ResponseItem) -> Option<&str> {

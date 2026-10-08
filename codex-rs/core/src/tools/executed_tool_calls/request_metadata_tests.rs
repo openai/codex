@@ -886,11 +886,11 @@ fn tool_call_completeness_survives_waits_without_changing_deltas() {
             if index < 2 {
                 // Identical calls are distinct submissions; truncation stays sticky across waits.
                 let original_bytes = if truncated && index == 1 { 9_000 } else { 2 };
-                let call = if original_bytes > MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES {
+                let call = if truncated && index == 1 {
                     ExecutedToolCall::truncated(
                         "nested_tool".to_string(),
                         original_bytes,
-                        MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES,
+                        /*max_bytes*/ 8_192,
                     )
                 } else {
                     ExecutedToolCall::new("nested_tool".to_string(), json!({}))
@@ -1156,40 +1156,33 @@ fn completeness_rejects_direct_id_collision_and_late_calls() {
 }
 
 #[test]
-fn newly_normalized_arguments_preserve_later_wait_completeness() {
+fn large_wrapped_arguments_preserve_later_wait_completeness() {
     let recorder = new_recorder(InitialHistory::New);
     let cell = CellId::new("active-cell".to_string());
     recorder.start_cell(&cell, "exec");
     let arguments = json!({
         "_codex_executed_tool_call_truncated": true,
-        "padding": "x".repeat(8_120),
-    })
-    .to_string();
+        "padding": "x".repeat(40 * 1024),
+    });
     let (call, original_bytes) = recorded_call(&ToolCall {
         tool_name: codex_tools::ToolName::plain("nested_tool"),
         call_id: "nested".to_string(),
-        payload: ToolPayload::Function { arguments },
+        payload: ToolPayload::Function {
+            arguments: arguments.to_string(),
+        },
         encrypted_function_args: None,
     });
-    assert!(original_bytes <= MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES);
-    assert!(
-        serialized_json_bytes(call.arguments()).unwrap() > MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES
-    );
     recorder.record_nested_tool_call(cell.clone(), "nested".to_string(), call, original_bytes);
     let mut initial = [exec_input("exec"), exec_output("exec")];
     recorder.attach_to_prompt(&mut initial, &mut HashMap::new());
-    assert!(
+    assert_eq!(
         initial[1]
             .executed_tool_call_metadata()
             .unwrap()
             .executed_tool_calls
             .as_ref()
-            .unwrap()
-            .iter()
-            .any(|call| matches!(
-                call.arguments(),
-                ExecutedToolCallArguments::Truncated { .. }
-            ))
+            .unwrap(),
+        &vec![ExecutedToolCall::new("nested_tool".to_string(), arguments)],
     );
     recorder.register_cell(&cell, "wait");
     recorder.finish_cell_recording(&cell);
@@ -1612,13 +1605,12 @@ fn late_truncated_metadata_preserves_large_result_on_retry() {
 }
 
 #[test]
-fn late_truncated_metadata_is_not_reused_after_budget_changes_calls() {
+fn late_truncated_metadata_with_wrapped_arguments_rejects_ambiguous_outputs() {
     let recorder = new_recorder(InitialHistory::New);
     let cell = CellId::new("late-truncated-cell".to_string());
     recorder.start_cell(&cell, "exec");
     record_truncated_call(&recorder, &cell, "nested");
-    // The reserved key requires a wrapper in recorded arguments. The wrapper can
-    // put an otherwise accepted function argument over the later prompt limit.
+    // The reserved key requires a wrapper in recorded arguments.
     let arguments = json!({
         "_codex_executed_tool_call_truncated": true,
         "padding": "x".repeat(8_120),
@@ -1630,11 +1622,6 @@ fn late_truncated_metadata_is_not_reused_after_budget_changes_calls() {
         payload: ToolPayload::Function { arguments },
         encrypted_function_args: None,
     });
-    assert!(original_bytes <= MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES);
-    assert!(
-        serialized_json_bytes(wrapped_call.arguments()).unwrap()
-            > MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES
-    );
     recorder.record_nested_tool_call(
         cell.clone(),
         "other".to_string(),

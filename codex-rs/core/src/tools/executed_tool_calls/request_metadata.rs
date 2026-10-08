@@ -57,7 +57,7 @@ impl ExecutedToolCalls {
 
         // Argument truncation preserves inventory completeness; omitted calls or
         // names still invalidate completion across the cell's outputs.
-        normalize_executed_tool_call_arguments(items);
+        normalize_executed_tool_call_completeness(items);
     }
 
     fn attach_pending_to_prompt_with_state(
@@ -258,7 +258,6 @@ impl ExecutedToolCalls {
                         }
                         calls.push(call);
                     }
-                    cell.pending_full_argument_bytes = 0;
                     complete = cell.completion == CellCompletion::Complete
                         && (state.can_prove_wait_completion
                             || matches!(item, ResponseItem::CustomToolCallOutput { .. }));
