@@ -389,10 +389,14 @@ pub(crate) fn remap_source_wrapped_line(
             let line = line_to_static(&wrapped.line);
             let displayed = line_text(&line);
             let prefix_columns = display_width(&displayed[..wrapped.prefix_bytes]);
-            source_column += display_width(&text[source_byte..wrapped.range.start]);
+            // Some wrapping paths retain a one-past-the-end cursor sentinel. Span slicing already
+            // clips that sentinel to the visible line; keep hyperlink and source projection on the
+            // same bounded range instead of indexing past the flattened text.
+            let range = wrapped.range.start.min(text.len())..wrapped.range.end.min(text.len());
+            source_column += display_width(&text[source_byte..range.start]);
             let start = source_column;
-            let end = start + display_width(&text[wrapped.range.clone()]);
-            source_byte = wrapped.range.end;
+            let end = start + display_width(&text[range.clone()]);
+            source_byte = range.end;
             source_column = end;
             let hyperlinks = source
                 .hyperlinks
@@ -410,7 +414,7 @@ pub(crate) fn remap_source_wrapped_line(
             HyperlinkLine {
                 line,
                 hyperlinks,
-                source: Some(logical.wrapped(wrapped.range, wrapped.prefix_bytes)),
+                source: Some(logical.wrapped(range, wrapped.prefix_bytes)),
             }
         })
         .collect()
