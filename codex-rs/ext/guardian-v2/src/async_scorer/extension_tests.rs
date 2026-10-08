@@ -3427,7 +3427,7 @@ impl codex_extension_api::SynchronousApprovalReviewer for CacheMiss {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cached_approval_discounts_only_its_own_unscored_wrapper() -> Result<()> {
+async fn cached_approval_respects_action_order_and_wrapper_lag() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let fixture = GuardianFailureFixture::new().await?;
     let store = fixture.test.codex.thread_extension_data();
@@ -3502,6 +3502,16 @@ async fn cached_approval_discounts_only_its_own_unscored_wrapper() -> Result<()>
         wrapper + 3,
         ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await,
     );
+    // A later LOW may already be cached before an earlier action reaches its
+    // initial approval check. It must not approve that action or unknown provenance.
+    for (call_id, expected) in [
+        ("first", None),
+        ("second", None),
+        ("third", Some(ReviewDecision::Approved)),
+        ("unknown", None),
+    ] {
+        assert_eq!(approve(call_id).await, expected);
+    }
     let output = start("output-only", &origin, ToolCallSource::Direct);
     let other = ResponseItemId::from_server("other-wrapper".to_owned());
     start("other-wrapper", &other, ToolCallSource::Direct);

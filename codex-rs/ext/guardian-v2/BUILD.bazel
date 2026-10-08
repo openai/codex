@@ -10,4 +10,5 @@ codex_rust_crate(
     name = "guardian-v2",
     crate_name = "codex_guardian_v2",
     extra_binaries = ["//codex-rs/code-mode-host:codex-code-mode-host"],
+    test_data_extra = glob(["src/**/snapshots/**"]),
 )

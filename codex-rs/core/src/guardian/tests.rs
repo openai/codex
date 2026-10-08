@@ -1527,6 +1527,10 @@ fn guardian_write_stdin_preserves_input_and_foreign_cwd(
         ),
         (Some("terminal-open"), "current-turn"),
     );
+    assert_eq!(
+        ReviewAction::from(action).tool_call_id.as_deref(),
+        Some("terminal-write")
+    );
     Ok(())
 }
 

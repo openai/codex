@@ -52,7 +52,10 @@ const TOOL_SUGGESTION_TOOL_TYPE_KEY: &str = "tool_type";
 enum GuardianElicitationReview {
     NotRequested,
     Decline(&'static str),
-    ApprovalRequest(Box<crate::guardian::GuardianApprovalRequest>),
+    ApprovalRequest {
+        request: Box<crate::guardian::GuardianApprovalRequest>,
+        tool_call_id: Option<String>,
+    },
 }
 
 struct GuardianMcpElicitationReviewer {
@@ -927,12 +930,20 @@ async fn review_guardian_mcp_elicitation(
             return Ok(None);
         }
 
-        let GuardianElicitationReview::ApprovalRequest(guardian_request) =
-            guardian_elicitation_review_request(&request, originating_call_id)
+        let GuardianElicitationReview::ApprovalRequest {
+            request: guardian_request,
+            tool_call_id,
+        } = guardian_elicitation_review_request(&request, originating_call_id)
         else {
             return Ok(None);
         };
-        trusted_guardian_request.unwrap_or(*guardian_request).into()
+        match trusted_guardian_request {
+            Some(request) => request.into(),
+            None => crate::guardian::ReviewAction {
+                tool_call_id,
+                ..(*guardian_request).into()
+            },
+        }
     } else {
         let approval_policy = mcp_config.approval_policy.value();
         match approval_policy {
@@ -1000,12 +1011,17 @@ async fn review_guardian_mcp_elicitation(
                         })
                         .map_err(|error| error.to_string()),
                     category: GuardianScope::for_mcp_server(&request.server_name),
+                    tool_call_id: None,
                     request: Err(reason.to_owned()),
                 }
             }
-            GuardianElicitationReview::ApprovalRequest(guardian_request) => {
-                (*guardian_request).into()
-            }
+            GuardianElicitationReview::ApprovalRequest {
+                request: guardian_request,
+                tool_call_id,
+            } => crate::guardian::ReviewAction {
+                tool_call_id,
+                ..(*guardian_request).into()
+            },
         }
     };
     guardian_request.category = guardian_scope;
@@ -1108,8 +1124,10 @@ fn guardian_elicitation_review_request(
         None => Some(Value::Object(Map::new())),
     };
 
-    GuardianElicitationReview::ApprovalRequest(Box::new(
-        crate::guardian::GuardianApprovalRequest::McpToolCall {
+    GuardianElicitationReview::ApprovalRequest {
+        // Synthetic display IDs must not participate in tool observation ordering.
+        tool_call_id: originating_call_id.map(str::to_owned),
+        request: Box::new(crate::guardian::GuardianApprovalRequest::McpToolCall {
             id: originating_call_id.map(str::to_owned).unwrap_or_else(|| {
                 format!(
                     "mcp_elicitation:{}:{}",
@@ -1130,8 +1148,8 @@ fn guardian_elicitation_review_request(
             tool_title: metadata_owned_string(meta, MCP_ELICITATION_TOOL_TITLE_KEY),
             tool_description: metadata_owned_string(meta, MCP_ELICITATION_TOOL_DESCRIPTION_KEY),
             annotations: None,
-        },
-    ))
+        }),
+    }
 }
 
 fn elicitation_connector_id(elicitation: &Elicitation) -> Option<&str> {

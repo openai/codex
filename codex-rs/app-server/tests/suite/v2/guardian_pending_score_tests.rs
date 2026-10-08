@@ -5,9 +5,12 @@ use codex_app_server_protocol::GuardianApprovalReviewStatus;
 use codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
+use test_case::test_case;
 
+#[test_case("snapshot"; "snapshot")]
+#[test_case("conversation"; "conversation")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn later_low_does_not_release_earlier_review() -> Result<()> {
+async fn later_low_does_not_release_earlier_review(mode: &str) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let state = Arc::new(MockResponsesState {
         luna_gates: (0..2).map(|_| Notify::new()).collect(),
@@ -40,8 +43,12 @@ async fn later_low_does_not_release_earlier_review() -> Result<()> {
                             // Start each action only once the previous action is awaiting
                             // synchronous review and its classifier request has arrived.
                             if index > 0 {
-                                wait_for_luna_request(&state, index - 1).await.unwrap();
-                                wait_for_guardian_reviews(&state, index).await.unwrap();
+                                wait_for_luna_request(&state, index - 1)
+                                    .await
+                                    .expect("previous action's classifier request should arrive");
+                                wait_for_guardian_reviews(&state, index)
+                                    .await
+                                    .expect("previous action should be awaiting synchronous review");
                             }
                             let mut events = Vec::new();
                             if index == 0 {
@@ -79,7 +86,7 @@ async fn later_low_does_not_release_earlier_review() -> Result<()> {
         .with_approval_policy("on-request")
         .with_root_config("approvals_reviewer = \"auto_review\"")
         .with_extra_config(&format!(
-            "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_url}/mcp\"\ndefault_tools_approval_mode = \"prompt\"\nsupports_parallel_tool_calls = true\n\n[features.guardianv2]\nenabled = true\nmax_tool_call_lag = 0\n\n[features.guardianv2.review_scope]\ncomputer_use_only = false"
+            "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_url}/mcp\"\ndefault_tools_approval_mode = \"prompt\"\nsupports_parallel_tool_calls = true\n\n[features.guardianv2]\nenabled = true\nmax_tool_call_lag = 2\nasync_classifier_mode = '{mode}'\n\n[features.guardianv2.review_scope]\ncomputer_use_only = false"
         ))
         .enable_feature(Feature::GuardianApproval)
         .write(codex_home.path())?;
@@ -105,7 +112,8 @@ async fn later_low_does_not_release_earlier_review() -> Result<()> {
     wait_for_luna_request(&state, /*index*/ 1).await?;
     wait_for_guardian_reviews(&state, /*expected*/ 2).await?;
 
-    // Both reviews are pending. Only the later action gets a LOW, at thread lag zero.
+    // Both classifiers are within the lag window and must run concurrently.
+    // Only the later action gets a LOW, at thread lag zero.
     state.luna_gates[1].notify_one();
     let approved: ItemGuardianApprovalReviewCompletedNotification = timeout(
         TIMEOUT,

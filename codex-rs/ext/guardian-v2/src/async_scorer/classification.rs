@@ -346,16 +346,16 @@ impl Classification {
                         );
                     }
                     let (ready, score) = tokio::sync::oneshot::channel();
-                    reservation.submit(ConversationRequest {
+                    tokio::spawn(reservation.run(ConversationRequest {
                         evidence,
                         sampling,
-                        reset_token_limit: guardian_config
-                            .async_classifier_conversation_token_limit,
+                        reset_token_limit:
+                            guardian_config.async_classifier_conversation_token_limit,
                         ready,
                         authorization: score_authorization.clone(),
                         thread: Arc::clone(&thread),
                         metrics: metrics.clone(),
-                    });
+                    }));
                     score.await.unwrap_or(Err(LunaSamplerError::Superseded))
                 }
             };

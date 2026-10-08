@@ -1,4 +1,5 @@
 //! Captures one approval action for the extension-owned synchronous reviewer.
+//! Tool-call provenance is separate from the item's display identity.
 
 use codex_protocol::protocol::ReviewDecision;
 use std::sync::Arc;
@@ -17,14 +18,32 @@ use crate::session::session::Session;
 pub(crate) struct ReviewAction {
     pub(crate) action: Result<serde_json::Value, String>,
     pub(crate) category: codex_protocol::openai_models::GuardianScope,
+    /// Actual host invocation, absent when the approval has no originating tool call.
+    pub(crate) tool_call_id: Option<String>,
     pub(crate) request: Result<GuardianApprovalRequest, String>,
 }
 
 impl From<GuardianApprovalRequest> for ReviewAction {
     fn from(request: GuardianApprovalRequest) -> Self {
+        let tool_call_id = match &request {
+            // Stdin's display target is the launch; freshness belongs to this write.
+            GuardianApprovalRequest::WriteStdin { approval_id, .. } => Some(approval_id.clone()),
+            // Intercepts retain the launch ID, not the current triggering call.
+            #[cfg(unix)]
+            GuardianApprovalRequest::Execve { .. } => None,
+            GuardianApprovalRequest::ExecCommand { .. }
+            | GuardianApprovalRequest::ApplyPatch { .. }
+            | GuardianApprovalRequest::NetworkAccess { .. }
+            | GuardianApprovalRequest::McpToolCall { .. }
+            | GuardianApprovalRequest::RequestPermissions { .. } => {
+                super::approval_request::guardian_request_target_item_id(&request)
+                    .map(str::to_owned)
+            }
+        };
         Self {
             action: guardian_approval_request_to_json(&request).map_err(|error| error.to_string()),
             category: request.guardian_scope(),
+            tool_call_id,
             request: Ok(request),
         }
     }
@@ -45,6 +64,7 @@ impl ReviewAction {
             Err(error) => Self {
                 action: original,
                 category,
+                tool_call_id: None,
                 request: Err(error.to_string()),
             },
         }

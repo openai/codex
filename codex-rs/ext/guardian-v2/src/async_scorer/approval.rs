@@ -1,5 +1,6 @@
 //! Owns approval routing and the choice between cached evidence and a fresh assessment.
 //! Registration does not depend on the async scorer starting successfully.
+//! Tool-linked approvals never reuse a score from a later action.
 
 use super::authorization::ScoreAuthorization;
 use super::config::GuardianV2Config;
@@ -266,6 +267,10 @@ async fn cached_evidence(
                     GuardianReviewReason::AuthorizationChanged,
                     "authorization_changed",
                 )
+            } else if input.tool_call_id.is_some() && !cached.score_at_or_before_action {
+                // Apply action ordering to both initial and pending approvals. Intercepted
+                // actions without a tool-call ID retain their existing thread-level checks.
+                (GuardianReviewReason::MissingScore, "missing_score")
             } else {
                 record_fast_decision(metrics, "approved", "low_risk");
                 return Ok(cached.score_at_or_before_action);

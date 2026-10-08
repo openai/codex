@@ -1,8 +1,10 @@
-//! One worker owns each treatment conversation and commits only completed requests.
-//! Admission reserves order before async preparation; permits bound active and queued work.
+//! Concurrent classifications fork the latest compatible completed conversation.
+//! Admission assigns order and reserves capacity atomically before async preparation.
+//! Only newer completions replace history.
+//! Permits bound preparation and sampling through full response completion.
 //! Backend replacement invalidates its generation without changing snapshot shutdown policy.
 //! Oversized retained requests rebuild from fresh evidence before the model's hard limit.
-//! Prepared requests own their history; only progress remains in state during sampling.
+//! Each request owns its fork; failed or cancelled requests leave committed history intact.
 //! Host-only instruction delivery metadata is committed with its completed input messages.
 
 use std::sync::Arc;
@@ -17,7 +19,6 @@ use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::ResponseItem;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
-use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use super::authorization::ScoreAuthorization;
@@ -29,18 +30,23 @@ use super::transcript::CollectedTranscript;
 const MAX_OUTSTANDING: usize = 16;
 
 pub(super) struct ConversationBackend {
-    queue: Mutex<mpsc::UnboundedSender<QueuedRequest>>,
-    capacity: Arc<Semaphore>,
+    history: Arc<Mutex<Option<Arc<CompletedConversation>>>>,
+    sampler: Arc<LunaSampler>,
+    capacity: Mutex<Arc<Semaphore>>,
     generation: Arc<()>,
 }
 
-struct QueuedRequest {
-    request: oneshot::Receiver<ConversationRequest>,
-    _permit: OwnedSemaphorePermit,
+struct CompletedConversation {
+    index: usize,
+    key: ReuseKey,
+    state: ConversationState<Vec<ResponseItemEnvelope>>,
 }
 
 pub(super) struct Reservation {
-    request: oneshot::Sender<ConversationRequest>,
+    index: usize,
+    history: Arc<Mutex<Option<Arc<CompletedConversation>>>>,
+    sampler: Arc<LunaSampler>,
+    _permit: OwnedSemaphorePermit,
     pub(super) generation: Weak<()>,
 }
 
@@ -64,13 +70,11 @@ struct ReuseKey {
 
 impl ConversationBackend {
     pub(super) fn new(sampler: Arc<LunaSampler>) -> Self {
-        let (sender, receiver) = mpsc::unbounded_channel();
-        let generation = Arc::new(());
-        tokio::spawn(run(receiver, sampler, Arc::downgrade(&generation)));
         Self {
-            queue: Mutex::new(sender),
-            capacity: Arc::new(Semaphore::new(MAX_OUTSTANDING)),
-            generation,
+            history: Arc::default(),
+            sampler,
+            capacity: Mutex::new(Arc::new(Semaphore::new(MAX_OUTSTANDING))),
+            generation: Arc::new(()),
         }
     }
 
@@ -78,25 +82,21 @@ impl ConversationBackend {
         &self,
         observe: impl FnOnce() -> usize,
     ) -> (usize, Result<Reservation, LunaSamplerError>) {
-        // Keep the tool index and queue position in the same admission order.
-        let queue = self
-            .queue
+        // Keep observation order and admission atomic, including when only one slot remains.
+        let capacity = self
+            .capacity
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let index = observe();
         let reservation = (|| {
-            let permit = Arc::clone(&self.capacity)
+            let permit = Arc::clone(&capacity)
                 .try_acquire_owned()
                 .map_err(|_| LunaSamplerError::QueueFull)?;
-            let (sender, request) = oneshot::channel();
-            queue
-                .send(QueuedRequest {
-                    request,
-                    _permit: permit,
-                })
-                .map_err(|_| LunaSamplerError::Superseded)?;
             Ok(Reservation {
-                request: sender,
+                index,
+                history: Arc::clone(&self.history),
+                sampler: Arc::clone(&self.sampler),
+                _permit: permit,
                 generation: Arc::downgrade(&self.generation),
             })
         })();
@@ -105,46 +105,41 @@ impl ConversationBackend {
 }
 
 impl Reservation {
-    pub(super) fn submit(self, request: ConversationRequest) {
-        if let Err(request) = self.request.send(request) {
-            let _ = request.ready.send(Err(LunaSamplerError::Superseded));
-        }
-    }
-}
-
-async fn run(
-    mut queue: mpsc::UnboundedReceiver<QueuedRequest>,
-    sampler: Arc<LunaSampler>,
-    generation: Weak<()>,
-) {
-    // Only completed requests have reusable history and a matching reuse key.
-    let mut committed: Option<(ReuseKey, ConversationState<Vec<ResponseItemEnvelope>>)> = None;
-    while let Some(queued) = queue.recv().await {
-        // A preparation error drops its sender, preserving the order of later observations.
-        let Ok(request) = queued.request.await else {
-            continue;
-        };
-        if generation.strong_count() == 0
+    pub(super) async fn run(self, request: ConversationRequest) {
+        if self.generation.strong_count() == 0
             || !request.authorization.is_current(&request.thread).await
         {
-            committed = None;
             let _ = request.ready.send(Err(LunaSamplerError::Superseded));
-            continue;
+            return;
         }
         let key = ReuseKey {
             authorization: request.authorization.clone(),
             instructions: request.sampling.instructions.clone(),
             parent_compaction: request.sampling.parent_compaction.clone(),
         };
-        let mut state = committed
-            .take()
-            .filter(|(previous, _)| previous == &key)
-            .map(|(_, state)| state)
+        let previous = self
+            .history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let mut state = previous
+            // Delayed preparation must never import a later action's evidence.
+            .filter(|previous| previous.index < self.index && previous.key == key)
+            .and_then(|previous| previous.state.snapshot().cloned())
+            .map(|checkpoint| {
+                let (mut state, history) = ConversationState::fork(checkpoint);
+                state.commit_snapshot(history);
+                state
+            })
             .unwrap_or_default();
         let had_history = state.snapshot().is_some();
         let prepared = request
             .sampling
-            .prepare_retained(&request.evidence, &mut state, sampler.max_input_tokens())
+            .prepare_retained(
+                &request.evidence,
+                &mut state,
+                self.sampler.max_input_tokens(),
+            )
             .filter(|prepared| {
                 prepared.existing_context_tokens == 0
                     || prepared.input_tokens <= request.reset_token_limit
@@ -157,12 +152,12 @@ async fn run(
                 request.sampling.prepare_retained(
                     &request.evidence,
                     &mut state,
-                    sampler.max_input_tokens(),
+                    self.sampler.max_input_tokens(),
                 )
             });
         let Some(mut prepared) = prepared else {
             let _ = request.ready.send(Err(LunaSamplerError::InputTooLarge));
-            continue;
+            return;
         };
         super::metrics::record_section_costs(
             request.metrics.as_deref(),
@@ -176,9 +171,9 @@ async fn run(
         drop(request.evidence);
         let cursor = prepared.cursor;
         let pending_truncations = std::mem::take(&mut prepared.truncations);
-        let history = sampler.sample_retained(prepared, request.ready).await;
+        let history = self.sampler.sample_retained(prepared, request.ready).await;
         if let Some(history) = history
-            && generation.strong_count() > 0
+            && self.generation.strong_count() > 0
             && request.authorization.is_current(&request.thread).await
         {
             let mut truncations = super::truncation::ClassificationTruncations::default();
@@ -186,9 +181,22 @@ async fn run(
             truncations.emit(request.metrics.as_deref());
             state.complete_review(cursor);
             state.commit_snapshot(history);
-            committed = Some((key, state));
+            let mut latest = self
+                .history
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if latest
+                .as_ref()
+                .is_none_or(|previous| previous.index < self.index)
+            {
+                *latest = Some(Arc::new(CompletedConversation {
+                    index: self.index,
+                    key,
+                    state,
+                }));
+            }
         }
         // The permit is released only after completion and commit, not after the early score.
-        drop(queued._permit);
+        drop(self._permit);
     }
 }

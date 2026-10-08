@@ -85,20 +85,7 @@ pub(crate) async fn decide_approval(
             options,
         },
         approval_id: &review_id,
-        tool_call_id: request
-            .request
-            .as_ref()
-            .ok()
-            .and_then(|request| match request {
-                // Stdin's target is the terminal launch; freshness belongs to this write.
-                GuardianApprovalRequest::WriteStdin { approval_id, .. } => {
-                    Some(approval_id.as_str())
-                }
-                // Intercepts retain the launch ID, not the current triggering call.
-                #[cfg(unix)]
-                GuardianApprovalRequest::Execve { .. } => None,
-                _ => super::approval_request::guardian_request_target_item_id(request),
-            }),
+        tool_call_id: request.tool_call_id.as_deref(),
         action: request.action.as_ref().ok(),
         thread_id: session.thread_id,
         thread_store: &session.services.thread_extension_data,
