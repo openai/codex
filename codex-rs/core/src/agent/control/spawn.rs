@@ -320,12 +320,13 @@ impl LocalAgentControl {
     }
 
     /// A provided parent enables owner-validated reloads; `None` preserves sender-driven reloads.
+    /// Keep the returned residency pin until the caller has submitted its input.
     pub(crate) async fn ensure_v2_agent_loaded(
         &self,
         mut config: Config,
         thread_id: ThreadId,
         parent: Option<Arc<CodexThread>>,
-    ) -> CodexResult<()> {
+    ) -> CodexResult<Option<tokio::sync::OwnedRwLockReadGuard<()>>> {
         let membership = self.runtime.admit_start()?;
         let state = self.runtime.upgrade()?;
         let owner_thread_id = parent.as_ref().map(|parent| parent.session.thread_id);
@@ -347,9 +348,10 @@ impl LocalAgentControl {
                 )));
             }
         }
-        if owner_thread_id.is_none() && state.get_thread(thread_id).await.is_ok() {
-            self.touch_loaded_v2_residency(&state, thread_id).await;
-            return Ok(());
+        if owner_thread_id.is_none()
+            && let Ok(thread) = state.get_thread(thread_id).await
+        {
+            return self.runtime.pin_v2_residency(&state, &thread).await;
         }
         if self
             .runtime
@@ -402,8 +404,7 @@ impl LocalAgentControl {
             }
             if let Ok(thread) = state.get_thread(thread_id).await {
                 self.validate_loaded_v2_child(&thread, parent_thread_id)?;
-                self.touch_loaded_v2_residency(&state, thread_id).await;
-                return Ok(());
+                return self.runtime.pin_v2_residency(&state, &thread).await;
             }
         }
         let parent = if let Some(parent) = parent {
@@ -633,28 +634,37 @@ impl LocalAgentControl {
                 if let Some(parent_thread_id) = owner_thread_id {
                     self.validate_loaded_v2_child(&reloaded_thread.thread, parent_thread_id)?;
                 }
-                self.runtime.registry.clear_evicted_environments(thread_id);
-                residency_slot.commit(reloaded_thread.thread_id);
-                // Register before listeners can forward events from the resumed thread.
-                if let Some((client_metadata, source)) = subagent_analytics {
-                    let thread_config = reloaded_thread.thread.config_snapshot().await;
-                    emit_subagent_session_started(
-                        &reloaded_thread
-                            .thread
-                            .session
-                            .services
-                            .analytics_events_client,
-                        client_metadata,
-                        reloaded_thread.thread.session.session_id(),
-                        reloaded_thread.thread_id,
-                        thread_config.parent_thread_id,
-                        thread_config,
-                        source,
-                        /*resumed_created_at*/ Some(stored_thread.created_at),
-                    );
-                }
-                state.notify_thread_created(reloaded_thread.thread_id);
-                Ok(())
+                let runtime = self.runtime.clone();
+                // Finish registration even if the sender is cancelled while acquiring its pin.
+                tokio::spawn(async move {
+                    let _membership = membership;
+                    let residency_pin = runtime
+                        .pin_v2_residency(&state, &reloaded_thread.thread)
+                        .await?;
+                    runtime.registry.clear_evicted_environments(thread_id);
+                    residency_slot.commit(reloaded_thread.thread_id);
+                    // Register before listeners can forward events from the resumed thread.
+                    if let Some((client_metadata, source)) = subagent_analytics {
+                        let thread_config = reloaded_thread.thread.config_snapshot().await;
+                        emit_subagent_session_started(
+                            &reloaded_thread
+                                .thread
+                                .session
+                                .services
+                                .analytics_events_client,
+                            client_metadata,
+                            reloaded_thread.thread.session.session_id(),
+                            reloaded_thread.thread_id,
+                            thread_config.parent_thread_id,
+                            thread_config,
+                            source,
+                            /*resumed_created_at*/ Some(stored_thread.created_at),
+                        );
+                    }
+                    state.notify_thread_created(reloaded_thread.thread_id);
+                    Ok(residency_pin)
+                })
+                .await?
             }
             Err(err) => {
                 if let Ok(thread) = state.get_thread(thread_id).await {
@@ -663,8 +673,7 @@ impl LocalAgentControl {
                     }
                     self.runtime.registry.clear_evicted_environments(thread_id);
                     drop(residency_slot);
-                    self.touch_loaded_v2_residency(&state, thread_id).await;
-                    return Ok(());
+                    return self.runtime.pin_v2_residency(&state, &thread).await;
                 }
                 Err(err)
             }

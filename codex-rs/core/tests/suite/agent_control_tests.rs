@@ -278,6 +278,28 @@ async fn host_threads_preserve_lineage_settings_and_resume_routing() -> anyhow::
         (controller.identity(), Some(root_id))
     );
     assert_eq!(controller.service_tier(), Some("priority".to_string()));
+    let unread_mail = vec![codex_protocol::protocol::InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::root().join("worker").expect("valid child path"),
+        Vec::new(),
+        "Retain this in the host mailbox".into(),
+        /*trigger_turn*/ false,
+    )];
+    *controller.mail.lock().expect("mail lock") = unread_mail.clone();
+    let error = test
+        .thread_manager
+        .try_evict_v2_thread(Arc::clone(&child.thread))
+        .await
+        .expect_err("local eviction must reject a host-controlled child");
+    assert!(matches!(
+        error.details(),
+        CodexErrorDetails::InvalidRequest(_)
+    ));
+    assert!(Arc::ptr_eq(
+        &test.thread_manager.get_thread(child.thread_id).await?,
+        &child.thread,
+    ));
+    assert_eq!(controller.take_mailbox(child.thread_id), unread_mail);
     child.thread.ensure_rollout_materialized().await;
     child.thread.flush_rollout().await?;
     let saved = test

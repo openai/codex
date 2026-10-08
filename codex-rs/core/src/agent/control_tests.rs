@@ -1168,7 +1168,7 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
         .expect("ollama provider should be configured");
 
     let mut parent_turn = parent_thread.session.new_default_turn().await;
-    match route {
+    let residency_pin = match route {
         V2ReloadRoute::Sender => control
             .ensure_v2_agent_loaded(sender_config, spawned_agent.thread_id, /*parent*/ None)
             .await
@@ -1208,13 +1208,24 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
                 .expect("known child should reload through its parent");
             parent_turn = parent_thread.session.new_default_turn().await;
             assert!(harness.manager.get_thread(parent_thread_id).await.is_err());
+            None
         }
-    }
+    };
     let reloaded_child = harness
         .manager
         .get_thread(spawned_agent.thread_id)
         .await
         .expect("reloaded child thread should exist");
+    if matches!(route, V2ReloadRoute::Sender) {
+        assert_eq!(
+            harness
+                .manager
+                .try_evict_v2_thread(Arc::clone(&reloaded_child))
+                .await
+                .expect("attempt eviction before input submission"),
+            crate::ThreadEvictionOutcome::Busy,
+        );
+    }
     let reloaded_instructions = reloaded_child.session.inherited_instructions().await;
     assert_eq!(
         (reloaded_instructions.user, reloaded_instructions.thread),
@@ -1279,6 +1290,7 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
         )
         .await
         .expect("send_inter_agent_communication should succeed after reload");
+    drop(residency_pin);
     let expected = (
         spawned_agent.thread_id,
         Op::InterAgentCommunication {

@@ -1,8 +1,9 @@
-//! Fences and signals one local agent tree, then exposes its teardown result.
+//! Unloads locally controlled idle MAv2 children and exposes tracked agent-tree teardown.
 
 use super::ThreadManager;
 use crate::agent::control::AgentTreeShutdownState;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_thread_store::ThreadStoreError;
 use std::fmt;
@@ -126,6 +127,26 @@ impl AgentTreeShutdown {
 }
 
 impl ThreadManager {
+    /// Unloads this exact idle MAv2 child using the manager's local controller backend,
+    /// preserving mail and environments for reloading. Host controllers own their eviction
+    /// and recovery; managers configured with a host controller factory are rejected.
+    /// Dropping the future after shutdown starts does not cancel cleanup.
+    pub async fn try_evict_v2_thread(
+        &self,
+        thread: Arc<crate::CodexThread>,
+    ) -> CodexResult<crate::ThreadEvictionOutcome> {
+        // Backend selection is fixed before the manager is shared or starts any threads.
+        if self.state.agent_control_factory.is_some() {
+            return Err(CodexErr::InvalidRequest(
+                "idle eviction requires the local agent controller".to_owned(),
+            ));
+        }
+        let Ok(membership) = thread.session.services.local_agent_runtime.admit_start() else {
+            return Ok(crate::ThreadEvictionOutcome::Busy);
+        };
+        self.state.try_evict_v2_thread(thread, &membership).await
+    }
+
     /// Requests shutdown of a loaded thread and every session sharing its local runtime.
     ///
     /// Returns after fencing new starts and signalling admitted sessions. Callers can wait on the

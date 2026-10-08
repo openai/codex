@@ -54,14 +54,16 @@ impl Handler {
             .local_agent_runtime
             .control(session.session_id());
         let receiver_agent = local_agent_control.get_agent_metadata(receiver_thread_id);
-        if receiver_agent.is_some() {
+        let residency_pin = if receiver_agent.is_some() {
             let resume_config = build_agent_resume_config(turn.as_ref())
                 .map_err(FunctionCallError::RespondToModel)?;
             local_agent_control
                 .ensure_v2_agent_loaded(resume_config, receiver_thread_id, /*parent*/ None)
                 .await
-                .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
-        }
+                .map_err(|err| collab_agent_error(receiver_thread_id, err))?
+        } else {
+            None
+        };
         let receiver_agent = receiver_agent.unwrap_or_default();
         if args.interrupt {
             session
@@ -106,6 +108,7 @@ impl Handler {
             )
             .await
             .map_err(|err| collab_agent_error(receiver_thread_id, err));
+        drop(residency_pin);
         let status = local_agent_control.get_status(receiver_thread_id).await;
         session
             .emit_turn_item_completed(

@@ -110,10 +110,12 @@ impl AgentControl for LocalAgentControl {
             let (metadata, submission_id) = match input {
                 AgentInput::UserInput(input) => {
                     let receiver = self.get_agent_metadata(target);
-                    if receiver.is_some() {
+                    let _residency_pin = if receiver.is_some() {
                         self.ensure_v2_agent_loaded(resume_config, target, /*parent*/ None)
-                            .await?;
-                    }
+                            .await?
+                    } else {
+                        None
+                    };
                     let submission_id = self.send_input(target, input, start_options).await?;
                     (receiver.unwrap_or_default(), submission_id)
                 }
@@ -140,13 +142,15 @@ impl AgentControl for LocalAgentControl {
                     // locally evicted recipients can retain mail without reloading.
                     // Loaded recipients go straight to delivery, which rejects sends
                     // racing an in-progress eviction when it acquires the residency pin.
-                    if mode == MessageDeliveryMode::TriggerTurn
+                    let _residency_pin = if mode == MessageDeliveryMode::TriggerTurn
                         || (self.runtime.upgrade()?.get_thread(target).await.is_err()
                             && self.runtime.registry.evicted_environments(target).is_none())
                     {
                         self.ensure_v2_agent_loaded(resume_config, target, /*parent*/ None)
-                            .await?;
-                    }
+                            .await?
+                    } else {
+                        None
+                    };
                     let communication = message.into_communication(author, receiver_path, mode);
                     let kind = match mode {
                         MessageDeliveryMode::QueueOnly => {
@@ -191,6 +195,7 @@ impl AgentControl for LocalAgentControl {
             let config = parent.session.get_config().await.as_ref().clone();
             self.ensure_v2_agent_loaded(config, child, Some(parent))
                 .await
+                .map(drop)
         })
     }
 
