@@ -313,7 +313,7 @@ impl From<DetectedShell> for ShellInfo {
     }
 }
 
-/// Optional tool attribution for executor telemetry, not authorization.
+/// Optional tool attribution for executor telemetry and child environments, not authorization.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecMetadata {

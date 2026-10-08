@@ -10,6 +10,8 @@ use std::collections::HashMap;
 
 pub use codex_protocol::shell_environment::CODEX_SESSION_ID_ENV_VAR;
 pub use codex_protocol::shell_environment::CODEX_THREAD_ID_ENV_VAR;
+pub use codex_protocol::shell_environment::CODEX_TOOL_CALL_ID_ENV_VAR;
+pub(crate) use codex_protocol::shell_environment::set_tool_call_id_env_var;
 
 pub(crate) const CODEX_VERSION_ENV_VAR: &str = "CODEX_VERSION";
 

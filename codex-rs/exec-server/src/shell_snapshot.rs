@@ -16,6 +16,8 @@ use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::strip_managed_proxy_env;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_protocol::shell_environment;
+use codex_protocol::shell_environment::CODEX_THREAD_ID_ENV_VAR;
+use codex_protocol::shell_environment::CODEX_TOOL_CALL_ID_ENV_VAR;
 use codex_shell_command::shell_detect::ShellType;
 use codex_shell_command::shell_snapshot::CapturedSnapshot;
 use codex_shell_command::shell_snapshot::SnapshotCaptureOptions;
@@ -29,6 +31,7 @@ use tokio::sync::OnceCell;
 use tokio::time::Instant;
 
 use crate::FileSystemSandboxContext;
+use crate::local_process::apply_exec_metadata;
 use crate::local_process::shell_environment_policy;
 use crate::process_sandbox::PreparedExecRequest;
 use crate::protocol::ExecEnvPolicy;
@@ -283,6 +286,7 @@ impl ShellSnapshotCache {
                 .map(|(name, value)| (name.clone(), value.clone())),
         );
         prepared.env.extend(request_overrides);
+        apply_exec_metadata(&mut prepared.env, params.metadata.as_ref());
         prepared
             .env
             .retain(|name, _| !shell_environment::is_non_inheritable_env_var(name));
@@ -396,6 +400,7 @@ async fn capture_snapshot(
         .current_dir(prepared.cwd.as_path())
         .env_clear()
         .envs(&prepared.env)
+        .env_remove(CODEX_TOOL_CALL_ID_ENV_VAR)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -558,6 +563,8 @@ fn parse_snapshot(
         }
         None => environment,
     };
+    environment.remove(CODEX_THREAD_ID_ENV_VAR);
+    environment.remove(CODEX_TOOL_CALL_ID_ENV_VAR);
     environment.remove("PWD");
     environment.remove("OLDPWD");
     environment.retain(|name, _| !shell_environment::is_non_inheritable_env_var(name));

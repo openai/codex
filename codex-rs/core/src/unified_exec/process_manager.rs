@@ -22,6 +22,7 @@ use crate::exec_env::create_env;
 use crate::exec_env::inject_apply_patch_env;
 use crate::exec_env::inject_permission_profile_env;
 use crate::exec_env::inject_session_env;
+use crate::exec_env::set_tool_call_id_env_var;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::guardian::GuardianReviewContext;
 use crate::plugins::metrics::finish_and_track_measurements;
@@ -1445,10 +1446,13 @@ impl UnifiedExecProcessManager {
         let shell_environment_policy = request.turn_environment.shell_environment_policy();
         let local_policy_env = create_env(shell_environment_policy, /*thread_id*/ None);
         let mut env = local_policy_env.clone();
+        #[cfg(windows)]
+        env.retain(|name, _| !name.eq_ignore_ascii_case(CODEX_THREAD_ID_ENV_VAR));
         env.insert(
             CODEX_THREAD_ID_ENV_VAR.to_string(),
             context.session.thread_id.to_string(),
         );
+        set_tool_call_id_env_var(&mut env, Some(&context.call_id));
         inject_session_env(&mut env, context.session.session_id());
         inject_apply_patch_env(&mut env);
         let active_permission_profile = request.turn_environment.active_permission_profile();

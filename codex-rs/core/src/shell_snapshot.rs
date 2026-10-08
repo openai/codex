@@ -23,6 +23,7 @@ use codex_network_proxy::brokered_credential_value_env_keys;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::shell_environment::CODEX_TOOL_CALL_ID_ENV_VAR;
 use codex_protocol::shell_environment::create_env_from_vars;
 use codex_shell_command::shell_snapshot::CapturedSnapshot;
 use codex_shell_command::shell_snapshot::PreparedSnapshot;
@@ -1053,11 +1054,13 @@ async fn run_script_with_timeout(
             SnapshotShellMode::Validation(path) => Some(path),
             SnapshotShellMode::Login | SnapshotShellMode::NonLogin => None,
         };
+        let mut env = prepared_env.unwrap_or_else(|| std::env::vars().collect());
+        remove_env_value(&mut env, CODEX_TOOL_CALL_ID_ENV_VAR);
         return sandbox
             .run(
                 args,
                 cwd,
-                prepared_env.unwrap_or_else(|| std::env::vars().collect()),
+                env,
                 snapshot_timeout,
                 shell_name,
                 snapshot_read_path,
@@ -1081,6 +1084,7 @@ async fn run_script_with_timeout(
         handler.env_clear();
         handler.envs(env);
     }
+    handler.env_remove(CODEX_TOOL_CALL_ID_ENV_VAR);
     codex_protocol::shell_environment::scrub_non_inheritable_env_vars(handler.as_std_mut());
     #[cfg(unix)]
     let output = {

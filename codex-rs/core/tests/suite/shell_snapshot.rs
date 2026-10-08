@@ -641,9 +641,10 @@ async fn shell_snapshot_v2_guardian_uses_its_resolved_permissions_and_tools(
 ) -> Result<()> {
     skip_if_remote!(Ok(()), "profile fixture uses a host-local HOME directory");
     let profile_home = tempfile::tempdir()?;
+    // Appending detects any successful reviewer write, even with the wrong thread ID.
     fs::write(
         profile_home.path().join(".bashrc"),
-        "printf capture > \"$HOME/$CODEX_THREAD_ID\"\n",
+        "printf '%s\\n' \"$CODEX_THREAD_ID\" >> \"$HOME/captures\"\n",
     )
     .await?;
     let builder =
@@ -654,6 +655,12 @@ async fn shell_snapshot_v2_guardian_uses_its_resolved_permissions_and_tools(
                 .expect("set parent permissions");
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            // Read the fixture's .bashrc instead of an inherited startup hook.
+            config
+                .permissions
+                .shell_environment_policy
+                .r#set
+                .insert("BASH_ENV".to_string(), String::new());
             let rules = config.codex_home.join("rules");
             std::fs::create_dir_all(&rules).expect("create rules directory");
             std::fs::write(
@@ -741,15 +748,10 @@ async fn shell_snapshot_v2_guardian_uses_its_resolved_permissions_and_tools(
         .expect("Guardian thread ID")
         .to_string();
     assert_ne!(guardian_id, test.session_configured.thread_id.to_string());
-    assert!(
-        profile_home
-            .path()
-            .join(test.session_configured.thread_id.to_string())
-            .exists()
-    );
-    assert!(
-        !profile_home.path().join(guardian_id).exists(),
-        "Guardian profile must not inherit writable owner permissions"
+    assert_eq!(
+        fs::read_to_string(profile_home.path().join("captures")).await?,
+        format!("{}\n", test.session_configured.thread_id),
+        "only the parent may write; Guardian must not inherit writable owner permissions"
     );
     Ok(())
 }

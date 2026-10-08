@@ -443,6 +443,80 @@ async fn exec_command_does_not_expose_configured_noise_auth_token() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_command_exports_originating_call_metadata_across_later_input() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses POSIX shell and TTY fixtures");
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex()).await?;
+    let first_call_id = "exec-first-metadata";
+    let second_call_id = "exec-second-metadata";
+    let input_call_id = "exec-later-input";
+    let first_args = json!({
+        "cmd": "printf '%s|%s' \"$CODEX_THREAD_ID\" \"$CODEX_TOOL_CALL_ID\" > first-metadata",
+        "yield_time_ms": 5_000,
+    });
+    let second_args = json!({
+        "cmd": "printf '%s|%s' \"$CODEX_THREAD_ID\" \"$CODEX_TOOL_CALL_ID\" > second-before; IFS= read -r _; printf '%s|%s' \"$CODEX_THREAD_ID\" \"$CODEX_TOOL_CALL_ID\" > second-after",
+        "yield_time_ms": 100,
+        "tty": true,
+    });
+    let input_args = json!({
+        "chars": "continue\n",
+        "session_id": 1001,
+        "yield_time_ms": 5_000,
+    });
+    let mut responses = Vec::new();
+    for (response_id, call_id, tool, args) in [
+        ("resp-1", first_call_id, "exec_command", first_args),
+        ("resp-2", second_call_id, "exec_command", second_args),
+        ("resp-3", input_call_id, "write_stdin", input_args),
+    ] {
+        responses.push(sse(vec![
+            ev_response_created(response_id),
+            ev_function_call(call_id, tool, &args.to_string()),
+            ev_completed(response_id),
+        ]));
+    }
+    responses.push(sse(vec![
+        ev_response_created("resp-4"),
+        ev_assistant_message("msg-1", "done"),
+        ev_completed("resp-4"),
+    ]));
+    let _response_mock = mount_sse_sequence(harness.server(), responses).await;
+
+    harness.submit("record execution metadata").await?;
+
+    let outputs = collect_tool_outputs(&harness.request_bodies().await)?;
+    let second_output = outputs
+        .get(second_call_id)
+        .context("missing second exec_command output")?;
+    assert_eq!(second_output.process_id.as_deref(), Some("1001"));
+    let input_output = outputs
+        .get(input_call_id)
+        .context("missing write_stdin output")?;
+    assert_eq!(input_output.exit_code, Some(0));
+    assert!(
+        input_output.output.contains("continue"),
+        "write_stdin did not echo the later input: {:?}",
+        input_output.output
+    );
+
+    let thread_id = harness.test().session_configured.thread_id;
+    for (file, call_id) in [
+        ("first-metadata", first_call_id),
+        ("second-before", second_call_id),
+        ("second-after", second_call_id),
+    ] {
+        assert_eq!(
+            harness.read_file_text(file).await?,
+            format!("{thread_id}|{call_id}"),
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_command_uses_installed_environment_shell_policy_with_explicit_overrides() -> Result<()>
 {
     skip_if_wine_exec!(

@@ -310,12 +310,21 @@ fn snapshot_filters_profile_exports_after_capture() {
         inherit: ShellEnvironmentPolicyInherit::All,
         ignore_default_excludes: false,
         exclude: vec!["PROFILE_DENIED".to_string()],
-        r#set: HashMap::from([("PROFILE_ALLOWED".to_string(), "override".to_string())]),
-        include_only: vec!["PROFILE_*".to_string()],
+        r#set: HashMap::from([
+            ("PROFILE_ALLOWED".to_string(), "override".to_string()),
+            ("CODEX_THREAD_ID".to_string(), "policy-thread".to_string()),
+            ("CODEX_TOOL_CALL_ID".to_string(), "policy-call".to_string()),
+        ]),
+        // Metadata must survive policy filtering so the cache owns its removal.
+        include_only: vec![
+            "PROFILE_*".to_string(),
+            "CODEX_THREAD_ID".to_string(),
+            "CODEX_TOOL_CALL_ID".to_string(),
+        ],
     };
     let snapshot = parse_snapshot(
         ShellType::Bash,
-        b"profile \xff noise\n# Snapshot file\nfunction profile_helper() { :; }\n\0alias profile_alias='profile_helper'\n\0PROFILE_DENIED\0export PROFILE_DENIED=denied\n\0NON_UTF8\0export NON_UTF8='\xff'\n\0\0PROFILE_ALLOWED=profile\0PROFILE_DENIED=denied\0PROFILE_SECRET=secret\0PWD=/tmp\0NON_UTF8=\xff\0",
+        b"profile \xff noise\n# Snapshot file\nfunction profile_helper() { :; }\n\0alias profile_alias='profile_helper'\n\0PROFILE_DENIED\0export PROFILE_DENIED=denied\n\0NON_UTF8\0export NON_UTF8='\xff'\n\0\0PROFILE_ALLOWED=profile\0PROFILE_DENIED=denied\0PROFILE_SECRET=secret\0PWD=/tmp\0NON_UTF8=\xff\0CODEX_THREAD_ID=capture-thread\0CODEX_TOOL_CALL_ID=profile-call\0",
         Some(&policy),
         SnapshotReplay::Environment,
     )
@@ -380,7 +389,9 @@ fn snapshot_caches_only_unmanaged_proxy_state() {
             ]),
         ),
     ] {
-        let output = format!("# Snapshot file\n\0\0\0{exports}");
+        let output = format!(
+            "# Snapshot file\n\0\0\0{exports}CODEX_THREAD_ID=capture-thread\0CODEX_TOOL_CALL_ID=profile-call\0"
+        );
         let snapshot = parse_snapshot(
             ShellType::Bash,
             output.as_bytes(),
@@ -392,6 +403,7 @@ fn snapshot_caches_only_unmanaged_proxy_state() {
         assert_eq!(snapshot.environment, expected);
     }
 }
+
 use codex_shell_command::shell_detect::ShellType;
 
 #[test_case(SnapshotReplay::File, 1024 * 1024, 0, None; "file_accepts_large_state")]

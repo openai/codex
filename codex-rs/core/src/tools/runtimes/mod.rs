@@ -7,6 +7,7 @@ small and focused and reuses the orchestrator for approvals + sandbox + retry.
 use crate::exec_env::CODEX_PERMISSION_PROFILE_ENV_VAR;
 use crate::exec_env::CODEX_SESSION_ID_ENV_VAR;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
+use crate::exec_env::CODEX_TOOL_CALL_ID_ENV_VAR;
 use crate::exec_env::CODEX_VERSION_ENV_VAR;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
@@ -352,6 +353,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     for key in [
         CODEX_SESSION_ID_ENV_VAR,
         CODEX_THREAD_ID_ENV_VAR,
+        CODEX_TOOL_CALL_ID_ENV_VAR,
         CODEX_VERSION_ENV_VAR,
         CODEX_PERMISSION_PROFILE_ENV_VAR,
         CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR,
@@ -368,6 +370,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
             CODEX_PERMISSION_PROFILE_ENV_VAR,
             CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR,
             PLUGIN_METRICS_OUTPUT_ENV_VAR,
+            CODEX_TOOL_CALL_ID_ENV_VAR,
         ],
     );
     let (proxy_captures, proxy_exports) = build_proxy_env_exports(env);
