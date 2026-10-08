@@ -10,6 +10,7 @@ pub(crate) use shutdown::thread_store_error_kind;
 
 use crate::CodexAppsToolsCache;
 use crate::CodexThreadSettingsOverrides;
+use crate::agent::AgentStatus;
 use crate::agent::LocalAgentControl;
 use crate::agent::api::AgentConfigUpdate;
 use crate::agent::api::AgentControl;
@@ -56,6 +57,7 @@ use codex_extension_api::ThreadInstructionsProvider;
 use codex_extension_api::UserInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
+use codex_history::HistoryInitialization;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
 use codex_history::RolloutItem;
@@ -2043,6 +2045,21 @@ impl ThreadManagerState {
             inherited_exec_policy,
             user_shell_override,
         } = request;
+        let history_initialization = if matches!(
+            &options.initial_history,
+            InitialHistory::New | InitialHistory::Forked(_)
+        ) && let Some(source_thread_id) = forked_from_thread_id
+        {
+            if let Ok(source) = self.get_thread(source_thread_id).await
+                && source.agent_status().await != AgentStatus::Shutdown
+            {
+                HistoryInitialization::WarmFork
+            } else {
+                HistoryInitialization::ColdFork
+            }
+        } else {
+            HistoryInitialization::from_history(&options.initial_history)
+        };
         let StartThreadOptions {
             mut config,
             thread_instructions_provider,
@@ -2281,6 +2298,7 @@ impl ThreadManagerState {
             code_mode_session_provider: Arc::clone(&self.code_mode_session_provider),
             extensions,
             conversation_history: initial_history,
+            history_initialization,
             disabled_plugin_ids,
             requested_history_mode: history_mode,
             fork_persistence,

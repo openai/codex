@@ -22,6 +22,7 @@ use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_api::TransportError;
+use codex_history::HistoryInitialization;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthManager;
@@ -1541,13 +1542,14 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
 
     let thread_id = client.state.thread_id.to_string();
     let expected_window_id = format!("{thread_id}:1");
-    let responses_metadata = test_responses_metadata_for_client(
+    let mut responses_metadata = test_responses_metadata_for_client(
         &client,
         Some("turn-123"),
         expected_window_id.clone(),
         Some(parent_thread_id),
         TestCodexResponsesRequestKind::Turn,
     );
+    responses_metadata.history_initialization = Some(HistoryInitialization::WarmFork);
     let client_metadata = client.build_ws_client_metadata(
         &responses_metadata,
         /*include_internal*/ true,
@@ -1560,6 +1562,7 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
             .expect("turn metadata"),
     )
     .expect("valid turn metadata");
+    assert_eq!(turn_metadata["history_initialization"], "warm_fork");
     for (client_key, metadata_key, expected) in [
         (
             X_CODEX_INSTALLATION_ID_HEADER,

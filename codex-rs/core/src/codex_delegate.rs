@@ -31,6 +31,7 @@ use crate::session::session::Session;
 use crate::session::startup::SessionStartup;
 use crate::session::startup::SessionStartupGuard;
 use crate::session::turn_context::TurnContext;
+use codex_history::HistoryInitialization;
 use codex_history::InitialHistory;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -80,6 +81,13 @@ pub(crate) async fn run_codex_thread_interactive(
 
     let conversation_history = initial_history.unwrap_or(InitialHistory::New);
     let forked_from_thread_id = conversation_history.forked_from_id();
+    let history_initialization = if matches!(&conversation_history, InitialHistory::Forked(_))
+        && forked_from_thread_id == Some(parent_session.thread_id)
+    {
+        HistoryInitialization::WarmFork
+    } else {
+        HistoryInitialization::from_history(&conversation_history)
+    };
     let runtime = parent_session.services.local_agent_runtime.clone();
     let startup = Arc::new(SessionStartup::default());
     startup.hold_membership(runtime.admit_start()?);
@@ -113,6 +121,7 @@ pub(crate) async fn run_codex_thread_interactive(
         code_mode_session_provider: parent_session.services.code_mode_service.session_provider(),
         extensions,
         conversation_history,
+        history_initialization,
         disabled_plugin_ids: (isolation == codex_extension_api::SessionIsolation::Inherit)
             .then(|| parent_ctx.disabled_plugin_ids.clone()),
         requested_history_mode: None,

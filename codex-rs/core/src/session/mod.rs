@@ -84,6 +84,7 @@ use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_features::unstable_features_warning_event;
+use codex_history::HistoryInitialization;
 use codex_history::RolloutItem;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
@@ -458,6 +459,7 @@ pub(crate) struct SessionSpawnArgs {
     pub(crate) code_mode_session_provider: Arc<dyn codex_code_mode::CodeModeSessionProvider>,
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
+    pub(crate) history_initialization: HistoryInitialization,
     pub(crate) disabled_plugin_ids: Option<Vec<String>>,
     pub(crate) requested_history_mode: Option<ThreadHistoryMode>,
     pub(crate) fork_persistence: ForkPersistence,
@@ -572,6 +574,7 @@ impl Session {
             code_mode_session_provider,
             extensions,
             conversation_history,
+            history_initialization,
             disabled_plugin_ids,
             requested_history_mode,
             fork_persistence,
@@ -935,6 +938,7 @@ impl Session {
             tx_event.clone(),
             agent_status_tx.clone(),
             conversation_history,
+            history_initialization,
             fork_persistence,
             session_source_clone,
             skills_service,

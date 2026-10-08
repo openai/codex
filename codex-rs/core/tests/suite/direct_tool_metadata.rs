@@ -654,11 +654,13 @@ async fn direct_function_and_tool_search_mark_complete_attempts(
     Ok(())
 }
 
-#[test_case(false; "ungranted_provider")]
-#[test_case(true; "granted_provider")]
+#[test_case(false, false; "ungranted_provider")]
+#[test_case(true, false; "granted_provider_cold_fork")]
+#[test_case(true, true; "granted_provider_warm_fork")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn direct_metadata_limit_respects_provider_support(
     include_internal_metadata: bool,
+    fork_from_running_thread: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
@@ -844,7 +846,14 @@ async fn direct_metadata_limit_respects_provider_support(
     }
 
     let rollout_path = test.codex.rollout_path().expect("rollout path");
-    test.codex.shutdown_and_wait().await?;
+    if fork_from_running_thread {
+        test.codex.flush_rollout().await?;
+    } else {
+        test.codex.shutdown_and_wait().await?;
+        test.thread_manager
+            .remove_thread(&test.session_configured.thread_id)
+            .await;
+    }
     let rollout = tokio::fs::read_to_string(&rollout_path).await?;
     let rollout = rollout
         .lines()
@@ -887,6 +896,10 @@ async fn direct_metadata_limit_respects_provider_support(
         .await
         .expect("shutdown fork");
 
+    if fork_from_running_thread {
+        test.codex.shutdown_and_wait().await?;
+    }
+
     let resumed = search_capable_apps_builder(apps.chatgpt_base_url)
         .with_config(configure_metadata)
         .resume(&server, test.home.clone(), rollout_path)
@@ -907,6 +920,36 @@ async fn direct_metadata_limit_respects_provider_support(
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 7);
+    let expected_fork = if fork_from_running_thread {
+        "warm_fork"
+    } else {
+        "cold_fork"
+    };
+    let initialization = requests
+        .iter()
+        .map(|request| {
+            let body = request.body_json();
+            let metadata: Value = serde_json::from_str(
+                body["client_metadata"]["x-codex-turn-metadata"]
+                    .as_str()
+                    .expect("turn metadata"),
+            )
+            .expect("valid turn metadata");
+            metadata["history_initialization"].clone()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        Value::Array(initialization),
+        json!([
+            "new",
+            "new",
+            "new",
+            expected_fork,
+            expected_fork,
+            "cold_resume",
+            "cold_resume"
+        ])
+    );
     for request in &requests[3..] {
         for original in [&first_output, &second_output] {
             let call_id = original["call_id"].as_str().expect("call ID");

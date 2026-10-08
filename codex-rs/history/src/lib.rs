@@ -14,6 +14,9 @@ pub use compaction_resume_metadata::resume_multi_agent_version;
 mod compaction_checkpoint;
 pub use compaction_checkpoint::CompactionCheckpoint;
 
+mod initialization;
+pub use initialization::HistoryInitialization;
+
 use std::borrow::Borrow;
 use std::ops::Deref;
 use std::ops::DerefMut;

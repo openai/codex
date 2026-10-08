@@ -26,6 +26,7 @@ use crate::client::X_CODEX_PARENT_THREAD_ID_HEADER;
 use crate::client::X_CODEX_TURN_METADATA_HEADER;
 use crate::client::X_CODEX_WINDOW_ID_HEADER;
 use crate::client::X_OPENAI_SUBAGENT_HEADER;
+use codex_history::HistoryInitialization;
 
 pub(crate) const INSTALLATION_ID_KEY: &str = "installation_id";
 pub(crate) const SESSION_ID_KEY: &str = "session_id";
@@ -43,6 +44,7 @@ pub(crate) const TOOL_NAMESPACES_INFO_KEY: &str = "tool_namespaces_info";
 pub(crate) const TURN_STARTED_AT_UNIX_MS_KEY: &str = "turn_started_at_unix_ms";
 pub(crate) const HISTORY_INGEST_REQUESTED_KEY: &str = "history_ingest_requested";
 pub(crate) const ANALYTICS_ENABLED_KEY: &str = "analytics_enabled";
+pub(crate) const HISTORY_INITIALIZATION_KEY: &str = "history_initialization";
 pub(crate) const MCP_ATTRIBUTION_CLIENT_METADATA_KEY: &str = "mcp_attribution";
 pub(crate) const MAX_MCP_ATTRIBUTION_BYTES: usize = 16 * 1024;
 
@@ -86,6 +88,7 @@ const RESERVED_METADATA_KEYS: &[&str] = &[
     TURN_STARTED_AT_UNIX_MS_KEY,
     HISTORY_INGEST_REQUESTED_KEY,
     ANALYTICS_ENABLED_KEY,
+    HISTORY_INITIALIZATION_KEY,
     FORKED_FROM_THREAD_ID_KEY,
     FORKED_FROM_ORDINAL_EXCLUSIVE_KEY,
     PARENT_THREAD_ID_KEY,
@@ -240,6 +243,7 @@ pub struct CodexResponsesMetadata {
     pub(crate) window_id: String,
     pub(crate) window_number: Option<u64>,
     pub(crate) context_window_id: Option<Uuid>,
+    pub(crate) history_initialization: Option<HistoryInitialization>,
     pub(crate) request_kind: Option<CodexResponsesRequestKind>,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) forked_from_ordinal_exclusive: Option<u64>,
@@ -285,6 +289,7 @@ impl CodexResponsesMetadata {
             window_id,
             window_number: None,
             context_window_id: None,
+            history_initialization: None,
             request_kind: None,
             forked_from_thread_id: None,
             forked_from_ordinal_exclusive: None,
@@ -428,6 +433,7 @@ impl CodexResponsesMetadata {
                 .then_some(self.context_window_id)
                 .flatten(),
             request_kind: request_kind_value,
+            history_initialization: self.history_initialization,
             forked_from_thread_id: self.forked_from_thread_id,
             forked_from_ordinal_exclusive: self.forked_from_ordinal_exclusive,
             parent_thread_id: self.parent_thread_id,
@@ -558,6 +564,8 @@ struct CodexTurnMetadataPayload<'a> {
     context_window_id: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     request_kind: Option<&'static str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    history_initialization: Option<HistoryInitialization>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     forked_from_thread_id: Option<ThreadId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

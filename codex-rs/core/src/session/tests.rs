@@ -6968,6 +6968,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services,
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
         fork_persistence: ForkPersistence::Copied,
+        history_initialization: HistoryInitialization::New,
         forked_from_ordinal_exclusive: None,
         next_internal_sub_id: AtomicU64::new(0),
     };
@@ -7142,6 +7143,7 @@ async fn make_session_with_config_and_rx(
         tx_event,
         agent_status_tx,
         InitialHistory::New,
+        HistoryInitialization::New,
         ForkPersistence::Copied,
         SessionSource::Exec,
         skills_service,
@@ -7260,6 +7262,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     ));
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
 
+    let history_initialization = HistoryInitialization::from_history(&initial_history);
     let session = Session::new(
         /*startup*/ None,
         session_configuration,
@@ -7275,6 +7278,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         tx_event,
         agent_status_tx,
         initial_history,
+        history_initialization,
         ForkPersistence::Copied,
         session_source,
         skills_service,
@@ -9231,6 +9235,7 @@ where
         services,
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
         fork_persistence: ForkPersistence::Copied,
+        history_initialization: HistoryInitialization::New,
         forked_from_ordinal_exclusive: None,
         next_internal_sub_id: AtomicU64::new(0),
     });

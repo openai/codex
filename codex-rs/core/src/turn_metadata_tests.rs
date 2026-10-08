@@ -709,6 +709,10 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
         (ROOT_TURN_ID_KEY.to_string(), "client-supplied".to_string()),
         ("subagent_kind".to_string(), "client-supplied".to_string()),
         (
+            "history_initialization".to_string(),
+            "client-supplied".to_string(),
+        ),
+        (
             SANDBOX_MODE_KEY.to_string(),
             "danger-full-access".to_string(),
         ),
@@ -731,6 +735,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
     assert!(json.get("parent_turn_id").is_none());
     assert!(json.get(ROOT_TURN_ID_KEY).is_none());
     assert!(json.get("subagent_kind").is_none());
+    assert!(json.get("history_initialization").is_none());
     assert_eq!(json[SANDBOX_MODE_KEY].as_str(), Some("read-only"));
     assert_eq!(json[AUTO_REVIEW_ENABLED_KEY].as_bool(), Some(false));
     assert_eq!(

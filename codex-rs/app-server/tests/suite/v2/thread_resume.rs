@@ -541,6 +541,34 @@ async fn thread_resume_with_empty_path_uses_running_thread_id() -> Result<()> {
     } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
 
     assert_eq!(resumed.id, thread.id);
+    mcp.start_turn_and_wait_for_completion(TurnStartParams {
+        thread_id: resumed.id,
+        input: vec![UserInput::Text {
+            text: "after warm resume".to_string(),
+            text_elements: Vec::new(),
+        }],
+        ..Default::default()
+    })
+    .await?;
+    let requests = responses::received_responses_requests(&server).await;
+    let initialization = requests
+        .iter()
+        .map(|request| {
+            let body = request.body_json();
+            let metadata: serde_json::Value = serde_json::from_str(
+                body["client_metadata"]["x-codex-turn-metadata"]
+                    .as_str()
+                    .expect("turn metadata"),
+            )
+            .expect("valid turn metadata");
+            metadata["history_initialization"].clone()
+        })
+        .collect::<Vec<_>>();
+    // Rejoining the live runtime must not relabel it as reconstructed history.
+    assert_eq!(
+        serde_json::Value::Array(initialization),
+        json!(["new", "new"])
+    );
     Ok(())
 }
 
@@ -6101,6 +6129,24 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     assert_eq!(model_provider, "mock_provider");
     assert_eq!(resumed.preview, history_text);
     assert_eq!(resumed.status, ThreadStatus::Idle);
+
+    mcp.start_turn_and_wait_for_completion(TurnStartParams {
+        thread_id: resumed.id,
+        input: vec![UserInput::Text {
+            text: "after supplied history".to_string(),
+            text_elements: Vec::new(),
+        }],
+        ..Default::default()
+    })
+    .await?;
+    let requests = responses::received_responses_requests(&server).await;
+    let body = requests.last().expect("resumed model request").body_json();
+    let metadata: serde_json::Value = serde_json::from_str(
+        body["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .expect("turn metadata"),
+    )?;
+    assert_eq!(metadata["history_initialization"], "supplied_history");
 
     Ok(())
 }
