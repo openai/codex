@@ -9,6 +9,8 @@ mod ssh_config_dependencies;
 pub mod environment_transport;
 #[cfg(any(windows, test))]
 mod launch_environment;
+#[cfg(any(windows, test))]
+mod setup_acl_error;
 
 use std::fmt;
 use std::sync::Arc;

@@ -15,11 +15,53 @@ use super::lock_sandbox_dir;
 use super::resolve_sid;
 use super::sid_bytes_to_psid;
 use crate::ensure_allow_write_aces;
+use crate::extract_setup_failure;
 use crate::path_mask_allows;
+use crate::read_setup_error_report;
 use crate::workspace_write_cap_sid_for_root;
+use crate::write_setup_error_report;
+use pretty_assertions::assert_eq;
 use std::fs;
+use windows_sys::Win32::Foundation::ERROR_PATH_NOT_FOUND;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LocalFree;
+
+#[test]
+fn bin_lock_report_retains_native_open_error() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut payload: Payload =
+        serde_json::from_value(super::tests::payload_json()).expect("fixture payload");
+    // The no-reparse open cannot create a bin whose parent does not exist.
+    // It fails before resolving account SIDs or changing any permissions.
+    payload.codex_home = temp.path().join("missing-home");
+    payload.mode = SetupMode::ProvisionOnly;
+    let bin = super::sandbox_bin_dir(&payload.codex_home);
+    let error = lock_sandbox_bin_dir(&payload, &[]).expect_err("missing bin parent");
+    let failure = extract_setup_failure(&error).expect("structured lock failure");
+    let expected = crate::SetupFailure::new(
+        crate::SetupErrorCode::HelperSandboxLockFailed,
+        format!(
+            "lock sandbox bin dir {0} failed: open directory {0}: NtCreateFile: {1}",
+            bin.display(),
+            std::io::Error::from_raw_os_error(ERROR_PATH_NOT_FOUND as i32),
+        ),
+    );
+    assert_eq!(failure, &expected);
+
+    write_setup_error_report(
+        temp.path(),
+        &crate::SetupErrorReport {
+            code: failure.code,
+            message: failure.message.clone(),
+        },
+    )
+    .expect("write structured failure");
+    let report = read_setup_error_report(temp.path())
+        .expect("read structured failure")
+        .expect("failure report");
+    assert_eq!(crate::SetupFailure::from_report(report), expected);
+    assert!(!payload.codex_home.exists());
+}
 
 #[test]
 fn provision_only_locks_plain_directory_via_handle() {
