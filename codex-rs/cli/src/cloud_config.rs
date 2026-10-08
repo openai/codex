@@ -1,5 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
+use codex_app_server::in_process::EmbeddedNetworkPolicy;
 use codex_cloud_config::cloud_config_bundle_loader_for_storage;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLoadOptions;
@@ -17,7 +18,7 @@ pub(crate) async fn load_config(
     config_overrides: &CliConfigOverrides,
     loader_overrides: LoaderOverrides,
 ) -> Result<Config> {
-    config_builder(
+    let mut config = config_builder(
         config_overrides,
         loader_overrides,
         ConfigOverrides::default(),
@@ -25,7 +26,9 @@ pub(crate) async fn load_config(
     .await?
     .build()
     .await
-    .context("failed to load configuration")
+    .context("failed to load configuration")?;
+    EmbeddedNetworkPolicy::default().activate(&mut config);
+    Ok(config)
 }
 
 pub(crate) async fn config_builder(
@@ -33,6 +36,7 @@ pub(crate) async fn config_builder(
     loader_overrides: LoaderOverrides,
     harness_overrides: ConfigOverrides,
 ) -> Result<ConfigBuilder> {
+    let network_policy = EmbeddedNetworkPolicy::load(&loader_overrides).await;
     let cli_overrides = config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
@@ -55,8 +59,10 @@ pub(crate) async fn config_builder(
     .await
     .context("failed to load bootstrap configuration")?;
     let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
-        bootstrap_auth_config(codex_home.as_path(), &bootstrap_config)
-            .context("failed to resolve cloud configuration authentication")?,
+        network_policy.bind_bootstrap_auth(
+            bootstrap_auth_config(codex_home.as_path(), &bootstrap_config)
+                .context("failed to resolve cloud configuration authentication")?,
+        ),
         /*enable_codex_api_key_env*/ false,
     )
     .await
