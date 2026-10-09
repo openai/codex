@@ -8,15 +8,17 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::turn_input::CyberAccessProgram;
 
+/// Configured support for explicit Cyber programs on API-key requests.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum ApiKeyCyberAccessPrograms {
+pub enum ApiKeyCyberAccessPrograms {
     UnsupportedProvider,
     Disabled,
     Enabled,
 }
 
 impl ApiKeyCyberAccessPrograms {
-    pub(crate) fn from_config(config: &crate::config::Config) -> Self {
+    /// Captures the same provider and feature policy used by ordinary model requests.
+    pub fn from_config(config: &crate::config::Config) -> Self {
         if config.model_provider_id != OPENAI_PROVIDER_ID {
             Self::UnsupportedProvider
         } else if config.features.enabled(Feature::ApiKeyCyberAccessPrograms) {
@@ -34,7 +36,8 @@ pub(crate) fn for_provider(
     program.filter(|_| provider_id == OPENAI_PROVIDER_ID)
 }
 
-pub(crate) fn for_auth(
+/// Resolves an explicit program using the request's current authentication.
+pub fn for_auth(
     auth: Option<&CodexAuth>,
     program: Option<CyberAccessProgram>,
     policy: ApiKeyCyberAccessPrograms,

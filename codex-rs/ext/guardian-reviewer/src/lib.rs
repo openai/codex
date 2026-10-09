@@ -59,6 +59,7 @@ pub use execution::start_review_turn;
 pub use execution::wait_for_guardian_review;
 pub use settings::ReviewerConfig;
 pub use settings::ReviewerTurn;
+pub use settings::guardian_cyber_access_program;
 pub use settings::reviewer_permission_profile;
 pub use settings::reviewer_tool_policy;
 

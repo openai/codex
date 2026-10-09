@@ -100,6 +100,8 @@ mod gateway_auth;
 mod guardian_connector_trust;
 #[cfg(not(target_os = "windows"))]
 mod guardian_context_budget;
+#[path = "guardian_cyber_access_program_tests.rs"]
+mod guardian_cyber_access_program;
 mod guardian_history;
 mod guardian_mcp_elicitation;
 #[cfg(not(target_os = "windows"))]

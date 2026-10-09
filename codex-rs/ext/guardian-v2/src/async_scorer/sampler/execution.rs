@@ -13,11 +13,13 @@ use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_api::ResponsesApiRequest;
 use codex_api::TransportError;
+use codex_core::cyber_access_program;
 use codex_extension_api::ExtensionMetrics;
 use codex_login::UnauthorizedRecovery;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::turn_input::CyberAccessProgram;
 use http::StatusCode;
 use serde_json::json;
 use std::collections::HashMap;
@@ -33,6 +35,7 @@ const TURN_METADATA_KEY: &str = "x-codex-turn-metadata";
 
 pub(super) struct SamplingExecution {
     pub(super) auth_owner_generation: Option<u64>,
+    pub(super) cyber_access_program: Option<CyberAccessProgram>,
     pub(super) config: Arc<LunaSamplerConfig>,
     pub(super) connections: Arc<ConnectionPool>,
     pub(super) request: ResponsesApiRequest,
@@ -255,6 +258,24 @@ impl SamplingExecution {
                         continue;
                     }
                     return Err(error);
+                }
+            };
+            // Omitted programs need no auth lookup, which can refresh credentials.
+            self.request.access_programs = match self.cyber_access_program {
+                None => None,
+                Some(program) => {
+                    let auth = tokio::select! {
+                        biased;
+                        _ = &mut owner_changed => return Err(account_changed_error()),
+                        _ = mode.superseded() => return Err(LunaSamplerError::Superseded),
+                        auth = self.config.provider.auth() => auth,
+                    };
+                    cyber_access_program::for_auth(
+                        auth.as_ref(),
+                        Some(program),
+                        self.config.api_key_cyber_access_programs,
+                    )
+                    .map_err(LunaSamplerError::Provider)?
                 }
             };
             ensure_account_owner()?;

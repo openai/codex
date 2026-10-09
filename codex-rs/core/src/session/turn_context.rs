@@ -1374,6 +1374,10 @@ impl Session {
             &turn_context.config.model_provider_id,
             options.cyber_access_program,
         );
+        // Tool observers retain this turn's selection even after a later turn starts.
+        if let Some(program) = turn_context.cyber_access_program {
+            turn_context.extension_data.insert(program);
+        }
         let turn_context = Arc::new(turn_context);
         if git_enrichment_policy == GitEnrichmentPolicy::Fresh
             && turn_context

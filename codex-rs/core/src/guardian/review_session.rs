@@ -759,6 +759,7 @@ async fn run_review_on_session(
         personality: params.personality,
         model: review_model.model.clone(),
         reasoning_effort: review_model.reasoning_effort.clone(),
+        cyber_access_program: parent_turn.cyber_access_program,
         parent_response_id: params.parent_context.parent_response_id.clone(),
         schema: params.schema.clone(),
         parent_turn_id: parent_turn.sub_id.clone(),
