@@ -34,6 +34,8 @@ pub use host::NotificationDelivery;
 pub use in_memory::InMemoryAgentMessageBoard;
 pub use in_memory::InMemoryMessageBoards;
 pub use local::LocalAgentMessageBoard;
+pub use local::setup::LocalBoardSetup;
+pub use local::setup::configure_local_board;
 pub use permissions::BoardPermissions;
 pub use permissions::ChannelPermissions;
 pub use permissions::PermissionDenied;

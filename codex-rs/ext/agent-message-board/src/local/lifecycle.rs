@@ -77,6 +77,7 @@ impl LocalAgentMessageBoard {
                 "DELETE FROM subscription_opt_outs WHERE board=?",
                 "DELETE FROM posts WHERE board=?",
                 "DELETE FROM channels WHERE board=?",
+                "DELETE FROM board_templates WHERE board=?",
             ] {
                 sqlx::query(statement)
                     .bind(root.to_string())

@@ -45,7 +45,9 @@ use uuid::Uuid;
 
 mod lifecycle;
 mod paging;
+mod pool;
 mod queries;
+pub(crate) mod setup;
 
 #[cfg(test)]
 #[path = "local/pools_tests.rs"]
@@ -61,6 +63,7 @@ const DATABASE_FILE: &str = "agent_message_board_1.sqlite";
 static POOLS: LazyLock<Mutex<HashMap<PathBuf, Weak<SqlitePool>>>> = LazyLock::new(Mutex::default);
 
 const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS board_templates (board TEXT PRIMARY KEY NOT NULL, template TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS deleted_boards (board TEXT PRIMARY KEY NOT NULL);
 CREATE TABLE IF NOT EXISTS channels (
  board TEXT NOT NULL, name TEXT NOT NULL, name_search TEXT NOT NULL, created_at TEXT NOT NULL, timestamp INTEGER NOT NULL, author TEXT NOT NULL, description TEXT,
@@ -104,60 +107,14 @@ struct StoredPost {
 impl LocalAgentMessageBoard {
     /// Reopens the same board for a root, child or resumed runtime. The shared
     /// SQLite configuration preserves the host's connection and journal policy.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "pool creation and schema initialization stay serialized to avoid duplicate pools"
-    )]
     pub async fn open(
         sqlite: &SqliteConfig,
         identity: SessionId,
         host: Arc<dyn MessageBoardHost>,
     ) -> Result<Self> {
-        tokio::fs::create_dir_all(sqlite.home()).await?;
-        let path = tokio::fs::canonicalize(sqlite.home())
-            .await?
-            .join(DATABASE_FILE);
-        let mut pools = POOLS.lock().await;
-        pools.retain(|_, pool| pool.strong_count() > 0);
-        let pool = if let Some(pool) = pools
-            .get(&path)
-            .and_then(Weak::upgrade)
-            .filter(|pool| !pool.is_closed())
-        {
-            pool
-        } else {
-            let pool = sqlite
-                .open_read_write_pool(&path)
-                .await
-                .map_err(storage_error)?;
-            let mut tx = pool
-                .begin_with("BEGIN IMMEDIATE")
-                .await
-                .map_err(storage_error)?;
-            sqlx::raw_sql(SCHEMA)
-                .execute(&mut *tx)
-                .await
-                .map_err(storage_error)?;
-            let has_description: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('channels') WHERE name='description')",
-            )
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(storage_error)?;
-            if !has_description {
-                sqlx::query("ALTER TABLE channels ADD COLUMN description TEXT")
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(storage_error)?;
-            }
-            tx.commit().await.map_err(storage_error)?;
-            let pool = Arc::new(pool);
-            pools.insert(path, Arc::downgrade(&pool));
-            pool
-        };
         Ok(Self {
             identity,
-            pool,
+            pool: pool::open(sqlite).await?,
             host,
         })
     }
