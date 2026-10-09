@@ -57,6 +57,7 @@ mod rollout_migration;
 pub(crate) mod test_support;
 mod thread_attachments;
 mod thread_metadata;
+mod thread_read_state;
 mod thread_section_order;
 mod thread_sections;
 mod threads;
@@ -81,6 +82,9 @@ pub use recovery::is_sqlite_corruption_error;
 pub use recovery::runtime_db_path_for_corruption_error;
 pub use recovery::sqlite_error_detail_is_lock;
 pub use remote_control::RemoteControlEnrollmentRecord;
+pub use thread_read_state::ReadStateOperation;
+pub use thread_read_state::ReadStateUpdate;
+pub use thread_read_state::ThreadReadState;
 pub use threads::ThreadFilterOptions;
 
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:
