@@ -353,7 +353,7 @@ impl App {
             &event,
             TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained
         ) {
-            self.chat_widget.refresh_iterm_session_status();
+            self.chat_widget.refresh_terminal_program_status();
         }
         let width = tui.terminal.last_known_screen_size.width.max(/*other*/ 1);
         let footer = self.prompt_navigation_footer(width.saturating_sub(/*rhs*/ 2));

@@ -408,7 +408,7 @@ pub fn restore_after_exit() -> Result<()> {
     if let Err(err) = terminal_stderr::finish() {
         first_error.get_or_insert(err);
     }
-    if let Err(err) = crate::iterm_session_status::clear_iterm_session_status() {
+    if let Err(err) = crate::terminal_program_status::clear_terminal_program_status() {
         first_error.get_or_insert(err);
     }
 
@@ -976,6 +976,9 @@ impl Tui {
         if let Err(err) = terminal_stderr::pause() {
             tracing::warn!("failed to restore terminal stderr before external program: {err}");
         }
+        if let Err(err) = crate::terminal_program_status::clear_terminal_program_status() {
+            tracing::debug!(error = %err, "failed to clear terminal program status before external program");
+        }
 
         let output = f().await;
 
@@ -999,7 +1002,7 @@ impl Tui {
             let _ = self.enter_alt_screen();
         }
 
-        crate::iterm_session_status::invalidate_iterm_session_status();
+        crate::terminal_program_status::invalidate_terminal_program_status();
         self.resume_events();
         self.schedule_screen_size_recheck(Duration::ZERO);
         output

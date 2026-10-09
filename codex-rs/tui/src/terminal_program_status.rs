@@ -1,9 +1,10 @@
-//! Emits coarse Codex lifecycle state through iTerm2's OSC 21337 protocol.
+//! Emits coarse Codex lifecycle state through terminal status protocols.
 //!
-//! This first integration is intentionally limited to direct iTerm2 sessions.
-//! The payload includes bounded activity text from the existing TUI status.
-//! A process-wide cache matches the terminal session's ownership and prevents
-//! stale state when the active chat changes.
+//! OSC 7501 is safe to send to any terminal and reports only the lifecycle
+//! state and app name. Direct iTerm2 sessions also receive the existing OSC
+//! 21337 status, including bounded activity text. A process-wide cache matches
+//! the terminal session's ownership and prevents stale state when the active
+//! chat changes.
 
 use std::fmt;
 use std::io;
@@ -21,7 +22,7 @@ use ratatui::crossterm::execute;
 const NO_EMITTED_STATUS: u8 = 0;
 const INVALIDATED_EMITTED_STATUS: u8 = u8::MAX;
 static SESSION_STATUS_STATE: SessionStatusState = SessionStatusState::new();
-static ITERM_SESSION_STATUS_SUPPORTED: OnceLock<bool> = OnceLock::new();
+static TERMINAL_PROGRAM_STATUS_SUPPORT: OnceLock<TerminalProgramStatusSupport> = OnceLock::new();
 
 struct SessionStatusState {
     last_emitted: Mutex<EmittedSessionStatus>,
@@ -75,58 +76,92 @@ impl SessionStatusState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub(crate) enum ItermSessionStatus {
-    Idle = 1,
-    Working = 2,
-    Waiting = 3,
+struct TerminalProgramStatusSupport {
+    osc_7501: bool,
+    osc_21337: bool,
 }
 
-impl ItermSessionStatus {
-    fn label(self) -> &'static str {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub(crate) enum ProgramStatus {
+    Idle = 1,
+    Working = 2,
+    Blocked = 3,
+}
+
+impl ProgramStatus {
+    fn iterm_label(self) -> &'static str {
         match self {
             Self::Idle => "Idle",
             Self::Working => "Working",
-            Self::Waiting => "Waiting",
+            Self::Blocked => "Waiting",
         }
     }
 
-    fn indicator(self) -> &'static str {
+    fn iterm_indicator(self) -> &'static str {
         match self {
             Self::Idle => "#00d75f",
             Self::Working => "#ff9500",
-            Self::Waiting => "#5f87ff",
+            Self::Blocked => "#5f87ff",
+        }
+    }
+
+    fn protocol_state(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Working => "working",
+            Self::Blocked => "blocked",
         }
     }
 }
 
-pub(crate) fn set_iterm_session_status(
-    status: ItermSessionStatus,
+pub(crate) fn set_terminal_program_status(
+    status: ProgramStatus,
     detail: Option<&str>,
 ) -> io::Result<()> {
     if cfg!(test) {
         return Ok(());
     }
 
-    if !*ITERM_SESSION_STATUS_SUPPORTED.get_or_init(|| {
-        iterm_session_status_supported(
-            &terminal_info(),
-            /*stdout_is_terminal*/ stdout().is_terminal(),
-            /*screen_active*/ std::env::var_os("STY").is_some(),
-        )
-    }) {
+    let support = current_terminal_program_status_support();
+    if !support.osc_7501 {
         return Ok(());
     }
 
-    let detail = sanitize_iterm_session_detail(detail.unwrap_or_default());
+    let detail = if support.osc_21337 {
+        sanitize_iterm_session_detail(detail.unwrap_or_default())
+    } else {
+        String::new()
+    };
     SESSION_STATUS_STATE.update(status as u8, &detail, || {
-        execute!(stdout(), SetItermSessionStatus(status, &detail))
+        execute!(
+            stdout(),
+            SetTerminalProgramStatus {
+                status,
+                iterm_detail: &detail,
+                emit_iterm_status: support.osc_21337,
+            }
+        )
     })
 }
 
-pub(crate) fn clear_iterm_session_status() -> io::Result<()> {
+pub(crate) fn clear_terminal_program_status() -> io::Result<()> {
+    if cfg!(test) {
+        return Ok(());
+    }
+
+    let support = current_terminal_program_status_support();
+    if !support.osc_7501 {
+        return Ok(());
+    }
+
     SESSION_STATUS_STATE.update(NO_EMITTED_STATUS, "", || {
-        execute!(stdout(), ClearItermSessionStatus)
+        execute!(
+            stdout(),
+            ClearTerminalProgramStatus {
+                emit_iterm_status: support.osc_21337,
+            }
+        )
     })
 }
 
@@ -134,7 +169,7 @@ pub(crate) fn clear_iterm_session_status() -> io::Result<()> {
 ///
 /// The next active draw will re-emit Codex's current status even if its
 /// lifecycle state did not change during the handoff.
-pub(crate) fn invalidate_iterm_session_status() {
+pub(crate) fn invalidate_terminal_program_status() {
     SESSION_STATUS_STATE.invalidate();
 }
 
@@ -153,35 +188,60 @@ fn sanitize_iterm_session_detail(detail: &str) -> String {
     escaped
 }
 
-fn iterm_session_status_supported(
+fn current_terminal_program_status_support() -> TerminalProgramStatusSupport {
+    *TERMINAL_PROGRAM_STATUS_SUPPORT.get_or_init(|| {
+        terminal_program_status_support(
+            &terminal_info(),
+            /*stdout_is_terminal*/ stdout().is_terminal(),
+            /*screen_active*/ std::env::var_os("STY").is_some(),
+        )
+    })
+}
+
+fn terminal_program_status_support(
     terminal: &TerminalInfo,
     stdout_is_terminal: bool,
     screen_active: bool,
-) -> bool {
-    stdout_is_terminal
+) -> TerminalProgramStatusSupport {
+    let osc_21337 = stdout_is_terminal
         && terminal.name == TerminalName::Iterm2
         && terminal.multiplexer.is_none()
-        && !screen_active
+        && !screen_active;
+    TerminalProgramStatusSupport {
+        osc_7501: stdout_is_terminal,
+        osc_21337,
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
-struct SetItermSessionStatus<'a>(ItermSessionStatus, &'a str);
+struct SetTerminalProgramStatus<'a> {
+    status: ProgramStatus,
+    iterm_detail: &'a str,
+    emit_iterm_status: bool,
+}
 
-impl Command for SetItermSessionStatus<'_> {
+impl Command for SetTerminalProgramStatus<'_> {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        if self.emit_iterm_status {
+            write!(
+                f,
+                "\x1b]21337;status={};indicator={};status-color=;detail={}\x07",
+                self.status.iterm_label(),
+                self.status.iterm_indicator(),
+                self.iterm_detail,
+            )?;
+        }
         write!(
             f,
-            "\x1b]21337;status={};indicator={};status-color=;detail={}\x07",
-            self.0.label(),
-            self.0.indicator(),
-            self.1,
+            "\x1b]7501;state={}:app=codex\x1b\\",
+            self.status.protocol_state(),
         )
     }
 
     #[cfg(windows)]
     fn execute_winapi(&self) -> io::Result<()> {
         Err(io::Error::other(
-            "tried to set iTerm2 session status using WinAPI; use ANSI instead",
+            "tried to set terminal program status using WinAPI; use ANSI instead",
         ))
     }
 
@@ -192,17 +252,22 @@ impl Command for SetItermSessionStatus<'_> {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ClearItermSessionStatus;
+struct ClearTerminalProgramStatus {
+    emit_iterm_status: bool,
+}
 
-impl Command for ClearItermSessionStatus {
+impl Command for ClearTerminalProgramStatus {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        write!(f, "\x1b]21337;status=;indicator=;status-color=;detail=\x07")
+        if self.emit_iterm_status {
+            write!(f, "\x1b]21337;status=;indicator=;status-color=;detail=\x07")?;
+        }
+        write!(f, "\x1b]7501;state=clear\x1b\\")
     }
 
     #[cfg(windows)]
     fn execute_winapi(&self) -> io::Result<()> {
         Err(io::Error::other(
-            "tried to clear iTerm2 session status using WinAPI; use ANSI instead",
+            "tried to clear terminal program status using WinAPI; use ANSI instead",
         ))
     }
 

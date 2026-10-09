@@ -1,16 +1,17 @@
 use super::*;
-use crate::iterm_session_status::ItermSessionStatus::Idle;
-use crate::iterm_session_status::ItermSessionStatus::Waiting;
-use crate::iterm_session_status::ItermSessionStatus::Working;
 use pretty_assertions::assert_eq;
+
+use crate::terminal_program_status::ProgramStatus::Blocked;
+use crate::terminal_program_status::ProgramStatus::Idle;
+use crate::terminal_program_status::ProgramStatus::Working;
 
 #[tokio::test]
 async fn session_status_follows_existing_lifecycle_state() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let mut states = vec![chat.desired_iterm_session_status()];
+    let mut states = vec![chat.desired_program_status()];
 
     chat.bottom_pane.set_task_running(/*running*/ true);
-    states.push(chat.desired_iterm_session_status());
+    states.push(chat.desired_program_status());
 
     handle_exec_approval_request(
         &mut chat,
@@ -31,13 +32,13 @@ async fn session_status_follows_existing_lifecycle_state() {
             available_decisions: None,
         },
     );
-    states.push(chat.desired_iterm_session_status());
+    states.push(chat.desired_program_status());
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
-    states.push(chat.desired_iterm_session_status());
+    states.push(chat.desired_program_status());
 
     chat.bottom_pane.set_task_running(/*running*/ false);
-    states.push(chat.desired_iterm_session_status());
+    states.push(chat.desired_program_status());
 
     chat.unified_exec_processes.push(UnifiedExecProcessSummary {
         key: "background-process".to_string(),
@@ -45,13 +46,13 @@ async fn session_status_follows_existing_lifecycle_state() {
         command_display: "sleep 5".to_string(),
         recent_chunks: Vec::new(),
     });
-    states.push(chat.desired_iterm_session_status());
+    states.push(chat.desired_program_status());
     chat.unified_exec_processes.clear();
-    states.push(chat.desired_iterm_session_status());
+    states.push(chat.desired_program_status());
 
     assert_eq!(
         states,
-        [Idle, Working, Waiting, Working, Idle, Working, Idle]
+        [Idle, Working, Blocked, Working, Idle, Working, Idle]
     );
 }
 
@@ -65,7 +66,7 @@ async fn session_status_detail_uses_only_foreground_activity() {
     let generic = detail(&chat, Working);
     chat.set_status_header("Reading source".to_string());
     let working = detail(&chat, Working);
-    let waiting = detail(&chat, Waiting);
+    let waiting = detail(&chat, Blocked);
     chat.bottom_pane.set_task_running(/*running*/ false);
     let idle = detail(&chat, Idle);
     let background = detail(&chat, Working);

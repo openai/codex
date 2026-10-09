@@ -8,12 +8,12 @@ use crate::bottom_pane::status_line_from_segments;
 use crate::branch_summary;
 use crate::chatwidget::limit_label_for_window;
 use crate::chatwidget::rate_limits::get_limits_duration;
-use crate::iterm_session_status::ItermSessionStatus;
 use crate::legacy_core::config::Config;
 use crate::model_catalog::LUNA_RESERVE_MODEL;
 use crate::status::format_credit_micros;
 use crate::status::format_estimated_usd_micros;
 use crate::status::format_tokens_compact;
+use crate::terminal_program_status::ProgramStatus;
 use codex_app_server_protocol::AskForApproval;
 use codex_config::ConfigLayerSource;
 use codex_config::os_host_name;
@@ -322,18 +322,18 @@ impl ChatWidget {
         self.bottom_pane.terminal_title_requires_action()
     }
 
-    pub(super) fn desired_iterm_session_status(&self) -> ItermSessionStatus {
+    pub(super) fn desired_program_status(&self) -> ProgramStatus {
         if self.terminal_title_requires_action() {
-            ItermSessionStatus::Waiting
+            ProgramStatus::Blocked
         } else if self.bottom_pane.is_task_running() || !self.unified_exec_processes.is_empty() {
-            ItermSessionStatus::Working
+            ProgramStatus::Working
         } else {
-            ItermSessionStatus::Idle
+            ProgramStatus::Idle
         }
     }
 
-    pub(super) fn iterm_session_detail(&self, status: ItermSessionStatus) -> Option<&str> {
-        (status == ItermSessionStatus::Working && self.bottom_pane.is_task_running())
+    pub(super) fn iterm_session_detail(&self, status: ProgramStatus) -> Option<&str> {
+        (status == ProgramStatus::Working && self.bottom_pane.is_task_running())
             .then_some(self.status_state.current_status.header.as_str())
             .filter(|detail| *detail != "Working")
     }
