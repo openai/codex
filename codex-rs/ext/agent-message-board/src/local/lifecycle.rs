@@ -4,11 +4,11 @@
 //! Recovery closes the cached pool before backing up and recreating the database,
 //! and excludes new handles until the replacement's deletion tombstones are saved.
 
-use super::DATABASE_FILE;
 use super::LocalAgentMessageBoard;
-use super::POOLS;
-use super::SCHEMA;
 use super::invalid;
+use super::pool::DATABASE_FILE;
+use super::pool::POOLS;
+use super::pool::SCHEMA;
 use super::storage_error;
 use codex_protocol::SessionId;
 use codex_protocol::error::Result;

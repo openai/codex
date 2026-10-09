@@ -1,11 +1,13 @@
 //! Loads initial channels into an empty local board and pins their source template.
 
+use super::insert_channel;
 use super::invalid;
 use super::storage_error;
 use super::validate_channel;
 use crate::ChannelDescription;
 use chrono::DateTime;
 use chrono::Utc;
+use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::error::Result;
 use codex_state::SqliteConfig;
@@ -59,10 +61,10 @@ pub async fn configure_local_board(
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(storage_error)?;
-    let board = board.to_string();
+    let board_key = board.to_string();
     let deleted: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM deleted_boards WHERE board=?)")
-            .bind(&board)
+            .bind(&board_key)
             .fetch_one(&mut *tx)
             .await
             .map_err(storage_error)?;
@@ -71,7 +73,7 @@ pub async fn configure_local_board(
     }
     let pinned: Option<String> =
         sqlx::query_scalar("SELECT template FROM board_templates WHERE board=?")
-            .bind(&board)
+            .bind(&board_key)
             .fetch_optional(&mut *tx)
             .await
             .map_err(storage_error)?;
@@ -81,7 +83,7 @@ pub async fn configure_local_board(
         }
     } else {
         let used: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM channels WHERE board=?)")
-            .bind(&board)
+            .bind(&board_key)
             .fetch_one(&mut *tx)
             .await
             .map_err(storage_error)?;
@@ -91,18 +93,22 @@ pub async fn configure_local_board(
             ));
         }
         sqlx::query("INSERT INTO board_templates(board,template) VALUES(?,?)")
-            .bind(&board)
+            .bind(&board_key)
             .bind(encoded)
             .execute(&mut *tx)
             .await
             .map_err(storage_error)?;
         let now = setup.timestamp.unwrap_or_else(Utc::now);
         for (name, channel) in &template.channels {
-            sqlx::query("INSERT INTO channels(board,name,name_search,created_at,timestamp,author,description) VALUES(?,?,?,?,?,'/root',?)")
-                .bind(&board).bind(name).bind(caseless::default_case_fold_str(name))
-                .bind(now.to_rfc3339()).bind(now.timestamp_micros())
-                .bind(channel.description.as_ref().map(ChannelDescription::as_str))
-                .execute(&mut *tx).await.map_err(storage_error)?;
+            insert_channel(
+                &mut tx,
+                board,
+                name,
+                channel.description.as_ref(),
+                &AgentPath::root(),
+                now,
+            )
+            .await?;
         }
     }
     tx.commit().await.map_err(storage_error)

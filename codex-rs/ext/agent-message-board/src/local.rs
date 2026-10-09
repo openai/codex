@@ -34,13 +34,8 @@ use serde::Serialize;
 use sqlx::Row;
 use sqlx::SqliteConnection;
 use sqlx::SqlitePool;
-use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::LazyLock;
-use std::sync::Weak;
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
 mod lifecycle;
@@ -56,40 +51,6 @@ mod pools_tests;
 const MAX_POST_BYTES: usize = 64 * 1024;
 const MAX_CHANNEL_BYTES: usize = 128;
 const MAX_READ_CHARS: usize = 20_000;
-const DATABASE_FILE: &str = "agent_message_board_1.sqlite";
-
-// Weak entries let the last board handle release its pool. Initialization and
-// recovery share one lock so concurrent starts cannot open duplicate or stale pools.
-static POOLS: LazyLock<Mutex<HashMap<PathBuf, Weak<SqlitePool>>>> = LazyLock::new(Mutex::default);
-
-const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS board_templates (board TEXT PRIMARY KEY NOT NULL, template TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS deleted_boards (board TEXT PRIMARY KEY NOT NULL);
-CREATE TABLE IF NOT EXISTS channels (
- board TEXT NOT NULL, name TEXT NOT NULL, name_search TEXT NOT NULL, created_at TEXT NOT NULL, timestamp INTEGER NOT NULL, author TEXT NOT NULL, description TEXT,
- PRIMARY KEY(board,name)
-);
-CREATE TABLE IF NOT EXISTS posts (
- seq INTEGER PRIMARY KEY AUTOINCREMENT,
- board TEXT NOT NULL, id TEXT NOT NULL, channel TEXT NOT NULL, root TEXT NOT NULL,
- author TEXT NOT NULL, timestamp INTEGER NOT NULL, body_search TEXT NOT NULL,
- payload TEXT NOT NULL, request_id TEXT NOT NULL, request TEXT NOT NULL,
- UNIQUE(board,id), UNIQUE(board,request_id)
-);
-CREATE INDEX IF NOT EXISTS posts_board_channel ON posts(board,channel,seq);
-CREATE INDEX IF NOT EXISTS posts_board_channel_timestamp ON posts(board,channel,timestamp,seq);
-CREATE INDEX IF NOT EXISTS posts_roots_created ON posts(board,channel,timestamp,seq) WHERE id=root;
-CREATE INDEX IF NOT EXISTS posts_board_root ON posts(board,root,seq);
-CREATE INDEX IF NOT EXISTS posts_board_root_timestamp ON posts(board,root,timestamp,seq);
-CREATE INDEX IF NOT EXISTS posts_board_timestamp ON posts(board,timestamp,seq);
-CREATE TABLE IF NOT EXISTS subscriptions (
- board TEXT NOT NULL, target TEXT NOT NULL, agent TEXT NOT NULL,
- PRIMARY KEY(board,target,agent)
-);
-CREATE TABLE IF NOT EXISTS subscription_opt_outs (
- board TEXT NOT NULL, target TEXT NOT NULL, agent TEXT NOT NULL,
- PRIMARY KEY(board,target,agent)
-);";
 
 #[derive(Clone)]
 pub struct LocalAgentMessageBoard {
@@ -128,10 +89,11 @@ impl LocalAgentMessageBoard {
         let author = self.host.agent_path(caller).await?;
         let now = self.host.current_time(caller).await?;
         let mut tx = self.begin_write().await?;
-        self.insert_channel(
+        insert_channel(
             &mut tx,
+            self.identity,
             &request.channel_name,
-            request.description.as_ref().map(ChannelDescription::as_str),
+            request.description.as_ref(),
             &author,
             now,
         )
@@ -216,8 +178,15 @@ impl LocalAgentMessageBoard {
             }
             PostDestination::NewChannel(channel) => {
                 validate_channel(channel)?;
-                self.insert_channel(&mut tx, channel, /*description*/ None, &author, now)
-                    .await?;
+                insert_channel(
+                    &mut tx,
+                    self.identity,
+                    channel,
+                    /*description*/ None,
+                    &author,
+                    now,
+                )
+                .await?;
                 self.subscribe(
                     &mut tx,
                     &SubscriptionTarget::Channel(channel.clone()),
@@ -377,23 +346,6 @@ impl LocalAgentMessageBoard {
         })
     }
 
-    async fn insert_channel(
-        &self,
-        conn: &mut SqliteConnection,
-        name: &str,
-        description: Option<&str>,
-        author: &AgentPath,
-        now: DateTime<Utc>,
-    ) -> Result<()> {
-        let inserted = sqlx::query("INSERT OR IGNORE INTO channels(board,name,name_search,created_at,timestamp,author,description) VALUES(?,?,?,?,?,?,?)")
-            .bind(self.identity.to_string()).bind(name).bind(default_case_fold_str(name)).bind(now.to_rfc3339()).bind(now.timestamp_micros()).bind(author.to_string()).bind(description)
-            .execute(conn).await.map_err(storage_error)?.rows_affected();
-        if inserted == 0 {
-            return Err(invalid("channel already exists"));
-        }
-        Ok(())
-    }
-
     async fn subscribe(
         &self,
         conn: &mut SqliteConnection,
@@ -476,6 +428,25 @@ impl LocalAgentMessageBoard {
                 .map_err(storage_error)?,
         })
     }
+}
+
+// Runtime writes and template setup validate names and board lifecycle before
+// inserting within their own transaction.
+async fn insert_channel(
+    conn: &mut SqliteConnection,
+    board: SessionId,
+    name: &str,
+    description: Option<&ChannelDescription>,
+    author: &AgentPath,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let inserted = sqlx::query("INSERT OR IGNORE INTO channels(board,name,name_search,created_at,timestamp,author,description) VALUES(?,?,?,?,?,?,?)")
+        .bind(board.to_string()).bind(name).bind(default_case_fold_str(name)).bind(now.to_rfc3339()).bind(now.timestamp_micros()).bind(author.to_string()).bind(description.map(ChannelDescription::as_str))
+        .execute(conn).await.map_err(storage_error)?.rows_affected();
+    if inserted == 0 {
+        return Err(invalid("channel already exists"));
+    }
+    Ok(())
 }
 
 fn validate_channel(name: &str) -> Result<()> {
