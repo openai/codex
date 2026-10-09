@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
+use std::time::Duration;
 
 use arc_swap::ArcSwapOption;
 use codex_config::ScopedSkillsConfig;
@@ -1013,6 +1014,26 @@ impl Environment {
                     .await
                     .map_err(|error| ExecServerError::Protocol(error.to_string()))
             }
+        }
+    }
+
+    /// Reads configuration with a timeout for the remote RPC once connected.
+    /// Remote transports without a reconnect strategy remain open after a timeout.
+    /// Local reads retain their existing behavior without a timeout.
+    pub async fn read_environment_config_with_timeout(
+        &self,
+        params: EnvironmentConfigReadParams,
+        rpc_timeout: Duration,
+    ) -> Result<EnvironmentConfigReadResponse, ExecServerError> {
+        match &self.remote_client {
+            Some(client) => {
+                client
+                    .get()
+                    .await?
+                    .read_environment_config_with_timeout(params, rpc_timeout)
+                    .await
+            }
+            None => self.read_environment_config(params).await,
         }
     }
 

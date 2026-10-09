@@ -28,6 +28,7 @@ impl ExecServerError {
             Self::Closed
             | Self::Disconnected(_)
             | Self::WebSocketConnectTimeout { .. }
+            | Self::RpcTimedOut { .. }
             | Self::InitializeTimedOut { .. } => true,
             Self::WebSocketConnect { source, .. } => match source {
                 WebSocketError::ConnectionClosed

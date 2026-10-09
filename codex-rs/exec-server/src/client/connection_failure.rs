@@ -37,6 +37,7 @@ impl ExecServerError {
             | Self::WebSocketConnectTimeout { .. }
             | Self::WebSocketConfiguration(_)
             | Self::InitializeTimedOut { .. }
+            | Self::RpcTimedOut { .. }
             | Self::Closed
             | Self::Disconnected(_)
             | Self::ProvisioningFailed(_)

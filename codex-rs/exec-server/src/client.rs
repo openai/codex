@@ -676,6 +676,10 @@ pub enum ExecServerError {
     WebSocketConfiguration(String),
     #[error("timed out waiting for exec-server initialize handshake after {timeout:?}")]
     InitializeTimedOut { timeout: Duration },
+    #[error(
+        "exec-server protocol error: timed out waiting for exec-server `{method}` response after {timeout:?}"
+    )]
+    RpcTimedOut { method: String, timeout: Duration },
     #[error(transparent)]
     ApplicationNetworkPolicy(#[from] codex_http_client::NetworkPolicyDenied),
     #[error("exec-server transport closed")]
@@ -845,33 +849,27 @@ impl ExecServerClient {
     /// Fetches executor metadata over RPC without reading or updating the cache.
     // TODO: Remove after app-server migrates off this call.
     pub async fn force_environment_info(&self) -> Result<EnvironmentInfo, ExecServerError> {
-        let rpc_client = self.rpc_client().await?;
-        // Bound sending as well as receiving: a stuck transport can fill the outbound queue.
-        let result = timeout(
-            ENVIRONMENT_INFO_TIMEOUT,
-            rpc_client.call(ENVIRONMENT_INFO_METHOD, &()),
-        )
-        .await;
-        match result {
-            Ok(result) => self.map_rpc_call_result(result),
-            Err(_) => {
-                let error = ExecServerError::from(RpcCallError::TimedOut {
-                    method: ENVIRONMENT_INFO_METHOD.to_string(),
-                    timeout: ENVIRONMENT_INFO_TIMEOUT,
-                });
-                // Retire only the connection we probed; recovery ignores a stale client.
-                rpc_client.close_transport().await;
-                self.inner.request_recovery(rpc_client, error.to_string());
-                Err(error)
-            }
-        }
+        self.call_with_timeout_recovery(ENVIRONMENT_INFO_METHOD, &(), ENVIRONMENT_INFO_TIMEOUT)
+            .await
     }
 
+    /// Reads configuration without imposing an additional RPC timeout.
     pub async fn read_environment_config(
         &self,
         params: EnvironmentConfigReadParams,
     ) -> Result<EnvironmentConfigReadResponse, ExecServerError> {
         self.call(ENVIRONMENT_CONFIG_READ_METHOD, &params).await
+    }
+
+    /// Bounds the RPC after connecting, recovering reconnectable transports on timeout.
+    /// Transports without a reconnect strategy remain open after a timeout.
+    pub async fn read_environment_config_with_timeout(
+        &self,
+        params: EnvironmentConfigReadParams,
+        rpc_timeout: Duration,
+    ) -> Result<EnvironmentConfigReadResponse, ExecServerError> {
+        self.call_with_timeout_recovery(ENVIRONMENT_CONFIG_READ_METHOD, &params, rpc_timeout)
+            .await
     }
 
     pub async fn environment_status(&self) -> Result<EnvironmentStatus, ExecServerError> {
@@ -1343,6 +1341,35 @@ impl ExecServerClient {
         self.call_rpc(&rpc_client, method, params).await
     }
 
+    async fn call_with_timeout_recovery<P, T>(
+        &self,
+        method: &str,
+        params: &P,
+        call_timeout: Duration,
+    ) -> Result<T, ExecServerError>
+    where
+        P: serde::Serialize,
+        T: serde::de::DeserializeOwned,
+    {
+        let rpc_client = self.rpc_client().await?;
+        // Bound sending as well as receiving: a stuck transport can fill the outbound queue.
+        match timeout(call_timeout, rpc_client.call(method, params)).await {
+            Ok(result) => self.map_rpc_call_result(result),
+            Err(_) => {
+                let error = ExecServerError::RpcTimedOut {
+                    method: method.to_string(),
+                    timeout: call_timeout,
+                };
+                if self.inner.reconnect_strategy.is_some() {
+                    // Retire only the connection we probed; recovery ignores a stale client.
+                    rpc_client.close_transport().await;
+                    self.inner.request_recovery(rpc_client, error.to_string());
+                }
+                Err(error)
+            }
+        }
+    }
+
     async fn call_rpc<P, T>(
         &self,
         rpc_client: &Arc<RpcClient>,
@@ -1413,9 +1440,7 @@ impl From<RpcCallError> for ExecServerError {
                 code: error.code,
                 message: error.message,
             },
-            RpcCallError::TimedOut { method, timeout } => Self::Protocol(format!(
-                "timed out waiting for exec-server `{method}` response after {timeout:?}"
-            )),
+            RpcCallError::TimedOut { method, timeout } => Self::RpcTimedOut { method, timeout },
             RpcCallError::PendingRequestLimitExceeded { limit } => Self::Protocol(format!(
                 "exec-server has reached its limit of {limit} pending requests"
             )),
@@ -3443,5 +3468,6 @@ mod tests {
         server.await.expect("server task should finish");
     }
 
+    mod config_timeout_tests;
     mod network_policy_tests;
 }
