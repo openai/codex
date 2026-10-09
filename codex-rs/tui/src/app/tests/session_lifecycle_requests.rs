@@ -349,6 +349,8 @@ pub(super) enum HistoryCapabilities {
     ItemsAndSummaryTurnsFail,
     ThreadListFails,
     ThreadStartFails,
+    ThreadStartWhileShuttingDown,
+    ThreadStartDuringLegacyShutdown,
     ConfigReadUnsupported(i64),
     ConfigReadFails,
     ConfigReadUnknownVoice,
@@ -637,15 +639,30 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                                 message: "method not found".to_string(),
                             },
                         })
-                    } else if history_capabilities == HistoryCapabilities::ThreadStartFails
-                        && request.method == "thread/start"
+                    } else if matches!(
+                        history_capabilities,
+                        HistoryCapabilities::ThreadStartFails
+                            | HistoryCapabilities::ThreadStartWhileShuttingDown
+                            | HistoryCapabilities::ThreadStartDuringLegacyShutdown
+                    ) && request.method == "thread/start"
                     {
+                        let (code, message, data) = match history_capabilities {
+                            HistoryCapabilities::ThreadStartWhileShuttingDown => (
+                                -32600,
+                                "not accepting new actions",
+                                Some(serde_json::json!({ "reason": "serverShuttingDown" })),
+                            ),
+                            HistoryCapabilities::ThreadStartDuringLegacyShutdown => {
+                                (-32600, "Server is draining; retry after reconnecting", None)
+                            }
+                            _ => (-32603, "replacement unavailable", None),
+                        };
                         JSONRPCMessage::Error(JSONRPCError {
                             id: request_id,
                             error: JSONRPCErrorError {
-                                code: -32603,
-                                data: None,
-                                message: "replacement unavailable".to_string(),
+                                code,
+                                data,
+                                message: message.to_string(),
                             },
                         })
                     } else if request.method == "thread/list"

@@ -17,7 +17,10 @@ fn drain_rejects_new_work_without_waiting_for_admitted_work() {
 
     let error = admission.admit().err().expect("new request rejected");
     assert_eq!(error.code, INVALID_REQUEST_ERROR_CODE);
-    assert_eq!(error.data, None);
+    assert_eq!(
+        error.data,
+        Some(serde_json::json!({ "reason": "serverShuttingDown" }))
+    );
     drop(in_flight);
     assert_eq!(*active.borrow(), 1);
     drop(automatic);

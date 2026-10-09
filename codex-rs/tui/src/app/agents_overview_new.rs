@@ -31,9 +31,10 @@ impl App {
     fn agents_overview_retained_worktree_error(
         &mut self,
         checkout: &codex_worktree::ManagedWorktree,
+        title: Option<&'static str>,
         reason: impl std::fmt::Display,
     ) {
-        self.add_agents_overview_error(format!("{reason} A checkout was retained at {}; remove it with `git worktree remove <checkout-path>` from the source repository if it is no longer needed.", checkout.root.display()));
+        self.show_agents_overview_error(title, format!("{reason} A checkout was retained at {}; remove it with `git worktree remove <checkout-path>` from the source repository if it is no longer needed.", checkout.root.display()));
     }
 
     pub(in crate::app) async fn new_agents_overview_session(
@@ -106,6 +107,7 @@ impl App {
             if let Some((_, checkout)) = &managed_worktree {
                 self.agents_overview_retained_worktree_error(
                     checkout,
+                    /*title*/ None,
                     "Could not start the session.",
                 );
             }
@@ -118,6 +120,7 @@ impl App {
             if let Some((_, checkout)) = &managed_worktree {
                 self.agents_overview_retained_worktree_error(
                     checkout,
+                    /*title*/ None,
                     "Could not load the new session settings.",
                 );
             }
@@ -164,13 +167,34 @@ impl App {
         let started = match result {
             Ok(started) => started,
             Err(error) => {
-                if let Some((_, checkout)) = &managed_worktree {
-                    self.agents_overview_retained_worktree_error(
-                        checkout,
-                        format!("Failed to start session: {error}"),
+                // Older servers omit the reason. Only use their specific message when
+                // data is absent, so other invalid requests aren't misclassified.
+                let (title, message) = if matches!(
+                    error.downcast_ref::<TypedRequestError>(),
+                    Some(TypedRequestError::Server { source, .. })
+                        if source.code == -32600
+                            && match &source.data {
+                                Some(data) => data.get("reason").and_then(serde_json::Value::as_str)
+                                    == Some("serverShuttingDown"),
+                                None => source.message == "Server is draining; retry after reconnecting",
+                            }
+                ) {
+                    let mut message = String::from(
+                        "New sessions are paused while active turns finish or are canceled. The default shutdown wait is up to one minute.",
                     );
+                    if !matches!(self.app_server_target, AppServerTarget::Embedded) {
+                        message.push_str(
+                            " If the server restarts, Codex will reconnect automatically.",
+                        );
+                    }
+                    (Some("Codex's background server is shutting down"), message)
                 } else {
-                    self.add_agents_overview_error(format!("Failed to start session: {error}"));
+                    (None, format!("Failed to start session: {error}"))
+                };
+                if let Some((_, checkout)) = &managed_worktree {
+                    self.agents_overview_retained_worktree_error(checkout, title, message);
+                } else {
+                    self.show_agents_overview_error(title, message);
                 }
                 return Ok(AppRunControl::Continue);
             }
@@ -193,7 +217,7 @@ impl App {
                 };
             if let Err(error) = result {
                 let _ = app_server.thread_unsubscribe(thread_id).await;
-                self.agents_overview_retained_worktree_error(checkout, error);
+                self.agents_overview_retained_worktree_error(checkout, /*title*/ None, error);
                 return Ok(AppRunControl::Continue);
             }
         }
@@ -216,6 +240,7 @@ impl App {
             if let Some((_, checkout)) = &managed_worktree {
                 self.agents_overview_retained_worktree_error(
                     checkout,
+                    /*title*/ None,
                     "Could not open the new session.",
                 );
             }

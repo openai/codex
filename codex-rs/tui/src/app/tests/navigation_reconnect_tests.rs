@@ -3,7 +3,6 @@
 use super::active_reconnect::drain_history;
 use super::disconnect::serve_reconnect_requests;
 use super::*;
-use crate::app::reconnect::ReconnectPresentation;
 use crate::app::reconnect::reconnect;
 use crate::app_event::AgentsOverviewThreadRefresh;
 use crate::app_event::WindowsSandboxEnableMode;
@@ -265,6 +264,13 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
                 .is_err()
         );
         let disconnected = session.next_event().await.unwrap();
+        // A shutdown error can cover the initial command center when its first New fails.
+        if previous_thread.is_none() && overview_initialized {
+            app.show_agents_overview_error(
+                Some("Codex's background server is shutting down"),
+                "Waiting for active turns.".into(),
+            );
+        }
         app.handle_app_server_event(&session, disconnected).await;
         assert!(app.reconnect.offline);
         assert!(app.agents_overview.last_messages.is_empty());
@@ -321,7 +327,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
             previous_thread,
             /*remote_cwd*/ None,
             session.thread_tool_transport(),
-            ReconnectPresentation::Overview,
+            app.reconnect.presentation,
         )
         .await?;
         app.finish_reconnect(

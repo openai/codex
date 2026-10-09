@@ -536,8 +536,19 @@ async fn command_center_new_read_failure_keeps_overview_and_does_not_start() -> 
     for capability in [
         HistoryCapabilities::ConfigReadFails,
         HistoryCapabilities::ThreadStartFails,
+        HistoryCapabilities::ThreadStartWhileShuttingDown,
+        HistoryCapabilities::ThreadStartDuringLegacyShutdown,
     ] {
         let (mut app, mut events, _) = make_test_app_with_channels().await;
+        if capability == HistoryCapabilities::ThreadStartDuringLegacyShutdown {
+            app.app_server_target = AppServerTarget::LocalDaemon {
+                endpoint: crate::RemoteAppServerEndpoint::WebSocket {
+                    websocket_url: "ws://127.0.0.1:1".into(),
+                    auth_token: None,
+                },
+                allow_embedded_fallback: false,
+            };
+        }
         trust_launch_folder(&mut app);
         app.harness_overrides.model = Some("local-model".into());
         let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
@@ -581,11 +592,29 @@ async fn command_center_new_read_failure_keeps_overview_and_does_not_start() -> 
                 _ => None,
             })
             .find(|message| {
-                message.contains("Failed to") || message.contains("Unable to check folder trust")
+                message.contains("Failed to")
+                    || message.contains("Unable to check folder trust")
+                    || message.contains("Codex's background server is shutting down")
             })
             .expect("visible read error");
         if capability == HistoryCapabilities::ConfigReadFails {
             insta::assert_snapshot!(error, @"■ Unable to check folder trust: config/read failed while checking remote project trust");
+        } else if matches!(
+            capability,
+            HistoryCapabilities::ThreadStartWhileShuttingDown
+                | HistoryCapabilities::ThreadStartDuringLegacyShutdown
+        ) {
+            insta::assert_snapshot!(
+                if matches!(app.app_server_target, AppServerTarget::Embedded) {
+                    "command_center_embedded_server_shutting_down"
+                } else {
+                    "command_center_daemon_shutting_down"
+                },
+                crate::chatwidget::tests::helpers::render_bottom_popup(
+                    &app.chat_widget,
+                    /*width*/ 80,
+                )
+            );
         } else {
             insta::assert_snapshot!(
                 "command_center_session_start_error",

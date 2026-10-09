@@ -22,6 +22,14 @@ impl Renderable for AgentsOverviewErrorHeader {
 
 impl App {
     pub(in crate::app) fn add_agents_overview_error(&mut self, message: String) {
+        self.show_agents_overview_error(/*title*/ None, message);
+    }
+
+    pub(in crate::app) fn show_agents_overview_error(
+        &mut self,
+        title: Option<&'static str>,
+        message: String,
+    ) {
         if self
             .chat_widget
             .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
@@ -34,13 +42,16 @@ impl App {
             }];
             self.chat_widget.show_selection_view(SelectionViewParams {
                 header: Box::new(AgentsOverviewErrorHeader(vec![
-                    Line::from("Unable to complete action".bold()),
+                    Line::from(title.unwrap_or("Unable to complete action").bold()),
                     Line::from(message.clone().dim()),
                 ])),
                 items,
                 ..SelectionViewParams::picker()
             });
         }
-        self.chat_widget.add_error_message(message);
+        self.chat_widget.add_error_message(match title {
+            Some(title) => format!("{title}: {message}"),
+            None => message,
+        });
     }
 }

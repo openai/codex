@@ -64,7 +64,10 @@ async fn websocket_transport_ctrl_c_waits_for_running_turn_before_exit() -> Resu
     send_turn_start_request(&mut ws, /*id*/ 4, &thread_id).await?;
     let rejected = read_error_for_id(&mut ws, /*id*/ 4).await?;
     assert_eq!(rejected.error.code, -32600);
-    assert_eq!(rejected.error.data, None);
+    assert_eq!(
+        rejected.error.data,
+        Some(json!({ "reason": "serverShuttingDown" }))
+    );
 
     send_request(
         &mut ws,

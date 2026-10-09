@@ -1,0 +1,13 @@
+---
+source: tui/src/app/tests/background_task_defaults_tests.rs
+assertion_line: 609
+expression: "crate::chatwidget::tests::helpers::render_bottom_popup(&app.chat_widget, 80,)"
+---
+  Codex's background server is shutting down
+  New sessions are paused while active turns finish or are canceled. The
+  default shutdown wait is up to one minute.
+
+
+› 1. Return to command center
+
+  enter select · esc back
