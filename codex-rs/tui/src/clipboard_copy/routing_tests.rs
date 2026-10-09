@@ -17,6 +17,7 @@ fn local_tmux_preserves_native_html_when_terminal_silently_rejects_copy() {
         "**hello**",
         CopyFormat::Markdown,
         CopyEnvironment {
+            herdr_session: false,
             ssh_session: false,
             tmux_session: true,
             wsl_session: false,
@@ -48,6 +49,7 @@ fn copy_uses_osc52_when_tmux_fails_even_if_native_copy_succeeds() {
         "hello",
         CopyFormat::PlainText,
         CopyEnvironment {
+            herdr_session: false,
             ssh_session: false,
             tmux_session: true,
             wsl_session: false,
@@ -73,10 +75,40 @@ fn copy_uses_osc52_when_tmux_fails_even_if_native_copy_succeeds() {
 
 fn local_tmux_environment() -> CopyEnvironment {
     CopyEnvironment {
+        herdr_session: false,
         tmux_session: true,
         ssh_session: false,
         wsl_session: false,
     }
+}
+
+#[test]
+fn herdr_forwards_to_osc52_even_when_native_copy_succeeds() {
+    let calls = RefCell::new(Vec::new());
+    let result = copy_to_clipboard_with(
+        "hello",
+        CopyFormat::PlainText,
+        CopyEnvironment {
+            herdr_session: true,
+            ssh_session: false,
+            tmux_session: false,
+            wsl_session: false,
+        },
+        |_| panic!("Herdr should use OSC 52 directly"),
+        |_| {
+            calls.borrow_mut().push("osc52");
+            Ok(())
+        },
+        |text, html| {
+            assert_eq!((text, html), ("hello", None));
+            calls.borrow_mut().push("native");
+            Ok(Some(ClipboardLease::test()))
+        },
+        |_| panic!("native copy succeeded"),
+    );
+
+    assert!(matches!(result, Ok(CopyOutcome::Copied(Some(_)))));
+    assert_eq!(calls.into_inner(), vec!["native", "osc52"]);
 }
 
 #[test]
