@@ -299,13 +299,17 @@ async fn run_tool_turn_on_harness(
         _ => None,
     })
     .await;
-    let end = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ExecCommandEnd(ev) if ev.call_id == call_id => Some(ev.clone()),
-        _ => None,
-    })
-    .await;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-    Ok(end)
+    let mut end = None;
+    let mut turn_completed = false;
+    // The tool can return before its background watcher emits command-end.
+    while end.is_none() || !turn_completed {
+        match wait_for_event(&codex, |_| true).await {
+            EventMsg::ExecCommandEnd(ev) if ev.call_id == call_id => end = Some(ev),
+            EventMsg::TurnComplete(_) => turn_completed = true,
+            _ => {}
+        }
+    }
+    Ok(end.expect("command-end should have arrived before completing the wait"))
 }
 
 fn normalize_newlines(text: &str) -> String {
