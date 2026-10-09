@@ -12143,6 +12143,7 @@ usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
 subagent_usage_hint_text = "Subagent guidance."
 subagent_developer_instructions = "  Delegate carefully.  "
+preserve_fork_prefix = true
 multi_agent_mode_hint_text = "Custom mode guidance."
 tool_namespace = "agents"
 hide_spawn_agent_metadata = true
@@ -12203,6 +12204,7 @@ max_concurrent_threads_per_session = 9
         Some("agents")
     );
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
+    assert!(config.multi_agent_v2.preserve_fork_prefix);
     assert!(!config.multi_agent_v2.expose_spawn_agent_model_overrides);
     assert!(!config.multi_agent_v2.wait_agent_enabled);
     assert!(config.multi_agent_v2.disable_direct_message);

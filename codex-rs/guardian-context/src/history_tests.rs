@@ -34,6 +34,39 @@ fn rollback_keeps_the_earlier_prefix_or_clears_an_evicted_boundary() {
 }
 
 #[test]
+fn inherited_manual_approvals_stay_out_of_review_after_checkpoint_replay() {
+    for content_type in ["input_text", "output_text"] {
+        let approval: ResponseItem = serde_json::from_value(json!({
+            "type": "message", "role": "developer", "content": [{
+                "type": content_type, "text": format!("{}\nApproved action: original action", crate::MANUAL_APPROVAL_DEVELOPER_PREFIX)
+            }]
+        })).unwrap();
+        let mut inherited = ResponseItemEnvelope::new(approval.clone());
+        inherited
+            .metadata
+            .get_or_insert_default()
+            .inherited_user_message = true;
+        let mut history = TranscriptHistory::default();
+        history.reset([inherited.clone(), approval.clone().into()].iter());
+        assert_eq!(
+            history.items().cloned().collect::<Vec<_>>(),
+            vec![approval.clone()]
+        );
+        let checkpoint = history.checkpoint();
+        assert_eq!(
+            checkpoint.0[0], inherited,
+            "model history keeps the original approval and provenance"
+        );
+        let mut restored = TranscriptHistory::default();
+        restored.reset(checkpoint.0.iter());
+        assert_eq!(
+            restored.items().cloned().collect::<Vec<_>>(),
+            vec![approval]
+        );
+    }
+}
+
+#[test]
 fn each_kind_evicts_its_own_oldest_entries_without_reordering() {
     let users = [message("first"), message("second"), message("third")];
     let tools: Vec<_> = (0..MAX_ITEMS_PER_KIND)

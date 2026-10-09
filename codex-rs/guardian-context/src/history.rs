@@ -228,7 +228,12 @@ impl TranscriptHistory {
 
 impl SectionHistory for TranscriptHistory {
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
-        Box::new(self.items.iter().map(|(item, _)| &item.item))
+        Box::new(
+            self.items
+                .iter()
+                .filter(|(item, _)| !crate::is_inherited_manual_approval(item))
+                .map(|(item, _)| &item.item),
+        )
     }
 }
 

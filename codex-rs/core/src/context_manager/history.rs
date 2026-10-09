@@ -213,6 +213,7 @@ impl SharedConversationHistory {
         self.items
             .iter()
             .filter(|envelope| !is_guardian_context_message(&envelope.item))
+            .filter(|envelope| !codex_guardian_context::is_inherited_manual_approval(envelope))
             .map(|envelope| {
                 (
                     &envelope.item,

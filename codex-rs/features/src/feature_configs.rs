@@ -313,6 +313,10 @@ pub struct MultiAgentV2ConfigToml {
     /// Overrides inherited developer instructions for subagents without role-specific instructions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent_developer_instructions: Option<String>,
+    /// Preserve the parent's model-visible history on full forks and append child instructions.
+    /// Defaults to false. Legacy compaction without a reusable context baseline still rebuilds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preserve_fork_prefix: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multi_agent_mode_hint_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

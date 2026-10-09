@@ -41,6 +41,7 @@ pub use transcript::MANUAL_APPROVAL_DEVELOPER_PREFIX;
 pub use transcript::TranscriptEntryLimits;
 pub use transcript::TranscriptRetentionConfig;
 pub use transcript::collect_transcript;
+pub use transcript::is_inherited_manual_approval;
 pub use truncation::truncate_text;
 
 mod verified_answers;

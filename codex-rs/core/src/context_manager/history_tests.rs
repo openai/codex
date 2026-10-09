@@ -2259,9 +2259,9 @@ fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
     assert_truncated_message_matches(&truncated, "line-0-", /*expected_removed*/ 17_423);
 }
 
-#[cfg(not(debug_assertions))]
-#[test]
-fn normalize_adds_missing_output_for_custom_tool_call() {
+#[cfg_attr(not(debug_assertions), test_case::test_case(false; "local"))]
+#[test_case::test_case(true; "inherited")]
+fn normalize_adds_missing_output_for_custom_tool_call(inherited: bool) {
     let items = vec![ResponseItem::CustomToolCall {
         id: None,
         status: None,
@@ -2272,6 +2272,10 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
         internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
+    Arc::make_mut(&mut h.items)[0]
+        .metadata
+        .get_or_insert_default()
+        .inherited_user_message = inherited;
 
     h.normalize_history(&default_input_modalities());
 
@@ -2298,9 +2302,9 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
     );
 }
 
-#[cfg(not(debug_assertions))]
-#[test]
-fn normalize_adds_missing_output_for_local_shell_call_with_id() {
+#[cfg_attr(not(debug_assertions), test_case::test_case(false; "local"))]
+#[test_case::test_case(true; "inherited")]
+fn normalize_adds_missing_output_for_local_shell_call_with_id(inherited: bool) {
     let items = vec![ResponseItem::LocalShellCall {
         id: None,
         call_id: Some("shell-1".to_string()),
@@ -2315,6 +2319,10 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
         internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
+    Arc::make_mut(&mut h.items)[0]
+        .metadata
+        .get_or_insert_default()
+        .inherited_user_message = inherited;
 
     h.normalize_history(&default_input_modalities());
 

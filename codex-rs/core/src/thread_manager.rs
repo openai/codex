@@ -2643,7 +2643,7 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
     }
 }
 
-fn fork_history_from_snapshot(
+pub(crate) fn fork_history_from_snapshot(
     snapshot: ForkSnapshot,
     history: InitialHistory,
     interrupted_marker: InterruptedTurnHistoryMarker,

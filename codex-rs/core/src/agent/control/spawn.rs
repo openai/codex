@@ -20,10 +20,14 @@ use crate::context::DeveloperInstructions;
 use crate::context::ManagedDeveloperInstructions;
 use crate::context::MultiAgentModeInstructions;
 use crate::context::MultiAgentRoleInstructions;
+use crate::context::MultiAgentUsageHint;
 use crate::context::world_state::IncrementalToolsHint;
 use crate::context::world_state::PersistentModeState;
 use crate::session::multi_agents::resolve_usage_hints;
+use crate::tasks::InterruptedTurnHistoryMarker;
+use crate::thread_manager::ForkSnapshot;
 use crate::thread_manager::StartThreadOptions;
+use crate::thread_manager::fork_history_from_snapshot;
 use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
 use codex_features::Feature;
@@ -1109,15 +1113,25 @@ impl LocalAgentControl {
             break;
         }
         let mut replaced_parent_developer_instructions = false;
-        // Scrub inherited hints and replace only the parent's developer-instruction fragment.
-        // Compaction stores response items separately, so sanitize both top-level messages and
-        // compacted replacement histories with the same policy.
+        let preserve_fork_prefix = multi_agent_version == MultiAgentVersion::V2
+            && config.multi_agent_v2.preserve_fork_prefix
+            && preserve_context_baselines;
+        if preserve_fork_prefix {
+            let InitialHistory::Forked(items) = fork_history_from_snapshot(
+                ForkSnapshot::Interrupted,
+                InitialHistory::Forked(forked_rollout_items),
+                InterruptedTurnHistoryMarker::Disabled,
+            ) else {
+                unreachable!("a forked snapshot remains forked");
+            };
+            forked_rollout_items = items;
+        }
         let retain_forked_item = |envelope: &mut ResponseItemEnvelope, replaced: &mut bool| {
             if multi_agent_version == MultiAgentVersion::V2
-                && matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "user" || role == "assistant")
+                && (preserve_fork_prefix
+                    || matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "user" || role == "assistant"))
             {
-                // Persist the scope of every inherited conversational message, including the suffix
-                // after a checkpoint. Resume must not recapture it as local authorization.
+                // Resume must not recapture copied parent messages as local authorization.
                 envelope
                     .metadata
                     .get_or_insert_default()
@@ -1129,6 +1143,9 @@ impl LocalAgentControl {
             {
                 // Assistant and tool positions belong to the parent counter, not the child.
                 metadata.user_input_order = None;
+            }
+            if preserve_fork_prefix {
+                return true;
             }
             let response_item = &mut envelope.item;
             // Tool declarations and their comparison baseline must survive or be rebuilt together.
@@ -1199,7 +1216,9 @@ impl LocalAgentControl {
             true
         };
         forked_rollout_items.retain_mut(|item| {
-            if !keep_forked_rollout_item(item, preserve_context_baselines)
+            let keep = (preserve_fork_prefix && matches!(item, RolloutItem::ResponseItem(_)))
+                || keep_forked_rollout_item(item, preserve_context_baselines);
+            if !keep
                 || destination_history_mode == Some(ThreadHistoryMode::Paginated)
                     && matches!(
                         &*item,
@@ -1265,6 +1284,13 @@ impl LocalAgentControl {
                 | RolloutItem::SecurityRiskScore(_) => false,
             }
         });
+        if preserve_fork_prefix {
+            forked_rollout_items.push(RolloutItem::ResponseItem(
+                ContextualUserFragment::into(MultiAgentUsageHint::new(
+                    "You are now a newly spawned child agent. The preceding conversation is inherited parent context. Follow your own role, identity, and task below; earlier identities, tasks, and action-specific approvals belong to your ancestors. Inherited tool calls are historical records; live tool sessions and process handles are not inherited. Report your result to your parent.",
+                )).into(),
+            ));
+        }
         // Full forks reuse the parent's reference context instead of rebuilding it. If that
         // context omitted the parent's developer fragment, append the child's override so its
         // instructions still reach the model exactly once.

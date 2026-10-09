@@ -3575,8 +3575,12 @@ async fn spawn_agent_full_fork_restores_instructions_after_compaction_discards_p
 
 /// A legacy compaction clears the child's baseline, so its first turn must
 /// rebuild configured developer instructions exactly once.
+#[test_case::test_case(false; "filtered fork")]
+#[test_case::test_case(true; "preserve prefix fallback")]
 #[tokio::test]
-async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_once() {
+async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_once(
+    preserve_fork_prefix: bool,
+) {
     let managed_policy = "Managed policy for every agent.";
     let current_managed_fragment = format!(
         "<managed_developer_instructions>\n{managed_policy}\n</managed_developer_instructions>"
@@ -3612,6 +3616,7 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
         )
         .expect("managed requirements stack");
         let mut child_config = parent_config.clone();
+        child_config.multi_agent_v2.preserve_fork_prefix = preserve_fork_prefix;
         child_config.developer_instructions = Some("Child developer instructions.".to_string());
         child_config.multi_agent_v2.subagent_developer_instructions =
             Some("Child developer instructions.".to_string());

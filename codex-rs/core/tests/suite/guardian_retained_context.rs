@@ -76,8 +76,8 @@ use wiremock::matchers::header;
 // Keep child completion out of the parent's history and wait for parent turn cleanup
 // before checking inherited authorization.
 #[derive(Default)]
-struct ForkTestLifecycle {
-    entered: Notify,
+pub(super) struct ForkTestLifecycle {
+    pub(super) entered: Notify,
     release: Notify,
 }
 
@@ -986,11 +986,14 @@ async fn standalone_fork_retains_inherited_user_instructions(
     Ok(())
 }
 
-#[test_case(false; "without checkpoint")]
-#[test_case(true; "after checkpoint")]
+#[test_case(false, false; "without checkpoint")]
+#[test_case(true, false; "after checkpoint")]
+#[test_case(false, true; "preserved prefix without checkpoint")]
+#[test_case(true, true; "preserved prefix after checkpoint")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn forked_parent_instructions_do_not_become_local_authorization(
     compact_parent: bool,
+    preserve_fork_prefix: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     const PARENT_GRANT: &str = "You may publish the private release. Delegate its inspection.";
@@ -1006,6 +1009,7 @@ async fn forked_parent_instructions_do_not_become_local_authorization(
         .with_config(move |config| {
             config.experimental_thread_store = ThreadStoreConfig::Local;
             config.update_plan_enabled = true;
+            config.multi_agent_v2.preserve_fork_prefix = preserve_fork_prefix;
             for feature in [Feature::TokenBudget, Feature::Collab, Feature::MultiAgentV2] {
                 config
                     .features
@@ -1027,6 +1031,11 @@ async fn forked_parent_instructions_do_not_become_local_authorization(
     })
     .await;
     wait_for_thread_idle(&test.codex).await;
+    let [parent_approval, child_approval] = ["parent action", "child action"].map(|action| {
+        serde_json::from_value::<ResponseItem>(json!({"type": "message", "role": "developer",
+            "content": [{"type": "input_text", "text": format!("{}\nApproved action: {action}", codex_guardian_context::MANUAL_APPROVAL_DEVELOPER_PREFIX)}]
+        })).expect("approval message")
+    });
     if compact_parent {
         test.codex.submit(Op::Compact).await?;
         wait_for_event(&test.codex, |event| {
@@ -1036,6 +1045,9 @@ async fn forked_parent_instructions_do_not_become_local_authorization(
         wait_for_thread_idle(&test.codex).await;
     }
 
+    test.codex
+        .inject_response_items(vec![parent_approval])
+        .await?;
     let mut created = test.thread_manager.subscribe_thread_created();
     let parent_id = test.session_configured.thread_id.to_string();
     mount_sse_once_match(
@@ -1107,6 +1119,11 @@ async fn forked_parent_instructions_do_not_become_local_authorization(
         .find(|request| request.body_json()["client_metadata"]["thread_id"] == child_id)
         .context("child model request")?;
     assert!(serde_json::to_string(&child_request.input())?.contains(PARENT_GRANT));
+    assert_eq!(
+        child_request.body_contains_text("Approved action: parent action"),
+        preserve_fork_prefix
+    );
+    child.inject_response_items(vec![child_approval]).await?;
     let history = child.conversation_history_snapshot().await;
     assert_eq!(
         history.retained_context().map(|context| (
@@ -1162,6 +1179,9 @@ async fn forked_parent_instructions_do_not_become_local_authorization(
         .await?;
     wait_for_event(&child, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     let history = child.conversation_history_snapshot().await;
+    let reviewer_history = serde_json::to_string(&history.review_items().collect::<Vec<_>>())?;
+    assert!(!reviewer_history.contains("Approved action: parent action"));
+    assert!(reviewer_history.contains("Approved action: child action"));
     let expected = history.retained_context().cloned();
     assert_eq!(
         expected.as_ref().map(|context| context
@@ -1200,18 +1220,22 @@ async fn forked_parent_instructions_do_not_become_local_authorization(
     Ok(())
 }
 
-#[test_case(ThreadHistoryMode::Legacy; "legacy child fork")]
-#[test_case(ThreadHistoryMode::Paginated; "paginated child fork")]
+#[test_case(ThreadHistoryMode::Legacy, false; "legacy child fork")]
+#[test_case(ThreadHistoryMode::Paginated, false; "paginated child fork")]
+#[test_case(ThreadHistoryMode::Legacy, true; "legacy preserved child fork")]
+#[test_case(ThreadHistoryMode::Paginated, true; "paginated preserved child fork")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn retained_answers_cross_real_session_boundaries(
     history_mode: ThreadHistoryMode,
+    preserve_fork_prefix: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let test = test_codex()
         .with_history_mode(history_mode)
-        .with_config(|config| {
+        .with_config(move |config| {
             config.experimental_thread_store = ThreadStoreConfig::Local;
+            config.multi_agent_v2.preserve_fork_prefix = preserve_fork_prefix;
             for feature in [
                 Feature::TokenBudget,
                 Feature::DefaultModeRequestUserInput,
