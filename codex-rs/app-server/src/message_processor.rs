@@ -1917,3 +1917,7 @@ mod gateway_oauth_tests;
 #[cfg(test)]
 #[path = "message_processor_thread_lifecycle_tests.rs"]
 mod thread_lifecycle_tests;
+
+#[cfg(test)]
+#[path = "message_processor_workspace_routing_tests.rs"]
+mod workspace_routing_tests;

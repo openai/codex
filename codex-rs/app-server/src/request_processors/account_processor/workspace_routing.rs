@@ -128,6 +128,21 @@ impl WorkspaceRoutingResolver for AccountRequestProcessor {
 }
 
 impl AccountRequestProcessor {
+    pub(super) async fn read_account_for_background_workspace_routing(
+        &self,
+    ) -> Result<Option<AccountRead>, AccountReadError> {
+        if !self
+            .auth_manager
+            .auth_cached()
+            .as_ref()
+            .is_some_and(CodexAuth::is_chatgpt_auth)
+        {
+            return Ok(None);
+        }
+
+        self.read_account(/*request*/ None).await.map(Some)
+    }
+
     pub(crate) fn notify_workspace_routing_to_connection(&self, connection_id: ConnectionId) {
         let processor = self.clone();
         let auth_changes = self.auth_manager.auth_change_state_receiver();
@@ -136,7 +151,9 @@ impl AccountRequestProcessor {
             if auth_changes.borrow().owner_generation != owner_generation {
                 return;
             }
-            if let Ok(response) = processor.read_account(/*request*/ None).await
+            if let Ok(Some(response)) = processor
+                .read_account_for_background_workspace_routing()
+                .await
                 && response.workspace_routing.is_some()
                 && auth_changes.borrow().owner_generation == owner_generation
             {

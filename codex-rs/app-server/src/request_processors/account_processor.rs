@@ -150,7 +150,9 @@ impl AccountRequestProcessor {
             .set_workspace_routing_resolver(Arc::downgrade(&resolver));
         let startup = processor.clone();
         tokio::spawn(async move {
-            let _ = startup.read_account(/*request*/ None).await;
+            let _ = startup
+                .read_account_for_background_workspace_routing()
+                .await;
         });
         processor
     }
