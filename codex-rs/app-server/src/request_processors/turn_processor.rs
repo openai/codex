@@ -15,6 +15,8 @@ use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind
 use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
+use codex_protocol::turn_input::AnnotatedResponseItem;
+use codex_protocol::turn_input::ResponseItemAnnotations;
 use codex_skills::system_cache_root_dir;
 
 use crate::image_url::REMOTE_IMAGE_URL_ERROR;
@@ -608,7 +610,14 @@ impl TurnRequestProcessor {
                 internal_chat_message_metadata_passthrough: None,
             };
             validate_response_item_image_urls(std::slice::from_ref(&item))?;
-            TurnInput::ResponseItem(item)
+            if tool_output.retain {
+                TurnInput::AnnotatedResponseItem(AnnotatedResponseItem {
+                    item,
+                    annotations: ResponseItemAnnotations { retain: true },
+                })
+            } else {
+                TurnInput::ResponseItem(item)
+            }
         } else {
             TurnInput::UserInput {
                 content: params

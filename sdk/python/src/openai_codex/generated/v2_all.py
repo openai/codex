@@ -11832,6 +11832,10 @@ class TurnToolOutput(BaseModel):
     name: str
     namespace: str | None = None
     output: FunctionCallOutputBody
+    retain: Annotated[
+        bool | None,
+        Field(description="Requests retention of this output in the thread's model history."),
+    ] = None
 
 
 class TurnsPage(BaseModel):

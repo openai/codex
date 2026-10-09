@@ -157,6 +157,9 @@ pub struct TurnToolOutput {
     pub name: String,
     pub namespace: Option<String>,
     pub output: FunctionCallOutputBody,
+    /// Requests retention of this output in the thread's model history.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retain: bool,
 }
 
 #[derive(
