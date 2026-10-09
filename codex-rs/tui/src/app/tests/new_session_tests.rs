@@ -152,7 +152,7 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
             "medium",
         ),
     ] {
-        let (mut app, _events, _ops) = make_test_app_with_channels().await;
+        let (mut app, mut events, _ops) = make_test_app_with_channels().await;
         let server_home = tempdir()?;
         let client_home = tempdir()?;
         std::fs::write(
@@ -307,6 +307,16 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
 
               server-model high · <PROJECT>
             ");
+        }
+        if explicit.starts_with("profile_summary") {
+            // Opening the overview starts background RPCs. Let them finish before
+            // closing the client so the proxy is not writing to a closed socket.
+            loop {
+                let event = events.recv().await.expect("agents overview refresh");
+                if matches!(event, AppEvent::AgentsOverviewThreadsLoaded { .. }) {
+                    break;
+                }
+            }
         }
         server.shutdown().await?;
         proxy.await??;

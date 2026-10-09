@@ -61,6 +61,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SandboxPermissions;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -2438,7 +2439,14 @@ async fn future_pending_environment_can_finish_without_retargeting_the_active_tu
         }])
     };
     thread.start_or_steer_turn(request("wait")).await?;
-    wait_for_response_request_count(&response_mock, /*expected_count*/ 1).await;
+    // The HTTP request can arrive before its tool call is recorded. Steering
+    // at that point can preempt the response and discard the wait call.
+    wait_for_event(&thread, |event| {
+        matches!(event, EventMsg::RawResponseItem(raw)
+            if matches!(&raw.item, ResponseItem::FunctionCall { call_id, .. }
+                if call_id == "wait-for-active-environment"))
+    })
+    .await;
     assert!(matches!(
         thread
             .start_or_steer_turn(
