@@ -99,3 +99,9 @@ pub(crate) struct Failure {
     pub(crate) code: String,
     pub(crate) message: String,
 }
+
+#[derive(Deserialize)]
+pub(crate) struct PermissionDeniedDetails {
+    pub(crate) action: Option<String>,
+    pub(crate) resource: Option<String>,
+}

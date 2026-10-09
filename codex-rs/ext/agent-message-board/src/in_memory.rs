@@ -172,6 +172,7 @@ impl State {
             name.to_owned(),
             Channel {
                 summary: ChannelSummary {
+                    permissions: None,
                     channel_name: name.to_owned(),
                     description,
                     created_at: now,

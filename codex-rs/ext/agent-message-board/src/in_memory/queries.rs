@@ -3,6 +3,7 @@
 use super::InMemoryAgentMessageBoard;
 use super::invalid;
 use crate::AgentMessageBoard;
+use crate::ChannelPage;
 use crate::ChannelQuery;
 use crate::ChannelSummary;
 use crate::CreateChannelRequest;
@@ -86,7 +87,7 @@ impl AgentMessageBoard for InMemoryAgentMessageBoard {
         &self,
         caller: ThreadId,
         query: ChannelQuery,
-    ) -> BoxFuture<'_, Result<Page<ChannelSummary>>> {
+    ) -> BoxFuture<'_, Result<ChannelPage>> {
         Box::pin(async move {
             self.host.agent_path(caller).await?;
             let search = default_case_fold_str(&query.query.unwrap_or_default());
@@ -109,13 +110,16 @@ impl AgentMessageBoard for InMemoryAgentMessageBoard {
                 channels.reverse();
             }
             let page = page(&query.page, channels)?;
-            Ok(Page {
-                results: page
-                    .results
-                    .into_iter()
-                    .map(|channel| channel.summary.clone())
-                    .collect(),
-                next_cursor: page.next_cursor,
+            Ok(ChannelPage {
+                channels: Page {
+                    results: page
+                        .results
+                        .into_iter()
+                        .map(|channel| channel.summary.clone())
+                        .collect(),
+                    next_cursor: page.next_cursor,
+                },
+                board_permissions: None,
             })
         })
     }

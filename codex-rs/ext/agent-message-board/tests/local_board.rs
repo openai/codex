@@ -656,8 +656,8 @@ async fn check_queries_enforce_page_and_preview_caps(backend: Backend) {
         )
         .await
         .unwrap();
-    assert_eq!(channels.results.len(), 1);
-    assert_eq!(channels.results[0].description, None);
+    assert_eq!(channels.channels.results.len(), 1);
+    assert_eq!(channels.channels.results[0].description, None);
     let query = PostQuery {
         channel_name: None,
         query: Some("STRASSE".into()),
@@ -905,8 +905,11 @@ async fn check_queries_page_discussions_and_search_unicode(backend: Backend) {
         )
         .await
         .unwrap();
-    assert_eq!(channels.results[0].message_count, 3);
-    assert_eq!(channels.results[0].last_message_id, Some(reply.message_id));
+    assert_eq!(channels.channels.results[0].message_count, 3);
+    assert_eq!(
+        channels.channels.results[0].last_message_id,
+        Some(reply.message_id)
+    );
     assert!(
         board
             .read_thread(
@@ -1005,6 +1008,7 @@ async fn check_tools_cover_channel_discussions_subscriptions_and_escaped_preview
         ChannelSummary {
             channel_name: "Workflow".into(),
             description: Some("é".repeat(256)),
+            permissions: None,
             created_at: "2026-09-18T12:00:00Z".parse().unwrap(),
             created_by: AgentPath::root(),
             message_count: 0,
@@ -1258,6 +1262,7 @@ async fn check_tools_validate_arguments_deduplicate_calls_and_bound_unicode_resu
             )
             .await
             .unwrap()
+            .channels
             .results
             .is_empty()
     );
@@ -1448,6 +1453,7 @@ async fn channel_descriptions_migrate_legacy_storage_and_survive_reopen() {
     let legacy = ChannelSummary {
         channel_name: "legacy".into(),
         description: None,
+        permissions: None,
         created_at: "2026-09-17T12:00:00Z".parse().unwrap(),
         created_by: AgentPath::root(),
         message_count: 0,
@@ -1485,7 +1491,7 @@ async fn channel_descriptions_migrate_legacy_storage_and_survive_reopen() {
         .await
         .unwrap();
     assert_eq!(
-        listed,
+        listed.channels,
         Page {
             results: vec![created, legacy],
             next_cursor: None

@@ -9,16 +9,19 @@ use crate::protocol::Failure;
 use crate::protocol::MAX_BODY;
 use crate::protocol::MAX_RESPONSE;
 use crate::protocol::Operation;
+use crate::protocol::PermissionDeniedDetails;
 use crate::protocol::Registration;
 use crate::protocol::Watch;
 use anyhow::Context;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_agent_message_board_extension::AgentMessageBoard;
+use codex_agent_message_board_extension::ChannelPage;
 use codex_agent_message_board_extension::ChannelQuery;
 use codex_agent_message_board_extension::ChannelSummary;
 use codex_agent_message_board_extension::CreateChannelRequest;
 use codex_agent_message_board_extension::Page;
+use codex_agent_message_board_extension::PermissionDenied;
 use codex_agent_message_board_extension::PostContent;
 use codex_agent_message_board_extension::PostMetadata;
 use codex_agent_message_board_extension::PostPreview;
@@ -320,12 +323,7 @@ impl AgentMessageBoard for RemoteAgentMessageBoard {
         CreateChannelRequest,
         ChannelSummary
     );
-    operation!(
-        list_channels,
-        ListChannels,
-        ChannelQuery,
-        Page<ChannelSummary>
-    );
+    operation!(list_channels, ListChannels, ChannelQuery, ChannelPage);
     operation!(post, Post, PostRequest, PostMetadata);
     operation!(list_threads, ListThreads, ThreadQuery, Page<ThreadSummary>);
     operation!(search_posts, SearchPosts, PostQuery, Page<PostPreview>);
@@ -389,6 +387,15 @@ async fn decode<T: DeserializeOwned>(mut response: HttpResponse) -> Result<T> {
         let failure: Failure = serde_json::from_slice(&body)
             .with_context(|| format!("invalid board error response (HTTP {status})"))
             .map_err(transport_error)?;
+        if status == http::StatusCode::FORBIDDEN && failure.code == "permission_denied" {
+            let details: PermissionDeniedDetails = serde_json::from_slice(&body)?;
+            return Err(PermissionDenied {
+                message: failure.message,
+                action: details.action,
+                resource: details.resource,
+            }
+            .into());
+        }
         let message = format!("{}: {}", failure.code, failure.message);
         return Err(if status.is_server_error() {
             transport_error(message)

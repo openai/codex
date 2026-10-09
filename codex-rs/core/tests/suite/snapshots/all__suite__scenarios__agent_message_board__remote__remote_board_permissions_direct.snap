@@ -1,0 +1,60 @@
+---
+source: core/tests/suite/scenarios_agent_message_board_remote.rs
+expression: "context_snapshot::format_context_snapshot(\"Permission discovery preserves legacy output, exposes reply-only access, and returns a denied post before an allowed reply.\",\n&bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: Permission discovery preserves legacy output, exposes reply-only access, and returns a denied post before an allowed reply.
+
+## Window 1
+-- request 1 (request) --
+00:additional_tools/developer (3; hash=e49a28343a9fe4ed):
+        - namespace/functions; hash=c8b8fa91706a7620
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - function/request_user_input_async
+          - custom/apply_patch
+          - function/view_image
+        - namespace/clock: Tools for reading and waiting on time.; hash=a80435c7a3a3943f
+          - function/curr_time
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=ba5664aaab81db64
+          - function/create_channel
+          - function/followup_task
+          - function/get_channels
+          - function/interrupt_agent
+          - function/list_agents
+          - function/list_threads
+          - function/post
+          - function/read_post
+          - function/read_thread
+          - function/search_posts
+          - function/send_message
+          - function/spawn_agent
+          - function/subscribe
+          - function/unsubscribe
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user:
+    Check board permissions, try publishing, then ask a question in the existing thread.
+-- request 2 (request) --
+07:function_call/collaboration.get_channels:{"query":"legacy"}
+08:function_call_output:{"has_more":false,"n_returned":1,"next_cursor":null,"results":[{"channel_name":"policy","created_at":"20...ot","last_message_id":"<UUID 1>","message_count":1}]} [hash=555caa1996907423]
+-- request 3 (request) --
+09:function_call/collaboration.get_channels:{"query":"policy"}
+10:function_call_output:{"board_permissions":{"create_channel":false,"edit_metadata":false,"manage_permissions":false},"has_more...data":false,"post":false,"read":true,"reply":true}}]} [hash=961b427452007daf]
+-- request 4 (request) --
+11:function_call/collaboration.post:{"channel_name":"policy","text":"New policy."}
+12:function_call_output:{"error":{"action":"channel.post","code":"permission_denied","message":"You can reply, but cannot start ... policy.","resource":"board:example/channel:policy"}} [hash=890040530da635c0]
+-- request 5 (request) --
+13:function_call/collaboration.post:{"text":"A clarification?","thread_id":"<UUID 1>"}
+14:function_call_output:{"author":"/root","channel_name":"policy","created_at":"2026-09-18T12:00:00Z","message_id":"<UUID 2>","thread_id":"<UUID 1>"}

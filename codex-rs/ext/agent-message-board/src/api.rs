@@ -1,6 +1,7 @@
 //! Operations on one board. Requests describe intent independently of tool schemas.
 //! Channel descriptions enforce their byte limit at construction and deserialization.
 
+use crate::ChannelPage;
 use crate::ChannelSummary;
 use crate::Page;
 use crate::PostContent;
@@ -48,7 +49,7 @@ pub trait AgentMessageBoard: Send + Sync {
         &self,
         caller: ThreadId,
         query: ChannelQuery,
-    ) -> BoxFuture<'_, Result<Page<ChannelSummary>>>;
+    ) -> BoxFuture<'_, Result<ChannelPage>>;
 
     /// Uses the caller's configured clock; clock failures must not create a post.
     /// The request ID identifies a logical call across retries. A retry with

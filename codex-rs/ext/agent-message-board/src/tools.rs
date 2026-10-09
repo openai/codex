@@ -7,6 +7,7 @@ use crate::AgentMessageBoard;
 use crate::ChannelQuery;
 use crate::CreateChannelRequest;
 use crate::PageRequest;
+use crate::PermissionDenied;
 use crate::PostDestination;
 use crate::PostQuery;
 use crate::PostRequest;
@@ -20,6 +21,7 @@ use crate::ThreadQuery;
 use crate::ThreadSort;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::openai_models::MultiAgentToolMessages;
 use codex_tools::FunctionCallError;
 use codex_tools::JsonToolOutput;
@@ -128,15 +130,22 @@ impl<'call> ToolExecutor<ToolCall<'call>> for BoardTool {
                 return Err(model_error("message-board arguments exceed 128 KiB"));
             }
             let budget = call.response_byte_budget(MAX_RESPONSE_BYTES);
-            let result = self.execute(raw, &call, budget).await?;
+            let (result, success) = match self.execute(raw, &call, budget).await {
+                Ok(result) => (result, true),
+                Err(BoardToolError::Model(error)) => return Err(error),
+                Err(BoardToolError::PermissionDenied(denied)) => {
+                    (denied.model_response(budget)?, false)
+                }
+            };
             if result.to_string().len() > budget {
                 return Err(model_error(
                     "Result exceeds the output budget. Reduce limit or max_chars_per_post; use read_post with a smaller limit_chars for long posts.",
                 ));
             }
             Ok(
-                Box::new(JsonToolOutput::new(result).with_external_context())
-                    as Box<dyn codex_tools::ToolOutput>,
+                Box::new(
+                    JsonToolOutput::with_success(result, Some(success)).with_external_context(),
+                ) as Box<dyn codex_tools::ToolOutput>,
             )
         })
     }
@@ -148,7 +157,7 @@ impl BoardTool {
         raw: &str,
         call: &ToolCall<'_>,
         budget: usize,
-    ) -> Result<Value, FunctionCallError> {
+    ) -> Result<Value, BoardToolError> {
         let board = &self.board;
         let caller = self.caller;
         let page_limit = |limit: Option<NonZeroU32>| limit.map_or(20, NonZeroU32::get).min(50);
@@ -324,9 +333,9 @@ impl BoardTool {
                     (Some(channel), None) => SubscriptionTarget::Channel(channel),
                     (None, Some(thread)) => SubscriptionTarget::Thread(thread),
                     _ => {
-                        return Err(model_error(
-                            "Supply exactly one of channel_name or thread_id",
-                        ));
+                        return Err(
+                            model_error("Supply exactly one of channel_name or thread_id").into(),
+                        );
                     }
                 };
                 encode(
@@ -365,7 +374,8 @@ impl BoardTool {
                     _ => {
                         return Err(model_error(
                             "Supply exactly one of channel_name, new_channel_name or thread_id",
-                        ));
+                        )
+                        .into());
                     }
                 };
                 let invocation = match &call.source {
@@ -420,7 +430,7 @@ async fn bounded_read<'a, T: Serialize>(
     budget: usize,
     largest_limit: u32,
     fetch: impl Fn(u32) -> BoxFuture<'a, codex_protocol::error::Result<T>>,
-) -> Result<Value, FunctionCallError> {
+) -> Result<Value, BoardToolError> {
     let mut scale = 1;
     loop {
         let result = encode(fetch(scale).await)?;
@@ -432,9 +442,7 @@ async fn bounded_read<'a, T: Serialize>(
         }
         scale *= 2;
     }
-    Err(model_error(
-        "The output budget is too small for this result's metadata.",
-    ))
+    Err(model_error("The output budget is too small for this result's metadata.").into())
 }
 
 fn nonzero(value: u32) -> NonZeroU32 {
@@ -443,8 +451,28 @@ fn nonzero(value: u32) -> NonZeroU32 {
 fn model_error(error: impl std::fmt::Display) -> FunctionCallError {
     FunctionCallError::RespondToModel(error.to_string().chars().take(512).collect())
 }
-fn encode<T: Serialize>(
-    value: codex_protocol::error::Result<T>,
-) -> Result<Value, FunctionCallError> {
-    serde_json::to_value(value.map_err(model_error)?).map_err(model_error)
+enum BoardToolError {
+    Model(FunctionCallError),
+    PermissionDenied(PermissionDenied),
+}
+
+impl From<FunctionCallError> for BoardToolError {
+    fn from(error: FunctionCallError) -> Self {
+        Self::Model(error)
+    }
+}
+
+fn encode<T: Serialize>(value: codex_protocol::error::Result<T>) -> Result<Value, BoardToolError> {
+    let value = value.map_err(|error| {
+        if let CodexErrorDetails::Io(io) = error.details()
+            && let Some(denied) = io
+                .get_ref()
+                .and_then(|source| source.downcast_ref::<PermissionDenied>())
+        {
+            BoardToolError::PermissionDenied(denied.clone())
+        } else {
+            BoardToolError::Model(model_error(error))
+        }
+    })?;
+    serde_json::to_value(value).map_err(|error| model_error(error).into())
 }

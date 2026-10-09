@@ -504,6 +504,7 @@ impl LocalAgentMessageBoard {
         .map_err(storage_error)?
         .ok_or_else(|| invalid("channel not found in this board"))?;
         Ok(ChannelSummary {
+            permissions: None,
             channel_name: name.to_string(),
             description: row.get("description"),
             created_at: DateTime::parse_from_rfc3339(row.get("created_at"))

@@ -1,5 +1,7 @@
 //! Message-board records shared by backends and tool adapters.
 
+use crate::BoardPermissions;
+use crate::ChannelPermissions;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::AgentPath;
@@ -47,6 +49,9 @@ pub struct ThreadSummary {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelSummary {
+    /// Absent on boards without ACL metadata; preserve the legacy wire shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<ChannelPermissions>,
     pub channel_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -54,6 +59,15 @@ pub struct ChannelSummary {
     pub created_by: AgentPath,
     pub message_count: usize,
     pub last_message_id: Option<Uuid>,
+}
+
+/// Channel discovery also exposes board actions, including when there are no channels.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelPage {
+    #[serde(flatten)]
+    pub channels: Page<ChannelSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_permissions: Option<BoardPermissions>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
