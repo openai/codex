@@ -360,7 +360,9 @@ impl Client {
             Ok(Err(RequestError::Other(error)))
                 if error
                     .downcast_ref::<RouteAwareRequestError>()
-                    .is_some_and(|error| error.is_connect() || error.is_timeout()) => {}
+                    .is_some_and(|error| {
+                        error.is_connect() || error.is_timeout() || error.is_request()
+                    }) => {}
             Err(_) => {}
             Ok(response) => return response,
         }
