@@ -72,6 +72,8 @@ const REPLAY_RETAINED_OUTPUT_SEQ: u64 = 800;
 #[cfg_attr(windows, allow(dead_code))]
 enum PushedExecScenario {
     Complete,
+    OutputAfterExit,
+    OutputAfterRecoveredExit,
     CodexPath,
     CodexPathDefaultFeature,
     CodexPathDisabledFeature,
@@ -420,7 +422,79 @@ async fn serve_exec_with_pushed_events(
     )
     .await;
 
+    let mut process_read_requests = 0;
     match scenario {
+        PushedExecScenario::OutputAfterExit | PushedExecScenario::OutputAfterRecoveredExit => {
+            send_exec_server_json(
+                &mut websocket,
+                json!({
+                    "method": "process/output",
+                    "params": {
+                        "processId": &process_id,
+                        "seq": 1,
+                        "stream": "stdout",
+                        "chunk": BASE64_STANDARD.encode("pushed "),
+                    }
+                }),
+            )
+            .await;
+            let mut exit = json!({
+                "method": "process/exited",
+                "params": {
+                    "processId": &process_id,
+                    "seq": 2,
+                    "exitCode": 0,
+                }
+            });
+            if matches!(scenario, PushedExecScenario::OutputAfterExit) {
+                exit["params"]["sandboxDenied"] = json!(false);
+            }
+            send_exec_server_json(&mut websocket, exit).await;
+            if matches!(scenario, PushedExecScenario::OutputAfterRecoveredExit) {
+                let read = read_exec_server_json(&mut websocket, STARTUP_TIMEOUT).await;
+                assert_eq!(read["method"], "process/read");
+                process_read_requests += 1;
+                send_exec_server_json(
+                    &mut websocket,
+                    json!({
+                        "id": read["id"],
+                        "result": {
+                            "chunks": [],
+                            "nextSeq": 3,
+                            "exited": true,
+                            "exitCode": 0,
+                            "closed": false,
+                            "failure": null,
+                            "sandboxDenied": false,
+                        }
+                    }),
+                )
+                .await;
+            }
+            // Model foreground output delayed in transit beyond the local post-exit grace.
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            send_exec_server_json(
+                &mut websocket,
+                json!({
+                    "method": "process/output",
+                    "params": {
+                        "processId": &process_id,
+                        "seq": 3,
+                        "stream": "stdout",
+                        "chunk": BASE64_STANDARD.encode("remote output\n"),
+                    }
+                }),
+            )
+            .await;
+            send_exec_server_json(
+                &mut websocket,
+                json!({
+                    "method": "process/closed",
+                    "params": { "processId": &process_id, "seq": 4 }
+                }),
+            )
+            .await;
+        }
         PushedExecScenario::Complete
         | PushedExecScenario::DenyWin
         | PushedExecScenario::DenyWinUnchanged
@@ -506,13 +580,16 @@ async fn serve_exec_with_pushed_events(
         PushedExecScenario::ReplayGap => {}
     }
 
-    let mut process_read_requests = 0;
     loop {
         let request = read_exec_server_json(&mut websocket, Duration::from_secs(/*secs*/ 5)).await;
         match request["method"].as_str() {
             Some("process/read") => {
                 process_read_requests += 1;
                 let result = match scenario {
+                    PushedExecScenario::OutputAfterExit
+                    | PushedExecScenario::OutputAfterRecoveredExit => {
+                        panic!("unexpected read after the delayed-output sequence")
+                    }
                     PushedExecScenario::Complete
                     | PushedExecScenario::CodexPath
                     | PushedExecScenario::CodexPathDefaultFeature
@@ -633,6 +710,8 @@ async fn serve_exec_with_pushed_events(
 }
 
 #[test_case(PushedExecScenario::Complete, ManagedNetworkScenario::None, false ; "complete_event_stream")]
+#[test_case(PushedExecScenario::OutputAfterExit, ManagedNetworkScenario::None, false ; "output_after_exit")]
+#[test_case(PushedExecScenario::OutputAfterRecoveredExit, ManagedNetworkScenario::None, false ; "output_after_recovered_exit")]
 #[test_case(PushedExecScenario::CodexPath, ManagedNetworkScenario::None, false ; "codex_path_is_exported_before_nested_command")]
 #[test_case(PushedExecScenario::CodexPathDefaultFeature, ManagedNetworkScenario::None, false ; "codex_path_is_not_exported_by_default")]
 #[test_case(PushedExecScenario::CodexPathDisabledFeature, ManagedNetworkScenario::None, false ; "disabled_codex_path_preserves_original_login_command")]
@@ -1368,6 +1447,22 @@ timeout = 900
     let output = output.context("exec_command output should contain text")?;
     let process_read_requests = exec_server_result.process_read_requests;
     match scenario {
+        PushedExecScenario::OutputAfterExit | PushedExecScenario::OutputAfterRecoveredExit => {
+            assert_ne!(success, Some(false));
+            assert!(saw_exec_command_begin);
+            assert!(output.contains("Process exited with code 0"));
+            assert!(
+                output.contains(COMPLETE_OUTPUT),
+                "missing remote output tail: {output}"
+            );
+            assert_eq!(
+                process_read_requests,
+                usize::from(matches!(
+                    scenario,
+                    PushedExecScenario::OutputAfterRecoveredExit
+                ))
+            );
+        }
         PushedExecScenario::Complete
         | PushedExecScenario::DenyWin
         | PushedExecScenario::DenyWinUnchanged

@@ -74,6 +74,15 @@ impl Drop for OutputTaskGuard {
     }
 }
 
+/// Controls whether process exit can start the collectors' bounded output drain.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum OutputDrainPolicy {
+    /// Match direct local execution when descendants retain inherited output pipes.
+    BoundedAfterExit,
+    /// Remote foreground output may still be buffered or in transit after exit.
+    WaitForOutputClosure,
+}
+
 /// Transport-specific process handle used by unified exec.
 enum ProcessHandle {
     Local(Box<ExecCommandSession>),
@@ -385,6 +394,7 @@ impl UnifiedExecProcess {
 
     pub(super) async fn from_exec_server_started(
         started: StartedExecProcess,
+        output_drain_policy: OutputDrainPolicy,
     ) -> Result<Self, UnifiedExecError> {
         let process_handle = ProcessHandle::ExecServer(Arc::clone(&started.process));
         // Older peers do not report this field. In that case, skip local
@@ -394,6 +404,7 @@ impl UnifiedExecProcess {
         let output_handles = managed.output_handles().clone();
         managed.output_task = Some(Self::spawn_exec_server_output_task(
             started,
+            output_drain_policy,
             output_handles,
             managed.output_tx.clone(),
             managed.state_tx.clone(),
@@ -422,6 +433,7 @@ impl UnifiedExecProcess {
 
     fn spawn_exec_server_output_task(
         started: StartedExecProcess,
+        output_drain_policy: OutputDrainPolicy,
         output_handles: OutputHandles,
         output_tx: broadcast::Sender<Vec<u8>>,
         state_tx: watch::Sender<ProcessState>,
@@ -527,6 +539,9 @@ impl UnifiedExecProcess {
                             state
                         });
                     }
+                    if exited && output_drain_policy == OutputDrainPolicy::BoundedAfterExit {
+                        cancellation_token.cancel();
+                    }
                     if closed {
                         output_closed.store(true, Ordering::Release);
                         output_closed_notify.notify_waiters();
@@ -564,6 +579,9 @@ impl UnifiedExecProcess {
                         let mut state = state_tx.borrow().clone();
                         state.sandbox_denied |= sandbox_denied.unwrap_or(false);
                         let _ = state_tx.send_replace(state.exited(Some(exit_code)));
+                        if output_drain_policy == OutputDrainPolicy::BoundedAfterExit {
+                            cancellation_token.cancel();
+                        }
                     }
                     ExecProcessEvent::Closed { seq } => {
                         if seq <= last_seq {

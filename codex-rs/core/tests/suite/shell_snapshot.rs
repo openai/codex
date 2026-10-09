@@ -383,6 +383,64 @@ async fn run_no_shell_turn(harness: &TestCodexHarness) -> Result<()> {
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_snapshot_v2_returns_before_inherited_output_closes() -> Result<()> {
+    use std::io::Write;
+
+    skip_if_remote!(Ok(()), "tests the local executor's inherited output pipes");
+    let profile_home = tempfile::tempdir()?;
+    let gate_path = profile_home.path().join("output-gate");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&gate_path)
+        .status()?;
+    anyhow::ensure!(status.success(), "failed to create output gate");
+    let mut gate = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&gate_path)?;
+    let harness = TestCodexHarness::with_auto_env_builder(shell_snapshot_v2_prewarm_builder(
+        profile_home.path(),
+    ))
+    .await?;
+
+    // The foreground shell exits, but its descendant retains stdout until we release the FIFO.
+    // Wait for the public command-end and turn-complete notifications, not polled process state.
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        run_tool_turn_on_harness(
+            &harness,
+            "run a command whose descendant retains stdout",
+            "inherited-output",
+            "exec_command",
+            json!({
+                "cmd": "(read -r release < \"$HOME/output-gate\") & printf 'foreground output'; exit 7",
+                "yield_time_ms": 30_000,
+                "tty": false,
+            }),
+        ),
+    )
+    .await;
+
+    // Release the descendant even when completion timed out on the broken path.
+    gate.write_all(b"release\n")?;
+    harness.test().codex.shutdown_and_wait().await?;
+    let end =
+        result.expect("tool response should complete before the inherited pipe is released")?;
+    assert_eq!(
+        (end.exit_code, end.aggregated_output),
+        (7, "foreground output".to_string()),
+    );
+    let output = harness.function_call_stdout("inherited-output").await;
+    assert!(output.contains("Process exited with code 7"), "{output}");
+    assert!(
+        !output.contains("Process running with session ID"),
+        "{output}"
+    );
+    assert!(output.ends_with("foreground output"), "{output}");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_snapshot_v2_warms_after_hooks_without_blocking_the_model() -> Result<()> {
     skip_if_remote!(Ok(()), "profile fixture uses a host-local HOME directory");
     let profile_home = tempfile::tempdir()?;

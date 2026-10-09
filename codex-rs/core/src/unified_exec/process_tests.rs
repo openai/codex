@@ -1,3 +1,4 @@
+use super::process::OutputDrainPolicy;
 use super::process::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecError;
 use codex_exec_server::ExecProcess;
@@ -104,7 +105,7 @@ pub(super) async fn remote_process(
         sandbox_type: sandbox_type.into(),
     };
 
-    UnifiedExecProcess::from_exec_server_started(started)
+    UnifiedExecProcess::from_exec_server_started(started, OutputDrainPolicy::WaitForOutputClosure)
         .await
         .expect("remote process should start")
 }
