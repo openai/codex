@@ -1445,45 +1445,53 @@ async fn text_helper_serializes_objects() {
 }
 
 #[tokio::test]
-async fn text_helper_surfaces_stringify_errors() {
-    let service = InProcessCodeModeSession::new();
+async fn output_helpers_surface_serialization_errors() {
+    for (source, expected_error) in [
+        (
+            "const circular = {}; circular.self = circular; text(circular);",
+            "Converting circular structure to JSON",
+        ),
+        (
+            "image({get image_url() { throw new Error('image getter failed'); }});",
+            "image getter failed",
+        ),
+        (
+            "image({type: 'image', get data() { throw new Error('MCP getter failed'); }});",
+            "MCP getter failed",
+        ),
+    ] {
+        let service = InProcessCodeModeSession::new();
+        let response = execute(
+            &service,
+            ExecuteRequest {
+                yield_time_ms: None,
+                ..execute_request(source)
+            },
+        )
+        .await;
 
-    let response = execute(
-        &service,
-        ExecuteRequest {
-            source: r#"
-const circular = {};
-circular.self = circular;
-text(circular);
-"#
-            .to_string(),
-            yield_time_ms: None,
-            ..execute_request("")
-        },
-    )
-    .await;
-
-    let RuntimeResponse::Result {
-        error_text: Some(error_text),
-        ..
-    } = &response
-    else {
-        panic!("circular stringify unexpectedly succeeded: {response:?}");
-    };
-    assert!(
-        error_text.contains("Converting circular structure to JSON"),
-        "unexpected circular stringify error: {error_text}"
-    );
-    let error_text = error_text.clone();
-    assert_eq!(
-        response,
-        RuntimeResponse::Result {
-            code_mode_host_duration: None,
-            cell_id: cell_id("1"),
-            content_items: Vec::new(),
+        let RuntimeResponse::Result {
             error_text: Some(error_text),
-        }
-    );
+            ..
+        } = &response
+        else {
+            panic!("serialization unexpectedly succeeded: {response:?}");
+        };
+        assert!(
+            error_text.contains(expected_error),
+            "unexpected serialization error: {error_text}"
+        );
+        let error_text = error_text.clone();
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                code_mode_host_duration: None,
+                cell_id: cell_id("1"),
+                content_items: Vec::new(),
+                error_text: Some(error_text),
+            }
+        );
+    }
 }
 
 #[tokio::test]

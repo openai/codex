@@ -429,40 +429,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminate_execution_stops_cpu_bound_module() {
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-        let (_runtime_tx, _runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
-            HashMap::new(),
-            execute_request("while (true) {}"),
-            event_tx,
-            PendingRuntimeMode::Continue,
-            /*task_failure_handler*/ None,
-        )
-        .unwrap();
-
-        let started_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
-            .await
-            .unwrap()
+    async fn terminate_execution_stops_javascript() {
+        for source in [
+            r#"notify("started"); while (true) {}"#,
+            // The failed first read enters JSON fallback, whose TryCatch must preserve termination.
+            r#"
+let reads = 0;
+const value = {
+    get image_url() {
+        if (++reads === 1) throw new Error("enter fallback");
+        notify("started");
+        while (true) {}
+    }
+};
+try { image(value); } catch {}
+text("continued after cancellation");
+"#,
+        ] {
+            let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+            let (_runtime_tx, _runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
+                HashMap::new(),
+                execute_request(source),
+                event_tx,
+                PendingRuntimeMode::Continue,
+                /*task_failure_handler*/ None,
+            )
             .unwrap();
-        assert!(matches!(started_event, RuntimeEvent::Started));
 
-        assert!(runtime_terminate_handle.terminate_execution());
-
-        let result_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        let RuntimeEvent::Result { error_text, .. } = result_event else {
-            panic!("expected runtime result after termination");
-        };
-        assert!(error_text.is_some());
-
-        assert!(
-            tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+            let started_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
                 .await
                 .unwrap()
-                .is_none()
-        );
+                .unwrap();
+            assert!(matches!(started_event, RuntimeEvent::Started));
+
+            // Started precedes evaluation; the notification proves the workload is running.
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                    .await
+                    .unwrap(),
+                Some(RuntimeEvent::Notify { .. })
+            ));
+            assert!(runtime_terminate_handle.terminate_execution());
+
+            let result_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let RuntimeEvent::Result { error_text, .. } = result_event else {
+                panic!("expected runtime result after termination");
+            };
+            assert!(error_text.is_some());
+
+            assert!(
+                tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 
     #[tokio::test]

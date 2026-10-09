@@ -297,6 +297,10 @@ pub(super) fn v8_value_to_json(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
 ) -> Result<Option<JsonValue>, String> {
+    // Reentering V8 during termination can replace it with a catchable exception.
+    if scope.is_execution_terminating() {
+        return Err("JavaScript execution terminated".to_string());
+    }
     // V8 stringifies undefined as the non-JSON text "undefined".
     if value.is_undefined() {
         return Ok(None);
@@ -362,6 +366,10 @@ pub(super) fn value_to_error_text(
 }
 
 pub(super) fn throw_type_error(scope: &mut v8::PinScope<'_, '_>, message: &str) {
+    // Preserve V8's uncatchable termination instead of replacing it with a JS error.
+    if scope.is_execution_terminating() {
+        return;
+    }
     if let Some(message) = v8::String::new(scope, message) {
         scope.throw_exception(message.into());
     }

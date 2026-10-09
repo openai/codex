@@ -46,6 +46,8 @@ use tonic::transport::Server;
 mod admission_tests;
 #[path = "support/host.rs"]
 mod host;
+#[path = "grpc/image_cancellation_tests.rs"]
+mod image_cancellation_tests;
 #[path = "support/large_tool_delegate.rs"]
 mod large_tool_delegate;
 #[path = "grpc/network_policy_tests.rs"]
