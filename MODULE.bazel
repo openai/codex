@@ -517,8 +517,8 @@ codex_release_archive = use_extension(
     "codex_release_archive",
 )
 codex_release_archive.release(
-    sha256 = "8b711520beddf385467b8da4d2c93736637c6ba1e46811cf0d8606b7c490b6f6",
-    version = "0.156.1",
+    sha256 = "a676f5722aae0d86cbe3764332f08eab1fdd89dc0a300b3ad4ffbf48611fa3e3",
+    version = "0.162.1",
 )
 codex_release_archive.release(
     sha256 = "71a28d362c96ac9829bf8203a2c71be451aeb726adb843167fdaf0eae8fe7dd9",
@@ -527,7 +527,7 @@ codex_release_archive.release(
 use_repo(
     codex_release_archive,
     "codex_release_0.145.0_linux_x86_64",
-    "codex_release_0.156.1_linux_x86_64",
+    "codex_release_0.162.1_linux_x86_64",
 )
 
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
