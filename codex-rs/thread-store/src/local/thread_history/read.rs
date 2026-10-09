@@ -162,7 +162,7 @@ pub(in crate::local) async fn list_turns(
 
 pub(in crate::local) async fn list_items(
     store: &LocalThreadStore,
-    params: ListItemsParams,
+    mut params: ListItemsParams,
 ) -> ThreadStoreResult<ItemPage> {
     validate_thread_for_paginated_reads(
         store,
@@ -171,6 +171,21 @@ pub(in crate::local) async fn list_items(
         "list_items",
     )
     .await?;
+    if let Some(ids) = &params.item_ids {
+        if params.turn_id.is_none()
+            || params.position.is_some()
+            || params.after_updated_at_ordinal.is_some()
+            || params.sort_key != crate::ItemSortKey::CreatedAtOrdinal
+            || !(1..=100).contains(&ids.len())
+        {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: "itemIds requires turnId, 1 to 100 IDs, and no cursor or update replay"
+                    .to_string(),
+            });
+        }
+        params.page_size = ids.len();
+        params.sort_direction = crate::SortDirection::Asc;
+    }
     validate_page_size(params.page_size)?;
     let lineage = store
         .resolve_rollout_lineage(params.thread_id, /*initial_path*/ None)

@@ -902,6 +902,15 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_items_read(
+        &self,
+        params: ThreadItemsReadParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_items_read_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn thread_timeline_list(
         &self,
         params: ThreadTimelineListParams,
@@ -3404,6 +3413,7 @@ impl ThreadRequestProcessor {
             let page = self
                 .thread_store
                 .list_items(StoreListItemsParams {
+                    item_ids: None,
                     thread_id,
                     turn_id: Some(turn_id.to_string()),
                     include_archived: true,
@@ -3520,6 +3530,7 @@ impl ThreadRequestProcessor {
             .map_err(paginated_history_list_error)?;
         let items_page = thread_store
             .list_items(StoreListItemsParams {
+                item_ids: None,
                 thread_id,
                 turn_id: None,
                 include_archived: true,
@@ -3566,6 +3577,7 @@ impl ThreadRequestProcessor {
         let page = self
             .thread_store
             .list_items(StoreListItemsParams {
+                item_ids: None,
                 thread_id,
                 turn_id,
                 include_archived: true,
@@ -3595,18 +3607,7 @@ impl ThreadRequestProcessor {
         let data = page
             .items
             .into_iter()
-            .map(|stored_item| {
-                let turn_id = stored_item.turn_id.clone();
-                let started_at_ms = stored_item.started_at_ms;
-                let completed_at_ms = stored_item.completed_at_ms;
-                let item = deserialize_stored_thread_item(stored_item)?;
-                Ok(ThreadItemEntry {
-                    turn_id,
-                    item,
-                    started_at_ms,
-                    completed_at_ms,
-                })
-            })
+            .map(stored_thread_item_to_entry)
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(ThreadItemsListResponse {
@@ -3614,6 +3615,56 @@ impl ThreadRequestProcessor {
             next_cursor: page.next_cursor,
             backwards_cursor: page.backwards_cursor,
         })
+    }
+
+    async fn thread_items_read_response_inner(
+        &self,
+        params: ThreadItemsReadParams,
+    ) -> Result<ThreadItemsReadResponse, JSONRPCErrorError> {
+        if !(1..=100).contains(&params.item_ids.len()) {
+            return Err(invalid_request(
+                "itemIds must contain 1 to 100 IDs".to_string(),
+            ));
+        }
+        let ThreadItemsReadParams {
+            thread_id,
+            turn_id,
+            item_ids,
+        } = params;
+        let thread_id = ThreadId::from_string(&thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        let page_size = item_ids.len();
+        let page = self
+            .thread_store
+            .list_items(StoreListItemsParams {
+                item_ids: Some(item_ids),
+                thread_id,
+                turn_id: Some(turn_id),
+                include_archived: true,
+                position: None,
+                page_size,
+                sort_direction: StoreSortDirection::Asc,
+                sort_key: StoreItemSortKey::CreatedAtOrdinal,
+                after_updated_at_ordinal: None,
+            })
+            .await
+            .map_err(|err| match err {
+                ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+                ThreadStoreError::Unsupported { .. } => {
+                    method_not_found("thread/items/read is not supported yet")
+                }
+                ThreadStoreError::ThreadNotFound { thread_id } => {
+                    invalid_request(format!("no rollout found for thread id {thread_id}"))
+                }
+                err => internal_error(format!("failed to read thread items: {err}")),
+            })?;
+        let data = page
+            .items
+            .into_iter()
+            .map(stored_thread_item_to_entry)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(ThreadItemsReadResponse { data })
     }
 
     async fn load_thread_turns_list_history(
@@ -6093,6 +6144,21 @@ fn deserialize_stored_thread_item(
             "failed to deserialize stored thread item {}: {err}",
             item.item_id
         ))
+    })
+}
+
+fn stored_thread_item_to_entry(
+    stored_item: codex_thread_store::StoredThreadItem,
+) -> Result<ThreadItemEntry, JSONRPCErrorError> {
+    let turn_id = stored_item.turn_id.clone();
+    let started_at_ms = stored_item.started_at_ms;
+    let completed_at_ms = stored_item.completed_at_ms;
+    let item = deserialize_stored_thread_item(stored_item)?;
+    Ok(ThreadItemEntry {
+        turn_id,
+        item,
+        started_at_ms,
+        completed_at_ms,
     })
 }
 

@@ -29,6 +29,8 @@ use codex_app_server_protocol::ThreadItemsListAnchor;
 use codex_app_server_protocol::ThreadItemsListCursor;
 use codex_app_server_protocol::ThreadItemsListParams;
 use codex_app_server_protocol::ThreadItemsListResponse;
+use codex_app_server_protocol::ThreadItemsReadParams;
+use codex_app_server_protocol::ThreadItemsReadResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
@@ -2204,6 +2206,48 @@ async fn paginated_history_lists_and_legacy_reads_use_projected_turns_and_items(
             (-32602, message)
         );
     }
+    let read_id = mcp
+        .send_thread_items_read_request(ThreadItemsReadParams {
+            thread_id: thread_id.to_string(),
+            item_ids: vec![
+                "agent-1".to_string(),
+                "steer-1".to_string(),
+                "user-2".to_string(),
+                "missing".to_string(),
+            ],
+            turn_id: "turn-1".to_string(),
+        })
+        .await?;
+    let read: ThreadItemsReadResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(read_id)).await??;
+    assert_eq!(
+        read.data,
+        vec![
+            ThreadItemEntry {
+                turn_id: "turn-1".to_string(),
+                item: ThreadItem::UserMessage {
+                    id: "steer-1".to_string(),
+                    client_id: Some("updated-steer".to_string()),
+                    content: Vec::new(),
+                },
+                started_at_ms: Some(0),
+                completed_at_ms: Some(1),
+            },
+            ThreadItemEntry {
+                turn_id: "turn-1".to_string(),
+                item: ThreadItem::AgentMessage {
+                    id: "agent-1".to_string(),
+                    text: "first".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                    delivery: None,
+                    questions: None,
+                },
+                started_at_ms: Some(0),
+                completed_at_ms: Some(1),
+            },
+        ]
+    );
 
     let turn_start_id = mcp
         .send_turn_start_request(TurnStartParams {
@@ -2244,7 +2288,7 @@ async fn paginated_history_lists_and_legacy_reads_use_projected_turns_and_items(
 }
 
 #[tokio::test]
-async fn thread_items_list_returns_unsupported() -> Result<()> {
+async fn thread_items_read_validates_ids_before_history_access() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
@@ -2275,6 +2319,43 @@ async fn thread_items_list_returns_unsupported() -> Result<()> {
         read_err.error.message,
         "thread/items/list is not supported yet"
     );
+
+    let read = ThreadItemsReadParams {
+        thread_id: "00000000-0000-4000-8000-000000000123".to_string(),
+        item_ids: vec!["item".to_string()],
+        turn_id: "turn".to_string(),
+    };
+    for item_ids in [
+        Vec::new(),
+        (0..101).map(|index| index.to_string()).collect(),
+    ] {
+        let id = mcp
+            .send_thread_items_read_request(ThreadItemsReadParams {
+                item_ids,
+                ..read.clone()
+            })
+            .await?;
+        let error: JSONRPCError = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_error_message(RequestId::Integer(id)),
+        )
+        .await??;
+        assert_eq!(error.error.code, -32600);
+        assert_eq!(error.error.message, "itemIds must contain 1 to 100 IDs");
+    }
+
+    let max_read_id = mcp
+        .send_thread_items_read_request(ThreadItemsReadParams {
+            item_ids: (0..100).map(|index| index.to_string()).collect(),
+            ..read
+        })
+        .await?;
+    let max_read_error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(max_read_id)),
+    )
+    .await??;
+    assert_eq!(max_read_error.error.code, -32601);
 
     Ok(())
 }

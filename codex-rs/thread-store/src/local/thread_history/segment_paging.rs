@@ -306,6 +306,14 @@ WHERE thread_id =
         if let Some(turn_id) = params.turn_id.as_deref() {
             query.push(" AND turn_id = ").push_bind(turn_id);
         }
+        if let Some(item_ids) = params.item_ids.as_deref() {
+            query.push(" AND item_id IN (");
+            let mut ids = query.separated(", ");
+            for item_id in item_ids {
+                ids.push_bind(item_id);
+            }
+            ids.push_unseparated(")");
+        }
         push_cursor_clause(&mut query, params.sort_direction, segment_cursor)?;
         push_order_and_limit(&mut query, params.sort_direction, remaining);
         rows.extend(

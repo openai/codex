@@ -473,6 +473,7 @@ async fn migration_projects_explicit_and_implicit_legacy_completed_items() {
     assert_eq!(turns.turns[0].turn_id, "explicit");
     let items = store
         .list_items(ListItemsParams {
+            item_ids: None,
             thread_id,
             turn_id: None,
             include_archived: false,
@@ -625,6 +626,7 @@ async fn migration_keeps_late_completions_in_their_original_turn() {
 
     let items = store
         .list_items(ListItemsParams {
+            item_ids: None,
             thread_id,
             turn_id: None,
             include_archived: false,
@@ -1105,6 +1107,7 @@ async fn migration_keeps_late_completions_for_surviving_turns_across_rollback() 
     );
     let items = store
         .list_items(ListItemsParams {
+            item_ids: None,
             thread_id,
             turn_id: None,
             include_archived: false,
