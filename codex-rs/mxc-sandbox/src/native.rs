@@ -3,8 +3,8 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
-use mxc_sdk::mxc_common as wxc_common;
-use mxc_sdk::process_container_common::base_container_runner::BaseContainerRunner;
+use appcontainer_common::base_container_runner::BaseContainerRunner;
+use learning_mode_windows::SecurityEnvironmentApi;
 use wxc_common::logger::Logger;
 use wxc_common::logger::Mode;
 use wxc_common::models::ExecutionRequest;
@@ -25,9 +25,11 @@ pub(super) fn launch(request: &ExecutionRequest) -> Result<i32> {
             .any(|capability| capability.eq_ignore_ascii_case("permissiveLearningMode")),
         "MXC native launch does not support permissiveLearningMode"
     );
+    // With no least-privilege mode, legacy proxy, or capture enabled, this
+    // probe guarantees BaseContainerRunner chooses PSEC rather than SBOX.
     if !request.policy.denied_paths.is_empty() {
         ensure!(
-            BaseContainerRunner::supports_native_denied_paths(),
+            SecurityEnvironmentApi::load()?.supports_deny_paths()?,
             "this Windows build cannot enforce native MXC deny paths"
         );
     }
