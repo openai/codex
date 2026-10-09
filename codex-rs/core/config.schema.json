@@ -803,6 +803,9 @@
             "code_mode_host": {
               "$ref": "#/definitions/FeatureToml_for_CodeModeHostConfigToml"
             },
+            "code_mode_host_grpc": {
+              "type": "boolean"
+            },
             "code_mode_interrupt": {
               "type": "boolean"
             },
@@ -7099,6 +7102,9 @@
         },
         "code_mode_host": {
           "$ref": "#/definitions/FeatureToml_for_CodeModeHostConfigToml"
+        },
+        "code_mode_host_grpc": {
+          "type": "boolean"
         },
         "code_mode_interrupt": {
           "type": "boolean"

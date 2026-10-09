@@ -18,7 +18,7 @@ const OTEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 5);
 
 #[derive(Debug, Parser)]
 struct Cli {
-    /// Transport endpoint: `stdio`, `stdio://`, or `grpc://IP:PORT`.
+    /// Transport endpoint: `stdio`, `stdio://`, `grpc+stdio://`, or `grpc://IP:PORT`.
     #[arg(
         long,
         value_name = "URL",

@@ -41,6 +41,10 @@ fn parse_listen_url_accepts_stdio_transports() {
         parse_listen_url("stdio://").expect("stdio URL should parse"),
         ListenTransport::Stdio
     );
+    assert_eq!(
+        parse_listen_url("grpc+stdio://").expect("gRPC stdio URL should parse"),
+        ListenTransport::GrpcStdio
+    );
 }
 
 #[test]
