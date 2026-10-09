@@ -585,6 +585,7 @@ pub(super) async fn run_main_inner(
             &mut startup_draft,
             &app_server_target,
             &config,
+            &cli_kv_overrides,
             managed_daemon,
         )
         .await?

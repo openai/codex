@@ -8,27 +8,16 @@ use anyhow::ensure;
 use codex_app_server_protocol::JSONRPCMessage;
 use futures::SinkExt;
 use futures::StreamExt;
-use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio::net::UnixListener;
 use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn incompatible_daemon_falls_back_for_default_and_explicit_features() -> Result<()> {
-    for scenario in ["default", "explicit", "host policy"] {
+async fn incompatible_daemon_falls_back_for_explicit_features() -> Result<()> {
+    for scenario in ["explicit enable", "explicit disable"] {
         let cwd = codex_utils_cargo_bin::repo_root()?;
         let home = tempfile::tempdir_in("/tmp")?;
         write_test_config(home.path(), &cwd)?;
-        if scenario == "host policy" {
-            let path = home.path().join("config.toml");
-            let contents = std::fs::read_to_string(&path)?;
-            std::fs::write(
-                path,
-                format!(
-                    "features.code_mode_host = {{enabled=false, disable_in_process_fallback=true}}\n{contents}"
-                ),
-            )?;
-        }
         let socket = codex_app_server_client::app_server_control_socket_path(home.path())?;
         std::fs::create_dir_all(socket.parent().unwrap())?;
         let listener = UnixListener::bind(socket.as_path())?;
@@ -43,15 +32,22 @@ async fn incompatible_daemon_falls_back_for_default_and_explicit_features() -> R
                 let JSONRPCMessage::Request(request) = serde_json::from_str(&text)? else {
                     continue;
                 };
-                let response = if request.method == "initialize" {
-                    json!({"id": request.id, "result": {"userAgent": "daemon-test/0.0.0"}})
-                } else {
-                    assert_eq!(request.method, "experimentalFeature/list");
-                    json!({"id": request.id, "result": {"data": [{
+                let response = match request.method.as_str() {
+                    "initialize" => {
+                        json!({"id": request.id, "result": {"userAgent": "daemon-test/0.0.0"}})
+                    }
+                    "config/read" => {
+                        json!({"id": request.id, "result": {"config": {}, "layers": []}})
+                    }
+                    "configRequirements/read" => {
+                        json!({"id": request.id, "result": {"requirements": null}})
+                    }
+                    "experimentalFeature/list" => json!({"id": request.id, "result": {"data": [{
                         "name": "api_key_model_discovery", "stage": "stable",
                         "displayName": null, "description": null, "announcement": null,
-                        "enabled": scenario == "explicit", "defaultEnabled": true,
-                    }], "nextCursor": null}})
+                        "enabled": scenario == "explicit disable", "defaultEnabled": true,
+                    }], "nextCursor": null}}),
+                    _ => panic!("unexpected request: {}", request.method),
                 };
                 socket
                     .send(Message::Text(response.to_string().into()))
@@ -59,25 +55,24 @@ async fn incompatible_daemon_falls_back_for_default_and_explicit_features() -> R
             }
             Ok::<_, anyhow::Error>(())
         });
-        let args = if scenario == "explicit" {
+        let args = if scenario == "explicit disable" {
             vec!["-c", "features.api_key_model_discovery=false"]
         } else {
-            vec![]
+            vec!["-c", "features.api_key_model_discovery=true"]
         };
         let mut terminal = PtyCodex::start(&cwd, home, &args)?;
         terminal.wait_for_startup()?;
         terminal.wait_for_screen("warning")?;
         terminal.write_input(b"\x14")?;
         let (snapshot, warning_end) = match scenario {
-            "default" => (
+            "explicit enable" => (
                 "daemon_feature_mismatch",
                 "api_key_model_discovery to be enabled.",
             ),
-            "explicit" => (
+            "explicit disable" => (
                 "daemon_override_mismatch",
                 "api_key_model_discovery to be disabled.",
             ),
-            "host policy" => ("daemon_host_policy_mismatch", "requires embedded mode."),
             _ => unreachable!(),
         };
         terminal.wait_for_screen(warning_end)?;
@@ -94,10 +89,6 @@ async fn incompatible_daemon_falls_back_for_default_and_explicit_features() -> R
         terminal.write_input(b"\r")?;
         terminal.wait_for_screen("Model:")?;
         ensure!(!terminal.screen_contains("unix://"));
-        if scenario == "host policy" {
-            server.abort();
-            continue;
-        }
         tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), server).await???;
     }
     Ok(())

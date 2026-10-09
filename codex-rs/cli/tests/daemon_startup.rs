@@ -364,6 +364,17 @@ async fn daemon_startup(command: &str) -> Result<()> {
                             ensure!(text.contains("Cannotusethesharedbackgroundserver:Thissessionrequiresapi_key_model_discoverytobedisabled."));
                         } else {
                             ensure!(text.contains("Server:Localbackgroundserver") == restart);
+                            if restart {
+                                let settings: serde_json::Value = serde_json::from_slice(
+                                    &fs::read(home.path().join("app-server-daemon/settings.json"))?
+                                )?;
+                                let flag = if disabling && !persisted {
+                                    "auth_elicitation"
+                                } else {
+                                    "api_key_model_discovery"
+                                };
+                                assert_eq!(settings["featureOverrides"], serde_json::json!({(flag): false}));
+                            }
                         }
                     } else if command == "start" {
                         ensure!(text.contains("Server:Localbackgroundserver"));
