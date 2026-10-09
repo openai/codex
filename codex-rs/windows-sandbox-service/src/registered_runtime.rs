@@ -250,7 +250,7 @@ fn validate_account_sid(account: &RuntimeAccountRegistration) -> Result<()> {
     Ok(())
 }
 
-fn validate_record(record: &InstallationRecord) -> Result<()> {
+pub(crate) fn validate_record(record: &InstallationRecord) -> Result<()> {
     let runtime = record.runtime()?;
     ensure!(
         runtime.accounts.len() <= 2,
@@ -265,7 +265,7 @@ fn validate_record(record: &InstallationRecord) -> Result<()> {
     Ok(())
 }
 
-fn registered_packages(user_sid: &str, family: &str) -> Result<Vec<HSTRING>> {
+pub(crate) fn registered_packages(user_sid: &str, family: &str) -> Result<Vec<HSTRING>> {
     let packages = PackageManager::new()?.FindPackagesByUserSecurityIdPackageFamilyName(
         &HSTRING::from(user_sid),
         &HSTRING::from(family),
@@ -313,7 +313,7 @@ fn load_profile(
     })
 }
 
-fn validate_target(
+pub(crate) fn validate_target(
     token: HANDLE,
     account: SandboxRuntimeAccount,
     expected_sid: Option<&str>,
