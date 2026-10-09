@@ -341,10 +341,12 @@ pub(super) async fn ensure_listener_task_running(
                     // Track the event before emitting any typed translations
                     // so thread-local state such as raw event opt-in stays
                     // synchronized with the conversation.
-                    let raw_events_enabled = {
+                    let (raw_events_enabled, terminal_summary) = {
                         let mut thread_state = thread_state.lock().await;
                         thread_state.track_current_turn_event(&event.id, &event.msg);
-                        thread_state.experimental_raw_events
+                        let terminal = matches!(event.msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
+                            .then(|| thread_state.turn_summary.clone());
+                        (thread_state.experimental_raw_events, terminal)
                     };
                     if matches!(
                         &event.msg,
@@ -362,6 +364,12 @@ pub(super) async fn ensure_listener_task_running(
                         conversation_id,
                     );
 
+                    // Make reads after turn/completed reflect the committed frontier.
+                    if let Some(summary) = terminal_summary {
+                        super::thread_read_state::publish(
+                            &event, conversation_id, &conversation, &summary,
+                        ).await;
+                    }
                     apply_bespoke_event_handling(
                         event.clone(),
                         conversation_id,

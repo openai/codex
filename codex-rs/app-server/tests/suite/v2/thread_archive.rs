@@ -353,7 +353,9 @@ async fn thread_archive_without_turns(history_mode: ThreadHistoryMode) -> Result
     .await??;
     assert_eq!(archived_notification.thread_id, thread.id);
 
-    let ThreadReadResponse { thread: archived } = mcp
+    let ThreadReadResponse {
+        thread: archived, ..
+    } = mcp
         .request(|request_id| ClientRequest::ThreadRead {
             request_id,
             params: ThreadReadParams {

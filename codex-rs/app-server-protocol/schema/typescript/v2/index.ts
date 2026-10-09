@@ -539,6 +539,7 @@ export type { ThreadProjectUpdatedNotification } from "./ThreadProjectUpdatedNot
 export type { ThreadQueueChangedNotification } from "./ThreadQueueChangedNotification";
 export type { ThreadReadParams } from "./ThreadReadParams";
 export type { ThreadReadResponse } from "./ThreadReadResponse";
+export type { ThreadReadState } from "./ThreadReadState";
 export type { ThreadRealtimeAudioChunk } from "./ThreadRealtimeAudioChunk";
 export type { ThreadRealtimeBemItemPresentation } from "./ThreadRealtimeBemItemPresentation";
 export type { ThreadRealtimeClosedNotification } from "./ThreadRealtimeClosedNotification";
@@ -600,6 +601,7 @@ export type { ThreadTurnsListResponse } from "./ThreadTurnsListResponse";
 export type { ThreadUnarchiveParams } from "./ThreadUnarchiveParams";
 export type { ThreadUnarchiveResponse } from "./ThreadUnarchiveResponse";
 export type { ThreadUnarchivedNotification } from "./ThreadUnarchivedNotification";
+export type { ThreadUnreadPosition } from "./ThreadUnreadPosition";
 export type { ThreadUnsubscribeParams } from "./ThreadUnsubscribeParams";
 export type { ThreadUnsubscribeResponse } from "./ThreadUnsubscribeResponse";
 export type { ThreadUnsubscribeStatus } from "./ThreadUnsubscribeStatus";

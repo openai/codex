@@ -91,7 +91,7 @@ async fn runtime_enabled_legacy_migration_preserves_cold_resume_model_context() 
                     include_turns: false,
                 })
                 .await?;
-            let ThreadReadResponse { thread: read } = secondary.read_response(read_id).await?;
+            let ThreadReadResponse { thread: read, .. } = secondary.read_response(read_id).await?;
             if read.history_mode == ThreadHistoryMode::Paginated {
                 return Ok::<(), anyhow::Error>(());
             }

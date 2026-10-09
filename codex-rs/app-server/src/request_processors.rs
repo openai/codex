@@ -570,6 +570,7 @@ mod thread_fork_goal;
 mod thread_input;
 mod thread_processor;
 mod thread_queue_processor;
+mod thread_read_state;
 mod thread_sections;
 mod token_usage_replay;
 mod turn_processor;

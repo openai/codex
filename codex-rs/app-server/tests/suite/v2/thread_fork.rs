@@ -1292,6 +1292,7 @@ async fn thread_fork_can_cut_before_unfinished_stored_turn() -> Result<()> {
         .await?;
     let ThreadReadResponse {
         thread: source_thread,
+        ..
     } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(read_id)).await??;
     assert_eq!(source_thread.turns.len(), 2);
     assert_eq!(source_thread.turns[1].id, unfinished_turn_id);

@@ -1005,7 +1005,7 @@ async fn thread_search_returns_content_matches() -> Result<()> {
                 include_turns: false,
             })
             .await?;
-        let ThreadReadResponse { thread } =
+        let ThreadReadResponse { thread, .. } =
             timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
         pinned_threads.push(thread);
     }
@@ -1245,6 +1245,7 @@ async fn thread_list_db_only_errors_distinguish_unavailable_database_from_empty_
                         page,
                         ThreadListResponse {
                             data: vec![],
+                            read_states: Some(HashMap::new()),
                             next_cursor: None,
                             backwards_cursor: None
                         }

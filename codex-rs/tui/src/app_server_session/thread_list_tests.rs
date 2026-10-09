@@ -65,7 +65,7 @@ async fn thread_list_preserves_filters_and_retries_only_legacy_cwd_errors() -> R
         if code == 0 || retry {
             assert_eq!(
                 serde_json::to_value(result?)?,
-                json!({"data": [], "nextCursor": "next", "backwardsCursor": null})
+                json!({"data": [], "readStates": null, "nextCursor": "next", "backwardsCursor": null})
             );
         } else {
             assert!(format!("{:#}", result.unwrap_err()).contains(message));
