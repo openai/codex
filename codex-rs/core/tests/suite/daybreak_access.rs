@@ -59,7 +59,7 @@ async fn daybreak_metadata_follows_the_actual_plugin_call(case: AccessCase) -> R
     skip_if_no_network!(Ok(()));
     #[cfg(unix)]
     let remote = if matches!(case, AccessCase::RemoteStdio) {
-        Some(super::multi_exec_server_sandbox::ExecServerProcess::start().await?)
+        Some(core_test_support::exec_server::ExecServerProcess::start().await?)
     } else {
         None
     };

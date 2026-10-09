@@ -1465,7 +1465,7 @@ async fn sampling_is_ready_for_daemon_recovery(
     .await;
     #[cfg(unix)]
     let remote = if executor == "remote" {
-        Some(super::multi_exec_server_sandbox::ExecServerProcess::start().await?)
+        Some(core_test_support::exec_server::ExecServerProcess::start().await?)
     } else {
         None
     };

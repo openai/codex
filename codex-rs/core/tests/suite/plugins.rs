@@ -674,7 +674,7 @@ printf 'STDIN_OK\n'
         });
     // Exercise both native and executor-managed sandboxes with the same plugin fixture.
     let _executor = if environment_id == codex_exec_server::REMOTE_ENVIRONMENT_ID {
-        let executor = super::multi_exec_server_sandbox::ExecServerProcess::start().await?;
+        let executor = core_test_support::exec_server::ExecServerProcess::start().await?;
         builder = builder.with_exec_server_url(executor.websocket_url.clone());
         Some(executor)
     } else {
@@ -732,7 +732,7 @@ async fn remote_plugin_measurements_require_the_frontend_version() -> Result<()>
     skip_if_no_network!(Ok(()));
     // This fixture needs a real remote transport with separately controlled frontend
     // and executor caches, rather than the runner's automatic executor selection.
-    let executor = super::multi_exec_server_sandbox::ExecServerProcess::start().await?;
+    let executor = core_test_support::exec_server::ExecServerProcess::start().await?;
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let frontend_script = write_remote_plugin_script_and_config(home.as_ref());
