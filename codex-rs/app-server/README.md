@@ -27,7 +27,8 @@ thread IDs on the returned page to their receipts. Null (or absent on older serv
 means durable read state is unavailable; a missing map entry means that row is
 ineligible. Ephemeral, not-yet-persisted, service and product-owned threads are
 ineligible. Shared `Thread` objects, including search and lifecycle responses,
-carry no receipts. After start, resume or fork, refresh with `thread/read`.
+carry no receipts. After start, resume or fork, use `thread/read` to obtain the
+current receipt.
 Each local thread has one receipt, with the same storage ownership as the thread.
 
 A read state is `{firstUnread, revision}`. `firstUnread` is null when read,
@@ -41,6 +42,16 @@ older turn remains the first unread position. Reverting a paginated thread
 clears a removed position; explicit thread-start marks survive. Loading snapshots
 never acknowledges activity; empty threads start read and forked history does
 not publish inherited turns as new results.
+
+Enabling `initialize.capabilities.experimentalApi` permits receiving read-state
+notifications.
+
+Started, resumed or forked threads send `thread/readState/changed` alongside
+ordinary thread events; thread/unsubscribe or disconnect stops delivery.
+Clients can filter this method with the existing notification opt-out setting.
+Revisions are equality tokens, not clocks: never compare or merge them across
+threads or hosts. When concurrent responses disagree, refresh with `thread/read`.
+Offscreen threads converge on page refresh.
 
 # Guardian circuit-breaker errors
 

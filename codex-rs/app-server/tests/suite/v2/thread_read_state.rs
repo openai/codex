@@ -8,6 +8,7 @@ use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadReadStateChangedNotification;
 use codex_app_server_protocol::ThreadRevertParams;
 use codex_app_server_protocol::ThreadRevertResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -95,6 +96,13 @@ async fn read_state_tracks_terminal_activity_and_reverted_history() -> Result<()
     assert_eq!(listed.data.len(), 1);
     assert_eq!(listed.data[0].id, thread_id);
     assert_eq!(receipts, [(thread_id.clone(), first.clone())].into());
+
+    let changed: ThreadReadStateChangedNotification = timeout(
+        TIMEOUT,
+        server.read_notification("thread/readState/changed"),
+    )
+    .await??;
+    assert_eq!(changed.read_state, first);
 
     let _: ThreadRevertResponse = server
         .request(|request_id| ClientRequest::ThreadRevert {

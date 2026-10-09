@@ -364,10 +364,16 @@ pub(super) async fn ensure_listener_task_running(
                         conversation_id,
                     );
 
-                    // Make reads after turn/completed reflect the committed frontier.
-                    if let Some(summary) = terminal_summary {
-                        super::thread_read_state::publish(
+                    // Publish the committed receipt before turn/completed so completion
+                    // remains the last notification for this terminal result.
+                    if let Some(summary) = terminal_summary
+                        && let Some(db) = super::thread_read_state::publish(
                             &event, conversation_id, &conversation, &summary,
+                        ).await
+                    {
+                        super::thread_read_state::notify(
+                            &db, &thread_state_manager,
+                            &outgoing_for_task, conversation_id,
                         ).await;
                     }
                     apply_bespoke_event_handling(

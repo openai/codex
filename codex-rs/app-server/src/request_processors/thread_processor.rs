@@ -2303,12 +2303,24 @@ impl ThreadRequestProcessor {
                         codex_state::ReadStateOperation::Read,
                     )
                     .await
-                    .map(|_| ()),
-                Ok(None) => Ok(()),
+                    .map(|update| matches!(update, codex_state::ReadStateUpdate::Applied(_))),
+                Ok(None) => Ok(false),
                 Err(err) => Err(err),
             };
-            if let Err(err) = retirement {
-                tracing::warn!("reverted history but could not update unread position: {err}")
+            match retirement {
+                Ok(true) => {
+                    super::thread_read_state::notify(
+                        db,
+                        &self.thread_state_manager,
+                        &self.outgoing,
+                        thread_id,
+                    )
+                    .await;
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    tracing::warn!("reverted history but could not update unread position: {err}")
+                }
             }
         }
         let response = self

@@ -1,7 +1,8 @@
-//! Read state for durable local threads returned by the thread store.
+//! Read state for durable local threads. Receipt changes use the thread's usual subscribers.
 
 use super::*;
 use codex_app_server_protocol::ThreadReadState;
+use codex_app_server_protocol::ThreadReadStateChangedNotification;
 use codex_app_server_protocol::ThreadUnreadPosition;
 
 // These scopes have product notification policy the local server cannot resolve.
@@ -54,6 +55,30 @@ pub(super) async fn snapshots(
             tracing::warn!("thread read state unavailable: {err}");
             None
         }
+    }
+}
+
+pub(super) async fn notify(
+    db: &StateDbHandle,
+    manager: &ThreadStateManager,
+    outgoing: &Arc<OutgoingMessageSender>,
+    id: ThreadId,
+) {
+    match db.thread_read_states(&[id]).await {
+        Ok(mut states) => {
+            if let Some(state) = states.remove(&id) {
+                let subscribers = manager.subscribed_connection_ids(id).await;
+                ThreadScopedOutgoingMessageSender::new(Arc::clone(outgoing), subscribers, id)
+                    .send_server_notification(ServerNotification::ThreadReadStateChanged(
+                        ThreadReadStateChangedNotification {
+                            thread_id: id.to_string(),
+                            read_state: to_api(state),
+                        },
+                    ))
+                    .await;
+            }
+        }
+        Err(err) => tracing::warn!("could not project committed read state: {err}"),
     }
 }
 
