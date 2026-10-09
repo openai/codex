@@ -1,14 +1,19 @@
 use anyhow::Context;
 use anyhow::Result;
+use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
+use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::InitializeCapabilities;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadReadStateChangedNotification;
+use codex_app_server_protocol::ThreadReadStateUpdateResponse;
 use codex_app_server_protocol::ThreadRevertParams;
 use codex_app_server_protocol::ThreadRevertResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -22,6 +27,40 @@ use tokio::time::Duration;
 use tokio::time::timeout;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
+
+#[tokio::test]
+async fn read_state_methods_require_experimental_capability() -> Result<()> {
+    let mut server = TestAppServer::builder().without_auto_env().build().await?;
+    server
+        .initialize_with_capabilities(
+            ClientInfo {
+                name: DEFAULT_CLIENT_NAME.to_string(),
+                title: None,
+                version: "0.1.0".to_string(),
+            },
+            Some(InitializeCapabilities {
+                experimental_api: false,
+                ..Default::default()
+            }),
+        )
+        .await?;
+    let id = server
+        .send_raw_request(
+            "thread/readState/update",
+            Some(json!({
+                "threadId": "unknown",
+                "expectedRevision": "none", "operation": {"type": "unread"}
+            })),
+        )
+        .await?;
+    let error = timeout(
+        TIMEOUT,
+        server.read_stream_until_error_message(RequestId::Integer(id)),
+    )
+    .await??;
+    assert!(error.error.message.contains("experimental"), "{error:?}");
+    Ok(())
+}
 
 #[tokio::test]
 async fn read_state_tracks_terminal_activity_and_reverted_history() -> Result<()> {
@@ -103,6 +142,64 @@ async fn read_state_tracks_terminal_activity_and_reverted_history() -> Result<()
     )
     .await??;
     assert_eq!(changed.read_state, first);
+
+    let id = server
+        .send_raw_request(
+            "thread/readState/update",
+            Some(json!({
+                "threadId": thread_id,
+                "expectedRevision": first.revision, "operation": {"type": "unread"}
+            })),
+        )
+        .await?;
+    let marked: ThreadReadStateUpdateResponse =
+        timeout(TIMEOUT, server.read_response(id)).await??;
+    assert_eq!(
+        marked.read_state.first_unread,
+        Some(codex_app_server_protocol::ThreadUnreadPosition::ThreadStart)
+    );
+    let changed: ThreadReadStateChangedNotification = timeout(
+        TIMEOUT,
+        server.read_notification("thread/readState/changed"),
+    )
+    .await??;
+    assert_eq!(changed.read_state, marked.read_state);
+
+    // The initial snapshot predates this explicit unread mark. Both stale actions
+    // must conflict, and neither may erase the manual marker or change the revision.
+    for operation in ["read", "unread"] {
+        let id = server
+            .send_raw_request(
+                "thread/readState/update",
+                Some(json!({
+                    "threadId": thread_id,
+                    "expectedRevision": first.revision,
+                    "operation": {"type": operation}
+                })),
+            )
+            .await?;
+        let error = timeout(
+            TIMEOUT,
+            server.read_stream_until_error_message(RequestId::Integer(id)),
+        )
+        .await??;
+        assert_eq!(
+            error.error.data,
+            Some(json!({"reason": "readStateConflict", "readState": marked.read_state}))
+        );
+    }
+    let id = server
+        .send_raw_request(
+            "thread/readState/update",
+            Some(json!({
+                "threadId": thread_id,
+                "expectedRevision": marked.read_state.revision,
+                "operation": {"type": "read"}
+            })),
+        )
+        .await?;
+    let fresh: ThreadReadStateUpdateResponse = timeout(TIMEOUT, server.read_response(id)).await??;
+    assert_eq!(fresh.read_state.first_unread, None);
 
     let _: ThreadRevertResponse = server
         .request(|request_id| ClientRequest::ThreadRevert {

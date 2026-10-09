@@ -541,6 +541,7 @@ export type { ThreadReadParams } from "./ThreadReadParams";
 export type { ThreadReadResponse } from "./ThreadReadResponse";
 export type { ThreadReadState } from "./ThreadReadState";
 export type { ThreadReadStateChangedNotification } from "./ThreadReadStateChangedNotification";
+export type { ThreadReadStateOperation } from "./ThreadReadStateOperation";
 export type { ThreadRealtimeAudioChunk } from "./ThreadRealtimeAudioChunk";
 export type { ThreadRealtimeBemItemPresentation } from "./ThreadRealtimeBemItemPresentation";
 export type { ThreadRealtimeClosedNotification } from "./ThreadRealtimeClosedNotification";

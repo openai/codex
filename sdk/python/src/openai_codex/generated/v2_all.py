@@ -5761,6 +5761,29 @@ class ThreadReadParams(BaseModel):
     thread_id: Annotated[str, Field(alias="threadId")]
 
 
+class ReadThreadReadStateOperation(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    type: Annotated[Literal["read"], Field(title="ReadThreadReadStateOperationType")]
+
+
+class UnreadThreadReadStateOperation(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    type: Annotated[Literal["unread"], Field(title="UnreadThreadReadStateOperationType")]
+
+
+class ThreadReadStateOperation(
+    RootModel[ReadThreadReadStateOperation | UnreadThreadReadStateOperation]
+):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: ReadThreadReadStateOperation | UnreadThreadReadStateOperation
+
+
 class ThreadRealtimeAudioChunk(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,

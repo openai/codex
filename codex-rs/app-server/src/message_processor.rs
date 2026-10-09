@@ -1518,6 +1518,9 @@ impl MessageProcessor {
             ClientRequest::ThreadRead { params, .. } => {
                 self.thread_processor.thread_read(&request_id, params).await
             }
+            ClientRequest::ThreadReadStateUpdate { params, .. } => {
+                self.thread_processor.thread_read_state_update(params).await
+            }
             ClientRequest::ThreadTurnsList { params, .. } => {
                 self.thread_processor.thread_turns_list(params).await
             }

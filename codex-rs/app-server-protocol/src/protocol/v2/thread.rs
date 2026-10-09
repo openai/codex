@@ -2043,6 +2043,35 @@ pub enum ThreadUnreadPosition {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+#[ts(tag = "type", rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadReadStateOperation {
+    Read,
+    Unread,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadReadStateUpdateParams {
+    pub thread_id: String,
+    pub operation: ThreadReadStateOperation,
+    /// Revision of the row or transcript actually seen. Conflicts require a fresh user action.
+    pub expected_revision: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadReadStateUpdateResponse {
+    pub read_state: ThreadReadState,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadReadStateChangedNotification {

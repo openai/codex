@@ -23517,6 +23517,42 @@
         "title": "ThreadReadStateChangedNotification",
         "type": "object"
       },
+      "ThreadReadStateOperation": {
+        "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "read"
+                ],
+                "title": "ReadThreadReadStateOperationType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "ReadThreadReadStateOperation",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "unread"
+                ],
+                "title": "UnreadThreadReadStateOperationType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "UnreadThreadReadStateOperation",
+            "type": "object"
+          }
+        ]
+      },
       "ThreadRealtimeAudioChunk": {
         "description": "EXPERIMENTAL - thread realtime audio chunk.",
         "properties": {

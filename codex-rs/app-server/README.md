@@ -43,8 +43,17 @@ clears a removed position; explicit thread-start marks survive. Loading snapshot
 never acknowledges activity; empty threads start read and forked history does
 not publish inherited turns as new results.
 
-Enabling `initialize.capabilities.experimentalApi` permits receiving read-state
-notifications.
+Enabling `initialize.capabilities.experimentalApi` permits updating read state and
+receiving its notifications.
+
+`thread/readState/update` takes `{threadId, expectedRevision, operation}`,
+where operation is `{type:"read"}` or `{type:"unread"}`.
+Use the revision of the row or transcript actually seen. An unread edit
+starts at `threadStart`; a read edit clears the position. Both require an
+exact revision match, and both conflicts return `-32600` with
+`{reason:"readStateConflict", readState:<current>}` as error data.
+Do not blindly retry: the original action may precede an unseen result or
+another window's mark. Unavailable threads fail; writes never change recency.
 
 Started, resumed or forked threads send `thread/readState/changed` alongside
 ordinary thread events; thread/unsubscribe or disconnect stops delivery.

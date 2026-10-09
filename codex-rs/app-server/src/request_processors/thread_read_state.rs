@@ -1,9 +1,15 @@
 //! Read state for durable local threads. Receipt changes use the thread's usual subscribers.
 
 use super::*;
+use crate::error_code::method_not_found;
 use codex_app_server_protocol::ThreadReadState;
 use codex_app_server_protocol::ThreadReadStateChangedNotification;
+use codex_app_server_protocol::ThreadReadStateOperation;
+use codex_app_server_protocol::ThreadReadStateUpdateParams;
+use codex_app_server_protocol::ThreadReadStateUpdateResponse;
 use codex_app_server_protocol::ThreadUnreadPosition;
+use codex_state::ReadStateOperation;
+use codex_state::ReadStateUpdate;
 
 // These scopes have product notification policy the local server cannot resolve.
 // Do not advertise read state for them until their policy reaches this publisher.
@@ -144,4 +150,52 @@ pub(super) async fn publish(
         }
     }
     None
+}
+
+impl ThreadRequestProcessor {
+    pub(crate) async fn thread_read_state_update(
+        &self,
+        params: ThreadReadStateUpdateParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let id = ThreadId::from_string(&params.thread_id)
+            .map_err(|err| invalid_params(format!("invalid thread id: {err}")))?;
+        let db = self
+            .state_db
+            .as_ref()
+            .ok_or_else(|| method_not_found("durable thread read state unavailable"))?;
+        let thread = self
+            .read_thread_view(id, /*include_turns*/ false)
+            .await
+            .map_err(super::thread_processor::thread_read_view_error)?;
+        if !eligible(&thread) {
+            return Err(invalid_request("thread read state unavailable"));
+        }
+        let operation = match params.operation {
+            ThreadReadStateOperation::Read => ReadStateOperation::Read,
+            ThreadReadStateOperation::Unread => ReadStateOperation::Unread,
+        };
+        let outcome = db
+            .update_thread_read_state(id, &params.expected_revision, operation)
+            .await
+            .map_err(|err| internal_error(format!("read state was not saved: {err}")))?;
+        match outcome {
+            ReadStateUpdate::Applied(state) => {
+                notify(db, &self.thread_state_manager, &self.outgoing, id).await;
+                Ok(Some(
+                    ThreadReadStateUpdateResponse {
+                        read_state: to_api(state),
+                    }
+                    .into(),
+                ))
+            }
+            ReadStateUpdate::Conflict(state) => {
+                let mut error = invalid_request("read state changed");
+                error.data = Some(
+                    serde_json::json!({ "reason": "readStateConflict", "readState": to_api(state) }),
+                );
+                Err(error)
+            }
+            ReadStateUpdate::Unavailable => Err(invalid_request("thread read state unavailable")),
+        }
+    }
 }

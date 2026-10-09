@@ -2946,7 +2946,7 @@ impl ThreadRequestProcessor {
     }
 
     /// Builds the API view for `thread/read` from persisted metadata plus optional live state.
-    async fn read_thread_view(
+    pub(super) async fn read_thread_view(
         &self,
         thread_id: ThreadId,
         include_turns: bool,
@@ -6054,14 +6054,14 @@ pub(super) fn normalize_thread_turns_status(
     }
 }
 
-enum ThreadReadViewError {
+pub(super) enum ThreadReadViewError {
     InvalidRequest(String),
     Unsupported(&'static str),
     Internal(String),
     JsonRpc(JSONRPCErrorError),
 }
 
-fn thread_read_view_error(err: ThreadReadViewError) -> JSONRPCErrorError {
+pub(super) fn thread_read_view_error(err: ThreadReadViewError) -> JSONRPCErrorError {
     match err {
         ThreadReadViewError::InvalidRequest(message) => invalid_request(message),
         ThreadReadViewError::Unsupported(operation) => {

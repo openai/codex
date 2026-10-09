@@ -860,6 +860,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadReadResponse,
     },
+    #[experimental("thread/readState/update")]
+    ThreadReadStateUpdate => "thread/readState/update" {
+        params: v2::ThreadReadStateUpdateParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadReadStateUpdateResponse,
+    },
     ThreadTurnsList => "thread/turns/list" {
         params: v2::ThreadTurnsListParams,
         // Explicitly concurrent: this primarily reads append-only rollout storage.
