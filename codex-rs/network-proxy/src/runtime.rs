@@ -982,10 +982,31 @@ impl NetworkProxyState {
         &self,
         host: &str,
         req: &rama_http::Request,
+        credential_destinations: &[String],
     ) -> Result<HookEvaluation> {
         self.reload_if_needed().await?;
-        let guard = self.state.read().await;
-        Ok(evaluate_mitm_hooks(&guard.mitm_hooks, host, req))
+        let hooked_hosts = {
+            let guard = self.state.read().await;
+            match evaluate_mitm_hooks(&guard.mitm_hooks, host, req) {
+                HookEvaluation::NoHooksForHost if !guard.mitm_hooks.is_empty() => {
+                    guard.mitm_hooks.keys().cloned().collect::<Vec<_>>()
+                }
+                evaluation => return Ok(evaluation),
+            }
+        };
+
+        if credential_destinations.iter().any(|destination| {
+            self.credential_broker.request_matches_hooked_host_alias(
+                destination,
+                req.headers(),
+                &hooked_hosts,
+                self.environment_id(),
+            )
+        }) {
+            Ok(HookEvaluation::HookedHostNoMatch)
+        } else {
+            Ok(HookEvaluation::NoHooksForHost)
+        }
     }
 
     pub(crate) async fn host_mitm_requirement(

@@ -113,6 +113,18 @@ impl CredentialHostBinding {
         }
     }
 
+    // Hooks apply to the host regardless of each credential destination's port or path.
+    pub(super) fn matches_hostname(&self, host: &str) -> bool {
+        match self {
+            Self::ConfiguredHosts(destinations) => destinations
+                .iter()
+                .any(|destination| destination.matches_hostname(host)),
+            Self::ExactHost(_) | Self::ExactHosts(_) | Self::HostPattern { .. } => {
+                self.matches_host(host, /*port*/ 443)
+            }
+        }
+    }
+
     pub(super) fn requires_mitm(&self, host: &str, port: u16) -> bool {
         match self {
             Self::ConfiguredHosts(destinations) => destinations

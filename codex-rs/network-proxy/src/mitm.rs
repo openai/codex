@@ -77,6 +77,16 @@ struct MitmPolicyContext {
     app_state: Arc<NetworkProxyState>,
 }
 
+impl MitmPolicyContext {
+    fn credential_destination(&self, req: &Request) -> String {
+        let authority = authority_header_value(&self.target_host, self.target_port, &self.scheme);
+        let path = path_and_query(req.uri());
+        // Server-wide OPTIONS must not borrow authority from a narrower credential URL prefix.
+        let credential_path = if path == "*" { "/" } else { &path };
+        format!("{}://{authority}{credential_path}", self.scheme)
+    }
+}
+
 #[derive(Clone)]
 struct MitmRequestContext {
     policy: MitmPolicyContext,
@@ -248,6 +258,7 @@ async fn handle_mitm_request(
 }
 
 async fn forward_request(req: Request, request_ctx: &MitmRequestContext) -> Result<Response> {
+    let credential_destination = request_ctx.policy.credential_destination(&req);
     let hook_actions = match evaluate_mitm_policy(&req, &request_ctx.policy).await? {
         MitmPolicyDecision::Allow { hook_actions } => hook_actions,
         MitmPolicyDecision::Block(response) => return Ok(response),
@@ -268,12 +279,6 @@ async fn forward_request(req: Request, request_ctx: &MitmRequestContext) -> Resu
         .authority(authority.as_str())
         .path_and_query(path.as_str())
         .build()?;
-    // Server-wide OPTIONS must not borrow authority from a narrower credential URL prefix.
-    let credential_path = if path == "*" { "/" } else { &path };
-    let credential_destination = format!(
-        "{}://{authority}{credential_path}",
-        request_ctx.policy.scheme
-    );
     request_ctx
         .policy
         .app_state
@@ -424,7 +429,11 @@ async fn evaluate_mitm_policy(
 
     let hook_actions = match policy
         .app_state
-        .evaluate_mitm_hook_request(&policy.target_host, req)
+        .evaluate_mitm_hook_request(
+            &policy.target_host,
+            req,
+            &[policy.credential_destination(req)],
+        )
         .await?
     {
         HookEvaluation::Matched { actions } => Some(actions),

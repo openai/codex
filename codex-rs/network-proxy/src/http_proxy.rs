@@ -3,6 +3,7 @@ use crate::config::NetworkMode;
 use crate::connect_policy::TargetCheckedTcpConnector;
 use crate::connection_lifecycle::CancelOnShutdown;
 use crate::mitm;
+use crate::mitm_hook::HookEvaluation;
 use crate::network_policy::BlockDecisionAuditEventArgs;
 use crate::network_policy::NetworkDecision;
 use crate::network_policy::NetworkDecisionSource;
@@ -16,6 +17,7 @@ use crate::network_policy::emit_block_decision_audit_event;
 use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
+use crate::reasons::REASON_MITM_HOOK_DENIED;
 use crate::reasons::REASON_MITM_REQUIRED;
 use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_PROXY_DISABLED;
@@ -908,13 +910,70 @@ async fn http_plain_proxy(
         ));
     }
 
-    if let Err(err) =
-        inject_forward_request_credentials(app_state.as_ref(), &request_ctx, &mut req).await
+    let credential_destinations =
+        match forward_request_credential_destinations(app_state.as_ref(), &request_ctx, &req).await
+        {
+            Ok(destinations) => destinations,
+            Err(err) => {
+                return Ok(internal_error(
+                    "failed to read credential injection config",
+                    err,
+                ));
+            }
+        };
+    // Evaluate the original Authorization header before replacing brokered dummy credentials.
+    // Otherwise an unhooked provider alias can receive the real credential without hook policy.
+    match app_state
+        .evaluate_mitm_hook_request(&host, &req, &credential_destinations)
+        .await
     {
-        return Ok(internal_error(
-            "failed to read plaintext credential injection config",
-            err,
-        ));
+        Ok(HookEvaluation::HookedHostNoMatch) => {
+            emit_http_block_decision_audit_event(
+                &app_state,
+                BlockDecisionAuditEventArgs {
+                    source: NetworkDecisionSource::ModeGuard,
+                    reason: REASON_MITM_HOOK_DENIED,
+                    protocol: NetworkProtocol::Http,
+                    server_address: host.as_str(),
+                    server_port: port,
+                    method: Some(req.method().as_str()),
+                    client_addr: client.as_deref(),
+                },
+            );
+            let details = PolicyDecisionDetails {
+                decision: NetworkPolicyDecision::Deny,
+                reason: REASON_MITM_HOOK_DENIED,
+                source: NetworkDecisionSource::ModeGuard,
+                protocol: NetworkProtocol::Http,
+                host: &host,
+                port,
+            };
+            let _ = app_state
+                .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                    host: host.clone(),
+                    reason: REASON_MITM_HOOK_DENIED.to_string(),
+                    client: client.clone(),
+                    method: Some(req.method().as_str().to_string()),
+                    mode: None,
+                    protocol: "http".to_string(),
+                    decision: Some(details.decision.as_str().to_string()),
+                    source: Some(details.source.as_str().to_string()),
+                    port: Some(port),
+                }))
+                .await;
+            let client = client.as_deref().unwrap_or_default();
+            warn!(
+                "request blocked by MITM hook policy (client={client}, host={host}, method={})",
+                req.method()
+            );
+            return Ok(json_blocked(&host, REASON_MITM_HOOK_DENIED, Some(&details)));
+        }
+        Ok(HookEvaluation::Matched { .. } | HookEvaluation::NoHooksForHost) => {}
+        Err(err) => return Ok(internal_error("failed to evaluate MITM hook policy", err)),
+    }
+
+    for destination in credential_destinations {
+        app_state.inject_request_credentials(&destination, req.headers_mut());
     }
 
     let client = client.as_deref().unwrap_or_default();
@@ -946,11 +1005,11 @@ async fn http_plain_proxy(
     }
 }
 
-async fn inject_forward_request_credentials(
+async fn forward_request_credential_destinations(
     app_state: &NetworkProxyState,
     context: &RequestContext,
-    req: &mut Request,
-) -> Result<()> {
+    req: &Request,
+) -> Result<Vec<String>> {
     let authority = context.host_with_port();
     let scheme = req.uri().scheme_str().unwrap_or("http");
     // Server-wide OPTIONS may use root-scoped credentials without changing its wire target.
@@ -960,16 +1019,11 @@ async fn inject_forward_request_credentials(
         .map(rama_http::uri::PathAndQuery::as_str)
         .filter(|path| *path != "*")
         .unwrap_or("/");
-    let destination = format!("{scheme}://{authority}{request_path}");
-    let unrestricted_plaintext = app_state.plaintext_credential_injection_enabled().await?;
-    app_state.inject_request_credentials(&destination, req.headers_mut());
-    if unrestricted_plaintext {
-        app_state.inject_request_credentials(
-            &normalize_host(&authority.host.to_string()),
-            req.headers_mut(),
-        );
+    let mut destinations = vec![format!("{scheme}://{authority}{request_path}")];
+    if app_state.plaintext_credential_injection_enabled().await? {
+        destinations.push(normalize_host(&authority.host.to_string()));
     }
-    Ok(())
+    Ok(destinations)
 }
 
 async fn proxy_via_unix_socket(req: Request, socket_path: &str) -> Result<Response> {
@@ -1382,9 +1436,12 @@ mod tests {
                 .unwrap();
             let context = RequestContext::try_from(&req).unwrap();
 
-            inject_forward_request_credentials(&state, &context, &mut req)
+            for destination in forward_request_credential_destinations(&state, &context, &req)
                 .await
-                .unwrap();
+                .unwrap()
+            {
+                state.inject_request_credentials(&destination, req.headers_mut());
+            }
 
             let expected = if enabled { real_token } else { dummy };
             assert_eq!(
@@ -1482,9 +1539,12 @@ mod tests {
                     .unwrap();
                 let context = RequestContext::try_from(&req).unwrap();
 
-                inject_forward_request_credentials(&state, &context, &mut req)
+                for destination in forward_request_credential_destinations(&state, &context, &req)
                     .await
-                    .unwrap();
+                    .unwrap()
+                {
+                    state.inject_request_credentials(&destination, req.headers_mut());
+                }
 
                 let expected = if inject { real_token } else { dummy };
                 assert_eq!(
@@ -1495,6 +1555,64 @@ mod tests {
                 assert_eq!(req.uri().to_string(), uri);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn http_plain_proxy_blocks_brokered_provider_alias_before_credential_injection() {
+        let mut network = NetworkProxyConfig {
+            allow_local_binding: Some(true),
+            credential_broker: true,
+            dangerously_allow_plaintext_credential_injection: true,
+            mitm: true,
+            mitm_hooks: vec![crate::mitm_hook::MitmHookConfig {
+                host: "api.github.com".to_string(),
+                matcher: crate::mitm_hook::MitmHookMatchConfig {
+                    methods: vec!["POST".to_string()],
+                    path_prefixes: vec!["/repos/openai/".to_string()],
+                    ..crate::mitm_hook::MitmHookMatchConfig::default()
+                },
+                actions: crate::mitm_hook::MitmHookActionsConfig::default(),
+            }],
+            ..NetworkProxyConfig::default()
+        };
+        network.set_allowed_domains(vec!["api.github.com".to_string(), "github.com".to_string()]);
+        let state = Arc::new(network_proxy_state_for_policy(network));
+        let mut env = HashMap::from([("GH_TOKEN".to_string(), "ghp-real".to_string())]);
+        state.virtualize_child_credentials(&mut env);
+
+        for scheme in ["http", "https"] {
+            let mut req = Request::builder()
+                .method(Method::GET)
+                .uri(format!("{scheme}://github.com/repos/openai/codex/issues"))
+                .header(header::HOST, "github.com")
+                .header(header::AUTHORIZATION, format!("Bearer {}", env["GH_TOKEN"]))
+                .body(Body::empty())
+                .expect("absolute-form provider-alias request should build");
+            req.extensions_mut().insert(state.clone());
+
+            let response = http_plain_proxy(
+                /*policy_decider*/ None, /*environment_id*/ None, req,
+            )
+            .await
+            .expect("provider-alias policy should return a response");
+
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            assert_eq!(
+                response.headers().get("x-proxy-error").unwrap(),
+                "blocked-by-mitm-hook"
+            );
+        }
+
+        let blocked = state.drain_blocked().await.unwrap();
+        assert_eq!(blocked.len(), 2);
+        assert!(blocked.iter().all(|request| {
+            request.host == "github.com"
+                && request.reason == REASON_MITM_HOOK_DENIED
+                && request.protocol == "http"
+                && request.source.as_deref() == Some("mode_guard")
+        }));
+        assert_eq!(blocked[0].port, Some(80));
+        assert_eq!(blocked[1].port, Some(443));
     }
 
     #[tokio::test]

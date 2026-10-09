@@ -10,6 +10,7 @@ use super::matching::is_operational_path_match;
 use super::providers;
 use super::source_accepts_credential;
 use super::source_tracks_credential;
+use crate::policy::normalize_host;
 use base64::Engine;
 use rama_http::HeaderMap;
 use rama_http::HeaderName;
@@ -189,17 +190,30 @@ pub(super) fn is_builtin_shaped_credential(value: &str) -> bool {
 
 pub(super) fn select_credentials<'a>(
     headers: &HeaderMap,
-    host: &str,
-    request: Option<&Url>,
+    destination: &str,
     credentials: &'a [CredentialRecord],
     environment_id: Option<&str>,
 ) -> Vec<(&'a CredentialRecord, HeaderName, HeaderValue)> {
+    let request = if destination.contains("://") {
+        let Ok(request) = Url::parse(destination) else {
+            return Vec::new();
+        };
+        Some(request)
+    } else {
+        None
+    };
+    let host = normalize_host(
+        request
+            .as_ref()
+            .and_then(Url::host_str)
+            .unwrap_or(destination),
+    );
     let mut translated_matches = Vec::<(&CredentialRecord, HeaderName, HeaderValue)>::new();
     for credential in credentials.iter().filter(|credential| {
         credential.belongs_to_environment(environment_id)
             && credential
                 .host_bindings()
-                .any(|binding| binding.matches_request(host, request))
+                .any(|binding| binding.matches_request(&host, request.as_ref()))
     }) {
         for candidate in credentials.iter().filter(|candidate| {
             candidate.belongs_to_environment(environment_id)
@@ -207,7 +221,7 @@ pub(super) fn select_credentials<'a>(
                 && candidate.real_value == credential.real_value
                 && candidate
                     .host_bindings()
-                    .any(|binding| binding.matches_request(host, request))
+                    .any(|binding| binding.matches_request(&host, request.as_ref()))
         }) {
             for (name, value) in credential.provider.translate_request_headers(
                 headers,
@@ -252,7 +266,7 @@ pub(super) fn select_credentials<'a>(
                     merge_basic_auth_fields(original, &selected[existing].2, &header_value)
                 })
             {
-                // Keep the caller's configured-provider raw-path validation for either field.
+                // Keep configured-provider raw-path validation for either field.
                 if matches!(
                     credential.provider,
                     BrokeredCredentialProvider::Configured(_)
@@ -264,6 +278,23 @@ pub(super) fn select_credentials<'a>(
             }
             selected.swap_remove(existing);
             ambiguous_headers.push(header_name);
+        }
+    }
+    if selected.iter().any(|(credential, _, _)| {
+        matches!(
+            &credential.provider,
+            BrokeredCredentialProvider::Configured(_)
+        )
+    }) && let Some(request) = request.as_ref()
+    {
+        let Ok(raw_request) = destination.parse::<rama_http::Uri>() else {
+            return Vec::new();
+        };
+        let raw_path = raw_request.path();
+        if raw_path != request.path()
+            || !crate::authorization_path::is_safe_for_authorization(raw_path)
+        {
+            return Vec::new();
         }
     }
     selected

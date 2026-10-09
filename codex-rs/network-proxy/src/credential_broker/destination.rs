@@ -116,9 +116,10 @@ impl CredentialDestination {
     }
 
     pub(super) fn matches_host(&self, host: &str, port: u16) -> bool {
-        if self.port != port {
-            return false;
-        }
+        self.port == port && self.matches_hostname(host)
+    }
+
+    pub(super) fn matches_hostname(&self, host: &str) -> bool {
         if self.wildcard {
             host.strip_suffix(&self.host)
                 .is_some_and(|prefix| prefix.ends_with('.'))

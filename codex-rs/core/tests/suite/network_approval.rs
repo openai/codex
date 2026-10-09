@@ -16,6 +16,14 @@ use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
 use codex_history::RolloutItem;
+#[cfg(unix)]
+use codex_network_proxy::CredentialProviderConfig;
+#[cfg(unix)]
+use codex_network_proxy::MitmHookActionsConfig;
+#[cfg(unix)]
+use codex_network_proxy::MitmHookConfig;
+#[cfg(unix)]
+use codex_network_proxy::MitmHookMatchConfig;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_protocol::approvals::ExecApprovalKind;
@@ -3140,6 +3148,134 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
         )
         .await?;
 
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_started_proxy_denies_brokered_provider_alias() -> Result<()> {
+    const REAL_CREDENTIAL: &str = "alias_aaaaaaaaaaaaaaaaaaaaaaaa";
+    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = upstream.local_addr()?.port();
+    let mut network = NetworkProxyConfig {
+        enabled: true,
+        proxy_url: "http://127.0.0.1:0".to_string(),
+        socks_url: "http://127.0.0.1:0".to_string(),
+        // Local requests must stay behind the proxy for their credentials to be masked.
+        allow_local_binding: Some(false),
+        allow_upstream_proxy: false,
+        mitm_hooks: vec![MitmHookConfig {
+            host: "localhost".to_string(),
+            matcher: MitmHookMatchConfig {
+                methods: vec!["GET".to_string()],
+                path_prefixes: vec!["/v1".to_string()],
+                ..MitmHookMatchConfig::default()
+            },
+            actions: MitmHookActionsConfig::default(),
+        }],
+        ..NetworkProxyConfig::default()
+    };
+    network.set_credential_broker_enabled(/*enabled*/ true);
+    network.set_allowed_domains(vec!["localhost".to_string(), "127.0.0.1".to_string()]);
+    network.credential_providers.insert(
+        "alias_test".to_string(),
+        CredentialProviderConfig {
+            env: vec!["ALIAS_TEST_TOKEN".to_string()],
+            patterns: vec!["alias_[a-z]{24}".to_string()],
+            url_prefixes: vec![
+                format!("http://localhost:{port}/v1"),
+                format!("http://127.0.0.1:{port}/v2"),
+            ],
+            ..CredentialProviderConfig::default()
+        },
+    );
+    let permission_profile = PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Enabled,
+        /*exclude_tmpdir_env_var*/ false,
+        /*exclude_slash_tmp*/ false,
+    );
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(move |config| {
+            for feature in [
+                Feature::UnifiedExec,
+                Feature::ShellSnapshot,
+                Feature::NetworkProxy,
+            ] {
+                config
+                    .features
+                    .enable(feature)
+                    .expect("enable test feature");
+            }
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
+            config
+                .permissions
+                .set_permission_profile(permission_profile.clone())
+                .expect("set permission profile");
+            config
+                .permissions
+                .shell_environment_policy
+                .r#set
+                .insert("ALIAS_TEST_TOKEN".to_string(), REAL_CREDENTIAL.to_string());
+            config.permissions.network = Some(
+                NetworkProxySpec::from_config_and_constraints(
+                    network,
+                    /*requirements*/ None,
+                    &permission_profile,
+                )
+                .expect("build brokered managed network proxy"),
+            );
+        })
+        // Credential brokerage currently runs only in the local environment.
+        .build(&server)
+        .await?;
+    let proxy = test
+        .session_configured
+        .network_proxy
+        .as_ref()
+        .context("agent did not start its managed network proxy")?;
+    let command = r#"printf 'BROKERED:%s\nACTIVE:%s\n' "$ALIAS_TEST_TOKEN" "$CODEX_NETWORK_PROXY_CREDENTIAL_BROKER_ACTIVE""#;
+    let call_id = "exec-brokered-provider-alias";
+    let mut args = network_exec_args(command);
+    args["yield_time_ms"] = json!(30_000);
+    let responses =
+        mount_exec_network_turn(&server, "resp-brokered-provider-alias", call_id, args).await?;
+    test.submit_text_turn("read the brokered credential")
+        .await?;
+    let output = responses
+        .function_call_output_text(call_id)
+        .context("agent did not return command output")?;
+    assert!(output.contains("ACTIVE:1"), "{output}");
+    assert!(!output.contains(REAL_CREDENTIAL));
+    let token = output
+        .lines()
+        .find_map(|line| line.strip_prefix("BROKERED:"))
+        .context("agent did not expose its brokered dummy")?;
+    assert!(token.starts_with("alias_"));
+
+    // Probe after the command exits so the denial cannot interrupt the tool call.
+    let response = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
+        let mut connection = tokio::net::TcpStream::connect(&proxy.http_addr).await?;
+        connection
+            .write_all(
+                format!(
+                    "GET http://127.0.0.1:{port}/v2/resource HTTP/1.1\r\n\
+                     Host: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\n\
+                     Connection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await?;
+        let mut response = String::new();
+        connection.read_to_string(&mut response).await?;
+        Ok::<_, std::io::Error>(response)
+    })
+    .await
+    .context("alias denial did not finish")??;
+    assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+    assert!(response.contains("blocked-by-mitm-hook"), "{response}");
+    assert!(!response.contains(REAL_CREDENTIAL));
     Ok(())
 }
 
