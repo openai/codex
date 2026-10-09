@@ -20,12 +20,16 @@ use tokio::sync::SemaphorePermit;
 pub(crate) struct GoalAccountingState {
     inner: Mutex<GoalAccountingInner>,
     progress_accounting_lock: Semaphore,
+    // Serialize turn-start accounting with stopping a deferred interrupted turn.
+    // Never hold this lock while submitting a turn or awaiting the goal-state permit.
+    turn_start_lock: Semaphore,
     descendant_token_usage: AtomicI64,
 }
 
 #[derive(Debug)]
 struct GoalAccountingInner {
     current_turn_id: Option<String>,
+    interrupted_turn_id: Option<String>,
     turns: HashMap<String, GoalTurnAccounting>,
     wall_clock: GoalWallClockAccounting,
     budget_limit_reported_goal_id: Option<String>,
@@ -92,6 +96,10 @@ impl GoalAccountingState {
     ) {
         let turn_id = turn_id.into();
         let mut inner = self.inner();
+        if let Some(interrupted) = inner.interrupted_turn_id.take() {
+            inner.turns.remove(&interrupted);
+            inner.consecutive_empty_turns = 0;
+        }
         inner.current_turn_id = Some(turn_id.clone());
         inner.turns.insert(
             turn_id,
@@ -104,6 +112,10 @@ impl GoalAccountingState {
 
     pub(crate) fn current_turn_id(&self) -> Option<String> {
         self.inner().current_turn_id.clone()
+    }
+
+    pub(crate) fn interrupted_turn_id(&self) -> Option<String> {
+        self.inner().interrupted_turn_id.clone()
     }
 
     pub(crate) fn record_tool_outcome(
@@ -216,10 +228,14 @@ impl GoalAccountingState {
     /// Evaluated under the goal-state permit after automatic admission records its turn ID.
     pub(crate) fn empty_response_goal(&self, turn_id: &str) -> Option<String> {
         let mut inner = self.inner();
+        let interrupted = inner.interrupted_turn_id.as_deref() == Some(turn_id);
+        if interrupted {
+            inner.interrupted_turn_id = None;
+        }
         let automatic = inner.automatic_goal_turn_id.as_deref() == Some(turn_id);
         let turn = inner.turns.get_mut(turn_id)?;
         let goal_id = turn.active_goal_id.clone()?;
-        let empty = automatic && turn.empty_final && !turn.has_activity;
+        let empty = automatic && !turn.has_activity && (turn.empty_final || interrupted);
         turn.empty_final = false;
         if !empty {
             inner.consecutive_empty_turns = 0;
@@ -240,9 +256,20 @@ impl GoalAccountingState {
         self.progress_accounting_lock.acquire().await
     }
 
+    pub(crate) async fn turn_start_permit(
+        &self,
+    ) -> Result<SemaphorePermit<'_>, tokio::sync::AcquireError> {
+        self.turn_start_lock.acquire().await
+    }
+
     pub(crate) fn current_active_goal_id_for_turn(&self, turn_id: &str) -> Option<String> {
         let inner = self.inner();
-        if inner.current_turn_id.as_deref() != Some(turn_id) {
+        if inner
+            .current_turn_id
+            .as_deref()
+            .or(inner.interrupted_turn_id.as_deref())
+            != Some(turn_id)
+        {
             return None;
         }
         let turn = inner.turns.get(turn_id)?;
@@ -448,11 +475,26 @@ impl GoalAccountingState {
         }
     }
 
+    pub(crate) fn interrupt_turn(&self, turn_id: &str) {
+        let mut inner = self.inner();
+        if inner.current_turn_id.as_deref() == Some(turn_id) {
+            // Abort can run on the submission loop: defer evaluation until idle so
+            // it never waits for the goal-state permit held by automatic admission.
+            inner.current_turn_id = None;
+            inner.interrupted_turn_id = Some(turn_id.to_string());
+        } else {
+            inner.turns.remove(turn_id);
+        }
+    }
+
     pub(crate) fn finish_turn(&self, turn_id: &str) {
         let mut inner = self.inner();
         inner.turns.remove(turn_id);
         if inner.current_turn_id.as_deref() == Some(turn_id) {
             inner.current_turn_id = None;
+        }
+        if inner.interrupted_turn_id.as_deref() == Some(turn_id) {
+            inner.interrupted_turn_id = None;
         }
     }
 
@@ -500,6 +542,7 @@ impl Default for GoalAccountingState {
         Self {
             inner: Mutex::new(GoalAccountingInner::default()),
             progress_accounting_lock: Semaphore::new(/*permits*/ 1),
+            turn_start_lock: Semaphore::new(/*permits*/ 1),
             descendant_token_usage: AtomicI64::new(0),
         }
     }
@@ -535,6 +578,7 @@ impl Default for GoalAccountingInner {
     fn default() -> Self {
         Self {
             current_turn_id: None,
+            interrupted_turn_id: None,
             turns: HashMap::new(),
             wall_clock: GoalWallClockAccounting::new(),
             budget_limit_reported_goal_id: None,

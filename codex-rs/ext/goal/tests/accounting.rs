@@ -77,6 +77,10 @@ fn empty_continuations_require_three_turns_without_activity_or_goal_changes() {
         ("reset", 6),
         ("missing final", 6),
         ("partial answer", 6),
+        ("abort", 3),
+        ("mixed", 3),
+        ("tool after abort", 6),
+        ("user after abort", 6),
     ] {
         let state = GoalAccountingState::default();
         for turn in 1..=blocking_turn {
@@ -88,20 +92,27 @@ fn empty_continuations_require_three_turns_without_activity_or_goal_changes() {
             };
             state.start_turn(&id, ModeKind::Default, &TokenUsage::default());
             state.mark_turn_goal_active(&id, goal_id);
+            let aborted = matches!(
+                interruption,
+                "abort" | "tool after abort" | "user after abort"
+            ) || (interruption == "mixed" && turn == 2);
             if turn == 3 && interruption == "partial answer" {
                 let mut partial = empty_final.clone();
                 if let TurnItem::AgentMessage(message) = &mut partial {
                     message.phase = Some(MessagePhase::PartialAnswer);
                 }
                 state.record_item(&id, &partial);
-            } else if !(turn == 3 && interruption == "missing final") {
+            } else if !(aborted || turn == 3 && interruption == "missing final") {
                 state.record_item(&id, &empty_final);
             }
-            // Admission can finish after output arrives, but before turn-stop evaluation.
-            if !(turn == 3 && interruption == "user") {
+            if aborted {
+                state.interrupt_turn(&id);
+            }
+            // Admission can finish even after abort, but before idle evaluation.
+            if !(turn == 3 && matches!(interruption, "user" | "user after abort")) {
                 state.mark_goal_continuation(id.clone());
             }
-            if turn == 3 && interruption == "tool" {
+            if turn == 3 && matches!(interruption, "tool" | "tool after abort") {
                 state.record_tool_outcome(
                     &id,
                     &ToolName::plain("shell"),
