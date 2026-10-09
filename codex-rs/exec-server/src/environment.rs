@@ -73,6 +73,14 @@ pub enum EnvironmentConnectionState {
     Disconnected,
 }
 
+/// Outcome of an initial connection operation, including its internal retries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConnectionAttemptOutcome {
+    Success,
+    Failure,
+    Cancelled,
+}
+
 /// Owns the execution/filesystem environments available to the Codex runtime.
 ///
 /// `EnvironmentManager` is a shared registry for concrete environments. Its
@@ -905,6 +913,17 @@ impl Environment {
             .map_or_else(Vec::new, |ready_info| {
                 ready_info.selected_capability_roots.clone()
             })
+    }
+
+    /// Observes initial connection attempts from the end of provisioning through client installation.
+    /// Register before connecting. The first observer wins; past attempts and reconnections are omitted.
+    pub fn observe_connection_attempts(
+        &self,
+        observer: impl Fn(std::time::Duration, ConnectionAttemptOutcome) + Send + Sync + 'static,
+    ) {
+        if let Some(client) = &self.remote_client {
+            let _ = client.connection_observer.set(Arc::new(observer));
+        }
     }
 
     /// Subscribes to the current connection state for this remote environment.
@@ -1850,6 +1869,16 @@ mod tests {
         let environment = manager
             .get_environment("executor-a")
             .expect("first remote environment");
+        let (observed_tx, mut observed_rx) = tokio::sync::mpsc::unbounded_channel();
+        environment.observe_connection_attempts(move |_, outcome| {
+            observed_tx
+                .send(outcome)
+                .expect("record cancelled connection");
+        });
+        let _connection = timeout(Duration::from_secs(1), first_listener.accept())
+            .await
+            .expect("connection should start")
+            .expect("accept initial connection");
         let startup_abort = environment
             .startup_task
             .lock()
@@ -1880,6 +1909,11 @@ mod tests {
         })
         .await
         .expect("replacing the environment should cancel its startup task");
+        assert_eq!(
+            observed_rx.try_recv(),
+            Ok(super::ConnectionAttemptOutcome::Cancelled)
+        );
+        assert!(observed_rx.try_recv().is_err());
     }
 
     #[tokio::test]

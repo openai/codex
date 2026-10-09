@@ -23,6 +23,7 @@ use std::sync::Mutex as StdMutex;
 use futures::future::BoxFuture;
 use tokio::sync::OnceCell;
 use tokio::sync::watch;
+use tokio::time::Instant;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
@@ -33,6 +34,7 @@ use super::ExecServerError;
 use super::Inner;
 use super::LazyRemoteExecServerClient;
 use super::fail_all_in_flight_work;
+use crate::ConnectionAttemptOutcome;
 use crate::EnvironmentConnectionState;
 use crate::NoiseChannelPublicKey;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
@@ -48,6 +50,20 @@ pub(super) struct ConnectionAttempt {
     pub(super) result: OnceCell<ConnectionResult>,
     pub(super) cancelled: CancellationToken,
     pub(super) transport: Option<ExecServerTransportParams>,
+}
+
+struct ConnectionObservation<'a> {
+    started: Option<Instant>,
+    outcome: ConnectionAttemptOutcome,
+    observer: Option<&'a super::ConnectionObserver>,
+}
+
+impl Drop for ConnectionObservation<'_> {
+    fn drop(&mut self) {
+        if let (Some(started), Some(observer)) = (self.started, self.observer) {
+            observer(started.elapsed(), self.outcome);
+        }
+    }
 }
 
 // Use the compared bundle intact for the first connection: address, key and authorization
@@ -225,11 +241,22 @@ impl LazyRemoteExecServerClient {
                         "missing transport params for lazy exec-server connection".to_string(),
                     ))
                 })?;
-            let client = tokio::select! {
+            let mut observation = ConnectionObservation {
+                started: None,
+                outcome: ConnectionAttemptOutcome::Cancelled,
+                observer: (self.cached_client().is_none() && attempt.transport.is_none())
+                    .then(|| self.connection_observer.get())
+                    .flatten(),
+            };
+            let result = tokio::select! {
                 biased;
                 _ = attempt.cancelled.cancelled() => return Err(Arc::new(ExecServerError::Disconnected("connection attempt was superseded".to_string()))),
-                result = ExecServerClient::connect_for_transport(transport.clone(), self.http_client_factory.clone()) => result.map_err(Arc::new)?,
+                result = ExecServerClient::connect_for_transport(transport.clone(), self.http_client_factory.clone(), &mut observation.started) => result,
             };
+            let client = result.map_err(|error| {
+                observation.outcome = ConnectionAttemptOutcome::Failure;
+                Arc::new(error)
+            })?;
             // Cancellation can race with a completed handshake. Recheck before attaching
             // state or installing the client, under the same lock used by refresh.
             {
@@ -242,6 +269,7 @@ impl LazyRemoteExecServerClient {
                         self.environment_connection_state_tx.clone(),
                     );
                     *current = Some(client.clone());
+                    observation.outcome = ConnectionAttemptOutcome::Success;
                     return Ok(client);
                 }
             }

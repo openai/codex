@@ -251,6 +251,7 @@ impl LazyRemoteExecServerClient {
             reconnect: std::sync::Arc::new(std::sync::Mutex::new(None)),
             refresh_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             environment_connection_state_tx,
+            connection_observer: Default::default(),
         }
     }
 

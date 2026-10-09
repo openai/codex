@@ -331,6 +331,7 @@ impl ExecServerClient {
     pub(crate) async fn connect_for_transport(
         transport_params: ExecServerTransportParams,
         http_client_factory: HttpClientFactory,
+        started: &mut Option<Instant>,
     ) -> Result<Self, ExecServerError> {
         let (transport_params, deferred_readiness) = match transport_params {
             ExecServerTransportParams::Deferred(deferred) => {
@@ -362,6 +363,7 @@ impl ExecServerClient {
             None
         };
 
+        *started = Some(Instant::now());
         let websocket = match transport_params {
             ExecServerTransportParams::Deferred(_) => {
                 return Err(ExecServerError::Protocol(
