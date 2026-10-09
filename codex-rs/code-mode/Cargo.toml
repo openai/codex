@@ -21,6 +21,7 @@ codex-protocol = { workspace = true }
 futures = { workspace = true }
 http-body-util = "0.1.3"
 prost = "0.14.3"
+rand = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }

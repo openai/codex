@@ -25,9 +25,11 @@ use super::text_response;
 
 #[tokio::test]
 async fn only_missing_sessions_reopen_without_replaying_execution() -> Result<()> {
-    for (code, expected_cell, expected_value) in [
-        (Code::NotFound, "g2:1", "undefined"),
-        (Code::InvalidArgument, "2", "1"),
+    for (code, route_lost, expected_cell, expected_value) in [
+        (Code::NotFound, false, "g2:1", "undefined"),
+        (Code::InvalidArgument, false, "2", "1"),
+        (Code::Unavailable, false, "2", "1"),
+        (Code::Unavailable, true, "2", "1"),
     ] {
         let rejection = Arc::new(Mutex::new(/*t*/ None));
         let next_rejection = Arc::clone(&rejection);
@@ -62,7 +64,13 @@ async fn only_missing_sessions_reopen_without_replaying_execution() -> Result<()
         .await?;
 
         // Reject the next Execute without closing the lease or subscription streams.
-        let failure = Status::new(code, "injected RPC rejection");
+        let mut failure = Status::new(code, "injected RPC rejection");
+        if route_lost {
+            // A direct host has no proxy route to retire.
+            failure
+                .metadata_mut()
+                .insert("x-code-mode-route-lost", "true".parse()?);
+        }
         *rejection.lock().unwrap() = Some(failure.clone());
         let requests_before_rejection = request_count.load(Ordering::SeqCst);
         let failed = execute(
