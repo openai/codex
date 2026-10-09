@@ -52,6 +52,18 @@ use toml::Value;
 pub(crate) const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 pub(crate) const TEST_CURATED_PLUGIN_CACHE_VERSION: &str = "01234567";
 
+#[cfg(windows)]
+/// Model redirected directories without requiring Windows symlink privileges.
+pub(crate) fn create_directory_junction(target: &Path, alias: &Path) {
+    let output = codex_utils_process::background_command("cmd")
+        .args(["/D", "/C", "mklink", "/J"])
+        .arg(alias)
+        .arg(target)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "mklink /J failed: {output:?}");
+}
+
 pub(crate) fn test_plugins_manager(codex_home: PathBuf) -> PluginsManager {
     PluginsManager::new(
         codex_home,

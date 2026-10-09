@@ -31,6 +31,25 @@ fn primary_runtime_cache_uses_user_profile_on_windows() {
     ));
 }
 
+#[cfg(windows)]
+#[test]
+fn managed_windows_root_accepts_redirected_target_but_not_unowned_alias() {
+    let temp = TempDir::new().unwrap();
+    let target = temp.path().join("redirected-cache");
+    let owned = temp.path().join(".cache");
+    let alias = temp.path().join("unowned-alias");
+    let other = temp.path().join("different-source");
+    fs::create_dir_all(&target).unwrap();
+    fs::create_dir_all(&other).unwrap();
+    crate::test_support::create_directory_junction(&target, &owned);
+    crate::test_support::create_directory_junction(&target, &alias);
+    let canonical = owned.canonicalize().unwrap();
+    assert!(is_expected_managed_path(&canonical, &owned));
+    assert!(is_expected_managed_path(&owned, &owned));
+    assert!(!is_expected_managed_path(&alias, &owned));
+    assert!(!is_expected_managed_path(&other, &owned));
+}
+
 fn config_layer_stack_with_user_config(
     requirements_toml: &str,
     user_config: Option<(&str, AbsolutePathBuf)>,

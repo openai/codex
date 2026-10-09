@@ -534,13 +534,19 @@ fn is_expected_managed_path(path: &Path, expected: &Path) -> bool {
     #[cfg(windows)]
     {
         let path = path.to_string_lossy();
-        let expected = expected.to_string_lossy();
         let path = codex_utils_absolute_path::normalize_windows_device_path(&path)
-            .unwrap_or_else(|| path.into_owned());
-        let expected = codex_utils_absolute_path::normalize_windows_device_path(&expected)
-            .unwrap_or_else(|| expected.into_owned());
-        path.replace('/', "\\")
-            .eq_ignore_ascii_case(&expected.replace('/', "\\"))
+            .unwrap_or_else(|| path.into_owned())
+            .replace('/', "\\");
+        // Resolve only the owned root; arbitrary aliases must not borrow managed provenance.
+        let canonical_expected = expected.canonicalize().ok();
+        std::iter::once(expected)
+            .chain(canonical_expected.as_deref())
+            .any(|expected| {
+                let expected = expected.to_string_lossy();
+                let expected = codex_utils_absolute_path::normalize_windows_device_path(&expected)
+                    .unwrap_or_else(|| expected.into_owned());
+                path.eq_ignore_ascii_case(&expected.replace('/', "\\"))
+            })
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {

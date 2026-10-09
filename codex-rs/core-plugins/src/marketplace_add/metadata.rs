@@ -5,6 +5,7 @@ use crate::marketplace::validate_marketplace_root;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::MarketplaceConfigUpdate;
 use codex_config::record_user_marketplace;
+use codex_utils_path::paths_match_after_normalization;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -77,10 +78,10 @@ pub(super) fn installed_marketplace_root_for_source(
         if !install_metadata.matches_config(marketplace) {
             continue;
         }
-        let Some(root) =
-            resolve_configured_marketplace_root(marketplace_name, marketplace, install_root)
-        else {
-            continue;
+        let root = match &install_metadata.source {
+            // Keep using the resolved request path if the configured alias is retargeted.
+            InstalledMarketplaceSource::Local { path } => PathBuf::from(path),
+            InstalledMarketplaceSource::Git { .. } => install_root.join(marketplace_name),
         };
         if validate_marketplace_root(&root).is_ok() {
             return Ok(Some(root));
@@ -178,8 +179,15 @@ impl MarketplaceInstallMetadata {
     fn matches_config(&self, marketplace: &toml::Value) -> bool {
         marketplace.get("source_type").and_then(toml::Value::as_str)
             == Some(self.config_source_type())
-            && marketplace.get("source").and_then(toml::Value::as_str)
-                == Some(self.config_source().as_str())
+            && marketplace
+                .get("source")
+                .and_then(toml::Value::as_str)
+                .is_some_and(|source| match &self.source {
+                    InstalledMarketplaceSource::Local { path } => {
+                        paths_match_after_normalization(source, path)
+                    }
+                    InstalledMarketplaceSource::Git { url, .. } => source == url,
+                })
             && marketplace.get("ref").and_then(toml::Value::as_str) == self.ref_name()
             && config_sparse_paths(marketplace) == self.sparse_paths()
     }
@@ -259,5 +267,82 @@ mod tests {
         .unwrap();
 
         assert_eq!(root, Some(source_root));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn local_marketplace_matches_canonical_and_legacy_windows_sources() {
+        let source = TempDir::new().unwrap();
+        let other = TempDir::new().unwrap();
+        let metadata = MarketplaceInstallMetadata::from_source(
+            &MarketplaceSource::Local {
+                path: source.path().canonicalize().unwrap(),
+            },
+            &[],
+        );
+        let canonical = source.path().canonicalize().unwrap();
+        let legacy =
+            codex_utils_absolute_path::normalize_windows_device_path(&canonical.to_string_lossy())
+                .unwrap();
+        for spelling in [
+            canonical.to_string_lossy().into_owned(),
+            legacy.replace('\\', "/"),
+        ] {
+            let config: toml::Value =
+                toml::from_str(&format!("source_type = \"local\"\nsource = {spelling:?}\n"))
+                    .unwrap();
+            assert!(metadata.matches_config(&config));
+        }
+        let different = other.path().to_string_lossy();
+        let config: toml::Value = toml::from_str(&format!(
+            "source_type = \"local\"\nsource = {different:?}\n"
+        ))
+        .unwrap();
+        assert!(!metadata.matches_config(&config));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installed_local_root_does_not_follow_retargeted_configured_junction() {
+        let codex_home = TempDir::new().unwrap();
+        let source_root = codex_home.path().join("source");
+        let other_root = codex_home.path().join("other");
+        for (root, name) in [(&source_root, "source"), (&other_root, "other")] {
+            fs::create_dir_all(root.join(".agents/plugins")).unwrap();
+            fs::write(
+                root.join(".agents/plugins/marketplace.json"),
+                format!(r#"{{"name":"{name}","plugins":[]}}"#),
+            )
+            .unwrap();
+        }
+        let alias = codex_home.path().join("configured-source");
+        crate::test_support::create_directory_junction(&source_root, &alias);
+        let configured_metadata = MarketplaceInstallMetadata::from_source(
+            &MarketplaceSource::Local {
+                path: alias.clone(),
+            },
+            &[],
+        );
+        record_added_marketplace_entry(codex_home.path(), "source", &configured_metadata).unwrap();
+        let canonical_source = source_root.canonicalize().unwrap();
+        let request_metadata = MarketplaceInstallMetadata::from_source(
+            &MarketplaceSource::Local {
+                path: canonical_source.clone(),
+            },
+            &[],
+        );
+        let root = installed_marketplace_root_for_source(
+            codex_home.path(),
+            &codex_home.path().join("marketplaces"),
+            &request_metadata,
+        )
+        .unwrap()
+        .unwrap();
+
+        // Model an updater switching the alias before the caller validates the returned root.
+        fs::remove_dir(&alias).unwrap();
+        crate::test_support::create_directory_junction(&other_root, &alias);
+        assert_eq!(root, canonical_source);
+        assert_eq!(validate_marketplace_root(&root).unwrap(), "source");
     }
 }
