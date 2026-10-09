@@ -9075,14 +9075,18 @@ structuredContent=null"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_can_store_and_load_values_across_turns() -> Result<()> {
+async fn code_mode_can_store_and_load_values_across_turns_after_rejection() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let mut builder = test_codex().with_config(move |config| {
-        let _ = config.features.enable(Feature::CodeMode);
-    });
-    let test = builder.build(&server).await?;
+    let mut builder = test_codex()
+        .with_code_mode_host_program(codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?)
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::CodeMode);
+            let _ = config.features.enable(Feature::CodeModeHost);
+            config.code_mode.disable_in_process_fallback = true;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
 
     responses::mount_sse_once(
         &server,
@@ -9120,6 +9124,43 @@ text("stored");
         "exec store call failed unexpectedly: {first_output}"
     );
     assert_eq!(first_output, "stored");
+
+    let rejection = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-rejected"),
+                ev_custom_tool_call(
+                    "call-rejected",
+                    "exec",
+                    r#"
+// Each RawValue resets the parser's depth counter; the decoded arrays reach depth 400.
+let encoded = "0";
+for (let i = 0; i < 5; i++) {
+    encoded = JSON.stringify({
+        "$serde_json::private::RawValue": "[".repeat(80) + encoded + "]".repeat(80),
+    });
+}
+store("nb", JSON.parse(encoded));
+"#,
+                ),
+                ev_completed("resp-rejected"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-rejected", "rejected"),
+                ev_completed("resp-rejected-complete"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("attempt to overwrite the stored value with a private Serde marker")
+        .await?;
+    let (rejected_output, _) =
+        custom_tool_output_body_and_success(&rejection.requests()[1], "call-rejected");
+    assert_eq!(
+        rejected_output,
+        "Script error:\nfailed to serialize JavaScript value: reserved JSON object key",
+    );
 
     responses::mount_sse_once(
         &server,

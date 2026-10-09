@@ -687,6 +687,105 @@ text(load("key"));
 }
 
 #[tokio::test]
+async fn json_conversion_rejects_serde_markers_without_poisoning_sessions() {
+    let first = InProcessCodeModeSession::new();
+    let second = InProcessCodeModeSession::new();
+    let source = r#"
+store("healthy", 42);
+function rejects(value, message) {
+    let error;
+    try { store("healthy", value); } catch (e) { error = String(e); }
+    if (!message.test(error ?? "")) throw new Error(`expected ${message}; got ${error ?? "no error"}`);
+}
+const keys = ["$serde_json::private::RawValue", "$serde_json::private::Number"];
+for (const key of keys) {
+    for (const value of [
+        {[key]: "123"},
+        {first: 0, [key]: "null"},
+        [{[key]: "123"}],
+        JSON.parse('{"\\u0024' + key.slice(1) + '":"123"}'),
+    ]) rejects(value, /reserved JSON object key/);
+
+    // Marker text in strings and longer keys must remain valid.
+    const literal = ['{"' + key + '":"123"}', {['prefix"' + key]: key}];
+    store("literal", literal);
+    if (JSON.stringify(load("literal")) !== JSON.stringify(literal)) throw "changed literal";
+}
+for (const segments of [2, 5]) {
+    let encoded = "0";
+    for (let i = 0; i < segments; i++) {
+        encoded = "[".repeat(80) + encoded + "]".repeat(80);
+        if (i < segments - 1) encoded = JSON.stringify({[keys[0]]: encoded});
+    }
+    // Exercise Serde's depth reset without first requiring a deep V8 object.
+    rejects({[keys[0]]: encoded}, /reserved JSON object key/);
+}
+let value = 0;
+for (let depth = 1; depth <= 160; depth++) {
+    value = [value];
+    if (depth === 127) {
+        try {
+            store("boundary", value);
+            if (JSON.stringify(load("boundary")) !== JSON.stringify(value)) throw "changed boundary";
+        } catch (e) {
+            // V8 can reach its stack limit before Serde's depth limit on Windows.
+            if (!String(e).includes("Maximum call stack size exceeded")) throw e;
+        }
+    }
+    if (depth === 128 || depth === 160) rejects(value, /recursion limit exceeded|Maximum call stack size exceeded/);
+}
+const normal = {toJSON() { return [undefined, NaN, Infinity, 1.25, 1e100]; }};
+store("normal", normal);
+if (JSON.stringify(load("normal")) !== JSON.stringify(normal)) throw "changed normal JSON";
+text("ok");
+store("healthy", {[keys[0]]: "null"});
+"#;
+
+    for (session, source, expected_text, expected_error) in [
+        (
+            &second,
+            r#"store("healthy", 42); text(load("healthy"));"#,
+            "42",
+            None,
+        ),
+        (
+            &first,
+            source,
+            "ok",
+            Some("failed to serialize JavaScript value: reserved JSON object key"),
+        ),
+        (&first, r#"text(load("healthy"));"#, "42", None),
+        (&second, r#"text(load("healthy"));"#, "42", None),
+    ] {
+        let response = execute(
+            session,
+            ExecuteRequest {
+                yield_time_ms: None,
+                ..execute_request(source)
+            },
+        )
+        .await;
+        let RuntimeResponse::Result {
+            content_items,
+            error_text,
+            ..
+        } = response
+        else {
+            panic!("unexpected response: {response:?}");
+        };
+        assert_eq!(
+            (content_items, error_text),
+            (
+                vec![FunctionCallOutputContentItem::InputText {
+                    text: expected_text.to_string()
+                }],
+                expected_error.map(str::to_string)
+            )
+        );
+    }
+}
+
+#[tokio::test]
 async fn shutdown_interrupts_cpu_bound_cells() {
     let service = InProcessCodeModeSession::new();
 

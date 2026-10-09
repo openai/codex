@@ -313,7 +313,26 @@ pub(super) fn v8_value_to_json(
         }
         return Ok(None);
     };
-    serde_json::from_str(&stringified.to_rust_string_lossy(&tc))
+    let json = stringified.to_rust_string_lossy(&tc);
+    // V8 emits compact JSON with these ASCII key names unescaped. The object/comma
+    // prefix and colon distinguish keys from string contents. Reject these before
+    // Serde can reinterpret them as values and bypass its normal recursion limit.
+    // TODO(cconger): Remove this guard once our resolved serde_json dependency
+    // includes the upstream private-key provenance fix. Retain regression coverage
+    // for literal keys, depth limits, and session recovery.
+    // https://github.com/cconger/json/commit/63f6f14053ef3a173013d7e5ee5ac74140736929
+    if [
+        r#"{"$serde_json::private::RawValue":"#,
+        r#","$serde_json::private::RawValue":"#,
+        r#"{"$serde_json::private::Number":"#,
+        r#","$serde_json::private::Number":"#,
+    ]
+    .into_iter()
+    .any(|key| json.contains(key))
+    {
+        return Err("failed to serialize JavaScript value: reserved JSON object key".to_string());
+    }
+    serde_json::from_str(&json)
         .map(Some)
         .map_err(|err| format!("failed to serialize JavaScript value: {err}"))
 }
