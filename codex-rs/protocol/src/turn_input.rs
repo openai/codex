@@ -36,7 +36,24 @@ pub enum TurnInput {
         client_id: Option<String>,
     },
     ResponseItem(ResponseItem),
+    AnnotatedResponseItem(AnnotatedResponseItem),
     InterAgentCommunication(InterAgentCommunication),
+}
+
+/// A Responses API item with caller-supplied, harness-only annotations.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AnnotatedResponseItem {
+    pub item: ResponseItem,
+    #[serde(default)]
+    pub annotations: ResponseItemAnnotations,
+}
+
+/// Public annotations accepted by Core; internal history metadata stays private.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponseItemAnnotations {
+    /// Request compaction retention for a function-call output.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retain: bool,
 }
 
 /// One turn input and the context that follows it through submission.

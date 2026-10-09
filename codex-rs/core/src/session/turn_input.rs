@@ -42,6 +42,7 @@ use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::turn_input::AnnotatedResponseItem;
 use codex_protocol::turn_input::NotSubmittedReason;
 use codex_protocol::turn_input::TurnInput as SubmittedTurnInput;
 use codex_protocol::turn_input::TurnInputMode;
@@ -242,6 +243,7 @@ pub(super) async fn handle(
                 }
                 SubmittedTurnInput::UserInput { .. }
                 | SubmittedTurnInput::ResponseItem(_)
+                | SubmittedTurnInput::AnnotatedResponseItem(_)
                 | SubmittedTurnInput::InterAgentCommunication(_) => TurnStartKind::Automatic,
             };
             start_if_idle(
@@ -256,7 +258,10 @@ pub(super) async fn handle(
         TurnInputMode::ContinueIfIdle {
             expected_previous_turn_id,
         } => {
-            if !matches!(&request.request.input, SubmittedTurnInput::ResponseItem(_)) {
+            if !matches!(
+                &request.request.input,
+                SubmittedTurnInput::ResponseItem(_) | SubmittedTurnInput::AnnotatedResponseItem(_)
+            ) {
                 return Err(CodexErr::InvalidRequest(
                     "continuation requires internal response input".to_string(),
                 ));
@@ -342,6 +347,10 @@ async fn start_or_steer(
         SubmittedTurnInput::UserInput { content, .. } => !content.is_empty(),
         SubmittedTurnInput::ResponseItem(ResponseItem::FunctionCallOutput {
             call_id: None,
+            ..
+        })
+        | SubmittedTurnInput::AnnotatedResponseItem(AnnotatedResponseItem {
+            item: ResponseItem::FunctionCallOutput { call_id: None, .. },
             ..
         }) => true,
         _ => {
@@ -907,12 +916,14 @@ async fn capture_sender_user_messages(
     session: &Session,
     input: &mut SubmittedTurnInput,
 ) -> Option<GuardianSenderMessages> {
-    let SubmittedTurnInput::ResponseItem(
-        item @ ResponseItem::FunctionCallOutput { call_id: None, .. },
-    ) = input
+    let (SubmittedTurnInput::ResponseItem(item)
+    | SubmittedTurnInput::AnnotatedResponseItem(AnnotatedResponseItem { item, .. })) = input
     else {
         return None;
     };
+    if !matches!(item, ResponseItem::FunctionCallOutput { call_id: None, .. }) {
+        return None;
+    }
     Session::assign_missing_response_item_id(item);
     session
         .services
@@ -928,7 +939,11 @@ async fn pending_turn_input(
     turn_id: &str,
     origin: UserInputOrigin,
 ) -> TurnInput {
-    match input {
+    let retain = match &input {
+        SubmittedTurnInput::AnnotatedResponseItem(input) => input.annotations.retain,
+        _ => false,
+    };
+    let mut input = match input {
         SubmittedTurnInput::UserInput { content, client_id } => TurnInput::UserInput {
             content,
             client_id,
@@ -938,6 +953,7 @@ async fn pending_turn_input(
             },
         },
         SubmittedTurnInput::ResponseItem(item)
+        | SubmittedTurnInput::AnnotatedResponseItem(AnnotatedResponseItem { item, .. })
             if matches!(
                 &item,
                 ResponseItem::FunctionCallOutput { call_id: None, .. }
@@ -960,9 +976,20 @@ async fn pending_turn_input(
             };
             TurnInput::FunctionCallOutput(ResponseItemEnvelope { item, metadata })
         }
-        SubmittedTurnInput::ResponseItem(item) => TurnInput::ResponseItem(item.into()),
+        SubmittedTurnInput::ResponseItem(item)
+        | SubmittedTurnInput::AnnotatedResponseItem(AnnotatedResponseItem { item, .. }) => {
+            TurnInput::ResponseItem(item.into())
+        }
         SubmittedTurnInput::InterAgentCommunication(communication) => {
             TurnInput::InterAgentCommunication(communication)
         }
+    };
+    if retain
+        && let TurnInput::ResponseItem(envelope) | TurnInput::FunctionCallOutput(envelope) =
+            &mut input
+        && matches!(envelope.item, ResponseItem::FunctionCallOutput { .. })
+    {
+        envelope.metadata.get_or_insert_default().client_authored = true;
     }
+    input
 }

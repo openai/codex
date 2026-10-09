@@ -29,8 +29,11 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::turn_input::AnnotatedResponseItem;
+use codex_protocol::turn_input::ResponseItemAnnotations;
 use codex_protocol::turn_input::TurnAttribution;
 use codex_protocol::user_input::UserInput;
+use core_test_support::ThreadIdle;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -1576,5 +1579,122 @@ async fn daemon_recovery_includes_local_environment_that_finished_starting() -> 
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    Ok(())
+}
+
+/// Retention follows accepted outputs through idle submission, steering, and rollout storage.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_output_retention_is_submission_metadata() -> anyhow::Result<()> {
+    let (release, gate) = oneshot::channel();
+    let (server, _completions) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: Some(gate),
+            body: responses::sse_completed("started"),
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: responses::sse_completed("steered"),
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: responses::sse_completed("idle"),
+        }],
+    ])
+    .await;
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .build_with_streaming_server(&server)
+        .await?;
+    for (name, retain) in [("started", true), ("steered", true), ("ordinary", false)] {
+        let item = serde_json::from_value(serde_json::json!({
+            "type": "function_call_output", "name": name,
+            "namespace": "example", "output": "Inspect the failing tests.",
+        }))?;
+        let input = if retain {
+            TurnInput::AnnotatedResponseItem(AnnotatedResponseItem {
+                item,
+                annotations: ResponseItemAnnotations { retain },
+            })
+        } else {
+            TurnInput::ResponseItem(item)
+        };
+        let request = TurnInputRequest::new(input);
+        let submission = test.codex.start_or_steer_turn(request).await?;
+        if name == "started" {
+            assert!(matches!(submission, TurnInputSubmission::Started { .. }));
+            server.wait_for_request_count(/*count*/ 1).await;
+        } else {
+            assert!(matches!(submission, TurnInputSubmission::Steered { .. }));
+        }
+    }
+    release.send(()).expect("release active response");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    ThreadIdle::wait(&test.codex).await;
+
+    let request = TurnInputRequest::new(TurnInput::AnnotatedResponseItem(AnnotatedResponseItem {
+        item: serde_json::from_value(serde_json::json!({
+            "type": "function_call_output", "name": "idle",
+            "namespace": "example", "output": "Report your findings.",
+        }))?,
+        annotations: ResponseItemAnnotations { retain: true },
+    }));
+    assert!(matches!(
+        test.codex.start_turn_if_idle(request).await?,
+        StartIfIdleSubmission::Started { .. }
+    ));
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.codex.shutdown_and_wait().await?;
+
+    let history = codex_rollout::RolloutRecorder::get_rollout_history(
+        &test.codex.rollout_path().expect("durable rollout"),
+    )
+    .await?;
+    let retained = history
+        .get_rollout_items()
+        .iter()
+        .filter_map(|item| {
+            let codex_history::RolloutItem::ResponseItem(envelope) = item else {
+                return None;
+            };
+            let codex_protocol::models::ResponseItem::FunctionCallOutput { name, .. } =
+                &envelope.item
+            else {
+                return None;
+            };
+            Some((
+                name.as_deref().unwrap(),
+                envelope
+                    .metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.client_authored),
+            ))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        retained,
+        vec![
+            ("started", true),
+            ("steered", true),
+            ("ordinary", false),
+            ("idle", true)
+        ]
+    );
+    for request in server.requests().await {
+        let body: Value = serde_json::from_slice(&request)?;
+        for item in body["input"].as_array().unwrap() {
+            assert!(item.get("retain").is_none());
+            assert!(item.get("client_authored").is_none());
+        }
+    }
+    server.shutdown().await;
     Ok(())
 }
