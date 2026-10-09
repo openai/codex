@@ -54,3 +54,63 @@ async fn custom_ca_fallback_preserves_builder_configuration() {
             .any(|line| line.eq_ignore_ascii_case("x-builder-test: preserved"))
     );
 }
+
+/// A server cannot keep a connection reusable after the caller requests closure.
+#[tokio::test]
+async fn connection_close_prevents_reuse_when_server_ignores_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let url = format!("http://{}/", listener.local_addr()?);
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        let mut headers = Vec::new();
+        while !headers.ends_with(b"\r\n\r\n") {
+            headers.push(stream.read_u8().await?);
+        }
+        // Deliberately ignore the request's Connection: close header.
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n";
+        stream.write_all(response).await?;
+        let mut byte = [0];
+        let reused = tokio::select! {
+            read = stream.read(&mut byte) => {
+                if read? == 0 {
+                    stream = listener.accept().await?.0;
+                    false
+                } else {
+                    true
+                }
+            }
+            accepted = listener.accept() => {
+                stream = accepted?.0;
+                false
+            }
+        };
+        headers.clear();
+        if reused {
+            headers.push(byte[0]);
+        }
+        while !headers.ends_with(b"\r\n\r\n") {
+            headers.push(stream.read_u8().await?);
+        }
+        stream.write_all(response).await?;
+        Ok::<bool, std::io::Error>(reused)
+    });
+    let client = HttpClientBuilder::new().build_direct()?;
+    for _ in 0..2 {
+        client
+            .get(&url)
+            .header(http::header::CONNECTION, HeaderValue::from_static("close"))
+            .send()
+            .await?
+            .bytes()
+            .await?;
+    }
+    assert!(
+        !server.await??,
+        "the server reused a connection marked closed"
+    );
+    Ok(())
+}
