@@ -7,6 +7,12 @@ This crate is responsible for producing:
   - the `codex-exec` CLI can check if its arg0 is `codex-linux-sandbox` and, if so, execute as if it were `codex-linux-sandbox`
   - this should also be true of the `codex` multitool CLI
 
+The helper uses bubblewrap for filesystem and namespace isolation, and seccomp
+for syscall filtering. `src/seccomp.rs` installs `PR_SET_NO_NEW_PRIVS` and the
+seccomp filters; it also retains the legacy Landlock filesystem implementation.
+`src/linux_run_main.rs` coordinates these stages through `LinuxSandboxCommand`.
+End-to-end coverage lives in `tests/suite/sandbox.rs` and the other suite modules.
+
 On Linux, Codex prefers the first `bwrap` found on `PATH`
 outside the current working directory whenever it is available. If `bwrap` is
 present but too old to support
@@ -45,7 +51,10 @@ commands that would enter the bubblewrap path.
   `SandboxPolicy` model stay on bubblewrap so nested read-only or denied
   carveouts are preserved.
 - When bubblewrap is active, the helper applies `PR_SET_NO_NEW_PRIVS` and a
-  seccomp network filter in-process.
+  seccomp filter in-process after establishing the filesystem view. Restricted
+  network policies block network syscalls; filesystem-restricted policies with
+  otherwise unrestricted networking still block `AF_VSOCK` sockets. All filter
+  modes block `io_uring` to prevent bypassing socket-family restrictions.
 - When bubblewrap is active, the filesystem is read-only by default via `--ro-bind / /`.
 - When bubblewrap is active, writable roots are layered with `--bind <root> <root>`.
 - When bubblewrap is active, protected subpaths under writable roots (for
@@ -86,8 +95,10 @@ commands that would enter the bubblewrap path.
 - In managed proxy mode, the helper uses `--unshare-net` plus an internal
   TCP->UDS->TCP routing bridge so tool traffic reaches only configured proxy
   endpoints.
-- In managed proxy mode, after the bridge is live, seccomp blocks new
-  AF_UNIX/socketpair creation for the user command.
+- In managed proxy mode, after the bridge is live, seccomp allows IP sockets
+  inside the isolated network namespace and blocks new standalone `AF_UNIX`
+  sockets unless `dangerously_allow_all_unix_sockets` is granted. Unix socket
+  pairs remain allowed for communication between related processes.
 - When bubblewrap is active, it mounts a fresh `/proc` via `--proc /proc` by default.
   If that mount is denied, it retains the inherited `/proc` and still creates a
   PID namespace, preserving the existing fallback. `--no-proc` also retains the

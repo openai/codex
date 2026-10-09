@@ -16,8 +16,6 @@ mod exec_util;
 #[cfg(target_os = "linux")]
 mod fd_mount;
 #[cfg(target_os = "linux")]
-mod landlock;
-#[cfg(target_os = "linux")]
 mod launcher;
 #[cfg(target_os = "linux")]
 mod linux_run_main;
@@ -25,6 +23,8 @@ mod linux_run_main;
 mod proxy_lifecycle;
 #[cfg(target_os = "linux")]
 mod proxy_routing;
+#[cfg(target_os = "linux")]
+mod seccomp;
 #[cfg(target_os = "linux")]
 mod wslg;
 

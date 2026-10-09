@@ -25,12 +25,12 @@ use crate::bwrap::BwrapOptions;
 use crate::bwrap::WSL_INTEROP_DIR;
 use crate::bwrap::WSLG_DISTRO_ROOT;
 use crate::bwrap::create_bwrap_command_args;
-use crate::landlock::apply_permission_profile_to_current_thread;
 use crate::launcher::exec_bwrap;
 use crate::launcher::initialize_bwrap_launcher;
 use crate::launcher::preferred_bwrap_supports_argv0;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
+use crate::seccomp::apply_permission_profile_to_current_thread;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::PermissionProfile;
@@ -86,10 +86,8 @@ enum ProtectedCreateRemoval {
 #[derive(Debug, Parser)]
 /// CLI surface for the Linux sandbox helper.
 ///
-/// The type name remains `LandlockCommand` for compatibility with existing
-/// wiring, but bubblewrap is now the default filesystem sandbox and Landlock
-/// is the legacy fallback.
-pub struct LandlockCommand {
+/// Uses bubblewrap for filesystem isolation and seccomp for syscall filtering.
+pub struct LinuxSandboxCommand {
     /// It is possible that the cwd used in the context of the sandbox policy
     /// is different from the cwd of the process to spawn.
     #[arg(long = "sandbox-policy-cwd")]
@@ -166,7 +164,7 @@ pub struct LandlockCommand {
 /// 2. Apply in-process restrictions (no_new_privs + seccomp).
 /// 3. `execvp` into the final command.
 pub fn run_main() -> ! {
-    let LandlockCommand {
+    let LinuxSandboxCommand {
         sandbox_policy_cwd,
         command_cwd,
         permission_profile,
@@ -178,7 +176,7 @@ pub fn run_main() -> ! {
         no_proc,
         inherit_pid_namespace,
         command,
-    } = LandlockCommand::parse();
+    } = LinuxSandboxCommand::parse();
     let allow_network_for_proxy = managed_network.is_some();
 
     if command.is_empty() {
@@ -348,7 +346,7 @@ pub fn run_main() -> ! {
         );
     }
 
-    // Legacy path: Landlock enforcement only, when bwrap sandboxing is not enabled.
+    // Legacy pipeline: apply in-process restrictions without bubblewrap.
     if let Err(e) = apply_permission_profile_to_current_thread(
         &permission_profile,
         &sandbox_policy_cwd,

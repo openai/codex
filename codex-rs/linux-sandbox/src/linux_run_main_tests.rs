@@ -587,7 +587,7 @@ fn managed_proxy_inner_command_includes_route_spec() {
 
         assert!(args.iter().any(|arg| arg == "--proxy-route-spec"));
         assert!(args.iter().any(|arg| arg == "{\"routes\":[]}"));
-        let parsed = LandlockCommand::try_parse_from(args)
+        let parsed = LinuxSandboxCommand::try_parse_from(args)
             .expect("inner command should preserve the managed network policy");
         assert_eq!(parsed.managed_network, Some(managed_network));
     }
@@ -595,7 +595,7 @@ fn managed_proxy_inner_command_includes_route_spec() {
 
 #[test]
 fn managed_network_policy_alone_enables_proxy_mode() {
-    let parsed = LandlockCommand::try_parse_from([
+    let parsed = LinuxSandboxCommand::try_parse_from([
         "codex-linux-sandbox",
         "--sandbox-policy-cwd",
         "/tmp",
@@ -613,7 +613,7 @@ fn managed_network_policy_alone_enables_proxy_mode() {
 
 #[test]
 fn malformed_managed_network_policy_is_rejected() {
-    let error = LandlockCommand::try_parse_from([
+    let error = LinuxSandboxCommand::try_parse_from([
         "codex-linux-sandbox",
         "--sandbox-policy-cwd",
         "/tmp",
@@ -658,7 +658,7 @@ fn non_managed_inner_command_omits_route_spec() {
     });
 
     assert!(!args.iter().any(|arg| arg == "--proxy-route-spec"));
-    let parsed = LandlockCommand::try_parse_from(args)
+    let parsed = LinuxSandboxCommand::try_parse_from(args)
         .expect("unmanaged inner command should preserve ordinary sandbox mode");
     assert_eq!(parsed.managed_network, None);
 }

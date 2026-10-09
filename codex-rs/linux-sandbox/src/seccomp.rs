@@ -1,7 +1,8 @@
 //! In-process Linux sandbox primitives: `no_new_privs` and seccomp.
 //!
 //! Filesystem restrictions are enforced by bubblewrap in `linux_run_main`.
-//! Landlock helpers remain available here as legacy/backup utilities.
+//! The legacy Landlock filesystem implementation is retained here, but the
+//! helper rejects legacy mode for filesystem-restricted policies.
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -39,7 +40,8 @@ use seccompiler::apply_filter;
 /// - enabling `PR_SET_NO_NEW_PRIVS` when restrictions apply, and
 /// - installing seccomp restrictions for network isolation and VM sockets.
 ///
-/// Filesystem restrictions are intentionally handled by bubblewrap.
+/// Filesystem restrictions are normally handled by bubblewrap. The legacy
+/// Landlock implementation is only selected by `apply_landlock_fs`.
 pub(crate) fn apply_permission_profile_to_current_thread(
     permission_profile: &PermissionProfile,
     cwd: &Path,
@@ -142,8 +144,8 @@ fn set_no_new_privs() -> Result<()> {
 /// # Errors
 /// Returns [`CodexErr::Sandbox`] variants when the ruleset fails to apply.
 ///
-/// Note: this is currently unused because filesystem sandboxing is performed
-/// via bubblewrap. It is kept for reference and potential fallback use.
+/// Retained for the legacy pipeline. The helper currently rejects legacy mode
+/// for filesystem-restricted policies, so filesystem sandboxing uses bubblewrap.
 fn install_filesystem_landlock_rules_on_current_thread(
     writable_roots: Vec<AbsolutePathBuf>,
 ) -> Result<()> {

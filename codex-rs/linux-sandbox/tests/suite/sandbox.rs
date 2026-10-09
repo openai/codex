@@ -1,3 +1,5 @@
+//! End-to-end Linux sandbox coverage for filesystem isolation and syscall filtering.
+
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used)]
 use codex_core::exec::ExecCapturePolicy;
