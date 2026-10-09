@@ -9,7 +9,8 @@ use pretty_assertions::assert_eq;
 fn blockquote_paste_continues_current_line_prefix() {
     for (draft, pasted, expected) in [
         ("> ", "first\nsecond", "> first\n> second\n\n"),
-        ("intro\n> ", "α\r\n\r\nβ\r", "intro\n> α\n> \n> β\n> \n\n"),
+        ("> ", "first\n", "> first\n\n"),
+        ("intro\n> ", "α\r\n\r\nβ\r", "intro\n> α\n> \n> β\n\n"),
         (
             "> existing ",
             "first\nsecond",
@@ -82,7 +83,7 @@ fn blockquote_paste_rendered() {
         /*enhanced_keys_supported*/ false,
         |composer| {
             composer.insert_str("Please explain:\n> ");
-            composer.handle_paste("first line\n\nlast line".to_string());
+            composer.handle_paste("first line\n\nlast line\n".to_string());
             composer.insert_str("Next block");
         },
     );
