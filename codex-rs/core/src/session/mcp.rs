@@ -512,12 +512,9 @@ impl Session {
         let combined_roots = combine_selected_capability_roots(
             &thread_roots,
             environments.turn_environments().map(|environment| {
-                (
-                    environment.config_origin,
-                    environment
-                        .config_origin
-                        .selected_capability_roots(&environment.environment, environment.config()),
-                )
+                environment
+                    .config_origin
+                    .selected_capability_roots(&environment.environment, environment.config())
             }),
         );
         for (index, root) in combined_roots.into_iter().enumerate() {
