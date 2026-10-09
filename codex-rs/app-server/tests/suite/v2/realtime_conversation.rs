@@ -1711,6 +1711,7 @@ async fn realtime_list_voices_returns_supported_names() -> Result<()> {
                     RealtimeVoice::Marin,
                     RealtimeVoice::Cedar,
                 ],
+                v3: RealtimeVoicesList::builtin().v3,
                 default_v1: RealtimeVoice::Cove,
                 default_v2: RealtimeVoice::Marin,
             },

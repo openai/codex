@@ -3680,22 +3680,38 @@ class RealtimeVoice(Enum):
     alloy = "alloy"
     arbor = "arbor"
     ash = "ash"
+    aube = "aube"
     ballad = "ballad"
     breeze = "breeze"
+    bubbie = "bubbie"
     cedar = "cedar"
     coral = "coral"
     cove = "cove"
     echo = "echo"
     ember = "ember"
+    haetsal = "haetsal"
+    hanul = "hanul"
+    himari = "himari"
     juniper = "juniper"
+    leher = "leher"
     maple = "maple"
     marin = "marin"
+    miko = "miko"
+    neer = "neer"
+    porto = "porto"
+    rindo = "rindo"
+    rio = "rio"
+    rivage = "rivage"
     sage = "sage"
+    selva = "selva"
     shimmer = "shimmer"
     sol = "sol"
+    sonna = "sonna"
     spruce = "spruce"
+    tinta = "tinta"
     vale = "vale"
     verse = "verse"
+    viola = "viola"
 
 
 class RealtimeVoicesList(BaseModel):
@@ -3706,6 +3722,7 @@ class RealtimeVoicesList(BaseModel):
     default_v2: Annotated[RealtimeVoice, Field(alias="defaultV2")]
     v1: list[RealtimeVoice]
     v2: list[RealtimeVoice]
+    v3: list[RealtimeVoice] | None = []
 
 
 class ReasoningEffort(str, Enum):

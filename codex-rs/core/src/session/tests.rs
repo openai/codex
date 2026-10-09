@@ -11603,6 +11603,7 @@ async fn realtime_conversation_list_voices_emits_builtin_list() {
                 RealtimeVoice::Marin,
                 RealtimeVoice::Cedar,
             ],
+            v3: RealtimeVoicesList::builtin().v3,
             default_v1: RealtimeVoice::Cove,
             default_v2: RealtimeVoice::Marin,
         },

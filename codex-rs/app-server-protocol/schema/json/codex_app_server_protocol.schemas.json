@@ -18272,22 +18272,38 @@
           "alloy",
           "arbor",
           "ash",
+          "aube",
           "ballad",
           "breeze",
+          "bubbie",
           "cedar",
           "coral",
           "cove",
           "echo",
           "ember",
+          "haetsal",
+          "hanul",
+          "himari",
           "juniper",
+          "leher",
           "maple",
           "marin",
+          "miko",
+          "neer",
+          "porto",
+          "rindo",
+          "rio",
+          "rivage",
           "sage",
+          "selva",
           "shimmer",
           "sol",
+          "sonna",
           "spruce",
+          "tinta",
           "vale",
-          "verse"
+          "verse",
+          "viola"
         ],
         "type": "string"
       },
@@ -18306,6 +18322,13 @@
             "type": "array"
           },
           "v2": {
+            "items": {
+              "$ref": "#/definitions/v2/RealtimeVoice"
+            },
+            "type": "array"
+          },
+          "v3": {
+            "default": [],
             "items": {
               "$ref": "#/definitions/v2/RealtimeVoice"
             },

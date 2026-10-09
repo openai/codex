@@ -1668,8 +1668,9 @@ fn realtime_backend_item(text: String, prefix: Option<&str>) -> String {
 fn validate_realtime_voice(version: RealtimeWsVersion, voice: RealtimeVoice) -> CodexResult<()> {
     let voices = RealtimeVoicesList::builtin();
     let allowed = match version {
-        RealtimeWsVersion::V1 | RealtimeWsVersion::V3 => &voices.v1,
+        RealtimeWsVersion::V1 => &voices.v1,
         RealtimeWsVersion::V2 => &voices.v2,
+        RealtimeWsVersion::V3 => &voices.v3,
     };
     if allowed.contains(&voice) {
         return Ok(());
