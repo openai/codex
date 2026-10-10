@@ -84,8 +84,11 @@ fn startup_controls_meters_and_helper_loss() -> Result<()> {
         error.is_some()
     })?;
     assert_eq!(
-        error.as_deref(),
-        Some("voice audio session stopped unexpectedly")
+        error,
+        Some((
+            codex_realtime_webrtc::ConnectionError::AudioSession,
+            "voice audio session stopped unexpectedly".into()
+        ))
     );
     assert_eq!(handle.take_error(), None);
     Ok(())
@@ -145,9 +148,11 @@ fn device_failure_reaches_startup_completion_without_duplicate_error() -> Result
         started.handle.apply_answer_sdp("synthetic-answer".into()),
         Err(codex_realtime_webrtc::ConnectionError::AudioDevices)
     );
+    started.handle.set_microphone_muted(/*muted*/ true)?;
+    assert_eq!(started.handle.take_error(), None);
+    started.handle.close();
     #[cfg(unix)]
     common::wait_for_helper_reaped(&root)?;
-    assert_eq!(started.handle.take_error(), None);
     Ok(())
 }
 

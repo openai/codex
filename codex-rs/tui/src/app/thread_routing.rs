@@ -486,7 +486,8 @@ impl App {
             | AppCommand::RealtimeConversationStop { thread_id } = &op
                 && self.chat_widget.thread_id() == Some(*thread_id)
             {
-                self.chat_widget.record_realtime_failure();
+                self.chat_widget
+                    .record_realtime_failure(crate::chatwidget::RealtimeFailureCause::LocalRequest);
                 self.chat_widget.reset_realtime_conversation();
             }
             self.chat_widget
@@ -512,7 +513,8 @@ impl App {
             | AppCommand::RealtimeConversationStop { thread_id } = &op
                 && self.chat_widget.thread_id() == Some(*thread_id)
             {
-                self.chat_widget.record_realtime_failure();
+                self.chat_widget
+                    .record_realtime_failure(crate::chatwidget::RealtimeFailureCause::LocalRequest);
                 self.chat_widget.reset_realtime_conversation();
             }
             self.chat_widget.add_error_message(

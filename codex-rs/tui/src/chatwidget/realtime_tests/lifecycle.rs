@@ -1,6 +1,7 @@
 //! Voice startup, shutdown, and retry maintain one active owned session.
 
 use super::*;
+use crate::app_event::RealtimeWebrtcStartupFailure;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -148,7 +149,10 @@ async fn audio_failure_cancels_pending_voice_and_reports_the_device_error() {
     chat.realtime_conversation.phase = RealtimeConversationPhase::Starting;
     chat.realtime_conversation.startup_abort = Some(abort);
 
-    chat.on_realtime_error("speaker stream failed: device disconnected".to_string());
+    chat.on_realtime_error(
+        "speaker stream failed: device disconnected".to_string(),
+        RealtimeFailureCause::AudioSession,
+    );
 
     commit_realtime_history_events(&mut chat, &mut events);
     let cell = std::iter::from_fn(|| events.try_recv().ok())
@@ -198,7 +202,10 @@ async fn canceled_offer_is_ignored_after_a_new_start_attempt() {
     chat.on_realtime_webrtc_offer_created(
         ThreadId::new(),
         /*attempt_id*/ 1,
-        Err("canceled offer failed".to_string()),
+        Err(RealtimeWebrtcStartupFailure {
+            message: "superseded failure".into(),
+            cause: codex_realtime_webrtc::ConnectionError::Failed,
+        }),
     );
 
     assert_eq!(
@@ -208,6 +215,38 @@ async fn canceled_offer_is_ignored_after_a_new_start_attempt() {
             events.try_recv().is_err()
         ),
         (RealtimeConversationPhase::Starting, 2, true)
+    );
+}
+
+#[tokio::test]
+async fn voice_startup_failure_preserves_the_specific_error() {
+    let (mut chat, _sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
+    chat.realtime_conversation.phase = RealtimeConversationPhase::Starting;
+    chat.realtime_conversation.attempt_id = 1;
+
+    chat.on_realtime_webrtc_offer_created(
+        ThreadId::new(),
+        /*attempt_id*/ 1,
+        Err(RealtimeWebrtcStartupFailure {
+            message: "voice package unavailable".into(),
+            cause: codex_realtime_webrtc::ConnectionError::Failed,
+        }),
+    );
+
+    commit_realtime_history_events(&mut chat, &mut events);
+    let cell = std::iter::from_fn(|| events.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => Some(cell),
+            _ => None,
+        })
+        .expect("voice should report the startup failure");
+    insta::assert_snapshot!(
+        cell.display_lines(/*width*/ 80)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        @"■ Failed to start voice mode: voice package unavailable"
     );
 }
 
@@ -507,10 +546,13 @@ async fn failure_cleanup_does_not_attribute_stop_to_the_user() {
     // A local failure initiates backend cleanup; its acknowledgement is still "requested".
     chat.realtime_conversation.phase = RealtimeConversationPhase::Stopping;
     chat.realtime_conversation.failure_recorded = true;
-    chat.on_realtime_error(format!(
-        "Failed to connect voice mode: {}",
-        codex_realtime_webrtc::ConnectionError::AudioDevices
-    ));
+    chat.on_realtime_error(
+        format!(
+            "Failed to connect voice mode: {}",
+            codex_realtime_webrtc::ConnectionError::AudioDevices
+        ),
+        RealtimeFailureCause::AudioDevices,
+    );
     chat.on_realtime_conversation_closed(Some("requested".into()));
     assert_eq!(
         chat.realtime_conversation.phase,

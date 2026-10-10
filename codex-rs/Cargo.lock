@@ -4867,6 +4867,7 @@ dependencies = [
  "libc",
  "objc2-app-kit",
  "objc2-foundation",
+ "opentelemetry_sdk",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",

@@ -8,7 +8,16 @@ impl ChatWidget {
         let muted = !self.realtime_conversation.microphone_muted;
         if let Some(handle) = self.realtime_conversation.handle.as_ref() {
             if let Err(error) = handle.set_microphone_muted(muted) {
-                self.on_realtime_error(format!("Failed to update microphone: {error}"));
+                let (message, cause) = match handle.take_error() {
+                    Some((cause, error)) => {
+                        (format!("Voice conversation failed: {error}"), cause.into())
+                    }
+                    None => (
+                        format!("Failed to update microphone: {error}"),
+                        RealtimeFailureCause::AudioControls,
+                    ),
+                };
+                self.on_realtime_error(message, cause);
                 return;
             }
         } else if self.realtime_conversation.phase != RealtimeConversationPhase::Starting {
@@ -136,8 +145,8 @@ impl ChatWidget {
         let Some(handle) = self.realtime_conversation.handle.as_ref() else {
             return;
         };
-        if let Some(error) = handle.take_error() {
-            self.on_realtime_error(format!("Voice conversation failed: {error}"));
+        if let Some((cause, error)) = handle.take_error() {
+            self.on_realtime_error(format!("Voice conversation failed: {error}"), cause.into());
             return;
         }
         if self.realtime_conversation.phase == RealtimeConversationPhase::Starting {

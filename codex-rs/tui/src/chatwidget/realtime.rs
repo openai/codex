@@ -3,8 +3,11 @@
 //! Interleaved speakers retain separate displays so settled caption text never reanimates.
 //! Speech recovery suppresses stale queued answers while preserving unspoken text fallbacks.
 
+mod failure_metrics;
 mod recording_controls;
 mod transcript_replay;
+
+pub(crate) use failure_metrics::RealtimeFailureCause;
 
 use super::ChatWidget;
 use super::HistoryCell;
@@ -13,6 +16,7 @@ use super::realtime_split_flap::SplitFlapTranscriptCell;
 use super::realtime_split_flap::VoiceAmplitudeHistory;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
+use crate::app_event::RealtimeWebrtcStartupFailure;
 use crate::bottom_pane::VoiceStripPhase;
 use crate::bottom_pane::VoiceStripState;
 use crate::history_cell;
@@ -144,6 +148,7 @@ pub(super) struct RealtimeConversationUiState {
     backend_started: bool,
     webrtc_connected: bool,
     active_since: Option<Instant>,
+    finished_duration: Option<Duration>,
     failure_recorded: bool,
     microphone_muted: bool,
     microphone_level: usize,
@@ -333,8 +338,16 @@ impl ChatWidget {
                 .map(|channels| channels.as_slice().to_vec()),
         };
         std::thread::spawn(move || {
-            let result = RealtimeWebrtcSession::start(abort_registration, selection)
-                .map_err(|error| error.to_string());
+            let result =
+                RealtimeWebrtcSession::start(abort_registration, selection).map_err(|error| {
+                    RealtimeWebrtcStartupFailure {
+                        cause: error
+                            .downcast_ref::<codex_realtime_webrtc::ConnectionError>()
+                            .copied()
+                            .unwrap_or(codex_realtime_webrtc::ConnectionError::Failed),
+                        message: error.to_string(),
+                    }
+                });
             app_event_tx.send(AppEvent::RealtimeWebrtcOfferCreated {
                 thread_id,
                 attempt_id,
@@ -352,7 +365,7 @@ impl ChatWidget {
         ) {
             return;
         }
-        self.finish_realtime_session_metrics();
+        self.capture_realtime_session_duration();
         self.restore_all_undelivered_realtime_speech();
 
         // Stopping may prevent final transcript events from arriving.
@@ -368,7 +381,7 @@ impl ChatWidget {
                 return;
             };
             if !self.submit_op(AppCommand::RealtimeConversationStop { thread_id }) {
-                self.record_realtime_failure();
+                self.record_realtime_failure(RealtimeFailureCause::LocalRequest);
                 self.reset_realtime_conversation();
             }
         } else {
@@ -383,7 +396,7 @@ impl ChatWidget {
         &mut self,
         thread_id: ThreadId,
         attempt_id: u64,
-        result: Result<StartedRealtimeWebrtcSession, String>,
+        result: Result<StartedRealtimeWebrtcSession, RealtimeWebrtcStartupFailure>,
     ) {
         if self.realtime_conversation.phase != RealtimeConversationPhase::Starting
             || self.realtime_conversation.attempt_id != attempt_id
@@ -397,7 +410,10 @@ impl ChatWidget {
         let offer = match result {
             Ok(offer) => offer,
             Err(error) => {
-                self.on_realtime_error(format!("Failed to start voice mode: {error}"));
+                self.on_realtime_error(
+                    format!("Failed to start voice mode: {}", error.message),
+                    error.cause.into(),
+                );
                 return;
             }
         };
@@ -405,8 +421,18 @@ impl ChatWidget {
         if self.realtime_conversation.microphone_muted
             && let Err(error) = offer.handle.set_microphone_muted(/*muted*/ true)
         {
+            let failure = offer.handle.take_error();
             offer.handle.close();
-            self.on_realtime_error(format!("Failed to restore microphone mute: {error}"));
+            let (message, cause) = match failure {
+                Some((cause, error)) => {
+                    (format!("Voice conversation failed: {error}"), cause.into())
+                }
+                None => (
+                    format!("Failed to restore microphone mute: {error}"),
+                    RealtimeFailureCause::AudioControls,
+                ),
+            };
+            self.on_realtime_error(message, cause);
             return;
         }
         self.realtime_conversation.handle = Some(offer.handle);
@@ -418,7 +444,7 @@ impl ChatWidget {
             thread_id,
             offer_sdp: offer.offer_sdp.into(),
         }) {
-            self.record_realtime_failure();
+            self.record_realtime_failure(RealtimeFailureCause::LocalRequest);
             self.reset_realtime_conversation();
         }
     }
@@ -475,7 +501,7 @@ impl ChatWidget {
                 self.realtime_conversation.startup_retry = StartupRetry::WaitingForStop;
                 self.refresh_terminal_title();
                 if !self.submit_op(AppCommand::RealtimeConversationStop { thread_id }) {
-                    self.record_realtime_failure();
+                    self.record_realtime_failure(RealtimeFailureCause::LocalRequest);
                     self.reset_realtime_conversation();
                 } else {
                     self.add_info_message(
@@ -485,7 +511,22 @@ impl ChatWidget {
                 }
                 return;
             }
-            self.on_realtime_error(format!("Failed to connect voice mode: {error}"));
+            let stored_error = self
+                .realtime_conversation
+                .handle
+                .as_ref()
+                .and_then(RealtimeWebrtcSessionHandle::take_error);
+            let (message, cause) = match stored_error {
+                Some((cause, message)) => (
+                    format!("Voice conversation failed: {message}"),
+                    cause.into(),
+                ),
+                None => (
+                    format!("Failed to connect voice mode: {error}"),
+                    error.into(),
+                ),
+            };
+            self.on_realtime_error(message, cause);
             return;
         }
 
@@ -1005,7 +1046,10 @@ impl ChatWidget {
             text: text.into(),
         }) {
             self.restore_undelivered_realtime_speech(delivery_id);
-            self.on_realtime_error("Failed to deliver the voice response.".to_string());
+            self.on_realtime_error(
+                "Failed to deliver the voice response.".to_string(),
+                RealtimeFailureCause::SpeechDelivery,
+            );
         } else {
             self.realtime_conversation.pending_speech.retain(|pending| {
                 pending.turn_id != turn_id || pending.state != PendingSpeechState::AwaitingTurn
@@ -1656,29 +1700,18 @@ impl ChatWidget {
         cells
     }
 
-    pub(crate) fn record_realtime_failure(&mut self) {
-        if self.realtime_conversation.phase == RealtimeConversationPhase::Inactive
-            || self.realtime_conversation.failure_recorded
-        {
-            return;
-        }
-        self.realtime_conversation.failure_recorded = true;
-        self.session_telemetry
-            .counter("codex.voice.session.failure", /*inc*/ 1, &[]);
-    }
-
     pub(super) fn realtime_retry_cleanup_pending(&self) -> bool {
         self.realtime_conversation.startup_retry == StartupRetry::WaitingForStop
     }
 
-    pub(crate) fn on_realtime_error(&mut self, message: String) {
+    pub(crate) fn on_realtime_error(&mut self, message: String, cause: RealtimeFailureCause) {
         if self.realtime_conversation.phase == RealtimeConversationPhase::Inactive {
             return;
         }
         if self.realtime_conversation.phase != RealtimeConversationPhase::Stopping
             || self.realtime_retry_cleanup_pending()
         {
-            self.record_realtime_failure();
+            self.record_realtime_failure(cause);
         }
         self.stop_realtime_conversation();
         self.add_realtime_error(message);
@@ -1717,7 +1750,13 @@ impl ChatWidget {
         if retry_thread_id.is_none()
             && (reason.is_none() || matches!(reason.as_deref(), Some("transport_closed" | "error")))
         {
-            self.record_realtime_failure();
+            let cause = match reason.as_deref() {
+                Some("transport_closed") => RealtimeFailureCause::TransportClosed,
+                Some("error") => RealtimeFailureCause::Backend,
+                None => RealtimeFailureCause::UnknownClose,
+                Some(_) => RealtimeFailureCause::Backend,
+            };
+            self.record_realtime_failure(cause);
         }
         let failed = self.realtime_conversation.failure_recorded;
         self.reset_realtime_conversation();
@@ -1748,14 +1787,28 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn capture_realtime_session_duration(&mut self) {
+        if self.realtime_conversation.finished_duration.is_none()
+            && let Some(active_since) = self.realtime_conversation.active_since.take()
+        {
+            self.realtime_conversation.finished_duration = Some(active_since.elapsed());
+        }
+    }
+
     fn finish_realtime_session_metrics(&mut self) {
-        if let Some(active_since) = self.realtime_conversation.active_since.take() {
+        self.capture_realtime_session_duration();
+        if let Some(duration) = self.realtime_conversation.finished_duration.take() {
+            let outcome = if self.realtime_conversation.failure_recorded {
+                "failure"
+            } else {
+                "success"
+            };
             self.session_telemetry
                 .counter("codex.voice.session.ended", /*inc*/ 1, &[]);
             self.session_telemetry.record_duration(
                 "codex.voice.session.duration",
-                active_since.elapsed(),
-                &[],
+                duration,
+                &[("outcome", outcome)],
             );
         }
     }

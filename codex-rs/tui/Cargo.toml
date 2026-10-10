@@ -181,6 +181,7 @@ chrono = { workspace = true, features = ["serde"] }
 futures = { workspace = true }
 http = { workspace = true }
 insta = { workspace = true }
+opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 serial_test = { workspace = true }

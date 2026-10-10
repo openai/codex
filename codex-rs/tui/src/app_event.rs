@@ -69,6 +69,12 @@ use codex_realtime_webrtc::StartedRealtimeWebrtcSession;
 
 use crate::history_cell::HistoryCell;
 
+#[derive(Debug)]
+pub(crate) struct RealtimeWebrtcStartupFailure {
+    pub message: String,
+    pub cause: codex_realtime_webrtc::ConnectionError,
+}
+
 /// Global voice controls always apply to the one call's owner.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum VoiceControl {
@@ -1233,7 +1239,7 @@ pub(crate) enum AppEvent {
     RealtimeWebrtcOfferCreated {
         thread_id: ThreadId,
         attempt_id: u64,
-        result: Result<StartedRealtimeWebrtcSession, String>,
+        result: Result<StartedRealtimeWebrtcSession, RealtimeWebrtcStartupFailure>,
     },
 
     /// Result of establishing the WebRTC connection for an active voice attempt.

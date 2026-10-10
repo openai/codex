@@ -43,7 +43,32 @@ fn controls_preserve_order_and_independent_settings_and_overflow_closes() {
     }
     assert!(handle.set_microphone_muted(/*muted*/ false).is_err());
     assert!(handle.0.stop.is_aborted());
-    assert!(handle.take_error().is_some());
+    assert_eq!(
+        handle.take_error(),
+        Some((
+            ConnectionError::Failed,
+            "Voice control channel unavailable.".into()
+        ))
+    );
+}
+
+#[test]
+fn failed_control_send_preserves_existing_error() {
+    let (handle, commands, _) = handles();
+    *handle.0.state.error.lock().unwrap() = Some((
+        ConnectionError::AudioSession,
+        "voice audio session stopped unexpectedly".into(),
+    ));
+    drop(commands);
+
+    assert!(handle.set_microphone_muted(/*muted*/ true).is_err());
+    assert_eq!(
+        handle.take_error(),
+        Some((
+            ConnectionError::AudioSession,
+            "voice audio session stopped unexpectedly".into()
+        ))
+    );
 }
 
 #[tokio::test]

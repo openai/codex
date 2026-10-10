@@ -39,7 +39,7 @@ enum Command {
 struct State {
     microphone: AtomicU16,
     speaker: AtomicU16,
-    error: Mutex<Option<String>>,
+    error: Mutex<Option<(ConnectionError, String)>>,
 }
 
 struct Owner {
@@ -137,6 +137,7 @@ impl RealtimeWebrtcSession {
         std::thread::Builder::new()
             .name("voice-session".into())
             .spawn(move || {
+                let mut receiver = receiver;
                 let task = async {
                     let host = report_failure(
                         ConnectionError::HelperStartup,
@@ -151,7 +152,7 @@ impl RealtimeWebrtcSession {
                     offer
                         .send(Ok(sdp.into_sdp()))
                         .map_err(|_| anyhow::anyhow!("voice startup cancelled"))?;
-                    run(host, receiver, &state, &controls, selection).await
+                    run(host, &mut receiver, &state, &controls, selection).await
                 };
                 let result = runtime.block_on(Abortable::new(Abortable::new(task, abort), stopped));
                 if let Ok(Ok(Err(error))) = result {
@@ -164,7 +165,7 @@ impl RealtimeWebrtcSession {
                         .error
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                        Some(failure.to_string());
+                        Some((failure, failure.to_string()));
                 }
             })?;
         let offer_sdp = result
@@ -232,7 +233,7 @@ impl RealtimeWebrtcSessionHandle {
         }
     }
 
-    pub fn take_error(&self) -> Option<String> {
+    pub fn take_error(&self) -> Option<(ConnectionError, String)> {
         self.0
             .state
             .error
@@ -251,13 +252,18 @@ impl RealtimeWebrtcSessionHandle {
 
     fn send(&self, command: Command) -> Result<()> {
         if self.0.sender.try_send(command).is_err() {
-            *self
+            let mut error = self
                 .0
                 .state
                 .error
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                Some("Voice control channel unavailable.".into());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if error.is_none() {
+                *error = Some((
+                    ConnectionError::Failed,
+                    "Voice control channel unavailable.".into(),
+                ));
+            }
             self.close();
             anyhow::bail!("voice control channel unavailable");
         }
@@ -267,7 +273,7 @@ impl RealtimeWebrtcSessionHandle {
 
 async fn run(
     mut host: VoiceHost,
-    mut commands: mpsc::Receiver<Command>,
+    commands: &mut mpsc::Receiver<Command>,
     state: &State,
     controls: &Mutex<AudioControls>,
     selection: AudioDeviceSelection,
@@ -283,7 +289,7 @@ async fn run(
                     let startup = async {
                         let mut host = report_failure(ConnectionError::Transport, host.apply_answer(sdp).await)?;
                         host = report_failure(ConnectionError::AudioDevices, host.open_devices(selection.clone()).await)?;
-                        let applied = startup_controls(&mut commands, controls, |initial| {
+                        let applied = startup_controls(commands, controls, |initial| {
                             host.begin_audio_controls(initial)
                         });
                         let applied = report_failure(ConnectionError::AudioControls, applied)?;
@@ -297,7 +303,7 @@ async fn run(
                                 .copied().unwrap_or(ConnectionError::Failed);
                             let _ = complete.send(Err(failure));
                             // This failure is delivered by the startup completion only.
-                            return Ok(());
+                            return std::future::pending().await;
                         }
                     };
                     connected = true;
