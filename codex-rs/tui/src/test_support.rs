@@ -1,5 +1,7 @@
 //! Test-only helpers shared across the TUI crate.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::LazyLock;
 
 use codex_models_manager::bundled_models_response;
@@ -53,3 +55,18 @@ where
             panic!("app-server wire value should map to legacy helper type: {err}")
         })
 }
+
+/// Construct a large test future outside its caller's poll frame before boxing it.
+/// `Box::pin(large_future())` can still reserve the future's full size on that stack.
+#[inline(never)]
+pub(crate) fn box_future<F: Future>(create: impl FnOnce() -> F) -> Pin<Box<F>> {
+    Box::pin(create())
+}
+
+// Keep boxed call sites shaped like ordinary calls, without closure indentation.
+macro_rules! boxed_future {
+    ($future:expr) => {
+        $crate::test_support::box_future(|| $future)
+    };
+}
+pub(crate) use boxed_future;

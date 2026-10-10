@@ -114,6 +114,7 @@ use crate::app_backtrack::BacktrackState;
 use crate::app_backtrack::nth_user_position;
 use crate::app_backtrack::user_count;
 use crate::app_event::HistoryBatchEntryResponse;
+use crate::test_support::boxed_future;
 
 async fn drain_managed_worktree_start(app: &mut App, server: &mut AppServerSession) {
     if let Some((mode, name)) = app.pending_start_managed_worktree.take() {
@@ -1380,7 +1381,8 @@ async fn replay_thread_snapshot_restores_the_matching_safety_buffer_prompt() {
         store.snapshot()
     };
 
-    let (mut chat_widget, _app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    let (mut chat_widget, _app_event_tx, _rx, _op_rx) =
+        boxed_future!(make_chatwidget_manual_with_sender()).await;
     chat_widget.handle_thread_session(test_thread_session(
         ThreadId::new(),
         test_path_buf("/tmp/other-project"),
@@ -1639,7 +1641,8 @@ async fn replay_thread_snapshot_in_progress_turn_restores_running_state_without_
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let thread_id = ThreadId::new();
     let session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
-    let (chat_widget, _app_event_tx, _rx, _new_op_rx) = make_chatwidget_manual_with_sender().await;
+    let (chat_widget, _app_event_tx, _rx, _new_op_rx) =
+        boxed_future!(make_chatwidget_manual_with_sender()).await;
     app.chat_widget = chat_widget;
     app.chat_widget.handle_thread_session(session);
 
@@ -1926,7 +1929,8 @@ async fn replay_thread_snapshot_restores_collaboration_mode_without_input() {
         .capture_thread_input_state()
         .expect("expected collaboration-only input state");
 
-    let (chat_widget, _app_event_tx, _rx, _new_op_rx) = make_chatwidget_manual_with_sender().await;
+    let (chat_widget, _app_event_tx, _rx, _new_op_rx) =
+        boxed_future!(make_chatwidget_manual_with_sender()).await;
     app.chat_widget = chat_widget;
     app.chat_widget
         .set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
@@ -6179,7 +6183,8 @@ async fn ctrl_l_clears_owned_history_and_preserves_the_draft() -> Result<()> {
 }
 
 async fn make_test_app() -> Box<App> {
-    let (mut chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    let (mut chat_widget, app_event_tx, _rx, _op_rx) =
+        boxed_future!(make_chatwidget_manual_with_sender()).await;
     let test_codex_home = chat_widget.test_codex_home.take();
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
@@ -6298,7 +6303,8 @@ pub(super) async fn make_test_app_with_channels() -> (
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) {
-    let (mut chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
+    let (mut chat_widget, app_event_tx, rx, op_rx) =
+        boxed_future!(make_chatwidget_manual_with_sender()).await;
     let test_codex_home = chat_widget.test_codex_home.take();
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
@@ -8404,6 +8410,11 @@ async fn remembered_current_cwd_stays_at_launch_across_in_app_resumes() -> Resul
 
 #[tokio::test]
 async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Result<()> {
+    // Allocate the whole scenario before Tokio polls it on the test thread.
+    boxed_future!(prompt_edit_reverts_earlier_and_first_visible_prompts_in_place_scenario()).await
+}
+
+async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place_scenario() -> Result<()> {
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::models::ImageReference;

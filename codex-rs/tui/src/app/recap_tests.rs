@@ -952,7 +952,7 @@ fn track_in_flight_recap(app: &mut App, thread_id: ThreadId) -> (RecapRequest, T
     (request, temporary_thread_id)
 }
 
-async fn app_with_visible_thread(thread_id: ThreadId) -> App {
+async fn app_with_visible_thread(thread_id: ThreadId) -> Box<App> {
     let mut app = make_test_app().await;
     app.active_thread_id = Some(thread_id);
     app

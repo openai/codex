@@ -3,21 +3,24 @@
 //! This module keeps heavyweight `App` construction and config-inspection helpers available to
 //! focused sibling test modules without making `app/tests.rs` the only practical place to test
 //! app-owned behavior.
+//! Return the large fixture on the heap so async scenarios do not embed it in their stack frames.
 
 use super::*;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
+use crate::test_support::boxed_future;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_models_manager::test_support::get_model_offline_for_tests;
 
-pub(crate) async fn make_test_app() -> App {
-    let (mut chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+pub(crate) async fn make_test_app() -> Box<App> {
+    let (mut chat_widget, app_event_tx, _rx, _op_rx) =
+        boxed_future!(make_chatwidget_manual_with_sender()).await;
     let test_codex_home = chat_widget.test_codex_home.take();
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
-    App {
+    Box::new(App {
         feature_write_lock: Arc::default(),
         model_catalog: chat_widget.model_catalog(),
         session_telemetry,
@@ -121,7 +124,7 @@ pub(crate) async fn make_test_app() -> App {
         pending_hook_enabled_writes: HashMap::new(),
         recap: recap::RecapState::default(),
         _test_codex_home: test_codex_home,
-    }
+    })
 }
 
 fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {

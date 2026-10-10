@@ -1,5 +1,6 @@
 use super::*;
 use crate::legacy_core::config::ConfigOverrides;
+use crate::test_support::boxed_future;
 use codex_config::LoaderOverrides;
 use pretty_assertions::assert_eq;
 use std::fs;
@@ -88,6 +89,11 @@ async fn start_server(
 #[tokio::test]
 async fn creation_attaches_to_original_task_and_survives_service_restart() -> color_eyre::Result<()>
 {
+    boxed_future!(creation_attaches_to_original_task_and_survives_service_restart_scenario()).await
+}
+
+async fn creation_attaches_to_original_task_and_survives_service_restart_scenario()
+-> color_eyre::Result<()> {
     let home = tempfile::tempdir()?;
     let responses =
         app_test_support::create_mock_responses_server_repeating_assistant("Ready").await;

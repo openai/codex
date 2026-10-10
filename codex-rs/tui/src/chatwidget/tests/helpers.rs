@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::boxed_future;
 use codex_app_server_protocol::ImageGenerationItem;
 use codex_app_server_protocol::PluginAvailability;
 use codex_utils_absolute_path::test_support::PathExt;
@@ -375,7 +376,7 @@ pub(crate) async fn make_chatwidget_manual_with_sender() -> (
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) {
-    let (widget, rx, op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (widget, rx, op_rx) = boxed_future!(make_chatwidget_manual(/*model_override*/ None)).await;
     let app_event_tx = AppEventSender::new(widget.app_event_tx.app_event_tx.clone());
     (widget, app_event_tx, rx, op_rx)
 }
