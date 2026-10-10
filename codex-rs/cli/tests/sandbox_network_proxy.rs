@@ -1,11 +1,14 @@
 #![cfg(target_os = "linux")]
 
 use std::net::TcpListener;
-use std::time::Duration;
-use std::time::Instant;
 
 use anyhow::Result;
 use tempfile::TempDir;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const BWRAP_UNAVAILABLE_ERR: &str = "bubblewrap is unavailable";
 
@@ -71,50 +74,17 @@ mode = "full"
     Ok(())
 }
 
-#[test]
-fn sandbox_with_network_proxy_allows_explicit_loopback_access() -> Result<()> {
+#[tokio::test]
+async fn sandbox_with_network_proxy_allows_explicit_loopback_access() -> Result<()> {
     let codex_home = TempDir::new()?;
     let listener = TcpListener::bind("127.0.0.2:0")?;
     let port = listener.local_addr()?.port();
-    listener.set_nonblocking(true)?;
-    let server = std::thread::spawn(move || -> std::io::Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    // Closing with unread request bytes can reset the connection and yield a 502.
-                    stream.set_nonblocking(false)?;
-                    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-                    let mut request = Vec::new();
-                    let mut buffer = [0_u8; 1024];
-                    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                        let bytes_read = std::io::Read::read(&mut stream, &mut buffer)?;
-                        if bytes_read == 0 || request.len() + bytes_read > 64 * 1024 {
-                            return Err(std::io::Error::other(
-                                "incomplete or oversized loopback request headers",
-                            ));
-                        }
-                        request.extend_from_slice(&buffer[..bytes_read]);
-                    }
-                    std::io::Write::write_all(
-                        &mut stream,
-                        b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n",
-                    )?;
-                    return Ok(());
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            "timed out waiting for allowlisted loopback request",
-                        ));
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(err) => return Err(err),
-            }
-        }
-    });
+    let server = MockServer::builder().listener(listener).start().await;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
     std::fs::write(
         codex_home.path().join("config.toml"),
         r#"
@@ -138,7 +108,7 @@ allow_local_binding = false
     )?;
 
     let url = format!("http://127.0.0.2:{port}/");
-    let output = std::process::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+    let output = tokio::process::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
         .env("CODEX_HOME", codex_home.path())
         .args([
             "sandbox",
@@ -155,7 +125,8 @@ allow_local_binding = false
             "4",
             url.as_str(),
         ])
-        .output()?;
+        .output()
+        .await?;
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     if stderr.contains(BWRAP_UNAVAILABLE_ERR) {
@@ -170,7 +141,5 @@ allow_local_binding = false
         String::from_utf8_lossy(&output.stdout),
         stderr,
     );
-    server.join().expect("loopback server panicked")?;
-
     Ok(())
 }

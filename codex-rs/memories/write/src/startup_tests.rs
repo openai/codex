@@ -143,7 +143,7 @@ async fn memories_startup_fails_consolidation_when_worker_creates_extension_syml
             ev_assistant_message("msg-phase2-complete", "phase2 complete"),
             ev_completed("resp-phase2-complete"),
         ]),
-        sse_failed("resp-phase2-failed", "server_error", "worker failed"),
+        sse_failed("resp-phase2-failed", "invalid_prompt", "worker failed"),
     ];
 
     for response in responses {

@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 fn service() -> ElicitationClientService {
-    let mut info = ClientInfo::default();
+    let mut info = ClientConfig::default();
     info.capabilities.extensions = Some(
         [(
             OPENAI_ELICITATION_EXTENSION_ID.into(),

@@ -281,7 +281,7 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
             "2",
         ])
         .stdin(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::inherit())
         .kill_on_drop(true);
 
     let mut child = command.spawn()?;
@@ -290,7 +290,9 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
         .take()
         .ok_or_else(|| anyhow::anyhow!("remote exec-server stdin was not piped"))?;
 
-    let environment_websocket = accept_parent_lifetime_websocket(&listener, TEST_TIMEOUT).await?;
+    let environment_websocket = accept_parent_lifetime_websocket(&listener, TEST_TIMEOUT)
+        .await
+        .context("remote executor failed to attach")?;
     // Remote startup must capture the version before registration, not on the first initialize.
     std::fs::write(&manifest, r#"{"version":"9.9.9"}"#)?;
     let executor_public_key = registered_parent_lifetime_executor_public_key(&registry).await?;
@@ -311,7 +313,9 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
     };
     let client_task =
         tokio::spawn(async move { ExecServerClient::connect_noise_rendezvous(harness_args).await });
-    let harness_websocket = accept_parent_lifetime_websocket(&listener, TEST_TIMEOUT).await?;
+    let harness_websocket = accept_parent_lifetime_websocket(&listener, TEST_TIMEOUT)
+        .await
+        .context("harness failed to attach")?;
     let relay_task = tokio::spawn(proxy_parent_lifetime_relay(
         environment_websocket,
         harness_websocket,
@@ -342,9 +346,12 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
 
     #[cfg(windows)]
     let argv = vec![
-        "cmd.exe",
-        "/C",
-        "if defined CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE (exit /b 1) else ping -n 61 127.0.0.1",
+        "powershell.exe",
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "if (Test-Path Env:CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE) { exit 1 }; Start-Sleep -Seconds 60",
     ];
     #[cfg(not(windows))]
     let argv = vec![
@@ -385,15 +392,10 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
 
     drop(stdin);
 
-    let output = tokio::time::timeout(TEST_TIMEOUT, child.wait_with_output())
+    let status = tokio::time::timeout(TEST_TIMEOUT, child.wait())
         .await
         .map_err(|_| anyhow::anyhow!("remote exec-server did not exit after stdin closed"))??;
-    anyhow::ensure!(
-        output.status.success(),
-        "remote exec-server exited with {}; stderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
-    );
+    anyhow::ensure!(status.success(), "remote exec-server exited with {status}");
 
     relay_task.abort();
     let _ = relay_task.await;
