@@ -1,7 +1,6 @@
 use serde_json::Value as JsonValue;
 
 use super::CompletionState;
-use super::EXIT_SENTINEL;
 use super::RuntimeState;
 use super::value::json_to_v8;
 use super::value::value_to_error_text;
@@ -32,9 +31,6 @@ pub(super) fn evaluate_main_module(
         Some(result) => result,
         None => {
             if let Some(exception) = tc.exception() {
-                if is_exit_exception(&mut tc, exception) {
-                    return Ok(None);
-                }
                 return Err(value_to_error_text(&mut tc, exception));
             }
             return Err("unknown code mode exception".to_string());
@@ -49,18 +45,6 @@ pub(super) fn evaluate_main_module(
     }
 
     Ok(None)
-}
-
-fn is_exit_exception(
-    scope: &mut v8::PinScope<'_, '_>,
-    exception: v8::Local<'_, v8::Value>,
-) -> bool {
-    scope
-        .get_slot::<RuntimeState>()
-        .map(|state| state.exit_requested)
-        .unwrap_or(false)
-        && exception.is_string()
-        && exception.to_rust_string_lossy(scope) == EXIT_SENTINEL
 }
 
 pub(super) fn resolve_tool_response(
@@ -106,35 +90,27 @@ pub(super) fn completion_state(
     scope: &mut v8::PinScope<'_, '_>,
     pending_promise: Option<&v8::Global<v8::Promise>>,
 ) -> CompletionState {
-    let stored_value_writes = scope
+    // Termination during a microtask can leave the module promise pending.
+    // This isolate belongs to the exiting cell; never pump or await it again.
+    if scope
         .get_slot::<RuntimeState>()
-        .map(|state| state.stored_value_writes.clone())
-        .unwrap_or_default();
+        .is_some_and(|state| state.exit_requested)
+    {
+        return CompletionState::Completed { error_text: None };
+    }
 
     let Some(pending_promise) = pending_promise else {
-        return CompletionState::Completed {
-            stored_value_writes,
-            error_text: None,
-        };
+        return CompletionState::Completed { error_text: None };
     };
 
     let promise = v8::Local::new(scope, pending_promise);
     match promise.state() {
         v8::PromiseState::Pending => CompletionState::Pending,
-        v8::PromiseState::Fulfilled => CompletionState::Completed {
-            stored_value_writes,
-            error_text: None,
-        },
+        v8::PromiseState::Fulfilled => CompletionState::Completed { error_text: None },
         v8::PromiseState::Rejected => {
             let result = promise.result(scope);
-            let error_text = if is_exit_exception(scope, result) {
-                None
-            } else {
-                Some(value_to_error_text(scope, result))
-            };
             CompletionState::Completed {
-                stored_value_writes,
-                error_text,
+                error_text: Some(value_to_error_text(scope, result)),
             }
         }
     }

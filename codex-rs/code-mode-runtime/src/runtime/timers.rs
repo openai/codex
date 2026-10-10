@@ -15,7 +15,7 @@ pub(super) struct ScheduledTimeout {
 pub(super) fn schedule_timeout(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments,
-) -> Result<u64, String> {
+) -> Result<Option<u64>, String> {
     let callback = args.get(0);
     if !callback.is_function() {
         return Err("setTimeout expects a function callback".to_string());
@@ -33,6 +33,10 @@ pub(super) fn schedule_timeout(
     let state = scope
         .get_slot_mut::<RuntimeState>()
         .ok_or_else(|| "runtime state unavailable".to_string())?;
+    // Converting the delay can execute JavaScript that calls exit().
+    if state.exit_requested {
+        return Ok(None);
+    }
     let timeout_id = state.next_timeout_id;
     state.next_timeout_id = state.next_timeout_id.saturating_add(1);
     let runtime_command_tx = state.runtime_command_tx.clone();
@@ -49,7 +53,7 @@ pub(super) fn schedule_timeout(
         },
     );
 
-    Ok(timeout_id)
+    Ok(Some(timeout_id))
 }
 
 pub(super) fn clear_timeout(
@@ -63,7 +67,9 @@ pub(super) fn clear_timeout(
     let Some(state) = scope.get_slot_mut::<RuntimeState>() else {
         return Err("runtime state unavailable".to_string());
     };
-    state.pending_timeouts.remove(&timeout_id);
+    if !state.exit_requested {
+        state.pending_timeouts.remove(&timeout_id);
+    }
     Ok(())
 }
 

@@ -4,6 +4,7 @@ use codex_code_mode_protocol::DEFAULT_IMAGE_DETAIL;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use codex_code_mode_protocol::ImageDetail;
 
+use super::RuntimeState;
 use super::audio::wav_duration_seconds;
 
 const IMAGE_HELPER_EXPECTS_MESSAGE: &str = "image expects a non-empty image URL string, an object with image_url and optional detail, or a raw MCP image block";
@@ -361,6 +362,15 @@ pub(super) fn value_to_error_text(
         && stack.is_string()
     {
         return stack.to_rust_string_lossy(scope);
+    }
+    // The stack getter can call exit() and V8 can clear its termination before
+    // returning here. Never enter a user-defined toString() after that.
+    if scope
+        .get_slot::<RuntimeState>()
+        .is_some_and(|state| state.exit_requested)
+    {
+        // send_scope_result reports this as successful exit and preserves prior stores.
+        return String::new();
     }
     value.to_rust_string_lossy(scope)
 }

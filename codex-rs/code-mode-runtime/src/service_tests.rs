@@ -578,6 +578,204 @@ async fn synchronous_exit_returns_successfully() {
 }
 
 #[tokio::test]
+async fn exit_stops_the_whole_cell_and_preserves_only_prior_writes() {
+    for (label, source) in [
+        ("exit inside infinite loop", r#"for (;;) { exit(); }"#),
+        ("infinite loop after exit", r#"exit(); for (;;) {}"#),
+        (
+            "invalid helper after exit",
+            r#"try { exit(); image(null); } catch { for (;;) {} }"#,
+        ),
+        (
+            "catch and finally",
+            r#"try { exit(); } catch { text("caught"); } finally { store("phase", "finally"); text("finally"); }"#,
+        ),
+        (
+            "queued microtask",
+            r#"Promise.resolve().then(() => { store("phase", "microtask"); text("microtask"); }); exit();"#,
+        ),
+        (
+            "unawaited promise",
+            r#"Promise.resolve().then(() => exit()).catch(() => text("caught")); await new Promise(() => {});"#,
+        ),
+        (
+            "async module",
+            r#"await Promise.resolve(); try { exit(); } finally { text("finally"); }"#,
+        ),
+        (
+            "parallel promises",
+            r#"await Promise.all([Promise.resolve().then(() => exit()), Promise.resolve().then(() => { store("phase", "sibling"); text("sibling"); })]);"#,
+        ),
+        (
+            "timer callback",
+            r#"setTimeout(() => { try { exit(); } catch { text("caught"); } finally { text("finally"); } }, 0); await new Promise(() => {});"#,
+        ),
+        (
+            "timer microtask",
+            r#"setTimeout(() => { Promise.resolve().then(() => exit()); }, 0); await new Promise(() => {});"#,
+        ),
+        (
+            "after awaited timer",
+            r#"await new Promise((resolve) => setTimeout(resolve, 0)); try { exit(); } catch { text("caught"); }"#,
+        ),
+        (
+            "text toJSON",
+            r#"try { text({ toJSON() { exit(); } }); } catch { text("caught"); } finally { text("finally"); }"#,
+        ),
+        (
+            "store toJSON",
+            r#"try { store("phase", { toJSON() { exit(); } }); } catch { text("caught"); } finally { text("finally"); }"#,
+        ),
+        (
+            "store key coercion",
+            r#"try { store({ toString() { exit(); } }, "late"); } catch { text("caught"); } finally { text("finally"); }"#,
+        ),
+        (
+            "image getter",
+            r#"try { image({ get image_url() { exit(); } }); } catch { text("caught"); } finally { text("finally"); }"#,
+        ),
+        (
+            "exception stack getter",
+            r#"store("phase", "before formatting");
+throw {
+    get stack() { store("phase", "before"); exit(); for (;;) {} },
+    toString() { for (;;) {} }
+};"#,
+        ),
+    ] {
+        let service = InProcessCodeModeSession::new();
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            execute(
+                &service,
+                ExecuteRequest {
+                    source: format!(
+                        r#"store("phase", "before"); text("before"); {source} store("phase", "after"); text("after");"#
+                    ),
+                    yield_time_ms: Some(30_000),
+                    ..execute_request("")
+                },
+            ),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("exit did not stop {label}"));
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                code_mode_host_duration: None,
+                cell_id: cell_id("1"),
+                content_items: vec![FunctionCallOutputContentItem::InputText {
+                    text: "before".to_string(),
+                }],
+                error_text: None,
+            },
+            "{label}"
+        );
+
+        let response = execute(
+            &service,
+            ExecuteRequest {
+                yield_time_ms: None,
+                ..execute_request(r#"text(load("phase"));"#)
+            },
+        )
+        .await;
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                code_mode_host_duration: None,
+                cell_id: cell_id("2"),
+                content_items: vec![FunctionCallOutputContentItem::InputText {
+                    text: "before".to_string(),
+                }],
+                error_text: None,
+            },
+            "{label}: next cell"
+        );
+    }
+}
+
+#[tokio::test]
+async fn exit_after_yield_and_tool_response_finishes_successfully() {
+    let delegate = Arc::new(ReleasableToolDelegate::default());
+    let service = InProcessCodeModeSession::new();
+    let yield_signal = CancellationToken::new();
+    let started = service
+        .execute(
+            ExecuteRequest {
+                enabled_tools: vec![echo_tool()],
+                source: r#"
+text("before yield");
+await tools.echo({});
+store("phase", "after tool");
+text("after tool");
+try { exit(); } catch { text("caught"); } finally { text("finally"); }
+text("after exit");
+"#
+                .to_string(),
+                yield_time_ms: Some(30_000),
+                ..execute_request("")
+            },
+            delegate.clone(),
+            Some(yield_signal.clone()),
+        )
+        .await
+        .unwrap();
+    let response = tokio::spawn(started.initial_response());
+    wait_until_tool_started(&delegate).await.unwrap();
+    yield_signal.cancel();
+    assert_eq!(
+        response.await.unwrap().unwrap(),
+        RuntimeResponse::Yielded {
+            code_mode_host_duration: None,
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "before yield".to_string(),
+            }],
+        }
+    );
+    delegate.release_tool();
+    assert_eq!(
+        service
+            .wait(
+                WaitRequest {
+                    cell_id: cell_id("1"),
+                    yield_time_ms: 30_000,
+                },
+                /*preempt*/ None,
+            )
+            .await
+            .unwrap(),
+        WaitOutcome::LiveCell(RuntimeResponse::Result {
+            code_mode_host_duration: None,
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "after tool".to_string(),
+            }],
+            error_text: None,
+        })
+    );
+    assert_eq!(
+        execute(
+            &service,
+            ExecuteRequest {
+                yield_time_ms: None,
+                ..execute_request(r#"text(load("phase"));"#)
+            },
+        )
+        .await,
+        RuntimeResponse::Result {
+            code_mode_host_duration: None,
+            cell_id: cell_id("2"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "after tool".to_string(),
+            }],
+            error_text: None,
+        }
+    );
+}
+
+#[tokio::test]
 async fn stored_values_are_shared_between_cells_but_not_sessions() {
     let first_session = InProcessCodeModeSession::new();
     let second_session = InProcessCodeModeSession::new();

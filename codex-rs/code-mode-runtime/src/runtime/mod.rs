@@ -24,8 +24,6 @@ use tokio::sync::mpsc;
 use crate::TaskFailureHandler;
 use crate::v8_init::ensure_v8_initialized;
 
-const EXIT_SENTINEL: &str = "__codex_code_mode_exit__";
-
 #[derive(Debug)]
 pub(crate) enum RuntimeCommand {
     ToolResponse { id: String, result: JsonValue },
@@ -174,10 +172,7 @@ pub(super) struct RuntimeState {
 
 pub(super) enum CompletionState {
     Pending,
-    Completed {
-        stored_value_writes: HashMap<String, Arc<JsonValue>>,
-        error_text: Option<String>,
-    },
+    Completed { error_text: Option<String> },
 }
 
 fn run_runtime(
@@ -231,17 +226,14 @@ fn run_runtime(
     let pending_promise = match module_loader::evaluate_main_module(scope, &config.source) {
         Ok(pending_promise) => pending_promise,
         Err(error_text) => {
-            capture_scope_send_error(scope, &event_tx, Some(error_text));
+            send_scope_result(scope, &event_tx, Some(error_text));
             return;
         }
     };
 
     match module_loader::completion_state(scope, pending_promise.as_ref()) {
-        CompletionState::Completed {
-            stored_value_writes,
-            error_text,
-        } => {
-            send_result(&event_tx, stored_value_writes, error_text);
+        CompletionState::Completed { error_text } => {
+            send_scope_result(scope, &event_tx, error_text);
             return;
         }
         CompletionState::Pending => {}
@@ -257,7 +249,7 @@ fn run_runtime(
                 if let Err(error_text) =
                     module_loader::resolve_tool_response(scope, &id, Ok(result))
                 {
-                    capture_scope_send_error(scope, &event_tx, Some(error_text));
+                    send_scope_result(scope, &event_tx, Some(error_text));
                     return;
                 }
             }
@@ -265,13 +257,13 @@ fn run_runtime(
                 if let Err(runtime_error) =
                     module_loader::resolve_tool_response(scope, &id, Err(error_text))
                 {
-                    capture_scope_send_error(scope, &event_tx, Some(runtime_error));
+                    send_scope_result(scope, &event_tx, Some(runtime_error));
                     return;
                 }
             }
             RuntimeCommand::TimeoutFired { id } => {
                 if let Err(runtime_error) = timers::invoke_timeout_callback(scope, id) {
-                    capture_scope_send_error(scope, &event_tx, Some(runtime_error));
+                    send_scope_result(scope, &event_tx, Some(runtime_error));
                     return;
                 }
             }
@@ -280,11 +272,8 @@ fn run_runtime(
 
         scope.perform_microtask_checkpoint();
         match module_loader::completion_state(scope, pending_promise.as_ref()) {
-            CompletionState::Completed {
-                stored_value_writes,
-                error_text,
-            } => {
-                send_result(&event_tx, stored_value_writes, error_text);
+            CompletionState::Completed { error_text } => {
+                send_scope_result(scope, &event_tx, error_text);
                 return;
             }
             CompletionState::Pending => {}
@@ -325,16 +314,18 @@ fn next_runtime_command(
     }
 }
 
-fn capture_scope_send_error(
+fn send_scope_result(
     scope: &mut v8::PinScope<'_, '_>,
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
     error_text: Option<String>,
 ) {
-    let stored_value_writes = scope
-        .get_slot::<RuntimeState>()
+    // Error rendering can itself run JS getters, including exit(). Capture
+    // the result only after every call into the exiting isolate has returned.
+    let state = scope.get_slot::<RuntimeState>();
+    let stored_value_writes = state
         .map(|state| state.stored_value_writes.clone())
         .unwrap_or_default();
-
+    let error_text = error_text.filter(|_| !state.is_some_and(|state| state.exit_requested));
     send_result(event_tx, stored_value_writes, error_text);
 }
 
