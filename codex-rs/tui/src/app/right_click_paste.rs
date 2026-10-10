@@ -36,7 +36,7 @@ impl PasteEnvironment {
         }
     }
 
-    fn allows(&self, mode: RightClickPaste) -> bool {
+    pub(super) fn allows(&self, mode: RightClickPaste) -> bool {
         if self.ssh || self.vscode == VscodeDetection::VsCode {
             return false;
         }

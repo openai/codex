@@ -28,7 +28,7 @@ async fn blocked_copy_allows_overlay_exit_rejects_backlog_and_wakes_completion()
                 released.recv().unwrap();
                 (Ok(CopyOutcome::Copied(Some(ClipboardLease::test()))), None)
             },
-            |_| unreachable!("copy-only backend"),
+            || |_| unreachable!("copy-only backend"),
         )
         .unwrap();
     let mut app = Box::new(crate::app::test_support::make_test_app().await);
@@ -137,7 +137,7 @@ fn dropping_worker_does_not_wait_for_blocked_backend() {
                 finished.send(()).unwrap();
                 (Err("unavailable".into()), None)
             },
-            |_| unreachable!("copy-only backend"),
+            || |_| unreachable!("copy-only backend"),
         )
         .unwrap();
     worker
@@ -178,7 +178,7 @@ async fn expired_setup_discards_delivery_and_keeps_worker_busy_until_it_returns(
                     });
                     (outcome, None)
                 },
-                |_| unreachable!("copy-only backend"),
+                || |_| unreachable!("copy-only backend"),
             )
             .unwrap();
         worker
@@ -293,10 +293,12 @@ async fn right_click_paste_uses_normal_input_and_discards_stale_reads() {
         .start(
             tui.frame_requester(),
             |_, _, _| unreachable!("no selection"),
-            move |_| {
-                started.send(()).unwrap();
-                released.recv().unwrap();
-                Ok("café\r\nsecond line\n".into())
+            move || {
+                move |_| {
+                    started.send(()).unwrap();
+                    released.recv().unwrap();
+                    Ok("café\r\nsecond line\n".into())
+                }
             },
         )
         .unwrap();
@@ -380,9 +382,11 @@ fn expired_text_read_rejects_backlog_and_discards_late_completion() {
         .start(
             FrameRequester::test_dummy(),
             |_, _, _| unreachable!(),
-            move |_| {
-                released.recv().unwrap();
-                Ok("late".into())
+            move || {
+                move |_| {
+                    released.recv().unwrap();
+                    Ok("late".into())
+                }
             },
         )
         .unwrap();
