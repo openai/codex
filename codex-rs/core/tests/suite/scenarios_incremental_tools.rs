@@ -3,6 +3,7 @@
 use anyhow::Result;
 use codex_features::Feature;
 use codex_protocol::openai_models::CodeModeToolMessages;
+use codex_protocol::openai_models::IncrementalToolMessages;
 use codex_protocol::openai_models::ToolMessage;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
@@ -108,8 +109,12 @@ async fn incremental_tools_append_changed_catalog_without_rewriting_history(
     Ok(())
 }
 
+#[test_case(false; "bundled")]
+#[test_case(true; "catalog_messages")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_removal_appends_a_standalone_notice_without_rewriting_history() -> Result<()> {
+async fn tool_removal_appends_a_standalone_notice_without_rewriting_history(
+    catalog_messages: bool,
+) -> Result<()> {
     skip_if_wine_exec!(
         Ok(()),
         "requires a Windows test_stdio_server in the Wine-exec environment"
@@ -118,29 +123,53 @@ async fn tool_removal_appends_a_standalone_notice_without_rewriting_history() ->
     let server = responses::start_mock_server().await;
     let command = remote_aware_stdio_server_bin()?;
     let environment_id = remote_aware_environment_id();
-    let server_config = |enabled_tools: &[&str]| {
+    let server_config = |enabled_tools: &[&str], instructions: &str| {
         serde_json::from_value(json!({
             "command": command,
             "environment_id": environment_id,
-            "env": {"MCP_TEST_SERVER_INSTRUCTIONS": "Echo service instructions."},
+            "env": {"MCP_TEST_SERVER_INSTRUCTIONS": instructions},
             "enabled_tools": enabled_tools,
             "default_tools_approval_mode": "approve",
         }))
     };
-    let initial_server = server_config(&["echo", "cwd"])?;
-    let reduced_server = server_config(&["echo"])?;
-    let restored_server = server_config(&["echo", "cwd"])?;
+    let initial_server = server_config(&["echo", "cwd"], "Echo service instructions.")?;
+    let reduced_server = server_config(&["echo"], "Echo service instructions.")?;
+    let restored_server = server_config(&["echo", "cwd"], "Echo service instructions.")?;
     let test = test_codex()
-        .with_model_info_override("gpt-5.5", |model| {
+        .with_model_info_override("gpt-5.5", move |model| {
             model.use_responses_lite = true;
             model.supports_search_tool = false;
             model.tool_mode = Some(ToolMode::Direct);
+            if catalog_messages {
+                model
+                    .model_messages
+                    .get_or_insert_default()
+                    .tools
+                    .get_or_insert_default()
+                    .incremental_tools = Some(IncrementalToolMessages {
+                    tool_update_hint: Some(
+                        "Catalog update: retain earlier tools unless explicitly removed."
+                            .to_string(),
+                    ),
+                    removed_tools_header: Some("Unavailable tools:".to_string()),
+                    removed_namespaces_header: Some("Unavailable namespaces:".to_string()),
+                    namespace_instructions_prefix: Some("Catalog {name}: ".to_string()),
+                    namespace_instructions_cleared: Some("Cleared {name}.".to_string()),
+                });
+            }
         })
         .with_config(move |config| {
             config
                 .features
                 .enable(Feature::IncrementalTools)
                 .expect("enable incremental tools");
+            if catalog_messages {
+                config
+                    .features
+                    .enable(Feature::NonPrefixedMcpToolNames)
+                    .expect("enable unprefixed MCP namespaces");
+                config.non_prefixed_mcp_tool_servers = Some(vec!["functions".to_string()]);
+            }
             config
                 .mcp_servers
                 .set(std::collections::HashMap::from([(
@@ -152,9 +181,10 @@ async fn tool_removal_appends_a_standalone_notice_without_rewriting_history() ->
         .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&test.codex, "echo_service").await?;
+    let response_count = if catalog_messages { 11 } else { 7 };
     let mock = responses::mount_sse_sequence(
         &server,
-        (1..=7)
+        (1..=response_count)
             .map(|index| responses::sse(vec![responses::ev_completed(&format!("resp-{index}"))]))
             .collect(),
     )
@@ -237,11 +267,62 @@ async fn tool_removal_appends_a_standalone_notice_without_rewriting_history() ->
     test.submit_text_turn("Continue with the same restored tools.")
         .await?;
 
+    if catalog_messages {
+        // The functions namespace preserves empty instructions instead of adding fallback text.
+        // Move the service there, then change and clear instructions with unchanged tool schemas.
+        for (instructions, prompt) in [
+            (
+                "Use these echo tools.",
+                "Continue with the echo tools in the functions namespace.",
+            ),
+            (
+                "Keep {name} and {instructions} literal.",
+                "Continue with updated echo instructions.",
+            ),
+            ("", "Continue after clearing echo instructions."),
+        ] {
+            let current_config = test.codex.config().await;
+            let mut updated_config = current_config.as_ref().clone();
+            updated_config
+                .mcp_servers
+                .set(std::collections::HashMap::from([(
+                    "functions".to_string(),
+                    server_config(&["echo", "cwd"], instructions)?,
+                )]))?;
+            let _ = test
+                .codex
+                .refresh_mcp_config(current_config, updated_config)
+                .await;
+            test.codex
+                .call_mcp_tool(
+                    "functions",
+                    "echo",
+                    Some(json!({"message": "ready after instructions refresh"})),
+                    /*meta*/ None,
+                )
+                .await?;
+            test.submit_text_turn(prompt).await?;
+        }
+        test.submit_text_turn("Continue with the same cleared instructions.")
+            .await?;
+    }
+
     let requests = mock.requests();
-    insta::assert_snapshot!(
-        "incremental_tool_removals",
-        context_snapshot::format_request_history_snapshot(
+    let (snapshot_name, scenario) = if catalog_messages {
+        (
+            "incremental_tools_catalog_messages",
+            "Catalog overrides supply the update hint, both removal headers, and namespace instructions notices. MCP refreshes remove and restore tools, then change and clear only the namespace instructions. Runtime instructions remain verbatim, and unchanged turns do not repeat notices.",
+        )
+    } else {
+        (
+            "incremental_tool_removals",
             "MCP refreshes remove one tool, then its whole namespace, before restoring both tools. Removal notices append alone; restoration appends one developer notice before both namespace declarations. Unchanged turns do not repeat updates.",
+        )
+    };
+    insta::assert_snapshot!(
+        snapshot_name,
+        context_snapshot::format_request_history_snapshot(
+            scenario,
             &requests,
             &ContextSnapshotOptions::default()
                 .rewrite_known_segments()

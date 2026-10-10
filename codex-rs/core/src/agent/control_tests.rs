@@ -3188,7 +3188,9 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(marke
         role: "developer".to_string(),
         tools: vec![serde_json::json!({"type": "function", "name": "compacted_tool"})],
     };
-    let tools_update = ContextualUserFragment::into(IncrementalToolsHint);
+    let tools_update = ContextualUserFragment::into(IncrementalToolsHint(
+        codex_prompts::ResolvedIncrementalToolMessages::default().tool_update_hint,
+    ));
     let replacement_history = vec![
         tools_update.clone(),
         tool_declarations.clone(),
@@ -3700,7 +3702,9 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
             internal_chat_message_metadata_passthrough: None,
         }));
         rollout_items.push(rollout_response_item(ContextualUserFragment::into(
-            IncrementalToolsHint,
+            IncrementalToolsHint(
+                codex_prompts::ResolvedIncrementalToolMessages::default().tool_update_hint,
+            ),
         )));
         rollout_items.push(rollout_response_item(ResponseItem::AdditionalTools {
             id: None,

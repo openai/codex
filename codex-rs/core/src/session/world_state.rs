@@ -147,6 +147,7 @@ impl Session {
             let specs = step_context.tool_router.model_visible_specs();
             let definitions = codex_tools::create_tools_json_for_responses_lite(&specs)?;
             world_state.add_section(TopLevelToolsState::new(
+                model_messages.incremental_tools(),
                 definitions,
                 Some(Arc::clone(&extension_metrics)),
             )?);

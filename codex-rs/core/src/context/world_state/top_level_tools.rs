@@ -13,6 +13,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::DeveloperInstructions;
 use codex_extension_api::ExtensionMetrics;
 use codex_otel::TOOL_INCREMENTAL_UPDATES_METRIC;
+use codex_prompts::ResolvedIncrementalToolMessages;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
 use codex_protocol::models::ContentItemKind;
@@ -26,11 +27,9 @@ const ACTION_ADDED: &str = "added";
 const ACTION_REMOVED: &str = "removed";
 const ACTION_SCHEMA_CHANGED: &str = "schema_changed";
 
-const REMOVED_TOOLS_HEADER: &str = "The following tools are no longer available. Do not call them:";
-const REMOVED_NAMESPACES_HEADER: &str = "The following namespaces are no longer available. Do not call tools in them unless those tools are declared in a later update:";
-
 /// The exact serialized Responses Lite declarations visible in one captured step.
 pub(crate) struct TopLevelToolsState {
+    messages: ResolvedIncrementalToolMessages,
     definitions: Vec<Value>,
     hashes: BTreeMap<String, WorldStateHash>,
     metrics: Option<Arc<dyn ExtensionMetrics>>,
@@ -42,6 +41,7 @@ impl TopLevelToolsState {
         reason = "the Responses Lite serializer emits objects with array-valued namespace members"
     )]
     pub(crate) fn new(
+        messages: ResolvedIncrementalToolMessages,
         definitions: Vec<Value>,
         metrics: Option<Arc<dyn ExtensionMetrics>>,
     ) -> Result<Self> {
@@ -68,6 +68,7 @@ impl TopLevelToolsState {
             insert_hash(name.to_string(), &header)?;
         }
         Ok(Self {
+            messages,
             definitions,
             hashes,
             metrics,
@@ -174,19 +175,31 @@ impl WorldStateSection for TopLevelToolsState {
                 // repeating unchanged tool definitions.
                 let instructions = definition["description"].as_str().unwrap_or_default();
                 let text = if instructions.is_empty() {
-                    format!("The {name} namespace no longer has additional instructions.")
+                    self.messages
+                        .namespace_instructions_cleared
+                        .replace("{name}", name)
                 } else {
-                    format!("Updated instructions for the {name} namespace:\n{instructions}")
+                    let mut text = self
+                        .messages
+                        .namespace_instructions_prefix
+                        .replace("{name}", name);
+                    text.push_str(instructions);
+                    text
                 };
-                namespace_updates
-                    .push(WorldStateUpdate::fragment(DeveloperInstructions::new(text)));
+                if !text.is_empty() {
+                    namespace_updates
+                        .push(WorldStateUpdate::fragment(DeveloperInstructions::new(text)));
+                }
             }
         }
         let mut updates = Vec::new();
         if !tools.is_empty() {
-            if previous.is_some() && tools.iter().any(|tool| tool["type"] == "namespace") {
+            if previous.is_some()
+                && tools.iter().any(|tool| tool["type"] == "namespace")
+                && !self.messages.tool_update_hint.is_empty()
+            {
                 updates.push(WorldStateUpdate::prefix_item(ContextualUserFragment::into(
-                    IncrementalToolsHint,
+                    IncrementalToolsHint(self.messages.tool_update_hint.clone()),
                 )));
             }
             updates.push(WorldStateUpdate::prefix_item(
@@ -225,6 +238,7 @@ impl WorldStateSection for TopLevelToolsState {
             if !namespaces.is_empty() || !tools.is_empty() {
                 updates.push(
                     WorldStateUpdate::fragment(RemovedTools {
+                        messages: self.messages.clone(),
                         namespaces: namespaces.into_iter().map(str::to_string).collect(),
                         tools,
                     })
@@ -239,7 +253,7 @@ impl WorldStateSection for TopLevelToolsState {
 }
 
 /// Guidance for an appended catalog batch, retained or discarded with its declarations.
-pub(crate) struct IncrementalToolsHint;
+pub(crate) struct IncrementalToolsHint(pub(crate) String);
 
 impl IncrementalToolsHint {
     pub(crate) const KIND: &str = "tools.incremental_update";
@@ -263,12 +277,13 @@ impl ContextualUserFragment for IncrementalToolsHint {
     }
 
     fn body(&self) -> String {
-        "This is an incremental tools update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one.".to_string()
+        self.0.clone()
     }
 }
 
 #[derive(Default)]
 struct RemovedTools {
+    messages: ResolvedIncrementalToolMessages,
     namespaces: Vec<String>,
     tools: Vec<String>,
 }
@@ -293,8 +308,11 @@ impl ContextualUserFragment for RemovedTools {
     /// Lists removed namespaces and individual tools in separate sections of one notice.
     fn body(&self) -> String {
         let sections = [
-            (REMOVED_NAMESPACES_HEADER, &self.namespaces),
-            (REMOVED_TOOLS_HEADER, &self.tools),
+            (
+                self.messages.removed_namespaces_header.as_str(),
+                &self.namespaces,
+            ),
+            (self.messages.removed_tools_header.as_str(), &self.tools),
         ];
         let mut body = String::new();
         for (header, names) in sections {
