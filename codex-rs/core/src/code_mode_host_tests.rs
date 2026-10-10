@@ -132,8 +132,16 @@ async fn hung_grpc_stdio_host_is_reaped_and_the_session_recovers() -> Result<()>
     })
     .await
     .context("unresponsive host was not killed and reaped")?;
+    let reset = execute(&session, r#"store("recovery", "must not run");"#)
+        .await
+        .unwrap_err();
+    assert!(
+        reset
+            .to_string()
+            .contains("Stored values and running cells were lost")
+    );
     assert_eq!(
-        execute(&session, "text(\"recovered\");").await?,
+        execute(&session, r#"text(load("recovery") ?? "recovered");"#).await?,
         vec![FunctionCallOutputContentItem::InputText {
             text: "recovered".to_string()
         }]
