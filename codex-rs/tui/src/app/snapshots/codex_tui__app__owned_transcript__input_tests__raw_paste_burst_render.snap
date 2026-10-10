@@ -1,0 +1,54 @@
+---
+source: tui/src/app/owned_transcript_input_tests.rs
+expression: "format!(\"During paste:\\n{during_paste}\\n\\nAfter flush:\\n{}\", screen(&tui))"
+---
+During paste:
+Before paste
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› Ask Codex to do anything
+
+  GPT-5.6-Sol default · /tmp/project
+  ? for shortcuts
+
+After flush:
+After paste
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› [Pasted Content 2084 chars]
+
+  GPT-5.6-Sol default · /tmp/project

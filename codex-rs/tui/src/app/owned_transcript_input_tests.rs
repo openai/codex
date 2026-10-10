@@ -724,6 +724,143 @@ async fn escape_returns_to_latest_without_changing_the_composer_draft() -> Resul
 }
 
 #[tokio::test]
+async fn raw_multiline_paste_defers_rendering_and_submits_once() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    app.local_settings.tui.animations = false;
+    app.transcript_cells = vec![Arc::new(PlainHistoryCell::new(vec!["Before paste".into()]))];
+    tokio::time::pause();
+    // The first character starts a possible burst; defer further renders until the draw.
+    app.handle_tui_event(
+        &mut tui,
+        &mut server,
+        TuiEvent::Key(KeyCode::Char('D').into()),
+    )
+    .await?;
+    let before = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal).clone();
+    app.transcript_cells = vec![Arc::new(PlainHistoryCell::new(vec!["After paste".into()]))];
+    let rest = "ebug\t한국어\tASCII\t0123456789\n".repeat(80) + "end";
+    for ch in rest.chars() {
+        let code = match ch {
+            '\n' => KeyCode::Enter,
+            '\t' => KeyCode::Tab,
+            ch => KeyCode::Char(ch),
+        };
+        // Windows reports AltGr text as Ctrl+Alt, including with Shift held.
+        #[cfg(windows)]
+        let modifiers = match ch {
+            '한' => KeyModifiers::CONTROL | KeyModifiers::ALT,
+            '국' => KeyModifiers::SHIFT | KeyModifiers::CONTROL | KeyModifiers::ALT,
+            _ => KeyModifiers::NONE,
+        };
+        #[cfg(not(windows))]
+        let modifiers = KeyModifiers::NONE;
+        app.handle_tui_event(
+            &mut tui,
+            &mut server,
+            TuiEvent::Key(KeyEvent::new(code, modifiers)),
+        )
+        .await?;
+    }
+    assert_eq!(
+        crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
+        &before
+    );
+    assert!(app.chat_widget.queued_user_message_texts().is_empty());
+    let during_paste = screen(&tui);
+    // Wait out Windows' active-paste timeout and accidental-Enter suppression window.
+    tokio::time::advance(Duration::from_secs(/*secs*/ 1)).await;
+    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Draw)
+        .await?;
+    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Draw)
+        .await?;
+    assert!(screen(&tui).contains("After paste"));
+    insta::assert_snapshot!(
+        "raw_paste_burst_render",
+        format!(
+            "During paste:\n{during_paste}\n\nAfter flush:\n{}",
+            screen(&tui)
+        )
+    );
+    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Enter.into()))
+        .await?;
+    assert_eq!(
+        app.chat_widget.queued_user_message_texts(),
+        vec![format!("D{rest}")]
+    );
+    tokio::time::resume();
+    server.shutdown().await?;
+    tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn accepted_find_defers_paste_rendering_but_keeps_enter() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    app.local_settings.tui.animations = false;
+    app.transcript_cells = vec![Arc::new(PlainHistoryCell::new(vec![
+        "Before paste needle".into(),
+    ]))];
+    for event in [
+        TuiEvent::Key(KeyCode::F(3).into()),
+        TuiEvent::Paste("needle".to_string()),
+        TuiEvent::Draw,
+        TuiEvent::Key(KeyCode::Enter.into()),
+    ] {
+        app.handle_tui_event(&mut tui, &mut server, event).await?;
+    }
+    assert!(!app.transcript_view.is_search_editing());
+    assert!(app.transcript_view.has_active_interaction());
+    tokio::time::pause();
+    app.handle_tui_event(
+        &mut tui,
+        &mut server,
+        TuiEvent::Key(KeyCode::Char('D').into()),
+    )
+    .await?;
+    let before = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal).clone();
+    app.transcript_cells = vec![Arc::new(PlainHistoryCell::new(vec![
+        "After paste needle".into(),
+    ]))];
+    for ch in "ebug log ".repeat(80).chars() {
+        app.handle_tui_event(
+            &mut tui,
+            &mut server,
+            TuiEvent::Key(KeyCode::Char(ch).into()),
+        )
+        .await?;
+    }
+    assert_eq!(
+        crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
+        &before
+    );
+    // Enter still belongs to accepted Find, even in the middle of a paste burst.
+    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Enter.into()))
+        .await?;
+    assert_ne!(
+        crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
+        &before
+    );
+    assert!(app.chat_widget.queued_user_message_texts().is_empty());
+    tokio::time::advance(Duration::from_secs(/*secs*/ 1)).await;
+    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Draw)
+        .await?;
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        format!("D{}", "ebug log ".repeat(80))
+    );
+    tokio::time::resume();
+    server.shutdown().await?;
+    tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn composer_paste_releases_selection_and_retains_normal_cursor_movement() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
