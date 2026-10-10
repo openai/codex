@@ -898,6 +898,11 @@ pub struct Tui {
     #[serde(default)]
     pub copy_on_select: CopyOnSelect,
 
+    /// Deselect transcript text after Copy on select confirms clipboard delivery.
+    /// Defaults to `false` and has no effect when Copy on select is off.
+    #[serde(default)]
+    pub copy_on_select_clear_selection: bool,
+
     /// Right-click text paste fallback. Defaults to `auto` (Windows/WSL/Linux).
     /// `on` also enables macOS; neither mode reads over SSH or in recognized VS Code terminals.
     /// This controls the fullscreen fallback, not the terminal's own paste binding.

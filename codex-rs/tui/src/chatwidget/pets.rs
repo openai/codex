@@ -2,6 +2,22 @@
 
 use super::*;
 use codex_config::types::TuiPetAnchor;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+
+// A configured-pet load can finish after its ChatWidget is replaced, so
+// generations must remain unique across widget replacements.
+static NEXT_CONFIGURED_PET_LOAD_GENERATION: AtomicU64 = AtomicU64::new(/*v*/ 1);
+
+/// Identifies one configured-pet load across widget replacements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ConfiguredPetLoadGeneration(u64);
+
+fn next_configured_pet_load_generation() -> ConfiguredPetLoadGeneration {
+    ConfiguredPetLoadGeneration(
+        NEXT_CONFIGURED_PET_LOAD_GENERATION.fetch_add(/*val*/ 1, Ordering::Relaxed),
+    )
+}
 
 pub(super) fn load_ambient_pet(
     config: &crate::local_settings::LocalSettings,
@@ -27,12 +43,13 @@ pub(super) fn start_configured_pet_load_if_needed(
     frame_requester: FrameRequester,
     app_event_tx: AppEventSender,
     pet_http_client: codex_http_client::RouteAwareClientPool,
-) {
+) -> ConfiguredPetLoadGeneration {
+    let generation = next_configured_pet_load_generation();
     let Some(pet_id) = config.tui.pet.clone() else {
-        return;
+        return generation;
     };
     if pet_id == crate::pets::DISABLED_PET_ID || !ambient_pet_missing {
-        return;
+        return generation;
     }
 
     let codex_home = config.codex_home.clone();
@@ -53,10 +70,12 @@ pub(super) fn start_configured_pet_load_if_needed(
         },
         app_event_tx,
         move |result| AppEvent::ConfiguredPetLoaded {
+            generation,
             pet_id: event_pet_id,
             result,
         },
     );
+    generation
 }
 
 impl ChatWidget {
@@ -210,8 +229,40 @@ impl ChatWidget {
     pub(crate) fn set_tui_pet(&mut self, pet: Option<String>) {
         self.local_settings.tui.pet = pet;
         self.ambient_pet = load_ambient_pet(&self.local_settings, self.frame_requester.clone());
+        self.configured_pet_load_generation = start_configured_pet_load_if_needed(
+            &self.local_settings,
+            /*ambient_pet_missing*/ self.ambient_pet.is_none(),
+            self.frame_requester.clone(),
+            self.app_event_tx.clone(),
+            self.pet_http_client.clone(),
+        );
         self.apply_ambient_pet_image_support_override_for_tests();
         self.request_redraw();
+    }
+
+    /// Applies a configured-pet result only if it belongs to this widget's current load.
+    pub(crate) fn finish_configured_pet_load(
+        &mut self,
+        generation: ConfiguredPetLoadGeneration,
+        pet_id: String,
+        result: Result<Option<crate::pets::AmbientPet>, String>,
+    ) -> bool {
+        if generation != self.configured_pet_load_generation
+            || self.local_settings.tui.pet.as_deref() != Some(pet_id.as_str())
+        {
+            return false;
+        }
+
+        match result {
+            Ok(ambient_pet) => {
+                self.set_tui_pet_loaded(Some(pet_id), ambient_pet);
+                true
+            }
+            Err(err) => {
+                self.add_warning_message(format!("Failed to load configured pet: {err}"));
+                false
+            }
+        }
     }
 
     pub(crate) fn set_tui_pet_loaded(
@@ -219,6 +270,7 @@ impl ChatWidget {
         pet: Option<String>,
         ambient_pet: Option<crate::pets::AmbientPet>,
     ) {
+        self.configured_pet_load_generation = next_configured_pet_load_generation();
         self.local_settings.tui.pet = pet;
         self.ambient_pet = ambient_pet;
         self.apply_ambient_pet_image_support_override_for_tests();

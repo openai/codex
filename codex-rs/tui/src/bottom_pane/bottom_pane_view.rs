@@ -1,6 +1,7 @@
 use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
+use crate::key_hint::KeyBinding;
 use crate::keymap::KeymapContextSet;
 use crate::render::renderable::Renderable;
 use codex_app_server_protocol::ToolRequestUserInputParams;
@@ -31,13 +32,50 @@ pub(crate) trait BottomPaneView: Renderable {
         ViewPresentation::Inline
     }
 
+    /// Refresh an open configuration panel, including one below a child editor.
+    /// Returns whether this view contains a configuration panel.
+    fn update_config_panel(&mut self, _update: &crate::config_panel::ConfigPanelUpdate) -> bool {
+        false
+    }
+
+    /// Acknowledge that a queued configuration editor has opened.
+    fn config_editor_opened(&mut self) {}
+
+    /// Mark a queued editor activation inactive after a non-key interaction.
+    fn interrupt_config_editor_transition(&mut self) {}
+
     /// Handle a key event while the view is active. A redraw is always
     /// scheduled after this call.
     fn handle_key_event(&mut self, _key_event: KeyEvent) {}
 
+    /// Handle a configured action while preserving the physical key that triggered it.
+    fn handle_key_event_with_activation_key(
+        &mut self,
+        key_event: KeyEvent,
+        _activation_key: Option<KeyBinding>,
+    ) {
+        self.handle_key_event(key_event);
+    }
+
+    /// Observe a press or repeat while another view is on top without handling it as input.
+    fn observe_key_event_while_covered(
+        &mut self,
+        _key_event: KeyEvent,
+        _activation_key: KeyBinding,
+    ) {
+    }
+
+    /// Observe key releases that the bottom pane otherwise filters before view dispatch.
+    fn handle_key_release(&mut self, _key_event: KeyEvent) {}
+
     /// Return the keymap contexts whose handlers are active in this view.
     fn keymap_contexts(&self) -> KeymapContextSet {
         KeymapContextSet::default()
+    }
+
+    /// Whether this local-only view can continue handling input while disconnected.
+    fn accepts_input_when_disconnected(&self) -> bool {
+        false
     }
 
     /// Return `true` if the view has finished and should be removed.

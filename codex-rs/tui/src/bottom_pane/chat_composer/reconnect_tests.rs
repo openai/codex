@@ -157,6 +157,21 @@ fn unavailable_thread_dispatches_recovery_and_local_commands() {
 }
 
 #[test]
+fn disconnected_input_dispatches_local_config_command() {
+    let (mut composer, _) = new_test_composer();
+    composer.set_text_content("/config".into(), Vec::new(), Vec::new());
+
+    assert_eq!(
+        composer.handle_restricted_key(
+            KeyEvent::from(KeyCode::Enter),
+            RestrictedInputMode::Disconnected,
+        ),
+        InputResult::Command(SlashCommand::Config),
+    );
+    assert_eq!(composer.current_text(), "");
+}
+
+#[test]
 fn unavailable_thread_dispatches_inline_commands_with_configured_submit_key() {
     for (text, command, args) in [
         ("/new recovery", SlashCommand::New, "recovery"),

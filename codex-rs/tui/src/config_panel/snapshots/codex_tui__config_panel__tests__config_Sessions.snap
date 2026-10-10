@@ -1,0 +1,21 @@
+---
+source: tui/src/config_panel/config_panel_tests.rs
+assertion_line: 61
+expression: "render(&panel, 140)"
+---
+
+  Configuration
+  Changes save automatically; some apply after restarting Codex.
+  Settings in this group: 3.
+
+   Appearance   Notifications   Input   Sessions   Text selection
+
+› Automatic recaps       [ ] Off              Prepare recaps while the terminal is unfocused. Restart Codex to apply.
+  Session picker layout  Dense ›              Choose tighter rows or a roomier list when resuming and forking conversations.
+  Resume directory       Ask ›                Choose which working directory to use when the current directory and saved session differ.
+
+
+
+
+
+  left/right group · / search · enter edit setting · esc close

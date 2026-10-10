@@ -405,6 +405,10 @@ impl BottomPaneView for StatusLineSetupView {
         crate::keymap::KeymapContextSet::new(crate::keymap::KeymapContext::List)
     }
 
+    fn accepts_input_when_disconnected(&self) -> bool {
+        true
+    }
+
     fn handle_key_event(&mut self, key_event: crossterm::event::KeyEvent) {
         self.picker.handle_key_event(key_event);
     }

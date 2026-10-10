@@ -54,6 +54,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::AstraModelPickerAction;
+use crate::chatwidget::ConfiguredPetLoadGeneration;
 use crate::chatwidget::ConnectorScopeGeneration;
 use crate::chatwidget::ThreadUsageOutcome;
 use crate::chatwidget::UserMessage;
@@ -906,6 +907,7 @@ pub(crate) enum AppEvent {
 
     /// Result of restoring the configured ambient pet during startup.
     ConfiguredPetLoaded {
+        generation: ConfiguredPetLoadGeneration,
         pet_id: String,
         result: Result<Option<crate::pets::AmbientPet>, String>,
     },
@@ -1621,6 +1623,20 @@ pub(crate) enum AppEvent {
 
     /// Remember the Command Center grouping across launches.
     PersistAgentsOverviewGrouping(codex_config::types::AgentsOverviewGrouping),
+
+    /// Open an existing editor above the configuration panel.
+    OpenConfigEditor(crate::config_panel::ConfigEditorHandoff),
+
+    /// Schedule a notification preview with time to switch away from the terminal.
+    TestConfigNotification,
+
+    /// Send the matching scheduled preview regardless of the configured focus condition.
+    SendConfigTestNotification {
+        generation: u64,
+    },
+
+    /// Requests saving a local `/config` preference and refreshing its effective value.
+    SaveConfigPreference(crate::config_panel::ConfigPreference),
 
     /// Save the transcript renderer preference for the next launch only.
     FullscreenTranscriptSelected {

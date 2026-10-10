@@ -1,0 +1,24 @@
+---
+source: tui/src/config_panel/config_panel_tests.rs
+assertion_line: 227
+expression: "render(&panel, 50)"
+---
+
+  Configuration
+  Changes save automatically; some apply after
+  restarting Codex.
+  Failed to save status line settings:
+  permission denied while writing config.toml
+
+   Appearance   Notifications   Input          ›
+
+› Theme                  Automatic ›          Cho…
+  Animations             [ ] Off              Ani…
+      Composer stars     Unavailable          Tur…
+  Tips                   [ ] Off              Sho…
+  Status line colors     [ ] Off              Use…
+  Status line fields     Configure ›          Cho…
+  Terminal title fields  Configure ›          Cho…
+
+  left/right group · / search · enter edit setting
+  · esc close

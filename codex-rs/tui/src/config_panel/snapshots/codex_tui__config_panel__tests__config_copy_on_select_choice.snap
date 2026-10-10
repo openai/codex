@@ -1,0 +1,13 @@
+---
+source: tui/src/config_panel/config_panel_tests.rs
+expression: "render(&picker, 100)"
+---
+  Copy on select
+  Copy transcript selections on release. Auto uses terminal defaults.
+
+
+› 1. Auto (default) (current)
+  2. On
+  3. Off
+
+  enter select · esc back

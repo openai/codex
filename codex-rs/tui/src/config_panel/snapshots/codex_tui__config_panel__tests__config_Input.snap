@@ -1,0 +1,21 @@
+---
+source: tui/src/config_panel/config_panel_tests.rs
+assertion_line: 61
+expression: "render(&panel, 140)"
+---
+
+  Configuration
+  Changes save automatically; some apply after restarting Codex.
+  Settings in this group: 3.
+
+   Appearance   Notifications   Input   Sessions   Text selection
+
+› Keyboard shortcuts   Configure ›          Browse actions and remap their keys.
+  Start in Vim mode    [ ] Off              Applies to new composers. Use /vim to switch the current composer.
+  Paste detection      [x] On               Recognize pasted-text bursts and keep multiline input together. Restart Codex to apply.
+
+
+
+
+
+  left/right group · / search · enter edit setting · esc close

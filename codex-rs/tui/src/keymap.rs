@@ -413,6 +413,13 @@ impl ListKeymap {
         .find(|action| self.bindings_for(*action).is_pressed(event))
     }
 
+    pub(crate) fn has_chord_prefix(&self, event: KeyEvent) -> bool {
+        self.chord_hints.bindings.iter().any(|binding| {
+            binding.action.context.overlaps(KeymapContext::List)
+                && binding.chord.prefix.is_press(event)
+        })
+    }
+
     pub(crate) fn primary_hint(&self, action: ListAction) -> Option<ShortcutHint> {
         let action_id = keymap_action_id(KeymapContext::List.config_name(), action.config_name())?;
         self.chord_hints

@@ -1,4 +1,4 @@
-//! Automatic copies retain completed mouse selections.
+//! Automatic copies occur on release and may deselect only after confirmed delivery.
 
 use super::*;
 use crate::clipboard_copy::CopyStatus;
@@ -23,11 +23,12 @@ fn mouse(kind: MouseEventKind, column: u16) -> MouseEvent {
 }
 
 #[test]
-fn copy_on_select_waits_for_release_and_retains_selection() {
+fn copy_on_select_waits_for_release_and_confirmed_delivery() {
     let cells = vec![cell("selected text")];
-    for enabled in [false, true] {
+    for (enabled, clear_selection) in [(false, false), (true, false), (true, true)] {
         let mut view = TranscriptView {
             copy_on_select: enabled,
+            copy_on_select_clear_selection: clear_selection,
             ..Default::default()
         };
         render(&mut view, &cells, /*width*/ 20, /*height*/ 1);
@@ -41,7 +42,9 @@ fn copy_on_select_waits_for_release_and_retains_selection() {
             ));
         }
         let release = mouse(MouseEventKind::Up(MouseButton::Left), /*column*/ 8);
-        let copied = match view.handle_mouse(release, &cells) {
+        let action = view.handle_mouse(release, &cells);
+        let selection_copy = action.as_ref().map(|action| view.selection_copy(action));
+        let copied = match action {
             Some(ViewAction::CopyOnSelect(text)) => Some(text),
             Some(ViewAction::Changed) => None,
             _ => panic!("release must finish the selection"),
@@ -51,6 +54,9 @@ fn copy_on_select_waits_for_release_and_retains_selection() {
         assert!(view.handle_mouse(release, &cells).is_none());
         assert!(!view.tick_selection(&cells));
         if let Some(copied) = copied {
+            let selection_copy = selection_copy.expect("copy on select policy");
+            assert_eq!(selection_copy, SelectionCopy::OnSelect { clear_selection });
+            assert!(selection_copy.publishes_primary());
             let buffer = render(&mut view, &cells, /*width*/ 20, /*height*/ 1);
             let highlight = (0..20)
                 .map(|column| {
@@ -64,22 +70,24 @@ fn copy_on_select_waits_for_release_and_retains_selection() {
                     }
                 })
                 .collect::<String>();
-            insta::assert_snapshot!(
-                format!("{}\n{highlight}", text(&buffer)),
-                @"
-                selected text
-                ^^^^^^^^············
-                "
-            );
+            insta::allow_duplicates! {
+                insta::assert_snapshot!(
+                    format!("{}\n{highlight}", text(&buffer)),
+                    @"
+                    selected text
+                    ^^^^^^^^············
+                    "
+                );
+            }
             for result in [
-                Ok(CopyStatus::Confirmed),
                 Ok(CopyStatus::Unconfirmed),
                 Err("clipboard unavailable".to_owned()),
+                Ok(CopyStatus::Confirmed),
             ] {
                 view.copy_selected_text_with(
                     &cells,
                     &copied,
-                    /*clear_selection*/ false,
+                    selection_copy.clear_selection(),
                     |_, _format| Ok(CopyStatus::Pending(1)),
                 )
                 .unwrap();
@@ -87,12 +95,38 @@ fn copy_on_select_waits_for_release_and_retains_selection() {
                     view.finish_copy(&cells, &(1, result.clone()), /*current*/ true),
                     Some(false)
                 );
-                assert_eq!(view.selected_text(&cells).as_deref(), Some(copied.as_str()));
+                assert_eq!(
+                    view.selected_text(&cells).as_deref(),
+                    (!clear_selection || result != Ok(CopyStatus::Confirmed))
+                        .then_some(copied.as_str())
+                );
                 assert_eq!(
                     view.copy_feedback
                         .as_ref()
                         .map(|feedback| (feedback.result, feedback.characters)),
                     Some((result.map_err(|_| ()), copied.chars().count()))
+                );
+            }
+            if clear_selection {
+                let buffer = render(&mut view, &cells, /*width*/ 20, /*height*/ 1);
+                let highlight = (0..20)
+                    .map(|column| {
+                        if buffer[(column, 0)]
+                            .modifier
+                            .contains(ratatui::style::Modifier::REVERSED)
+                        {
+                            '^'
+                        } else {
+                            '·'
+                        }
+                    })
+                    .collect::<String>();
+                insta::assert_snapshot!(
+                    format!("{}\n{highlight}", text(&buffer)),
+                    @"
+                    selected text
+                    ····················
+                    "
                 );
             }
         }

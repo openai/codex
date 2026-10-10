@@ -880,6 +880,8 @@ See the Codex keymap documentation for supported actions and examples."
             agents_overview::AgentsOverviewState::new(local_settings.tui.agents_overview_grouping);
         let mut app = Self {
             feature_write_lock: Arc::default(),
+            config_notification_test_generation: 0,
+            config_notification_test_pending: None,
             model_catalog,
             session_telemetry: session_telemetry.clone(),
             app_event_tx,
@@ -902,6 +904,7 @@ See the Codex keymap documentation for supported actions and examples."
             enhanced_keys_supported,
             keymap: runtime_keymap,
             key_chord_matcher: KeyChordMatcher::default(),
+            routed_key_activation: None,
             transcript_cells: Vec::new(),
             native_history: Default::default(),
             turn_tips: Default::default(),
@@ -995,9 +998,10 @@ See the Codex keymap documentation for supported actions and examples."
         };
         if tui.is_owned_screen()
             && app.right_click_paste_environment.wsl
-            && app
-                .right_click_paste_environment
-                .allows(app.local_settings.tui.right_click_paste)
+            && app.right_click_paste_environment.allows(
+                app.local_settings.tui.right_click_paste,
+                app.local_settings.transcript_mode,
+            )
         {
             // Prewarm WSL interop off the UI thread, without accessing clipboard contents.
             let _ = tui.clipboard.warm_text_reader(tui.frame_requester());

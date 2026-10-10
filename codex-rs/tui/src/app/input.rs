@@ -69,9 +69,20 @@ impl App {
         tui: &mut tui::Tui,
         key_event: KeyEvent,
     ) -> Option<KeyEvent> {
+        self.routed_key_activation = None;
         if self.chat_widget.take_key_chord_reset() {
             self.cancel_pending_key_chord();
         }
+        if self
+            .chat_widget
+            .consume_view_transition_key_event(key_event)
+        {
+            return None;
+        }
+        // Pending config handoffs must see the physical key before a chord or global shortcut
+        // consumes it.
+        self.chat_widget
+            .observe_config_editor_transition_key_event(key_event);
         self.transcript_view.set_keymap_bindings(&self.keymap);
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
             overlay.set_keymap_bindings(&self.keymap);
@@ -166,6 +177,8 @@ impl App {
             }
             crate::keymap::KeyChordMatch::Completed(dispatch_event) => {
                 self.set_key_chord_hint_override(/*items*/ None);
+                // Keep the real key so the newly opened config editor ignores it until release.
+                self.routed_key_activation = Some(KeyBinding::from_event(key_event));
                 Some(dispatch_event)
             }
             crate::keymap::KeyChordMatch::Cancelled => {
@@ -373,6 +386,7 @@ impl App {
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
+        let activation_key = self.routed_key_activation.take();
         if self.chat_widget.fork_in_progress {
             return;
         }
@@ -615,7 +629,9 @@ impl App {
             } else if self.should_reject_side_backtrack_esc(key_event) {
                 self.reject_side_backtrack_esc();
             } else {
-                let action = self.chat_widget.handle_key_event(key_event);
+                let action = self
+                    .chat_widget
+                    .handle_key_event_with_activation_key(key_event, activation_key);
                 self.handle_clipboard_key_action(tui, action);
             }
             return;
@@ -650,11 +666,14 @@ impl App {
                         self.reset_backtrack_state();
                     }
                 }
-                let action = self.chat_widget.handle_key_event(key_event);
+                let action = self
+                    .chat_widget
+                    .handle_key_event_with_activation_key(key_event, activation_key);
                 self.handle_clipboard_key_action(tui, action);
             }
             _ => {
-                self.chat_widget.handle_key_event(key_event);
+                self.chat_widget
+                    .handle_key_event_with_activation_key(key_event, activation_key);
             }
         };
     }

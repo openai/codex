@@ -394,23 +394,29 @@ Reduce `tui.keymap.global.leader` alternatives or `leader ...` bindings."
         action: KeymapActionId,
         bindings: &[KeyBinding],
     ) -> Option<crate::key_hint::ShortcutHint> {
-        if let Some(spec) = self.configured_specs(action).and_then(|specs| {
-            specs
-                .iter()
-                .find(|spec| !spec.starts_with("leader ") || !self.leader.is_empty())
+        if let Some(hint) = self.configured_specs(action).and_then(|specs| {
+            specs.iter().find_map(|spec| {
+                if let Some((prefix, completion)) = spec.split_once(' ') {
+                    Some(crate::key_hint::ShortcutHint::Chord {
+                        prefix: if prefix == "leader" {
+                            *self.leader.first()?
+                        } else {
+                            parse_keybinding(prefix)?
+                        },
+                        completion: parse_keybinding(completion)?,
+                    })
+                } else {
+                    parse_keybinding(spec)
+                        .filter(|configured| {
+                            bindings.iter().any(|binding| {
+                                binding.normalized_parts() == configured.normalized_parts()
+                            })
+                        })
+                        .map(crate::key_hint::ShortcutHint::Single)
+                }
+            })
         }) {
-            return if let Some((prefix, completion)) = spec.split_once(' ') {
-                Some(crate::key_hint::ShortcutHint::Chord {
-                    prefix: if prefix == "leader" {
-                        *self.leader.first()?
-                    } else {
-                        parse_keybinding(prefix)?
-                    },
-                    completion: parse_keybinding(completion)?,
-                })
-            } else {
-                parse_keybinding(spec).map(crate::key_hint::ShortcutHint::Single)
-            };
+            return Some(hint);
         }
 
         super::primary_binding(bindings)

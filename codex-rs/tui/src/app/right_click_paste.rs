@@ -1,9 +1,11 @@
 //! Right-click CLIPBOARD and local X11 middle-click PRIMARY fallback for an editable composer.
+//! The policy also reports why a configured mode is unavailable in this terminal.
 //! Existing selection handlers run first. Only a draw may deliver a read, so real input
 //! invalidates pending paste before completion and is never replaced by clipboard text.
 
 use super::*;
 use crate::clipboard_copy::worker::PasteSource;
+use crate::transcript_mode::TranscriptMode;
 use crate::tui::VscodeDetection;
 use codex_config::types::RightClickPaste;
 use crossterm::event::MouseButton;
@@ -17,7 +19,7 @@ pub(super) struct PendingPaste {
     _request: Arc<()>,
 }
 
-pub(super) struct PasteEnvironment {
+pub(crate) struct PasteEnvironment {
     pub(super) primary: bool,
     pub(super) platform_default: bool,
     pub(super) ssh: bool,
@@ -26,7 +28,7 @@ pub(super) struct PasteEnvironment {
 }
 
 impl PasteEnvironment {
-    pub(super) fn detect() -> Self {
+    pub(crate) fn detect() -> Self {
         Self {
             primary: crate::clipboard_copy::primary::available(),
             platform_default: cfg!(any(target_os = "windows", target_os = "linux")),
@@ -36,16 +38,39 @@ impl PasteEnvironment {
         }
     }
 
-    pub(super) fn allows(&self, mode: RightClickPaste) -> bool {
-        if self.ssh || self.vscode == VscodeDetection::VsCode {
-            return false;
+    pub(super) fn allows(&self, mode: RightClickPaste, transcript_mode: TranscriptMode) -> bool {
+        self.status(mode, transcript_mode)
+            .unwrap_or(/*default*/ false)
+    }
+
+    /// Return the effective state or why this terminal must handle paste itself.
+    pub(crate) fn status(
+        &self,
+        mode: RightClickPaste,
+        transcript_mode: TranscriptMode,
+    ) -> Result<bool, &'static str> {
+        if mode == RightClickPaste::Off {
+            return Ok(false);
+        }
+        if !transcript_mode.is_owned() {
+            return Err("Unavailable in inline mode. Use your terminal's paste command.");
+        }
+        if self.ssh {
+            return Err("Unavailable over SSH. Use your terminal's paste command.");
+        }
+        if self.vscode == VscodeDetection::VsCode {
+            return Err("VS Code handles pasting. Use its terminal paste command.");
+        }
+        if mode == RightClickPaste::Auto && self.wsl && self.vscode == VscodeDetection::Unknown {
+            return Err(
+                "Auto cannot identify this WSL terminal. Use On or your terminal's paste command.",
+            );
         }
         match mode {
-            RightClickPaste::Off => false,
-            RightClickPaste::On => !cfg!(target_os = "android"),
-            RightClickPaste::Auto => {
-                self.platform_default && !(self.wsl && self.vscode == VscodeDetection::Unknown)
-            }
+            RightClickPaste::Off => Ok(false),
+            RightClickPaste::On if cfg!(target_os = "android") => Err("Unavailable on Android"),
+            RightClickPaste::On => Ok(true),
+            RightClickPaste::Auto => Ok(self.platform_default),
         }
     }
 }
@@ -65,9 +90,10 @@ impl App {
                         .borrow()
                         .view
                         .has_selection_range()
-                    && self
-                        .right_click_paste_environment
-                        .allows(self.local_settings.tui.right_click_paste)
+                    && self.right_click_paste_environment.allows(
+                        self.local_settings.tui.right_click_paste,
+                        self.local_settings.transcript_mode,
+                    )
             }
             PasteSource::Primary => self.right_click_paste_environment.primary,
         };

@@ -24,7 +24,7 @@ impl ChatWidget {
 }
 
 #[derive(Debug)]
-pub(super) enum Notification {
+pub(crate) enum Notification {
     AgentTurnComplete { response: String },
     ExecApprovalRequested { command: String },
     EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },

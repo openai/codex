@@ -175,23 +175,15 @@ impl App {
     pub(super) fn handle_configured_pet_loaded(
         &mut self,
         tui: &mut tui::Tui,
+        generation: crate::chatwidget::ConfiguredPetLoadGeneration,
         pet_id: String,
         result: Result<Option<crate::pets::AmbientPet>, String>,
     ) {
-        if self.local_settings.tui.pet.as_deref() != Some(pet_id.as_str()) {
-            return;
-        }
-
-        match result {
-            Ok(ambient_pet) => {
-                self.chat_widget
-                    .set_tui_pet_loaded(Some(pet_id), ambient_pet);
-                tui.frame_requester().schedule_frame();
-            }
-            Err(err) => {
-                self.chat_widget
-                    .add_warning_message(format!("Failed to load configured pet: {err}"));
-            }
+        if self
+            .chat_widget
+            .finish_configured_pet_load(generation, pet_id, result)
+        {
+            tui.frame_requester().schedule_frame();
         }
     }
 }

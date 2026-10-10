@@ -11,18 +11,83 @@ fn pet_load_without_runtime_sends_completion_event() {
         async { Ok::<Option<crate::pets::AmbientPet>, String>(None) },
         app_event_tx,
         |result| AppEvent::ConfiguredPetLoaded {
+            generation: next_configured_pet_load_generation(),
             pet_id: crate::pets::DEFAULT_PET_ID.to_string(),
             result,
         },
     );
 
     match rx.blocking_recv().expect("pet load completion event") {
-        AppEvent::ConfiguredPetLoaded { pet_id, result } => {
+        AppEvent::ConfiguredPetLoaded { pet_id, result, .. } => {
             assert_eq!(pet_id, crate::pets::DEFAULT_PET_ID);
             assert!(result.expect("successful pet load").is_none());
         }
         event => panic!("expected configured pet completion, got {event:?}"),
     }
+}
+
+#[tokio::test]
+async fn configured_pet_loads_are_scoped_across_widget_replacements() {
+    let (mut replaced_chat, _replaced_tx, mut replaced_rx, _replaced_op_rx) =
+        crate::chatwidget::tests::make_chatwidget_manual_with_sender().await;
+    let (mut chat, _tx, mut rx, _op_rx) =
+        crate::chatwidget::tests::make_chatwidget_manual_with_sender().await;
+    let codex_home = tempfile::tempdir().unwrap();
+    replaced_chat.local_settings.codex_home =
+        AbsolutePathBuf::from_absolute_path(codex_home.path()).expect("absolute temporary path");
+    chat.local_settings.codex_home =
+        AbsolutePathBuf::from_absolute_path(codex_home.path()).expect("absolute temporary path");
+    let pet_id = "missing-custom-pet".to_string();
+
+    replaced_chat.set_tui_pet(/*pet*/ Some(pet_id.clone()));
+    let replaced_event = tokio::time::timeout(
+        std::time::Duration::from_secs(/*secs*/ 5),
+        replaced_rx.recv(),
+    )
+    .await
+    .expect("replaced widget pet load completion")
+    .expect("replaced widget pet load event");
+    let AppEvent::ConfiguredPetLoaded {
+        generation: replaced_generation,
+        ..
+    } = replaced_event
+    else {
+        panic!("expected configured pet completion");
+    };
+
+    chat.set_tui_pet(/*pet*/ Some(pet_id.clone()));
+    let event = tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), rx.recv())
+        .await
+        .expect("configured pet load completion")
+        .expect("configured pet load event");
+    let AppEvent::ConfiguredPetLoaded {
+        generation,
+        pet_id: loaded_pet_id,
+        ..
+    } = event
+    else {
+        panic!("expected configured pet completion");
+    };
+    assert_eq!(loaded_pet_id, pet_id);
+
+    assert!(!chat.finish_configured_pet_load(
+        replaced_generation,
+        pet_id.clone(),
+        /*result*/ Ok(None),
+    ));
+    assert!(chat.finish_configured_pet_load(
+        generation,
+        pet_id,
+        /*result*/
+        Ok(Some(crate::pets::test_ambient_pet(
+            chat.frame_requester.clone(),
+            /*animations_enabled*/ false,
+        ))),
+    ));
+    let area = ratatui::layout::Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 24,
+    );
+    assert!(chat.ambient_pet_draw(area, area.bottom()).is_some());
 }
 
 #[tokio::test]

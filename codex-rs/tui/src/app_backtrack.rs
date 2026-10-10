@@ -166,13 +166,21 @@ impl App {
             return;
         }
         let _ = tui.enter_alt_screen();
-        self.overlay = Some(Overlay::new_transcript(
-            self.transcript_cells.clone(),
-            self.keymap.pager.clone(),
-            self.local_settings
-                .copy_on_select(&codex_terminal_detection::terminal_info()),
-            self.local_settings.tui.mouse_scroll_speed.unwrap_or(1.0),
-        ));
+        self.overlay = Some(
+            Overlay::new_transcript(
+                self.transcript_cells.clone(),
+                self.keymap.pager.clone(),
+                self.local_settings
+                    .copy_on_select(&codex_terminal_detection::terminal_info()),
+                self.local_settings
+                    .tui
+                    .mouse_scroll_speed
+                    .unwrap_or(/*default*/ 1.0),
+            )
+            .with_copy_on_select_clear_selection(
+                self.local_settings.tui.copy_on_select_clear_selection,
+            ),
+        );
         if self.scrollback_has_older_history
             && let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut()
         {

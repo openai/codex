@@ -137,6 +137,10 @@ impl BottomPaneView for KeymapCaptureView {
         crate::keymap::KeymapContextSet::raw_key_capture()
     }
 
+    fn accepts_input_when_disconnected(&self) -> bool {
+        true
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if key_event.kind == KeyEventKind::Release
             || (self.capture_mode == KeymapCaptureMode::Chord

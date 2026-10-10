@@ -388,6 +388,7 @@ pub(crate) fn build_theme_picker_params(
         }) as Box<dyn Fn(&crate::app_event_sender::AppEventSender) + Send + Sync>,
     );
     SelectionViewParams {
+        allow_input_when_disconnected: true,
         title: Some("Select Syntax Theme".to_string()),
         subtitle: Some(theme_picker_subtitle(
             codex_home_owned.as_deref(),

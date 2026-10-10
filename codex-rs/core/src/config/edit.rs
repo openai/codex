@@ -62,6 +62,8 @@ pub enum ConfigEdit {
     SetSkillConfig { path: PathBuf, enabled: bool },
     /// Set or clear a skill config entry under `[[skills.config]]` by name.
     SetSkillConfigByName { name: String, enabled: bool },
+    /// Enable or disable TUI notifications without replacing custom event filters.
+    SetTuiNotificationsEnabled { enabled: bool },
     /// Set trust_level under `[projects."<path>"]`,
     /// migrating inline tables to explicit tables.
     SetProjectTrustLevel { path: PathBuf, level: TrustLevel },
@@ -310,6 +312,22 @@ impl ConfigDocument {
             }
             ConfigEdit::SetSkillConfigByName { name, enabled } => {
                 Ok(self.set_skill_config(SkillConfigSelector::Name(name.clone()), *enabled))
+            }
+            ConfigEdit::SetTuiNotificationsEnabled { enabled } => {
+                let segments = ["tui", "notifications"];
+                let custom_filters = segments
+                    .iter()
+                    .try_fold(self.doc.as_item(), |item, segment| {
+                        item.as_table_like()?.get(segment)
+                    })
+                    .and_then(TomlItem::as_array)
+                    .is_some();
+                if custom_filters {
+                    anyhow::bail!(
+                        "Event-specific notifications are configured. Edit those filters in the config file."
+                    );
+                }
+                Ok(self.write_value(&segments, value(*enabled)))
             }
             ConfigEdit::SetPath { segments, value } => {
                 if is_structured_feature_path(segments) && value.as_bool().is_some() {

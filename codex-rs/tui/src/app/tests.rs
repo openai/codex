@@ -2039,6 +2039,11 @@ async fn token_usage_update_refreshes_status_line_with_runtime_context_window() 
         /*use_theme_colors*/ true,
     );
 
+    assert_eq!(
+        app.chat_widget.config_panel_tui.status_line,
+        app.chat_widget.local_settings.tui.status_line
+    );
+    assert!(app.chat_widget.config_panel_tui.status_line_use_colors);
     assert_eq!(app.chat_widget.status_line_text(), None);
 
     app.handle_thread_event_now(ThreadBufferedEvent::Notification(Box::new(
@@ -6193,6 +6198,8 @@ async fn make_test_app() -> Box<App> {
 
     Box::new(App {
         feature_write_lock: Arc::default(),
+        config_notification_test_generation: 0,
+        config_notification_test_pending: None,
         model_catalog: chat_widget.model_catalog(),
         session_telemetry,
         app_event_tx,
@@ -6229,6 +6236,7 @@ async fn make_test_app() -> Box<App> {
         enhanced_keys_supported: false,
         keymap: crate::keymap::RuntimeKeymap::defaults(),
         key_chord_matcher: crate::keymap::KeyChordMatcher::default(),
+        routed_key_activation: None,
         commit_animation: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -6314,6 +6322,8 @@ pub(super) async fn make_test_app_with_channels() -> (
     (
         Box::new(App {
             feature_write_lock: Arc::default(),
+            config_notification_test_generation: 0,
+            config_notification_test_pending: None,
             model_catalog: chat_widget.model_catalog(),
             session_telemetry,
             app_event_tx,
@@ -6350,6 +6360,7 @@ pub(super) async fn make_test_app_with_channels() -> (
             enhanced_keys_supported: false,
             keymap: crate::keymap::RuntimeKeymap::defaults(),
             key_chord_matcher: crate::keymap::KeyChordMatcher::default(),
+            routed_key_activation: None,
             commit_animation: None,
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),

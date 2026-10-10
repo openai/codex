@@ -161,8 +161,35 @@ impl ChatWidget {
         self.refresh_pending_input_preview();
     }
 
-    pub(crate) fn handle_disconnected_view_key(&mut self, key: KeyEvent) {
-        self.bottom_pane.handle_key_event(key);
+    pub(crate) fn handle_disconnected_view_key(
+        &mut self,
+        key: KeyEvent,
+        activation_key: Option<crate::key_hint::KeyBinding>,
+    ) {
+        if crate::key_hint::ctrl(KeyCode::Char('c')).is_press(key) {
+            let _ = self.cancel_active_disconnected_view();
+        } else {
+            self.bottom_pane
+                .handle_key_event_with_activation_key(key, activation_key);
+        }
+    }
+
+    pub(crate) fn active_view_accepts_input_when_disconnected(&self) -> bool {
+        self.bottom_pane
+            .active_view_accepts_input_when_disconnected()
+    }
+
+    pub(crate) fn cancel_active_disconnected_view(&mut self) -> bool {
+        let had_view = self.active_view_accepts_input_when_disconnected();
+        if had_view {
+            self.revert_terminal_title_setup_preview();
+            let _ = self.bottom_pane.on_ctrl_c();
+        }
+        had_view
+    }
+
+    pub(crate) fn active_view_is(&self, view_id: &'static str) -> bool {
+        self.bottom_pane.active_view_id() == Some(view_id)
     }
 
     pub(crate) fn handle_restricted_key(&mut self, key: KeyEvent, mode: RestrictedInputMode) {

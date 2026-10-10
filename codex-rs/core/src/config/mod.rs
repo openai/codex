@@ -827,6 +827,9 @@ pub struct Config {
     /// Override the terminal-specific default for copying transcript mouse selections.
     pub tui_copy_on_select: codex_config::types::CopyOnSelect,
 
+    /// Whether to deselect transcript text after a confirmed automatic copy.
+    pub tui_copy_on_select_clear_selection: bool,
+
     /// Right-click text paste fallback for the fullscreen TUI.
     pub tui_right_click_paste: codex_config::types::RightClickPaste,
 
@@ -4597,6 +4600,10 @@ impl Config {
                 .as_ref()
                 .map(|tui| tui.copy_on_select)
                 .unwrap_or_default(),
+            tui_copy_on_select_clear_selection: cfg
+                .tui
+                .as_ref()
+                .is_some_and(|tui| tui.copy_on_select_clear_selection),
             tui_right_click_paste: cfg
                 .tui
                 .as_ref()

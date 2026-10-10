@@ -291,8 +291,8 @@ impl TranscriptView {
         }
     }
 
-    /// Track delivery for the current selection. Explicit copies release it on confirmation;
-    /// automatic copies, failures, and unacknowledged terminal writes retain the revision.
+    /// Deselect only after confirmed delivery when the current copy policy requests it.
+    /// Failures and unacknowledged terminal writes retain the selection.
     pub(crate) fn copy_selected_text_with(
         &mut self,
         cells: &[Arc<dyn HistoryCell>],
@@ -396,8 +396,9 @@ impl TranscriptView {
             }
             ViewAction::Changed | ViewAction::OpenLink(_) => return None,
         };
-        let clear_selection = !matches!(action, ViewAction::CopyOnSelect(_));
-        let publish_primary = !clear_selection && self.primary_selection;
+        let selection_copy = self.selection_copy(action);
+        let clear_selection = selection_copy.clear_selection();
+        let publish_primary = selection_copy.publishes_primary() && self.primary_selection;
         let mut primary_owner = None;
         let result =
             self.copy_selected_text_with(cells, text, clear_selection, |rich, rich_format| {

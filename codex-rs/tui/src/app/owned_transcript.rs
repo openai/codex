@@ -48,6 +48,8 @@ impl App {
         view.copy_on_select = self
             .local_settings
             .copy_on_select(&codex_terminal_detection::terminal_info());
+        view.copy_on_select_clear_selection =
+            self.local_settings.tui.copy_on_select_clear_selection;
         view.set_keymap_bindings(&self.keymap);
         view.set_presentation(view.is_detailed(), chat_widget.history_render_mode());
         let active_key = chat_widget.active_cell_transcript_key();

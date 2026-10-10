@@ -61,6 +61,13 @@ impl Overlay {
         Self::Transcript(overlay)
     }
 
+    pub(crate) fn with_copy_on_select_clear_selection(mut self, enabled: bool) -> Self {
+        if let Self::Transcript(overlay) = &mut self {
+            overlay.view.copy_on_select_clear_selection = enabled;
+        }
+        self
+    }
+
     pub(crate) fn new_static_with_lines(
         lines: Vec<Line<'static>>,
         title: String,

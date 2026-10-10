@@ -1,0 +1,21 @@
+---
+source: tui/src/config_panel/config_panel_tests.rs
+assertion_line: 73
+expression: "render(&panel, 140)"
+---
+
+  Configuration
+  Changes save automatically; some apply after restarting Codex.
+  Settings in this group: 3.
+
+   Appearance   Notifications   Input   Sessions   Text selection
+
+› Notifications        [x] On               Let your terminal notify you when a turn finishes or approval is needed.
+  Notify when          Unfocused ›          Only notify while you are away, or allow notifications while this terminal is focused too.
+  Test notification    Send in 5s ›         Sends in 5 seconds. Switch apps: your terminal may hide notifications while focused.
+
+
+
+
+
+  left/right group · / search · enter edit setting · esc close

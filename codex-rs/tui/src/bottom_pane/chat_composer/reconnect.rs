@@ -86,6 +86,7 @@ impl ChatComposer {
                 .filter(|_| text.trim().lines().count() == 1);
             if matches!(command, Some(SlashCommandItem::Builtin(command))
                 if command == SlashCommand::Warnings
+                    || command == SlashCommand::Config
                     || mode == RestrictedInputMode::UnavailableThread && command.available_when_thread_unavailable())
             {
                 return self

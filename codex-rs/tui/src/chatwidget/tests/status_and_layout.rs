@@ -612,7 +612,7 @@ async fn configured_pet_load_is_deferred_until_after_construction() {
         .unwrap();
     assert_matches!(
         event,
-        AppEvent::ConfiguredPetLoaded { pet_id, result } => {
+        AppEvent::ConfiguredPetLoaded { pet_id, result, .. } => {
             assert_eq!(pet_id, crate::pets::DEFAULT_PET_ID);
             assert!(result.unwrap().is_some());
         }

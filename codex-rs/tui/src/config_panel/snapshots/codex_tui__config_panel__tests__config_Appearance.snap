@@ -1,0 +1,21 @@
+---
+source: tui/src/config_panel/config_panel_tests.rs
+assertion_line: 61
+expression: "render(&panel, 140)"
+---
+
+  Configuration
+  Changes save automatically; some apply after restarting Codex.
+  Settings in this group: 7.
+
+   Appearance   Notifications   Input   Sessions   Text selection
+
+› Theme                  Automatic ›          Choose a syntax color palette with a live preview.
+  Animations             [ ] Off              Animate the welcome screen, working indicator, and transitions. Restart Codex to apply.
+      Composer stars     Unavailable          Turn on animations, then restart Codex to enable composer stars.
+  Tips                   [ ] Off              Show helpful shortcuts and suggestions. Restart Codex to apply.
+  Status line colors     [ ] Off              Use theme colors for the model, branch, and other status line fields.
+  Status line fields     Configure ›          Choose and reorder the information below the composer.
+  Terminal title fields  Configure ›          Choose and reorder the information in your terminal tab or window title.
+
+  left/right group · / search · enter edit setting · esc close

@@ -52,6 +52,7 @@ use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::hooks_rpc::HookTrustUpdate;
+use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::KeyChordMatcher;
 use crate::keymap::RuntimeKeymap;
@@ -216,6 +217,7 @@ mod app_server_thread_ownership;
 mod backend_banner_fallback;
 mod background_requests;
 mod composer_hints;
+mod config_panel;
 mod config_persistence;
 mod connector_mentions;
 mod daemon_menu;
@@ -256,6 +258,7 @@ mod replay_filter;
 mod resize_reflow;
 mod resume_config;
 mod right_click_paste;
+pub(crate) use right_click_paste::PasteEnvironment;
 mod safety_buffering;
 mod server_version_notice;
 mod session_lifecycle;
@@ -529,6 +532,8 @@ struct InitialHistoryReplayBuffer {
 
 pub(crate) struct App {
     feature_write_lock: Arc<tokio::sync::Mutex<()>>,
+    config_notification_test_generation: u64,
+    config_notification_test_pending: Option<u64>,
     model_catalog: Arc<ModelCatalog>,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) app_event_tx: AppEventSender,
@@ -574,6 +579,7 @@ pub(crate) struct App {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) keymap: RuntimeKeymap,
     pub(crate) key_chord_matcher: KeyChordMatcher,
+    routed_key_activation: Option<KeyBinding>,
 
     /// The foreground loop owns stream pacing; stopped animations have no timer.
     pub(crate) commit_animation: Option<tokio::time::Interval>,
@@ -899,6 +905,9 @@ impl App {
         if self.reconnect.offline
             && !transcript_owns_input
             && !self.chat_widget.keymap_contexts().is_warnings()
+            && !self
+                .chat_widget
+                .active_view_accepts_input_when_disconnected()
             && let TuiEvent::Key(key) = &event
             && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
             && key.modifiers.contains(KeyModifiers::CONTROL)
@@ -923,6 +932,11 @@ impl App {
             || matches!(&event, TuiEvent::Mouse(mouse) if mouse.kind != crossterm::event::MouseEventKind::Moved)
         {
             self.cancel_pending_key_chord();
+        }
+        if matches!(&event, TuiEvent::FocusLost)
+            || matches!(&event, TuiEvent::Mouse(mouse) if mouse.kind != crossterm::event::MouseEventKind::Moved)
+        {
+            self.chat_widget.interrupt_config_editor_transition();
         }
 
         if self.overlay.is_none()
@@ -1032,16 +1046,29 @@ impl App {
                         && self.chat_widget.agents_navigation_key_available()))
             {
                 self.open_agents_overview(app_server);
-            } else if self.reconnect.presentation == reconnect::ReconnectPresentation::Overview {
-                self.chat_widget.handle_disconnected_view_key(*key);
-                if self
-                    .chat_widget
-                    .selected_index_for_present_view(agents_overview::AGENTS_OVERVIEW_VIEW_ID)
-                    .is_none()
+            } else if self
+                .chat_widget
+                .active_view_accepts_input_when_disconnected()
+                || (self.reconnect.presentation == reconnect::ReconnectPresentation::Overview
+                    && self
+                        .chat_widget
+                        .active_view_is(agents_overview::AGENTS_OVERVIEW_VIEW_ID))
+            {
+                let activation_key = self.routed_key_activation.take();
+                self.chat_widget
+                    .handle_disconnected_view_key(*key, activation_key);
+                if self.reconnect.presentation == reconnect::ReconnectPresentation::Overview
+                    && self
+                        .chat_widget
+                        .selected_index_for_present_view(agents_overview::AGENTS_OVERVIEW_VIEW_ID)
+                        .is_none()
                 {
                     self.reconnect.presentation = reconnect::ReconnectPresentation::Conversation;
                 }
             } else {
+                if self.reconnect.presentation == reconnect::ReconnectPresentation::Overview {
+                    self.reconnect.presentation = reconnect::ReconnectPresentation::Conversation;
+                }
                 self.chat_widget
                     .handle_restricted_key(*key, RestrictedInputMode::Disconnected);
             }
@@ -1090,12 +1117,15 @@ impl App {
                             self.reset_backtrack_state();
                         }
                     }
-                    self.chat_widget.handle_paste(pasted);
-                    if self.reconnect.offline
+                    let restrict_disconnected_input = self.reconnect.offline
                         && !self.chat_widget.keymap_contexts().is_warnings()
                         && self.reconnect.presentation
                             == reconnect::ReconnectPresentation::Conversation
-                    {
+                        && !self
+                            .chat_widget
+                            .active_view_accepts_input_when_disconnected();
+                    self.chat_widget.handle_paste(pasted);
+                    if restrict_disconnected_input {
                         self.chat_widget.handle_restricted_key(
                             KeyEvent::new(KeyCode::Null, KeyModifiers::NONE),
                             RestrictedInputMode::Disconnected,

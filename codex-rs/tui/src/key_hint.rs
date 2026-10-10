@@ -145,6 +145,17 @@ impl KeyBinding {
         }
     }
 
+    /// Return whether two events came from the same held key.
+    ///
+    /// Shift can change Tab into BackTab while it is held, so both codes represent Tab here.
+    pub(crate) fn is_same_physical_key(self, other: Self) -> bool {
+        let physical_code = |binding: Self| match binding.normalized_parts().0 {
+            KeyCode::BackTab => KeyCode::Tab,
+            code => code,
+        };
+        physical_code(self) == physical_code(other)
+    }
+
     pub(crate) fn spans(&self) -> Vec<Span<'static>> {
         vec![self.into()]
     }
@@ -154,6 +165,10 @@ pub(crate) fn normalize_key_parts(
     key: KeyCode,
     mut modifiers: KeyModifiers,
 ) -> (KeyCode, KeyModifiers) {
+    if key == KeyCode::BackTab || (key == KeyCode::Tab && modifiers.contains(KeyModifiers::SHIFT)) {
+        modifiers.remove(KeyModifiers::SHIFT);
+        return (KeyCode::BackTab, modifiers);
+    }
     let KeyCode::Char(ch) = key else {
         return (key, modifiers);
     };

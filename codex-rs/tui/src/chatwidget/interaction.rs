@@ -65,7 +65,21 @@ impl ChatWidget {
         std::mem::take(&mut self.bottom_pane.key_chord_reset_requested)
     }
 
+    pub(crate) fn consume_view_transition_key_event(&mut self, key_event: KeyEvent) -> bool {
+        self.bottom_pane
+            .consume_view_transition_key_event(key_event)
+    }
+
+    #[cfg(test)]
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) -> KeyEventAction {
+        self.handle_key_event_with_activation_key(key_event, /*activation_key*/ None)
+    }
+
+    pub(crate) fn handle_key_event_with_activation_key(
+        &mut self,
+        key_event: KeyEvent,
+        activation_key: Option<crate::key_hint::KeyBinding>,
+    ) -> KeyEventAction {
         if self.handle_startup_submission_key(key_event) {
             return KeyEventAction::None;
         }
@@ -89,7 +103,8 @@ impl ChatWidget {
             let should_pause_active_goal = self
                 .bottom_pane
                 .active_view_will_interrupt_turn_on_key_event(key_event);
-            self.bottom_pane.handle_key_event(key_event);
+            self.bottom_pane
+                .handle_key_event_with_activation_key(key_event, activation_key);
             if should_pause_active_goal {
                 self.pause_active_goal_for_interrupt();
             }
@@ -100,7 +115,8 @@ impl ChatWidget {
         }
 
         if self.shortcut_overlay_visible() && key_hint::plain(KeyCode::Esc).is_press(key_event) {
-            self.bottom_pane.handle_key_event(key_event);
+            self.bottom_pane
+                .handle_key_event_with_activation_key(key_event, activation_key);
             return KeyEventAction::None;
         }
 
@@ -258,7 +274,9 @@ impl ChatWidget {
                 let had_modal_or_popup = !self.bottom_pane.no_modal_or_popup_active();
                 let should_pause_active_goal =
                     self.bottom_pane.should_interrupt_running_task(key_event);
-                let input_result = self.bottom_pane.handle_key_event(key_event);
+                let input_result = self
+                    .bottom_pane
+                    .handle_key_event_with_activation_key(key_event, activation_key);
                 if matches!(
                     input_result,
                     InputResult::None | InputResult::ParentOwnedInputBlocked

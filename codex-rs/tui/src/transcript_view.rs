@@ -47,6 +47,26 @@ pub(crate) use input::JumpTarget;
 pub(crate) use input::ViewAction;
 pub(crate) use layout::ActivityTranscriptLines;
 
+/// Copy origin plus the deselection policy applied after confirmed delivery.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SelectionCopy {
+    Explicit,
+    OnSelect { clear_selection: bool },
+}
+
+impl SelectionCopy {
+    fn clear_selection(self) -> bool {
+        match self {
+            Self::Explicit => true,
+            Self::OnSelect { clear_selection } => clear_selection,
+        }
+    }
+
+    fn publishes_primary(self) -> bool {
+        matches!(self, Self::OnSelect { .. })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum EntryKey {
     Cell(usize),
@@ -89,6 +109,7 @@ pub(crate) struct TranscriptView {
     pub(crate) mouse_scroll_speed: f64,
     pending_mouse_scroll: f64,
     pub(crate) copy_on_select: bool,
+    pub(crate) copy_on_select_clear_selection: bool,
     pub(crate) primary_selection: bool,
     position: Position,
     follow_control: follow_control::FollowControl,
@@ -126,6 +147,7 @@ impl Default for TranscriptView {
             mouse_scroll_speed: 1.0,
             pending_mouse_scroll: 0.0,
             copy_on_select: false,
+            copy_on_select_clear_selection: false,
             primary_selection: false,
             position: Position::Latest,
             follow_control: follow_control::FollowControl::default(),

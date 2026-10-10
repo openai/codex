@@ -492,6 +492,7 @@ impl App {
     pub(super) fn replace_chat_widget(&mut self, mut chat_widget: ChatWidget) {
         chat_widget.fork_in_progress = self.chat_widget.fork_in_progress;
         self.pending_right_click_paste = None;
+        self.config_notification_test_pending = None;
         if !self.chat_widget.realtime_conversation_is_running() {
             self.retain_realtime_replay_state_before_replace();
         }
@@ -504,6 +505,7 @@ impl App {
         if chat_widget.last_terminal_title.is_none() {
             chat_widget.last_terminal_title = previous_terminal_title;
         }
+        chat_widget.config_panel_tui = self.chat_widget.config_panel_tui.clone();
         chat_widget.remote_connection = self.chat_widget.remote_connection.clone();
         chat_widget.snapshot_local_images = self.app_server_target.uses_remote_workspace();
         chat_widget.set_local_worktree_operations(self.chat_widget.local_worktree_operations);

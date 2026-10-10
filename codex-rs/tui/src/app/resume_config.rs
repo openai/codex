@@ -10,6 +10,21 @@ use crate::startup_hooks_review::load_startup_hooks_review_entry;
 use crate::startup_hooks_review::maybe_run_startup_hooks_review;
 use codex_config::types::ResumeCwdMode;
 
+/// Marks "Current directory" unavailable for remote sessions without a local cwd override.
+pub(super) fn resume_current_directory_availability(
+    app_server_target: &AppServerTarget,
+    environment_manager: &EnvironmentManager,
+    cwd_override: Option<&Path>,
+) -> crate::config_panel::ResumeCurrentAvailability {
+    if crate::uses_remote_workspace_or_environment(app_server_target, environment_manager)
+        && cwd_override.is_none()
+    {
+        crate::config_panel::ResumeCurrentAvailability::RequiresCwdOverride
+    } else {
+        crate::config_panel::ResumeCurrentAvailability::Available
+    }
+}
+
 impl App {
     pub(super) async fn resume_config_for_target(
         &mut self,

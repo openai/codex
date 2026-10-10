@@ -2,7 +2,8 @@
 //! Stationary link clicks open on release; dragging or scrolling keeps the gesture in selection.
 //! Shift-click extends the existing selection from its original text unit.
 //! Optional automatic copying happens only when a nonempty mouse selection is released.
-//! Automatic copies retain the selection; explicit copies clear it after confirmed delivery.
+//! Automatic copies optionally clear the selection; explicit copies always clear it after
+//! confirmed delivery.
 //! Wheel input accumulates fractional rows and discards the remainder when direction reverses.
 
 use crate::key_hint::KeyBindingListExt;
@@ -88,6 +89,20 @@ impl JumpTarget {
 }
 
 impl TranscriptView {
+    /// Automatic copies may deselect but still publish PRIMARY, so retain their source.
+    pub(crate) fn selection_copy(&self, action: &ViewAction) -> SelectionCopy {
+        match action {
+            ViewAction::CopyOnSelect(_) => SelectionCopy::OnSelect {
+                clear_selection: self.copy_on_select_clear_selection,
+            },
+            ViewAction::Changed
+            | ViewAction::PrimarySelection(_)
+            | ViewAction::Copy(_)
+            | ViewAction::CopyAndFollow(_)
+            | ViewAction::OpenLink(_) => SelectionCopy::Explicit,
+        }
+    }
+
     /// Resolve links in the last rendered transcript, sharing geometry with click activation.
     pub(crate) fn link_at(&self, column: u16, row: u16) -> Option<String> {
         if !self.area.contains(ScreenPosition::new(column, row)) {

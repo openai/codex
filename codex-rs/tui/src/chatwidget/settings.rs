@@ -304,6 +304,7 @@ impl ChatWidget {
 
     /// Set the syntax theme override in the widget's config copy.
     pub(crate) fn set_tui_theme(&mut self, theme: Option<String>) {
+        self.config_panel_tui.theme.clone_from(&theme);
         self.local_settings.tui.theme = theme;
     }
 

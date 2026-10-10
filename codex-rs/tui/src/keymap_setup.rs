@@ -325,6 +325,7 @@ pub(crate) fn build_keymap_action_menu_params(
     });
 
     SelectionViewParams {
+        allow_input_when_disconnected: true,
         view_id: Some(KEYMAP_ACTION_MENU_VIEW_ID),
         header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
         footer_note: Some(Line::from(vec![
@@ -392,6 +393,7 @@ pub(crate) fn build_keymap_replace_binding_menu_params(
         .collect();
 
     SelectionViewParams {
+        allow_input_when_disconnected: true,
         view_id: Some(KEYMAP_REPLACE_BINDING_MENU_VIEW_ID),
         header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
         footer_hint: Some(picker_hint_line_for_keymap(&runtime_keymap.list)),
@@ -416,6 +418,7 @@ pub(crate) fn build_keymap_conflict_params(
         KeymapCaptureMode::SingleKey
     };
     SelectionViewParams {
+        allow_input_when_disconnected: true,
         header: Box::new(
             Paragraph::new(vec![
                 Line::from("Shortcut Conflict".bold()),
@@ -675,6 +678,10 @@ fn key_parts_to_config_key_spec(
     let key = match code {
         KeyCode::Enter => "enter".to_string(),
         KeyCode::Tab => "tab".to_string(),
+        KeyCode::BackTab => {
+            modifiers.insert(KeyModifiers::SHIFT);
+            "tab".to_string()
+        }
         KeyCode::Backspace => "backspace".to_string(),
         KeyCode::Esc => "esc".to_string(),
         KeyCode::Delete => "delete".to_string(),
@@ -1765,6 +1772,14 @@ mod tests {
         assert_eq!(
             key_event_to_config_key_spec(KeyEvent::new(KeyCode::PageDown, KeyModifiers::SHIFT)),
             Ok("shift-page-down".to_string())
+        );
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::from(KeyCode::BackTab)),
+            Ok("shift-tab".to_string())
+        );
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT)),
+            Ok("shift-tab".to_string())
         );
     }
 

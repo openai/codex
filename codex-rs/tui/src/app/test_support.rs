@@ -22,6 +22,8 @@ pub(crate) async fn make_test_app() -> Box<App> {
 
     Box::new(App {
         feature_write_lock: Arc::default(),
+        config_notification_test_generation: 0,
+        config_notification_test_pending: None,
         model_catalog: chat_widget.model_catalog(),
         session_telemetry,
         app_event_tx,
@@ -59,6 +61,7 @@ pub(crate) async fn make_test_app() -> Box<App> {
         enhanced_keys_supported: false,
         keymap: crate::keymap::RuntimeKeymap::defaults(),
         key_chord_matcher: crate::keymap::KeyChordMatcher::default(),
+        routed_key_activation: None,
         commit_animation: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),

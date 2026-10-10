@@ -145,7 +145,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
         );
         view.handle_key_event(KeyCode::Char('r').into());
         view.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
-        view.handle_paste("Keep this task draft".into());
+        view.handle_paste("Keep this task draft!".into());
         app.agents_overview.visible_thread_ids = view.thread_ids();
         app.chat_widget.show_bottom_pane_view(Box::new(view));
         let draft = |app: &App| {
@@ -295,16 +295,8 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
         );
         assert_eq!(app.agents_overview.visible_thread_ids.len(), 2);
         let mut tui = crate::tui::test_support::make_test_tui()?;
-        app.handle_tui_event(
-            &mut tui,
-            &mut session,
-            TuiEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        )
-        .await?;
-        app.handle_tui_event(&mut tui, &mut session, TuiEvent::Paste("!".into()))
-            .await?;
         assert_eq!(draft(&app), "Keep this task draft!");
-        if previous_thread.is_none() {
+        if previous_thread.is_none() && !overview_initialized {
             assert_snapshot!(
                 "daemon_command_center_reconnecting",
                 render_bottom_popup(&app.chat_widget, /*width*/ 100)

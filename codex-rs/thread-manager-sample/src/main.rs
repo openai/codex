@@ -295,6 +295,7 @@ async fn new_config(
         tui_fullscreen_transcript: false,
         tui_mouse_scroll_speed: None,
         tui_copy_on_select: Default::default(),
+        tui_copy_on_select_clear_selection: false,
         tui_right_click_paste: Default::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
