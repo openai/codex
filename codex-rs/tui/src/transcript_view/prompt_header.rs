@@ -19,7 +19,7 @@ pub(super) fn line(
     cells: &[Arc<dyn HistoryCell>],
     first: usize,
     width: u16,
-) -> Option<Line<'static>> {
+) -> Option<(Line<'static>, EntryKey)> {
     // A prompt that is still visible supplies its own context. Only pin a preceding prompt.
     if width < 16
         || cells
@@ -29,11 +29,16 @@ pub(super) fn line(
     {
         return None;
     }
-    let prompt = cells[..first.min(cells.len())]
+    let (index, prompt) = cells[..first.min(cells.len())]
         .iter()
+        .enumerate()
         .rev()
-        .filter_map(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
-        .find(|prompt| prompt.has_visible_content())?;
+        .find_map(|(index, cell)| {
+            cell.as_any()
+                .downcast_ref::<UserHistoryCell>()
+                .filter(|prompt| prompt.has_visible_content())
+                .map(|prompt| (index, prompt))
+        })?;
     // Bound work even for pasted multi-megabyte prompts; sanitize before painting controls.
     let prefix: String = prompt.message.chars().take(/*n*/ 512).collect();
     let message = sanitize_user_text(prefix.into())
@@ -45,17 +50,20 @@ pub(super) fn line(
     } else {
         message
     };
-    Some(truncate_line_with_ellipsis_if_overflow(
-        Line::from(vec![
-            if prompt.spoken {
-                "› ".red().bold()
-            } else {
-                "› ".bold().dim()
-            },
-            message.into(),
-        ])
-        .style(crate::style::history_prompt_style()),
-        usize::from(width.saturating_sub(1)),
+    Some((
+        truncate_line_with_ellipsis_if_overflow(
+            Line::from(vec![
+                if prompt.spoken {
+                    "› ".red().bold()
+                } else {
+                    "› ".bold().dim()
+                },
+                message.into(),
+            ])
+            .style(crate::style::history_prompt_style()),
+            usize::from(width.saturating_sub(1)),
+        ),
+        EntryKey::cell(&cells[index]),
     ))
 }
 

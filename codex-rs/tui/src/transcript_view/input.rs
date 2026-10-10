@@ -229,13 +229,29 @@ impl TranscriptView {
         {
             return Some(action);
         }
+        let point = ScreenPosition::new(event.column, event.row);
+        if mode == MouseMode::Interactive
+            && event.kind == MouseEventKind::Down(MouseButton::Left)
+            && event.modifiers.is_empty()
+            && let Some((area, key)) = self.prompt_header_target
+            && area.contains(point)
+        {
+            self.last_click = None;
+            if let Some(index) = cells.iter().position(|cell| EntryKey::cell(cell) == key) {
+                self.end_selection(cells);
+                self.cancel_search();
+                self.clear_activity_focus();
+                self.jump_to_entry(cells, index);
+            }
+            return Some(ViewAction::Changed);
+        }
         if mode == MouseMode::Interactive
             && event.kind == MouseEventKind::Down(MouseButton::Left)
             && event
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
             && let Some((area, tip)) = &self.composer_tip
-            && area.contains(ScreenPosition::new(event.column, event.row))
+            && area.contains(point)
         {
             let column = usize::from(event.column - area.x);
             return tip
@@ -245,9 +261,7 @@ impl TranscriptView {
                 .terminal_destination()
                 .map(ViewAction::OpenLink);
         }
-        let inside = self
-            .area
-            .contains(ScreenPosition::new(event.column, event.row));
+        let inside = self.area.contains(point);
         let dragging = self
             .selection
             .as_ref()

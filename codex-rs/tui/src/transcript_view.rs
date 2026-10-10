@@ -101,6 +101,7 @@ pub(crate) struct TranscriptView {
     live_key: Option<(u16, ActiveCellTranscriptKey)>,
     live_continuation: bool,
     area: Rect,
+    prompt_header_target: Option<(Rect, EntryKey)>,
     suppressed_prompt_header: Option<prompt_header::SuppressedHeader>,
     visible: Vec<VisibleRow>,
     selection: Option<Selection>,
@@ -137,6 +138,7 @@ impl Default for TranscriptView {
             live_key: None,
             live_continuation: false,
             area: Rect::default(),
+            prompt_header_target: None,
             suppressed_prompt_header: None,
             visible: Vec::new(),
             selection: None,
@@ -173,6 +175,7 @@ impl TranscriptView {
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, cells: &[Arc<dyn HistoryCell>]) {
         self.composer_tip = None;
+        self.prompt_header_target = None;
         self.cache.begin_frame();
         self.sync_history_tail(cells);
         let current_cells = cells;
@@ -217,8 +220,10 @@ impl TranscriptView {
             }
             // Following may advance into the next turn after reserving the header row.
             start = self.start(cells);
-            if let Some(header) = prompt_header::line(cells, start.0, area.width) {
-                header.render(Rect::new(area.x, area.y, area.width, /*height*/ 1), buf);
+            if let Some((header, key)) = prompt_header::line(cells, start.0, area.width) {
+                let header_area = Rect::new(area.x, area.y, area.width, /*height*/ 1);
+                header.render(header_area, buf);
+                self.prompt_header_target = Some((header_area, key));
             } else {
                 body = area;
                 self.area = area;
