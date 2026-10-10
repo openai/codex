@@ -1,0 +1,43 @@
+---
+source: tui/src/app/agent_center_tests.rs
+expression: "format!(\"Initial display:\\n{before}\\n\\nAfter progress updates:\\n{after}\")"
+---
+Initial display:
+  Agent command center  Group: Status  g
+   All 5   Needs you 1   Working 3   Ready 1   Inactive 0                          tab/⇧tab filter
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+      Tasks                                               │ Task details
+  Needs input  1                                          │
+    ! Needs input                                         │ Alpha
+                                                          │ ● Working
+  Working  3                                              │
+    ● Bravo                                               │ Model: Unknown
+    ● Charlie                                             │ Reasoning: Unknown
+  › ● Alpha                                               │
+                                                          │ Project
+  Ready  1                                                │ /tmp/project
+    ○ Ready task                                          │
+                                                          │ Prompt
+                                                          │ Alpha
+                                                          │
+  ? help  esc back  ↑/↓ move  enter open  n new
+
+After progress updates:
+  Agent command center  Group: Status  g
+   All 5   Needs you 1   Working 3   Ready 1   Inactive 0                          tab/⇧tab filter
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+      Tasks                                               │ Task details
+  Needs input  1                                          │
+    ! Needs input                                         │ Alpha
+                                                          │ ● Working
+  Working  3                                              │
+    ● Bravo                                               │ Model: Unknown
+    ● Charlie                                             │ Reasoning: Unknown
+  › ● Alpha                                               │
+                                                          │ Project
+  Ready  1                                                │ /tmp/project
+    ○ Ready task                                          │
+                                                          │ Prompt
+                                                          │ Progress update 3
+                                                          │
+  ? help  esc back  ↑/↓ move  enter open  n new

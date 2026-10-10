@@ -1,5 +1,6 @@
 //! Dashboard for inspecting and managing the TUI's retained daemon tasks.
 //! Search, rename, status filters and selection survive metadata refreshes.
+//! Rows retain their relative order while they remain in the same status group.
 
 #[path = "agent_center/mod.rs"]
 pub(super) mod command_center;
@@ -141,6 +142,7 @@ impl AgentsOverviewProjectGroup {
 
 #[derive(Default)]
 pub(super) struct AgentsOverviewViewState {
+    row_order: HashMap<ThreadId, (AgentsOverviewGroup, usize)>,
     scroll: usize,
     page_height: usize,
     status_filter: usize,
@@ -197,7 +199,7 @@ pub(super) struct AgentsOverviewView {
 
 impl AgentsOverviewView {
     pub(super) fn new(
-        rows: Vec<AgentsOverviewRow>,
+        mut rows: Vec<AgentsOverviewRow>,
         selected_thread_id: Option<ThreadId>,
         worktrees_enabled: bool,
         use_theme_colors: bool,
@@ -205,6 +207,24 @@ impl AgentsOverviewView {
         keymap: RuntimeKeymap,
         state: Arc<Mutex<AgentsOverviewViewState>>,
     ) -> Self {
+        {
+            let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+            // The caller supplies recency order. Keep existing rows in place, and append
+            // new arrivals or status transitions in that order within their new group.
+            rows.sort_by_key(|row| {
+                let rank = state
+                    .row_order
+                    .get(&row.thread_id)
+                    .filter(|(group, _)| *group == row.group)
+                    .map_or(usize::MAX, |(_, rank)| *rank);
+                (row.group, rank)
+            });
+            state.row_order = rows
+                .iter()
+                .enumerate()
+                .map(|(rank, row)| (row.thread_id, (row.group, rank)))
+                .collect();
+        }
         let selected = state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

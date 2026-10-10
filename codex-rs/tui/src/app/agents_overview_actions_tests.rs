@@ -467,7 +467,8 @@ async fn hiding_tasks_keeps_selection_adjacent_in_display_order() -> Result<()> 
             app.agents_overview.visible_thread_ids = view.thread_ids();
             app.chat_widget.show_bottom_pane_view(Box::new(view));
             let expected = match (grouping, filtered) {
-                (AgentsOverviewGrouping::Status, false) => vec![3, 2, 1, 4],
+                // The preceding filtered case retains Other 2; rediscovered tasks append.
+                (AgentsOverviewGrouping::Status, false) => vec![3, 1, 4, 2],
                 (AgentsOverviewGrouping::Status, true) => vec![3, 1, 4],
                 (AgentsOverviewGrouping::Project | AgentsOverviewGrouping::Model, false) => {
                     vec![3, 4, 2, 1]
