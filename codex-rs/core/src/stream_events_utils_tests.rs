@@ -41,9 +41,13 @@ fn assistant_output_text(text: &str) -> ResponseItem {
 
 fn assistant_output_text_with_phase(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: Some(ResponseItemId::with_suffix("msg", "1")),
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
+            annotations: None,
+            logprobs: None,
             text: text.to_string(),
         }],
         phase,
@@ -55,12 +59,14 @@ fn assistant_output_text_with_phase(text: &str, phase: Option<MessagePhase>) -> 
 fn external_context_pollution_items_include_web_search_and_tool_search() {
     let polluting_items = [
         ResponseItem::WebSearchCall {
+            encrypted_content: None,
             id: None,
             status: Some("completed".to_string()),
             action: None,
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
+            encrypted_content: None,
             id: None,
             call_id: Some("search-1".to_string()),
             status: None,
@@ -97,6 +103,7 @@ fn external_context_pollution_items_include_web_search_and_tool_search() {
 fn external_context_pollution_items_exclude_local_tool_calls() {
     let non_polluting_items = [
         ResponseItem::LocalShellCall {
+            encrypted_content: None,
             id: None,
             call_id: Some("shell-1".to_string()),
             status: LocalShellStatus::Completed,
@@ -110,6 +117,8 @@ fn external_context_pollution_items_exclude_local_tool_calls() {
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCall {
+            status: None,
+            encrypted_content: None,
             id: None,
             name: "shell".to_string(),
             namespace: None,
@@ -127,6 +136,7 @@ fn external_context_pollution_items_exclude_local_tool_calls() {
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCall {
+            encrypted_content: None,
             id: None,
             status: None,
             call_id: "custom-1".to_string(),

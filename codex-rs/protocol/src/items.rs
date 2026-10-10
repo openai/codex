@@ -687,6 +687,8 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
     }
 
     Some(ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: Some(ResponseItemId::new("msg")),
         role: "user".to_string(),
         content,

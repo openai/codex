@@ -832,6 +832,8 @@ pub fn ev_assistant_message(id: &str, text: &str) -> Value {
 
 pub fn user_message_item(text: &str) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {

@@ -8,6 +8,8 @@ use pretty_assertions::assert_eq;
 
 fn message(content: Vec<ContentItem>) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content,

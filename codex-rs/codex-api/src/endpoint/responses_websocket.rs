@@ -946,6 +946,8 @@ mod tests {
         let api_request = ResponsesApiRequest {
             model: "gpt-test".to_string(),
             input: vec![ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: Some(ResponseItemId::with_suffix("msg", "1")),
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {

@@ -40,6 +40,8 @@ impl SectionHistory for History {
 
 fn user_message(texts: Vec<String>) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_owned(),
         content: texts

@@ -340,6 +340,8 @@ async fn responses_client_stream_request_preserves_item_ids() -> Result<()> {
     let request = ResponsesApiRequest {
         model: "gpt-test".into(),
         input: vec![ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: Some(ResponseItemId::with_suffix("msg", "1")),
             role: "user".into(),
             content: vec![ContentItem::InputText { text: "hi".into() }],
@@ -394,6 +396,8 @@ async fn responses_client_stream_request_sends_routing_fields_ahead_of_large_inp
     let request = ResponsesApiRequest {
         model: "gpt-test".into(),
         input: vec![ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "user".into(),
             content: vec![ContentItem::InputText { text: large_input }],
@@ -604,6 +608,8 @@ async fn azure_store_sends_ids_and_headers() -> Result<()> {
     let request = ResponsesApiRequest {
         model: "gpt-test".into(),
         input: vec![ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: Some(ResponseItemId::with_suffix("msg", "1")),
             role: "user".into(),
             content: vec![ContentItem::InputText { text: "hi".into() }],

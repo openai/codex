@@ -303,6 +303,8 @@ fn restored_input_order_accounts_for_surviving_local_sources() {
     let surviving_items = [(Some(7), false), (Some(100), true), (None, false)].map(
         |(user_input_order, inherited_user_message)| ResponseItemEnvelope {
             item: ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "user".to_owned(),
                 content: vec![ContentItem::InputText {

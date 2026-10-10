@@ -7,6 +7,8 @@ use super::*;
 #[test]
 fn preparation_canonicalizes_data_urls_and_rejects_remote_urls() {
     let mut items = vec![ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![
@@ -29,6 +31,8 @@ fn preparation_canonicalizes_data_urls_and_rejects_remote_urls() {
     assert_eq!(
         items,
         vec![ResponseItem::Message {
+            encrypted_content: None,
+            status: None,
             id: None,
             role: "user".to_string(),
             content: vec![
@@ -51,6 +55,8 @@ fn preparation_canonicalizes_data_urls_and_rejects_remote_urls() {
 #[test]
 fn preparation_replaces_invalid_message_audio_with_placeholders() {
     let mut items = vec![ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![
@@ -70,6 +76,8 @@ fn preparation_replaces_invalid_message_audio_with_placeholders() {
     assert_eq!(
         items,
         vec![ResponseItem::Message {
+            encrypted_content: None,
+            status: None,
             id: None,
             role: "user".to_string(),
             content: vec![

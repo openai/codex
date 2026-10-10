@@ -2261,7 +2261,7 @@ async fn guardian_denial_rejects_tool_call_with_rationale(
     assert!(recorded_history.iter().any(|item| {
         matches!(item, ResponseItem::Message { role, content, .. }
         if role == "assistant" && content.iter().any(|part| {
-            matches!(part, ContentItem::OutputText { text }
+            matches!(part, ContentItem::OutputText { text , .. }
                 if Some(text.as_str()) == record["decision"].as_str())
         }))
     }));

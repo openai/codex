@@ -1838,6 +1838,8 @@ async fn assert_thread_fork_freezes_active_paginated_turn_as_interrupted(
     let user_response_item = |id: &str| {
         RolloutItem::ResponseItem(
             ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {

@@ -120,9 +120,15 @@ impl<'a> From<&'a RolloutItem> for RolloutItemWire<'a> {
                 };
                 Self::ResponseItem {
                     payload: Cow::Owned(ResponseItem::Message {
+                        status: None,
+                        encrypted_content: None,
                         id: message.message_id.clone().map(ResponseItemId::from_server),
                         role: "assistant".to_owned(),
-                        content: vec![ContentItem::OutputText { text }],
+                        content: vec![ContentItem::OutputText {
+                            annotations: None,
+                            logprobs: None,
+                            text,
+                        }],
                         // Older Guardian clients exclude commentary from root-to-worker
                         // review. Keep the phase unspecified so they can review this
                         // confirmed delivery without claiming it ended the turn.
@@ -173,7 +179,7 @@ impl From<RolloutItemWire<'_>> for RolloutItem {
                     Some(metadata),
                 ) = (payload.as_ref(), metadata.as_deref())
                     && role == "assistant"
-                    && let [ContentItem::OutputText { text }] = content.as_slice()
+                    && let [ContentItem::OutputText { text, .. }] = content.as_slice()
                     && let Some(turn_id) = passthrough.turn_id.as_ref()
                     && let Some(acceptance_order) = metadata.user_input_order
                     && let Some(marker) = metadata.delivered_assistant_message.as_deref()

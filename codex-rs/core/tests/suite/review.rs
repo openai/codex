@@ -268,7 +268,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
                 }
             } else if role == "assistant" {
                 for c in content {
-                    if let ContentItem::OutputText { text } = c {
+                    if let ContentItem::OutputText { text, .. } = c {
                         if text.contains("<user_action>") {
                             saw_assistant_xml = true;
                         }
@@ -1157,6 +1157,8 @@ async fn review_input_isolated_from_parent_history() {
 
         // Prior user message (enveloped response_item)
         let user = codex_protocol::models::ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "user".to_string(),
             content: vec![codex_protocol::models::ContentItem::InputText {
@@ -1177,9 +1179,13 @@ async fn review_input_isolated_from_parent_history() {
 
         // Prior assistant message (enveloped response_item)
         let assistant = codex_protocol::models::ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "assistant".to_string(),
             content: vec![codex_protocol::models::ContentItem::OutputText {
+                annotations: None,
+                logprobs: None,
                 text: "parent: assistant reply".to_string(),
             }],
             phase: None,

@@ -627,6 +627,8 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
             parent_response_id: None,
             instructions: classifier_instructions(),
             input: vec![ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "user".to_owned(),
                 content: vec![

@@ -352,9 +352,13 @@ async fn concurrent_requests_retain_only_the_newest_completed_history() -> Resul
                 .test
                 .codex
                 .inject_response_items(vec![ResponseItem::Message {
+                    status: None,
+                    encrypted_content: None,
                     id: None,
                     role: "assistant".to_owned(),
                     content: vec![ContentItem::OutputText {
+                        annotations: None,
+                        logprobs: None,
                         text: format!("Observed action {index}"),
                     }],
                     phase: Some(MessagePhase::Commentary),

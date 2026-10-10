@@ -322,6 +322,8 @@ mod guardian_tests;
 
 fn user_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -391,9 +393,13 @@ async fn default_turn_context_assigns_missing_response_item_ids() {
 
 fn assistant_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
+            annotations: None,
+            logprobs: None,
             text: text.to_string(),
         }],
         phase: None,
@@ -589,6 +595,8 @@ async fn world_state_extension_metrics_follow_turn_model_switch() {
 
 fn skill_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -853,6 +861,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*concurrent_reasoning_summaries_enabled*/ false,
+        /*output_token_replay_enabled*/ false,
         /*attestation_provider*/ None,
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         codex_model_provider::WorkspaceRoutingContext::new(
@@ -2426,6 +2435,8 @@ async fn reconstruct_history_matches_live_compactions() {
 async fn reconstruct_history_uses_replacement_history_verbatim() {
     let (session, turn_context) = make_session_and_context().await;
     let summary_item = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -2443,6 +2454,8 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
             metadata: Some(CodexHarnessMetadata::default()),
         },
         ResponseItemEnvelope::new(ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
@@ -3095,6 +3108,8 @@ async fn prepares_image_failures_before_history_insertion() {
 async fn prepares_resumed_history_before_installing_it() {
     let (session, _turn_context) = make_session_and_context().await;
     let resumed_item = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![
@@ -3134,6 +3149,8 @@ async fn prepares_resumed_history_before_installing_it() {
     assert_eq!(
         raw_history_items(&history),
         vec![ResponseItem::Message {
+            encrypted_content: None,
+            status: None,
             id: None,
             role: "user".to_string(),
             content: vec![
@@ -4114,6 +4131,8 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
     let response_item =
         ContextualUserFragment::into(DeveloperInstructions::new("Subagent guidance."));
     let mut expected_item = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {
@@ -6907,6 +6926,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config
                 .features
                 .enabled(Feature::ConcurrentReasoningSummaries),
+            /*output_token_replay_enabled*/ false,
             /*attestation_provider*/ None,
             config.http_client_factory(),
             config.workspace_routing_context(),
@@ -9174,6 +9194,7 @@ where
             config
                 .features
                 .enabled(Feature::ConcurrentReasoningSummaries),
+            /*output_token_replay_enabled*/ false,
             /*attestation_provider*/ None,
             config.http_client_factory(),
             config.workspace_routing_context(),
@@ -11135,6 +11156,8 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
     let turn_context = Arc::new(turn_context);
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let compacted_summary = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -12479,6 +12502,8 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
 
     let history = sess.clone_history().await;
     let expected = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![
@@ -12663,6 +12688,8 @@ async fn thread_idle_lifecycle_waits_for_trigger_turn_mailbox_work() {
 async fn abort_empty_active_turn_preserves_pending_input() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
     let pending_item = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -13003,6 +13030,8 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         .await;
 
     let item = ResponseItem::FunctionCall {
+        status: None,
+        encrypted_content: None,
         id: None,
         name: "test_tool".to_string(),
         namespace: None,
@@ -13122,6 +13151,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         &Default::default(),
     );
     let item = ResponseItem::CustomToolCall {
+        encrypted_content: None,
         id: None,
         status: None,
         call_id: "call-1".to_string(),

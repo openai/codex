@@ -148,6 +148,8 @@ async fn independent_review_preserves_oversized_instruction_order() -> Result<()
         .inject_response_items(vec![
             responses::user_message_item(&followup),
             ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "developer".to_owned(),
                 content: vec![ContentItem::InputText {

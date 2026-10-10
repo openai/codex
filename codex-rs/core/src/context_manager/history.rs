@@ -356,7 +356,9 @@ impl ContextManager {
                                     .iter()
                                     .filter_map(|content| match content {
                                         ContentItem::InputText { text }
-                                        | ContentItem::OutputText { text } => Some(text.as_str()),
+                                        | ContentItem::OutputText { text, .. } => {
+                                            Some(text.as_str())
+                                        }
                                         _ => None,
                                     })
                                     .collect::<Vec<_>>()
@@ -1100,7 +1102,7 @@ fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
         ResponseItem::Message { content, .. } => content
             .iter()
             .map(|part| match part {
-                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
                     text_bytes(text)
                 }
                 ContentItem::InputImage { image, detail } => {

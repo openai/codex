@@ -49,7 +49,7 @@ pub fn truncate_assistant_output_text_to_token_budget(
         }
 
         content.retain_mut(|content_item| {
-            let ContentItem::OutputText { text } = content_item else {
+            let ContentItem::OutputText { text, .. } = content_item else {
                 return true;
             };
             if remaining_budget == 0 {
@@ -83,10 +83,14 @@ mod tests {
 
     fn message(role: &str, text: &str) -> ResponseItem {
         ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: role.to_string(),
             content: vec![if role == "assistant" {
                 ContentItem::OutputText {
+                    annotations: None,
+                    logprobs: None,
                     text: text.to_string(),
                 }
             } else {

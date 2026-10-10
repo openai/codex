@@ -4972,6 +4972,8 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread_id.clone(),
             history: Some(vec![ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -6101,6 +6103,8 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
 
     let history_text = "Hello from history";
     let history = vec![ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {

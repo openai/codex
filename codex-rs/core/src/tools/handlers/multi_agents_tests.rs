@@ -2804,6 +2804,8 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
             config.clone(),
             InitialHistory::Forked(vec![RolloutItem::ResponseItem(
                 ResponseItem::Message {
+                    status: None,
+                    encrypted_content: None,
                     id: None,
                     role: "user".to_string(),
                     content: vec![ContentItem::InputText {

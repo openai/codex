@@ -240,6 +240,8 @@ pub(crate) async fn exit_review_mode(
             &ctx,
             ctx.model_info(),
             &[ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: Some(ResponseItemId::new("msg")),
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: user_message }],
@@ -260,9 +262,13 @@ pub(crate) async fn exit_review_mode(
             ctx.as_ref(),
             ctx.model_info(),
             ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: Some(ResponseItemId::new("msg")),
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
+                    annotations: None,
+                    logprobs: None,
                     text: assistant_message,
                 }],
                 phase: None,

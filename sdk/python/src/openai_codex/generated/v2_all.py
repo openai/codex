@@ -1128,6 +1128,8 @@ class OutputTextContentItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    annotations: list | None = None
+    logprobs: list | None = None
     text: str
     type: Annotated[Literal["output_text"], Field(title="OutputTextContentItemType")]
 
@@ -3993,6 +3995,7 @@ class LocalShellCallResponseItem(BaseModel):
     )
     action: LocalShellAction
     call_id: Annotated[str | None, Field(description="Set when using the Responses API.")] = None
+    encrypted_content: str | None = None
     id: Annotated[
         str | None,
         Field(description="Legacy id field retained for compatibility with older payloads."),
@@ -4008,11 +4011,13 @@ class FunctionCallResponseItem(BaseModel):
     )
     arguments: str
     call_id: str
+    encrypted_content: str | None = None
     encrypted_function_args: list[str] | None = None
     id: str | None = None
     internal_chat_message_metadata_passthrough: InternalChatMessageMetadataPassthrough | None = None
     name: str
     namespace: str | None = None
+    status: str | None = None
     type: Annotated[Literal["function_call"], Field(title="FunctionCallResponseItemType")]
 
 
@@ -4022,6 +4027,7 @@ class ToolSearchCallResponseItem(BaseModel):
     )
     arguments: Any
     call_id: str | None = None
+    encrypted_content: str | None = None
     execution: str
     id: str | None = None
     internal_chat_message_metadata_passthrough: InternalChatMessageMetadataPassthrough | None = None
@@ -4034,6 +4040,7 @@ class CustomToolCallResponseItem(BaseModel):
         populate_by_name=True,
     )
     call_id: str
+    encrypted_content: str | None = None
     id: str | None = None
     input: str
     internal_chat_message_metadata_passthrough: InternalChatMessageMetadataPassthrough | None = None
@@ -4060,6 +4067,7 @@ class ImageGenerationCallResponseItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    encrypted_content: str | None = None
     id: str | None = None
     internal_chat_message_metadata_passthrough: InternalChatMessageMetadataPassthrough | None = None
     result: str
@@ -9145,10 +9153,12 @@ class MessageResponseItem(BaseModel):
         populate_by_name=True,
     )
     content: list[ContentItem]
+    encrypted_content: str | None = None
     id: str | None = None
     internal_chat_message_metadata_passthrough: InternalChatMessageMetadataPassthrough | None = None
     phase: MessagePhase | None = None
     role: str
+    status: str | None = None
     type: Annotated[Literal["message"], Field(title="MessageResponseItemType")]
 
 
@@ -9157,6 +9167,7 @@ class WebSearchCallResponseItem(BaseModel):
         populate_by_name=True,
     )
     action: ResponsesApiWebSearchAction | None = None
+    encrypted_content: str | None = None
     id: str | None = None
     internal_chat_message_metadata_passthrough: InternalChatMessageMetadataPassthrough | None = None
     status: str | None = None

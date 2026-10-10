@@ -59,6 +59,8 @@ fn malformed_content_kinds_do_not_prevent_loading_response_item() -> Result<()> 
 
 fn response_item(metadata: InternalChatMessageMetadataPassthrough) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {

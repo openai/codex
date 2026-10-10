@@ -81,6 +81,8 @@ fn stored_thread(cwd: &str, title: &str, first_user_message: &str) -> StoredThre
 
 fn message(role: &str, content: ContentItem) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: role.to_string(),
         content: vec![content],
@@ -94,7 +96,14 @@ fn user_message(text: impl Into<String>) -> ResponseItem {
 }
 
 fn assistant_message(text: impl Into<String>) -> ResponseItem {
-    message("assistant", ContentItem::OutputText { text: text.into() })
+    message(
+        "assistant",
+        ContentItem::OutputText {
+            annotations: None,
+            logprobs: None,
+            text: text.into(),
+        },
+    )
 }
 
 fn long_turn_text(index: usize) -> String {

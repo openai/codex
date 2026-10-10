@@ -212,6 +212,8 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
     let tool_name = "create_event".to_string();
 
     let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+        status: None,
+        encrypted_content: None,
         id: None,
         name: tool_name.clone(),
         namespace: Some("mcp__codex_apps__calendar".to_string()),
@@ -244,6 +246,7 @@ async fn build_custom_tool_call_uses_namespace_for_registry_name() -> anyhow::Re
     let tool_name = "exec".to_string();
 
     let call = ToolRouter::build_tool_call(ResponseItem::CustomToolCall {
+        encrypted_content: None,
         id: None,
         status: None,
         call_id: "call-namespace".to_string(),
@@ -273,6 +276,8 @@ async fn build_custom_tool_call_uses_namespace_for_registry_name() -> anyhow::Re
 fn build_tool_call_normalizes_default_function_and_custom_namespaces() -> anyhow::Result<()> {
     for namespace in [None, Some(""), Some(DEFAULT_FUNCTION_NAMESPACE)] {
         let function_call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+            status: None,
+            encrypted_content: None,
             id: None,
             name: "lookup".to_string(),
             namespace: namespace.map(str::to_string),
@@ -283,6 +288,7 @@ fn build_tool_call_normalizes_default_function_and_custom_namespaces() -> anyhow
         })?
         .expect("function_call should produce a tool call");
         let custom_call = ToolRouter::build_tool_call(ResponseItem::CustomToolCall {
+            encrypted_content: None,
             id: None,
             status: None,
             call_id: "call-custom".to_string(),
@@ -535,6 +541,8 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
     let turn = Arc::new(turn);
     let step_context = StepContext::for_test(Arc::clone(&turn));
     let history_item = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -581,6 +589,8 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
     );
 
     let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+        status: None,
+        encrypted_content: None,
         id: None,
         name: "echo".to_string(),
         namespace: Some("extension/".to_string()),

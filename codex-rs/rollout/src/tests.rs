@@ -1453,6 +1453,8 @@ async fn read_head_for_summary_omits_harness_metadata() {
     let temp = TempDir::new().unwrap();
     let rollout_path = temp.path().join("rollout.jsonl");
     let response_item = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -1606,9 +1608,13 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
             timestamp: format!("{ts}-{idx:02}"),
             ordinal: None,
             item: RolloutItem::ResponseItem(ResponseItemEnvelope::new(ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "assistant".into(),
                 content: vec![ContentItem::OutputText {
+                    annotations: None,
+                    logprobs: None,
                     text: format!("reply-{idx}"),
                 }],
                 phase: None,

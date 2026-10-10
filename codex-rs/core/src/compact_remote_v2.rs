@@ -719,7 +719,7 @@ fn message_text_token_count(item: &ResponseItem) -> usize {
     content
         .iter()
         .map(|item| match item {
-            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+            ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
                 approx_token_count(text)
             }
             ContentItem::InputImage { .. } | ContentItem::InputAudio { .. } => 0,
@@ -737,7 +737,7 @@ fn truncate_message_text_to_token_budget(
     let mut truncated_content = Vec::with_capacity(content.len());
     for mut content_item in content {
         match content_item.content_mut() {
-            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+            ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
                 if remaining == 0 {
                     continue;
                 }
@@ -783,6 +783,8 @@ mod tests {
 
     fn message(role: &str, text: &str, phase: Option<MessagePhase>) -> ResponseItem {
         ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: role.to_string(),
             content: vec![ContentItem::InputText {
@@ -854,6 +856,8 @@ mod tests {
             message("assistant", "commentary", Some(MessagePhase::Commentary)),
             message("assistant", "final", Some(MessagePhase::FinalAnswer)),
             ResponseItem::FunctionCall {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 name: "shell_command".to_string(),
                 namespace: None,
@@ -990,6 +994,8 @@ mod tests {
     #[test]
     fn build_v2_compacted_history_counts_retained_input_images() {
         let input = vec![ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "user".to_string(),
             content: vec![
@@ -1039,6 +1045,8 @@ mod tests {
             truncated,
             vec![
                 ResponseItem::Message {
+                    encrypted_content: None,
+                    status: None,
                     id: None,
                     role: "user".to_string(),
                     content: vec![ContentItem::InputText {
@@ -1060,6 +1068,8 @@ mod tests {
     #[test]
     fn retained_history_truncation_preserves_images_and_truncates_later_text_parts() {
         let item = ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "user".to_string(),
             content: vec![
@@ -1073,6 +1083,8 @@ mod tests {
                     detail: None,
                 },
                 ContentItem::OutputText {
+                    annotations: None,
+                    logprobs: None,
                     text: "uvwxyz".to_string(),
                 },
                 ContentItem::InputText {
@@ -1130,6 +1142,8 @@ mod tests {
         assert_eq!(
             truncated,
             vec![ResponseItem::Message {
+                encrypted_content: None,
+                status: None,
                 id: None,
                 role: "user".to_string(),
                 content: vec![
@@ -1143,6 +1157,8 @@ mod tests {
                         detail: None,
                     },
                     ContentItem::OutputText {
+                        annotations: None,
+                        logprobs: None,
                         text: "uv…1 tokens truncated…yz".to_string(),
                     },
                     ContentItem::InputImage {
@@ -1172,6 +1188,8 @@ mod tests {
     #[test]
     fn retained_history_truncation_charges_image_only_messages() {
         let image_only_message = ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputImage {
@@ -1198,6 +1216,8 @@ mod tests {
     #[test]
     fn retained_history_truncation_drops_image_only_messages_after_budget_is_spent() {
         let image_only_message = ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputImage {

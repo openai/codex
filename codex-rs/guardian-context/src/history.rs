@@ -95,6 +95,7 @@ impl TranscriptHistory {
                 content,
                 phase,
                 internal_chat_message_metadata_passthrough,
+                ..
             } = item
                 && role == "user"
                 && content
@@ -126,6 +127,8 @@ impl TranscriptHistory {
                 if !text.is_empty() {
                     self.record(&ResponseItemEnvelope {
                         item: ResponseItem::Message {
+                            status: None,
+                            encrypted_content: None,
                             id: id.clone(),
                             role: role.clone(),
                             content: text,

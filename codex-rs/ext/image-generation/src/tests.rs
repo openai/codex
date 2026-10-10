@@ -85,6 +85,8 @@ async fn omitted_references_generate_with_fixed_defaults() {
 async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
     let history = vec![
         ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "user".to_string(),
             content: vec![
@@ -98,6 +100,8 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCall {
+            status: None,
+            encrypted_content: None,
             id: None,
             name: "mcp_image".to_string(),
             namespace: None,
@@ -115,6 +119,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::CustomToolCall {
+            encrypted_content: None,
             id: None,
             status: Some("completed".to_string()),
             call_id: "code-mode-call".to_string(),
@@ -131,6 +136,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ImageGenerationCall {
+            encrypted_content: None,
             id: Some(ResponseItemId::with_suffix("ig", "generated-call")),
             status: "completed".to_string(),
             revised_prompt: None,
@@ -177,6 +183,8 @@ async fn recent_image_fallback_passes_file_backed_image_to_edit_request() {
             num_last_images_to_include: Some(1),
         },
         &[ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "user".to_string(),
             content: vec![
@@ -331,6 +339,8 @@ async fn recent_image_fallback_requires_requested_count() {
             num_last_images_to_include: Some(2),
         },
         &[ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "user".to_string(),
             content: vec![input_image("only-image")],

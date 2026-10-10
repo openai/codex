@@ -614,6 +614,8 @@ impl App {
 
     pub(super) fn side_boundary_prompt_item() -> ResponseItem {
         ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {

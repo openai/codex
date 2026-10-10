@@ -643,6 +643,8 @@ fn turn_complete(turn_id: &str) -> RolloutItem {
 fn user_message(message: &str) -> RolloutItem {
     RolloutItem::ResponseItem(
         ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {

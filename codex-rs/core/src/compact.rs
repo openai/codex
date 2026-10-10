@@ -538,7 +538,7 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
     let mut pieces = Vec::new();
     for item in content {
         match item {
-            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+            ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
                 if !text.is_empty() {
                     pieces.push(text.as_str());
                 }
@@ -733,6 +733,8 @@ fn build_compacted_history_with_limit(
             }
             selected_messages.push(ResponseItemEnvelope {
                 item: ResponseItem::Message {
+                    status: None,
+                    encrypted_content: None,
                     id: id.clone(),
                     role: "user".to_owned(),
                     content,

@@ -225,6 +225,8 @@ async fn history_injection_skips_skill_discovery_after_initial_context() -> Resu
     });
     let test = builder.build_with_auto_env(&server).await?;
     let developer_message = |text: &str| ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {

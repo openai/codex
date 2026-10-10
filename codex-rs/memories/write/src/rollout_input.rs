@@ -124,7 +124,7 @@ pub(crate) fn serialize_tiered_input(
                     })
                     || InterAgentCommunication::is_message_content(content)
                     || content.iter().any(|part| match part {
-                        ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                        ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
                             let text = text.trim_start();
                             text.starts_with("<subagent_notification>")
                                 || (text.starts_with("Message Type:")
@@ -258,41 +258,28 @@ pub(crate) fn extraction_messages(mut text: &str) -> Vec<ResponseItem> {
 }
 
 pub(crate) fn sanitize_response_item_for_memories(item: &ResponseItem) -> Option<ResponseItem> {
-    let ResponseItem::Message {
-        id,
+    if !should_persist_response_item_for_memories(item) {
+        return None;
+    }
+
+    let mut item = item.clone();
+    item.clear_encrypted_content();
+    if let ResponseItem::Message {
         role,
         content,
-        phase,
-        internal_chat_message_metadata_passthrough: metadata,
-    } = item
-    else {
-        return should_persist_response_item_for_memories(item).then(|| item.clone());
-    };
-
-    if role == "developer" {
-        return None;
+        status,
+        ..
+    } = &mut item
+        && role == "user"
+    {
+        *status = None;
+        content.retain(|content_item| !is_memory_excluded_contextual_user_fragment(content_item));
+        if content.is_empty() {
+            return None;
+        }
     }
 
-    if role != "user" {
-        return Some(item.clone());
-    }
-
-    let content = content
-        .iter()
-        .filter(|content_item| !is_memory_excluded_contextual_user_fragment(content_item))
-        .cloned()
-        .collect::<Vec<_>>();
-    if content.is_empty() {
-        return None;
-    }
-
-    Some(ResponseItem::Message {
-        id: id.clone(),
-        role: role.clone(),
-        content,
-        phase: phase.clone(),
-        internal_chat_message_metadata_passthrough: metadata.clone(),
-    })
+    Some(item)
 }
 
 fn is_memory_excluded_contextual_user_fragment(content_item: &ContentItem) -> bool {

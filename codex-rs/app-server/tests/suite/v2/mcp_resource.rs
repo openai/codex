@@ -615,6 +615,8 @@ async fn metadata_and_mcp_requests_complete_while_unrelated_resume_loads_config(
             thread_id: "00000000-0000-4000-8000-000000000000".to_string(),
             cwd: Some(resume_cwd.path().to_string_lossy().into_owned()),
             history: Some(vec![ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {

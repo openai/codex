@@ -1776,6 +1776,7 @@ impl Session {
                     config
                         .features
                         .enabled(Feature::ConcurrentReasoningSummaries),
+                    config.features.enabled(Feature::OutputTokenReplay),
                     attestation_provider,
                     config.http_client_factory(),
                     workspace_routing.as_ref().clone(),

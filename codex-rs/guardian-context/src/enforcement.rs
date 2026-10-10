@@ -320,7 +320,7 @@ fn retain_content(
             let original_bytes = match &item.content {
                 SectionContent::Transcript(record) => record.rendered().text_bytes,
                 SectionContent::Other(
-                    ContentItem::InputText { text } | ContentItem::OutputText { text },
+                    ContentItem::InputText { text } | ContentItem::OutputText { text, .. },
                 ) => text.len(),
                 SectionContent::Other(ContentItem::InputImage {
                     image: ImageReference::Inline { image_url },

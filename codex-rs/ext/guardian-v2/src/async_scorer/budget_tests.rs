@@ -151,6 +151,8 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
         history.push(user);
         if matches!(evidence, BudgetEvidence::UserInstructions) {
             history.push(ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "developer".to_owned(),
                 content: vec![ContentItem::InputText {
@@ -162,6 +164,8 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
             history.push(user_instruction(restriction));
         }
         history.extend(commentary.into_iter().map(|text| ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "assistant".to_owned(),
             content: vec![ContentItem::InputText { text }],

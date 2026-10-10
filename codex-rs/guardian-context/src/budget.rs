@@ -96,7 +96,7 @@ pub struct SectionCost {
 impl SectionCost {
     fn add_content(mut self, item: &ContentItem) -> Self {
         match item {
-            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+            ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
                 self.text_bytes = self.text_bytes.saturating_add(text.len());
             }
             ContentItem::InputImage {

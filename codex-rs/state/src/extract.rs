@@ -258,6 +258,8 @@ mod tests {
         let mut metadata = metadata_for_test();
         let item = RolloutItem::ResponseItem(
             ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {

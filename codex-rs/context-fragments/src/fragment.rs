@@ -38,6 +38,8 @@ impl From<RenderedFragment> for ResponseItem {
         let (content, content_kind) = annotated_content.into_parts();
 
         Self::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: role.to_string(),
             content: vec![content],

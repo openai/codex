@@ -566,6 +566,8 @@ pub(super) fn bounded_text_parts(text: &str) -> impl Iterator<Item = &str> {
 
 pub(super) fn user_message(content: Vec<ContentItem>) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_owned(),
         content,

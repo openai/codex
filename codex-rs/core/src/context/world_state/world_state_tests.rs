@@ -244,6 +244,8 @@ fn missing_retained_fragment_is_rendered_again() {
     );
     let previous = world_state.render_full().0;
     let retained = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {

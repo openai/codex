@@ -89,6 +89,8 @@ fn requires_a_strict_nonempty_model_prefix() {
     let mut with_tool_call = history;
     with_tool_call.push(RolloutItem::ResponseItem(
         ResponseItem::FunctionCall {
+            status: None,
+            encrypted_content: None,
             id: None,
             name: "native_tool".to_string(),
             namespace: None,
@@ -128,7 +130,7 @@ fn model_messages(items: &[RolloutItem]) -> Vec<(MessageRole, &str)> {
                     ("user", [ContentItem::InputText { text }]) => {
                         Some((MessageRole::User, text.as_str()))
                     }
-                    ("assistant", [ContentItem::OutputText { text }]) => {
+                    ("assistant", [ContentItem::OutputText { text, .. }]) => {
                         Some((MessageRole::Assistant, text.as_str()))
                     }
                     _ => None,

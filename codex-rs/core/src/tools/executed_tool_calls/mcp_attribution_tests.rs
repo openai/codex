@@ -20,6 +20,8 @@ fn source(tool_name: &str, first_turn_id: &str) -> McpAttributionSource {
 fn envelope(attribution: Option<McpAttribution>) -> ResponseItemEnvelope {
     ResponseItemEnvelope {
         item: ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "user".to_string(),
             content: Vec::new(),

@@ -87,15 +87,21 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
 
     let injected_text = "Injected assistant context";
     let injected_item = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
+            annotations: None,
+            logprobs: None,
             text: injected_text.to_string(),
         }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
     };
     let developer_item = |text: &str| ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {
@@ -561,6 +567,8 @@ async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()
     .await??;
 
     let injected_item = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {

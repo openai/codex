@@ -174,6 +174,8 @@ fn agent_message(text: &str) -> RolloutItem {
 
 fn input_response_message(role: &str, text: &str) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: role.to_string(),
         content: vec![ContentItem::InputText {
@@ -935,6 +937,8 @@ async fn migration_coalesces_response_first_user_message_rollback_boundary() {
     let thread_id = ThreadId::new();
     let file_id = "file_123".to_string();
     let response = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![
@@ -1183,9 +1187,13 @@ async fn migration_rolls_back_pre_compaction_turns_from_sqlite_history() {
     let RolloutItem::Compacted(mut checkpoint) = compacted(vec![
         input_response_message("user", "old question"),
         ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
+                annotations: None,
+                logprobs: None,
                 text: "old answer".to_string(),
             }],
             phase: None,
@@ -1584,7 +1592,7 @@ async fn migration_keeps_downgraded_delivery_before_later_same_turn_steer() {
         RolloutItem::ResponseItem(envelope)
             if matches!(&envelope.item, ResponseItem::Message { role, content, .. }
                 if role == "assistant"
-                    && matches!(content.as_slice(), [ContentItem::OutputText { text }]
+                    && matches!(content.as_slice(), [ContentItem::OutputText { text , .. }]
                         if text == "May I publish?"))
     )));
 }
@@ -1640,6 +1648,8 @@ async fn assert_migrated_evidence_order(steer_order: Option<u64>) {
     let thread_id = ThreadId::new();
     let [initial, steer] =
         [("initial", INITIAL), ("steer", STEER)].map(|(id, text)| ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: Some(ResponseItemId::with_suffix("msg", id)),
             role: "user".to_owned(),
             content: vec![ContentItem::InputText {
@@ -2078,6 +2088,8 @@ async fn migration_compacts_subagent_prefix_and_does_not_project_it() {
                 message: "latest checkpoint".to_string(),
                 replacement_history: Some(vec![
                     ResponseItem::Message {
+                        encrypted_content: None,
+                        status: None,
                         id: None,
                         role: "user".to_string(),
                         content: vec![ContentItem::InputText {

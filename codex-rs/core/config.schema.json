@@ -1052,6 +1052,9 @@
             "omit_app_server_notification_media": {
               "type": "boolean"
             },
+            "output_token_replay": {
+              "type": "boolean"
+            },
             "personality": {
               "type": "boolean"
             },
@@ -7350,6 +7353,9 @@
           "type": "boolean"
         },
         "omit_app_server_notification_media": {
+          "type": "boolean"
+        },
+        "output_token_replay": {
           "type": "boolean"
         },
         "personality": {

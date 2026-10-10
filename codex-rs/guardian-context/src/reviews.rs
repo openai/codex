@@ -83,6 +83,8 @@ impl PreviousReviews {
             .map(|review| review.id.clone())
             .collect();
         let item = ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "developer".to_owned(),
             content: std::iter::once(ContentItem::InputText {

@@ -46,7 +46,7 @@ pub fn is_inherited_manual_approval(envelope: &codex_history::ResponseItemEnvelo
         .is_some_and(|metadata| metadata.inherited_user_message)
         && matches!(&envelope.item, ResponseItem::Message { role, content, .. }
             if role == "developer" && content.iter().any(|part|
-                matches!(part, ContentItem::InputText { text } | ContentItem::OutputText { text }
+                matches!(part, ContentItem::InputText { text } | ContentItem::OutputText { text , .. }
                     if text.starts_with(MANUAL_APPROVAL_DEVELOPER_PREFIX))))
 }
 
@@ -150,7 +150,7 @@ pub fn collect_transcript(
                 let text = content
                     .iter()
                     .filter_map(|item| match item {
-                        ContentItem::InputText { text } | ContentItem::OutputText { text }
+                        ContentItem::InputText { text } | ContentItem::OutputText { text, .. }
                             if !text.is_empty() =>
                         {
                             Some(text.as_str())

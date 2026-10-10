@@ -225,7 +225,7 @@ fn response_input_to_code_mode_result(response: ResponseInputItem) -> JsonValue 
                 .into_iter()
                 .map(|item| match item {
                     codex_protocol::models::ContentItem::InputText { text }
-                    | codex_protocol::models::ContentItem::OutputText { text } => {
+                    | codex_protocol::models::ContentItem::OutputText { text, .. } => {
                         FunctionCallOutputContentItem::InputText { text }
                     }
                     codex_protocol::models::ContentItem::InputImage { image, detail } => {

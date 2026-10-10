@@ -422,7 +422,7 @@ impl SamplingExecution {
                             && role == "assistant"
                         {
                             for item in content {
-                                if let ContentItem::OutputText { text } = item {
+                                if let ContentItem::OutputText { text, .. } = item {
                                     output.push_str(&text);
                                 }
                             }

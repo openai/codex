@@ -235,6 +235,8 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
         mode: super::NodeReplReviewEvidenceMode::TextOnly,
     };
     let history = [ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".into(),
         content: vec![codex_protocol::models::ContentItem::InputText {

@@ -770,6 +770,8 @@ mod tests {
         ] if start_content.is_empty()
             && text == "First result."
             && done_content == &vec![codex_protocol::models::ContentItem::OutputText {
+                annotations: None,
+                logprobs: None,
                 text: "First result.".to_string()
             }]);
     }

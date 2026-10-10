@@ -819,10 +819,18 @@ async fn run_memory_phase_one_model_request_test(
         "startup-models",
     )
     .await?;
+    let path = home.path().join(format!("rollout-{source_id}.jsonl"));
+    let mut contents = tokio::fs::read_to_string(&path).await?;
+    let mut items = vec![
+        json!({"type":"message", "role":"assistant", "phase":"final_answer",
+        "encrypted_content":"memory-message-ciphertext", "status":"completed", "content":[
+            {"type":"output_text", "text":"replay-bearing assistant evidence", "annotations":[], "logprobs":[]},
+        ]}),
+        json!({"type":"function_call", "name":"memory_test_tool", "call_id":"memory-test-call",
+            "arguments":"{}", "encrypted_content":"memory-tool-ciphertext", "status":"completed"}),
+    ];
     if version == codex_protocol::MemoryVersion::V2 {
-        let path = home.path().join(format!("rollout-{source_id}.jsonl"));
-        let mut contents = tokio::fs::read_to_string(&path).await?;
-        let mut items = vec![
+        items.extend([
             json!({"type":"message", "role":"user", "content":[
                 {"type":"input_image", "image_url":format!("data:image/png;base64,{}", "A".repeat(12_000))},
                 {"type":"input_text", "text":"Keep the migration read-only."},
@@ -841,7 +849,7 @@ async fn run_memory_phase_one_model_request_test(
             json!({"type":"message", "role":"user", "content":[
                 {"type":"input_text", "text":"<environment_context>harness context noise</environment_context>"},
             ]}),
-        ];
+        ]);
         for (namespace, call_id, answer) in [
             (None, "plain-question", "Use SQLite only."),
             (
@@ -879,19 +887,17 @@ async fn run_memory_phase_one_model_request_test(
         items.push(json!({"type":"message", "role":"user", "content":[
             {"type":"input_text", "text":"last human constraint"},
         ]}));
-        for item in items {
-            let line = RolloutLine {
-                timestamp: chrono::Utc::now().to_rfc3339(),
-                ordinal: None,
-                item: RolloutItem::ResponseItem(
-                    serde_json::from_value::<ResponseItem>(item)?.into(),
-                ),
-            };
-            contents.push_str(&serde_json::to_string(&line)?);
-            contents.push('\n');
-        }
-        tokio::fs::write(path, contents).await?;
     }
+    for item in items {
+        let line = RolloutLine {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            ordinal: None,
+            item: RolloutItem::ResponseItem(serde_json::from_value::<ResponseItem>(item)?.into()),
+        };
+        contents.push_str(&serde_json::to_string(&line)?);
+        contents.push('\n');
+    }
+    tokio::fs::write(&path, &contents).await?;
     db.update_thread_git_info(
         source_id,
         /*git_sha*/ None,
@@ -927,6 +933,13 @@ async fn run_memory_phase_one_model_request_test(
     let (context, config) = memory_startup_context_with_provider(&test, provider).await;
     phase1::run(context, config).await;
     let request = wait_for_single_request(&response).await;
+    let evidence = request.message_input_texts("user").join("");
+    assert!(evidence.contains("replay-bearing assistant evidence"));
+    assert!(!evidence.contains("encrypted_content"));
+    if version == codex_protocol::MemoryVersion::V1 {
+        assert!(evidence.contains("memory_test_tool"));
+    }
+    assert_eq!(tokio::fs::read_to_string(&path).await?, contents);
     if version == codex_protocol::MemoryVersion::V2 {
         let outputs = db
             .memories_for_version(version)
@@ -1245,6 +1258,8 @@ async fn seed_stage1_candidate(
         ordinal: None,
         item: RolloutItem::ResponseItem(
             ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {

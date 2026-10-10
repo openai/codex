@@ -16,6 +16,8 @@ pub(crate) fn build_rendered_message(fragments: Vec<RenderedFragment>) -> Option
         .unzip();
 
     Some(ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: role.to_string(),
         content,

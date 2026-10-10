@@ -1016,6 +1016,8 @@ async fn run_guardian_subagent_review(
             ]
             .into_iter()
             .map(|text| ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text }],
@@ -1027,6 +1029,8 @@ async fn run_guardian_subagent_review(
     if matches!(root_context, RootContext::RetainedAtMessageLimit) {
         // The newest final answer must share the cap with user instructions and Q&A.
         root_history_items.extend((0..14).map(|index| ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: Some(ResponseItemId::with_suffix("root-instruction", index)),
             role: "user".to_owned(),
             content: vec![ContentItem::InputText {
