@@ -4663,22 +4663,23 @@ impl Session {
         let turn_context = step_context.turn.as_ref();
         let history = self.clone_history().await;
         let input_goal_ids = crate::context::UserGoalUpdate::message_ids(history.raw_items());
-        let retained_client_developer_messages =
-            if self.enabled(Feature::RetainClientDeveloperMessages) {
-                crate::compact_remote_v2::truncate_retained_messages_for_remote_compaction(
-                    history
-                        .annotated_items()
-                        .iter()
-                        .filter(|item| {
-                            crate::compact_remote_v2::is_client_authored_developer_message(item)
-                        })
-                        .cloned()
-                        .collect(),
-                    crate::compact_remote_v2::RETAINED_MESSAGE_TOKEN_BUDGET,
-                )
-            } else {
-                Vec::new()
-            };
+        let retained_client_items =
+            crate::compact_remote_v2::truncate_retained_messages_for_remote_compaction(
+                history
+                    .annotated_items()
+                    .iter()
+                    .filter(|item| {
+                        (self.enabled(Feature::RetainClientToolOutputs)
+                            && crate::compact_retained_tool_outputs::is_retained_tool_output(item))
+                            || (self.enabled(Feature::RetainClientDeveloperMessages)
+                                && crate::compact_remote_v2::is_client_authored_developer_message(
+                                    item,
+                                ))
+                    })
+                    .cloned()
+                    .collect(),
+                crate::compact_remote_v2::RETAINED_MESSAGE_TOKEN_BUDGET,
+            );
         let window = {
             let mut state = self.state.lock().await;
             state.start_new_context_window()
@@ -4691,7 +4692,7 @@ impl Session {
             crate::context_manager::updates::merge_world_state_updates(context_updates)
                 .into_iter()
                 .map(ResponseItemEnvelope::new)
-                .chain(retained_client_developer_messages)
+                .chain(retained_client_items)
                 .collect();
         let turn_context_item = step_context.to_turn_context_item();
         self.replace_compacted_history(

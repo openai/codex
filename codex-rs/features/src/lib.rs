@@ -423,6 +423,8 @@ pub enum Feature {
     CompactionImageBudget,
     /// Retain client-authored developer messages across compacted context windows.
     RetainClientDeveloperMessages,
+    /// Honor client-requested tool-output retention across context windows.
+    RetainClientToolOutputs,
     /// Use Agent Identity for ChatGPT-authenticated sessions.
     UseAgentIdentity,
     /// Enable workspace dependency support.
@@ -2049,6 +2051,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RetainClientDeveloperMessages,
         key: "retain_client_developer_messages",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RetainClientToolOutputs,
+        key: "retain_client_tool_outputs",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

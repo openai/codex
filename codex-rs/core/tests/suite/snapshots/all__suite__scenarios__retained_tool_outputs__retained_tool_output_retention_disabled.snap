@@ -1,0 +1,115 @@
+---
+source: core/tests/suite/scenarios_retained_tool_outputs.rs
+expression: "context_snapshot::format_request_history_snapshot(if enabled\n{\n    \"Retained thread instructions stop emergency tool-output trimming. Compaction shares the 64K retention budget with oversized task details, and a cold resume preserves the retained tool content.\"\n} else\n{\n    \"With retention disabled, the client can still send retain=true. Tool outputs use ordinary emergency trimming and are not retained after compaction and cold resume.\"\n}, &requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: With retention disabled, the client can still send retain=true. Tool outputs use ordinary emergency trimming and are not retained after compaction and cold resume.
+
+## Window 1
+-- request 1 (turn) --
+00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
+        - namespace/functions; hash=fada4a476a3754dd
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:function_call_output/codex_app.send_message_to_thread:Investigate the failing tests; report your findings without changing files.
+-- request 2 (turn) --
+07:message/assistant:
+    I will investigate the tests.
+08:function_call_output/codex_app.task_details:Investigate the failing tests carefully. Investigate the failing tests carefully. Investigate the failin...s carefully. Investigate the failing tests carefully. [hash=3c65017b6f98a38f]
+-- request 3 (turn) --
+09:message/assistant:
+    I will use those task details.
+10:function_call_output/codex_app.send_message_to_thread:Report your findings without changing files.
+
+## Window 2 (after request 3: input diverged at item 10)
+-- request 4 (compaction) --
+00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
+        - namespace/functions; hash=fada4a476a3754dd
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:function_call_output/codex_app.send_message_to_thread:Investigate the failing tests; report your findings without changing files.
+07:message/assistant:
+    I will investigate the tests.
+08:function_call_output/codex_app.task_details:Investigate the failing tests carefully. Investigate the failing tests carefully. Investigate the failin...s carefully. Investigate the failing tests carefully. [hash=3c65017b6f98a38f]
+09:message/assistant:
+    I will use those task details.
+10:function_call_output/codex_app.send_message_to_thread:Output exceeded the available model context and was truncated
+11:function_call_output/example.progress:Output exceeded the available model context and was truncated
+12:compaction_trigger
+
+## Window 3 (after request 4: input diverged at item 06)
+-- request 5 (turn) --
+00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
+        - namespace/functions; hash=fada4a476a3754dd
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:compaction:encrypted=true; chars=31; hash=dc1cfb1784ca88e3
+07:message/user:
+    <ENVIRONMENT_CONTEXT>
+08:message/user:
+    What request are you working on?

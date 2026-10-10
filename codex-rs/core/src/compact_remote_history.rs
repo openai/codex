@@ -1,10 +1,12 @@
 use std::borrow::Borrow;
 
+use crate::compact_retained_tool_outputs::is_retained_tool_output;
 use crate::context::ContextualUserFragment;
 use crate::context::ImageResizeNotice;
 use crate::context_manager::ContextManager;
 use crate::context_manager::estimate_item_token_count;
 use crate::session::turn_context::TurnContext;
+use codex_features::Feature;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -97,10 +99,19 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
         let source_index = original_items
             .len()
             .saturating_sub(consumed_items.saturating_add(group_item_count));
-        let Some(rewritten_item) = original_items
-            .get(source_index)
-            .and_then(rewritten_output_for_context_window)
-        else {
+        let Some(rewritten_item) = original_items.get(source_index).and_then(|envelope| {
+            if turn_context
+                .config
+                .features
+                .enabled(Feature::RetainClientToolOutputs)
+                && is_retained_tool_output(envelope)
+            {
+                // Enabled retained outputs form the same boundary as user/developer messages.
+                None
+            } else {
+                rewritten_output_for_context_window(envelope)
+            }
+        }) else {
             break;
         };
         estimated_tokens = estimated_tokens

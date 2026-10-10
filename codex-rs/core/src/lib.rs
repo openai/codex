@@ -36,6 +36,7 @@ pub use turn_extension_data::WithTurnExtensionData;
 mod compact_model_fallback;
 mod compact_remote_history;
 mod compact_remote_v2;
+mod compact_retained_tool_outputs;
 mod compact_token_budget;
 mod thread_startup_metadata;
 pub use codex_network_proxy::EnvironmentNetworkPolicy;
