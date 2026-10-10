@@ -75,8 +75,10 @@ impl CodeModeSession for ReconnectableSession {
         delegate: Arc<dyn CodeModeSessionDelegate>,
         preempt: Option<CancellationToken>,
     ) -> CodeModeSessionResultFuture<'a, StartedCell> {
+        // Capture before polling so queued calls cannot silently cross a runtime reset.
+        let generation = self.inner.binding().map(|binding| binding.generation);
         Box::pin(async move {
-            let binding = self.inner.get_or_open_binding().await?;
+            let binding = self.inner.binding_for_request(generation).await?;
             let delegate = Arc::new(GenerationDelegate {
                 delegate,
                 generation: binding.generation,
@@ -91,8 +93,9 @@ impl CodeModeSession for ReconnectableSession {
         request: WaitRequest,
         preempt: Option<CancellationToken>,
     ) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
+        let generation = self.inner.binding().map(|binding| binding.generation);
         Box::pin(async move {
-            let binding = self.inner.get_or_open_binding().await?;
+            let binding = self.inner.binding_for_request(generation).await?;
             let request = WaitRequest {
                 cell_id: generation::remote_cell_id(binding.generation, &request.cell_id)?,
                 yield_time_ms: request.yield_time_ms,
@@ -104,7 +107,11 @@ impl CodeModeSession for ReconnectableSession {
 
     fn terminate<'a>(&'a self, cell_id: CellId) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
         Box::pin(async move {
-            let binding = self.inner.get_or_open_binding().await?;
+            // Cleanup must not replace the runtime and hide its loss from the next request.
+            let binding = self
+                .inner
+                .binding()
+                .ok_or_else(|| SHUTDOWN_ERROR.to_string())?;
             let cell_id = generation::remote_cell_id(binding.generation, &cell_id)?;
             let outcome = binding.session.terminate(cell_id).await?;
             Ok(generation::public_wait_outcome(binding.generation, outcome))
@@ -125,6 +132,18 @@ impl Drop for ReconnectableSession {
 }
 
 impl ReconnectInner {
+    async fn binding_for_request(&self, generation: Option<u64>) -> Result<SessionBinding, String> {
+        let binding = self.get_or_open_binding().await?;
+        if generation != Some(binding.generation) {
+            return Err(concat!(
+                "The exec runtime was replaced. Stored values and running cells were lost. ",
+                "Prior external tool operations may have completed; inspect their results before retrying. ",
+                "You may continue with a fresh exec call.",
+            ).into());
+        }
+        Ok(binding)
+    }
+
     async fn get_or_open_binding(&self) -> Result<SessionBinding, String> {
         if self.shutdown_requested.is_cancelled() {
             return Err(SHUTDOWN_ERROR.to_string());
@@ -148,12 +167,7 @@ impl ReconnectInner {
             return Ok(binding);
         }
 
-        let previous_binding = self
-            .binding
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        if let Some(binding) = previous_binding {
+        if let Some(binding) = self.binding() {
             wait_for_watch(binding.session.inner.request_shutdown()).await?;
         }
 
@@ -186,12 +200,15 @@ impl ReconnectInner {
     }
 
     fn live_binding(&self) -> Option<SessionBinding> {
+        self.binding()
+            .filter(|binding| !binding.session.inner.stopped.is_cancelled())
+    }
+
+    fn binding(&self) -> Option<SessionBinding> {
         self.binding
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .filter(|binding| !binding.session.inner.stopped.is_cancelled())
-            .cloned()
+            .clone()
     }
 
     fn request_shutdown(self: &Arc<Self>) -> ShutdownResultReceiver {

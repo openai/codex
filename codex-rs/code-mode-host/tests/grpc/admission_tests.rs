@@ -271,6 +271,19 @@ async fn routing_metadata_is_scoped_to_each_session_on_a_shared_provider() -> Re
         );
         if !retired {
             *rejection.lock().unwrap() = None;
+        } else {
+            let reset = execute(
+                &parent,
+                request(r#"store("preserved", "must not run");"#),
+                Arc::new(NoopCodeModeSessionDelegate),
+            )
+            .await
+            .expect_err("route loss must report the reset before executing new code");
+            assert!(
+                reset
+                    .to_string()
+                    .contains("Stored values and running cells were lost")
+            );
         }
         // The old lease and callback streams are still open. Only the explicit
         // route-loss response may replace the parent; the child must keep its state.

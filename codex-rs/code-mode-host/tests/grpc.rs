@@ -1201,6 +1201,17 @@ async fn cached_session_recovers_after_a_remote_host_restarts() -> Result<()> {
         .await
         .map_err(anyhow::Error::msg)?;
 
+    let saved = execute(
+        &session,
+        request(r#"store("saved", "before restart"); text(load("saved"));"#),
+        delegate.clone(),
+    )
+    .await?;
+    assert_eq!(
+        saved,
+        text_response("1", "before restart", saved.code_mode_host_duration())
+    );
+
     let mut pending = request("await tools.echo({generation: 1}); await new Promise(() => {});");
     pending.enabled_tools = vec![tool("echo")];
     pending.yield_time_ms = Some(/*value*/ 1);
@@ -1209,7 +1220,7 @@ async fn cached_session_recovers_after_a_remote_host_restarts() -> Result<()> {
         .await
         .map_err(anyhow::Error::msg)?;
     let old_cell_id = started.cell_id.clone();
-    assert_eq!(old_cell_id, cell_id("1"));
+    assert_eq!(old_cell_id, cell_id("2"));
     assert!(matches!(
         started.initial_response().await,
         Ok(RuntimeResponse::Yielded { .. })
@@ -1264,8 +1275,38 @@ async fn cached_session_recovers_after_a_remote_host_restarts() -> Result<()> {
     .context("host loss did not retire the original generation's cell")?;
 
     let _replacement = HostHarness::start(&listen_url).await?;
+    assert!(session.terminate(old_cell_id.clone()).await.is_err());
+
+    let mut rejected = request(r#"await tools.echo({must_not_run: true});"#);
+    rejected.enabled_tools = vec![tool("echo")];
+    let first = session.execute(rejected.clone(), delegate.clone(), /*preempt*/ None);
+    let concurrent = session.execute(rejected.clone(), delegate.clone(), /*preempt*/ None);
+    let queued = session.execute(rejected, delegate.clone(), /*preempt*/ None);
+    let queued_wait = session.wait(
+        WaitRequest {
+            cell_id: old_cell_id.clone(),
+            yield_time_ms: 1,
+        },
+        /*preempt*/ None,
+    );
+    let (first, concurrent) = timeout(TEST_TIMEOUT, async { tokio::join!(first, concurrent) })
+        .await
+        .context("concurrent recovery calls did not finish")?;
+    let reset = first.err().expect("first call must report the reset");
+    assert_eq!(
+        reset,
+        concat!(
+            "The exec runtime was replaced. Stored values and running cells were lost. ",
+            "Prior external tool operations may have completed; inspect their results before retrying. ",
+            "You may continue with a fresh exec call.",
+        )
+    );
+    assert_eq!(concurrent.err().expect("concurrent call must fail"), reset);
+    // Calls created before recovery must still fail even if first polled afterward.
+    assert_eq!(queued.await.err().expect("queued call must fail"), reset);
+    assert_eq!(queued_wait.await.unwrap_err(), reset);
     let mut callback = request(
-        r#"const result = await tools.echo({generation: 2}); notify("reconnected"); text(result.value);"#,
+        r#"const result = await tools.echo({generation: 2}); notify("reconnected"); text([result.value, load("saved") ?? null]);"#,
     );
     callback.tool_call_id = "reconnected-call".to_string();
     callback.enabled_tools = vec![tool("echo")];
@@ -1286,7 +1327,7 @@ async fn cached_session_recovers_after_a_remote_host_restarts() -> Result<()> {
         callback_response,
         text_response(
             callback_cell_id.as_str(),
-            "output",
+            r#"["output",null]"#,
             callback_response.code_mode_host_duration()
         )
     );

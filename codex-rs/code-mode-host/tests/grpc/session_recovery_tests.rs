@@ -89,6 +89,20 @@ async fn only_missing_sessions_reopen_without_replaying_execution() -> Result<()
             requests_before_rejection + 1,
             "the failed call must return without opening a session or replaying Execute"
         );
+        if code == Code::NotFound {
+            let reset = execute(
+                &session,
+                request(r#"store("before", "must not run");"#),
+                Arc::new(NoopCodeModeSessionDelegate),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                reset
+                    .to_string()
+                    .contains("Stored values and running cells were lost")
+            );
+        }
         let actual = execute(
             &session,
             request(r#"text(String(load("before")))"#),
