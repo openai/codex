@@ -777,6 +777,197 @@ async fn later_thread_approval_preserves_input_after_startup_boundary_ends() -> 
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn unattended_modals_survive_unfinished_terminal_input() -> Result<()> {
+    use std::os::fd::FromRawFd;
+    use std::process::Command;
+    use std::process::Stdio;
+
+    // Isolate crossterm's global parser and give its input poll a real terminal, as in
+    // tui_startup_tests. No key is delivered to the app before the approval.
+    if std::env::var_os("CODEX_UNATTENDED_MODALS_PTY").is_none() {
+        let mut master = -1;
+        let mut slave = -1;
+        // Safety: openpty initializes both file descriptors on success.
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0,
+        );
+        // Safety: openpty transferred ownership of these descriptors.
+        let _master = unsafe { std::fs::File::from_raw_fd(master) };
+        let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+        let output = Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "app::tests::startup::unattended_modals_survive_unfinished_terminal_input",
+                "--nocapture",
+            ])
+            .env("CODEX_UNATTENDED_MODALS_PTY", "1")
+            .stdin(Stdio::from(slave))
+            .output()?;
+        assert!(
+            output.status.success(),
+            "PTY child failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return Ok(());
+    }
+
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.startup_protected_input_boundary = true;
+    let thread_id = ThreadId::new();
+    app.enqueue_primary_thread_session(
+        test_thread_session(thread_id, test_path_buf("/tmp/project")),
+        Vec::new(),
+    )
+    .await?;
+    while app_event_rx.try_recv().is_ok() {}
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+    crossterm::event::buffer_input(b"\x1b]10;")?;
+    let request = exec_approval_request(thread_id, "turn-1", "call-1", /*approval_id*/ None);
+    let _ = app
+        .pending_app_server_requests
+        .note_server_request(&request);
+    app.enqueue_primary_thread_request(request).await?;
+    let event = app.active_thread_rx.as_mut().unwrap().try_recv()?;
+    app.handle_active_thread_event(&mut tui, &mut app_server, event)
+        .await?;
+    assert!(app.chat_widget.has_active_modal());
+
+    // A separate tracked request may resolve while the visible approval's input is quarantined.
+    let mut other = exec_approval_request(
+        ThreadId::new(),
+        "turn-2",
+        "call-2",
+        /*approval_id*/ None,
+    );
+    let ServerRequest::CommandExecutionRequestApproval { request_id, params } = &mut other else {
+        unreachable!("exec approval helper returns an exec approval");
+    };
+    *request_id = AppServerRequestId::Integer(2);
+    let resolved = codex_app_server_protocol::ServerRequestResolvedNotification {
+        thread_id: params.thread_id.clone(),
+        request_id: request_id.clone(),
+    };
+    let _ = app.pending_app_server_requests.note_server_request(&other);
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+            ServerNotification::ServerRequestResolved(resolved),
+        )),
+    )
+    .await;
+
+    // Action keys inside the unfinished sequence and immediately after its terminator are
+    // still typeahead. Even the first decoded key must retry the drain, not accept the prompt.
+    crossterm::event::buffer_input(b"1y\r\x1b\\y\r")?;
+    let crossterm::event::Event::Key(key) = crossterm::event::read()? else {
+        panic!("expected queued approval shortcut");
+    };
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Key(key))
+        .await?;
+    assert!(app.chat_widget.has_active_modal());
+    while let Ok(event) = app_event_rx.try_recv() {
+        assert!(
+            !matches!(event, AppEvent::SubmitThreadOp { .. }),
+            "typeahead answered unattended approval: {event:?}"
+        );
+    }
+
+    // After the drain has settled a fresh explicit decision works normally.
+    app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)),
+    )
+    .await?;
+    assert!(!app.chat_widget.has_active_modal());
+
+    // Overview can open before the first real input, and survives a server reconnect.
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.startup_protected_input_boundary = true;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    app.app_server_target = AppServerTarget::Remote {
+        endpoint: crate::resolve_remote_addr(&format!("ws://{}", listener.local_addr()?))?,
+    };
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+        super::disconnect::serve_reconnect_requests(
+            tokio_tungstenite::accept_async(stream).await?,
+            |request| {
+                std::future::ready(Some(match request.method.as_str() {
+                    "thread/list" | "thread/loaded/list" => {
+                        serde_json::json!({"result": {"data": [], "nextCursor": null}})
+                    }
+                    method => panic!("unexpected overview reconnect request: {method}"),
+                }))
+            },
+        )
+        .await
+    });
+    let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    crossterm::event::buffer_input(b"\x1b]10;")?;
+    app.render_startup_frame(&mut tui, &app_event_rx)?;
+    assert!(app.begin_reconnect());
+    let connected = super::super::reconnect::reconnect(
+        app.app_server_target.clone(),
+        app.config.clone(),
+        app.local_settings.clone(),
+        /*thread_id*/ None,
+        /*remote_cwd*/ None,
+        app_server.thread_tool_transport(),
+        super::super::reconnect::ReconnectPresentation::Overview,
+    )
+    .await?;
+    app.finish_reconnect(
+        &mut tui,
+        &mut app_server,
+        &mut app_event_rx,
+        connected,
+        CODEX_CLI_VERSION,
+    )
+    .await?;
+
+    crossterm::event::buffer_input(b"1n\r\x1b\\n\r")?;
+    let crossterm::event::Event::Key(key) = crossterm::event::read()? else {
+        panic!("expected queued overview shortcut");
+    };
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Key(key))
+        .await?;
+    assert!(
+        !std::iter::from_fn(|| app_event_rx.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::NewAgentsOverviewSession { .. })),
+        "typeahead created a task in restored Overview"
+    );
+    app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)),
+    )
+    .await?;
+    assert!(
+        std::iter::from_fn(|| app_event_rx.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::NewAgentsOverviewSession { .. })),
+        "fresh Overview shortcut should create a task"
+    );
+    app_server.shutdown().await?;
+    server.await??;
+    Ok(())
+}
+
 #[tokio::test]
 async fn auto_declined_mcp_elicitations_do_not_leave_startup_quarantine_armed() {
     for replay in [false, true] {

@@ -174,8 +174,21 @@ impl App {
         self.chat_widget.pre_draw_tick();
         self.render_chat_widget_frame(tui, tui.terminal.last_known_screen_size)?;
         if self.chat_widget.has_active_modal() && self.startup_protected_input_boundary {
-            tui.discard_pending_input_before_interactive_screen()?;
-            self.startup_pending_protected_request = false;
+            self.discard_startup_modal_input(tui)?;
+        }
+        Ok(())
+    }
+
+    /// Keep a visible modal closed to input if the terminal has not settled yet. The next input
+    /// event retries the drain instead of acting on the modal; server events can continue meanwhile.
+    pub(super) fn discard_startup_modal_input(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        match tui.discard_pending_input_before_interactive_screen() {
+            Ok(()) => self.startup_pending_protected_request = false,
+            Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {
+                self.startup_pending_protected_request = true;
+                tracing::warn!(%err, "keeping startup modal input quarantined");
+            }
+            Err(err) => return Err(err.into()),
         }
         Ok(())
     }

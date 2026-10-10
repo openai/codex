@@ -655,7 +655,8 @@ pub(crate) struct App {
     pending_managed_worktree_attach: Option<Box<working_directory::ManagedWorktreeAttach>>,
     /// Keeps protected screens quarantined until initialized chat receives genuine user input.
     startup_protected_input_boundary: bool,
-    /// Keeps that boundary armed while a startup approval waits for the typing-idle timer.
+    /// Keeps that boundary armed while an approval waits for the typing-idle timer or a visible
+    /// modal's terminal input has not settled.
     startup_pending_protected_request: bool,
     /// Invalidates in-flight full rate-limit reads when a newer rolling hard stop arrives.
     account_email_request_id: Option<uuid::Uuid>,
@@ -855,6 +856,17 @@ impl App {
         self.invalidate_right_click_paste(&event);
         self.finish_clipboard(tui, &event);
         let event = self.finish_right_click_paste(tui, event);
+        if self.startup_protected_input_boundary
+            && self.startup_pending_protected_request
+            && self.chat_widget.has_active_modal()
+            && matches!(
+                &event,
+                TuiEvent::Key(_) | TuiEvent::Paste(_) | TuiEvent::Mouse(_)
+            )
+        {
+            self.discard_startup_modal_input(tui)?;
+            return Ok(AppRunControl::Continue);
+        }
         let idle_draw = matches!(event, TuiEvent::Draw);
         if self.handle_rendered_selection_event(tui, &event)? {
             return Ok(AppRunControl::Continue);
@@ -1121,8 +1133,7 @@ impl App {
                         && self.chat_widget.has_active_modal()
                         && self.startup_protected_input_boundary
                     {
-                        tui.discard_pending_input_before_interactive_screen()?;
-                        self.startup_pending_protected_request = false;
+                        self.discard_startup_modal_input(tui)?;
                     }
                     if self.chat_widget.ambient_pet_image_enabled() {
                         let ambient_pet_area = Rect::new(

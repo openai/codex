@@ -282,7 +282,8 @@ impl App {
                     self.chat_widget.dismiss_app_server_request(&request);
                     if self.startup_pending_protected_request {
                         self.startup_pending_protected_request =
-                            self.chat_widget.has_pending_protected_request();
+                            self.chat_widget.has_active_modal()
+                                || self.chat_widget.has_pending_protected_request();
                     }
                 }
             }

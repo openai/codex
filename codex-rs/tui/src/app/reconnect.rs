@@ -481,6 +481,10 @@ impl App {
             let view = self.agents_overview_view(threads, selected);
             self.chat_widget.show_bottom_pane_view(Box::new(view));
             self.refresh_agents_overview_threads(app_server);
+            // The Overview survived request cleanup, but terminal typeahead may have survived too.
+            if self.startup_protected_input_boundary {
+                self.render_startup_frame(tui, app_event_rx)?;
+            }
         }
         #[cfg(any(target_os = "windows", test))]
         if interrupted_windows_setup {
