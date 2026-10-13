@@ -388,6 +388,14 @@ impl CodexThread {
         self.session.flush_rollout().await
     }
 
+    /// Test barrier: waits for background compaction without consuming its published result.
+    /// Call after the request starts, with foreground work gated to prevent new launches.
+    #[doc(hidden)]
+    pub async fn wait_for_background_compaction_for_test(&self) {
+        crate::session::async_compaction::wait_for_background_compaction_for_test(&self.session)
+            .await;
+    }
+
     pub async fn submit_with_trace(
         &self,
         op: Op,

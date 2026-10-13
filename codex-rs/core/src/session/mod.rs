@@ -238,7 +238,6 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
-#[allow(dead_code)]
 pub(crate) mod async_compaction;
 mod code_mode_warning;
 mod config_refresh;

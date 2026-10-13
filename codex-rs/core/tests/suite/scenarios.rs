@@ -11,6 +11,7 @@ use std::time::Duration;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_analytics::CompactionTrigger;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::types::McpServerConfig;
@@ -18,6 +19,7 @@ use codex_context_fragments::AnsweredQuestion;
 use codex_context_fragments::ContextualUserFragment;
 use codex_core::ForkSnapshot;
 use codex_core::StartThreadOptions;
+use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
 use codex_core::compact::AutoCompactionDisabled;
 use codex_core::config::Config;
@@ -29,6 +31,7 @@ use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
+use codex_history::RolloutItem;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::capabilities::CapabilityRootLocation;
@@ -80,6 +83,7 @@ use core_test_support::skip_if_wine_exec;
 use core_test_support::stdio_server_bin;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::environment_config_for_selection;
 use core_test_support::test_codex::executor_path_uri;
 use core_test_support::test_codex::test_codex;
@@ -2171,5 +2175,603 @@ async fn model_catalog_refresh_preserves_tools_and_history() -> Result<()> {
         &requests,
         &ContextSnapshotOptions::default().include_request_settings(),
     ));
+    Ok(())
+}
+
+fn compaction_chunk(
+    gate: Option<oneshot::Receiver<()>>,
+    events: Vec<serde_json::Value>,
+) -> StreamingSseChunk {
+    StreamingSseChunk {
+        gate,
+        body: sse(events),
+    }
+}
+
+fn compaction_output(value: &str) -> serde_json::Value {
+    json!({"type": "response.output_item.done", "item": {
+        "type": "compaction", "encrypted_content": value
+    }})
+}
+
+async fn async_compaction_test(
+    responses_uri: &str,
+    features: Vec<Feature>,
+    configure: impl Fn(&mut Config) + Send + Sync + 'static,
+) -> Result<(wiremock::MockServer, TestCodex)> {
+    let config_server = start_mock_server().await;
+    let base_url = format!("{responses_uri}/v1");
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            configure_scenario_catalog(config);
+            config.model_provider.base_url = Some(base_url);
+            config.model_context_window = Some(100_000);
+            for feature in features {
+                config
+                    .features
+                    .enable(feature)
+                    .expect("enable scenario feature");
+            }
+            config
+                .features
+                .enable(Feature::AsyncCompaction)
+                .expect("enable async compaction");
+            config
+                .features
+                .disable(Feature::EnableRequestCompression)
+                .expect("capture raw requests");
+            configure(config);
+        })
+        .with_model("gpt-6-astra")
+        .build_with_auto_env(&config_server)
+        .await?;
+    Ok((config_server, test))
+}
+
+#[derive(Clone, Copy)]
+enum LiveSuffix {
+    User,
+    Tool,
+    RetainedTool,
+    OverBudgetRetainedTool,
+}
+
+#[test_case::test_case(LiveSuffix::User; "newer user")]
+#[test_case::test_case(LiveSuffix::Tool; "only assistant and tools")]
+#[test_case::test_case(LiveSuffix::RetainedTool; "retained standalone output")]
+#[test_case::test_case(LiveSuffix::OverBudgetRetainedTool; "ready adoption still over budget")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
+    suffix: LiveSuffix,
+) -> Result<()> {
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Settings;
+    use codex_protocol::protocol::ThreadSettingsOverrides;
+    use core_test_support::responses::ev_completed_with_tokens;
+
+    skip_if_no_network!(Ok(()));
+    let over_budget = matches!(suffix, LiveSuffix::OverBudgetRetainedTool);
+    let retained_output = if over_budget {
+        format!("delegated work {}", "x ".repeat(12_000))
+    } else {
+        "delegated work".to_string()
+    };
+    let (release_background, background_gate) = oneshot::channel();
+    let (release_foreground, foreground_gate) = oneshot::channel();
+    let mut responses = vec![
+        vec![compaction_chunk(
+            /*gate*/ None,
+            vec![
+                ev_assistant_message("draft", "I drafted the launch notes."),
+                ev_completed_with_tokens(
+                    "draft-response",
+                    /*total_tokens*/ if over_budget { 2_000 } else { 70_000 },
+                ),
+            ],
+        )],
+        vec![compaction_chunk(
+            Some(background_gate),
+            vec![
+                compaction_output("ASYNC_LAUNCH_CHECKPOINT"),
+                ev_completed_with_tokens("compact-response", /*total_tokens*/ 3_000),
+            ],
+        )],
+        vec![
+            compaction_chunk(
+                /*gate*/ None,
+                vec![
+                    ev_response_created("team-response"),
+                    ev_assistant_message("team-check", "I will check who is available."),
+                ],
+            ),
+            compaction_chunk(
+                Some(foreground_gate),
+                vec![
+                    ev_function_call_with_namespace("team", "collaboration", "list_agents", "{}"),
+                    ev_completed_with_tokens(
+                        "team-response",
+                        /*total_tokens*/ if over_budget { 9_000 } else { 75_000 },
+                    ),
+                ],
+            ),
+        ],
+        vec![compaction_chunk(
+            /*gate*/ None,
+            vec![
+                ev_assistant_message("answer", "I can finish the notes myself."),
+                ev_completed_with_tokens(
+                    "answer-response",
+                    /*total_tokens*/ if over_budget { 10 } else { 3_000 },
+                ),
+            ],
+        )],
+    ];
+    if over_budget {
+        responses.insert(
+            3,
+            vec![compaction_chunk(
+                /*gate*/ None,
+                vec![
+                    compaction_output("SYNC"),
+                    ev_completed_with_tokens("sync", /*total_tokens*/ 3_000),
+                ],
+            )],
+        );
+    }
+    let (streaming, _completions) = start_streaming_sse_server(responses).await;
+    let features = match suffix {
+        LiveSuffix::User => vec![Feature::IncrementalTools],
+        LiveSuffix::Tool => vec![],
+        LiveSuffix::RetainedTool | LiveSuffix::OverBudgetRetainedTool => {
+            vec![Feature::RetainClientToolOutputs]
+        }
+    };
+    let (_config_server, test) = async_compaction_test(streaming.uri(), features, move |config| {
+        if over_budget {
+            config.async_compaction_threshold_percent = 1;
+            config.model_auto_compact_token_limit = Some(5_000);
+        }
+    })
+    .await?;
+    test.codex.ensure_rollout_materialized().await;
+    let compaction_event = |event: &EventMsg| match event {
+        EventMsg::ItemStarted(event) if matches!(event.item, TurnItem::ContextCompaction(_)) => {
+            Some(("started", event.item.id()))
+        }
+        EventMsg::ItemCompleted(event) if matches!(event.item, TurnItem::ContextCompaction(_)) => {
+            Some(("completed", event.item.id()))
+        }
+        _ => None,
+    };
+
+    test.submit_text_turn("Draft the launch notes.").await?;
+    let timeout = Duration::from_secs(/*secs*/ 20);
+    tokio::time::timeout(timeout, streaming.wait_for_request_count(/*count*/ 2)).await?;
+    let next_input = if matches!(suffix, LiveSuffix::User) {
+        TurnInputRequest::user_input(vec![text("Check who can finish the notes.")])
+    } else {
+        let item = serde_json::from_value(json!({
+            "type": "function_call_output",
+            "name": "send_message_to_thread",
+            "namespace": "codex_app",
+            "output": retained_output,
+        }))?;
+        TurnInputRequest::new(
+            if matches!(
+                suffix,
+                LiveSuffix::RetainedTool | LiveSuffix::OverBudgetRetainedTool
+            ) {
+                TurnInput::AnnotatedResponseItem(
+                    codex_protocol::turn_input::AnnotatedResponseItem {
+                        item,
+                        annotations: codex_protocol::turn_input::ResponseItemAnnotations {
+                            retain: true,
+                        },
+                    },
+                )
+            } else {
+                TurnInput::ResponseItem(item)
+            },
+        )
+    };
+    test.codex
+        .start_or_steer_turn(next_input.with_thread_settings(ThreadSettingsOverrides {
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Plan,
+                settings: Settings {
+                    model: "gpt-6-astra".to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: Some(
+                        "Plan Mode: prepare a plan before making changes.".to_string(),
+                    ),
+                },
+            }),
+            ..Default::default()
+        }))
+        .await?;
+    tokio::time::timeout(timeout, streaming.wait_for_request_count(/*count*/ 3)).await?;
+    wait_for_event(&test.codex, |event| {
+        assert_eq!(compaction_event(event), None);
+        matches!(event, EventMsg::ItemCompleted(event)
+        if matches!(&event.item, TurnItem::AgentMessage(message) if message.id == "team-check"))
+    })
+    .await;
+    release_background
+        .send(())
+        .expect("release background compaction");
+    // Wait for client publication while foreground work is gated, keeping adoption optional.
+    tokio::time::timeout(
+        timeout,
+        test.codex.wait_for_background_compaction_for_test(),
+    )
+    .await?;
+    release_foreground
+        .send(())
+        .expect("release foreground work");
+    let mut compaction_events = Vec::new();
+    wait_for_event(&test.codex, |event| {
+        compaction_events.extend(compaction_event(event));
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    tokio::time::timeout(
+        timeout,
+        test.codex.wait_for_background_compaction_for_test(),
+    )
+    .await?;
+    assert_eq!(compaction_events.len(), if over_budget { 4 } else { 2 });
+    for pair in compaction_events.chunks_exact(2) {
+        assert_eq!((pair[0].0, pair[1].0), ("started", "completed"));
+        assert_eq!(pair[0].1, pair[1].1);
+    }
+    if over_budget {
+        assert_ne!(compaction_events[0].1, compaction_events[2].1);
+    }
+
+    let requests = streaming
+        .requests()
+        .await
+        .iter()
+        .map(|body| serde_json::from_slice::<serde_json::Value>(body))
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    assert_eq!(requests.len(), if over_budget { 5 } else { 4 });
+    if over_budget {
+        let continuation = requests[4]["input"].as_array().expect("continuation input");
+        assert!(
+            continuation
+                .iter()
+                .any(|item| item["encrypted_content"] == "SYNC")
+        );
+        assert!(
+            continuation
+                .iter()
+                .any(|item| item["output"] == retained_output)
+        );
+    }
+    let history = test
+        .codex
+        .load_history(/*include_archived*/ false)
+        .await?
+        .items;
+    assert!(history.windows(2).any(|items| matches!(items,
+        [RolloutItem::Compacted(_), RolloutItem::WorldState(baseline)]
+        if baseline.full && baseline.state["collaboration_mode"]["mode"] == "plan"
+    )));
+    let input = requests[3]["input"].as_array().expect("request input");
+    // The full snapshot normalizes mode text; check the cutoff and later update explicitly.
+    let position = |text: &str| {
+        let positions = input
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| item.to_string().contains(text).then_some(i))
+            .collect::<Vec<_>>();
+        assert_eq!(positions.len(), 1, "{text}");
+        positions[0]
+    };
+    let default = position("# Collaboration Mode: Default");
+    let draft = position("Draft the launch notes.");
+    let compaction = position("ASYNC_LAUNCH_CHECKPOINT");
+    let plan = position("Plan Mode");
+    if matches!(suffix, LiveSuffix::User) {
+        let user = position("Check who can finish the notes.");
+        assert!(draft < compaction && compaction < default && default < plan && plan < user);
+        let entries = requests.iter().map(SnapshotEntry::body).collect::<Vec<_>>();
+        insta::assert_snapshot!(
+            "astra_async_compaction_with_live_suffix",
+            context_snapshot::format_context_snapshot(
+                "Astra compacts a completed launch-notes turn in the background. The user switches to Plan mode while it runs. Adoption restores Default mode at the cutoff, then preserves the Plan update, newer user message, and assistant/tool exchange in their original order.",
+                &entries,
+                &ContextSnapshotOptions::default().rewrite_known_segments(),
+            )
+        );
+    } else {
+        let tool = position("delegated work");
+        if matches!(
+            suffix,
+            LiveSuffix::RetainedTool | LiveSuffix::OverBudgetRetainedTool
+        ) {
+            assert!(draft < compaction && compaction < default && default < plan && plan < tool);
+        } else {
+            assert!(default < draft && draft < compaction && compaction < plan && plan < tool);
+        }
+        let assistant = position("I will check who is available.");
+        let call = input
+            .iter()
+            .position(|item| item["type"] == "function_call" && item["call_id"] == "team")
+            .expect("retained tool call");
+        let output = input
+            .iter()
+            .position(|item| item["type"] == "function_call_output" && item["call_id"] == "team")
+            .expect("retained tool output");
+        assert!(tool < assistant && assistant < call && call < output);
+    }
+    Ok(())
+}
+
+#[derive(PartialEq)]
+enum PendingCompactionOutcome {
+    Absent,
+    Success,
+    SuccessOverBudget,
+    StaleSuccess,
+    Failure,
+    Interrupted,
+}
+
+#[test_case::test_case(PendingCompactionOutcome::Success, CompactionTrigger::Auto; "auto uses pending result")]
+#[test_case::test_case(PendingCompactionOutcome::Failure, CompactionTrigger::Auto; "auto falls back after failure")]
+#[test_case::test_case(PendingCompactionOutcome::StaleSuccess, CompactionTrigger::Auto; "auto falls back after account changes")]
+#[test_case::test_case(PendingCompactionOutcome::Interrupted, CompactionTrigger::Auto; "auto can be interrupted")]
+#[test_case::test_case(PendingCompactionOutcome::Absent, CompactionTrigger::Manual; "manual without background")]
+#[test_case::test_case(PendingCompactionOutcome::Success, CompactionTrigger::Manual; "manual uses pending result")]
+#[test_case::test_case(PendingCompactionOutcome::Failure, CompactionTrigger::Manual; "manual falls back after failure")]
+#[test_case::test_case(PendingCompactionOutcome::StaleSuccess, CompactionTrigger::Manual; "manual falls back after account changes")]
+#[test_case::test_case(PendingCompactionOutcome::Interrupted, CompactionTrigger::Manual; "manual can be interrupted")]
+#[test_case::test_case(PendingCompactionOutcome::SuccessOverBudget, CompactionTrigger::Auto; "pending adoption still over budget")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn async_compaction_reuses_pending_work(
+    outcome: PendingCompactionOutcome,
+    trigger: CompactionTrigger,
+) -> Result<()> {
+    use core_test_support::responses::ev_completed_with_tokens;
+
+    skip_if_no_network!(Ok(()));
+    let over_budget = outcome == PendingCompactionOutcome::SuccessOverBudget;
+    let retained_output = format!("LATE_OUTPUT {}", "x ".repeat(12_000));
+    let manual = matches!(trigger, CompactionTrigger::Manual);
+    let has_background = outcome != PendingCompactionOutcome::Absent;
+    let seed_tokens = if over_budget {
+        2_000
+    } else if has_background {
+        70_000
+    } else {
+        10_000
+    };
+    let valid_output = outcome != PendingCompactionOutcome::Failure;
+    let succeeds = !matches!(
+        outcome,
+        PendingCompactionOutcome::Absent
+            | PendingCompactionOutcome::SuccessOverBudget
+            | PendingCompactionOutcome::Failure
+            | PendingCompactionOutcome::StaleSuccess
+    );
+    let response = |id, event, tokens| vec![event, ev_completed_with_tokens(id, tokens)];
+    let immediate = |events| vec![compaction_chunk(/*gate*/ None, events)];
+    let (release_background, background_gate) = oneshot::channel();
+    let mut responses = vec![immediate(response(
+        "seed",
+        ev_assistant_message("seed", "seed"),
+        seed_tokens,
+    ))];
+    if has_background {
+        responses.push(vec![compaction_chunk(
+            Some(background_gate),
+            response(
+                "background",
+                if valid_output {
+                    compaction_output("ASYNC")
+                } else {
+                    ev_assistant_message("invalid", "missing compaction output")
+                },
+                /*tokens*/ 3_000,
+            ),
+        )]);
+    }
+    if !manual {
+        responses.push(immediate(response(
+            "second",
+            ev_function_call_with_namespace("team", "collaboration", "list_agents", "{}"),
+            /*tokens*/ if over_budget { 9_000 } else { 91_000 },
+        )));
+    }
+    if !succeeds {
+        responses.push(immediate(response(
+            "sync",
+            compaction_output("SYNC"),
+            /*tokens*/ 3_000,
+        )));
+    }
+    responses.push(immediate(response(
+        "continuation",
+        ev_assistant_message("continuation", "continuation"),
+        /*tokens*/ if over_budget { 10 } else { 3_000 },
+    )));
+    let (streaming, mut completions) = start_streaming_sse_server(responses).await;
+    let (_config_server, test) = async_compaction_test(
+        streaming.uri(),
+        if over_budget {
+            vec![Feature::RetainClientToolOutputs]
+        } else {
+            vec![]
+        },
+        move |config| {
+            if over_budget {
+                config.async_compaction_threshold_percent = 1;
+                config.model_auto_compact_token_limit = Some(5_000);
+            }
+        },
+    )
+    .await?;
+    test.codex.ensure_rollout_materialized().await;
+    let timeout = Duration::from_secs(/*secs*/ 20);
+    test.submit_text_turn("first").await?;
+    if has_background {
+        tokio::time::timeout(timeout, streaming.wait_for_request_count(/*count*/ 2)).await?;
+    }
+    if manual {
+        test.codex.submit(Op::Compact).await?;
+    } else if over_budget {
+        test.codex.start_or_steer_turn(TurnInputRequest::new(TurnInput::AnnotatedResponseItem(
+            codex_protocol::turn_input::AnnotatedResponseItem {
+                item: serde_json::from_value(json!({"type": "function_call_output", "name": "send_message_to_thread", "namespace": "codex_app", "output": retained_output}))?,
+                annotations: codex_protocol::turn_input::ResponseItemAnnotations { retain: true },
+            },
+        ))).await?;
+    } else {
+        test.codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![text("newer")]))
+            .await?;
+    }
+    let started = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ItemStarted(event)
+            if matches!(event.item, TurnItem::ContextCompaction(_)))
+    })
+    .await;
+    if has_background {
+        assert_eq!(streaming.requests().await.len(), if manual { 2 } else { 3 });
+    }
+    if outcome == PendingCompactionOutcome::Interrupted {
+        test.codex.submit(Op::Interrupt).await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnAborted(_))
+        })
+        .await;
+        release_background.send(()).expect("release unused result");
+        completions.remove(1).await?;
+        test.codex.shutdown_and_wait().await?;
+        assert_eq!(streaming.requests().await.len(), if manual { 2 } else { 3 });
+        return Ok(());
+    }
+    if outcome == PendingCompactionOutcome::StaleSuccess {
+        let auth = test.thread_manager.auth_manager();
+        let mut tokens = auth.auth_cached().expect("test auth").get_token_data()?;
+        tokens.id_token.raw_jwt = "e30.e30.signature".to_string();
+        tokens.account_id = Some("second-account".to_string());
+        tokens.access_token = "second-account-token".to_string();
+        std::fs::write(
+            test.home.path().join("auth.json"),
+            serde_json::to_vec(
+                &json!({"auth_mode":"chatgpt", "tokens":tokens, "last_refresh":chrono::Utc::now()}),
+            )?,
+        )?;
+        auth.reload().await;
+    }
+    if has_background {
+        release_background.send(()).expect("release pending result");
+    }
+    let EventMsg::ItemStarted(started) = started else {
+        unreachable!();
+    };
+    let mut starts = vec![started.item.id()];
+    let mut completed = Vec::new();
+    wait_for_event(&test.codex, |event| {
+        if let EventMsg::ItemStarted(event) = event
+            && matches!(event.item, TurnItem::ContextCompaction(_))
+        {
+            starts.push(event.item.id());
+        }
+        if let EventMsg::ItemCompleted(event) = event
+            && matches!(event.item, TurnItem::ContextCompaction(_))
+        {
+            completed.push(event.item.id());
+        }
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(completed, starts);
+    assert_eq!(starts.len(), if over_budget { 2 } else { 1 });
+    assert_eq!(starts.iter().collect::<HashSet<_>>().len(), starts.len());
+    tokio::time::timeout(
+        timeout,
+        test.codex.wait_for_background_compaction_for_test(),
+    )
+    .await?;
+    if manual {
+        test.submit_text_turn("after manual compaction").await?;
+    }
+
+    let history = test.codex.load_history(/*include_archived*/ false).await?;
+    let usage = |id| {
+        history
+            .items
+            .iter()
+            .find_map(|item| match item {
+                RolloutItem::TokenUsageRecord(record) if record.response_id == id => Some(record),
+                _ => None,
+            })
+            .expect("persisted usage")
+    };
+    assert!(history.items.iter().all(|item| !matches!(item,
+        RolloutItem::TokenUsageRecord(record) if record.response_id == "background"
+    )));
+    let continuation = usage("continuation");
+    assert_eq!(
+        (
+            continuation.turn_token_usage.total_tokens,
+            continuation.thread_token_usage.total_tokens,
+        ),
+        if over_budget {
+            (12_010, 14_010)
+        } else if manual {
+            (3_000, seed_tokens + if succeeds { 3_000 } else { 6_000 })
+        } else if succeeds {
+            (94_000, 164_000)
+        } else {
+            (97_000, 167_000)
+        },
+    );
+
+    let requests = streaming
+        .requests()
+        .await
+        .iter()
+        .map(|body| serde_json::from_slice::<serde_json::Value>(body))
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    assert_eq!(
+        requests.len(),
+        (if manual { 2 } else { 3 }) + usize::from(has_background) + usize::from(!succeeds)
+    );
+    if over_budget {
+        for request in &requests[3..] {
+            assert!(
+                request["input"]
+                    .as_array()
+                    .expect("compaction or continuation input")
+                    .iter()
+                    .any(|item| item["output"] == retained_output)
+            );
+        }
+    }
+    if manual && !succeeds {
+        let foreground = &requests[requests.len() - 2];
+        let metadata: serde_json::Value = serde_json::from_str(
+            foreground["client_metadata"]["x-codex-turn-metadata"]
+                .as_str()
+                .expect("manual foreground metadata"),
+        )?;
+        assert_eq!(metadata["compaction"]["trigger"], "manual");
+        assert_eq!(metadata["compaction"]["reason"], "user_requested");
+        assert_eq!(metadata["compaction"]["phase"], "standalone_turn");
+    }
+    let summaries: Vec<_> = requests.last().expect("continuation")["input"]
+        .as_array()
+        .expect("foreground input")
+        .iter()
+        .filter(|item| item["type"] == "compaction")
+        .map(|item| &item["encrypted_content"])
+        .collect();
+    assert_eq!(summaries, [&json!(if succeeds { "ASYNC" } else { "SYNC" })]);
     Ok(())
 }

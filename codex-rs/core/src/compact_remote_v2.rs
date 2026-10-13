@@ -117,7 +117,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     world_state: Arc<WorldState>,
     reason: CompactionReason,
     phase: CompactionPhase,
-    candidate: Option<BackgroundCompactionCandidate>,
+    candidate: Option<Box<BackgroundCompactionCandidate>>,
     fallback: CompactionFallback,
 ) -> CodexResult<bool> {
     let compaction_metadata = CompactionTurnMetadata::new(
@@ -172,7 +172,7 @@ async fn run_remote_compact_task_inner(
     client_session: Option<&mut ModelClientSession>,
     world_state: Arc<WorldState>,
     compaction_metadata: CompactionTurnMetadata,
-    candidate: Option<BackgroundCompactionCandidate>,
+    candidate: Option<Box<BackgroundCompactionCandidate>>,
     fallback: CompactionFallback,
 ) -> CodexResult<bool> {
     let turn_context = &step_context.turn;
@@ -231,7 +231,7 @@ async fn run_remote_compact_task_inner(
         compaction_metadata,
         &mut analytics_details,
         started_item.as_ref(),
-        candidate,
+        candidate.map(|candidate| *candidate),
         fallback,
     ))
     .await;

@@ -1479,7 +1479,6 @@ impl<'a> ResponsesHttpExecutor<'a> {
 }
 
 impl ModelClientSession {
-    #[allow(dead_code)]
     pub(crate) fn turn_state_with_auth_owner(&self) -> (Option<String>, Option<u64>) {
         let owner = self.client.auth_owner_generation();
         let turn_state = (self.websocket_session.auth_owner_generation == owner)

@@ -31,7 +31,8 @@ struct CompactionAttempt {
 #[derive(Default)]
 pub(crate) struct AsyncCompactionState {
     last_attempt: Option<CompactionAttempt>,
-    result: Option<oneshot::Receiver<BackgroundCompactionCandidate>>,
+    // Keep prepared request state off the turn stack while checkpoints await adoption.
+    result: Option<oneshot::Receiver<Box<BackgroundCompactionCandidate>>>,
     tasks: TaskTracker,
     shutdown_cancellation: CancellationToken,
 }
@@ -53,6 +54,7 @@ pub(super) async fn maybe_start(
     step_context: &Arc<StepContext>,
     world_state: &Arc<WorldState>,
     phase: CompactionPhase,
+    turn_cancellation: &CancellationToken,
     token_status: &ContextWindowTokenStatus,
     (turn_state, auth_owner_generation): (Option<String>, Option<u64>),
 ) {
@@ -87,7 +89,9 @@ pub(super) async fn maybe_start(
         compaction_hash: model_info.comp_hash.clone(),
         auth_owner_generation,
     };
-    if state.shutting_down
+    // Stop blocks new launches; already-running compaction remains session-owned.
+    if turn_cancellation.is_cancelled()
+        || state.shutting_down
         || state.async_compaction.last_attempt.as_ref() == Some(&attempt)
         || state.history.annotated_items().is_empty()
         || sess.services.model_client.auth_owner_generation() != auth_owner_generation
@@ -124,7 +128,7 @@ pub(super) async fn maybe_start(
         .await
         {
             Ok(candidate) => {
-                let _ = send.send(candidate);
+                let _ = send.send(Box::new(candidate));
             }
             Err(error) => {
                 debug!(%error, "discarding unsuccessful background compaction");
@@ -140,7 +144,7 @@ pub(super) async fn maybe_start(
 pub(super) async fn take_ready(
     sess: &Session,
     turn_context: &TurnContext,
-) -> Option<BackgroundCompactionCandidate> {
+) -> Option<Box<BackgroundCompactionCandidate>> {
     if !enabled(turn_context) {
         return None;
     }
@@ -153,7 +157,7 @@ pub(super) async fn take_ready(
 pub(crate) async fn wait_for_pending(
     sess: &Session,
     step_context: &StepContext,
-) -> Option<BackgroundCompactionCandidate> {
+) -> Option<Box<BackgroundCompactionCandidate>> {
     if !enabled(&step_context.turn) {
         return None;
     }
@@ -196,3 +200,15 @@ pub(super) async fn shutdown(sess: &Session) {
     // Drain completed usage charging before shutdown finishes.
     tasks.wait().await;
 }
+
+/// Test barrier: callers must gate foreground work so it cannot launch another attempt.
+pub(crate) async fn wait_for_background_compaction_for_test(sess: &Session) {
+    let tasks = sess.state.lock().await.async_compaction.tasks.clone();
+    // Closing only enables waiting; it neither cancels tasks nor prevents future launches.
+    tasks.close();
+    tasks.wait().await;
+}
+
+#[cfg(test)]
+#[path = "async_compaction_tests.rs"]
+mod tests;

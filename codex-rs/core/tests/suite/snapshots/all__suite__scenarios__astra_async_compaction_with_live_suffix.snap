@@ -1,0 +1,117 @@
+---
+source: core/tests/suite/scenarios.rs
+expression: "context_snapshot::format_context_snapshot(\"Astra compacts a completed launch-notes turn in the background. The user switches to Plan mode while it runs. Adoption restores Default mode at the cutoff, then preserves the Plan update, newer user message, and assistant/tool exchange in their original order.\",\n&entries, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: Astra compacts a completed launch-notes turn in the background. The user switches to Plan mode while it runs. Adoption restores Default mode at the cutoff, then preserves the Plan update, newer user message, and assistant/tool exchange in their original order.
+
+## Window 1
+-- request 1 (request) --
+00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
+        - namespace/functions; hash=fada4a476a3754dd
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user:
+    Draft the launch notes.
+-- request 2 (request) --
+07:message/assistant:
+    I drafted the launch notes.
+08:compaction_trigger
+
+## Window 2 (after request 2: input diverged at item 08)
+-- request 3 (request) --
+00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
+        - namespace/functions; hash=fada4a476a3754dd
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user:
+    Draft the launch notes.
+07:message/assistant:
+    I drafted the launch notes.
+08:message/developer:
+    <COLLABORATION_MODE>
+09:message/user:
+    Check who can finish the notes.
+
+## Window 3 (after request 3: input diverged at item 02)
+-- request 4 (request) --
+00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
+        - namespace/functions; hash=fada4a476a3754dd
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/user:
+    Draft the launch notes.
+03:compaction:encrypted=true; chars=23; hash=159cfcb231cc70f0
+04:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+05:message/developer:
+    <MULTI_AGENT_ROLE>
+06:message/developer:
+    <MULTI_AGENT_MODE>
+07:message/user:
+    <ENVIRONMENT_CONTEXT>
+08:message/developer:
+    <COLLABORATION_MODE>
+09:message/user:
+    Check who can finish the notes.
+10:message/assistant:
+    I will check who is available.
+11:function_call/collaboration.list_agents:{}
+12:function_call_output:{"agents":[{"agent_name":"/root","agent_status":"running"}]}

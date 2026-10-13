@@ -1,5 +1,5 @@
-//! Materializes and installs foreground or prepared V2 compaction through one lifecycle.
-//! A rejected prepared result may fall back once; building and installation share one path.
+//! Materializes and installs foreground or prepared V2 compaction through a shared path.
+//! A rejected or still-over-budget prepared result may fall back to one foreground request.
 //! Prepared prefixes are validated by the history replacement primitive before mutation.
 
 use super::*;
@@ -8,6 +8,10 @@ use crate::context::world_state::split_prefix_updates;
 use crate::context_manager::updates::merge_world_state_updates;
 use crate::session::CompactedHistoryInstallation;
 use codex_rollout_trace::CompactionCheckpointTracePayload;
+
+#[cfg(test)]
+#[path = "compact_remote_v2_installation_tests.rs"]
+mod tests;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_compaction(
@@ -18,7 +22,7 @@ pub(super) async fn run_compaction(
     world_state: &WorldState,
     compaction_metadata: CompactionTurnMetadata,
     analytics_details: &mut CompactionAnalyticsDetails,
-    started_item: Option<&TurnItem>,
+    mut started_item: Option<&TurnItem>,
     candidate: Option<BackgroundCompactionCandidate>,
     fallback: CompactionFallback,
 ) -> CodexResult<bool> {
@@ -35,8 +39,20 @@ pub(super) async fn run_compaction(
             Some(candidate),
         )
         .await?;
-        if installed || fallback == CompactionFallback::Skip {
-            return Ok(installed);
+        if installed {
+            let status = crate::session::context_window::context_window_token_status(
+                sess,
+                &replacement_step_context.turn,
+            )
+            .await;
+            if !status.token_limit_reached {
+                return Ok(true);
+            }
+            // The live suffix can leave an adopted prefix over budget. Try the existing
+            // foreground path once, with a new item: adoption already completed its item.
+            started_item = None;
+        } else if fallback == CompactionFallback::Skip {
+            return Ok(false);
         }
     }
     build_and_install_compaction(
