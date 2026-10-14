@@ -48,7 +48,7 @@ async fn powershell_alias_falls_back_without_primary_runtime_over_rpc(
                     .into_owned(),
                 "-NoProfile".to_owned(),
                 "-Command".to_owned(),
-                "Write-Output 'fallback-ok'".to_owned(),
+                "if (!$env:SystemDrive -or !$env:LOCALAPPDATA -or !$env:USERPROFILE -or !$env:PATH) { throw 'missing Windows defaults' }; Write-Output 'fallback-ok'".to_owned(),
             ],
             cwd,
             env_policy: None,

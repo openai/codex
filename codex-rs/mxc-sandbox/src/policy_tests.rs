@@ -155,6 +155,7 @@ fn command(permissions: &PermissionProfile, cwd: &Path) -> MxcCommand {
         sandbox_policy_cwd: cwd.to_owned(),
         managed_network: None,
         command: vec!["program.exe".to_owned(), "--arg".to_owned()],
+        default_child_env: false,
     }
 }
 
@@ -173,6 +174,7 @@ fn wrapper_preserves_exact_argv_and_separate_command_cwd() -> Result<()> {
         "quotes\" and slash\\".to_owned(),
     ];
     let mut env = HashMap::new();
+    codex_windows_sandbox::environment_transport::encode("stale", &mut env)?;
     let wrapped = create_command_args(CreateMxcCommandArgsParams {
         command: argv.clone(),
         permission_profile: &profile,
@@ -182,6 +184,8 @@ fn wrapper_preserves_exact_argv_and_separate_command_cwd() -> Result<()> {
     })?;
     assert_eq!(wrapped, vec![crate::CODEX_WINDOWS_MXC_ARG1]);
     let parsed = crate::transport::decode(&mut env)?;
+    assert!(parsed.default_child_env);
+    assert!(env.is_empty());
     assert_eq!(
         (
             &parsed.permissions,

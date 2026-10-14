@@ -18,6 +18,7 @@ use anyhow::Result;
 use anyhow::ensure;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::models::PermissionProfile;
+use codex_windows_sandbox::environment_transport;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -46,6 +47,8 @@ struct MxcCommand {
     sandbox_policy_cwd: PathBuf,
     managed_network: Option<ManagedNetworkSandboxContext>,
     command: Vec<String>,
+    #[serde(default)]
+    default_child_env: bool,
 }
 
 /// Inputs used to build an MXC helper invocation.
@@ -80,6 +83,9 @@ pub fn create_command_args(args: CreateMxcCommandArgsParams<'_>) -> Result<Vec<S
             sandbox_policy_cwd: sandbox_policy_cwd.to_owned(),
             managed_network: managed_network.cloned(),
             command,
+            default_child_env: env
+                .keys()
+                .all(|key| environment_transport::is_key(key.as_ref())),
         },
         env,
     )?;

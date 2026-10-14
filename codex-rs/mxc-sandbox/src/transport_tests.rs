@@ -19,6 +19,7 @@ fn command(args: Vec<String>) -> MxcCommand {
         sandbox_policy_cwd: PathBuf::from("workspace"),
         managed_network: None,
         command: args,
+        default_child_env: false,
     }
 }
 
@@ -31,6 +32,10 @@ fn large_unicode_launch_roundtrips_and_never_reaches_child_environment() -> Resu
     ];
     let expected_env = HashMap::from([("CUSTOM".to_owned(), "value".to_owned())]);
     let mut env = expected_env.clone();
+    #[cfg(windows)]
+    env.extend(
+        ["systemdrive", "LocalAppData"].map(|key| (key.to_owned(), "caller-only".to_owned())),
+    );
     environment_transport::encode("stale", &mut env)?;
     let request = command(args);
     encode(&request, &mut env)?;
@@ -42,6 +47,10 @@ fn large_unicode_launch_roundtrips_and_never_reaches_child_environment() -> Resu
         serde_json::to_value(decode(&mut env)?)?,
         serde_json::to_value(request)?
     );
+    #[cfg(windows)]
+    for key in ["SystemDrive", "LOCALAPPDATA"] {
+        assert_eq!(env.remove(key), Some(std::env::var(key)?));
+    }
     assert_eq!(env, expected_env);
     Ok(())
 }

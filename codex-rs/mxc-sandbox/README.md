@@ -45,6 +45,13 @@ request: the canonical `PermissionProfile`, policy cwd, proxy context, and exact
 argv. The helper inherits command cwd, environment, and stdio from the shared
 process path; policy cwd can differ from command cwd.
 
+Windows MXC reserves `SystemDrive` and `LOCALAPPDATA` for the host's validated,
+nonempty values in both wrapper and explicit child environments. Caller
+overrides are replaced case-insensitively; unavailable host values fail before
+launch with a diagnostic naming the variable.
+Windows may virtualize the child's `LOCALAPPDATA` into a sandbox directory
+beneath the host profile.
+
 The request uses launcher-only environment chunks to leave Windows' command-line
 budget to the workload. Payloads are limited to 1,000,000 UTF-8 bytes and chunks
 to 4096 bytes; the helper removes them before native process creation. Use
@@ -70,8 +77,10 @@ to 4096 bytes; the helper removes them before native process creation. Use
   command are not implicitly granted.
 - The native API represents paths and environment values as Unicode strings.
   Non-Unicode values fail instead of undergoing lossy conversion.
-- An empty child environment uses the Windows user-profile defaults. Nonempty
-  environments remain explicit.
+- An empty child environment still uses the Windows user-profile defaults.
+  Supplying only two keys would turn it into an incomplete explicit environment,
+  so the wrapper's bootstrap values are removed before the SDK selects defaults.
+  Nonempty environments remain explicit except for these two host-owned values.
 - The upstream runner terminates remaining descendants when the foreground
   process exits, as well as on cancellation. Both existing Windows backends
   preserve descendants after normal exit, so detached servers currently lose
