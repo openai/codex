@@ -40,9 +40,10 @@ fn symbolic_root_precedence_is_independent_of_drive_and_cwd() -> Result<()> {
     let volumes = [
         PathUri::parse("file:///C:/")?,
         PathUri::parse("file:///D:/")?,
+        PathUri::parse("file:///R:/")?,
     ];
-    let readonly = PathUri::parse("file:///D:/foobar")?;
-    let writable = PathUri::parse("file:///D:/writable")?;
+    let readonly = PathUri::parse("file:///R:/foobar")?;
+    let writable = PathUri::parse("file:///R:/writable")?;
     let mut fs = FileSystemSandboxPolicy::read_only();
     fs.entries.extend([
         FileSystemSandboxEntry::new(volumes[1].clone().into(), Read),
@@ -52,7 +53,7 @@ fn symbolic_root_precedence_is_independent_of_drive_and_cwd() -> Result<()> {
     ]);
     for access in [Read, Write, Deny] {
         fs.entries[0].access = access;
-        let resolved = materialize_volume_roots(fs.clone(), &volumes)?;
+        let resolved = materialize_volume_roots(fs.clone(), &volumes, &volumes[..2])?;
         for volume in &volumes {
             let cwd = volume.join("work")?;
             let context = FileSystemSandboxPolicyContext {
@@ -62,9 +63,15 @@ fn symbolic_root_precedence_is_independent_of_drive_and_cwd() -> Result<()> {
                 temporary_directories: None,
             };
             assert_eq!(
-                [&volumes[0], &volumes[1], &readonly, &writable]
+                [&volumes[0], &volumes[1], &volumes[2], &readonly, &writable]
                     .map(|path| resolved.resolve_access(path, &context)),
-                [access, access, Read, Write]
+                [
+                    access,
+                    access,
+                    if access == Read { Deny } else { access },
+                    Read,
+                    Write
+                ]
             );
         }
     }
@@ -76,7 +83,7 @@ fn symbolic_root_precedence_is_independent_of_drive_and_cwd() -> Result<()> {
         Read,
     ));
     assert!(matches!(
-        materialize_volume_roots(fs, &volumes),
+        materialize_volume_roots(fs, &volumes, &volumes),
         Err(PolicyError::UnsupportedSymbolicPath)
     ));
     Ok(())
@@ -114,7 +121,7 @@ fn approved_command_expands_volume_roots_without_retaining_original_grants() -> 
     ]);
     let approved = policy.for_approved_command(&context);
     assert_eq!(approved.resolve_access(&formerly_readonly, &context), Deny);
-    let translated = materialize_volume_roots(approved, &volumes)?;
+    let translated = materialize_volume_roots(approved, &volumes, &volumes[..1])?;
     assert_eq!(
         [
             &volumes[0],
