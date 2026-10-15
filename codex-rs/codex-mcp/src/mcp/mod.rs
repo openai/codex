@@ -374,9 +374,10 @@ fn is_trusted_chatgpt_mcp_server(
         return false;
     }
 
-    if url::Url::parse(CHATGPT_CODEX_BASE_URL)
-        .ok()
-        .is_some_and(|chatgpt_url| server_url.origin() == chatgpt_url.origin())
+    if [CHATGPT_CODEX_BASE_URL, "https://gov.chatgpt.com"]
+        .into_iter()
+        .filter_map(|base_url| url::Url::parse(base_url).ok())
+        .any(|trusted_url| server_url.origin() == trusted_url.origin())
     {
         return true;
     }

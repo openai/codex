@@ -4484,6 +4484,63 @@ fn hosted_actor_credentials_are_only_available_to_host_owned_mcp_servers() {
     );
 }
 
+#[test]
+fn gov_codex_apps_retain_local_chatgpt_auth_provider() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let provider = codex_model_provider::auth_provider_from_auth(&auth);
+    let mut config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
+    config.chatgpt_base_url = "https://gov.chatgpt.com/backend-api/".to_string();
+    config.apps_enabled = true;
+
+    let local_config = crate::codex_apps_mcp_server_config(
+        &config.chatgpt_base_url,
+        /*apps_mcp_product_sku*/ None,
+        /*originator*/ None,
+    );
+    let mut remote_config = local_config.clone();
+    remote_config.environment_id = "customer-executor".to_string();
+    let mut custom_oauth = local_config.clone();
+    custom_oauth.auth = McpServerAuth::OAuth;
+
+    let mut catalog = crate::ResolvedMcpCatalog::builder();
+    catalog.register(crate::McpServerRegistration::from_hosted_apps(
+        "test-host",
+        /*contribution_order*/ 0,
+        local_config,
+    ));
+    catalog.register(crate::McpServerRegistration::from_config(
+        "custom-oauth".to_string(),
+        custom_oauth,
+    ));
+    catalog.register(crate::McpServerRegistration::from_config(
+        "remote-gov".to_string(),
+        remote_config,
+    ));
+    config.mcp_server_catalog = catalog.build();
+
+    let servers = crate::effective_mcp_servers(&config, Some(&auth));
+    let local = &servers[CODEX_APPS_MCP_SERVER_NAME];
+    assert_eq!(local.config().auth, McpServerAuth::ChatGpt);
+    let retained = chatgpt_auth_provider_for_server(local, Some(Arc::clone(&provider)))
+        .expect("local Gov Apps must retain ChatGPT authentication");
+    assert!(
+        Arc::ptr_eq(&provider, &retained),
+        "server selection must preserve the supplied provider"
+    );
+
+    assert_eq!(servers["custom-oauth"].config().auth, McpServerAuth::OAuth);
+    assert_eq!(servers["remote-gov"].config().auth, McpServerAuth::ChatGpt);
+    for name in ["custom-oauth", "remote-gov"] {
+        assert!(
+            chatgpt_auth_provider_for_server(&servers[name], Some(Arc::clone(&provider))).is_none(),
+            "{name} must not receive the host ChatGPT provider"
+        );
+    }
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn executor_owned_chatgpt_mcp_accepts_only_safe_explicit_authorization() -> anyhow::Result<()>
 {
