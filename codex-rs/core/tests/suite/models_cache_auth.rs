@@ -78,13 +78,11 @@ impl ExternalAuth for StallingAuth {
 }
 
 fn header_auth(token: &'static str) -> CodexAuth {
-    CodexAuth::Headers(AuthHeaders::new(HeaderMap::from_iter([
-        (http::header::AUTHORIZATION, HeaderValue::from_static(token)),
-        (
-            http::header::HeaderName::from_static("chatgpt-account-id"),
-            HeaderValue::from_static("same-account"),
-        ),
-    ])))
+    // Without stable account metadata, credential rotation must invalidate the catalog.
+    CodexAuth::Headers(AuthHeaders::new(HeaderMap::from_iter([(
+        http::header::AUTHORIZATION,
+        HeaderValue::from_static(token),
+    )])))
 }
 
 #[derive(Clone, Copy)]

@@ -105,6 +105,14 @@ pub const DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL: &str = "gpt-5.6-terra";
 /// Implementations own provider-specific behavior for a model backend. The
 /// `ModelProviderInfo` returned by `info` is the serialized/configured provider
 /// metadata used by the default OpenAI-compatible implementation.
+///
+/// OpenAI-compatible catalog caches use header auth's account ID instead of auth
+/// headers when available. Missing IDs and explicit provider API key, bearer, or
+/// command auth retain credential-sensitive keys. Provider settings remain in the key.
+/// Hosts using header auth must isolate model managers and cache storage by user and
+/// catalog-varying request context, such as country: an account ID may identify a
+/// workspace shared by multiple users. Request authentication, credential refresh,
+/// and permission checks are unchanged.
 pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the configured provider metadata.
     fn info(&self) -> &ModelProviderInfo;

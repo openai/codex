@@ -42,7 +42,8 @@ const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
     /// Opaque identity of the current provider and credentials, without resolving auth.
     ///
-    /// Must change when account, email, plan, provider, or API credentials change.
+    /// Must distinguish provider routing and authenticated principals within the
+    /// manager and cache's caller-established scope.
     /// Return `None` when identity is unavailable; cached catalog reuse is then disabled.
     fn identity(&self) -> Option<String>;
 
