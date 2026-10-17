@@ -7,6 +7,9 @@ use std::path::Path;
 
 use super::TransportEvent;
 use crate::transport::websocket::run_websocket_connection;
+use crate::websocket_compression::WEBSOCKET_COMPRESSION_HEADER;
+use crate::websocket_compression::WebSocketCompression;
+use crate::websocket_compression::ZSTD_STREAM_PROTOCOL;
 use codex_uds::UnixListener;
 use codex_uds::UnixStream;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -175,6 +178,7 @@ async fn run_control_socket_acceptor(
         let transport_event_tx = transport_event_tx.clone();
         tokio::spawn(async move {
             let mut shutdown_request = false;
+            let mut compression = WebSocketCompression::Plain;
             let websocket_config = WebSocketConfig::default();
             let max_unfragmented_message_bytes = [
                 websocket_config.max_frame_size,
@@ -194,6 +198,16 @@ async fn run_control_socket_acceptor(
                             return Err(rejection);
                         }
                         shutdown_request = true;
+                    } else if request
+                        .headers()
+                        .get(WEBSOCKET_COMPRESSION_HEADER)
+                        .is_some_and(|value| value == ZSTD_STREAM_PROTOCOL)
+                    {
+                        compression = WebSocketCompression::Zstd;
+                        response.headers_mut().insert(
+                            WEBSOCKET_COMPRESSION_HEADER,
+                            HeaderValue::from_static(ZSTD_STREAM_PROTOCOL),
+                        );
                     }
                     if let Some(max_bytes) = max_unfragmented_message_bytes {
                         response.headers_mut().insert(
@@ -218,7 +232,13 @@ async fn run_control_socket_acceptor(
                 return;
             }
             let (websocket_writer, websocket_reader) = websocket_stream.split();
-            run_websocket_connection(websocket_writer, websocket_reader, transport_event_tx).await;
+            run_websocket_connection(
+                websocket_writer,
+                websocket_reader,
+                transport_event_tx,
+                compression,
+            )
+            .await;
         });
     }
     info!("control socket acceptor shutting down");

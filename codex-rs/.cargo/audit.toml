@@ -12,4 +12,7 @@ ignore = [
     "RUSTSEC-2026-0119", # hickory-proto via rama-dns/rama-tcp; remove when rama updates to hickory 0.26.1 or hickory-net
     "RUSTSEC-2026-0194", # quick-xml via plist/syntect and wayland-scanner; trusted inputs only; remove when rust-plist#191 and wayland-rs#938 are released
     "RUSTSEC-2026-0195", # quick-xml via plist/syntect and wayland-scanner; trusted inputs only; remove when rust-plist#191 and wayland-rs#938 are released
+    "RUSTSEC-2026-0370", # zvariant 4.2.0 via zbus 4.4.0 in Linux TUI and keyring/secret-service; remove when those paths migrate off the retired standalone crates
+    "RUSTSEC-2026-0371", # zbus_names 3.0.0 via zbus 4.4.0 in Linux TUI and keyring/secret-service; remove when those paths migrate off the retired standalone crates
+    "RUSTSEC-2026-0372", # zvariant_derive 4.2.0 via zbus 4.4.0 in Linux TUI and keyring/secret-service; remove when those paths migrate off the retired standalone crates
 ]

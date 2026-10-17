@@ -10,6 +10,7 @@ pub const DAEMON_SHUTDOWN_SOCKET_ENV: &str = "CODEX_DAEMON_SHUTDOWN_SOCKET";
 mod connection_auth;
 mod outgoing_message;
 mod transport;
+mod websocket_compression;
 
 pub use connection_auth::ConnectionAuth;
 pub use outgoing_message::ConnectionId;
@@ -44,3 +45,8 @@ pub use transport::start_stdio_connection;
 pub use transport::start_websocket_acceptor;
 pub use transport::take_remote_control_disabled_env;
 pub use transport::verified_local_daemon_socket;
+pub use websocket_compression::WEBSOCKET_COMPRESSION_HEADER;
+pub use websocket_compression::WebSocketCompression;
+pub use websocket_compression::ZSTD_STREAM_PROTOCOL;
+pub use websocket_compression::ZstdDecoder;
+pub use websocket_compression::ZstdEncoder;

@@ -84,6 +84,9 @@ ignore = [
     { id = "RUSTSEC-2026-0119", reason = "hickory-proto v0.25.2 is pulled in via rama-dns/rama-tcp used by codex-network-proxy; no fixed rama release is available yet; remove when rama updates to hickory 0.26.1 or hickory-net" },
     { id = "RUSTSEC-2026-0194", reason = "quick-xml v0.39.4 remains via plist/syntect and wayland-scanner; plist does not exercise the affected APIs and wayland-scanner parses trusted build-time XML; remove when rust-plist#191 and wayland-rs#938 are released" },
     { id = "RUSTSEC-2026-0195", reason = "quick-xml v0.39.4 remains via plist/syntect and wayland-scanner; plist does not exercise the affected APIs and wayland-scanner parses trusted build-time XML; remove when rust-plist#191 and wayland-rs#938 are released" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 4.2.0 is unmaintained; pulled in via zbus 4.4.0 by Linux TUI accessibility integration and keyring/secret-service; remove when those paths migrate off the retired standalone crates" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 3.0.0 is unmaintained; pulled in via zbus 4.4.0 by Linux TUI accessibility integration and keyring/secret-service; remove when those paths migrate off the retired standalone crates" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 4.2.0 is unmaintained; pulled in via zbus 4.4.0 by Linux TUI accessibility integration and keyring/secret-service; remove when those paths migrate off the retired standalone crates" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
