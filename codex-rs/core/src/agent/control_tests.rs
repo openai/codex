@@ -2880,7 +2880,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let tool_declarations = ResponseItem::AdditionalTools {
         id: None,
         role: "developer".to_string(),
-        tools: vec![serde_json::json!({"type": "function", "name": "parent_tool"})],
+        tools: Arc::from([serde_json::json!({"type": "function", "name": "parent_tool"})]),
     };
     let tool_state = serde_json::json!({"top_level_tools": {"function:parent_tool": "hash"}})
         .as_object()
@@ -3286,7 +3286,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(marke
     let tool_declarations = ResponseItem::AdditionalTools {
         id: None,
         role: "developer".to_string(),
-        tools: vec![serde_json::json!({"type": "function", "name": "compacted_tool"})],
+        tools: Arc::from([serde_json::json!({"type": "function", "name": "compacted_tool"})]),
     };
     let tools_update = ContextualUserFragment::into(IncrementalToolsHint(
         codex_prompts::ResolvedIncrementalToolMessages::default().tool_update_hint,
@@ -3865,7 +3865,7 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
         rollout_items.push(rollout_response_item(ResponseItem::AdditionalTools {
             id: None,
             role: "developer".to_string(),
-            tools: vec![serde_json::json!({"type": "function", "name": "parent_tool"})],
+            tools: Arc::from([serde_json::json!({"type": "function", "name": "parent_tool"})]),
         }));
         rollout_items.push(RolloutItem::TurnContext(
             turn_context.to_turn_context_item(),

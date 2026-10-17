@@ -77,7 +77,7 @@ fn additional_tools(name: &str) -> ResponseItem {
     ResponseItem::AdditionalTools {
         id: None,
         role: "developer".to_string(),
-        tools: vec![json!({"type": "function", "name": name})],
+        tools: Arc::from([json!({"type": "function", "name": name})]),
     }
 }
 

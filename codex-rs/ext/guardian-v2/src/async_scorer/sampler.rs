@@ -189,7 +189,7 @@ impl LunaSampler {
                 ResponseItemEnvelope::new(ResponseItem::AdditionalTools {
                     id: None,
                     role: "developer".to_owned(),
-                    tools: Vec::new(),
+                    tools: Arc::from([]),
                 }),
                 ResponseItemEnvelope::new(ResponseItem::from(request.instructions.clone())),
             ];

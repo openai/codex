@@ -25,7 +25,7 @@ fn item(tools: Vec<Value>) -> ResponseItem {
     ResponseItem::AdditionalTools {
         id: None,
         role: "developer".to_string(),
-        tools,
+        tools: Arc::from(tools),
     }
 }
 

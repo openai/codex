@@ -8,6 +8,7 @@ use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::input_text;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::sync::Arc;
 
 struct TestFragment {
     role: &'static str,
@@ -76,7 +77,7 @@ fn additional_tools() -> ResponseItem {
     ResponseItem::AdditionalTools {
         id: None,
         role: "developer".to_string(),
-        tools: vec![json!({"type": "function", "name": "lookup", "parameters": {}})],
+        tools: Arc::from([json!({"type": "function", "name": "lookup", "parameters": {}})]),
     }
 }
 

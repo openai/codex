@@ -213,7 +213,7 @@ impl WorldStateSection for TopLevelToolsState {
                 ResponseItem::AdditionalTools {
                     id: None,
                     role: "developer".to_string(),
-                    tools,
+                    tools: Arc::from(tools),
                 },
             ));
         }

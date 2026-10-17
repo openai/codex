@@ -638,14 +638,14 @@ async fn recorder_preserves_additional_tools_in_both_history_modes() -> std::io:
             ResponseItem::AdditionalTools {
                 id: None,
                 role: "developer".to_string(),
-                tools: vec![serde_json::json!({
+                tools: Arc::from([serde_json::json!({
                     "type": "namespace",
                     "name": "functions",
                     "description": "Available tools.",
                     "tools": [{"type": "function", "name": "lookup",
                         "description": "Look up a value.",
                         "parameters": {"type": "object", "properties": {}}}]
-                })],
+                })]),
             }
             .into(),
         );

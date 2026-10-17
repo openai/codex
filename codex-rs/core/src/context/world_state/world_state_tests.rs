@@ -9,6 +9,7 @@ use pretty_assertions::assert_ne;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
+use std::sync::Arc;
 
 #[derive(Clone, Deserialize, Serialize)]
 struct TestSection {
@@ -443,9 +444,9 @@ impl WorldStateSection for MixedOutputSection {
                 content: WorldStateUpdateContent::Item(Box::new(ResponseItem::AdditionalTools {
                     id: None,
                     role: "developer".to_string(),
-                    tools: vec![
+                    tools: Arc::from([
                         json!({"type": "function", "name": "example", "description": self.0.to_string()}),
-                    ],
+                    ]),
                 })),
             },
             WorldStateUpdate {
@@ -457,7 +458,7 @@ impl WorldStateSection for MixedOutputSection {
                 content: WorldStateUpdateContent::Item(Box::new(ResponseItem::AdditionalTools {
                     id: None,
                     role: "developer".to_string(),
-                    tools: vec![json!({"type": "function", "name": "context_tool"})],
+                    tools: Arc::from([json!({"type": "function", "name": "context_tool"})]),
                 })),
             },
             WorldStateUpdate::fragment(TestFragment("after tools".to_string())),
@@ -481,13 +482,13 @@ fn mixed_output_preserves_order_and_restores_its_snapshot() {
         ResponseItem::AdditionalTools {
             id: None,
             role: "developer".to_string(),
-            tools: vec![json!({"type": "function", "name": "example", "description": "2"})],
+            tools: Arc::from([json!({"type": "function", "name": "example", "description": "2"})]),
         },
         ContextualUserFragment::into(TestFragment("prefix instructions".to_string())),
         ResponseItem::AdditionalTools {
             id: None,
             role: "developer".to_string(),
-            tools: vec![json!({"type": "function", "name": "context_tool"})],
+            tools: Arc::from([json!({"type": "function", "name": "context_tool"})]),
         },
         ContextualUserFragment::into(TestFragment("after tools".to_string())),
     ];
