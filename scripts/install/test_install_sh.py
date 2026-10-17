@@ -32,6 +32,11 @@ class InstallShTest(unittest.TestCase):
             f"Could not fetch GitHub release metadata for Codex {VERSION}",
             result.stderr,
         )
+        self.assertIn(
+            "Consider other installation options "
+            "https://developers.openai.com/codex/cli",
+            result.stderr,
+        )
         self.assertNotIn("Could not find Codex package", result.stderr)
 
     def test_exact_release_opt_out_uses_github_metadata_once(self) -> None:
