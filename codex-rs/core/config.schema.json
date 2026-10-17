@@ -753,6 +753,9 @@
             "api_key_model_discovery": {
               "type": "boolean"
             },
+            "app_server_websocket_compression": {
+              "type": "boolean"
+            },
             "apply_patch_freeform": {
               "type": "boolean"
             },
@@ -7140,6 +7143,9 @@
           "type": "boolean"
         },
         "api_key_model_discovery": {
+          "type": "boolean"
+        },
+        "app_server_websocket_compression": {
           "type": "boolean"
         },
         "apply_patch_freeform": {

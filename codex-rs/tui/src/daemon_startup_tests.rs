@@ -10,6 +10,8 @@ fn audited_overrides_allow_daemon_without_allowing_arbitrary_config() {
     for (raw, eligible) in [
         ("features.transcript_v2=true", true),
         ("features.transcript_v2=false", true),
+        ("features.app_server_websocket_compression=true", true),
+        ("features.app_server_websocket_compression=false", true),
         ("features={transcript_v2=true}", true),
         ("features.transcript_v2='true'", false),
         ("features.worktrees=true", true),
@@ -60,6 +62,7 @@ fn monorepo_wrapper_overrides_are_eligible_and_select_only_server_features() {
     let overrides = codex_utils_cli::CliConfigOverrides {
         raw_overrides: [
             "features.realtime_conversation=true",
+            "features.app_server_websocket_compression=true",
             "features.worktrees=true",
             "features.remote_models=true",
             "features.api_key_model_discovery=true",

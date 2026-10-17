@@ -117,6 +117,8 @@ pub enum Feature {
 
     /// Automatically start the shared local daemon for eligible interactive launches.
     DaemonAutoStart,
+    /// Enable negotiated zstd compression for app-server WebSocket and UDS connections.
+    AppServerWebSocketCompression,
 
     // Experimental
     /// Advertise enabled environment-backed tools and their shell parameters before the
@@ -1036,6 +1038,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "daemon_auto_start",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::AppServerWebSocketCompression,
+        key: "app_server_websocket_compression",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::TranscriptV2,

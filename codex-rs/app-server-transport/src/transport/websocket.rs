@@ -88,6 +88,7 @@ fn print_websocket_startup_banner(addr: SocketAddr) {
 struct WebSocketListenerState {
     transport_event_tx: mpsc::Sender<TransportEvent>,
     auth_policy: Arc<WebsocketAuthPolicy>,
+    compression: WebSocketCompression,
 }
 
 async fn health_check_handler() -> StatusCode {
@@ -125,9 +126,10 @@ async fn websocket_upgrade_handler(
         return (err.status_code(), err.message()).into_response();
     }
     info!(%peer_addr, "websocket client connected");
-    let compression = if headers
-        .get(WEBSOCKET_COMPRESSION_HEADER)
-        .is_some_and(|value| value == ZSTD_STREAM_PROTOCOL)
+    let compression = if state.compression == WebSocketCompression::Zstd
+        && headers
+            .get(WEBSOCKET_COMPRESSION_HEADER)
+            .is_some_and(|value| value == ZSTD_STREAM_PROTOCOL)
     {
         WebSocketCompression::Zstd
     } else {
@@ -159,6 +161,7 @@ pub async fn start_websocket_acceptor(
     transport_event_tx: mpsc::Sender<TransportEvent>,
     shutdown_token: CancellationToken,
     auth_policy: WebsocketAuthPolicy,
+    compression: WebSocketCompression,
 ) -> IoResult<JoinHandle<()>> {
     if is_unauthenticated_non_loopback_listener(bind_address, &auth_policy) {
         return Err(std::io::Error::new(
@@ -181,6 +184,7 @@ pub async fn start_websocket_acceptor(
         .with_state(WebSocketListenerState {
             transport_event_tx,
             auth_policy: Arc::new(auth_policy),
+            compression,
         });
     let server = axum::serve(
         listener,

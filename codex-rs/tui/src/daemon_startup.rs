@@ -133,6 +133,7 @@ fn allowed_feature(name: &str) -> bool {
         name,
         // Client gates and per-thread settings already forwarded in thread requests.
         "daemon_auto_start" | "transcript_v2" | "standalone_web_search"
+        | "app_server_websocket_compression"
         // Shared services and threadless MCP operations need daemon compatibility checks.
         | "api_key_model_discovery" | "code_mode_host" | "auth_elicitation"
         | "mcp_oauth_refresh_coordination"

@@ -23,87 +23,110 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 #[tokio::test]
 async fn tcp_compression_negotiates_and_retains_history() -> Result<(), Box<dyn Error>> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let address = listener.local_addr()?;
-    let (transport_event_tx, mut events) = mpsc::channel(CHANNEL_CAPACITY);
-    let router = Router::new()
-        .fallback(any(websocket_upgrade_handler))
-        .with_state(WebSocketListenerState {
-            transport_event_tx,
-            auth_policy: Arc::new(WebsocketAuthPolicy::default()),
+    for compression in [WebSocketCompression::Plain, WebSocketCompression::Zstd] {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let (transport_event_tx, mut events) = mpsc::channel(CHANNEL_CAPACITY);
+        let router = Router::new()
+            .fallback(any(websocket_upgrade_handler))
+            .with_state(WebSocketListenerState {
+                transport_event_tx,
+                auth_policy: Arc::new(WebsocketAuthPolicy::default()),
+                compression,
+            });
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
         });
-    let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            router.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-    });
-    for offer in [None, Some(ZSTD_STREAM_PROTOCOL), Some("future-protocol")] {
-        let mut request = format!("ws://{address}").into_client_request()?;
-        if let Some(offer) = offer {
-            request.headers_mut().insert(
-                WEBSOCKET_COMPRESSION_HEADER,
-                HeaderValue::from_static(offer),
+        for offer in [None, Some(ZSTD_STREAM_PROTOCOL), Some("future-protocol")] {
+            let mut request = format!("ws://{address}").into_client_request()?;
+            if let Some(offer) = offer {
+                request.headers_mut().insert(
+                    WEBSOCKET_COMPRESSION_HEADER,
+                    HeaderValue::from_static(offer),
+                );
+            }
+            let (websocket, response) = connect_async(request).await?;
+            let expected = offer.filter(|offer| {
+                compression == WebSocketCompression::Zstd && *offer == ZSTD_STREAM_PROTOCOL
+            });
+            assert_eq!(
+                response
+                    .headers()
+                    .get(WEBSOCKET_COMPRESSION_HEADER)
+                    .map(HeaderValue::to_str)
+                    .transpose()?,
+                expected
             );
+            timeout(
+                Duration::from_secs(/*secs*/ 5),
+                roundtrip(
+                    websocket,
+                    &mut events,
+                    WebSocketCompression::from_response_header(expected)?,
+                ),
+            )
+            .await??;
         }
-        let (websocket, response) = connect_async(request).await?;
-        let expected = offer.filter(|offer| *offer == ZSTD_STREAM_PROTOCOL);
-        assert_eq!(
-            response
-                .headers()
-                .get(WEBSOCKET_COMPRESSION_HEADER)
-                .map(HeaderValue::to_str)
-                .transpose()?,
-            expected
-        );
-        timeout(
-            Duration::from_secs(/*secs*/ 5),
-            roundtrip(
-                websocket,
-                &mut events,
-                WebSocketCompression::from_response_header(expected)?,
-            ),
-        )
-        .await??;
+        server.abort();
     }
-    server.abort();
     Ok(())
 }
 
 #[tokio::test]
 async fn local_socket_compression_negotiates_and_retains_history() -> Result<(), Box<dyn Error>> {
-    let temp_dir = tempfile::TempDir::new()?;
-    let socket_path = AbsolutePathBuf::from_absolute_path(
-        temp_dir.path().join("app-server-control").join("rpc.sock"),
-    )?;
-    let (transport_event_tx, mut events) = mpsc::channel(CHANNEL_CAPACITY);
-    let shutdown = CancellationToken::new();
-    let server = start_control_socket_acceptor(
-        socket_path.clone(),
-        transport_event_tx,
-        shutdown.clone(),
-        DaemonShutdownAccess::Disabled,
-    )
-    .await?;
-    let stream = UnixStream::connect(socket_path.as_path()).await?;
-    let mut request = "ws://localhost/rpc".into_client_request()?;
-    request.headers_mut().insert(
-        WEBSOCKET_COMPRESSION_HEADER,
-        HeaderValue::from_static(ZSTD_STREAM_PROTOCOL),
-    );
-    let (websocket, response) = client_async(request, stream).await?;
-    assert_eq!(
-        response.headers().get(WEBSOCKET_COMPRESSION_HEADER),
-        Some(&HeaderValue::from_static(ZSTD_STREAM_PROTOCOL))
-    );
-    timeout(
-        Duration::from_secs(/*secs*/ 5),
-        roundtrip(websocket, &mut events, WebSocketCompression::Zstd),
-    )
-    .await??;
-    shutdown.cancel();
-    server.await?;
+    for compression in [WebSocketCompression::Plain, WebSocketCompression::Zstd] {
+        let temp_dir = tempfile::TempDir::new()?;
+        let socket_path = AbsolutePathBuf::from_absolute_path(
+            temp_dir.path().join("app-server-control").join("rpc.sock"),
+        )?;
+        let (transport_event_tx, mut events) = mpsc::channel(CHANNEL_CAPACITY);
+        let shutdown = CancellationToken::new();
+        let server = start_control_socket_acceptor(
+            socket_path.clone(),
+            transport_event_tx,
+            shutdown.clone(),
+            DaemonShutdownAccess::Disabled,
+            compression,
+        )
+        .await?;
+        for offer in [None, Some(ZSTD_STREAM_PROTOCOL), Some("future-protocol")] {
+            let stream = UnixStream::connect(socket_path.as_path()).await?;
+            let mut request = "ws://localhost/rpc".into_client_request()?;
+            if let Some(offer) = offer {
+                request.headers_mut().insert(
+                    WEBSOCKET_COMPRESSION_HEADER,
+                    HeaderValue::from_static(offer),
+                );
+            }
+            let (websocket, response) = client_async(request, stream).await?;
+            let expected = offer.filter(|offer| {
+                compression == WebSocketCompression::Zstd && *offer == ZSTD_STREAM_PROTOCOL
+            });
+            assert_eq!(
+                response
+                    .headers()
+                    .get(WEBSOCKET_COMPRESSION_HEADER)
+                    .map(HeaderValue::to_str)
+                    .transpose()?,
+                expected
+            );
+            timeout(
+                Duration::from_secs(/*secs*/ 5),
+                roundtrip(
+                    websocket,
+                    &mut events,
+                    WebSocketCompression::from_response_header(expected)?,
+                ),
+            )
+            .await??;
+        }
+        shutdown.cancel();
+        server.await?;
+    }
     Ok(())
 }
 
