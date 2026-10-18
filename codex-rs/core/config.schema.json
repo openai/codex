@@ -1297,6 +1297,9 @@
             "view_image": {
               "type": "boolean"
             },
+            "wake_on_agent_messages": {
+              "type": "boolean"
+            },
             "web_search": {
               "type": "boolean"
             },
@@ -7687,6 +7690,9 @@
           "type": "boolean"
         },
         "view_image": {
+          "type": "boolean"
+        },
+        "wake_on_agent_messages": {
           "type": "boolean"
         },
         "web_search": {

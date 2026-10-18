@@ -449,8 +449,8 @@ impl Session {
 
     /// Starts a regular turn when the session is idle and pending work is waiting.
     ///
-    /// Pending work includes mailbox mail marked with `trigger_turn`, or any mailbox mail while
-    /// an outstanding durable sleep is attached to the thread.
+    /// Mail can request a new task with `trigger_turn`, wake durable sleep, or wake a root with
+    /// `wake_on_agent_messages` enabled.
     ///
     /// This helper generates a fresh sub-id for the synthetic turn before delegating to the
     /// explicit-sub-id variant.
@@ -466,8 +466,7 @@ impl Session {
     /// Starts a regular turn with the provided sub-id when pending work should wake an idle
     /// session.
     ///
-    /// The turn is created only when the session is idle and mailbox mail either requests a turn
-    /// or can wake an outstanding durable sleep.
+    /// Starts an idle turn for explicit follow-ups, durable sleep, or enabled message wakes.
     pub(crate) async fn maybe_start_turn_for_pending_work_with_sub_id(
         self: &Arc<Self>,
         sub_id: String,
@@ -499,7 +498,7 @@ impl Session {
         if !input.iter().any(
             |item| matches!(item, TurnInput::InterAgentCommunication(mail) if mail.trigger_turn),
         ) {
-            // Queue-only mail wakes durable sleep without selecting a new task's settings.
+            // Queue-only wakes retain the previous turn context without selecting a new task.
             start_options = previous_options;
             start_options.cyber_access_program = self
                 .reference_context_item()

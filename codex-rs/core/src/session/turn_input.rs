@@ -25,6 +25,7 @@ use crate::context::GuardianSenderMessages;
 use crate::state::ActiveTurn;
 use crate::state::TurnState;
 use crate::tasks::RegularTask;
+use codex_features::Feature;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_history::SenderUserMessages;
@@ -708,12 +709,15 @@ impl Session {
         if active_turn.is_some() {
             return None;
         }
-        let needs_new_turn = self.input_queue.has_trigger_turn_mailbox_items().await;
-        if !needs_new_turn && !self.has_outstanding_durable_sleep() {
+        let has_trigger_turn = self.input_queue.has_trigger_turn_mailbox_items().await;
+        if !has_trigger_turn
+            && !self.has_outstanding_durable_sleep()
+            && !self.should_wake_on_agent_messages().await
+        {
             return None;
         }
         let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
-        let previous_options = if needs_new_turn {
+        let previous_options = if has_trigger_turn {
             Default::default()
         } else {
             self.state
@@ -725,6 +729,20 @@ impl Session {
                 .unwrap_or_default()
         };
         Some((Arc::clone(&active_turn.turn_state), previous_options))
+    }
+
+    async fn should_wake_on_agent_messages(&self) -> bool {
+        if !self.features.enabled(Feature::WakeOnAgentMessages)
+            || self.is_interrupted()
+            || !self.input_queue.has_pending_mailbox_items().await
+        {
+            return false;
+        }
+
+        let state = self.state.lock().await;
+        let config = &state.session_configuration;
+        !config.session_source.is_non_root_agent()
+            && TurnStartKind::Automatic.permits_mode(config.step_settings.collaboration_mode.mode)
     }
 
     pub(crate) async fn route_realtime_text_input(

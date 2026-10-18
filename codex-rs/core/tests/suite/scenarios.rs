@@ -1167,6 +1167,184 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context(
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn child_completion_wakes_parent_after_final_answer() -> Result<()> {
+    use core_test_support::ThreadIdle;
+    use core_test_support::responses;
+    use wiremock::matchers::header;
+
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    let mut test = test_codex()
+        .with_model("gpt-6-astra")
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            configure_scenario_catalog(config);
+            config.model_reasoning_effort = Some(ReasoningEffort::Medium);
+            config.include_environment_context = false;
+            for feature in [
+                Feature::Collab,
+                Feature::MultiAgentV2,
+                Feature::MultiAgentV2DynamicTools,
+                Feature::WakeOnAgentMessages,
+            ] {
+                config.features.enable(feature).unwrap();
+            }
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    // A pending client tool holds the real child result until the parent is idle.
+    test.codex.shutdown_and_wait().await?;
+    let root = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "check_release".to_string(),
+                description: "Check whether the release is ready.".to_string(),
+                input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
+                defer_loading: false,
+            })],
+            environments: Some(vec![test.executor_environment().request()]),
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?;
+    test.codex = root.thread;
+    test.session_configured = root.session_configured;
+    let parent_id = test.session_configured.thread_id.to_string();
+    let mut created = test.thread_manager.subscribe_thread_created();
+
+    responses::mount_sse_once_match(
+        &server,
+        header("thread-id", parent_id.clone()),
+        sse(vec![
+            ev_function_call_with_namespace(
+                "spawn-worker",
+                "collaboration",
+                "spawn_agent",
+                r#"{"task_name":"worker","fork_turns":"none","message":"Check whether the release is ready."}"#,
+            ),
+            ev_completed("parent-spawn"),
+        ]),
+    )
+    .await;
+    let expected_parent = parent_id.clone();
+    let mut final_answer =
+        ev_assistant_message("parent-final", "I have delegated the release check.");
+    final_answer["item"]["phase"] = json!("final_answer");
+    let parent_finished = responses::mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            request
+                .headers
+                .get("thread-id")
+                .is_some_and(|id| id == expected_parent.as_str())
+                && String::from_utf8_lossy(&request.body).contains("spawn-worker")
+        },
+        sse(vec![final_answer, ev_completed("parent-finished")]),
+    )
+    .await;
+    let expected_parent = parent_id.clone();
+    responses::mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            request
+                .headers
+                .get("thread-id")
+                .is_some_and(|id| id != expected_parent.as_str())
+        },
+        sse(vec![
+            responses::ev_function_call("worker-check", "check_release", "{}"),
+            ev_completed("child-check"),
+        ]),
+    )
+    .await;
+
+    test.submit_text_turn("Ask a worker to check the release, then finish your turn.")
+        .await?;
+    ThreadIdle::wait(&test.codex).await;
+    let child_id = created.try_recv()?;
+    let child = test.thread_manager.get_thread(child_id).await?;
+    let call = wait_for_event_match(&child, |event| match event {
+        EventMsg::DynamicToolCallRequest(call) => Some(call.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(call.call_id, "worker-check");
+
+    responses::mount_sse_once_match(
+        &server,
+        header("thread-id", child_id.to_string()),
+        sse(vec![
+            ev_assistant_message("child-final", "All release checks passed."),
+            ev_completed("child-finished"),
+        ]),
+    )
+    .await;
+    let wake = responses::mount_sse_once_match(
+        &server,
+        header("thread-id", parent_id.clone()),
+        sse(vec![
+            ev_assistant_message(
+                "parent-update",
+                "The worker confirmed that the release is ready.",
+            ),
+            ev_completed("parent-woken"),
+        ]),
+    )
+    .await;
+    child
+        .submit(Op::DynamicToolResponse {
+            id: call.call_id,
+            response: DynamicToolResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "All release checks passed.".to_string(),
+                }],
+                success: true,
+            },
+        })
+        .await?;
+    wait_for_event(&child, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    ThreadIdle::wait(&test.codex).await;
+    assert_ne!(
+        parent_finished.single_request().body_json()["client_metadata"]["turn_id"],
+        wake.single_request().body_json()["client_metadata"]["turn_id"],
+    );
+
+    let mut requests = responses::received_responses_requests(&server).await;
+    assert_eq!(requests.len(), 5);
+    // Preserve each complete stream while removing parent/child scheduling order.
+    requests
+        .sort_by_key(|request| request.header("thread-id").as_deref() != Some(parent_id.as_str()));
+    let history = context_snapshot::format_request_history_snapshot(
+        "The parent finishes at medium reasoning without persistent mode. A real child then completes its release check and wakes a new parent turn. Complete model streams are grouped as parent, then worker.",
+        &requests,
+        &ContextSnapshotOptions::default()
+            .rewrite_known_segments()
+            .include_request_settings(),
+    );
+    // The shared formatter labels agent messages without rendering their payload.
+    let mut mailbox =
+        responses::strip_metadata_from_json(responses::strip_response_item_ids_from_json(
+            serde_json::Value::Array(wake.single_request().inputs_of_type("agent_message")),
+        ));
+    mailbox.sort_all_objects();
+    insta::assert_snapshot!(format!(
+        "{history}\n\nWoken parent mailbox:\n{}",
+        serde_json::to_string_pretty(&mailbox)?,
+    ));
+    test.thread_manager
+        .shutdown_all_threads_bounded(Duration::from_secs(5))
+        .await;
+    Ok(())
+}
+
 #[test_case::test_case(false; "native_tools")]
 #[test_case::test_case(true; "host_tools")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

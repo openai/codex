@@ -1,0 +1,97 @@
+---
+source: core/tests/suite/scenarios.rs
+expression: "format!(\"{history}\\n\\nWoken parent mailbox:\\n{}\",\nserde_json::to_string_pretty(&mailbox)?,)"
+---
+Scenario: The parent finishes at medium reasoning without persistent mode. A real child then completes its release check and wakes a new parent turn. Complete model streams are grouped as parent, then worker.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-6-astra"
+  parallel_tool_calls: false
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"context":"all_turns","effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+-- request 1 (turn) --
+00:additional_tools/developer (3; hash=37af7b347b5c1eb7):
+        - namespace/functions; hash=a3c60999d0288751
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    Ask a worker to check the release, then finish your turn.
+-- request 2 (turn) --
+06:function_call/collaboration.spawn_agent:{"fork_turns":"none","message":"Check whether the release is ready.","task_name":"worker"}
+07:function_call_output:{"task_name":"/root/worker"}
+-- request 3 (turn) --
+08:message/assistant:
+    I have delegated the release check.
+09:agent_message
+
+## Window 2 (after request 3: input diverged at item 00)
+Settings: same as window 1
+-- request 4 (turn) --
+00:additional_tools/developer (3; hash=ce2de39d992cd930):
+        - namespace/functions; hash=fa0731964313a476
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:agent_message
+-- request 5 (turn) --
+06:function_call/check_release:{}
+07:function_call_output:All release checks passed.
+
+Woken parent mailbox:
+[
+  {
+    "author": "/root/worker",
+    "content": [
+      {
+        "text": "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nAll release checks passed.",
+        "type": "input_text"
+      }
+    ],
+    "recipient": "/root",
+    "type": "agent_message"
+  }
+]

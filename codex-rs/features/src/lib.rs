@@ -237,6 +237,8 @@ pub enum Feature {
     /// Keep sampling through reasoning and commentary boundaries when agent mail arrives.
     /// Pending mail is delivered at the next normal input boundary instead.
     DeferMailboxPreemption,
+    /// Allow agent messages to wake idle root sessions after a completed turn.
+    WakeOnAgentMessages,
     /// Preempt responses and yield foreground code-mode observations on new user input.
     InstantInterrupt,
     /// Enable shared discussion tools for an agent tree.
@@ -1519,6 +1521,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::DeferMailboxPreemption,
         key: "defer_mailbox_preemption",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WakeOnAgentMessages,
+        key: "wake_on_agent_messages",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
