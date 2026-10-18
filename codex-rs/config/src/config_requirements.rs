@@ -2195,7 +2195,6 @@ mod tests {
     use crate::ComputerUseMacosRequirementsToml;
     use crate::ComputerUseWindowsExeRequirementToml;
     use crate::ComputerUseWindowsRequirementsToml;
-    use crate::HookEventsToml;
     use crate::McpServerCommandMatcher;
     use crate::McpServerIdentity;
     use crate::McpServerValueMatcher;
@@ -4406,7 +4405,7 @@ command = "python3 /enterprise/hooks/pre.py"
             .set(ManagedHooksRequirementsToml {
                 managed_dir: Some(std::path::PathBuf::from("/other/hooks")),
                 windows_managed_dir: None,
-                hooks: HookEventsToml::default(),
+                hooks: Default::default(),
             })
             .expect_err("managed hooks should reject drift");
 

@@ -273,7 +273,7 @@ impl ToolCallRuntime {
                         match dispatch_handle.await {
                             Ok(result) => result,
                             Err(err) if err.is_cancelled() => {
-                                let response = Self::aborted_response(&call, secs);
+                                let response = Self::aborted_response(&call, Some(secs));
                                 call_trace::result_ready(
                                     thread_id,
                                     &abort_turn.sub_id,
@@ -313,7 +313,7 @@ impl ToolCallRuntime {
                 .await;
                 result = Ok(Self::aborted_response(
                     &call,
-                    started.elapsed().as_secs_f32().max(0.1),
+                    Some(started.elapsed().as_secs_f32().max(0.1)),
                 ));
             }
             // Use one completion measurement for logging and response formatting.
@@ -362,18 +362,21 @@ impl ToolCallRuntime {
         }
     }
 
-    fn aborted_response(call: &ToolCall, secs: f32) -> AnyToolResult {
+    pub(crate) fn aborted_response(call: &ToolCall, elapsed_secs: Option<f32>) -> AnyToolResult {
         AnyToolResult {
             call_id: call.call_id.clone(),
             payload: call.payload.clone(),
             result: Box::new(AbortedToolOutput {
-                message: Self::abort_message(call, secs),
+                message: Self::abort_message(call, elapsed_secs),
             }),
             post_tool_use_payload: None,
         }
     }
 
-    fn abort_message(call: &ToolCall, secs: f32) -> String {
+    fn abort_message(call: &ToolCall, elapsed_secs: Option<f32>) -> String {
+        let Some(secs) = elapsed_secs else {
+            return "aborted by user before dispatch".to_string();
+        };
         if call.tool_name.is_default_namespace() && call.tool_name.name == "exec_command" {
             format!("Wall time: {secs:.1} seconds\naborted by user")
         } else {

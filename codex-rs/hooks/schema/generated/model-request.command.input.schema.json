@@ -1,0 +1,141 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AbsolutePathBuf": {
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "type": "string"
+    },
+    "ModelRequestStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "NullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "TokenUsage": {
+      "properties": {
+        "cache_write_input_tokens": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "cached_input_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "input_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "reasoning_output_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "total_tokens": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cached_input_tokens",
+        "input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+        "total_tokens"
+      ],
+      "type": "object"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "hook_event_name": {
+          "enum": [
+            "PreModelRequest"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "hook_event_name"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/NullableString"
+        },
+        "hook_event_name": {
+          "enum": [
+            "PostModelRequest"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/ModelRequestStatus"
+        },
+        "token_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TokenUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "error",
+        "hook_event_name",
+        "status",
+        "token_usage"
+      ],
+      "type": "object"
+    }
+  ],
+  "properties": {
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_type": {
+      "type": "string"
+    },
+    "cwd": {
+      "$ref": "#/definitions/AbsolutePathBuf"
+    },
+    "model": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "$ref": "#/definitions/NullableString"
+    },
+    "turn_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "cwd",
+    "model",
+    "session_id",
+    "transcript_path",
+    "turn_id"
+  ],
+  "title": "model-request.command.input",
+  "type": "object"
+}

@@ -676,6 +676,8 @@ fn event_label(event_name: HookEventName) -> &'static str {
         HookEventName::PostToolUse => "PostToolUse",
         HookEventName::PreCompact => "PreCompact",
         HookEventName::PostCompact => "PostCompact",
+        HookEventName::PreModelRequest => "PreModelRequest",
+        HookEventName::PostModelRequest => "PostModelRequest",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::SessionEnd => "SessionEnd",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
@@ -693,6 +695,8 @@ fn event_description(event_name: HookEventName) -> &'static str {
         HookEventName::PostToolUse => "After a tool executes",
         HookEventName::PreCompact => "Before context compaction",
         HookEventName::PostCompact => "After context compaction",
+        HookEventName::PreModelRequest => "Before a model request",
+        HookEventName::PostModelRequest => "After a model request, including failures",
         HookEventName::SessionStart => "When a new session starts",
         HookEventName::SessionEnd => "Right before a session ends",
         HookEventName::UserPromptSubmit => "When the user submits a prompt",
@@ -891,6 +895,11 @@ mod tests {
     fn renders_event_browser() {
         let mut view = view();
         assert_snapshot!("hooks_browser_events", render_lines(&view, /*width*/ 112));
+        view.state.selected_idx = Some(view.event_rows().len() - 1);
+        assert_snapshot!(
+            "hooks_browser_model_requests",
+            render_lines(&view, /*width*/ 112),
+        );
         view.keymap.accept.clear();
         assert!(!render_lines(&view, /*width*/ 112).contains("enter details"));
     }

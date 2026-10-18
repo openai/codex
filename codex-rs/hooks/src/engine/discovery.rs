@@ -259,7 +259,7 @@ fn append_managed_requirement_handlers(
             config_layer_stack: None,
             plugin_root: None,
         },
-        managed_hooks.get().hooks.clone(),
+        managed_hooks.get().hooks.as_ref().clone(),
         policy,
     );
     required_load_errors

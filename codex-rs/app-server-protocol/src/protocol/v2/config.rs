@@ -439,7 +439,7 @@ pub struct ConfigRequirements {
     pub in_app_browser: Option<InAppBrowserRequirements>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
     #[experimental("configRequirements/read.hooks")]
-    pub hooks: Option<ManagedHooksRequirements>,
+    pub hooks: Option<Box<ManagedHooksRequirements>>,
     pub enforce_residency: Option<ResidencyRequirement>,
     #[experimental("configRequirements/read.network")]
     pub network: Option<NetworkRequirements>,
@@ -612,6 +612,12 @@ pub struct InAppBrowserRequirements {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ManagedHooksRequirements {
+    #[serde(rename = "PreModelRequest", default)]
+    #[ts(rename = "PreModelRequest")]
+    pub pre_model_request: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "PostModelRequest", default)]
+    #[ts(rename = "PostModelRequest")]
+    pub post_model_request: Vec<ConfiguredHookMatcherGroup>,
     pub managed_dir: Option<PathBuf>,
     pub windows_managed_dir: Option<PathBuf>,
     #[serde(rename = "PreToolUse")]

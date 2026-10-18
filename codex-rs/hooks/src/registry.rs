@@ -1,5 +1,6 @@
 use crate::engine::ClaudeHooksEngine;
 use crate::engine::CommandShell;
+use crate::engine::ConfiguredHandler;
 use crate::engine::HookListEntry;
 use crate::engine::command_runner::CommandHookRuntime;
 use crate::events::compact::PostCompactRequest;
@@ -32,8 +33,11 @@ use codex_config::ConfigLayerStack;
 use codex_plugin::ExecutorPluginHookSource;
 use codex_plugin::PluginHookSource;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
 use std::ffi::OsString;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
@@ -112,6 +116,13 @@ impl Hooks {
     pub fn with_executor_hooks(&self, executor_hooks: Vec<ExecutorPluginHookSource>) -> Self {
         let mut hooks = self.clone();
         hooks.engine.set_executor_hooks(executor_hooks);
+        hooks
+    }
+
+    pub fn for_memory_consolidation(&self, executor_hooks: Vec<ExecutorPluginHookSource>) -> Self {
+        let mut hooks = self.with_executor_hooks(executor_hooks);
+        Arc::make_mut(&mut hooks.engine.handlers)
+            .retain(ConfiguredHandler::runs_for_memory_consolidation);
         hooks
     }
 
@@ -298,6 +309,35 @@ impl Hooks {
 
     pub async fn run_interrupt(&self, request: InterruptRequest) -> InterruptOutcome {
         self.engine.run_interrupt(request).await
+    }
+
+    /// None if unconfigured; Sync if any handler must finish before continuing.
+    pub fn execution_mode_for_event(&self, event: HookEventName) -> Option<HookExecutionMode> {
+        self.engine
+            .handlers
+            .iter()
+            .filter(|handler| handler.event_name == event)
+            .map(ConfiguredHandler::execution_mode)
+            .min_by_key(|mode| matches!(mode, HookExecutionMode::Async))
+    }
+
+    /// Run a hook task independently of the turn, but abort and join it at session shutdown.
+    pub fn schedule_async_task(&self, task: impl Future<Output = ()> + Send + 'static) {
+        self.engine.command_runtime.schedule_async_task(task);
+    }
+
+    pub fn preview_model_request(
+        &self,
+        request: &crate::ModelRequestHookInput,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        crate::events::model_request::preview(&self.engine.handlers, request)
+    }
+
+    pub async fn run_model_request(
+        &self,
+        request: crate::ModelRequestHookInput,
+    ) -> Vec<codex_protocol::protocol::HookCompletedEvent> {
+        crate::events::model_request::run(&self.engine, request).await
     }
 }
 

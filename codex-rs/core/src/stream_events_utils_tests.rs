@@ -314,6 +314,7 @@ fn output_context(session: Arc<Session>, turn_context: Arc<TurnContext>) -> Hand
         step_context,
         turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
         tool_runtime,
+        defer_tool_dispatch: false,
         cancellation_token: CancellationToken::new(),
     }
 }

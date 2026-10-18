@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use crate::events::common::SubagentHookContext;
 
 const GENERATED_DIR: &str = "generated";
+const MODEL_REQUEST_INPUT_FIXTURE: &str = "model-request.command.input.schema.json";
 const POST_TOOL_USE_INPUT_FIXTURE: &str = "post-tool-use.command.input.schema.json";
 const POST_TOOL_USE_OUTPUT_FIXTURE: &str = "post-tool-use.command.output.schema.json";
 const PERMISSION_REQUEST_INPUT_FIXTURE: &str = "permission-request.command.input.schema.json";
@@ -642,6 +643,11 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
     ensure_empty_dir(&generated_dir)?;
 
     write_schema(
+        &generated_dir.join(MODEL_REQUEST_INPUT_FIXTURE),
+        schema_json::<crate::ModelRequestHookInput>()?,
+    )?;
+
+    write_schema(
         &generated_dir.join(POST_TOOL_USE_INPUT_FIXTURE),
         schema_json::<PostToolUseCommandInput>()?,
     )?;
@@ -890,6 +896,7 @@ mod tests {
     use super::INTERRUPT_INPUT_FIXTURE;
     use super::INTERRUPT_OUTPUT_FIXTURE;
     use super::InterruptCommandInput;
+    use super::MODEL_REQUEST_INPUT_FIXTURE;
     use super::NullableString;
     use super::PERMISSION_REQUEST_INPUT_FIXTURE;
     use super::PERMISSION_REQUEST_OUTPUT_FIXTURE;
@@ -939,6 +946,9 @@ mod tests {
 
     fn expected_fixture(name: &str) -> &'static str {
         match name {
+            MODEL_REQUEST_INPUT_FIXTURE => {
+                include_str!("../schema/generated/model-request.command.input.schema.json")
+            }
             POST_TOOL_USE_INPUT_FIXTURE => {
                 include_str!("../schema/generated/post-tool-use.command.input.schema.json")
             }
@@ -1037,6 +1047,7 @@ mod tests {
         write_schema_fixtures(&schema_root).expect("write generated hook schemas");
 
         for fixture in [
+            MODEL_REQUEST_INPUT_FIXTURE,
             POST_TOOL_USE_INPUT_FIXTURE,
             POST_TOOL_USE_OUTPUT_FIXTURE,
             PERMISSION_REQUEST_INPUT_FIXTURE,
@@ -1172,6 +1183,8 @@ mod tests {
     #[test]
     fn subagent_context_fields_are_optional_for_hooks_that_run_inside_subagents() {
         let schemas = [
+            schema_json::<crate::ModelRequestHookInput>()
+                .expect("serialize model request input schema"),
             schema_json::<PreToolUseCommandInput>().expect("serialize pre tool use input schema"),
             schema_json::<PermissionRequestCommandInput>()
                 .expect("serialize permission request input schema"),

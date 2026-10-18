@@ -17,10 +17,12 @@ use crate::cyber_access_program;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::feedback_tags;
 use crate::hook_runtime::drain_async_hook_results;
+use crate::hook_runtime::hooks_for_model_request;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_legacy_after_agent_hook;
+use crate::hook_runtime::run_model_request_hooks;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_turn_stop_hooks;
 use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
@@ -79,6 +81,9 @@ use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
 use codex_file_system::FindUpErrorPolicy;
 use codex_file_system::find_nearest_ancestor_with_markers;
+use codex_hooks::ModelRequestHookEvent::PostModelRequest;
+use codex_hooks::ModelRequestHookEvent::PreModelRequest;
+use codex_hooks::ModelRequestStatus;
 use codex_login::CodexAuth;
 use codex_model_provider::RemoteCompactionSupport;
 use codex_protocol::ResponseItemId;
@@ -101,6 +106,8 @@ use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
@@ -2648,7 +2655,6 @@ async fn try_run_sampling_request(
         step_context.settings.model_info.slug.as_str(),
         turn_context.provider.info().name.as_str(),
     );
-    let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
     if client_session.inference_tools_changed(&step_context.tool_router.model_visible_specs()) {
         turn_context.turn_timing_state.record_tools_change();
     }
@@ -2668,7 +2674,45 @@ async fn try_run_sampling_request(
     let effort = sess
         .reasoning_effort_for_request(&step_context.settings, super::RequestEffortUsage::Sampling)
         .await;
-    let mut stream = client_session
+    let hooks = hooks_for_model_request(&sess, &step_context);
+    let post_mode = hooks.execution_mode_for_event(HookEventName::PostModelRequest);
+    let defer_tool_dispatch = post_mode == Some(HookExecutionMode::Sync);
+    let finish_post_request = post_mode.map(|_| {
+        let (post_request, completed) = tokio::sync::oneshot::channel();
+        let (hook_done, wait_for_hook) = tokio::sync::oneshot::channel();
+        hooks.schedule_async_task({
+            let hooks = Arc::clone(&hooks);
+            let session = Arc::clone(&sess);
+            let step = Arc::clone(&step_context);
+            async move {
+                let event = completed.await.unwrap_or(PostModelRequest {
+                    status: ModelRequestStatus::Cancelled,
+                    error: None,
+                    token_usage: None,
+                });
+                run_model_request_hooks(&session, &step, &hooks, event).await;
+                let _ = hook_done.send(());
+            }
+        });
+        let cancellation_token = cancellation_token.clone();
+        async move |event| {
+            let _ = post_request.send(event);
+            if defer_tool_dispatch {
+                // Interrupt the wait, not the session-owned hook or final token accounting.
+                let _ = wait_for_hook.or_cancel(&cancellation_token).await;
+            }
+        }
+    });
+    if hooks
+        .execution_mode_for_event(HookEventName::PreModelRequest)
+        .is_some()
+    {
+        run_model_request_hooks(&sess, &step_context, &hooks, PreModelRequest).await;
+    }
+    let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
+    let mut response_completed = false;
+    let mut request_token_usage = None;
+    let mut stream = match client_session
         .stream(
             prompt,
             &step_context.settings.model_info,
@@ -2681,7 +2725,21 @@ async fn try_run_sampling_request(
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
-        .await??;
+        .await?
+    {
+        Ok(stream) => stream,
+        Err(error) => {
+            if let Some(finish_post_request) = finish_post_request {
+                finish_post_request(PostModelRequest {
+                    status: ModelRequestStatus::Failed,
+                    error: Some(error.to_string()),
+                    token_usage: None,
+                })
+                .await;
+            }
+            return Err(error);
+        }
+    };
     if cancellation_token.is_cancelled() {
         return Err(CodexErr::TurnAborted);
     }
@@ -2771,6 +2829,7 @@ async fn try_run_sampling_request(
             Some(Ok(event)) => event,
             Some(Err(err)) => {
                 if let CodexErrorDetails::ResponseIncomplete(incomplete) = err.details() {
+                    request_token_usage = incomplete.token_usage.clone();
                     sess.record_incomplete_response_usage(
                         &turn_context,
                         &step_context.settings,
@@ -2866,6 +2925,7 @@ async fn try_run_sampling_request(
                     step_context: Arc::clone(&step_context),
                     turn_store: Arc::clone(&turn_store),
                     tool_runtime: tool_runtime.clone(),
+                    defer_tool_dispatch,
                     cancellation_token: cancellation_token.child_token(),
                 };
 
@@ -3075,6 +3135,8 @@ async fn try_run_sampling_request(
                 usage_metadata,
                 end_turn,
             } => {
+                response_completed = true;
+                request_token_usage = token_usage.clone();
                 sess.services
                     .analytics_events_client
                     .track_code_mode_tool_call(
@@ -3271,7 +3333,21 @@ async fn try_run_sampling_request(
     };
     drop(sampling_span);
     drop(sampling_timing_guard);
-
+    if let Some(finish_post_request) = finish_post_request {
+        let (status, error) = match (response_completed, &outcome) {
+            (true, _) => (ModelRequestStatus::Completed, None),
+            (false, Err(error)) if !matches!(error.details(), CodexErrorDetails::TurnAborted) => {
+                (ModelRequestStatus::Failed, Some(error.to_string()))
+            }
+            _ => (ModelRequestStatus::Cancelled, None),
+        };
+        finish_post_request(PostModelRequest {
+            status,
+            error,
+            token_usage: request_token_usage,
+        })
+        .await;
+    }
     flush_assistant_text_segments_all(
         &sess,
         &turn_context,

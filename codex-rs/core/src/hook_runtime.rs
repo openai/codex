@@ -994,6 +994,8 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookEventName::PostToolUse => "PostToolUse",
         HookEventName::PreCompact => "PreCompact",
         HookEventName::PostCompact => "PostCompact",
+        HookEventName::PreModelRequest => "PreModelRequest",
+        HookEventName::PostModelRequest => "PostModelRequest",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::SessionEnd => "SessionEnd",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
@@ -1070,6 +1072,42 @@ fn compaction_trigger_label(value: CompactionTrigger) -> &'static str {
         CompactionTrigger::Manual => "manual",
         CompactionTrigger::Auto => "auto",
     }
+}
+
+pub(crate) fn hooks_for_model_request(
+    session: &Session,
+    step: &StepContext,
+) -> Arc<codex_hooks::Hooks> {
+    let hooks = session.hooks();
+    match step.turn.session_source {
+        SessionSource::Internal(InternalSessionSource::MemoryConsolidation)
+        | SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
+            Arc::new(hooks.for_memory_consolidation(executor_hook_sources_for_step(step)))
+        }
+        _ => hooks,
+    }
+}
+
+pub(crate) async fn run_model_request_hooks(
+    session: &Arc<Session>,
+    step: &StepContext,
+    hooks: &codex_hooks::Hooks,
+    event: codex_hooks::ModelRequestHookEvent,
+) {
+    let subagent = thread_spawn_subagent_hook_context(session, &step.turn);
+    let request = codex_hooks::ModelRequestHookInput {
+        session_id: session.session_id().to_string(),
+        turn_id: step.turn.sub_id.clone(),
+        cwd: tool_hook_cwd(&step.environments, &step.turn),
+        transcript_path: session.hook_transcript_path().await,
+        model: step.settings.model_info.slug.clone(),
+        event,
+        agent_id: subagent.as_ref().map(|context| context.agent_id.clone()),
+        agent_type: subagent.map(|context| context.agent_type),
+    };
+    emit_hook_started_events(session, &step.turn, hooks.preview_model_request(&request)).await;
+    let events = hooks.run_model_request(request).await;
+    emit_hook_completed_events(session, &step.turn, events).await;
 }
 
 #[cfg(test)]

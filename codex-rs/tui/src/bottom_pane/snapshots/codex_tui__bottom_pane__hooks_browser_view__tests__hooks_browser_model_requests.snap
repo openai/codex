@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/hooks_browser_view.rs
+expression: "render_lines(&view, 112)"
+---
+                                                                                                                
+  Hooks                                                                                                         
+  Lifecycle hooks from config and enabled plugins.                                                              
+                                                                                                                
+  Event                 Installed   Active      Description                                                     
+↑                                                                                                               
+  SessionEnd            0           0           Right before a session ends                                     
+  UserPromptSubmit      0           0           When the user submits a prompt                                  
+  SubagentStart         0           0           When a subagent is created                                      
+  SubagentStop          0           0           Right before a subagent ends its turn                           
+  Stop                  0           0           Right before Codex ends its turn                                
+  Interrupt             0           0           Right before an interrupted turn is aborted                     
+  PreModelRequest       0           0           Before a model request                                          
+› PostModelRequest      0           0           After a model request, including failures                       
+                                                                                                                
+                                                                                                                
+  enter details · esc close

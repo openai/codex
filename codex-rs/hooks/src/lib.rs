@@ -21,7 +21,9 @@ pub use engine::dispatcher::hook_execution_mode_label;
 pub use engine::dispatcher::hook_handler_type_label;
 pub use events::common::SubagentHookContext;
 /// Hook event names as they appear in hooks JSON and config files.
-pub const HOOK_EVENT_NAMES: [&str; 12] = [
+pub const HOOK_EVENT_NAMES: [&str; 14] = [
+    "PreModelRequest",
+    "PostModelRequest",
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
@@ -102,6 +104,8 @@ pub fn hook_event_key_label(event_name: HookEventName) -> &'static str {
         HookEventName::PostToolUse => "post_tool_use",
         HookEventName::PreCompact => "pre_compact",
         HookEventName::PostCompact => "post_compact",
+        HookEventName::PreModelRequest => "pre_model_request",
+        HookEventName::PostModelRequest => "post_model_request",
         HookEventName::SessionStart => "session_start",
         HookEventName::SessionEnd => "session_end",
         HookEventName::UserPromptSubmit => "user_prompt_submit",
@@ -124,3 +128,7 @@ pub fn hook_key(
         hook_event_key_label(event_name)
     )
 }
+
+pub use events::model_request::ModelRequestHookEvent;
+pub use events::model_request::ModelRequestHookInput;
+pub use events::model_request::ModelRequestStatus;

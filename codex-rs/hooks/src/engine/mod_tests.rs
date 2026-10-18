@@ -144,7 +144,7 @@ fn managed_hooks_for_current_platform(
         } else {
             None
         },
-        hooks,
+        hooks: Box::new(hooks),
     }
 }
 

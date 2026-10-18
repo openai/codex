@@ -8,3 +8,5 @@ pub mod session_end;
 pub mod session_start;
 pub mod stop;
 pub mod user_prompt_submit;
+
+pub mod model_request;

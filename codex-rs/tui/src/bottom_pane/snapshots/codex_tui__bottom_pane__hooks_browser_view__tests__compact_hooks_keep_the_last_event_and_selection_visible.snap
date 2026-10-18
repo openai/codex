@@ -9,12 +9,12 @@ expression: text
 
   Event               Active/Installed
 ↑
-  SessionEnd          0/0
-  UserPromptSubmit    0/0
   SubagentStart       0/0
   SubagentStop        0/0
   Stop                0/0
-› Interrupt           0/0
+  Interrupt           0/0
+  PreModelRequest     0/0
+› PostModelRequest    0/0
 
 
   enter details · esc close

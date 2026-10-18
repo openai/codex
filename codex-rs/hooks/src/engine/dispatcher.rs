@@ -67,9 +67,11 @@ pub(crate) fn select_handlers_for_matcher_inputs(
                         .any(|input| matches_matcher(handler.matcher.as_ref(), Some(input)))
                 }
             }
-            HookEventName::UserPromptSubmit | HookEventName::Stop | HookEventName::Interrupt => {
-                true
-            }
+            HookEventName::PreModelRequest
+            | HookEventName::PostModelRequest
+            | HookEventName::UserPromptSubmit
+            | HookEventName::Stop
+            | HookEventName::Interrupt => true,
         })
         .cloned()
         .collect()
@@ -267,6 +269,8 @@ pub(crate) fn scope_for_event(event_name: HookEventName) -> HookScope {
         | HookEventName::UserPromptSubmit
         | HookEventName::SubagentStop
         | HookEventName::Stop
+        | HookEventName::PreModelRequest
+        | HookEventName::PostModelRequest
         | HookEventName::Interrupt => HookScope::Turn,
     }
 }
@@ -278,6 +282,8 @@ pub(crate) fn hook_event_name_label(event_name: HookEventName) -> &'static str {
         HookEventName::PostToolUse => "PostToolUse",
         HookEventName::PreCompact => "PreCompact",
         HookEventName::PostCompact => "PostCompact",
+        HookEventName::PreModelRequest => "PreModelRequest",
+        HookEventName::PostModelRequest => "PostModelRequest",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::SessionEnd => "SessionEnd",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
