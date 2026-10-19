@@ -18,6 +18,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+bytes = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-http-client = { workspace = true }
 codex-process-hardening = { workspace = true }
