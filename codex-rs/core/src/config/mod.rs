@@ -1878,6 +1878,7 @@ impl Config {
             requires_read_only_mcp_tools: false,
             codex_home: self.codex_home.to_path_buf(),
             mcp_enterprise_managed_auth: self.mcp_enterprise_managed_auth.clone(),
+            mcp_ema_cancellation: self.config_layer_stack.mcp_ema_cancellation().clone(),
             xaa_enabled: self.features.enabled(Feature::UseXaa)
                 && self.mcp_enterprise_managed_auth.is_some(),
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,

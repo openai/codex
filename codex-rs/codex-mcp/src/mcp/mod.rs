@@ -132,6 +132,8 @@ pub struct McpConfig {
     pub codex_home: PathBuf,
     /// Trusted enterprise IdP inherited after normal catalog and policy resolution.
     pub mcp_enterprise_managed_auth: Option<McpEnterpriseManagedAuthConfig>,
+    /// Retires only EMA connections and pending exchanges for this config snapshot.
+    pub mcp_ema_cancellation: tokio_util::sync::CancellationToken,
     pub xaa_enabled: bool,
     /// Preferred credential store for MCP OAuth tokens.
     pub mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode,

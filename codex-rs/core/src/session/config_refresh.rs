@@ -20,6 +20,7 @@ impl Session {
             .original_config_do_not_use
             .as_ref()
             .clone();
+        config.config_layer_stack.mcp_ema_cancellation().cancel();
         config.disable_mcp_enterprise_auth();
         state.session_configuration.original_config_do_not_use = Arc::new(config);
         self.services.mcp_runtime.invalidate_resource_caches();
@@ -160,6 +161,9 @@ impl Session {
             }
             let previous_config = notify_contributors
                 .then(|| self.build_effective_session_config(&state.session_configuration));
+            if config.mcp_enterprise_managed_auth.is_none() {
+                config.config_layer_stack.mcp_ema_cancellation().cancel();
+            }
             state.session_configuration.original_config_do_not_use = Arc::clone(&config);
             drop(policy_guard);
             if matches!(scope, RuntimeConfigRefresh::Mcp) {

@@ -46,6 +46,7 @@ async fn reload_mcp_config_with_policy(
     config_manager: &ConfigManager,
     policy: ReloadPolicy,
 ) -> io::Result<()> {
+    config_manager.revoke_mcp_ema();
     let mut rejected = false;
     let mut load_error = None;
     let mut completed: Vec<Arc<CodexThread>> = Vec::new();
@@ -401,6 +402,20 @@ enabled = false
             }
         }
         let thread = good_thread.expect("good test thread should exist");
+        // Config loading can finish before a startup is visible to ThreadManager.
+        let pending_startup = config_manager
+            .load_for_cwd(
+                /*request_overrides*/ None,
+                ConfigOverrides::default(),
+                Some(temp_dir.path().join("good")),
+            )
+            .await?;
+        assert!(
+            !pending_startup
+                .config_layer_stack
+                .mcp_ema_cancellation()
+                .is_cancelled()
+        );
         std::fs::write(
             temp_dir.path().join(codex_config::CONFIG_TOML_FILE),
             r#"
@@ -411,6 +426,34 @@ enabled = false
         )?;
 
         reload_mcp_config(&thread_manager, &config_manager).await?;
+
+        assert!(
+            pending_startup
+                .config_layer_stack
+                .mcp_ema_cancellation()
+                .is_cancelled()
+        );
+        assert!(
+            thread
+                .config()
+                .await
+                .config_layer_stack
+                .mcp_ema_cancellation()
+                .is_cancelled()
+        );
+        let fresh_startup = config_manager
+            .load_for_cwd(
+                /*request_overrides*/ None,
+                ConfigOverrides::default(),
+                Some(temp_dir.path().join("good")),
+            )
+            .await?;
+        assert!(
+            !fresh_startup
+                .config_layer_stack
+                .mcp_ema_cancellation()
+                .is_cancelled()
+        );
 
         assert!(
             thread

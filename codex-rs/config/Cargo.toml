@@ -40,6 +40,7 @@ serde_path_to_error = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
+tokio-util = { workspace = true, features = ["rt"] }
 toml = { workspace = true, features = ["preserve_order"] }
 toml_edit = { workspace = true }
 tonic = { workspace = true, features = ["tls-native-roots", "tls-ring"] }

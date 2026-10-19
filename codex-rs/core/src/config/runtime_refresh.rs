@@ -166,7 +166,8 @@ impl Config {
         if !matches!(scope, RuntimeConfigRefresh::Mcp) {
             config.tool_suggest = resolve_tool_suggest_config_from_layer_stack(&layers);
         }
-        config.config_layer_stack = layers;
+        config.config_layer_stack = layers
+            .with_mcp_ema_cancellation(self.config_layer_stack.mcp_ema_cancellation().clone());
         config.plugins = cfg.plugins;
         if enterprise_retired {
             config.disable_mcp_enterprise_auth();
