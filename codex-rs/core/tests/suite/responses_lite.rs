@@ -145,11 +145,16 @@ async fn base_instructions_use_input_items(responses_lite: bool) -> Result<()> {
             "content_item_kinds": ["model.base_instructions"],
         },
     });
+    let mut actual_instructions = instructions.clone();
     if responses_lite {
         expected_instructions["internal_chat_message_metadata_passthrough"]["content_item_metadata"] =
             serde_json::json!([{"provenance": {"type": "harness", "hook": false}}]);
+        actual_instructions["internal_chat_message_metadata_passthrough"]
+            .as_object_mut()
+            .context("base instructions should carry content metadata")?
+            .retain(|key, _| !matches!(key.as_str(), "turn_id" | "create_time"));
     }
-    assert_eq!(instructions, &expected_instructions);
+    assert_eq!(actual_instructions, expected_instructions);
 
     let tools = if responses_lite {
         assert!(body.get("tools").is_none());

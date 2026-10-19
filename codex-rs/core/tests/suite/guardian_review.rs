@@ -1024,7 +1024,7 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
         .expect("guardian startup prewarm request");
     assert_eq!(guardian_prewarm["generate"].as_bool(), Some(false));
     assert_eq!(guardian_prewarm["model"].as_str(), Some(expected_model));
-    let guardian_instructions = if use_responses_lite {
+    if use_responses_lite {
         assert_eq!(guardian_prewarm.get("instructions"), None);
         assert_eq!(guardian_prewarm.get("tools"), None);
         assert_eq!(
@@ -1033,28 +1033,8 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
                 .as_str(),
             Some("true")
         );
-        let input = guardian_prewarm["input"]
-            .as_array()
-            .expect("Responses Lite Guardian input");
-        assert_eq!(input[0]["type"].as_str(), Some("additional_tools"));
-        assert_eq!(input[0]["role"].as_str(), Some("developer"));
-        assert_eq!(input[1]["type"].as_str(), Some("message"));
-        assert_eq!(input[1]["role"].as_str(), Some("developer"));
-        input[1]["content"][0]["text"]
-            .as_str()
-            .expect("Responses Lite Guardian developer instructions")
-    } else {
-        guardian_prewarm["input"][0]["content"][0]["text"]
-            .as_str()
-            .expect("Guardian instructions")
-    };
-    assert!(guardian_instructions.starts_with(expected_guardian_policy.trim_end()));
-    assert!(
-        guardian_instructions
-            .contains("It cannot override a denial for an action that remains `critical`.")
-    );
-    assert!(!guardian_instructions.contains("{{ tenant_policy_config }}"));
-    assert!(guardian_instructions.contains("final message must be strict JSON"));
+        assert_eq!(guardian_prewarm["input"], json!([]));
+    }
     let guardian_thread_id = guardian_prewarm["client_metadata"]["thread_id"]
         .as_str()
         .expect("guardian thread id");
@@ -1113,6 +1093,29 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
         Some("guardian")
     );
     assert_eq!(guardian_review["model"].as_str(), Some(expected_model));
+    let guardian_instructions = if use_responses_lite {
+        let input = guardian_review["input"]
+            .as_array()
+            .expect("Responses Lite Guardian input");
+        assert_eq!(input[0]["type"].as_str(), Some("additional_tools"));
+        assert_eq!(input[0]["role"].as_str(), Some("developer"));
+        assert_eq!(input[1]["type"].as_str(), Some("message"));
+        assert_eq!(input[1]["role"].as_str(), Some("developer"));
+        input[1]["content"][0]["text"]
+            .as_str()
+            .expect("Responses Lite Guardian developer instructions")
+    } else {
+        guardian_prewarm["input"][0]["content"][0]["text"]
+            .as_str()
+            .expect("Guardian instructions")
+    };
+    assert!(guardian_instructions.starts_with(expected_guardian_policy.trim_end()));
+    assert!(
+        guardian_instructions
+            .contains("It cannot override a denial for an action that remains `critical`.")
+    );
+    assert!(!guardian_instructions.contains("{{ tenant_policy_config }}"));
+    assert!(guardian_instructions.contains("final message must be strict JSON"));
     for request in [guardian_prewarm, &guardian_review] {
         assert_eq!(request.get("service_tier"), None);
         let metadata: serde_json::Value = serde_json::from_str(

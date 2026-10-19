@@ -6207,7 +6207,7 @@ async fn remote_v2_compaction_refreshes_instructions_and_preserves_them_on_cold_
     assert_single_instruction_fragment(&requests[3], &new_fragment);
     let resumed_input = requests[3].input();
     assert_eq!(
-        resumed_input.get(2..=replacement_history.len() + 1),
+        resumed_input.get(..replacement_history.len()),
         Some(replacement_history.as_slice()),
         "remote-v2 cold resume should replay persisted replacement history verbatim"
     );

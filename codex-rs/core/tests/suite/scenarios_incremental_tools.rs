@@ -1,4 +1,4 @@
-//! Request-history coverage for opt-in incremental tools on Responses Lite.
+//! Request-history coverage for incremental tools on Responses Lite.
 
 use anyhow::Result;
 use codex_features::Feature;
@@ -84,10 +84,6 @@ async fn incremental_tools_append_changed_catalog_without_rewriting_history(
             }
         })
         .with_config(move |config| {
-            config
-                .features
-                .enable(Feature::IncrementalTools)
-                .expect("enable incremental tools");
             if !use_responses_lite {
                 config.base_instructions =
                     Some("Use the available tools to help the user.".to_string());
