@@ -12,6 +12,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -112,6 +113,7 @@ pub struct McpRuntime {
     resource_cache_generation: AtomicU64,
     elicitation_router: ElicitationRequestRouter,
     resource_origins: Mutex<ResourceOrigins>,
+    ema_auth: OnceLock<crate::ema_auth::EmaAuthContext>,
 }
 
 struct EventStreamCancellation {
@@ -251,6 +253,7 @@ impl McpRuntime {
             resource_cache_generation: AtomicU64::new(0),
             elicitation_router: ElicitationRequestRouter::default(),
             resource_origins: Mutex::default(),
+            ema_auth: OnceLock::new(),
         }
     }
 
@@ -335,6 +338,23 @@ impl McpRuntime {
     }
 
     async fn publish(&self, input: McpRuntimeInput, previous: Option<&McpConnectionSet>) {
+        let ema_auth = (input.config.xaa_enabled
+            && input.mcp_servers.values().any(|server| {
+                server.config().enabled
+                    && matches!(server.config().auth, codex_config::McpServerAuth::EmaAuth)
+            }))
+        .then(|| {
+            self.ema_auth
+                .get_or_init(|| {
+                    crate::ema_auth::EmaAuth::new(
+                        Arc::clone(&input.config),
+                        input.auth.as_ref(),
+                        input.auth_manager.as_ref(),
+                    )
+                    .map_err(Into::into)
+                })
+                .clone()
+        });
         let (publish, publication_gate) = McpPublicationGate::pending();
         let config = Arc::clone(&input.config);
         let auth = input.auth.clone();
@@ -351,6 +371,7 @@ impl McpRuntime {
         let ready_environments = input.runtime_context.ready_environments.clone();
         let connections = Arc::new(
             McpConnectionSet::new(
+                ema_auth,
                 previous,
                 publication_gate,
                 input,

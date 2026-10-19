@@ -2059,6 +2059,7 @@ async fn read_only_apps_discovery_never_uses_a_shared_writable_catalog() -> anyh
         let cancellation = CancellationToken::new();
         cancellation.cancel();
         let manager = McpConnectionSet::new(
+            /*ema_auth*/ None,
             /*previous*/ None,
             McpPublicationGate::already_published(),
             McpRuntimeInput {
@@ -2132,6 +2133,7 @@ async fn hosted_apps_protocol_mode_is_independent_of_generic_mode() -> anyhow::R
         let startup_cancellation_token = CancellationToken::new();
         startup_cancellation_token.cancel();
         let manager = McpConnectionSet::new(
+            /*ema_auth*/ None,
             /*previous*/ None,
             McpPublicationGate::already_published(),
             McpRuntimeInput {
@@ -2238,6 +2240,7 @@ async fn codex_apps_extension_does_not_share_host_owned_tools_cache() -> anyhow:
         let startup_cancellation_token = CancellationToken::new();
         startup_cancellation_token.cancel();
         let manager = McpConnectionSet::new(
+            /*ema_auth*/ None,
             /*previous*/ None,
             McpPublicationGate::already_published(),
             McpRuntimeInput {
@@ -4807,6 +4810,7 @@ async fn executor_owned_chatgpt_mcp_accepts_only_safe_explicit_authorization() -
         );
 
         let manager = McpConnectionSet::new(
+            /*ema_auth*/ None,
             /*previous*/ None,
             McpPublicationGate::already_published(),
             McpRuntimeInput {
@@ -4925,6 +4929,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
 
     let cancel_token = CancellationToken::new();
     let manager = McpConnectionSet::new(
+        /*ema_auth*/ None,
         /*previous*/ None,
         McpPublicationGate::already_published(),
         McpRuntimeInput {
@@ -5373,6 +5378,7 @@ async fn reconcile_reusable_server_with_mcp_config(
 ) -> McpConnectionSet {
     let (tx_event, _rx_event) = async_channel::unbounded();
     McpConnectionSet::new(
+        /*ema_auth*/ None,
         Some(previous),
         McpPublicationGate::already_published(),
         McpRuntimeInput {
@@ -6329,6 +6335,7 @@ async fn reconciliation_replaces_connection_when_protocol_mode_changes() {
     mcp_config.protocol_mode = codex_rmcp_client::McpProtocolMode::V20260728;
 
     let reconciled = McpConnectionSet::new(
+        /*ema_auth*/ None,
         Some(&previous),
         McpPublicationGate::already_published(),
         McpRuntimeInput {
@@ -6387,6 +6394,7 @@ async fn reconciliation_reuses_legacy_stdio_server_when_modern_protocol_is_enabl
     mcp_config.protocol_mode = codex_rmcp_client::McpProtocolMode::V20260728;
 
     let reconciled = McpConnectionSet::new(
+        /*ema_auth*/ None,
         Some(&previous),
         McpPublicationGate::already_published(),
         McpRuntimeInput {

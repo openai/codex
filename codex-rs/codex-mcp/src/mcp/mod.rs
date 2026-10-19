@@ -463,6 +463,7 @@ pub async fn read_mcp_resource(
     let cancel_token = CancellationToken::new();
     let runtime_config = config.for_threadless_operations(&mcp_servers);
     let manager = McpConnectionSet::new(
+        /*ema_auth*/ None,
         /*previous*/ None,
         McpPublicationGate::already_published(),
         McpRuntimeInput {
@@ -545,6 +546,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let cancel_token = CancellationToken::new();
     let runtime_config = config.for_threadless_operations(&mcp_servers);
     let mcp_connection_manager = McpConnectionSet::new(
+        /*ema_auth*/ None,
         /*previous*/ None,
         McpPublicationGate::already_published(),
         McpRuntimeInput {

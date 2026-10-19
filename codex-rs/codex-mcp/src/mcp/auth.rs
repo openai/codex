@@ -10,6 +10,7 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::HttpClient;
 use codex_login::CodexAuth;
 use codex_rmcp_client::McpAuthState;
+use codex_rmcp_client::McpLoginRequirement;
 use codex_rmcp_client::McpOAuthCallbackMode;
 use codex_rmcp_client::OAuthDiscoveryTimeout;
 use codex_rmcp_client::OAuthProviderError;
@@ -255,8 +256,29 @@ async fn compute_auth_status(
         return Ok(McpAuthState::Unsupported);
     }
     if matches!(config.auth, McpServerAuth::EmaAuth) {
-        // EMA connections are not enabled until the runtime stage of the stack.
-        return Ok(McpAuthState::Unsupported);
+        let Some(registration) = config.ema_registration() else {
+            return Ok(McpAuthState::Unsupported);
+        };
+        config
+            .validate_ema_auth_transport()
+            .map_err(anyhow::Error::msg)?;
+        let Some(scope) = crate::ema_auth_scope(auth) else {
+            return Ok(McpAuthState::LoggedOut(McpLoginRequirement::Login));
+        };
+        return Ok(
+            if crate::ema_auth::stored_ema_credentials(
+                registration.idp(),
+                &scope,
+                keyring_backend_kind,
+            )
+            .await?
+            .is_some()
+            {
+                McpAuthState::OAuth
+            } else {
+                McpAuthState::LoggedOut(McpLoginRequirement::Login)
+            },
+        );
     }
     let has_runtime_auth = matches!(config.auth, McpServerAuth::ChatGpt)
         && auth.is_some_and(CodexAuth::uses_codex_backend)

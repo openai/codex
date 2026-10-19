@@ -297,6 +297,7 @@ fn codex_apps_reconnect_backoff(consecutive_failures: u32) -> Duration {
 
 #[derive(Clone)]
 struct ManagedClientStartup {
+    ema_auth: Option<crate::ema_auth::EmaAuthContext>,
     originator: AuthStorageOriginator,
     server_name: String,
     server: EffectiveMcpServer,
@@ -328,6 +329,7 @@ impl ManagedClientStartup {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         let Self {
+            ema_auth,
             originator,
             server_name,
             server,
@@ -369,6 +371,7 @@ impl ManagedClientStartup {
                 let client = match tokio::time::timeout(
                     startup_timeout,
                     make_rmcp_client(
+                        ema_auth,
                         &server_name,
                         server.clone(),
                         store_mode,
@@ -462,6 +465,7 @@ impl AsyncManagedClient {
     #[instrument(level = "trace", skip_all, fields(server_name = %server_name))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
+        ema_auth: Option<crate::ema_auth::EmaAuthContext>,
         server_name: String,
         startup_submit_id: String,
         server: EffectiveMcpServer,
@@ -495,6 +499,7 @@ impl AsyncManagedClient {
         let startup_complete = Arc::new(AtomicBool::new(false));
         let server_capabilities = Arc::new(StdMutex::new(None));
         let startup = Arc::new(ManagedClientStartup {
+            ema_auth,
             originator: AuthStorageOriginator::current(),
             server_name,
             server,
@@ -1236,6 +1241,7 @@ struct StartServerTaskParams {
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace", skip_all, fields(server_name = %server_name))]
 pub(crate) async fn make_rmcp_client(
+    ema_auth: Option<crate::ema_auth::EmaAuthContext>,
     server_name: &str,
     server: EffectiveMcpServer,
     store_mode: OAuthCredentialsStoreMode,
@@ -1265,9 +1271,20 @@ pub(crate) async fn make_rmcp_client(
         }
     }
     if matches!(config.auth, McpServerAuth::EmaAuth) {
-        return Err(StartupOutcomeError::from(anyhow!(
-            "EMA MCP connections are not enabled in this version"
-        )));
+        let auth = ema_auth.ok_or_else(|| {
+            StartupOutcomeError::from(anyhow!(
+                "enterprise MCP requires a thread with an account owner"
+            ))
+        })??;
+        return auth
+            .connect(
+                server_name,
+                &server,
+                runtime_context.local_http_client(),
+                protocol_mode,
+            )
+            .await
+            .map_err(Into::into);
     }
     if matches!(config.auth, McpServerAuth::ChatGpt)
         && !config.is_local_environment()

@@ -240,11 +240,17 @@ impl EnterpriseLoginState {
                         // Keep cancellation responsive during the async checks above.
                         // Once admitted, retain this guard through the synchronous write.
                         let active = lifecycle.active.lock().await;
-                        (active.as_ref().is_some_and(|attempt| {
+                        let current = active.as_ref().is_some_and(|attempt| {
                             attempt.login_id == completion_id && !attempt.cancel.is_cancelled()
                         })
-                            && ema_auth_scope(lifecycle.auth_manager.auth_cached().as_ref()).as_ref() == Some(&scope))
-                            .then_some(active)
+                            && ema_auth_scope(lifecycle.auth_manager.auth_cached().as_ref()).as_ref() == Some(&scope);
+                        if !current {
+                            return None;
+                        }
+                        // The credential lock is held: revoke cached bearers before replacing
+                        // the grant, and let new threads pin only the committed credential.
+                        lifecycle.config_manager.revoke_mcp_ema();
+                        Some(active)
                     }).await?;
                     // A successful commit is no longer cancelable. Clear it while
                     // still holding the commit gate.
