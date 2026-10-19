@@ -17,6 +17,7 @@ use codex_login::CodexAuth;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::Op;
@@ -442,8 +443,12 @@ async fn worker_reasoning_overrides_follow_effective_client_policy(
     Ok(())
 }
 
+#[test_case(ReasoningEffort::High; "same effort")]
+#[test_case(ReasoningEffort::Medium; "changed effort")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reasoning_effort_override_recovery_reuses_trusted_tail_update() -> anyhow::Result<()> {
+async fn reasoning_effort_override_recovery_sends_latest_tail_update(
+    effort: ReasoningEffort,
+) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     // Keep the turn active without allowing any model output after the update.
@@ -512,7 +517,10 @@ async fn reasoning_effort_override_recovery_reuses_trusted_tail_update() -> anyh
             .codex
             .recover_turn_if_idle(RecoverTurnRequest {
                 turn_id: turn_id.clone(),
-                thread_settings: Default::default(),
+                thread_settings: ThreadSettingsOverrides {
+                    effort: Some(Some(effort.clone())),
+                    ..Default::default()
+                },
                 trace: None,
                 cyber_access_program: None,
             })
@@ -527,16 +535,141 @@ async fn reasoning_effort_override_recovery_reuses_trusted_tail_update() -> anyh
     })
     .await;
 
+    let history_efforts = resumed
+        .codex
+        .conversation_history_snapshot()
+        .await
+        .items()
+        .filter_map(|item| match item {
+            ResponseItem::ConfigurationUpdate { reasoning } => Some(reasoning.effort.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut expected_history_efforts = vec![ReasoningEffort::High];
+    if effort != ReasoningEffort::High {
+        expected_history_efforts.push(effort.clone());
+    }
+    assert_eq!(history_efforts, expected_history_efforts);
+
     let request = mock.single_request();
     assert_eq!(
         effort_updates(&request),
-        vec![effort_update(ReasoningEffort::High)]
+        vec![effort_update(effort.clone())]
     );
+    assert_eq!(request.input().last(), Some(&effort_update(effort.clone())));
     assert_eq!(
-        request.input().last(),
-        Some(&effort_update(ReasoningEffort::High))
+        request.body_json()["reasoning"]["effort"],
+        serde_json::to_value(effort)?
     );
-    assert_eq!(request.body_json()["reasoning"]["effort"], "high");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_effort_override_capacity_retry_keeps_latest_adjacent_update()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let first = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("first")]),
+    )
+    .await;
+    let failed = responses::mount_response_once(
+        &server,
+        ResponseTemplate::new(503)
+            .set_body_json(serde_json::json!({"error": {"code": "server_is_overloaded"}})),
+    )
+    .await;
+    let retried = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("retried")]),
+    )
+    .await;
+    let test = override_builder()
+        .with_config(|config| {
+            config.model_provider.supports_websockets = false;
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_text_turn("establish medium").await?;
+    assert_eq!(
+        effort_updates(&first.single_request()),
+        [effort_update(ReasoningEffort::Medium)]
+    );
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "try high".to_string(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                effort: Some(Some(ReasoningEffort::High)),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    let completed = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let EventMsg::TurnComplete(completed) = completed else {
+        unreachable!("waited for turn completion");
+    };
+    assert_eq!(
+        completed.error.and_then(|error| error.codex_error_info),
+        Some(CodexErrorInfo::ServerOverloaded)
+    );
+
+    // The app's capacity Retry action uses current settings without adding a user message.
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(Vec::new()).with_thread_settings(
+                ThreadSettingsOverrides {
+                    effort: Some(Some(ReasoningEffort::Medium)),
+                    ..Default::default()
+                },
+            ),
+        )
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let request = retried.single_request();
+    let mut expected = failed.single_request().input();
+    assert_eq!(expected.pop(), Some(effort_update(ReasoningEffort::High)));
+    expected.push(effort_update(ReasoningEffort::Medium));
+    assert_eq!(request.input(), expected);
+    assert_eq!(request.body_json()["reasoning"]["effort"], "medium");
+    assert_eq!(
+        effort_updates(&request),
+        vec![effort_update(ReasoningEffort::Medium); 2]
+    );
+    let saved_updates = test
+        .codex
+        .load_history(/*include_archived*/ false)
+        .await?
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            RolloutItem::ResponseItem(ResponseItemEnvelope {
+                item: item @ ResponseItem::ConfigurationUpdate { .. },
+                ..
+            }) => Some(serde_json::to_value(item).expect("serialize saved update")),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        saved_updates,
+        [
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::Medium
+        ]
+        .map(effort_update)
+    );
     Ok(())
 }
 
@@ -903,6 +1036,14 @@ async fn reasoning_effort_override_websocket_appends_then_replays_after_reconnec
                 responses::ev_response_created("changed"),
                 responses::ev_completed("changed"),
             ],
+            vec![
+                responses::ev_response_created("coalesced"),
+                responses::ev_completed("coalesced"),
+            ],
+            vec![
+                responses::ev_response_created("continued"),
+                responses::ev_completed("continued"),
+            ],
         ],
         vec![vec![
             responses::ev_response_created("replayed"),
@@ -934,15 +1075,35 @@ async fn reasoning_effort_override_websocket_appends_then_replays_after_reconnec
     )
     .await?;
     test.submit_text_turn("changed effort").await?;
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(Vec::new()).with_thread_settings(
+                ThreadSettingsOverrides {
+                    effort: Some(Some(ReasoningEffort::Low)),
+                    ..Default::default()
+                },
+            ),
+        )
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_text_turn("unchanged effort after coalescing")
+        .await?;
     test.submit_text_turn("unchanged effort after reconnect")
         .await?;
 
     let connections = websocket.connections();
-    assert_eq!(connections.iter().map(Vec::len).collect::<Vec<_>>(), [3, 1]);
+    assert_eq!(connections.iter().map(Vec::len).collect::<Vec<_>>(), [5, 1]);
     let first = connections[0][1].body_json();
     let changed = connections[0][2].body_json();
+    let coalesced = connections[0][3].body_json();
+    let continued = connections[0][4].body_json();
     let replayed = connections[1][0].body_json();
     assert_eq!(changed["previous_response_id"], "first");
+    assert_eq!(coalesced.get("previous_response_id"), None);
+    assert_eq!(continued["previous_response_id"], "coalesced");
     assert_eq!(replayed.get("previous_response_id"), None);
     assert_eq!(
         responses::strip_response_item_ids_from_json(responses::strip_metadata_from_json(
@@ -953,23 +1114,28 @@ async fn reasoning_effort_override_websocket_appends_then_replays_after_reconnec
             effort_update(ReasoningEffort::High),
         ])
     );
+    for full_request in [&coalesced, &replayed] {
+        assert_eq!(
+            full_request["input"]
+                .as_array()
+                .expect("full input")
+                .iter()
+                .filter(|item| item["type"] == "configuration_update")
+                .cloned()
+                .collect::<Vec<_>>(),
+            [effort_update(ReasoningEffort::Low)]
+        );
+    }
     assert_eq!(
-        replayed["input"]
-            .as_array()
-            .expect("replayed input")
-            .iter()
-            .filter(|item| item["type"] == "configuration_update")
-            .cloned()
-            .collect::<Vec<_>>(),
-        [effort_update(ReasoningEffort::High)]
+        responses::strip_response_item_ids_from_json(responses::strip_metadata_from_json(
+            continued["input"].clone()
+        )),
+        serde_json::json!([message("user", "unchanged effort after coalescing")]),
     );
     assert_eq!(
-        [&first, &changed, &replayed].map(|body| body["reasoning"]["effort"].clone()),
-        [
-            Value::from("medium"),
-            Value::from("medium"),
-            Value::from("medium")
-        ]
+        [&first, &changed, &coalesced, &continued, &replayed]
+            .map(|body| body["reasoning"]["effort"].clone()),
+        ["medium"; 5].map(Value::from),
     );
     websocket.shutdown().await;
     Ok(())

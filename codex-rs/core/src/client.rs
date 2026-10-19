@@ -968,6 +968,18 @@ impl ModelClient {
             // Unsupported models and disabled overrides must also accept saved history.
             // Filter only the request copy; persisted history remains unchanged.
             input.retain(|item| !matches!(item, ResponseItem::ConfigurationUpdate { .. }));
+        } else {
+            input.dedup_by(|next, previous| {
+                if matches!(next, ResponseItem::ConfigurationUpdate { .. })
+                    && matches!(previous, ResponseItem::ConfigurationUpdate { .. })
+                {
+                    // Keep the latest update; dedup_by removes `next`.
+                    std::mem::swap(previous, next);
+                    true
+                } else {
+                    false
+                }
+            });
         }
         let is_openai = self.state.provider.info().is_openai();
         // These prompt-only items are rebuilt on every request. Hash their visible payloads
