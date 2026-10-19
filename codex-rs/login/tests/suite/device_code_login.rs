@@ -8,6 +8,7 @@ use codex_login::AuthKeyringBackendKind;
 use codex_login::ServerOptions;
 use codex_login::auth::load_auth_dot_json;
 use codex_login::run_device_code_login;
+use codex_login::token_data::AccountOAuthProvenance;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -144,7 +145,7 @@ async fn device_code_login_integration_succeeds() -> anyhow::Result<()> {
     mock_oauth_token_single(&mock_server, jwt.clone()).await;
 
     let issuer = mock_server.uri();
-    let opts = server_opts(&codex_home, issuer, AuthCredentialsStoreMode::File);
+    let opts = server_opts(&codex_home, issuer.clone(), AuthCredentialsStoreMode::File);
 
     run_device_code_login(opts)
         .await
@@ -163,6 +164,18 @@ async fn device_code_login_integration_succeeds() -> anyhow::Result<()> {
     assert_eq!(tokens.refresh_token, "refresh-token-123");
     assert_eq!(tokens.id_token.raw_jwt, jwt);
     assert_eq!(tokens.account_id.as_deref(), Some(WORKSPACE_ID_ALLOWED));
+    let login_owner_id = tokens
+        .login_owner_id
+        .as_ref()
+        .context("completed login identity")?;
+    assert!(!login_owner_id.is_empty());
+    assert_eq!(
+        tokens.oauth_provenance,
+        Some(AccountOAuthProvenance {
+            issuer,
+            client_id: "client-id".to_string(),
+        })
+    );
     Ok(())
 }
 

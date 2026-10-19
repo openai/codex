@@ -2072,6 +2072,8 @@ mod tests {
                 id_token: parse_chatgpt_jwt_claims(&fake_jwt).expect("fake jwt should parse"),
                 access_token: access_token.to_string(),
                 refresh_token: "refresh-token".to_string(),
+                oauth_provenance: None,
+                login_owner_id: None,
                 account_id: Some("account_id".to_string()),
             }),
             last_refresh: Some(Utc::now()),

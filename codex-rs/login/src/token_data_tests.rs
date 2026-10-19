@@ -27,6 +27,29 @@ fn fake_jwt(payload: serde_json::Value) -> String {
 }
 
 #[test]
+fn legacy_account_token_record_has_no_inferred_oauth_provenance() -> serde_json::Result<()> {
+    let legacy = serde_json::json!({
+        "id_token": fake_jwt(serde_json::json!({"iss": "https://untrusted.example"})),
+        "access_token": "account-access",
+        "refresh_token": "account-refresh",
+        "account_id": "workspace"
+    });
+    let mut tokens: TokenData = serde_json::from_value(legacy.clone())?;
+    assert_eq!(tokens.oauth_provenance, None);
+    assert_eq!(serde_json::to_value(&tokens)?, legacy);
+
+    let provenance = AccountOAuthProvenance {
+        issuer: "https://idp.example".to_string(),
+        client_id: "codex-client".to_string(),
+    };
+    tokens.oauth_provenance = Some(provenance);
+    tokens.login_owner_id = Some("completed-login".into());
+    let round_trip: TokenData = serde_json::from_value(serde_json::to_value(&tokens)?)?;
+    assert_eq!(round_trip, tokens);
+    Ok(())
+}
+
+#[test]
 fn id_token_info_parses_email_and_plan() {
     let fake_jwt = fake_jwt(serde_json::json!({
         "email": "user@example.com",

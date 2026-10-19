@@ -257,6 +257,8 @@ fn chatgpt_auth_with_refresh_token(refresh_token: &str) -> AuthDotJson {
             },
             access_token: ACCESS_TOKEN.to_string(),
             refresh_token: refresh_token.to_string(),
+            oauth_provenance: None,
+            login_owner_id: None,
             account_id: Some("account-id".to_string()),
         }),
         last_refresh: None,

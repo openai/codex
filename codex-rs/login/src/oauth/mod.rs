@@ -23,7 +23,6 @@ pub(crate) use client::TokenEndpoint;
 pub(crate) use diagnostics::sanitize_url_for_logging;
 pub(crate) use error::ErrorBodyLimit;
 pub(crate) use error::OAuthError;
-pub(crate) use error::TokenErrorDetail;
 pub(crate) use error::TokenRejection;
 pub(crate) use pkce::PkceCodes;
 pub(crate) use pkce::generate_pkce;

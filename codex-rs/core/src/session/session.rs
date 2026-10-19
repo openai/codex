@@ -1947,12 +1947,13 @@ impl Session {
             } else {
                 mcp_projection
             };
-            sess.install_initial_mcp_runtime(
+            // Keep MCP startup's large future out of the surrounding session initialization frame.
+            Box::pin(sess.install_initial_mcp_runtime(
                 &session_configuration,
                 latest_auth,
                 mcp_projection,
                 &resolved_environments,
-            )
+            ))
             .await?;
             sess.start_mcp_prewarm_worker(mcp_prewarm_rx, mcp_auth_changes);
             sess.follow_inherited_environment_configurations(

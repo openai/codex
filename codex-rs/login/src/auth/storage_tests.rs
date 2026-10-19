@@ -433,6 +433,8 @@ fn auth_with_prefix(prefix: &str) -> AuthDotJson {
             id_token: id_token_with_prefix(prefix),
             access_token: format!("{prefix}-access"),
             refresh_token: format!("{prefix}-refresh"),
+            oauth_provenance: None,
+            login_owner_id: None,
             account_id: Some(format!("{prefix}-account-id")),
         }),
         last_refresh: None,

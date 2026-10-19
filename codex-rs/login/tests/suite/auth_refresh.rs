@@ -15,6 +15,7 @@ use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::RefreshTokenError;
 use codex_login::load_auth_dot_json;
 use codex_login::save_auth;
+use codex_login::token_data::AccountOAuthProvenance;
 use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
 use codex_protocol::auth::AuthMode;
@@ -200,8 +201,18 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
         .await;
 
     let ctx = RefreshTokenTestContext::new(&server).await?;
+    // Exercise the recorded issuer instead of the test endpoint override.
+    // SAFETY: auth_env serializes these tests; ctx restores the environment on drop.
+    unsafe {
+        std::env::remove_var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR);
+    }
     let initial_last_refresh = Utc::now() - Duration::days(1);
-    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    let mut initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    initial_tokens.login_owner_id = Some("completed-login".into());
+    initial_tokens.oauth_provenance = Some(AccountOAuthProvenance {
+        issuer: server.uri(),
+        client_id: "recorded-client".into(),
+    });
     let initial_auth = AuthDotJson {
         auth_mode: Some(AuthMode::Chatgpt),
         openai_api_key: None,
@@ -223,7 +234,7 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&requests[0].body)?,
         json!({
-            "client_id": "staging-client",
+            "client_id": "recorded-client",
             "grant_type": "refresh_token",
             "refresh_token": INITIAL_REFRESH_TOKEN,
             "refresh_reason": "forced",
@@ -1689,6 +1700,8 @@ fn build_tokens(access_token: &str, refresh_token: &str) -> TokenData {
         id_token,
         access_token: access_token.to_string(),
         refresh_token: refresh_token.to_string(),
+        oauth_provenance: None,
+        login_owner_id: None,
         account_id: Some("account-id".to_string()),
     }
 }

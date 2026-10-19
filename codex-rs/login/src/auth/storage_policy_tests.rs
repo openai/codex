@@ -427,6 +427,8 @@ fn secrets_keyring_auth_storage_save_persists_and_removes_fallback_file() -> any
             id_token: Default::default(),
             access_token: "access".to_string(),
             refresh_token: "refresh".to_string(),
+            oauth_provenance: None,
+            login_owner_id: None,
             account_id: Some("account".to_string()),
         }),
         last_refresh: Some(Utc::now()),

@@ -110,6 +110,8 @@ mod tests {
                     .expect("id token should parse"),
                 access_token,
                 refresh_token: "refresh-token".to_string(),
+                oauth_provenance: None,
+                login_owner_id: None,
                 account_id: Some("workspace-1".to_string()),
             }),
             last_refresh: Some(Utc::now()),

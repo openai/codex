@@ -223,16 +223,7 @@ pub async fn complete_device_code_login(
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
     }
 
-    crate::server::persist_tokens_async(
-        &opts.codex_home,
-        /*api_key*/ None,
-        tokens.id_token,
-        tokens.access_token,
-        tokens.refresh_token,
-        opts.cli_auth_credentials_store_mode,
-        opts.auth_keyring_backend_kind,
-    )
-    .await
+    crate::server::persist_tokens_async(&opts, /*api_key*/ None, &tokens).await
 }
 
 pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {

@@ -178,6 +178,8 @@ pub fn write_chatgpt_auth(
         id_token,
         access_token: fixture.access_token,
         refresh_token: fixture.refresh_token,
+        oauth_provenance: None,
+        login_owner_id: None,
         account_id: fixture.account_id,
     };
 

@@ -17,7 +17,6 @@ use std::io::Write;
 use std::io::{self};
 use std::net::SocketAddr;
 use std::net::TcpStream;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -52,6 +51,7 @@ use crate::success_page::LoginSuccessPage;
 use crate::success_page::LoginSuccessRedirect;
 use crate::success_page::compose_success_url;
 use crate::success_page::jwt_auth_claims;
+use crate::token_data::AccountOAuthProvenance;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use chrono::Utc;
@@ -444,17 +444,7 @@ async fn process_request(
                         obtain_api_key(&client, &opts.issuer, &opts.client_id, &tokens.id_token)
                             .await
                             .ok();
-                    if let Err(err) = persist_tokens_async(
-                        &opts.codex_home,
-                        api_key.clone(),
-                        tokens.id_token.clone(),
-                        tokens.access_token.clone(),
-                        tokens.refresh_token.clone(),
-                        opts.cli_auth_credentials_store_mode,
-                        opts.auth_keyring_backend_kind,
-                    )
-                    .await
-                    {
+                    if let Err(err) = persist_tokens_async(opts, api_key.clone(), &tokens).await {
                         eprintln!("Persist error: {err}");
                         return login_error_response(
                             "Sign-in completed but credentials could not be saved locally.",
@@ -705,9 +695,8 @@ pub(crate) struct ExchangedTokens {
 /// Exchanges an authorization code for tokens and returns the client for further token exchanges.
 ///
 /// The returned error remains suitable for user-facing CLI/browser surfaces, so backend-provided
-/// non-JSON error text is preserved there. Structured logging stays narrower: it logs reviewed
-/// fields from parsed token responses and redacted transport errors, but does not log the final
-/// callback-layer `%err` string.
+/// non-JSON error text is preserved there. Structured logs only report status and redacted
+/// transport errors, and do not log the final callback-layer `%err` string.
 pub(crate) async fn exchange_code_for_tokens(
     issuer: &str,
     client_id: &str,
@@ -775,7 +764,6 @@ pub(crate) async fn exchange_code_for_tokens(
             }
             warn!(
                 status = %rejection.status,
-                detail = ?rejection.detail,
                 "oauth token exchange returned non-success status"
             );
             Err(io::Error::other(rejection.to_string()))
@@ -831,16 +819,21 @@ async fn send_code_exchange_request(
 
 /// Persists exchanged credentials using the configured local auth store.
 pub(crate) async fn persist_tokens_async(
-    codex_home: &Path,
+    opts: &ServerOptions,
     api_key: Option<String>,
-    id_token: String,
-    access_token: String,
-    refresh_token: String,
-    auth_credentials_store_mode: AuthCredentialsStoreMode,
-    keyring_backend_kind: AuthKeyringBackendKind,
+    exchanged: &ExchangedTokens,
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
-    let codex_home = codex_home.to_path_buf();
+    let codex_home = opts.codex_home.clone();
+    let auth_credentials_store_mode = opts.cli_auth_credentials_store_mode;
+    let keyring_backend_kind = opts.auth_keyring_backend_kind;
+    let id_token = exchanged.id_token.clone();
+    let access_token = exchanged.access_token.clone();
+    let refresh_token = exchanged.refresh_token.clone();
+    let provenance = AccountOAuthProvenance {
+        issuer: opts.issuer.clone(),
+        client_id: opts.client_id.clone(),
+    };
     // Blocking tasks don't inherit task-local context.
     // Preserve the initiating client for credential-storage metrics.
     let originator = AuthStorageOriginator::current();
@@ -851,6 +844,8 @@ pub(crate) async fn persist_tokens_async(
                 id_token: parse_chatgpt_jwt_claims(&id_token).map_err(io::Error::other)?,
                 access_token,
                 refresh_token,
+                oauth_provenance: Some(provenance),
+                login_owner_id: Some(generate_state()),
                 account_id: None,
             };
             if let Some(acc) = jwt_auth_claims(&id_token)

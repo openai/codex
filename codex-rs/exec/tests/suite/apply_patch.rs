@@ -406,6 +406,8 @@ async fn shutdown_flushes_completed_turn_and_file_diff() -> anyhow::Result<()> {
                 },
                 access_token: "test-access-token".to_string(),
                 refresh_token: "test-refresh-token".to_string(),
+                oauth_provenance: None,
+                login_owner_id: None,
                 account_id: None,
             }),
             last_refresh: None,

@@ -119,6 +119,8 @@ fn remote_control_auth_dot_json(account_id: Option<&str>) -> AuthDotJson {
             id_token: parse_chatgpt_jwt_claims(&fake_jwt).expect("fake jwt should parse"),
             access_token: "Access Token".to_string(),
             refresh_token: "refresh-token".to_string(),
+            oauth_provenance: None,
+            login_owner_id: None,
             account_id: account_id.map(str::to_string),
         }),
         last_refresh: Some(chrono::Utc::now()),

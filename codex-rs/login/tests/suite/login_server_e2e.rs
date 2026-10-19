@@ -143,7 +143,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         auth_route_config: routes,
         client_id: codex_login::CLIENT_ID.to_string(),
-        issuer,
+        issuer: issuer.clone(),
         port: 0,
         open_browser: false,
         force_state: Some(state),
@@ -230,6 +230,12 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     assert_eq!(json["tokens"]["access_token"], "access-123");
     assert_eq!(json["tokens"]["refresh_token"], "refresh-123");
     assert_eq!(json["tokens"]["account_id"], chatgpt_account_id);
+    let login_owner_id = json["tokens"]["login_owner_id"].as_str().unwrap();
+    assert!(!login_owner_id.is_empty());
+    assert_eq!(
+        json["tokens"]["oauth_provenance"],
+        serde_json::json!({ "issuer": issuer, "client_id": codex_login::CLIENT_ID })
+    );
 
     // Stop mock issuer
     drop(issuer_handle);

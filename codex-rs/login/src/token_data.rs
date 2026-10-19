@@ -21,7 +21,22 @@ pub struct TokenData {
 
     pub refresh_token: String,
 
+    /// OAuth authority recorded when this refresh token was issued. Older records have no
+    /// provenance; never infer authority from unverified token claims.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_provenance: Option<AccountOAuthProvenance>,
+
+    /// Identifies one completed login; token rotation preserves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_owner_id: Option<String>,
+
     pub account_id: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct AccountOAuthProvenance {
+    pub issuer: String,
+    pub client_id: String,
 }
 
 /// Flat subset of useful claims in id_token from auth.json.
