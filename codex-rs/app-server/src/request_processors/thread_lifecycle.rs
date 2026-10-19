@@ -375,8 +375,9 @@ pub(super) async fn ensure_listener_task_running(
                             &outgoing_for_task, conversation_id,
                         ).await;
                     }
+                    let is_shutdown_complete = matches!(event.msg, EventMsg::ShutdownComplete);
                     apply_bespoke_event_handling(
-                        event.clone(),
+                        event,
                         conversation_id,
                         conversation.clone(),
                         thread_manager.clone(),
@@ -385,7 +386,7 @@ pub(super) async fn ensure_listener_task_running(
                         thread_watch_manager.clone(),
                     )
                     .await;
-                    if matches!(event.msg, EventMsg::ShutdownComplete)
+                    if is_shutdown_complete
                         && let Some(completion_tx) = thread_state
                             .lock()
                             .await
