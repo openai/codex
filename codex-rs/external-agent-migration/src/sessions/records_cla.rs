@@ -40,6 +40,15 @@ pub fn summarize_session(path: &Path) -> io::Result<Option<SessionSummary>> {
         let Ok(mut record) = serde_json::from_str::<JsonValue>(trimmed) else {
             continue;
         };
+        // Backgrounding replaces this session with a continuation that includes its history.
+        if record.get("type").and_then(JsonValue::as_str) == Some("continued-in")
+            && record
+                .get("continuedInSessionId")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|id| !id.trim().is_empty())
+        {
+            return Ok(None);
+        }
         if cwd.is_none() {
             cwd = record
                 .get("cwd")

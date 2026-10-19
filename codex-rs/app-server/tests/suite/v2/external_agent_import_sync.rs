@@ -247,6 +247,31 @@ fn assert_history(response: &ThreadReadResponse, expected: &[(&str, &str)]) {
 }
 
 #[tokio::test]
+async fn backgrounded_session_imports_only_its_continuation() -> Result<()> {
+    let mut fixture = ImportFixture::new().await?;
+    let continuation = fixture.session_path.with_file_name("background.jsonl");
+    std::fs::copy(&fixture.session_path, &continuation)?;
+    fixture.append_to(&continuation, &[("assistant", LATE_ASSISTANT)])?;
+    fixture.append_raw(&format!(
+        "{}\n",
+        json!({
+            "type": "continued-in",
+            "sessionId": "session",
+            "continuedInSessionId": "background",
+        })
+    ))?;
+
+    let imported = fixture.import_one().await?;
+    assert_eq!(fixture.thread_count().await?, 1);
+    assert_history(
+        &fixture.read(&imported).await?,
+        &[("user", FIRST_USER), ("assistant", LATE_ASSISTANT)],
+    );
+    assert!(fixture.detect().await?.items.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn cold_exact_prefix_appends_suffix_to_same_task_and_checkpoints() -> Result<()> {
     let mut fixture = ImportFixture::new().await?;
     let original = fixture.import_one().await?;

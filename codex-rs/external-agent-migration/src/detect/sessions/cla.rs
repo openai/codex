@@ -65,6 +65,7 @@ mod tests {
     use super::*;
     use crate::sessions::ledger::record_imported_session;
     use codex_protocol::ThreadId;
+    use pretty_assertions::assert_eq;
     use serde_json::Value as JsonValue;
     use std::fs::FileTimes;
     use std::fs::OpenOptions;
@@ -97,6 +98,45 @@ mod tests {
                 path: session_path,
                 cwd: project_root,
                 title: Some("hello there".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn detects_only_the_continuation_of_a_backgrounded_session() {
+        let root = TempDir::new().expect("tempdir");
+        let external_agent_home = root.path().join(".external");
+        let project_root = root.path().join("repo");
+        let original = record("user", "plan a vacation", &project_root);
+        write_session(
+            &external_agent_home,
+            &project_root,
+            "original.jsonl",
+            &[
+                original.clone(),
+                serde_json::json!({
+                    "type": "continued-in",
+                    "sessionId": "original",
+                    "continuedInSessionId": "background",
+                }),
+            ],
+        );
+        let continuation = write_session(
+            &external_agent_home,
+            &project_root,
+            "background.jsonl",
+            &[
+                original,
+                record("assistant", "Here is your itinerary", &project_root),
+            ],
+        );
+
+        assert_eq!(
+            detect_recent_cla_sessions(&external_agent_home, root.path()).expect("detect"),
+            vec![ExternalAgentSessionMigration {
+                path: continuation,
+                cwd: project_root,
+                title: Some("plan a vacation".to_string()),
             }]
         );
     }
