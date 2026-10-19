@@ -1,5 +1,71 @@
 use std::collections::HashSet;
 
+use serde::Deserialize;
+use serde::Serialize;
+
+use crate::catalog::SkillSourceKind;
+
+fn alias_prefix(source: &SkillSourceKind) -> Option<&'static str> {
+    match source {
+        SkillSourceKind::Cloud => Some("c"),
+        SkillSourceKind::Executor => Some("e"),
+        SkillSourceKind::Host => Some("r"),
+        SkillSourceKind::Custom(_) => None,
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(from = "String", into = "String")]
+pub(crate) struct SkillLocator {
+    value: String,
+    alias_source: Option<SkillSourceKind>,
+}
+
+impl From<String> for SkillLocator {
+    fn from(value: String) -> Self {
+        let alias_source = value.split_once('/').and_then(|(root, suffix)| {
+            if suffix.is_empty() {
+                return None;
+            }
+            let (prefix, index) = root.split_at_checked(1)?;
+            if index.is_empty()
+                || !index.bytes().all(|byte| byte.is_ascii_digit())
+                || (index.len() > 1 && index.starts_with('0'))
+            {
+                return None;
+            }
+            index.parse::<usize>().ok()?;
+            [
+                SkillSourceKind::Cloud,
+                SkillSourceKind::Executor,
+                SkillSourceKind::Host,
+            ]
+            .into_iter()
+            .find(|source| alias_prefix(source) == Some(prefix))
+        });
+        Self {
+            value,
+            alias_source,
+        }
+    }
+}
+
+impl From<SkillLocator> for String {
+    fn from(locator: SkillLocator) -> Self {
+        locator.value
+    }
+}
+
+impl SkillLocator {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.value
+    }
+
+    pub(crate) fn alias_source(&self) -> Option<&SkillSourceKind> {
+        self.alias_source.as_ref()
+    }
+}
+
 struct AliasRoot {
     name: String,
     value: String,
@@ -10,7 +76,8 @@ pub(crate) struct AliasPlan {
 }
 
 impl AliasPlan {
-    pub(crate) fn build(prefix: &str, candidates: &[&str]) -> Option<Self> {
+    pub(crate) fn build(source: &SkillSourceKind, candidates: &[&str]) -> Option<Self> {
+        let prefix = alias_prefix(source)?;
         let mut roots = Vec::new();
         let mut seen = HashSet::new();
 

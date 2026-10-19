@@ -985,13 +985,6 @@ pub(crate) fn build_alias_plan(entries: &[&SkillCatalogEntry]) -> Option<AliasPl
     if entries.iter().any(|entry| &entry.authority.kind != source) {
         return None;
     }
-    let prefix = match source {
-        SkillSourceKind::Host => "r",
-        SkillSourceKind::Executor => "e",
-        SkillSourceKind::Cloud => "c",
-        SkillSourceKind::Custom(_) => return None,
-    };
-
     let mut alias_ordered_entries = entries.to_vec();
     alias_ordered_entries.sort_by_key(|entry| entry.alias_root_order().unwrap_or(usize::MAX));
     let roots = match source {
@@ -1005,7 +998,7 @@ pub(crate) fn build_alias_plan(entries: &[&SkillCatalogEntry]) -> Option<AliasPl
     };
     let roots = roots.iter().map(String::as_str).collect::<Vec<_>>();
 
-    AliasPlan::build(prefix, &roots)
+    AliasPlan::build(source, &roots)
 }
 
 fn render_skill_locator_with_aliases(entry: &SkillCatalogEntry, plan: &AliasPlan) -> String {

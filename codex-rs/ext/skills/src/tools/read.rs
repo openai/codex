@@ -11,7 +11,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::aliases::SkillLocator;
 use crate::catalog::SkillResourceId;
+use crate::catalog::SkillSourceKind;
 use crate::provider::MAX_SKILL_RESOURCE_CONTENT_BYTES;
 use crate::provider::SkillReadContext;
 use crate::provider::SkillReadRequest;
@@ -36,7 +38,8 @@ const TOOL_NAME: &str = "read";
 
 #[derive(Deserialize, JsonSchema)]
 struct ReadArgs {
-    package: String,
+    #[schemars(with = "String")]
+    package: SkillLocator,
     resource: Option<String>,
     cursor: Option<String>,
 }
@@ -79,16 +82,21 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
         Box::pin(async move {
             let args: ReadArgs = parse_args(&call)?;
             let response_byte_budget = call.response_byte_budget(MAX_SKILL_RESPONSE_BYTES);
-            validate_handle("package", &args.package, MAX_HANDLE_BYTES)?;
+            validate_handle("package", args.package.as_str(), MAX_HANDLE_BYTES)?;
             if let Some(resource) = args.resource.as_deref() {
                 validate_handle("resource", resource, MAX_HANDLE_BYTES)?;
             }
 
+            let search_authorities: &[_] = match args.package.alias_source() {
+                Some(SkillSourceKind::Cloud) => &[SkillToolAuthoritySelector::Cloud],
+                Some(SkillSourceKind::Executor) => &[SkillToolAuthoritySelector::Executor],
+                Some(SkillSourceKind::Host | SkillSourceKind::Custom(_)) | None => &[
+                    SkillToolAuthoritySelector::Cloud,
+                    SkillToolAuthoritySelector::Executor,
+                ],
+            };
             let mut selected_skill = None;
-            for selector in [
-                super::SkillToolAuthoritySelector::Cloud,
-                super::SkillToolAuthoritySelector::Executor,
-            ] {
+            for &selector in search_authorities {
                 let catalog = self.context.catalog(&call.turn_id, selector).await;
                 let alias_plan = build_alias_plan(
                     &catalog
@@ -99,11 +107,11 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                 );
                 if let Some(entry) = catalog.entries.into_iter().find(|entry| {
                     entry.enabled
-                        && (entry.id.0 == args.package
+                        && (entry.id.0 == args.package.as_str()
                             || alias_plan
                                 .as_ref()
                                 .and_then(|plan| plan.shorten(&entry.id.0))
-                                .is_some_and(|alias| alias == args.package))
+                                .is_some_and(|alias| alias == args.package.as_str()))
                         && SkillToolAuthority::from_authority(&entry.authority)
                             .is_some_and(|authority| authority.selector() == selector)
                 }) {
