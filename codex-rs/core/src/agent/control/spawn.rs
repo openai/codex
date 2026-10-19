@@ -362,11 +362,7 @@ impl LocalAgentControl {
         {
             return Err(CodexErr::ThreadNotFound(thread_id));
         }
-        let evicted_environments = self.runtime.registry.evicted_environments(thread_id);
-        let mut environment_selections = evicted_environments
-            .as_ref()
-            .map(|environments| environments.selections.clone());
-        let evicted_environments = evicted_environments.map(|environments| environments.bindings);
+        let mut environment_selections = self.runtime.registry.evicted_environments(thread_id);
 
         let stored_thread = state
             .read_stored_thread(ReadThreadParams {
@@ -422,8 +418,7 @@ impl LocalAgentControl {
                     "cannot resume multi-agent v2 child {thread_id} with the current parent settings"
                 ))
             })?;
-            let environments = parent.session.inherited_environment_snapshot().await;
-            Some((parent, environments))
+            Some((parent, turn.initial_environments.clone()))
         } else {
             None
         };
@@ -495,11 +490,6 @@ impl LocalAgentControl {
                 )));
             }
             if let Some(selections) = environment_selections.as_mut() {
-                let parent_selections = parent_environments.all_selections();
-                let ready_parent = parent_environments.refresh_readiness();
-                let ready_evicted = evicted_environments
-                    .as_ref()
-                    .map(TurnEnvironmentSnapshot::refresh_readiness);
                 for selection in selections {
                     let environment_id = &selection.environment_id;
                     let invalid_environment = |reason: &str| {
@@ -507,22 +497,17 @@ impl LocalAgentControl {
                             "cannot resume multi-agent v2 child {thread_id}: cached environment {environment_id} {reason}"
                         ))
                     };
-                    // A changed parent selection does not revoke the child's retained binding.
-                    // If the parent still configures this workspace, keep enforcing its current
-                    // roots and permissions rather than restoring superseded authority.
-                    let owner_environments = if parent_selections.iter().any(|parent_selection| {
-                        parent_selection.environment_id == selection.environment_id
-                            && parent_selection.cwd == selection.cwd
-                    }) {
-                        &ready_parent
-                    } else {
-                        ready_evicted.as_ref().unwrap_or(&ready_parent)
-                    };
-                    let owner_environment = owner_environments
+                    // Matching the attachment also keeps startup on the captured owner executor.
+                    let owner_environment = parent_environments
                         .turn_environments()
-                        .find(|environment| environment.selection.has_same_workspace(selection))
+                        .find(|environment| {
+                            let parent_selection = &environment.selection;
+                            parent_selection.environment_id == selection.environment_id
+                                && parent_selection.cwd == selection.cwd
+                                && parent_selection.workspace_roots == selection.workspace_roots
+                        })
                         .ok_or_else(|| {
-                            invalid_environment("has no matching ready environment binding")
+                            invalid_environment("no longer matches a ready parent environment")
                         })?;
                     let owner_config = owner_environment.config();
                     let child_config = match &selection.config {
@@ -584,24 +569,14 @@ impl LocalAgentControl {
                 }
             }
             (
-                Some(
-                    evicted_environments
-                        .as_ref()
-                        .unwrap_or(parent_environments)
-                        .clone(),
-                ),
+                Some(parent_environments.clone()),
                 Some(Arc::clone(&parent.session.services.exec_policy)),
                 Some(parent.client_mcp_extensions()),
             )
         } else {
             (
-                match &evicted_environments {
-                    Some(environments) => Some(environments.clone()),
-                    None => {
-                        self.inherited_environments_for_source(&state, Some(&session_source))
-                            .await
-                    }
-                },
+                self.inherited_environments_for_source(&state, Some(&session_source))
+                    .await,
                 self.inherited_exec_policy_for_source(&state, Some(&session_source), &config)
                     .await,
                 None,

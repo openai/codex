@@ -1449,7 +1449,7 @@ async fn serve_environment_info(listener: TcpListener) {
     send_environment_info(&mut websocket).await;
 }
 
-pub(super) async fn serve_environment_with_agents_md(
+async fn serve_environment_with_agents_md(
     listener: TcpListener,
     contents: &str,
     attach: tokio::sync::oneshot::Receiver<()>,

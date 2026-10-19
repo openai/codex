@@ -651,7 +651,14 @@ impl LocalAgentControl {
         };
 
         let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
-        Some(parent_thread.session.inherited_environment_snapshot().await)
+        Some(
+            parent_thread
+                .session
+                .services
+                .turn_environments
+                .snapshot()
+                .await,
+        )
     }
 
     async fn inherited_exec_policy_for_source(

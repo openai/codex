@@ -232,8 +232,6 @@ pub enum Feature {
     ModelCatalogInContext,
     /// Inherit client-defined dynamic tools in fresh V2 subagents.
     MultiAgentV2DynamicTools,
-    /// Inherit configured thread environments instead of temporary turn selections.
-    SubagentThreadEnvironments,
     /// Use each subagent model's default context window and auto-compaction threshold.
     SubagentDefaultContextLimits,
     /// Keep sampling through reasoning and commentary boundaries when agent mail arrives.
@@ -1511,12 +1509,6 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::MultiAgentV2DynamicTools,
         key: "multi_agent_v2_dynamic_tools",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::SubagentThreadEnvironments,
-        key: "subagent_thread_environments",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
