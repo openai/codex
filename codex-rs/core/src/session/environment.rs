@@ -23,6 +23,7 @@ use crate::session::session::SessionConfiguration;
 use crate::session::session::SessionSettingsUpdate;
 
 /// Defaults for environments that inherit their configuration from the running turn.
+#[derive(Clone)]
 pub(crate) struct ThreadEnvironmentDefaults {
     pub(crate) common: EnvironmentConfig,
     // Chosen once when the session starts; it does not apply to remote environments.
@@ -349,6 +350,11 @@ impl Session {
             }
         }
 
+        if update_future {
+            self.services
+                .turn_environments
+                .update_configured_selections(&future);
+        }
         state.session_configuration.environments = future;
         if update_current {
             // Invalidate MCP before installed configuration can wake a waiting turn.

@@ -289,6 +289,7 @@ impl StepContext {
                 mode_instructions: None,
             },
             turn: Arc::clone(&turn),
+            inherited_environments: environments.clone(),
             environments,
             selected_capability_roots: Vec::new(),
             executor_capability_discovery: None,

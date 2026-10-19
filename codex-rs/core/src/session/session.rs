@@ -1483,6 +1483,7 @@ impl Session {
                 inherited_environments.clone(),
                 config.features.enabled(Feature::DeferredExecutor),
             ));
+            turn_environments.update_configured_selections(environment_selections);
             turn_environments.update_selections(environment_selections);
             session_configuration.environments = turn_environments.selections();
             let resolved_environments = turn_environments.snapshot().await;

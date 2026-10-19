@@ -126,8 +126,10 @@ async fn capability_roots_follow_attachments_through_configuration_changes() {
     ));
 }
 
+#[test_case::test_case(false; "standalone startup")]
+#[test_case::test_case(true; "configured startup")]
 #[tokio::test]
-async fn unpolled_snapshot_does_not_delay_canceling_a_removed_environment() {
+async fn unpolled_snapshot_does_not_delay_canceling_a_removed_environment(shared_startup: bool) {
     let cwd = PathUri::from_abs_path(&AbsolutePathBuf::current_dir().expect("cwd"));
     let selection = TurnEnvironmentSelection {
         selected_capability_roots: Default::default(),
@@ -144,6 +146,9 @@ async fn unpolled_snapshot_does_not_delay_canceling_a_removed_environment() {
         TurnEnvironmentSnapshot::default(),
         /*non_blocking_snapshots*/ false,
     );
+    if shared_startup {
+        environments.update_configured_selections(std::slice::from_ref(&selection));
+    }
     environments.update_selections(&[selection]);
     let starting = environments
         .snapshot()
@@ -208,7 +213,7 @@ async fn updating_another_environment_retries_the_executor_without_canceling_pen
         (
             failing.resolution.clone(),
             failing.pending_completion.as_ref().unwrap().subscribe(),
-            failing.owner_config_result.clone().unwrap(),
+            pending_configuration(failing.pending_completion.as_ref().unwrap()),
         )
     };
 
@@ -218,9 +223,9 @@ async fn updating_another_environment_retries_the_executor_without_canceling_pen
 
     local.config = EnvironmentConfigState::Ready(tests::test_environment_config());
     environments.update_selections(&[local.clone(), pending.clone()]);
-    let (second_attempt, _, second_owner) = current();
+    let (second_attempt, second_config, _) = current();
     assert!(!first_attempt.ptr_eq(&second_attempt));
-    assert!(original_owner.ptr_eq(&second_owner));
+    assert!(original_config.same_channel(&second_config));
     assert!(second_attempt.await.is_err());
     assert!(original_config.borrow().is_none());
 

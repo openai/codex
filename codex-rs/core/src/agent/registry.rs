@@ -1,4 +1,5 @@
 use crate::agent::types::AgentMetadata;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::AgentErrorContext;
@@ -37,9 +38,16 @@ struct ActiveAgents {
     nickname_reset_count: usize,
 }
 
+/// Thread defaults and executor bindings retained while a child's runtime is unloaded.
+#[derive(Clone)]
+pub(crate) struct EvictedEnvironments {
+    pub(crate) selections: Vec<TurnEnvironmentSelection>,
+    pub(crate) bindings: TurnEnvironmentSnapshot,
+}
+
 struct RegisteredAgent {
     path: String,
-    evicted_environments: Option<Vec<TurnEnvironmentSelection>>,
+    evicted_environments: Option<EvictedEnvironments>,
 }
 
 impl RegisteredAgent {
@@ -174,7 +182,7 @@ impl AgentRegistry {
     pub(crate) fn save_evicted_environments(
         &self,
         thread_id: ThreadId,
-        environments: Vec<TurnEnvironmentSelection>,
+        environments: EvictedEnvironments,
     ) {
         let mut active_agents = self
             .active_agents
@@ -185,10 +193,7 @@ impl AgentRegistry {
         }
     }
 
-    pub(crate) fn evicted_environments(
-        &self,
-        thread_id: ThreadId,
-    ) -> Option<Vec<TurnEnvironmentSelection>> {
+    pub(crate) fn evicted_environments(&self, thread_id: ThreadId) -> Option<EvictedEnvironments> {
         let active_agents = self
             .active_agents
             .lock()

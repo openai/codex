@@ -1175,9 +1175,12 @@ async fn cancelled_v2_send_finishes_reload_registration() {
             .unwrap(),
         child_id,
     );
-    assert_eq!(
-        control.runtime.registry.evicted_environments(child_id),
-        None
+    assert!(
+        control
+            .runtime
+            .registry
+            .evicted_environments(child_id)
+            .is_none()
     );
     // Evict and reload again with the single child slot. This also catches a leaked
     // pin or pending residency reservation left behind by the cancelled sender.

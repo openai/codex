@@ -189,14 +189,27 @@ async fn next_step_waits_for_environment_publication_before_capturing() {
             .turn_environments
             .update_selections(&selections);
     }
+    {
+        // Thread attachments publish under state independently of active-turn settings.
+        // A capture waiting for that publication must not retain the previous attachments.
+        let mut state = session.state.lock().await;
+        let mut context = std::task::Context::from_waker(futures::task::noop_waker_ref());
+        assert!(std::future::Future::poll(capture.as_mut(), &mut context).is_pending());
+        session
+            .services
+            .turn_environments
+            .update_configured_selections(&selections);
+        state.session_configuration.environments = selections.clone();
+    }
 
     let step = capture.await.expect("capture after publication");
     assert_eq!(
         (
             step.settings.model_info.slug.as_str(),
             step.environments.primary().map(TurnEnvironment::cwd),
+            step.inherited_environments.all_selections(),
         ),
-        ("next-step-model", Some(&next_cwd)),
+        ("next-step-model", Some(&next_cwd), selections),
     );
     session.abort_all_tasks(TurnAbortReason::Interrupted).await;
 }
@@ -409,6 +422,7 @@ async fn activation_fixture(models: Vec<ModelInfo>) -> ActivationFixture {
     let (models, lookup) = GatedModelsManager::new(models);
     mutable.services.models_manager = models;
     for feature in [
+        Feature::SubagentThreadEnvironments,
         Feature::StepModelSwitching,
         Feature::FastMode,
         Feature::TokenBudget,
