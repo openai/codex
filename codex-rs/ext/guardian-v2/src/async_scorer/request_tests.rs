@@ -63,6 +63,17 @@ fn collect(history: &History, images: &[ContentItem]) -> CollectedTranscript {
 
 #[test]
 fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_images() {
+    let native = ResponseItem::AgentMessage {
+        id: Some(ResponseItemId::from_server("amsg_parent".to_owned())),
+        author: "/root".to_owned(),
+        recipient: "/root/worker".to_owned(),
+        content: vec![
+            codex_protocol::models::AgentMessageInputContent::EncryptedContent {
+                encrypted_content: "opaque-parent-restriction".to_owned(),
+            },
+        ],
+        internal_chat_message_metadata_passthrough: None,
+    };
     let mut images = [
         ImageReference::Inline {
             image_url: "data:image/png;base64,Zmlyc3Q=".to_owned(),
@@ -90,7 +101,11 @@ fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_image
             .collect::<Vec<_>>()
     };
     let mut history = History {
-        items: vec![responses::user_message_item("Inspect README.md.")],
+        items: vec![
+            responses::user_message_item("Inspect README.md."),
+            native.clone(),
+            native.clone(),
+        ],
         version: 1,
     };
     if let ResponseItem::Message { content, .. } = &mut history.items[0] {
@@ -106,6 +121,15 @@ fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_image
         vec![images[1].clone(), images[0].clone()]
     );
     assert!(first.input.iter().all(|item| item.id().is_some()));
+    assert_eq!(
+        first
+            .input
+            .iter()
+            .filter(|item| matches!(item.item, ResponseItem::AgentMessage { .. }))
+            .map(|item| item.item.clone())
+            .collect::<Vec<_>>(),
+        vec![native.clone()]
+    );
     let mut committed = first.input;
     // Keep the actual returned item, including the server ID and metadata.
     let output: ResponseItem =
@@ -117,6 +141,10 @@ fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_image
     history
         .items
         .push(responses::user_message_item("Inspect LICENSE next."));
+    history.items.push(native.clone());
+    let mut next_native = native.clone();
+    next_native.set_id(Some(ResponseItemId::from_server("amsg_next".to_owned())));
+    history.items.push(next_native.clone());
     // Source detail can differ from the normalized image already in classifier history.
     if let ContentItem::InputImage { detail, .. } = &mut images[0] {
         *detail = Some(ImageDetail::High);
@@ -140,7 +168,16 @@ fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_image
         input_images(&second.input[committed.len()..]),
         vec![images[2].clone()]
     );
-    assert_eq!(second.cursor.transcript_entry_count, 2);
+    assert_eq!(
+        second
+            .input
+            .iter()
+            .filter(|item| matches!(item.item, ResponseItem::AgentMessage { .. }))
+            .map(|item| item.item.clone())
+            .collect::<Vec<_>>(),
+        vec![native.clone(), next_native.clone()]
+    );
+    assert_eq!(second.cursor.transcript_entry_count, 6);
     let delta = serde_json::to_string(
         &second.input[committed.len()..]
             .iter()
@@ -149,7 +186,7 @@ fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_image
     )
     .unwrap();
     assert!(delta.contains("TRANSCRIPT DELTA START"));
-    assert!(delta.contains("[2] user: Inspect LICENSE next."));
+    assert!(delta.contains("[4] user: Inspect LICENSE next."));
     assert!(!delta.contains("[1] user: Inspect README.md."));
     assert!(delta.contains("Do not write files."));
     assert!(delta.contains("read_file"));
@@ -162,6 +199,15 @@ fn preparation_preserves_committed_prefix_and_selects_only_new_entries_and_image
         .prepare_retained(&evidence, &mut ConversationState::default(), INPUT_BUDGET)
         .unwrap();
     assert_eq!(input_images(&rebuilt.input), input_images(&second.input));
+    assert_eq!(
+        rebuilt
+            .input
+            .iter()
+            .filter(|item| matches!(item.item, ResponseItem::AgentMessage { .. }))
+            .map(|item| item.item.clone())
+            .collect::<Vec<_>>(),
+        vec![native, next_native]
+    );
 }
 
 #[test]

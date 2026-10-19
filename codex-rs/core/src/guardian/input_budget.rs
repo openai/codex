@@ -85,12 +85,14 @@ pub(crate) async fn check_pending(session: &Session, turn: &TurnContext) -> Code
     let maximum = effective_input_token_limit(turn.model_info(), turn.config.model_context_window)
         .saturating_sub(super::request_budget::INPUT_TOKEN_MARGIN);
     let mut context = pending.0.clone();
-    context.retain_new_instructions(
-        &session
-            .clone_history()
-            .await
-            .for_prompt_annotated(&turn.model_info().input_modalities),
-    );
+    let history = session
+        .clone_history()
+        .await
+        .for_prompt_annotated(&turn.model_info().input_modalities);
+    context.retain_new_instructions(&history);
+    context
+        .retain_new_agent_messages(&history)
+        .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
     if context.estimated_tokens().saturating_add(minimum_prefix) > maximum {
         context
             .enforce_budget(
@@ -153,6 +155,9 @@ pub(crate) async fn finalize(
     // Use the history that will actually reach the model. Recompute after every
     // compaction retry; evidence removed by compaction must be delivered again.
     context.retain_new_instructions(&history);
+    context
+        .retain_new_agent_messages(&history)
+        .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
     let prompt = build_prompt(
         history
             .into_iter()

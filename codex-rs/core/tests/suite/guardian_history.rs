@@ -12,12 +12,14 @@ use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
 use codex_history::RolloutItem;
 use codex_login::CodexAuth;
+use codex_protocol::AgentPath;
 use codex_protocol::TranscriptFormat;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::ImageReference;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
@@ -408,7 +410,7 @@ async fn guardian_history_uses_deltas_between_eviction_batches(
         .build_with_auto_env(&server)
         .await?;
     let plan = r#"{"plan":[{"step":"inspect the repository","status":"completed"}]}"#;
-    let mut inspection: Vec<_> = (0..130)
+    let mut inspection: Vec<_> = (0..155)
         .map(|index| ev_function_call(&format!("initial-{index}"), "update_plan", plan))
         .collect();
     inspection.push(ev_completed("inspection"));
@@ -436,8 +438,10 @@ async fn guardian_history_uses_deltas_between_eviction_batches(
     let mut responses = Vec::new();
     for index in 0..3 {
         if index == 1 {
-            // Force eviction after the first review has saved its transcript cursor.
-            let mut traffic: Vec<_> = (0..130)
+            // Evict the older prefix after a completed review, while retaining the
+            // recent encrypted reply within the transcript's recent-entry limit.
+            // Full fallback must not admit that reply twice.
+            let mut traffic: Vec<_> = (0..10)
                 .map(|index| ev_function_call(&format!("later-{index}"), "update_plan", plan))
                 .collect();
             traffic.push(ev_completed("more-inspection"));
@@ -468,7 +472,22 @@ async fn guardian_history_uses_deltas_between_eviction_batches(
     }
     responses.push(sse(vec![ev_completed("done")]));
     let reviews = mount_sse_sequence(&server, responses).await;
-    test.submit_text_turn("Continue inspecting.").await?;
+    test.codex
+        .submit(Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new_encrypted(
+                AgentPath::root(),
+                AgentPath::root().join("worker").expect("worker path"),
+                Vec::new(),
+                "opaque-parent-restriction".into(),
+                /*trigger_turn*/ true,
+            ),
+            start_options: Default::default(),
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     let requests = reviews.requests();
     let guardian_requests = requests
         .iter()
@@ -479,7 +498,13 @@ async fn guardian_history_uses_deltas_between_eviction_batches(
         .map(|request| {
             request
                 .message_input_text_groups("user")
-                .last()
+                .into_iter()
+                .rfind(|group| {
+                    group.iter().any(|text| {
+                        text.contains(">>> TRANSCRIPT START\n")
+                            || text.contains(">>> TRANSCRIPT DELTA START\n")
+                    })
+                })
                 .expect("Guardian review prompt")
                 .join("")
         })
@@ -515,9 +540,24 @@ async fn guardian_history_uses_deltas_between_eviction_batches(
         assert!(prompts[1].contains(restriction));
     }
     assert!(prompts[2].contains("review-2"));
-    assert_eq!(
-        guardian_requests[1].body_json()["client_metadata"]["thread_id"],
-        guardian_requests[2].body_json()["client_metadata"]["thread_id"]
+    let expected_messages = guardian_requests[0].inputs_of_type("agent_message");
+    assert_eq!(expected_messages.len(), 1);
+    assert!(expected_messages[0]["id"].is_string());
+    for request in &guardian_requests {
+        assert_eq!(request.inputs_of_type("agent_message"), expected_messages);
+        assert_eq!(
+            request.body_json()["client_metadata"]["thread_id"],
+            guardian_requests[0].body_json()["client_metadata"]["thread_id"],
+            "the completed reviewer is reused across full-transcript fallback",
+        );
+    }
+    let history = test.codex.conversation_history_snapshot().await;
+    assert!(
+        history.review_items().any(|item| {
+            item.id()
+                .is_some_and(|id| Some(id.as_str()) == expected_messages[0]["id"].as_str())
+        }),
+        "full fallback must still select the encrypted reply after eviction"
     );
     test.codex.shutdown_and_wait().await?;
     Ok(())

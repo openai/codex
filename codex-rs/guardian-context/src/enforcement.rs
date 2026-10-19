@@ -3,12 +3,16 @@
 //! hosts may shorten historical instructions after compaction cannot make room.
 //! Every reduction reserves an omission notice and preserves source order.
 //! JSON recovery shortens only the body; line mode shortens the whole rendered entry.
+//! Native agent messages are reconciled with current history before budgeting.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TruncationPolicy;
 
 use crate::ComposedContext;
@@ -92,6 +96,70 @@ pub enum HistoryTruncation {
 }
 
 impl ComposedContext {
+    /// Omits native agent messages already present in the effective reviewer history
+    /// or earlier in this input. Hosts must repeat this check after compaction;
+    /// missing evidence may be delivered again. Identity excludes host annotations.
+    /// Conflicting payloads under one ID reject the input without changing it.
+    pub fn retain_new_agent_messages(
+        &mut self,
+        reviewer_history: &[ResponseItemEnvelope],
+    ) -> Result<(), SectionError> {
+        if !self.sections.iter().any(|section| {
+            matches!(
+                &section.delivery,
+                SectionDelivery::Message(message)
+                    if matches!(message.content.item, ResponseItem::AgentMessage { .. })
+            )
+        }) {
+            return Ok(());
+        }
+        let mut seen = HashMap::new();
+        let mut duplicates = HashSet::new();
+        let pending =
+            self.sections
+                .iter()
+                .enumerate()
+                .filter_map(|(index, section)| match &section.delivery {
+                    SectionDelivery::Message(message) => Some((Some(index), &message.content.item)),
+                    SectionDelivery::UserContent(_) => None,
+                });
+        for (index, item) in reviewer_history
+            .iter()
+            .map(|item| (None, &item.item))
+            .chain(pending)
+        {
+            let ResponseItem::AgentMessage {
+                id: Some(id),
+                author,
+                recipient,
+                content,
+                ..
+            } = item
+            else {
+                continue;
+            };
+            if id.is_empty() {
+                continue;
+            }
+            let payload = (author, recipient, content);
+            if let Some(previous) = seen.insert(id, payload) {
+                if previous != payload {
+                    return Err(SectionError::ConflictingAgentMessage);
+                }
+                if let Some(index) = index {
+                    duplicates.insert(index);
+                }
+            }
+        }
+        let mut index = 0;
+        self.sections.retain(|_| {
+            let retain = !duplicates.contains(&index);
+            index += 1;
+            retain
+        });
+        Ok(())
+    }
+
     /// Applies host image admission before aggregate selection, preserving section
     /// identity and each retained item's selection policy.
     pub fn retain_images(
