@@ -6,7 +6,7 @@ Buffer {
     area: Rect { x: 0, y: 0, width: 80, height: 12 },
     content: [
         "/ T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / / ",
-        "⚠ `transcript_v2` is deprecated.                                                ",
+        "⚠ `legacy_option` is deprecated.                                                ",
         "Remove it from your configuration.                                              ",
         "                                                                                ",
         "                                                                                ",

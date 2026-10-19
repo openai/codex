@@ -101,7 +101,7 @@ pub enum Feature {
     ApiKeyCyberAccessPrograms,
     /// Enable Daybreak controls and automatic access-program selection in CLI clients.
     CliDaybreak,
-    /// Deprecated no-op; use `tui.fullscreen_transcript` instead.
+    /// Removed no-op; use `tui.fullscreen_transcript` instead.
     TranscriptV2,
     // Stable.
     /// Enable the default shell tool.
@@ -1052,7 +1052,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TranscriptV2,
         key: "transcript_v2",
-        stage: Stage::Deprecated,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     // Stable features.

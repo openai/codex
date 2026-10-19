@@ -47,7 +47,7 @@ async fn deprecation_delivery_deduplicates_retained_transcript() -> Result<()> {
     tui.set_owned_screen(/*owned*/ false)?;
     let notice = ServerNotification::DeprecationNotice(
         codex_app_server_protocol::DeprecationNoticeNotification {
-            summary: "`transcript_v2` is deprecated.".into(),
+            summary: "`legacy_option` is deprecated.".into(),
             details: Some("Remove it from your configuration.".into()),
         },
     );
@@ -86,8 +86,8 @@ async fn deprecation_delivery_deduplicates_retained_transcript() -> Result<()> {
     insta::assert_snapshot!("deduplicated_deprecation_transcript", format!("{buffer:?}"));
 
     for (summary, details) in [
-        ("`transcript_v2` is deprecated.", None),
-        ("`transcript_v2` is deprecated.", Some("Updated guidance.")),
+        ("`legacy_option` is deprecated.", None),
+        ("`legacy_option` is deprecated.", Some("Updated guidance.")),
         ("Another deprecated setting.", Some("Updated guidance.")),
     ] {
         app.chat_widget.handle_server_notification(
@@ -109,7 +109,7 @@ async fn deprecation_delivery_deduplicates_retained_transcript() -> Result<()> {
             .map(|entry| entry.details)
             .collect::<Vec<_>>(),
         vec![
-            "`transcript_v2` is deprecated.\nRemove it from your configuration.\n\n`transcript_v2` is deprecated.\nUpdated guidance.",
+            "`legacy_option` is deprecated.\nRemove it from your configuration.\n\n`legacy_option` is deprecated.\nUpdated guidance.",
             "Another deprecated setting.\nUpdated guidance.",
         ],
     );

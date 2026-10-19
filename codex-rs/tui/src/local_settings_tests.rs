@@ -151,6 +151,16 @@ fast_default_opt_out = true
     ] {
         let home = tempfile::tempdir()?;
         std::fs::write(home.path().join("config.toml"), config_text)?;
+        let cli_overrides = vec![
+            ("tui.disable_paste_burst".into(), true.into()),
+            ("tui.right_click_paste".into(), "on".into()),
+            ("tui.mouse_scroll_speed".into(), 1.5.into()),
+            // The removed flag must not override the TUI preference.
+            (
+                "features.transcript_v2".into(),
+                config_text.is_empty().into(),
+            ),
+        ];
         let config = ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
             .strict_config(true)
@@ -158,32 +168,16 @@ fast_default_opt_out = true
                 ignore_project_config: true,
                 ..LoaderOverrides::without_managed_config_for_tests()
             })
-            .cli_overrides(vec![
-                ("tui.disable_paste_burst".into(), true.into()),
-                ("tui.right_click_paste".into(), "on".into()),
-                ("tui.mouse_scroll_speed".into(), 1.5.into()),
-                // The deprecated flag must not override or migrate into the TUI preference.
-                (
-                    "features.transcript_v2".into(),
-                    config_text.is_empty().into(),
-                ),
-            ])
+            .cli_overrides(cli_overrides.clone())
             .build()
             .await?;
         assert_eq!(config.startup_warnings, Vec::<String>::new());
         assert_eq!(config.tui_mouse_scroll_speed, Some(1.5));
+        assert!(config.tui_fullscreen_transcript);
         let bootstrap = crate::legacy_core::config::load_config_toml_with_layer_stack(
             home.path(),
             /*cwd*/ None,
-            vec![
-                ("tui.disable_paste_burst".into(), true.into()),
-                ("tui.right_click_paste".into(), "on".into()),
-                ("tui.mouse_scroll_speed".into(), 1.5.into()),
-                (
-                    "features.transcript_v2".into(),
-                    config_text.is_empty().into(),
-                ),
-            ],
+            cli_overrides,
             codex_config::ConfigLoadOptions {
                 loader_overrides: LoaderOverrides {
                     ignore_project_config: true,
@@ -198,14 +192,7 @@ fast_default_opt_out = true
             LocalSettings::from_bootstrap(&bootstrap, config.codex_home.clone())?,
             LocalSettings::from(&config),
         );
-        assert_eq!(
-            config
-                .features
-                .legacy_feature_usages()
-                .map(|usage| usage.alias.as_str())
-                .collect::<Vec<_>>(),
-            vec!["features.transcript_v2"],
-        );
+        assert_eq!(config.features.legacy_feature_usages().count(), 1);
     }
     Ok(())
 }
