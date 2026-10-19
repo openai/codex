@@ -1,5 +1,236 @@
 use super::*;
+use crate::app_event::HistoryLookupResponse;
 use pretty_assertions::assert_eq;
+
+#[tokio::test]
+async fn initial_prompt_recall_precedes_cross_session_history() {
+    for submit_follow_up in [false, true] {
+        let (mut chat, mut events, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        let thread_id = ThreadId::new();
+        chat.thread_id = Some(thread_id);
+        chat.bottom_pane
+            .set_history_metadata(thread_id, /*log_id*/ 7, /*entry_count*/ 1);
+        chat.initial_user_message =
+            create_initial_user_message(Some("CURRENT_A".into()), Vec::new(), Vec::new());
+
+        chat.submit_initial_user_message_if_pending();
+        chat.submit_initial_user_message_if_pending();
+        assert_matches!(next_submit_op(&mut ops), Op::UserTurn { items, .. }
+            if items == vec![UserInput::Text { text: "CURRENT_A".into(), text_elements: Vec::new() }]);
+        assert_no_submit_op(&mut ops);
+        handle_turn_started(&mut chat, "initial");
+        handle_turn_completed(&mut chat, "initial", /*duration_ms*/ None);
+
+        let mut expected = vec!["CURRENT_A"];
+        if submit_follow_up {
+            chat.handle_paste("CURRENT_B".into());
+            chat.handle_key_event(KeyCode::Enter.into());
+            assert_matches!(next_submit_op(&mut ops), Op::UserTurn { .. });
+            handle_turn_started(&mut chat, "follow-up");
+            handle_turn_completed(&mut chat, "follow-up", /*duration_ms*/ None);
+            expected.insert(0, "CURRENT_B");
+        }
+        let persisted = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::AppendMessageHistoryEntry {
+                    thread_id: owner,
+                    text,
+                } => {
+                    assert_eq!(owner, thread_id);
+                    Some(text)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            persisted,
+            expected.iter().rev().copied().collect::<Vec<_>>()
+        );
+
+        for text in expected {
+            chat.handle_key_event(KeyCode::Up.into());
+            assert_eq!(chat.bottom_pane.composer_text(), text);
+            assert!(
+                events.try_recv().is_err(),
+                "local recall must not fetch shared history"
+            );
+        }
+        if submit_follow_up {
+            assert_chatwidget_snapshot!(
+                "initial_prompt_recalled_composer",
+                super::helpers::normalize_snapshot_paths(render_bottom_popup(
+                    &chat, /*width*/ 80
+                ))
+            );
+        }
+        chat.handle_key_event(KeyCode::Up.into());
+        let AppEvent::LookupMessageHistoryEntry {
+            thread_id: owner,
+            log_id,
+            offset,
+        } = events
+            .try_recv()
+            .expect("shared history lookup after current prompts")
+        else {
+            panic!("expected shared history lookup");
+        };
+        assert_eq!((owner, log_id, offset), (thread_id, 7, 0));
+        chat.bottom_pane
+            .on_history_lookup_response(HistoryLookupResponse::Entry {
+                log_id,
+                offset,
+                entry: Some("FOREIGN_X".into()),
+            });
+        assert_eq!(chat.bottom_pane.composer_text(), "FOREIGN_X");
+    }
+}
+
+#[tokio::test]
+async fn initial_prompt_image_preparation_preserves_recall_metadata() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("image.png");
+    image::RgbImage::new(/*width*/ 1, /*height*/ 1)
+        .save(&path)
+        .unwrap();
+    let placeholder = "[Image #1]";
+    for (input, elements, recalled_text, placeholder_start) in [
+        (
+            "describe",
+            Vec::new(),
+            "describe [Image #1]",
+            "describe ".len(),
+        ),
+        (
+            "[Image #1] describe",
+            vec![TextElement::new(
+                (0..placeholder.len()).into(),
+                Some(placeholder.into()),
+            )],
+            "[Image #1] describe",
+            0,
+        ),
+    ] {
+        let (mut chat, mut events, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        let thread_id = ThreadId::new();
+        chat.thread_id = Some(thread_id);
+        chat.bottom_pane
+            .set_history_metadata(thread_id, /*log_id*/ 7, /*entry_count*/ 1);
+        chat.snapshot_local_images = true;
+        let text_elements = vec![TextElement::new(
+            (placeholder_start..placeholder_start + placeholder.len()).into(),
+            Some(placeholder.into()),
+        )];
+        chat.initial_user_message =
+            create_initial_user_message(Some(input.into()), vec![path.clone()], elements);
+
+        chat.submit_initial_user_message_if_pending();
+        assert!(chat.pending_image_submission.is_some());
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let AppEvent::ImagesPrepared(id) = events.recv().await.unwrap() {
+                    chat.on_images_prepared(id);
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("initial image preparation");
+        assert_matches!(next_submit_op(&mut ops), Op::UserTurn { items, .. }
+        if items.iter().any(|item| matches!(item, UserInput::Text { text, .. } if text == input)));
+        chat.submit_initial_user_message_if_pending();
+        assert_no_submit_op(&mut ops);
+        handle_turn_started(&mut chat, "initial");
+        handle_turn_completed(&mut chat, "initial", /*duration_ms*/ None);
+        while events.try_recv().is_ok() {}
+
+        chat.handle_key_event(KeyCode::Up.into());
+        let recalled = chat.bottom_pane.composer_draft_snapshot();
+        assert_eq!(
+            (
+                recalled.text,
+                recalled.text_elements,
+                recalled.local_images,
+                recalled.pending_pastes
+            ),
+            (
+                recalled_text.into(),
+                text_elements,
+                vec![LocalImageAttachment {
+                    placeholder: placeholder.into(),
+                    path: path.clone()
+                }],
+                Vec::new()
+            ),
+        );
+        chat.handle_key_event(KeyCode::Up.into());
+        assert_matches!(
+            events.try_recv(),
+            Ok(AppEvent::LookupMessageHistoryEntry { offset: 0, .. })
+        );
+
+        chat.handle_key_event(KeyCode::Enter.into());
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let AppEvent::ImagesPrepared(id) = events.recv().await.unwrap() {
+                    chat.on_images_prepared(id);
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("recalled image preparation");
+        assert_matches!(next_submit_op(&mut ops), Op::UserTurn { items, .. }
+        if items.iter().any(|item| matches!(item, UserInput::Image { .. })));
+    }
+}
+
+#[tokio::test]
+async fn initial_prompt_queued_before_session_is_recalled_once_after_dispatch() {
+    let (mut chat, mut events, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.initial_user_message = Some("CURRENT_A".into());
+    chat.submit_initial_user_message_if_pending();
+    assert_no_submit_op(&mut ops);
+    assert_eq!(chat.queued_user_message_texts(), vec!["CURRENT_A"]);
+
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.bottom_pane
+        .set_history_metadata(thread_id, /*log_id*/ 7, /*entry_count*/ 1);
+    assert!(chat.maybe_send_next_queued_input());
+    assert_matches!(next_submit_op(&mut ops), Op::UserTurn { .. });
+    handle_turn_started(&mut chat, "initial");
+    handle_turn_completed(&mut chat, "initial", /*duration_ms*/ None);
+    while events.try_recv().is_ok() {}
+
+    chat.handle_key_event(KeyCode::Up.into());
+    assert_eq!(chat.bottom_pane.composer_text(), "CURRENT_A");
+    chat.handle_key_event(KeyCode::Up.into());
+    assert_matches!(
+        events.try_recv(),
+        Ok(AppEvent::LookupMessageHistoryEntry { offset: 0, .. })
+    );
+}
+
+#[tokio::test]
+async fn rejected_initial_prompt_is_not_recorded_in_recall_history() {
+    let (mut chat, mut events, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.bottom_pane
+        .set_history_metadata(thread_id, /*log_id*/ 7, /*entry_count*/ 1);
+    // A disconnected submission channel rejects the initial prompt synchronously.
+    ops.close();
+    chat.initial_user_message = Some("CURRENT_A".into());
+    chat.submit_initial_user_message_if_pending();
+    assert_no_submit_op(&mut ops);
+    while events.try_recv().is_ok() {}
+
+    chat.handle_key_event(KeyCode::Up.into());
+    assert_matches!(
+        events.try_recv(),
+        Ok(AppEvent::LookupMessageHistoryEntry { offset: 0, .. })
+    );
+}
 
 #[tokio::test]
 async fn startup_submission_waits_for_session_and_sends_exactly_once() {

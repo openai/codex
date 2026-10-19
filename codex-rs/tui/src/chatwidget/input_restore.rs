@@ -2,6 +2,8 @@
 
 use std::collections::HashSet;
 
+use codex_protocol::models::local_image_label_text;
+
 use crate::bottom_pane::ComposerDraftSnapshot;
 use crate::bottom_pane::KillBufferSnapshot;
 
@@ -177,7 +179,46 @@ impl ChatWidget {
             return;
         }
         if let Some(user_message) = self.initial_user_message.take() {
-            self.submit_user_message(user_message);
+            // Command-line input bypasses the composer, which normally records local recall.
+            let mut entry = HistoryEntry {
+                text: user_message.text.clone(),
+                text_elements: user_message.text_elements.clone(),
+                local_image_paths: user_message
+                    .local_images
+                    .iter()
+                    .map(|image| image.path.clone())
+                    .collect(),
+                remote_image_urls: user_message.remote_image_urls.clone(),
+                mention_bindings: user_message.mention_bindings.clone(),
+                pending_pastes: Vec::new(),
+            };
+            // CLI images have no composer elements. Give recalled attachments owned placeholders
+            // so the composer retains them when the user submits the recalled prompt again.
+            for index in 0..entry.local_image_paths.len() {
+                let placeholder = local_image_label_text(entry.remote_image_urls.len() + index + 1);
+                if entry
+                    .text_elements
+                    .iter()
+                    .any(|element| element.placeholder(&entry.text) == Some(placeholder.as_str()))
+                {
+                    continue;
+                }
+                if !entry.text.is_empty() {
+                    entry.text.push(' ');
+                }
+                let start = entry.text.len();
+                entry.text.push_str(&placeholder);
+                entry.text_elements.push(TextElement::new(
+                    (start..entry.text.len()).into(),
+                    Some(placeholder),
+                ));
+            }
+            if self.submit_user_message_with_history_record(
+                user_message,
+                UserMessageHistoryRecord::UserMessageText,
+            ) {
+                self.bottom_pane.record_local_user_message_history(entry);
+            }
         }
     }
 

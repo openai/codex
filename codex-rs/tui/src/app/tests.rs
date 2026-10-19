@@ -963,6 +963,11 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
         }])
     );
 
+    for expected in ["follow-up after replay", "earlier prompt"] {
+        app.chat_widget.handle_key_event(KeyCode::Up.into());
+        assert_eq!(app.chat_widget.composer_text_with_pending(), expected);
+    }
+
     Ok(())
 }
 

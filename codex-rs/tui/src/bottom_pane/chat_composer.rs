@@ -5,6 +5,8 @@
 //! bursts, especially on Windows. Paste timing uses Tokio's clock so asynchronous flush deadlines
 //! and input classification share a clock, including in paused-time tests. Copy shortcuts and right
 //! clicks preserve selected draft text.
+//! Local recall retains full draft metadata for composer submissions and accepted command-line
+//! initial prompts; transcript replay seeds earlier prompts separately.
 //! When enabled, fullscreen right-click paste requires an editable composer without a selection,
 //! search, or blocking view. The app reads clipboard text asynchronously and delivers a normal
 //! paste only while the same thread, draft, and cursor remain eligible. Intervening input or focus
@@ -1241,6 +1243,10 @@ impl ChatComposer {
         };
         self.apply_history_search_result(result);
         true
+    }
+
+    pub(crate) fn record_local_user_message_history(&mut self, entry: HistoryEntry) {
+        self.history.record_local_submission(entry);
     }
 
     pub(crate) fn record_replayed_user_message_history(&mut self, entry: HistoryEntry) {
