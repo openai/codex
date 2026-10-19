@@ -13,27 +13,26 @@ use codex_protocol::protocol::FileSystemSpecialPath;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use codex_windows_sandbox::resolve_windows_deny_read_paths;
+use mxc_sdk::mxc_common::cmdline::CommandLineContext;
+use mxc_sdk::mxc_common::cmdline::CommandLineError;
+use mxc_sdk::mxc_common::cmdline::cmdline_from_argv_for_context;
+use mxc_sdk::mxc_common::filesystem_object::ExistingObjectComparison;
+use mxc_sdk::mxc_common::filesystem_object::compare_existing_filesystem_objects;
+use mxc_sdk::mxc_common::filesystem_object::normalize_object_conflicts;
+use mxc_sdk::mxc_common::logger::Logger;
+use mxc_sdk::mxc_common::logger::Mode;
+use mxc_sdk::mxc_common::models::BaseProcessUiConfig;
+use mxc_sdk::mxc_common::models::ContainerPolicy;
+use mxc_sdk::mxc_common::models::ExecutionRequest;
+use mxc_sdk::mxc_common::models::FallbackPolicy;
+use mxc_sdk::mxc_common::models::NetworkAction;
+use mxc_sdk::mxc_common::models::NetworkCidr;
+use mxc_sdk::mxc_common::models::NetworkEgressPolicy;
+use mxc_sdk::mxc_common::models::NetworkIngressPolicy;
+use mxc_sdk::mxc_common::models::NetworkPeer;
+use mxc_sdk::mxc_common::models::NetworkRule;
+use mxc_sdk::mxc_common::models::UiPolicy;
 use thiserror::Error;
-use wxc_common::cmdline::CommandLineContext;
-use wxc_common::cmdline::CommandLineError;
-use wxc_common::cmdline::cmdline_from_argv_for_context;
-use wxc_common::filesystem_object::ExistingObjectComparison;
-use wxc_common::filesystem_object::compare_existing_filesystem_objects;
-use wxc_common::filesystem_object::normalize_object_conflicts;
-use wxc_common::logger::Logger;
-use wxc_common::logger::Mode;
-use wxc_common::models::BaseProcessUiConfig;
-use wxc_common::models::ContainerPolicy;
-use wxc_common::models::ExecutionRequest;
-use wxc_common::models::FallbackPolicy;
-use wxc_common::models::NetworkAction;
-use wxc_common::models::NetworkCidr;
-use wxc_common::models::NetworkEgressPolicy;
-use wxc_common::models::NetworkIngressPolicy;
-use wxc_common::models::NetworkPeer;
-use wxc_common::models::NetworkPolicy;
-use wxc_common::models::NetworkRule;
-use wxc_common::models::UiPolicy;
 
 use crate::MxcCommand;
 
@@ -247,7 +246,7 @@ pub(super) fn build_request(
         ..Default::default()
     };
     if proxied {
-        // PSEC host loopback is bidirectional. This shape is supported only
+        // PSEC host loopback can be bidirectional. This shape is supported only
         // when the caller already allows local clients and servers. Keep
         // private-network ingress denied and allow no direct DNS bypass.
         egress.allow.push(NetworkRule {
@@ -279,7 +278,7 @@ pub(super) fn build_request(
             .to_str()
             .ok_or(PolicyError::NonUnicodeCommandCwd)?
             .to_owned(),
-        env,
+        env: (!env.is_empty()).then_some(env),
         policy: ContainerPolicy {
             capabilities: vec!["registryRead".to_owned()],
             readwrite_paths: unicode_paths(write)?,
@@ -288,12 +287,6 @@ pub(super) fn build_request(
             fallback: FallbackPolicy {
                 allow_dacl_mutation: false,
             },
-            default_network_policy: if egress_default == NetworkAction::Allow {
-                NetworkPolicy::Allow
-            } else {
-                NetworkPolicy::Block
-            },
-            allow_local_network: ingress_default == NetworkAction::Allow,
             network_egress: Some(egress),
             network_ingress: Some(NetworkIngressPolicy {
                 default: ingress_default,
