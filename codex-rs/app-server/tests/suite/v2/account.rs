@@ -3424,6 +3424,8 @@ async fn get_account_with_chatgpt() -> Result<()> {
 #[test_case("self_serve_business_prolite", AccountPlanType::SelfServeBusinessProLite; "business_prolite")]
 #[test_case("edu_plus", AccountPlanType::EduPlus; "edu_plus")]
 #[test_case("edu_pro", AccountPlanType::EduPro; "edu_pro")]
+#[test_case("sci", AccountPlanType::Sci; "sci")]
+#[test_case("sci_plus", AccountPlanType::SciPlus; "sci_plus")]
 #[tokio::test]
 async fn get_account_with_chatgpt_plan_variants_returns_plan_type(
     plan_type: &str,

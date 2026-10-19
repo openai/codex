@@ -229,6 +229,12 @@ mod tests {
                 .map(plan_type_display_name)
                 .join("\n")
         );
+        insta::assert_snapshot!(
+            [PlanType::Sci, PlanType::SciPlus]
+                .map(plan_type_display_name)
+                .join("\n"),
+            @"Academic Researchers\nAcademic Researchers Plus"
+        );
     }
 
     #[test]

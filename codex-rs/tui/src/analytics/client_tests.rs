@@ -333,6 +333,13 @@ async fn analytics_matches_app_account_routes_and_parameters() {
             vec![("group_by", "day")],
         ),
         (
+            "sci_plus",
+            Report::Usage,
+            Grouping::Model,
+            "usage/daily-workspace-user-token-usage-breakdown",
+            vec![("group_by", "day")],
+        ),
+        (
             "team",
             Report::Credits,
             Grouping::Speed,

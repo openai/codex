@@ -15,6 +15,7 @@ impl From<Option<PlanType>> for AccountKind {
     fn from(plan: Option<PlanType>) -> Self {
         match plan {
             None | Some(PlanType::Unknown) => Self::Unknown,
+            Some(PlanType::Sci | PlanType::SciPlus) => Self::Business,
             Some(plan) if plan.is_team_like() => Self::Business,
             Some(plan) if plan.is_workspace_account() => Self::Enterprise,
             Some(_) => Self::Consumer,

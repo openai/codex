@@ -56,7 +56,10 @@ fn cloud_config_eligible_auth(auth: &CodexAuth) -> bool {
     auth.uses_codex_backend()
         && (plan_type.is_business_like()
             || plan_type.is_education_like()
-            || plan_type == PlanType::Enterprise)
+            || matches!(
+                plan_type,
+                PlanType::Enterprise | PlanType::Sci | PlanType::SciPlus
+            ))
 }
 
 fn optional_bundle(bundle: CloudConfigBundle) -> Option<CloudConfigBundle> {

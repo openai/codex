@@ -92,6 +92,8 @@ impl PlanType {
             "education" | "edu" => Self::Known(KnownPlan::Edu),
             "edu_plus" => Self::Known(KnownPlan::EduPlus),
             "edu_pro" => Self::Known(KnownPlan::EduPro),
+            "sci" => Self::Known(KnownPlan::Sci),
+            "sci_plus" => Self::Known(KnownPlan::SciPlus),
             _ => Self::Unknown(raw.to_string()),
         }
     }
@@ -125,6 +127,9 @@ pub enum KnownPlan {
     EduPlus,
     #[serde(rename = "edu_pro")]
     EduPro,
+    Sci,
+    #[serde(rename = "sci_plus")]
+    SciPlus,
 }
 
 impl KnownPlan {
@@ -147,6 +152,8 @@ impl KnownPlan {
             Self::Edu => "Edu",
             Self::EduPlus => "Edu Plus",
             Self::EduPro => "Edu Pro",
+            Self::Sci => "Academic Researchers",
+            Self::SciPlus => "Academic Researchers Plus",
         }
     }
 
@@ -169,6 +176,8 @@ impl KnownPlan {
             Self::Edu => "edu",
             Self::EduPlus => "edu_plus",
             Self::EduPro => "edu_pro",
+            Self::Sci => "sci",
+            Self::SciPlus => "sci_plus",
         }
     }
 
@@ -186,6 +195,8 @@ impl KnownPlan {
                 | Self::Edu
                 | Self::EduPlus
                 | Self::EduPro
+                | Self::Sci
+                | Self::SciPlus
         )
     }
 }
@@ -240,6 +251,8 @@ mod tests {
             ("promax", KnownPlan::ProMax),
             ("edu_plus", KnownPlan::EduPlus),
             ("edu_pro", KnownPlan::EduPro),
+            ("sci", KnownPlan::Sci),
+            ("sci_plus", KnownPlan::SciPlus),
         ] {
             let expected = PlanType::Known(known);
             assert_eq!(PlanType::from_raw_value(raw), expected);

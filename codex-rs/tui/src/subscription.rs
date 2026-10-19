@@ -1,6 +1,7 @@
 //! Subscription labels for TUI surfaces, preserving status-specific plan detail.
 
 use codex_protocol::account::PlanType;
+use codex_protocol::auth::KnownPlan;
 
 pub(crate) enum SubscriptionDisplay {
     Status,
@@ -31,6 +32,8 @@ impl SubscriptionDisplay {
             (PlanType::EduPlus, Self::Status) => "Edu Plus",
             (PlanType::EduPro, Self::Status) => "Edu Pro",
             (PlanType::Edu | PlanType::EduPlus | PlanType::EduPro, Self::Analytics) => "Education",
+            (PlanType::Sci, _) => KnownPlan::Sci.display_name(),
+            (PlanType::SciPlus, _) => KnownPlan::SciPlus.display_name(),
             (PlanType::Unknown, Self::Status) => "Unknown",
             (PlanType::Unknown, Self::Analytics) => "Account",
         }

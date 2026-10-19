@@ -140,6 +140,10 @@ pub enum PlanType {
     EduPlus,
     #[serde(rename = "edu_pro")]
     EduPro,
+    #[serde(rename = "sci")]
+    Sci,
+    #[serde(rename = "sci_plus")]
+    SciPlus,
     #[serde(rename = "unknown", other)]
     Unknown,
 }

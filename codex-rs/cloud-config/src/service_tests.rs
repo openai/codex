@@ -585,6 +585,8 @@ async fn get_bundle_allows_eligible_workspace_plans_and_writes_cache() {
         "education",
         "edu_plus",
         "edu_pro",
+        "sci",
+        "sci_plus",
     ] {
         let bundle = test_bundle();
         let fetcher = Arc::new(StaticBundleClient::new(bundle.clone()));

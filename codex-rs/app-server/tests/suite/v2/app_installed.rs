@@ -18,6 +18,8 @@ use axum::extract::State;
 use axum::routing::get;
 use codex_app_server_protocol::AppsInstalledParams;
 use codex_app_server_protocol::AppsInstalledResponse;
+use codex_app_server_protocol::AppsListParams;
+use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::InstalledApp;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::RequestId;
@@ -109,6 +111,15 @@ async fn installed_apps_threadless_refresh_updates_existing_thread_tools() -> Re
     fixture.set_tools(vec![connector_tool("alpha", "Alpha")?]);
     let responses_server = responses::start_mock_server().await;
     let codex_home = configured_codex_home(fixture.base_url())?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123")
+            .plan_type("sci_plus"),
+        AuthCredentialsStoreMode::File,
+    )?;
     MockResponsesConfig::new(&responses_server.uri())
         .with_root_config(&format!(
             "chatgpt_base_url = {:?}\nmcp_oauth_credentials_store = \"file\"",
@@ -168,6 +179,17 @@ async fn installed_apps_threadless_refresh_updates_existing_thread_tools() -> Re
         }
         assert_eq!(fixture.list_tools_calls(), index + 1);
     }
+    let request_id = app_server
+        .send_apps_list_request(AppsListParams {
+            limit: None,
+            cursor: None,
+            thread_id: None,
+            force_refetch: true,
+        })
+        .await?;
+    let _: AppsListResponse =
+        timeout(DEFAULT_TIMEOUT, app_server.read_response(request_id)).await??;
+    assert_eq!(fixture.directory_calls(), 2);
     Ok(())
 }
 
@@ -559,6 +581,10 @@ impl InstalledAppsFixture {
             StreamableHttpServerConfig::default(),
         );
         let router = Router::new()
+            .route(
+                "/api/codex/config/bundle",
+                get(|| async { Json(json!({})) }),
+            )
             .route("/connectors/directory/list", get(list_directory_apps))
             .route(
                 "/connectors/directory/list_workspace",
