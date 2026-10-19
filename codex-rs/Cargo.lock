@@ -4575,6 +4575,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-runtime-agent-instance"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-redacted-string",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "codex-sandboxing"
 version = "0.0.0"
 dependencies = [

@@ -1,0 +1,6 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "runtime-agent-instance",
+    crate_name = "codex_runtime_agent_instance",
+)

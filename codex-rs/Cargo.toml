@@ -102,6 +102,7 @@ members = [
     "rollout-trace",
     "rmcp-client",
     "responses-api-proxy",
+    "runtime-agent-instance",
     "response-debug-context",
     "sandboxing",
     "stdio-to-uds",
