@@ -11,10 +11,21 @@ doctest = false
 workspace = true
 
 [dependencies]
+base64 = { workspace = true }
+codex-agent-identity = { workspace = true }
+codex-http-client = { workspace = true }
 codex-utils-redacted-string = { workspace = true }
+ed25519-dalek = { workspace = true }
+http = { workspace = true }
+rand = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-uuid = { workspace = true, features = ["serde"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
-serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock = { workspace = true }

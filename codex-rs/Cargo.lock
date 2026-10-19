@@ -4578,11 +4578,22 @@ dependencies = [
 name = "codex-runtime-agent-instance"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
+ "codex-agent-identity",
+ "codex-http-client",
  "codex-utils-redacted-string",
+ "ed25519-dalek",
+ "http 1.4.0",
  "pretty_assertions",
+ "rand 0.9.3",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
  "uuid",
+ "wiremock",
+ "zeroize",
 ]
 
 [[package]]
