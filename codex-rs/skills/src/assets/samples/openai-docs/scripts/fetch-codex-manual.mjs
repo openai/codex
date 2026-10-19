@@ -171,15 +171,20 @@ const requestManualWithFetch = async (url, { method, timeoutMs }) => {
     );
   }
 
-  return withTimeout(
-    (signal) =>
-      fetch(url, {
-        method,
-        headers: { "User-Agent": USER_AGENT },
-        signal,
-      }),
-    timeoutMs,
-  );
+  return withTimeout(async (signal) => {
+    const response = await fetch(url, {
+      method,
+      headers: { "User-Agent": USER_AGENT },
+      signal,
+    });
+    if (!response.ok || method === "HEAD") return response;
+    // Keep body reads inside both the timeout and transport fallback.
+    return makeResponse({
+      body: await response.text(),
+      headers: response.headers,
+      status: response.status,
+    });
+  }, timeoutMs);
 };
 
 const requestManual = async (url, { cacheDir, method, timeoutMs }) => {

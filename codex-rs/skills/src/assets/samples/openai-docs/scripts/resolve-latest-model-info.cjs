@@ -46,7 +46,8 @@ async function readSource(source) {
       });
 
       if (response.ok) {
-        return response.text();
+        // Body failures must be caught by this attempt's retry handler.
+        return await response.text();
       }
 
       lastError = new Error(
