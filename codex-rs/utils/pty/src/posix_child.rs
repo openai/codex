@@ -178,11 +178,19 @@ impl NativeChild {
                 cvt(addchdir(&mut actions.0, cwd.as_ptr()))?;
             }
             for (target, source) in child_fds.iter().enumerate() {
-                cvt(libc::posix_spawn_file_actions_adddup2(
+                let result = libc::posix_spawn_file_actions_adddup2(
                     &mut actions.0,
                     source.as_raw_fd(),
                     target as i32,
-                ))?;
+                );
+                // Darwin rejects valid high descriptors in spawn file actions,
+                // even below RLIMIT_NOFILE. The compatibility backend's dup2
+                // can still wire these owned stdio descriptors after fork.
+                #[cfg(target_os = "macos")]
+                if result == libc::EBADF && request.fallback == crate::SpawnFallback::Compatible {
+                    return Ok(None);
+                }
+                cvt(result)?;
             }
             for target in &request.inherited_fds {
                 #[cfg(target_os = "macos")]

@@ -131,3 +131,88 @@ async fn inherited_descriptors_survive_native_and_executable_text_spawns() -> an
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn high_stdio_descriptors_use_compatible_fallback() -> anyhow::Result<()> {
+    if std::env::var_os("CODEX_TEST_HIGH_STDIO_FDS").is_none() {
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "child_command::descriptor_tests::high_stdio_descriptors_use_compatible_fallback",
+                "--nocapture",
+            ])
+            .env("CODEX_TEST_HIGH_STDIO_FDS", "1")
+            .output()?;
+        assert!(output.status.success(), "{output:?}");
+        return Ok(());
+    }
+
+    let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+    // SAFETY: getrlimit initializes writable storage. Only this isolated test
+    // subprocess raises its soft limit; the test runner and host are unchanged.
+    assert_eq!(
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()) },
+        0
+    );
+    let mut limit = unsafe { limit.assume_init() };
+    limit.rlim_cur = limit.rlim_cur.max(16_384);
+    assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
+
+    let file = fs::File::open("/dev/null")?;
+    // SAFETY: Create a new inheritable descriptor to check fallback isolation.
+    let raw = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD, 3) };
+    anyhow::ensure!(raw >= 3, "{}", io::Error::last_os_error());
+    let sentinel = unsafe { OwnedFd::from_raw_fd(raw) };
+    let mut occupied = Vec::new();
+    loop {
+        let descriptor = file.try_clone()?;
+        let raw = descriptor.as_raw_fd();
+        occupied.push(descriptor);
+        // Darwin's spawn file actions reject valid descriptors >= OPEN_MAX
+        // (10240), even when RLIMIT_NOFILE allows the descriptor to be opened.
+        if raw >= 10_240 {
+            break;
+        }
+    }
+
+    let mut strict = Command::new("/usr/bin/true");
+    strict.fallback(SpawnFallback::ReturnError);
+    let error = strict
+        .spawn()
+        .err()
+        .expect("native high-fd action must fail");
+    assert_eq!(error.raw_os_error(), Some(libc::EBADF));
+
+    for mode in [ProcessMode::NewGroup, ProcessMode::NewSession] {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", &format!(
+                "test ! -e /dev/fd/{} || exit 99; IFS= read -r line; printf '%s' \"$line\"; printf diagnostic >&2; exit 23",
+                sentinel.as_raw_fd()
+            )])
+            .descriptor_policy(DescriptorPolicy::Explicit)
+            .process_mode(mode);
+        let mut child = command.spawn()?;
+        assert!(matches!(child.inner, ChildKind::Tokio(_)));
+        let pid = child.id().expect("live child") as libc::pid_t;
+        // SAFETY: The child waits for input and still owns this PID.
+        assert_eq!(unsafe { libc::getpgid(pid) }, pid);
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(b"round trip\n")
+            .await?;
+        let output = child.wait_with_output().await?;
+        assert_eq!(
+            (output.status.code(), output.stdout, output.stderr),
+            (Some(23), b"round trip".to_vec(), b"diagnostic".to_vec())
+        );
+    }
+    // SAFETY: Child setup must not close or change the parent's descriptor.
+    assert_eq!(
+        unsafe { libc::fcntl(sentinel.as_raw_fd(), libc::F_GETFD) },
+        0
+    );
+    Ok(())
+}
