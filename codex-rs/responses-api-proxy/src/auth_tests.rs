@@ -2,12 +2,15 @@
 
 use super::*;
 use pretty_assertions::assert_eq;
+use reqwest::blocking::Client;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::Barrier;
 use std::sync::mpsc;
 use std::thread;
 use tiny_http::Header;
 use tiny_http::Server;
+use tiny_http::StatusCode;
 
 pub(crate) fn direct_token_client() -> TokenClient {
     TokenClient(TokenClient::builder().build_direct().unwrap())
@@ -93,6 +96,22 @@ fn recv_exchange(server: &Server, subject: &str) -> tiny_http::Request {
             "service_account_id": "sa-test",
         })
     );
+    req
+}
+
+fn recv_response_request(
+    server: &Server,
+    expected_token: &str,
+    expected_body: &str,
+) -> tiny_http::Request {
+    let mut req = recv(server);
+    assert_eq!(req.url(), "/v1/responses");
+    assert_eq!(req.method(), &tiny_http::Method::Post);
+    assert!(req.headers().iter().any(|h| h.field.equiv("Authorization")
+        && h.value.as_str() == format!("Bearer {expected_token}")));
+    let mut body = String::new();
+    req.as_reader().read_to_string(&mut body).unwrap();
+    assert_eq!(body, expected_body);
     req
 }
 
@@ -374,6 +393,50 @@ fn absolute_expiry_forces_renewal_and_discards_cached_credential_on_failure() {
 }
 
 #[test]
+fn rejected_renewal_discards_old_credential_and_does_not_log_or_follow_redirect() {
+    let (server, url) = server();
+    let target = url.join("/credential-leak").unwrap();
+    let worker = thread::spawn(move || {
+        serve_exchange(
+            &server,
+            "issuer.subject.1",
+            "original.token",
+            /*expires_in*/ 300,
+            epoch_seconds() + 300,
+        );
+        recv_exchange(&server, "issuer.subject.2")
+            .respond(
+                tiny_http::Response::from_string("issuer.subject.2 original.token")
+                    .with_status_code(StatusCode(302))
+                    .with_header(Header::from_bytes("Location", target.as_str()).unwrap()),
+            )
+            .unwrap();
+        assert!(
+            server
+                .recv_timeout(Duration::from_millis(200))
+                .unwrap()
+                .is_none()
+        );
+    });
+    let auth = auth_at(&url);
+    assert_eq!(
+        auth.header().unwrap().value.to_str().unwrap(),
+        "Bearer original.token"
+    );
+    let Auth::Federated { ref state, .. } = auth else {
+        unreachable!()
+    };
+    state.lock().unwrap().cached.as_mut().unwrap().renew_at = Instant::now();
+    let error = format!("{:#}", auth.header().unwrap_err());
+    assert!(error.contains("302"), "{error}");
+    for secret in ["issuer.subject.2", "original.token", url.as_str()] {
+        assert!(!error.contains(secret), "{error}");
+    }
+    assert!(state.lock().unwrap().cached.is_none());
+    worker.join().unwrap();
+}
+
+#[test]
 fn invalid_subjects_are_rejected_before_exchange() {
     struct InvalidSource(String);
     impl SubjectTokenSource for InvalidSource {
@@ -393,4 +456,397 @@ fn invalid_subjects_are_rejected_before_exchange() {
             "workload identity source returned an invalid subject token"
         );
     }
+}
+
+#[test]
+fn forwards_401_without_replay_then_reacquires_but_keeps_token_on_403() {
+    let (upstream, upstream_url) = server();
+    let auth = auth_at(&upstream_url);
+    let (proxy, proxy_url) = server();
+    let upstream_worker = thread::spawn(move || {
+        serve_exchange(
+            &upstream,
+            "issuer.subject.1",
+            "openai.first.jwt",
+            /*expires_in*/ 300,
+            epoch_seconds() + 300,
+        );
+        recv_response_request(&upstream, "openai.first.jwt", "first")
+            .respond(
+                tiny_http::Response::from_string("rejected")
+                    .with_status_code(StatusCode(401))
+                    .with_header(Header::from_bytes("WWW-Authenticate", "Bearer").unwrap()),
+            )
+            .unwrap();
+        // No Responses replay or speculative exchange: the caller submits a
+        // distinct POST. A permission failure on that POST must not evict auth.
+        serve_exchange(
+            &upstream,
+            "issuer.subject.2",
+            "openai.second.jwt",
+            /*expires_in*/ 300,
+            epoch_seconds() + 300,
+        );
+        recv_response_request(&upstream, "openai.second.jwt", "second")
+            .respond(
+                tiny_http::Response::from_string("forbidden").with_status_code(StatusCode(403)),
+            )
+            .unwrap();
+        recv_response_request(&upstream, "openai.second.jwt", "third")
+            .respond(tiny_http::Response::from_string("success"))
+            .unwrap();
+    });
+    let proxy_worker = thread::spawn(move || {
+        let client = Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .redirect(auth.redirect_policy())
+            .build()
+            .unwrap();
+        let config = crate::ForwardConfig {
+            host_header: HeaderValue::from_str(upstream_url.authority()).unwrap(),
+            upstream_url: upstream_url.join("/v1/responses").unwrap(),
+        };
+        for _ in 0..3 {
+            crate::forward_request(
+                &client,
+                &auth,
+                &config,
+                /*dump_dir*/ None,
+                recv(&proxy),
+            )
+            .unwrap();
+        }
+    });
+    let client = Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let response_url = proxy_url.join("/v1/responses").unwrap();
+    let response = client
+        .post(response_url.clone())
+        .body("first")
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response.headers().get("www-authenticate").unwrap(),
+        "Bearer"
+    );
+    assert_eq!(response.text().unwrap(), "rejected");
+    let response = client
+        .post(response_url.clone())
+        .body("second")
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(response.text().unwrap(), "forbidden");
+    let response = client.post(response_url).body("third").send().unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(response.text().unwrap(), "success");
+    proxy_worker.join().unwrap();
+    upstream_worker.join().unwrap();
+}
+
+#[test]
+fn late_rejection_does_not_invalidate_a_newer_credential() {
+    let (server, url) = server();
+    let worker = thread::spawn(move || {
+        serve_exchange(
+            &server,
+            "issuer.subject.1",
+            "openai.first.jwt",
+            /*expires_in*/ 300,
+            epoch_seconds() + 300,
+        );
+        serve_exchange(
+            &server,
+            "issuer.subject.2",
+            "openai.second.jwt",
+            /*expires_in*/ 300,
+            epoch_seconds() + 300,
+        );
+    });
+    let auth = auth_at(&url);
+    let original = auth.header().unwrap();
+    original.invalidate();
+    let renewed = auth.header().unwrap();
+    assert_eq!(renewed.value.to_str().unwrap(), "Bearer openai.second.jwt");
+    worker.join().unwrap();
+    // Model an in-flight request made with the old token completing after
+    // the refresh. The server is closed, so an accidental third exchange fails.
+    original.invalidate();
+    assert_eq!(auth.header().unwrap().value, renewed.value);
+}
+
+#[test]
+fn forwards_401_before_an_inflight_renewal_finishes() {
+    let (upstream, upstream_url) = server();
+    let auth = Arc::new(auth_at(&upstream_url));
+    let acquiring = Arc::clone(&auth);
+    let first = thread::spawn(move || acquiring.header().unwrap());
+    serve_exchange(
+        &upstream,
+        "issuer.subject.1",
+        "openai.first.jwt",
+        /*expires_in*/ 300,
+        epoch_seconds() + 300,
+    );
+    let original = first.join().unwrap();
+    let (proxy, proxy_url) = server();
+    let forwarding = Arc::clone(&auth);
+    let config = crate::ForwardConfig {
+        host_header: HeaderValue::from_str(upstream_url.authority()).unwrap(),
+        upstream_url: upstream_url.join("/v1/responses").unwrap(),
+    };
+    let proxy_worker = thread::spawn(move || {
+        let client = Client::builder()
+            .no_proxy()
+            .redirect(forwarding.redirect_policy())
+            .build()
+            .unwrap();
+        crate::forward_request(
+            &client,
+            &forwarding,
+            &config,
+            /*dump_dir*/ None,
+            recv(&proxy),
+        )
+        .unwrap();
+    });
+    let (sent, received) = mpsc::sync_channel(1);
+    let caller = thread::spawn(move || {
+        let response = Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .post(proxy_url.join("/v1/responses").unwrap())
+            .body("first")
+            .send()
+            .unwrap();
+        sent.send((response.status(), response.text().unwrap()))
+            .unwrap();
+    });
+    // The request is already at upstream with the first credential. Hold its
+    // response until a concurrent rejection has started a new exchange.
+    let response_request = recv_response_request(&upstream, "openai.first.jwt", "first");
+    original.invalidate();
+    let acquiring = Arc::clone(&auth);
+    let renewal = thread::spawn(move || acquiring.header().unwrap());
+    let exchange = recv_exchange(&upstream, "issuer.subject.2");
+    response_request
+        .respond(tiny_http::Response::from_string("rejected").with_status_code(StatusCode(401)))
+        .unwrap();
+    // This must arrive before we let the exchange finish and release the mutex.
+    // Always release it before asserting so a regression cannot strand workers.
+    let response = received.recv_timeout(Duration::from_secs(5));
+    respond_exchange(
+        exchange,
+        "openai.second.jwt",
+        /*expires_in*/ 300,
+        epoch_seconds() + 300,
+    );
+    let renewed = renewal.join().unwrap();
+    caller.join().unwrap();
+    proxy_worker.join().unwrap();
+    assert_eq!(
+        response.unwrap(),
+        (reqwest::StatusCode::UNAUTHORIZED, "rejected".to_string())
+    );
+    assert_eq!(auth.header().unwrap().value, renewed.value);
+}
+
+fn header_at(auth: &Auth, now: Instant) -> Result<AuthHeader> {
+    let Auth::Federated { state } = auth else {
+        unreachable!()
+    };
+    state.lock().unwrap().header(|| now)
+}
+
+// Advance to the recorded retry deadline without waiting on real time.
+fn elapse_backoff(auth: &Auth, now: &mut Instant) -> Duration {
+    let Auth::Federated { state } = auth else {
+        unreachable!()
+    };
+    let state = state.lock().unwrap();
+    assert!(state.cached.is_none());
+    let failure = state.renewal_failure.as_ref().unwrap();
+    *now = failure.retry_at;
+    failure.delay
+}
+
+#[test]
+fn renewal_backoff_starts_after_a_slow_exchange_fails() {
+    let (server, url) = server();
+    let started = Instant::now();
+    let failed = started + Duration::from_secs(10);
+    let clock = Arc::new(Mutex::new(started));
+    let upstream_clock = Arc::clone(&clock);
+    let worker = thread::spawn(move || {
+        serve_exchange(
+            &server,
+            "issuer.subject.1",
+            "openai.first.jwt",
+            /*expires_in*/ 300,
+            epoch_seconds() + 300,
+        );
+        let exchange = recv_exchange(&server, "issuer.subject.2");
+        // Simulate time spent waiting on the failed renewal, longer than its cooldown.
+        *upstream_clock.lock().unwrap() = failed;
+        exchange
+            .respond(
+                tiny_http::Response::from_string("temporarily unavailable")
+                    .with_status_code(StatusCode(503)),
+            )
+            .unwrap();
+    });
+    let auth = auth_at(&url);
+    auth.header().unwrap().invalidate();
+    let Auth::Federated { state } = &auth else {
+        unreachable!()
+    };
+    let error = state
+        .lock()
+        .unwrap()
+        .header(|| *clock.lock().unwrap())
+        .unwrap_err();
+    worker.join().unwrap();
+    assert_eq!(
+        error.to_string(),
+        "OpenAI workload identity token request rejected (HTTP 503)"
+    );
+    let retry_at = failed + Duration::from_secs(1);
+    assert_eq!(
+        state
+            .lock()
+            .unwrap()
+            .renewal_failure
+            .as_ref()
+            .unwrap()
+            .retry_at,
+        retry_at
+    );
+    assert_eq!(
+        header_at(&auth, retry_at - Duration::from_nanos(1))
+            .unwrap_err()
+            .to_string(),
+        "workload identity renewal temporarily unavailable; retry later"
+    );
+}
+
+#[test]
+fn concurrent_renewal_failure_backs_off_caps_and_resets_after_success() {
+    let (server, url) = server();
+    let worker = thread::spawn(move || {
+        serve_exchange(
+            &server,
+            "issuer.subject.1",
+            "openai.first.jwt",
+            /*expires_in*/ 300,
+            epoch_seconds() + 300,
+        );
+        for subject in 2..=8 {
+            recv_exchange(&server, &format!("issuer.subject.{subject}"))
+                .respond(
+                    tiny_http::Response::from_string("private-issuer-token openai.first.jwt")
+                        .with_status_code(StatusCode(503)),
+                )
+                .unwrap();
+        }
+        serve_exchange(
+            &server,
+            "issuer.subject.9",
+            "openai.recovered.jwt",
+            /*expires_in*/ 300,
+            epoch_seconds() + 300,
+        );
+        recv_exchange(&server, "issuer.subject.10")
+            .respond(
+                tiny_http::Response::from_string("private-issuer-token")
+                    .with_status_code(StatusCode(503)),
+            )
+            .unwrap();
+    });
+    let auth = Arc::new(auth_at(&url));
+    let original = auth.header().unwrap();
+    let Auth::Federated { state, .. } = auth.as_ref() else {
+        unreachable!()
+    };
+    let mut now = Instant::now();
+    state.lock().unwrap().cached.as_mut().unwrap().renew_at = now;
+    let barrier = Arc::new(Barrier::new(8));
+    // Start every participant before joining any of them.
+    let mut callers = Vec::with_capacity(8);
+    for _ in 0..8 {
+        let auth = Arc::clone(&auth);
+        let barrier = Arc::clone(&barrier);
+        callers.push(thread::spawn(move || {
+            barrier.wait();
+            format!("{:#}", header_at(&auth, now).unwrap_err())
+        }));
+    }
+    let errors: Vec<_> = callers
+        .into_iter()
+        .map(|caller| caller.join().unwrap())
+        .collect();
+    assert_eq!(errors.iter().filter(|e| e.contains("503")).count(), 1);
+    assert_eq!(
+        errors.iter().filter(|e| e.contains("retry later")).count(),
+        7
+    );
+    for error in &errors {
+        for secret in ["private-issuer-token", "openai.first.jwt", url.as_str()] {
+            assert!(!error.contains(secret), "{error}");
+        }
+    }
+    // An older 401 arriving during backoff cannot trigger another renewal.
+    original.invalidate();
+    assert!(
+        header_at(&auth, now)
+            .unwrap_err()
+            .to_string()
+            .contains("retry later")
+    );
+    for seconds in [1, 2, 4, 8, 16, 30] {
+        assert_eq!(
+            elapse_backoff(&auth, &mut now),
+            Duration::from_secs(seconds)
+        );
+        assert!(
+            header_at(&auth, now)
+                .unwrap_err()
+                .to_string()
+                .contains("503")
+        );
+        assert!(
+            header_at(&auth, now)
+                .unwrap_err()
+                .to_string()
+                .contains("retry later")
+        );
+    }
+    assert_eq!(elapse_backoff(&auth, &mut now), Duration::from_secs(30));
+    let renewed = header_at(&auth, now).unwrap();
+    assert_eq!(
+        renewed.value.to_str().unwrap(),
+        "Bearer openai.recovered.jwt"
+    );
+    assert!(state.lock().unwrap().renewal_failure.is_none());
+    renewed.invalidate();
+    assert!(
+        header_at(&auth, now)
+            .unwrap_err()
+            .to_string()
+            .contains("503")
+    );
+    assert!(
+        header_at(&auth, now)
+            .unwrap_err()
+            .to_string()
+            .contains("retry later")
+    );
+    assert_eq!(elapse_backoff(&auth, &mut now), Duration::from_secs(1));
+    worker.join().unwrap();
 }

@@ -226,7 +226,7 @@ fn forward_request(
             return Err(err);
         }
     };
-    headers.insert(AUTHORIZATION, auth_header.value);
+    headers.insert(AUTHORIZATION, auth_header.value.clone());
 
     headers.insert(HOST, config.host_header.clone());
 
@@ -242,6 +242,11 @@ fn forward_request(
     // implements `Read`, so we can use it directly as the body of the
     // `tiny_http::Response`.
     let status = upstream_resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        // Do not replay a Responses POST. A subsequent request can obtain a
+        // fresh credential, but a late 401 must not evict one renewed in-flight.
+        auth_header.invalidate();
+    }
     let mut response_headers = Vec::new();
     for (name, value) in upstream_resp.headers().iter() {
         // Skip headers that tiny_http manages itself.

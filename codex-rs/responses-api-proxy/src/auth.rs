@@ -1,11 +1,14 @@
 //! Authenticates proxy requests using a locked API key or renewable OpenAI credentials.
-//! Serializes exchanges and never reuses expired credentials on renewal errors.
+//! Federated exchanges are serialized, fail closed on renewal errors, and never replay requests.
 //! Token clients never follow redirects or emit credential-bearing URL diagnostics.
 
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -37,6 +40,8 @@ const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_EXCHANGE_REQUEST_BYTES: usize = 64 * 1024;
 pub(crate) const TOKEN_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_FEDERATED_TOKEN_LIFETIME: Duration = Duration::from_secs(3600);
+const INITIAL_RENEWAL_BACKOFF: Duration = Duration::from_secs(1);
+const MAX_RENEWAL_BACKOFF: Duration = Duration::from_secs(30);
 
 /// Supplies a fresh JWT whenever an OpenAI credential needs to be issued.
 /// Acquisition stays asynchronous so callers can compose it with the exchange.
@@ -94,10 +99,21 @@ impl fmt::Debug for Auth {
     }
 }
 
-/// The sensitive header used for an individual request.
+/// The sensitive header and, for federation, the rejection state of this issuance.
+/// In-flight requests share only their own issuance's flag, never a replacement's.
 #[derive(Clone, Debug)]
 pub(crate) struct AuthHeader {
     pub(crate) value: HeaderValue,
+    rejected: Option<Arc<AtomicBool>>,
+}
+
+impl AuthHeader {
+    pub(crate) fn invalidate(&self) {
+        if let Some(rejected) = &self.rejected {
+            // This flag carries no other state; credentials remain mutex-protected.
+            rejected.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
 impl Auth {
@@ -123,6 +139,7 @@ impl Auth {
                 provider,
                 service_account,
                 cached: None,
+                renewal_failure: None,
             })),
         })
     }
@@ -146,12 +163,15 @@ impl Auth {
                 // Keep the existing locked, static API key allocation.
                 let mut header = HeaderValue::from_static(value);
                 header.set_sensitive(true);
-                Ok(AuthHeader { value: header })
+                Ok(AuthHeader {
+                    value: header,
+                    rejected: None,
+                })
             }
             Self::Federated { state } => state
                 .lock()
                 .map_err(|_| anyhow!("workload identity credential cache unavailable"))?
-                .header(),
+                .header(Instant::now),
         }
     }
 }
@@ -164,6 +184,7 @@ pub(crate) struct FederatedAuth {
     provider: String,
     service_account: String,
     cached: Option<CachedToken>,
+    renewal_failure: Option<RenewalFailure>,
 }
 
 struct CachedToken {
@@ -172,22 +193,60 @@ struct CachedToken {
     expires_at: SystemTime,
 }
 
+struct RenewalFailure {
+    retry_at: Instant,
+    delay: Duration,
+}
+
 impl FederatedAuth {
-    fn header(&mut self) -> Result<AuthHeader> {
+    fn header(&mut self, clock: impl Fn() -> Instant) -> Result<AuthHeader> {
+        let now = clock();
         if let Some(cached) = &self.cached
-            && Instant::now() < cached.renew_at
+            && now < cached.renew_at
             // Monotonic time can stop while a host is suspended.
             && SystemTime::now() < cached.expires_at
+            && cached
+                .header
+                .rejected
+                .as_ref()
+                .is_none_or(|rejected| !rejected.load(Ordering::Relaxed))
         {
             return Ok(cached.header.clone());
         }
-        // Discard the old credential before a fallible exchange. Never reuse it
-        // when acquisition fails.
+        if let Some(failure) = &self.renewal_failure
+            && now < failure.retry_at
+        {
+            // Keep neither the failed token nor an error that could hold source
+            // credentials. The initiating request reports the original safe error.
+            return Err(anyhow!(
+                "workload identity renewal temporarily unavailable; retry later"
+            ));
+        }
+        // One exchange at a time (under Auth's mutex), including during startup.
+        // On failure, fail closed instead of reusing an expired/revoked token.
         self.cached = None;
-        let cached = self.exchange()?;
-        let header = cached.header.clone();
-        self.cached = Some(cached);
-        Ok(header)
+        match self.exchange() {
+            Ok(cached) => {
+                let header = cached.header.clone();
+                self.cached = Some(cached);
+                self.renewal_failure = None;
+                Ok(header)
+            }
+            Err(err) => {
+                // Waiters share this failure instead of each retrying the token
+                // endpoints. Later requests may retry after a bounded delay.
+                let delay = self
+                    .renewal_failure
+                    .as_ref()
+                    .map(|failure| (failure.delay * 2).min(MAX_RENEWAL_BACKOFF))
+                    .unwrap_or(INITIAL_RENEWAL_BACKOFF);
+                self.renewal_failure = Some(RenewalFailure {
+                    retry_at: clock() + delay,
+                    delay,
+                });
+                Err(err)
+            }
+        }
     }
 
     fn exchange(&mut self) -> Result<CachedToken> {
@@ -272,7 +331,10 @@ impl FederatedAuth {
             .checked_add(remaining - skew)
             .ok_or_else(|| anyhow!("OpenAI returned an invalid token lifetime"))?;
         Ok(CachedToken {
-            header: AuthHeader { value: header },
+            header: AuthHeader {
+                value: header,
+                rejected: Some(Arc::new(AtomicBool::new(/*v*/ false))),
+            },
             renew_at,
             expires_at,
         })
