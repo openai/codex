@@ -368,7 +368,7 @@ pub struct TurnContext {
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) available_models: Vec<ModelPreset>,
     pub(crate) final_output_json_schema: Option<Value>,
-    pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
+    pub(crate) dynamic_tools: Arc<[DynamicToolSpec]>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
     pub(crate) extension_data: Arc<codex_extension_api::ExtensionData>,
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
