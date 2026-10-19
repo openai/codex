@@ -72,9 +72,19 @@ pub enum MatchType {
     Directory,
 }
 
-/// Carries the entry type observed by the walker so matched paths are not restatted.
-struct IndexedEntry {
-    full_path: Arc<str>,
+/// Carries the selected root and entry type without duplicating ASCII matcher paths.
+enum IndexedEntry {
+    Ascii {
+        root_idx: usize,
+        match_type: MatchType,
+    },
+    Unicode(Box<UnicodeEntry>),
+}
+
+// Unicode matcher columns retain only one codepoint per grapheme.
+struct UnicodeEntry {
+    root_idx: usize,
+    relative_path: Box<str>,
     match_type: MatchType,
 }
 
@@ -470,23 +480,29 @@ fn walker_worker(
                 Err(_) => return ignore::WalkState::Continue,
             };
             let path = entry.path();
-            let Some(full_path) = path.to_str() else {
+            if path.to_str().is_none() {
                 return ignore::WalkState::Continue;
-            };
-            if let Some((_, relative_path)) = get_file_path(path, &search_directories) {
+            }
+            if let Some((root_idx, relative_path)) = get_file_path(path, &search_directories) {
                 let match_type = match entry.file_type() {
                     Some(file_type) if file_type.is_dir() => MatchType::Directory,
                     _ => MatchType::File,
                 };
-                injector.push(
-                    IndexedEntry {
-                        full_path: Arc::from(full_path),
+                let column = Utf32String::from(relative_path);
+                let indexed_entry = match &column {
+                    Utf32String::Ascii(_) => IndexedEntry::Ascii {
+                        root_idx,
                         match_type,
                     },
-                    |_, cols| {
-                        cols[0] = Utf32String::from(relative_path);
-                    },
-                );
+                    Utf32String::Unicode(_) => IndexedEntry::Unicode(Box::new(UnicodeEntry {
+                        root_idx,
+                        relative_path: Box::from(relative_path),
+                        match_type,
+                    })),
+                };
+                injector.push(indexed_entry, |_, cols| {
+                    cols[0] = column;
+                });
             }
             n += 1;
             if n >= CHECK_INTERVAL {

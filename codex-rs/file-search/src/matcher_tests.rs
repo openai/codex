@@ -18,10 +18,9 @@ fn query_update_does_not_relabel_pending_matches() {
     );
     let injector = nucleo.injector();
     for (relative, match_type) in [("", MatchType::Directory), ("beta.txt", MatchType::File)] {
-        let full_path = root.path().join(relative);
         injector.push(
-            IndexedEntry {
-                full_path: Arc::from(full_path.to_str().unwrap()),
+            IndexedEntry::Ascii {
+                root_idx: 0,
                 match_type,
             },
             |_, columns| columns[0] = Utf32String::from(relative),

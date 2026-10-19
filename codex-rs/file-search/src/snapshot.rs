@@ -4,10 +4,9 @@ use crate::FileMatch;
 use crate::FileSearchSnapshot;
 use crate::IndexedEntry;
 use crate::SessionInner;
-use crate::get_file_path;
 use nucleo::Matcher;
 use nucleo::Nucleo;
-use std::path::Path;
+use nucleo::Utf32String;
 use std::path::PathBuf;
 
 pub(super) fn for_query(
@@ -31,9 +30,22 @@ pub(super) fn for_query(
         .take(limit)
         .filter_map(|match_| {
             let item = snapshot.get_item(match_.idx)?;
-            let full_path = item.data.full_path.as_ref();
-            let (root_idx, relative_path) =
-                get_file_path(Path::new(full_path), &inner.search_directories)?;
+            let (root_idx, relative_path, match_type) = match item.data {
+                IndexedEntry::Ascii {
+                    root_idx,
+                    match_type,
+                } => {
+                    let Utf32String::Ascii(path) = &item.matcher_columns[0] else {
+                        return None;
+                    };
+                    (*root_idx, path.as_ref(), *match_type)
+                }
+                IndexedEntry::Unicode(entry) => (
+                    entry.root_idx,
+                    entry.relative_path.as_ref(),
+                    entry.match_type,
+                ),
+            };
             let indices = if let Some(indices_matcher) = indices_matcher.as_mut() {
                 let mut indices = Vec::<u32>::new();
                 let haystack = item.matcher_columns[0].slice(..);
@@ -47,7 +59,7 @@ pub(super) fn for_query(
             Some(FileMatch {
                 score: match_.score,
                 path: PathBuf::from(relative_path),
-                match_type: item.data.match_type,
+                match_type,
                 root: inner.search_directories[root_idx].clone(),
                 indices,
             })
