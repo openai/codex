@@ -1,6 +1,7 @@
 mod environment_accessor;
 mod exec_permission_profile_serde;
 mod find_up;
+mod local_logs;
 mod nfs;
 
 use bytes::Bytes;
@@ -30,6 +31,7 @@ pub use find_up::find_nearest_ancestor_with_markers;
 pub use find_up::find_nearest_native_ancestor_with_markers;
 use futures::Stream;
 use futures::stream::BoxStream;
+pub use local_logs::LocalLogsDir;
 pub use nfs::is_nfs;
 use serde::Deserialize;
 use serde::Serialize;
