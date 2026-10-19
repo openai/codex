@@ -2168,6 +2168,7 @@ dependencies = [
  "futures",
  "hmac 0.12.1",
  "http 1.4.0",
+ "insta",
  "keyring",
  "libc",
  "opentelemetry",

@@ -1,0 +1,195 @@
+---
+source: app-server/tests/suite/v2/thread_sample.rs
+expression: "context_snapshot::format_request_history_snapshot(\"A parent uses high effort with custom instructions, client tools, permission tools, and priority service. A medium-effort sample, prediction fork, and subsequent parent turn preserve the same request context and high request-effort baseline.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
+---
+Scenario: A parent uses high effort with custom instructions, client tools, permission tools, and priority service. A medium-effort sample, prediction fork, and subsequent parent turn preserve the same request context and high request-effort baseline.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-5.4"
+  parallel_tool_calls: false
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"context":"all_turns","effort":"high","summary":"auto"}
+  service_tier: "priority"
+  store: false
+  stream: true
+  tool_choice: "auto"
+-- request 1 (turn) --
+00:additional_tools/developer (3; hash=bf13940dee826ebd):
+        - namespace/functions; hash=028af59ad835936d
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - function/request_permissions
+          - function/view_image
+          - function/get_goal
+          - function/create_goal
+          - function/update_goal
+          - function/parent_tool
+        - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=c826e5b07fd2820f
+          - function/close_agent
+          - function/resume_agent
+          - function/send_input
+          - function/spawn_agent
+          - function/wait_agent
+        - namespace/web: Tools in the web namespace.; hash=0037b1ed8d50fab5
+          - function/run
+01:message/developer:
+    Retain these base instructions.
+02:message/developer[4]:
+    [01] Retain this system policy context.
+    [02] <skills_instructions>
+        ## Skills
+        A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
+        ### Skill roots
+        - `r0` = `<SKILLS_ROOT>/.system`
+        ### Available skills
+        - imagegen: Generate or edit raster images when the task benefits from AI-created bitmap visuals such as...ctly in HTML/CSS/canvas. (file: r0/imagegen/SKILL.md) [hash=dcbada3f7f876b5c]
+        - openai-docs: Use for Codex models/pricing, scheduled tasks, skills, settings, setup, troubleshooting, ...merely mention Codex. (file: r0/openai-docs/SKILL.md) [hash=daf7d1f4fd2d2abe]
+        - skill-creator: Create or update a Codex skill with appropriately scoped instructions and any needed supporting resources. (file: r0/skill-creator/SKILL.md)
+        - skill-installer: Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo pat...g private repos). (file: r0/skill-installer/SKILL.md) [hash=d3eb4395bd8e52c5]
+        </skills_instructions>
+    [03] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
+        </permissions instructions>
+    [04] <collaboration_mode>Keep the parent's planning instructions.</collaboration_mode>
+03:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+04:message/user:
+    Initial turn
+05:configuration_update:reasoning={"effort":"high"}
+-- request 2 (turn) --
+06:reasoning:summary=Check the release.:encrypted=true
+07:message/assistant:
+    Done
+08:message/user:
+    Continue identically
+09:configuration_update:reasoning={"effort":"medium"}
+
+## Window 2 (after request 2: input repeated)
+Settings: same as window 1
+-- request 3 (turn) --
+00:additional_tools/developer (3; hash=bf13940dee826ebd):
+        - namespace/functions; hash=028af59ad835936d
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - function/request_permissions
+          - function/view_image
+          - function/get_goal
+          - function/create_goal
+          - function/update_goal
+          - function/parent_tool
+        - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=c826e5b07fd2820f
+          - function/close_agent
+          - function/resume_agent
+          - function/send_input
+          - function/spawn_agent
+          - function/wait_agent
+        - namespace/web: Tools in the web namespace.; hash=0037b1ed8d50fab5
+          - function/run
+01:message/developer:
+    Retain these base instructions.
+02:message/developer[4]:
+    [01] Retain this system policy context.
+    [02] <skills_instructions>
+        ## Skills
+        A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
+        ### Skill roots
+        - `r0` = `<SKILLS_ROOT>/.system`
+        ### Available skills
+        - imagegen: Generate or edit raster images when the task benefits from AI-created bitmap visuals such as...ctly in HTML/CSS/canvas. (file: r0/imagegen/SKILL.md) [hash=dcbada3f7f876b5c]
+        - openai-docs: Use for Codex models/pricing, scheduled tasks, skills, settings, setup, troubleshooting, ...merely mention Codex. (file: r0/openai-docs/SKILL.md) [hash=daf7d1f4fd2d2abe]
+        - skill-creator: Create or update a Codex skill with appropriately scoped instructions and any needed supporting resources. (file: r0/skill-creator/SKILL.md)
+        - skill-installer: Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo pat...g private repos). (file: r0/skill-installer/SKILL.md) [hash=d3eb4395bd8e52c5]
+        </skills_instructions>
+    [03] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
+        </permissions instructions>
+    [04] <collaboration_mode>Keep the parent's planning instructions.</collaboration_mode>
+03:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+04:message/user:
+    Initial turn
+05:configuration_update:reasoning={"effort":"high"}
+06:reasoning:summary=Check the release.:encrypted=true
+07:message/assistant:
+    Done
+08:message/user:
+    Continue identically
+09:configuration_update:reasoning={"effort":"medium"}
+
+## Window 3 (after request 3: input repeated)
+Settings: same as window 1
+-- request 4 (turn) --
+00:additional_tools/developer (3; hash=bf13940dee826ebd):
+        - namespace/functions; hash=028af59ad835936d
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - function/request_permissions
+          - function/view_image
+          - function/get_goal
+          - function/create_goal
+          - function/update_goal
+          - function/parent_tool
+        - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=c826e5b07fd2820f
+          - function/close_agent
+          - function/resume_agent
+          - function/send_input
+          - function/spawn_agent
+          - function/wait_agent
+        - namespace/web: Tools in the web namespace.; hash=0037b1ed8d50fab5
+          - function/run
+01:message/developer:
+    Retain these base instructions.
+02:message/developer[4]:
+    [01] Retain this system policy context.
+    [02] <skills_instructions>
+        ## Skills
+        A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
+        ### Skill roots
+        - `r0` = `<SKILLS_ROOT>/.system`
+        ### Available skills
+        - imagegen: Generate or edit raster images when the task benefits from AI-created bitmap visuals such as...ctly in HTML/CSS/canvas. (file: r0/imagegen/SKILL.md) [hash=dcbada3f7f876b5c]
+        - openai-docs: Use for Codex models/pricing, scheduled tasks, skills, settings, setup, troubleshooting, ...merely mention Codex. (file: r0/openai-docs/SKILL.md) [hash=daf7d1f4fd2d2abe]
+        - skill-creator: Create or update a Codex skill with appropriately scoped instructions and any needed supporting resources. (file: r0/skill-creator/SKILL.md)
+        - skill-installer: Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo pat...g private repos). (file: r0/skill-installer/SKILL.md) [hash=d3eb4395bd8e52c5]
+        </skills_instructions>
+    [03] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
+        </permissions instructions>
+    [04] <collaboration_mode>Keep the parent's planning instructions.</collaboration_mode>
+03:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+04:message/user:
+    Initial turn
+05:configuration_update:reasoning={"effort":"high"}
+06:reasoning:summary=Check the release.:encrypted=true
+07:message/assistant:
+    Done
+08:message/user:
+    Continue identically
+09:configuration_update:reasoning={"effort":"medium"}

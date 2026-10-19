@@ -522,6 +522,9 @@ enabled = false
                 thread_extensions(
                     &good_config,
                     ThreadExtensionDependencies {
+                        sample_responses: Arc::new(
+                            crate::thread_sample::SampleResponseRegistry::default(),
+                        ),
                         event_sink: Arc::new(NoopExtensionEventSink),
                         auth_manager: auth_manager.clone(),
                         state_db: Some(state_db.clone()),
