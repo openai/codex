@@ -981,7 +981,7 @@ async fn wait_for_guardian_review_timeout_drains_expected_turn_after_stale_termi
         .await
         .expect("interrupt response task should complete");
     assert!(matches!(outcome, GuardianReviewSessionOutcome::TimedOut));
-    assert_eq!(disposition, SessionDisposition::Reusable);
+    assert_eq!(disposition, SessionDisposition::Rollback);
     assert!(!turn_completed);
 }
 
@@ -1022,7 +1022,7 @@ async fn wait_for_guardian_review_cancel_drains_expected_turn_after_stale_termin
         .await
         .expect("interrupt response task should complete");
     assert!(matches!(outcome, GuardianReviewSessionOutcome::Aborted));
-    assert_eq!(disposition, SessionDisposition::Reusable);
+    assert_eq!(disposition, SessionDisposition::Rollback);
     assert!(!turn_completed);
 }
 
@@ -1048,7 +1048,7 @@ async fn interrupt_and_drain_turn_ignores_prior_turn_completion() {
         &mut GuardianReviewAnalyticsResult::without_session(),
     )
     .await;
-    assert_eq!(result.disposition, SessionDisposition::Reusable);
+    assert_eq!(result.disposition, SessionDisposition::Rollback);
 
     assert!(review_session.io.rx_event.try_recv().is_err());
 }

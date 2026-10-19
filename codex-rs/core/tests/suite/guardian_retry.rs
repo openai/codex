@@ -23,6 +23,201 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::time::Duration;
+use test_case::test_case;
+
+#[derive(Clone, Copy)]
+enum ReviewInterruption {
+    Cancellation,
+    Timeout,
+}
+
+#[test_case(ReviewInterruption::Cancellation; "cancellation")]
+#[test_case(ReviewInterruption::Timeout; "timeout")]
+#[tokio::test]
+async fn interrupted_guardian_review_preserves_evidence_once(
+    interruption: ReviewInterruption,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "Guardian approval actions require host-native paths"
+    );
+    let command = |id: &str| {
+        sse(vec![
+            ev_function_call(
+                id,
+                "exec_command",
+                &json!({
+                    "cmd": "echo unexpected > guardian-interrupted.txt",
+                    "sandbox_permissions": "require_escalated",
+                    "justification": "Exercise interrupted Guardian review recovery",
+                })
+                .to_string(),
+            ),
+            ev_completed(id),
+        ])
+    };
+    let denial = |id: &str| {
+        sse(vec![
+            ev_assistant_message(
+                id,
+                r#"{"risk_level":"low","user_authorization":"low","outcome":"deny","rationale":"Fixture denial."}"#,
+            ),
+            ev_completed(id),
+        ])
+    };
+    let (hold_review, review_gate) = tokio::sync::oneshot::channel();
+    let mut responses = vec![
+        (None, sse(vec![ev_completed("waiting-for-evidence")])),
+        (None, command("committed-command")),
+        (None, denial("msg_committed_review")),
+        (None, sse(vec![ev_completed("first-parent-done")])),
+        (None, command("interrupted-command")),
+        (Some(review_gate), denial("msg_interrupted_review")),
+    ];
+    if matches!(interruption, ReviewInterruption::Timeout) {
+        responses.push((None, sse(vec![ev_completed("timed-out-parent-done")])));
+    }
+    responses.extend([
+        (None, command("followup-command")),
+        (None, denial("msg_followup_review")),
+        (None, sse(vec![ev_completed("last-parent-done")])),
+    ]);
+    let (model, _) = start_streaming_sse_server(
+        responses
+            .into_iter()
+            .map(|(gate, body)| vec![StreamingSseChunk { gate, body }])
+            .collect(),
+    )
+    .await;
+    let server = start_mock_server().await;
+    let base_url = format!("{}/v1", model.uri());
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider.base_url = Some(base_url);
+            config.model_provider.stream_idle_timeout_ms = Some(180_000);
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config
+                .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
+                .expect("set sandbox policy");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_text_turn("Wait for the parent's instructions before requesting the command.")
+        .await?;
+    // Commit one review, then deliver new encrypted evidence for the interrupted attempt.
+    for evidence in ["committed-evidence", "pending-evidence"] {
+        test.codex
+            .submit(Op::InterAgentCommunication {
+                communication: InterAgentCommunication::new_encrypted(
+                    AgentPath::root(),
+                    AgentPath::root().join("worker").expect("worker path"),
+                    Vec::new(),
+                    evidence.into(),
+                    /*trigger_turn*/ true,
+                ),
+                start_options: Default::default(),
+            })
+            .await?;
+        if evidence == "committed-evidence" {
+            wait_for_event(&test.codex, |event| {
+                matches!(event, EventMsg::TurnComplete(_))
+            })
+            .await;
+        }
+    }
+    // The request reaching the server proves Guardian has admitted the pending evidence.
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        model.wait_for_request_count(/*count*/ 6),
+    )
+    .await
+    .context("wait for pending Guardian review")?;
+    match interruption {
+        ReviewInterruption::Cancellation => {
+            test.codex.submit(Op::Interrupt).await?;
+        }
+        ReviewInterruption::Timeout => {
+            tokio::time::pause();
+            tokio::time::advance(codex_guardian_reviewer::REVIEW_TIMEOUT + Duration::from_secs(1))
+                .await;
+            tokio::time::resume();
+        }
+    }
+    let expected_status = match interruption {
+        ReviewInterruption::Cancellation => GuardianAssessmentStatus::Aborted,
+        ReviewInterruption::Timeout => GuardianAssessmentStatus::TimedOut,
+    };
+    let mut review_finished = false;
+    let mut parent_finished = false;
+    while !review_finished || !parent_finished {
+        match test.codex.next_event().await?.msg {
+            EventMsg::GuardianAssessment(review) if review.status == expected_status => {
+                review_finished = true;
+            }
+            EventMsg::TurnAborted(_)
+                if matches!(interruption, ReviewInterruption::Cancellation) =>
+            {
+                parent_finished = true;
+            }
+            EventMsg::TurnComplete(_) if matches!(interruption, ReviewInterruption::Timeout) => {
+                parent_finished = true;
+            }
+            _ => {}
+        }
+    }
+    test.submit_text_turn("Request the command again.").await?;
+    let requests = model
+        .requests()
+        .await
+        .into_iter()
+        .map(|body| serde_json::from_slice::<Value>(&body))
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    let reviews = requests
+        .iter()
+        .filter(|request| request["client_metadata"]["x-openai-subagent"] == "guardian")
+        .collect::<Vec<_>>();
+    assert_eq!(reviews.len(), 3);
+    let pending_messages = reviews[1]["input"]
+        .as_array()
+        .expect("pending input")
+        .iter()
+        .filter(|item| item["type"] == "agent_message")
+        .collect::<Vec<_>>();
+    assert_eq!(pending_messages.len(), 2);
+    let followup = reviews[2]["input"].as_array().expect("followup input");
+    assert_eq!(
+        followup
+            .iter()
+            .filter(|item| item["type"] == "agent_message")
+            .collect::<Vec<_>>(),
+        pending_messages,
+        "the next review must receive both encrypted messages exactly once",
+    );
+    assert_eq!(
+        followup
+            .iter()
+            .filter(|item| item["id"] == "msg_committed_review")
+            .count(),
+        1,
+        "the last completed review must survive rollback",
+    );
+    let marker_error = test
+        .fs()
+        .get_metadata(
+            &test.workspace_path_uri("guardian-interrupted.txt")?,
+            Default::default(),
+            /*sandbox*/ None,
+        )
+        .await
+        .expect_err("interrupted or denied commands must not execute");
+    assert_eq!(marker_error.kind(), std::io::ErrorKind::NotFound);
+    test.codex.shutdown_and_wait().await?;
+    drop(hold_review);
+    model.shutdown().await;
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_retry_executes_only_after_a_completed_approval() -> Result<()> {

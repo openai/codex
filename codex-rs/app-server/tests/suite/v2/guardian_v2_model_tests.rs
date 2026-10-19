@@ -20,6 +20,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::CyberAccessProgram;
+use codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -319,10 +320,16 @@ computer_use_only = false
             "prior turn evidence remains available after changing programs"
         );
         classifier_requests.push(classifier_request);
-        // Wait for the reviewer to start before releasing a low classifier score.
+        // Complete the review before a low score can cancel it: this test checks
+        // that program changes alone preserve reviewer session reuse.
         wait_for_guardian_reviews(&state, index + 1).await?;
-        state.allow_luna.notify_one();
         state.allow_guardian_review.notify_one();
+        let _: ItemGuardianApprovalReviewCompletedNotification = timeout(
+            TIMEOUT,
+            app_server.read_notification("item/autoApprovalReview/completed"),
+        )
+        .await??;
+        state.allow_luna.notify_one();
         let completed: TurnCompletedNotification =
             timeout(TIMEOUT, app_server.read_notification("turn/completed")).await??;
         assert_eq!(completed.turn.status, TurnStatus::Completed);

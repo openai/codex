@@ -1,5 +1,6 @@
 //! Executes reviewer turns, including deadlines, cancellation and terminal event matching.
 //! A session is reusable only after its submitted turn has completed or drained.
+//! Interrupted turns roll back admitted context; completed inference errors can retain it.
 
 use std::future::Future;
 use std::time::Duration;
@@ -78,7 +79,7 @@ pub async fn wait_for_guardian_review(
         tokio::select! {
             _ = &mut timeout => {
                 let disposition = if interrupt_and_drain_turn(runtime, expected_turn_id).await.is_ok() {
-                    SessionDisposition::Reusable
+                    SessionDisposition::Rollback
                 } else {
                     SessionDisposition::Discard
                 };
@@ -96,7 +97,7 @@ pub async fn wait_for_guardian_review(
                 }
             } => {
                 let disposition = if interrupt_and_drain_turn(runtime, expected_turn_id).await.is_ok() {
-                    SessionDisposition::Reusable
+                    SessionDisposition::Rollback
                 } else {
                     SessionDisposition::Discard
                 };
@@ -142,7 +143,7 @@ pub async fn wait_for_guardian_review(
                         EventMsg::TurnAborted(_) => {
                             return ReviewTurnResult {
                                 outcome: GuardianReviewSessionOutcome::Aborted,
-                                disposition: SessionDisposition::Reusable,
+                                disposition: SessionDisposition::Rollback,
                                 turn_completed: false,
                             };
                         }
