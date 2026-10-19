@@ -37,19 +37,49 @@ pub trait EmaTokenSource: Send + Sync {
 }
 
 /// Revocable authority held while one EMA connection awaits HTTP responses.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct EmaRequestAuthority {
     revoked: CancellationToken,
+    is_current: Arc<dyn Fn() -> bool + Send + Sync>,
     responses: Arc<RwLock<()>>,
 }
 
+impl Default for EmaRequestAuthority {
+    fn default() -> Self {
+        Self::new(CancellationToken::new(), || true)
+    }
+}
+
 impl EmaRequestAuthority {
+    /// Couples prompt cancellation with a synchronous check at each HTTP boundary.
+    /// The check must be cheap and must not perform credential or network I/O.
+    pub fn new(
+        revoked: CancellationToken,
+        is_current: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            revoked,
+            is_current: Arc::new(is_current),
+            responses: Arc::default(),
+        }
+    }
+
     pub fn revoke(&self) {
         self.revoked.cancel();
     }
 
     pub fn is_revoked(&self) -> bool {
+        if !self.revoked.is_cancelled() && !(self.is_current)() {
+            self.revoke();
+        }
         self.revoked.is_cancelled()
+    }
+
+    pub fn check(&self) -> Result<(), ExecServerError> {
+        if self.is_revoked() {
+            return Err(revoked_authority_error());
+        }
+        Ok(())
     }
 
     /// Wait until response futures admitted before revocation complete or are cancelled.
@@ -59,9 +89,7 @@ impl EmaRequestAuthority {
 
     async fn acquire(&self) -> Result<OwnedRwLockReadGuard<()>, ExecServerError> {
         let response = self.responses.clone().read_owned().await;
-        if self.is_revoked() {
-            return Err(revoked_authority_error());
-        }
+        self.check()?;
         Ok(response)
     }
 
@@ -229,10 +257,12 @@ impl<S: EmaTokenSource> HttpClient for EmaAuthenticatedHttpClient<S> {
             let request = async {
                 let _authority = self.authority.acquire().await?;
                 let token = self.authenticate(&mut params).await?;
+                self.authority.check()?;
                 if let Some(deadline) = deadline {
                     params.timeout_ms = Some(remaining_timeout(deadline)?);
                 }
                 let response = self.inner.http_request(params).await?;
+                self.authority.check()?;
                 self.validate_response(&response, &token)?;
                 Ok(response)
             };
@@ -256,10 +286,12 @@ impl<S: EmaTokenSource> HttpClient for EmaAuthenticatedHttpClient<S> {
             let request = async {
                 let _authority = self.authority.acquire().await?;
                 let token = self.authenticate(&mut params).await?;
+                self.authority.check()?;
                 if let Some(deadline) = deadline {
                     params.timeout_ms = Some(remaining_timeout(deadline)?);
                 }
                 let response = self.inner.http_request_stream(params).await?;
+                self.authority.check()?;
                 self.validate_response(&response.0, &token)?;
                 Ok((
                     response.0,
