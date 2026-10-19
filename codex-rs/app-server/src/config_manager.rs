@@ -66,6 +66,12 @@ pub(crate) struct StartupConfig {
     pub(crate) used_defaults: bool,
 }
 
+/// Local auth authority and the cloud-backed configuration loaded with it.
+pub(crate) struct CloudStartupConfig {
+    pub(crate) bootstrap: Config,
+    pub(crate) config: std::io::Result<Config>,
+}
+
 /// Configuration and policy must finish loading against the same account and cloud snapshot.
 pub(crate) struct ApplicationPolicyLoad {
     cloud_config: CloudConfigBundleLoader,
@@ -372,6 +378,26 @@ impl ConfigManager {
             ));
         }
         Ok(())
+    }
+
+    /// Load local policy before auth, then fetch the account's cloud configuration.
+    /// Callers choose their error/recovery policy before initializing any runtimes.
+    pub(crate) async fn load_cloud_startup_config(
+        &self,
+        cwd: Option<PathBuf>,
+    ) -> std::io::Result<CloudStartupConfig> {
+        let bootstrap = self.load_startup_config(cwd.clone()).await?.config;
+        let auth =
+            AuthManager::shared_from_config(&bootstrap, /*enable_codex_api_key_env*/ false)
+                .await
+                .map_err(std::io::Error::other)?;
+        self.replace_cloud_config_bundle_loader(
+            auth,
+            bootstrap.chatgpt_base_url.clone(),
+            bootstrap.http_client_factory(),
+        );
+        let config = self.load_latest_config(cwd).await;
+        Ok(CloudStartupConfig { bootstrap, config })
     }
 
     /// Installs local policy before cloud access; failed policy loads block traffic while

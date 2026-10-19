@@ -132,6 +132,9 @@ impl CloudManagedConfigFixture {
             .env_remove("CODEX_ACCESS_TOKEN")
             .env_remove("CODEX_API_KEY")
             .env_remove("OPENAI_API_KEY")
+            .env_remove("OPENAI_FEDERATION_RULE_ID")
+            .env_remove("OPENAI_IDENTITY_TOKEN_FILE")
+            .env_remove("OPENAI_WORKLOAD_IDENTITY_CONTEXT")
             .args(args);
         Ok(command)
     }
@@ -440,5 +443,139 @@ async fn add_and_remove_preserve_cloud_managed_resources() -> Result<()> {
         .await?;
     fixture.server.verify().await;
 
+    Ok(())
+}
+
+async fn mock_startup_bundle(server: &MockServer, status: u16, config: &str, requirements: &str) {
+    server.reset().await;
+    let layer = |contents: &str| {
+        json!({
+            "enterprise_managed": [{"id": "startup", "name": "Startup policy", "contents": contents}]
+        })
+    };
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+            "config_toml": layer(config), "requirements_toml": layer(requirements),
+        })))
+        .expect(1..)
+        .mount(server)
+        .await;
+}
+
+async fn successful_json(command: &mut Command) -> Result<Value> {
+    let output = command.output().await?;
+    ensure!(output.status.success(), "{output:?}");
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+#[tokio::test]
+async fn startup_config_loads_managed_policy_or_reports_cloud_failure() -> Result<()> {
+    for status in [200, 401, 503] {
+        let Some(fixture) = CloudManagedConfigFixture::new().await? else {
+            return Ok(());
+        };
+        mock_startup_bundle(
+            &fixture.server,
+            status,
+            "forced_login_method = 'api'\n",
+            "[application.network.domains]\n'127.0.0.1' = 'allow'\n'example.com' = 'allow'\n",
+        )
+        .await;
+        let sqlite_home = TempDir::new()?;
+        let history_path = sqlite_home.path().join("state_5.sqlite");
+        std::fs::write(&history_path, b"history must not be repaired")?;
+        let output = fixture
+            .command(&["app-server", "--print-startup-config"])?
+            .env("CODEX_SQLITE_HOME", sqlite_home.path())
+            .env(
+                "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
+                format!("{}/refresh", fixture.server.uri()),
+            )
+            .output()
+            .await?;
+        let value: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(output.status.success(), status == 200, "{value}");
+        if status == 200 {
+            let requirements = &value["configRequirements"]["requirements"];
+            assert_eq!(requirements["allowedLoginMethods"], json!(["api"]));
+            assert_eq!(
+                requirements["application"]["network"]["domains"]["example.com"],
+                "allow"
+            );
+        } else {
+            assert_eq!(value["error"]["data"]["reason"], "cloudConfigBundle");
+            assert!(value.get("configRequirements").is_none());
+        }
+        assert_eq!(
+            std::fs::read(&history_path)?,
+            b"history must not be repaired"
+        );
+        assert_eq!(std::fs::read_dir(sqlite_home.path())?.count(), 1);
+        fixture.server.verify().await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn startup_config_sign_out_reloads_policy_without_starting_runtime() -> Result<()> {
+    for (status, provider) in [(200, None), (503, None), (503, Some("amazon-bedrock"))] {
+        let Some(mut fixture) = CloudManagedConfigFixture::new().await? else {
+            return Ok(());
+        };
+        if let Some(provider) = provider {
+            fixture
+                .user_config
+                .push_str(&format!("model_provider = \"{provider}\"\n"));
+        }
+        std::fs::write(
+            fixture.codex_home.path().join("config.toml"),
+            &fixture.user_config,
+        )?;
+        mock_startup_bundle(
+            &fixture.server, status, "forced_login_method = 'api'\n",
+            "cli_auth_credentials_store = 'ephemeral'\nenforce_residency = 'us'\n[application.network.domains]\n'127.0.0.1' = 'allow'\n[windows]\nrequire_mxc = true\n",
+        ).await;
+        let mut revoke = Mock::given(method("POST")).and(path("/revoke"));
+        if status == 200 {
+            revoke = revoke.and(header("x-openai-internal-codex-residency", "us"));
+        }
+        revoke
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&fixture.server)
+            .await;
+        let signed_out_home = TempDir::new()?;
+        std::fs::write(
+            signed_out_home.path().join("config.toml"),
+            &fixture.user_config,
+        )?;
+        let baseline = successful_json(
+            fixture
+                .command(&["app-server", "--print-startup-config"])?
+                .env("CODEX_HOME", signed_out_home.path()),
+        )
+        .await?;
+        let sqlite_home = TempDir::new()?;
+        let value = successful_json(
+            fixture
+                .command(&["app-server", "--print-startup-config", "--startup-sign-out"])?
+                .env("CODEX_SQLITE_HOME", sqlite_home.path())
+                .env(
+                    "CODEX_REVOKE_TOKEN_URL_OVERRIDE",
+                    format!("{}/revoke", fixture.server.uri()),
+                ),
+        )
+        .await?;
+        assert_eq!(value["configRequirements"], baseline["configRequirements"]);
+        assert_eq!(std::fs::read_dir(sqlite_home.path())?.count(), 0);
+        let user_config: toml::Value = toml::from_str(&std::fs::read_to_string(
+            fixture.codex_home.path().join("config.toml"),
+        )?)?;
+        assert!(user_config.get("model_provider").is_none());
+        let status = fixture.command(&["login", "status"])?.output().await?;
+        assert!(!status.status.success());
+        fixture.server.verify().await;
+    }
     Ok(())
 }

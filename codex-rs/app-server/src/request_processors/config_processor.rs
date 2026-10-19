@@ -439,7 +439,7 @@ async fn reload_user_config_inner(config_manager: &ConfigManager, thread_manager
     }
 }
 
-fn map_requirements_to_api(
+pub(crate) fn map_requirements_to_api(
     requirements: Option<ConfigRequirementsToml>,
     allowed_login_methods: Vec<ForcedLoginMethod>,
 ) -> Option<ConfigRequirements> {
