@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -35,10 +36,22 @@ impl LocalThreadStore {
         requested_thread_id: ThreadId,
         initial_path: Option<PathBuf>,
     ) -> ThreadStoreResult<RolloutLineage> {
-        self.resolve_rollout_lineage_with_representation(
+        self.resolve_rollout_lineage_with_mode(
             requested_thread_id,
-            LineageRepresentation::Existing,
+            LineageResolutionMode::Existing,
             initial_path,
+        )
+        .await
+    }
+
+    pub(super) async fn resolve_rollout_lineage_for_history_page(
+        &self,
+        requested_thread_id: ThreadId,
+    ) -> ThreadStoreResult<RolloutLineage> {
+        self.resolve_rollout_lineage_with_mode(
+            requested_thread_id,
+            LineageResolutionMode::HistoryPage,
+            /*initial_path*/ None,
         )
         .await
     }
@@ -47,38 +60,43 @@ impl LocalThreadStore {
         &self,
         requested_thread_id: ThreadId,
     ) -> ThreadStoreResult<RolloutLineage> {
-        self.resolve_rollout_lineage_with_representation(
+        self.resolve_rollout_lineage_with_mode(
             requested_thread_id,
-            LineageRepresentation::PlainForReference,
+            LineageResolutionMode::PlainForReference,
             /*initial_path*/ None,
         )
         .await
     }
 
-    async fn resolve_rollout_lineage_with_representation(
+    async fn resolve_rollout_lineage_with_mode(
         &self,
         requested_thread_id: ThreadId,
-        representation: LineageRepresentation,
+        mode: LineageResolutionMode,
         mut initial_path: Option<PathBuf>,
     ) -> ThreadStoreResult<RolloutLineage> {
         let mut segments = Vec::new();
         let mut seen = HashSet::new();
         let mut next_rollout_id = None;
         let mut end = None;
+        let mut prefetched_paths = HashMap::new();
 
         loop {
             let coordination_id = next_rollout_id.unwrap_or(requested_thread_id);
-            let _writer_guard = match representation {
-                LineageRepresentation::Existing => None,
-                LineageRepresentation::PlainForReference => {
+            let _writer_guard = match mode {
+                LineageResolutionMode::Existing | LineageResolutionMode::HistoryPage => None,
+                LineageResolutionMode::PlainForReference => {
                     Some(self.live_writer_locks.lock(coordination_id).await)
                 }
             };
             let (rollout_id, rollout_path) = match (next_rollout_id, initial_path.take()) {
                 (Some(rollout_id), _) => {
-                    let rollout_path = resolve_rollout_path_by_id(self, rollout_id)
-                        .await?
-                        .ok_or_else(|| malformed_lineage(rollout_id, "missing source rollout"))?;
+                    let rollout_path = resolve_rollout_path_by_id(
+                        self,
+                        rollout_id,
+                        prefetched_paths.remove(&rollout_id),
+                    )
+                    .await?
+                    .ok_or_else(|| malformed_lineage(rollout_id, "missing source rollout"))?;
                     (rollout_id, rollout_path)
                 }
                 (None, Some(path)) => {
@@ -105,9 +123,11 @@ impl LocalThreadStore {
             if !seen.insert(rollout_id) {
                 return Err(malformed_lineage(requested_thread_id, "cycle detected"));
             }
-            let rollout_path = match representation {
-                LineageRepresentation::Existing => rollout_path,
-                LineageRepresentation::PlainForReference => {
+            let rollout_path = match mode {
+                LineageResolutionMode::Existing | LineageResolutionMode::HistoryPage => {
+                    rollout_path
+                }
+                LineageResolutionMode::PlainForReference => {
                     let outside_codex_home = || ThreadStoreError::InvalidRequest {
                         message: format!(
                             "rollout path `{}` must be in Codex home directory",
@@ -154,9 +174,11 @@ impl LocalThreadStore {
                     "source rollout is not paginated",
                 ));
             }
-            let rollout_path = match representation {
-                LineageRepresentation::Existing => rollout_path,
-                LineageRepresentation::PlainForReference
+            let rollout_path = match mode {
+                LineageResolutionMode::Existing | LineageResolutionMode::HistoryPage => {
+                    rollout_path
+                }
+                LineageResolutionMode::PlainForReference
                     if next_rollout_id.is_none() && meta.meta.history_base.is_none() =>
                 {
                     // A newly shared standalone source must remain readable by older binaries.
@@ -172,7 +194,7 @@ impl LocalThreadStore {
                 // Already-shared compressed history requires a compatible reader regardless of
                 // new forks. Read it without publishing decoded copies into ancestors' folders;
                 // their owners may concurrently archive or unarchive those immutable files.
-                LineageRepresentation::PlainForReference => rollout_path,
+                LineageResolutionMode::PlainForReference => rollout_path,
             };
             if let Some(end) = end {
                 validate_cutoff_bounds(requested_thread_id, rollout_path.as_path(), &end).await?;
@@ -193,6 +215,17 @@ impl LocalThreadStore {
             let Some(base) = meta.meta.history_base else {
                 break;
             };
+            if matches!(mode, LineageResolutionMode::HistoryPage)
+                && let [child] = segments.as_slice()
+            {
+                prefetched_paths = codex_rollout::prefetch_sibling_rollout_paths(
+                    &self.config.codex_home,
+                    &child.rollout_path,
+                    base.thread_id,
+                )
+                .await
+                .unwrap_or_default();
+            }
             next_rollout_id = Some(base.thread_id);
             end = Some(base);
         }
@@ -205,7 +238,16 @@ impl LocalThreadStore {
 async fn resolve_rollout_path_by_id(
     store: &LocalThreadStore,
     rollout_id: ThreadId,
+    prefetched_path: Option<PathBuf>,
 ) -> ThreadStoreResult<Option<PathBuf>> {
+    if let Some(path) = prefetched_path
+        && let Some(path) = codex_rollout::existing_rollout_path(&path).await
+        && tokio::fs::symlink_metadata(&path)
+            .await
+            .is_ok_and(|metadata| metadata.is_file())
+    {
+        return Ok(Some(path));
+    }
     codex_rollout::find_rollout_path_by_rollout_id(store.config.codex_home.as_path(), rollout_id)
         .await
         .map_err(|err| ThreadStoreError::Internal {
@@ -214,8 +256,9 @@ async fn resolve_rollout_path_by_id(
 }
 
 #[derive(Clone, Copy)]
-enum LineageRepresentation {
+enum LineageResolutionMode {
     Existing,
+    HistoryPage,
     PlainForReference,
 }
 

@@ -4,7 +4,10 @@
 //! all candidates before sorting; creation-time listings retain directory-level early stopping.
 //! Scans check cancellation between directory entries and candidate metadata lookups.
 
+use codex_protocol::RolloutId;
+use codex_protocol::ThreadId;
 use std::cmp::Reverse;
+use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -16,6 +19,9 @@ use super::ThreadCandidate;
 use super::parse_timestamp_uuid_from_filename;
 use super::truncate_to_millis;
 use crate::compression;
+use crate::rollout_file_name::RolloutFileName;
+
+const MAX_SIBLING_ROLLOUT_IDS: usize = 64;
 
 /// Runs a scan whose worker observes cancellation when its async waiter is dropped.
 async fn run_scan<T, F>(read: F) -> io::Result<T>
@@ -70,6 +76,33 @@ pub(super) async fn collect_rollout_day_files(
 ) -> io::Result<Vec<(OffsetDateTime, Uuid, PathBuf)>> {
     let day_path = day_path.to_path_buf();
     run_scan(move |scan| collect_rollout_day_files_sync(&day_path, scan)).await
+}
+
+pub(super) async fn collect_sibling_rollout_ids(
+    directory: &Path,
+    thread_id: ThreadId,
+    child_rollout_id: RolloutId,
+) -> io::Result<HashSet<RolloutId>> {
+    let directory = directory.to_path_buf();
+    run_scan(move |scan| {
+        let mut ids = HashSet::new();
+        for entry in std::fs::read_dir(directory)?.take(MAX_SCAN_FILES) {
+            scan.check_cancelled()?;
+            let entry = entry?;
+            if entry.file_type()?.is_file()
+                && let Some(file_name) = entry.file_name().to_str().and_then(RolloutFileName::parse)
+                && file_name.thread_id() == thread_id
+                && file_name.rollout_id() != child_rollout_id
+            {
+                ids.insert(file_name.rollout_id());
+                if ids.len() >= MAX_SIBLING_ROLLOUT_IDS {
+                    break;
+                }
+            }
+        }
+        Ok(ids)
+    })
+    .await
 }
 
 pub(super) async fn collect_flat_rollout_files(

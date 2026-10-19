@@ -248,6 +248,39 @@ async fn filesystem_lookup_distinguishes_thread_ids_from_rollout_ids() {
 }
 
 #[tokio::test]
+async fn sibling_rollout_prefetch_preserves_first_match_for_duplicate_ids() -> Result<()> {
+    let home = TempDir::new()?;
+    let sessions = home.path().join("sessions");
+    let directory = sessions.join("2025/01/03");
+    fs::create_dir_all(&directory)?;
+    let owner = ThreadId::new();
+    let child = ThreadId::new();
+    let first = ThreadId::new();
+    let second = ThreadId::new();
+    let child_path = directory.join(format!("rollout-2025-01-03T12-00-00-{owner}_{child}.jsonl"));
+    let first_sibling =
+        directory.join(format!("rollout-2025-01-03T12-00-00-{owner}_{first}.jsonl"));
+    let second_sibling = directory.join(format!(
+        "rollout-2025-01-03T12-00-00-{owner}_{second}.jsonl"
+    ));
+    let earlier_duplicate = sessions.join(format!("rollout-2025-01-02T12-00-00-{first}.jsonl"));
+    for path in [
+        &child_path,
+        &first_sibling,
+        &second_sibling,
+        &earlier_duplicate,
+    ] {
+        fs::write(path, b"")?;
+    }
+
+    let paths = crate::prefetch_sibling_rollout_paths(home.path(), &child_path, first).await?;
+
+    assert_eq!(paths.get(&first), Some(&earlier_duplicate));
+    assert_eq!(paths.get(&second), Some(&second_sibling));
+    Ok(())
+}
+
+#[tokio::test]
 async fn read_thread_item_from_rollout_rejects_unknown_canonical_history_mode() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();

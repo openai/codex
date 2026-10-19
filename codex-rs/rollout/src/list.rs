@@ -2,6 +2,7 @@
 
 use codex_utils_path as path_utils;
 use std::cmp::Reverse;
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt;
 use std::io;
@@ -1544,6 +1545,65 @@ pub async fn find_rollout_path_by_rollout_id(
         }
     }
     Ok(None)
+}
+
+/// Prefetch a bounded set of active rollout paths for a history page.
+///
+/// The sibling directory supplies candidate IDs. They are resolved in the same traversal order as
+/// [`find_rollout_path_by_rollout_id`] to preserve duplicate-ID selection; missing or stale paths
+/// still require the normal lookup.
+pub async fn prefetch_sibling_rollout_paths(
+    codex_home: &Path,
+    child_path: &Path,
+    first_ancestor_id: RolloutId,
+) -> io::Result<HashMap<RolloutId, PathBuf>> {
+    let Some(child_name) = child_path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .and_then(RolloutFileName::parse)
+    else {
+        return Ok(HashMap::new());
+    };
+    // A thread's original rollout ends the chain of same-thread ancestors.
+    if child_name.thread_id() == child_name.rollout_id()
+        || first_ancestor_id == child_name.thread_id()
+    {
+        return Ok(HashMap::new());
+    }
+    let active_root = codex_home.join(SESSIONS_SUBDIR);
+    let canonical_root = tokio::fs::canonicalize(&active_root).await?;
+    let canonical_child = tokio::fs::canonicalize(child_path).await?;
+    let Some(directory) = canonical_child
+        .parent()
+        .filter(|directory| directory.starts_with(&canonical_root))
+    else {
+        return Ok(HashMap::new());
+    };
+    let ids = files::collect_sibling_rollout_ids(
+        directory,
+        child_name.thread_id(),
+        child_name.rollout_id(),
+    )
+    .await?;
+    if ids.len() < 2 || !ids.contains(&first_ancestor_id) {
+        return Ok(HashMap::new());
+    }
+
+    let mut paths = HashMap::new();
+    visit_rollout_filenames(
+        &active_root,
+        |file_name| ids.contains(&file_name.rollout_id()),
+        |file_name, path| {
+            paths.entry(file_name.rollout_id()).or_insert(path);
+            if paths.len() == ids.len() {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        },
+    )
+    .await?;
+    Ok(paths)
 }
 
 /// Extract the `YYYY/MM/DD` directory components from a rollout filename.

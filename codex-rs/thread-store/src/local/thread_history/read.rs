@@ -112,7 +112,7 @@ pub(in crate::local) async fn list_turns(
     .await?;
     validate_page_size(params.page_size)?;
     let lineage = store
-        .resolve_rollout_lineage(params.thread_id, /*initial_path*/ None)
+        .resolve_rollout_lineage_for_history_page(params.thread_id)
         .await?;
     let pool = store.thread_history_db().await?;
     let page = page_turn_rows(
@@ -188,7 +188,7 @@ pub(in crate::local) async fn list_items(
     }
     validate_page_size(params.page_size)?;
     let lineage = store
-        .resolve_rollout_lineage(params.thread_id, /*initial_path*/ None)
+        .resolve_rollout_lineage_for_history_page(params.thread_id)
         .await?;
     let pool = store.thread_history_db().await?;
     let page = page_item_rows(pool, &lineage, &params).await?;

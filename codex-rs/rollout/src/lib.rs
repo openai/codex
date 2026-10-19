@@ -129,6 +129,7 @@ pub use list::find_thread_path_by_id_str as find_conversation_path_by_id_str;
 pub use list::get_threads;
 pub use list::get_threads_in_root;
 pub use list::parse_cursor;
+pub use list::prefetch_sibling_rollout_paths;
 pub use list::read_head_for_summary;
 pub use list::read_session_meta_line;
 pub use list::read_thread_item_from_rollout;
