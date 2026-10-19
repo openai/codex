@@ -314,7 +314,7 @@ async fn check_thread_title_generation(scenario: TitleScenario) -> color_eyre::R
 
     enum TitleDriveEvent {
         Ui(Box<AppEvent>),
-        Server(AppServerEvent),
+        Server(crate::app_server_session::AppServerSessionEvent),
         RequestStarted,
     }
 
@@ -347,7 +347,7 @@ async fn check_thread_title_generation(scenario: TitleScenario) -> color_eyre::R
                 app.handle_event(&mut tui, &mut app_server, *event).await?;
             }
             TitleDriveEvent::Server(event) => {
-                if let AppServerEvent::ServerNotification(notification) = &event
+                if let AppServerEvent::ServerNotification(notification) = &event.event
                     && let ServerNotification::ThreadStarted(started) = notification.as_ref()
                     && started.thread.ephemeral
                 {
@@ -356,13 +356,13 @@ async fn check_thread_title_generation(scenario: TitleScenario) -> color_eyre::R
                         Some(ThreadSource::Feature("thread_title".to_string())),
                     );
                 }
-                if let AppServerEvent::ServerNotification(notification) = &event
+                if let AppServerEvent::ServerNotification(notification) = &event.event
                     && let ServerNotification::TurnCompleted(completed) = notification.as_ref()
                     && Some(&completed.thread_id) == temporary_thread_id.as_ref()
                 {
                     interrupted = completed.turn.status == TurnStatus::Interrupted;
                 }
-                app.handle_app_server_event(&app_server, event).await;
+                app.handle_backend_event(&app_server, event).await;
             }
             TitleDriveEvent::RequestStarted => {
                 let name = "Keep this title".to_string();

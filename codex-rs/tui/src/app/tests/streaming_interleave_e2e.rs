@@ -118,9 +118,9 @@ async fn command_start_before_message_completion_does_not_duplicate_preamble() -
             tokio::select! {
                 event = app_server.next_event() => {
                     let event = event.expect("embedded app-server should stay connected");
-                    let turn_completed = matches!(&event, AppServerEvent::ServerNotification(notification)
+                    let turn_completed = matches!(&event.event, AppServerEvent::ServerNotification(notification)
                         if matches!(notification.as_ref(), ServerNotification::TurnCompleted(_)));
-                    if let AppServerEvent::ServerNotification(notification) = &event {
+                    if let AppServerEvent::ServerNotification(notification) = &event.event {
                         match notification.as_ref() {
                             ServerNotification::AgentMessageDelta(delta) if delta.delta == PREAMBLE => {
                                 observed_order.push("agent delta");
@@ -157,7 +157,7 @@ async fn command_start_before_message_completion_does_not_duplicate_preamble() -
                             _ => {}
                         }
                     }
-                    app.handle_app_server_event(&app_server, event).await;
+                    app.handle_backend_event(&app_server, event).await;
                     app.drain_active_thread_events(&mut tui).await?;
                     if turn_completed {
                         break Ok::<_, color_eyre::Report>(());

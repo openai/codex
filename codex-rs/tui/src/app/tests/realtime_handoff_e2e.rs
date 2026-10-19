@@ -158,7 +158,7 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
         loop {
             tokio::select! {
                 event = app_server.next_event() => {
-                    app.handle_app_server_event(
+                    app.handle_backend_event(
                         &app_server,
                         event.expect("embedded app-server should stay connected"),
                     ).await;
@@ -268,9 +268,9 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
             tokio::select! {
                 event = app_server.next_event() => {
                     let event = event.expect("embedded app-server should stay connected");
-                    let completed = matches!(&event, AppServerEvent::ServerNotification(notification)
+                    let completed = matches!(&event.event, AppServerEvent::ServerNotification(notification)
                         if matches!(notification.as_ref(), ServerNotification::TurnCompleted(_)));
-                    app.handle_app_server_event(&app_server, event).await;
+                    app.handle_backend_event(&app_server, event).await;
                     app.drain_active_thread_events(&mut tui).await?;
                     if completed {
                         break Ok::<_, color_eyre::Report>(());

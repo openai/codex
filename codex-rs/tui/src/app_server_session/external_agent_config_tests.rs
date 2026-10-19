@@ -3,6 +3,7 @@
 use super::*;
 use crate::external_agent_config_migration::flow::ExternalAgentConfigMigrationFlowOutcome;
 use crate::external_agent_config_migration::flow::handle_external_agent_config_migration_prompt;
+use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::ServerNotification;
 use futures::SinkExt;
@@ -103,7 +104,9 @@ async fn external_agent_config_migration_over_shared_transport() -> Result<()> {
         for (import_id, consumed) in [("other-client", false), ("this-client", true)] {
             let event =
                 tokio::time::timeout(Duration::from_secs(/*secs*/ 5), session.next_event()).await?;
-            let Some(AppServerEvent::ServerNotification(notification)) = event else {
+            let Some(AppServerEvent::ServerNotification(notification)) =
+                event.map(|event| event.event)
+            else {
                 panic!("expected import completion");
             };
             let ServerNotification::ExternalAgentConfigImportCompleted(notification) =

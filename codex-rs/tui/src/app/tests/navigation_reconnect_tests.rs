@@ -272,7 +272,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
                 "Waiting for active turns.".into(),
             );
         }
-        app.handle_app_server_event(&session, disconnected).await;
+        app.handle_backend_event(&session, disconnected).await;
         assert!(app.reconnect.offline);
         assert!(app.agents_overview.last_messages.is_empty());
         assert!(refresh.await.unwrap_err().is_cancelled());

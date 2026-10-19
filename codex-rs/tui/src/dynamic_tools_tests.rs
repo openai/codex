@@ -236,7 +236,7 @@ stream_max_retries = 0
     assert_eq!(expected["page"]["order"], "newest_first");
     tokio::time::timeout(Duration::from_secs(/*secs*/ 30), async {
         while let Some(event) = model_server.next_event().await {
-            match event {
+            match event.event {
                 codex_app_server_client::AppServerEvent::ServerRequest(request) => {
                     if let codex_app_server_protocol::ServerRequest::DynamicToolCall {
                         request_id,

@@ -467,7 +467,8 @@ async fn exit_interrupts_before_requesting_shutdown() -> Result<()> {
                 .next_event()
                 .await
                 .expect("app-server event stream should remain open");
-            if let codex_app_server_client::AppServerEvent::ServerNotification(notification) = event
+            if let codex_app_server_client::AppServerEvent::ServerNotification(notification) =
+                event.event
             {
                 match notification.as_ref() {
                     ServerNotification::TurnStarted(notification)

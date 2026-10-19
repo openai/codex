@@ -573,9 +573,9 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let event = app_server.next_event().await.expect("server notification");
-            let is_created = matches!(&event, AppServerEvent::ServerNotification(notification)
+            let is_created = matches!(&event.event, AppServerEvent::ServerNotification(notification)
                 if matches!(notification.as_ref(), ServerNotification::ThreadStarted(started) if started.thread.id == created.to_string()));
-            app.handle_app_server_event(&app_server, event).await;
+            app.handle_backend_event(&app_server, event).await;
             if is_created { break; }
         }
     }).await.expect("creation notification received");

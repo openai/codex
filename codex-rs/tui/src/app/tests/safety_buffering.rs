@@ -122,7 +122,7 @@ async fn next_turn_started(
         .await
         .expect("app-server should emit a turn/start event")
         .expect("app-server event stream should remain open");
-        let started_turn_id = if let AppServerEvent::ServerNotification(notification) = &event
+        let started_turn_id = if let AppServerEvent::ServerNotification(notification) = &event.event
             && let ServerNotification::TurnStarted(notification) = notification.as_ref()
             && notification.thread_id == thread_id.to_string()
         {
@@ -130,7 +130,7 @@ async fn next_turn_started(
         } else {
             None
         };
-        app.handle_app_server_event(app_server, event).await;
+        app.handle_backend_event(app_server, event).await;
         drain_active_thread_events(app);
         if let Some(turn_id) = started_turn_id {
             return turn_id;
@@ -152,7 +152,7 @@ async fn wait_for_turn_completed(
         .expect("app-server should emit a turn/completed event")
         .expect("app-server event stream should remain open");
         let completed = matches!(
-            &event,
+            &event.event,
             AppServerEvent::ServerNotification(notification)
                 if matches!(
                     notification.as_ref(),
@@ -160,7 +160,7 @@ async fn wait_for_turn_completed(
                         if notification.thread_id == thread_id.to_string()
                 )
         );
-        app.handle_app_server_event(app_server, event).await;
+        app.handle_backend_event(app_server, event).await;
         drain_active_thread_events(app);
         if completed {
             return;
@@ -315,7 +315,7 @@ stream_max_retries = 0
         )
         .await?
         .expect("app-server remains open");
-        let committed_id = if let AppServerEvent::ServerNotification(notification) = &event
+        let committed_id = if let AppServerEvent::ServerNotification(notification) = &event.event
             && let ServerNotification::ItemCompleted(item) = notification.as_ref()
             && let ThreadItem::UserMessage {
                 content, client_id, ..
@@ -326,7 +326,7 @@ stream_max_retries = 0
         } else {
             None
         };
-        app.handle_app_server_event(&app_server, event).await;
+        app.handle_backend_event(&app_server, event).await;
         if let Some(client_id) = committed_id {
             let saved_input = if via_overview {
                 assert!(!app.thread_event_channels.contains_key(&thread_id));
@@ -429,7 +429,7 @@ async fn drive_until_request_count(
             () = server.wait_for_request_count(expected_request_count) => return,
             event = app_server.next_event() => {
                 let event = event.expect("app-server event stream should remain open");
-                app.handle_app_server_event(app_server, event).await;
+                app.handle_backend_event(app_server, event).await;
                 drain_active_thread_events(app);
             }
             () = &mut timeout => {

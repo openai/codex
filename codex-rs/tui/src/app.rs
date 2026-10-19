@@ -215,6 +215,7 @@ mod app_server_events;
 pub(crate) mod app_server_requests;
 mod app_server_thread_ownership;
 mod backend_banner_fallback;
+mod backend_events;
 mod background_requests;
 mod composer_hints;
 mod config_panel;

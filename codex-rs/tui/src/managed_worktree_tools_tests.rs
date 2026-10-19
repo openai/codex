@@ -152,7 +152,7 @@ async fn creation_attaches_to_original_task_and_survives_service_restart_scenari
         .await?;
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            if matches!(server.next_event().await, Some(codex_app_server_client::AppServerEvent::ServerNotification(notification)) if matches!(notification.as_ref(), codex_app_server_protocol::ServerNotification::TurnCompleted(_))) { break; }
+            if matches!(server.next_event().await, Some(event) if matches!(&event.event, codex_app_server_client::AppServerEvent::ServerNotification(notification) if matches!(notification.as_ref(), codex_app_server_protocol::ServerNotification::TurnCompleted(_)))) { break; }
         }
     }).await?;
     let tools = ManagedWorktreeTools::new(&config)

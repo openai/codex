@@ -764,7 +764,7 @@ async fn run_onboarding_screen_inner(
                 }
             }, if app_server.is_some() => {
                 if let Some(event) = event {
-                    match event {
+                    match event.event {
                         AppServerEvent::ServerNotification(notification) => {
                             onboarding_screen.handle_app_server_notification(*notification);
                         }

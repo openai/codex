@@ -56,7 +56,7 @@ async fn model_call(
     let approvals = tokio::time::timeout(Duration::from_secs(/*secs*/ 30), async {
         let mut approvals = 0;
         while let Some(event) = server.next_event().await {
-            match event {
+            match event.event {
                 AppServerEvent::ServerRequest(request) => {
                     let ServerRequest::McpServerElicitationRequest { request_id, params } = *request else { panic!("unexpected server request: {request:?}"); };
                     assert_eq!(params.thread_id, thread);

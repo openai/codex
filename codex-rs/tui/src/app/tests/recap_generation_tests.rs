@@ -160,7 +160,7 @@ stream_max_retries = 0
                 }
                 event = app_server.next_event() => {
                     let event = event.expect("app-server event stream");
-                    app.handle_app_server_event(&app_server, event).await;
+                    app.handle_backend_event(&app_server, event).await;
                 }
             }
         }

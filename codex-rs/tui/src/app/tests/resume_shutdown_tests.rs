@@ -39,7 +39,7 @@ async fn thread_close_exits_only_when_displayed_thread_is_unloaded() -> Result<(
     server.thread_unsubscribe(thread_id).await?;
     let closed = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
         while let Some(event) = server.next_event().await {
-            if matches!(&event,
+            if matches!(&event.event,
                 AppServerEvent::ServerNotification(notification)
                     if matches!(notification.as_ref(), ServerNotification::ThreadClosed(closed)
                         if closed.thread_id == thread_id.to_string()))
@@ -50,7 +50,7 @@ async fn thread_close_exits_only_when_displayed_thread_is_unloaded() -> Result<(
         panic!("server event stream ended before the thread closed");
     })
     .await?;
-    app.handle_app_server_event(&server, closed).await;
+    app.handle_backend_event(&server, closed).await;
     app.drain_active_thread_events(&mut tui).await?;
     assert!(
         std::iter::from_fn(|| events.try_recv().ok())

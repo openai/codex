@@ -814,13 +814,13 @@ impl App {
                 // transcript would hide the fact that server history has already changed.
                 tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
                     while let Some(event) = app_server.next_event().await {
-                        let is_reverted = matches!(
-                            &event,
+                        let is_reverted = event.backend_id == app_server.backend_id() && matches!(
+                            &event.event,
                             AppServerEvent::ServerNotification(notification)
                                 if matches!(notification.as_ref(), ServerNotification::ThreadReverted(notification)
                                     if notification.thread_id == thread_id.to_string())
                         );
-                        self.handle_app_server_event(app_server, event).await;
+                        self.handle_backend_event(app_server, event).await;
                         if is_reverted {
                             return Ok(());
                         }

@@ -391,7 +391,7 @@ async fn transcript_preview_for_history_mode(
                     panic!("app-server event stream closed before turn completed");
                 };
                 if matches!(
-                    event,
+                    event.event,
                     AppServerEvent::ServerNotification(notification)
                         if matches!(notification.as_ref(), ServerNotification::TurnCompleted(_))
                 ) {
