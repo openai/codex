@@ -1,0 +1,6 @@
+---
+source: core/tests/suite/scenarios_mcp_ema.rs
+assertion_line: 65
+expression: error
+---
+The enterprise MCP server is not logged in. Sign in to your enterprise provider in Codex, then start a new thread.

@@ -146,6 +146,9 @@ mod indirect_namespace_prefixes;
 #[path = "scenarios_mcp_resource_messages.rs"]
 mod mcp_resource_messages;
 
+#[path = "scenarios_mcp_ema.rs"]
+mod mcp_ema;
+
 #[path = "scenarios_guardian_agent_messages_tests.rs"]
 mod guardian_agent_messages;
 
@@ -294,7 +297,8 @@ fn configure_scenario_catalog(config: &mut Config) {
         stack.requirements().clone(),
         stack.requirements_toml().clone(),
     )
-    .expect("fixture config layers");
+    .expect("fixture config layers")
+    .with_cloud_config_binding(stack.cloud_config_binding().cloned());
     config.model_catalog = Some(bundled_models_response().expect("bundled model catalog"));
     config.cloud_skill_enabled = false;
 }

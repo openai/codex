@@ -15,6 +15,7 @@ use codex_app_server::in_process::InProcessClientHandle;
 use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::McpServerStartupState;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
@@ -205,8 +206,120 @@ async fn enterprise_login_attempt_lifecycle() -> Result<()> {
 
     keyring::set_default_credential_builder(Box::<TestKeyring>::default());
     let server = MockServer::builder().start().await;
+    let idp_server = MockServer::start().await;
     let origin = server.uri();
-    let issuer = format!("{origin}/idp");
+    let issuer = format!("{}/idp", idp_server.uri());
+    let resource = format!("{origin}/api/codex/ps/mcp");
+    core_test_support::apps_test_server::AppsTestServer::mount(&server).await?;
+    let catalog_meta = json!({"enterpriseCatalog": "calendar"});
+    let response_meta = catalog_meta.clone();
+    Mock::given(method("POST"))
+        .and(path("/api/codex/ps/mcp"))
+        .and(wiremock::matchers::header_regex(
+            "authorization",
+            "^Bearer enterprise-resource-",
+        ))
+        .and(body_partial_json(json!({"method": "tools/list"})))
+        .respond_with(move |request: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0", "id": body["id"],
+                "result": {
+                    "tools": [{"name": "calendar_list_events", "inputSchema": {"type": "object"}}],
+                    "_meta": response_meta,
+                },
+            }))
+        })
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/.well-known/oauth-protected-resource/api/codex/ps/mcp",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "resource": resource, "authorization_servers": [format!("{origin}/as")],
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server/as"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issuer": format!("{origin}/as"), "token_endpoint": format!("{origin}/as/token"),
+            "grant_types_supported": ["urn:ietf:params:oauth:grant-type:jwt-bearer"],
+            "token_endpoint_auth_methods_supported": ["none"],
+        })))
+        .mount(&server)
+        .await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let jag = format!(
+        "{}.{}.c2lnbmF0dXJl",
+        URL_SAFE_NO_PAD.encode(r#"{"alg":"ES256","typ":"oauth-id-jag+jwt"}"#),
+        URL_SAFE_NO_PAD.encode(
+            json!({
+                "iss": issuer, "aud": format!("{origin}/as"), "sub": "enterprise-user",
+                "client_id": "mcp-client", "jti": "enterprise-grant", "iat": now,
+                "exp": now + 3600, "resource": resource, "scope": "files.read",
+            })
+            .to_string()
+        ),
+    );
+    let expected_jag = jag.clone();
+    let resource_exchanges = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let exchanges = Arc::clone(&resource_exchanges);
+    Mock::given(method("POST")).and(path("/as/token"))
+        .respond_with(move |request: &wiremock::Request| {
+            let fields = url::form_urlencoded::parse(&request.body).into_owned().collect::<HashMap<_, _>>();
+            assert_eq!(fields.get("assertion"), Some(&expected_jag));
+            ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": format!("enterprise-resource-{}", exchanges.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1),
+                "token_type": "Bearer", "expires_in": 3600,
+            }))
+        }).mount(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/api/codex/ps/mcp"))
+        .and(header("authorization", "Bearer enterprise-resource-1"))
+        .and(body_partial_json(json!({"method": "tools/call"})))
+        .respond_with(ResponseTemplate::new(401))
+        .with_priority(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    let token_resource = resource.clone();
+    let pending_exchange = Arc::new(Mutex::new(
+        None::<(
+            tokio::sync::oneshot::Sender<()>,
+            std::sync::mpsc::Receiver<()>,
+        )>,
+    ));
+    let exchange_gate = Arc::clone(&pending_exchange);
+    Mock::given(method("POST"))
+        .and(path("/idp/token"))
+        .and(wiremock::matchers::body_string_contains(
+            "grant-type%3Atoken-exchange",
+        ))
+        .respond_with(move |request: &wiremock::Request| {
+            let fields = url::form_urlencoded::parse(&request.body)
+                .into_owned()
+                .collect::<HashMap<_, _>>();
+            assert_eq!(
+                fields.get("subject_token").map(String::as_str),
+                Some("enterprise-refresh")
+            );
+            if let Some((arrived, release)) = exchange_gate.lock().unwrap().take() {
+                let _ = arrived.send(());
+                let _ = release.recv();
+            }
+            ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": jag, "issued_token_type": "urn:ietf:params:oauth:token-type:id-jag",
+                "token_type": "N_A", "resource": token_resource, "scope": "files.read",
+            }))
+        })
+        .with_priority(1)
+        .mount(&idp_server)
+        .await;
     Mock::given(method("GET"))
         .and(path("/backend-api/wham/config/bundle"))
         .respond_with(
@@ -223,7 +336,7 @@ async fn enterprise_login_attempt_lifecycle() -> Result<()> {
             "token_endpoint": format!("{issuer}/token"),
             "token_endpoint_auth_methods_supported": ["none"],
         })))
-        .mount(&server)
+        .mount(&idp_server)
         .await;
     let assertion = format!(
         "{}.{}.signature",
@@ -239,7 +352,7 @@ async fn enterprise_login_attempt_lifecycle() -> Result<()> {
             "access_token":"enterprise-access", "refresh_token":"enterprise-refresh",
             "id_token":assertion, "token_type":"Bearer",
         })))
-        .mount(&server)
+        .mount(&idp_server)
         .await;
 
     let home = TempDir::new()?;
@@ -262,10 +375,14 @@ issuer = "{issuer}"
 client_id = "idp-client"
 
 [mcp_servers.enterprise]
-url = "{origin}/mcp"
+url = "{resource}"
 auth = "ema_auth"
 scopes = ["files.read"]
 oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as" }}
+
+[mcp_servers.ordinary]
+url = "{resource}"
+http_headers = {{ Authorization = "Bearer ordinary-access" }}
 
 [mcp_servers.disabled-enterprise]
 url = "{origin}/mcp"
@@ -455,6 +572,171 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
         );
     }
 
+    // A fresh thread uses the saved enterprise grant and renews it for MCP requests.
+    let connected = enterprise_rpc(&client, "thread/start", json!({})).await?;
+    let connected_id = connected["thread"]["id"]
+        .as_str()
+        .context("connected thread ID")?;
+    let call = |server: &str| {
+        json!({
+            "threadId": connected_id, "server": server,
+            "tool": "calendar_list_events", "arguments": {"query": "hello"},
+        })
+    };
+    // A rejected operation is not replayed. The next explicit call renews its bearer.
+    assert_eq!(
+        enterprise_rpc(&client, "mcpServer/tool/call", call("enterprise")).await?["isError"],
+        true
+    );
+    let enterprise_result =
+        enterprise_rpc(&client, "mcpServer/tool/call", call("enterprise")).await?;
+    let ordinary_result = enterprise_rpc(&client, "mcpServer/tool/call", call("ordinary")).await?;
+    assert_eq!(enterprise_result, ordinary_result);
+    let bulk_status = enterprise_rpc(
+        &client,
+        "mcpServerStatus/list",
+        json!({"threadId": connected_id}),
+    )
+    .await?;
+    let statuses = bulk_status["data"].as_array().context("server statuses")?;
+    for name in ["enterprise", "ordinary"] {
+        let selected_status = enterprise_rpc(
+            &client,
+            "mcpServerStatus/list",
+            json!({"threadId": connected_id, "serverName": name}),
+        )
+        .await?;
+        let status = statuses
+            .iter()
+            .find(|status| status["name"] == name)
+            .context("connected server status")?;
+        assert_eq!(status, &selected_status["data"][0]);
+        assert!(!status["tools"]["calendar_list_events"].is_null());
+        if name == "enterprise" {
+            assert_eq!(status["toolListMeta"], catalog_meta);
+        }
+    }
+    // Bulk inventory must not attach the old connection's catalog to an edited registration.
+    let inventory_request_count = |requests: &[wiremock::Request]| {
+        requests
+            .iter()
+            .filter(|request| {
+                request.headers.get("authorization").is_some_and(|value| {
+                    value.as_bytes().starts_with(b"Bearer enterprise-resource-")
+                }) && serde_json::from_slice::<Value>(&request.body).is_ok_and(|body| {
+                    matches!(
+                        body["method"].as_str(),
+                        Some("resources/list" | "resources/templates/list")
+                    )
+                })
+            })
+            .count()
+    };
+    let inventory_requests_before =
+        inventory_request_count(&server.received_requests().await.context("requests")?);
+    assert!(inventory_requests_before > 0);
+    let config_path = home.path().join("config.toml");
+    let saved_config = std::fs::read_to_string(&config_path)?;
+    let mut edited_config: toml::Value = toml::from_str(&saved_config)?;
+    for (url, enabled) in [
+        ("https://replacement.example/mcp", true),
+        (resource.as_str(), false),
+    ] {
+        let enterprise = edited_config["mcp_servers"]["enterprise"]
+            .as_table_mut()
+            .context("enterprise config")?;
+        enterprise.insert("url".into(), toml::Value::String(url.into()));
+        enterprise.insert("enabled".into(), toml::Value::Boolean(enabled));
+        std::fs::write(&config_path, toml::to_string(&edited_config)?)?;
+        let changed = enterprise_rpc(
+            &client,
+            "mcpServerStatus/list",
+            json!({"threadId": connected_id}),
+        )
+        .await?;
+        assert_eq!(
+            inventory_request_count(&server.received_requests().await.context("requests")?),
+            inventory_requests_before,
+            "bulk status must not query the previous enterprise registration",
+        );
+        let changed = changed["data"].as_array().context("changed statuses")?;
+        let enterprise = changed
+            .iter()
+            .find(|status| status["name"] == "enterprise")
+            .context("changed enterprise status")?;
+        assert_eq!(
+            enterprise["httpOrigin"],
+            url::Url::parse(url)?.origin().ascii_serialization()
+        );
+        assert_eq!(enterprise["tools"], json!({}));
+        assert_eq!(enterprise["resources"], json!([]));
+        assert_eq!(enterprise["resourceTemplates"], json!([]));
+        for field in ["serverInfo", "serverCapabilities", "toolListMeta"] {
+            assert!(enterprise[field].is_null(), "stale {field}: {enterprise}");
+        }
+        assert_eq!(
+            changed.iter().find(|status| status["name"] == "ordinary"),
+            statuses.iter().find(|status| status["name"] == "ordinary"),
+        );
+    }
+    std::fs::write(config_path, saved_config)?;
+    let authorization = server
+        .received_requests()
+        .await
+        .context("requests")?
+        .into_iter()
+        .filter(|request| {
+            serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .is_some_and(|body| body["method"] == "tools/call")
+        })
+        .map(|request| {
+            request.headers["authorization"]
+                .to_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        authorization,
+        [
+            "Bearer enterprise-resource-1",
+            "Bearer enterprise-resource-2",
+            "Bearer ordinary-access"
+        ]
+    );
+    assert_eq!(
+        resource_exchanges.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+
+    // Replacing the enterprise grant fences old threads, including cached bearers.
+    let relogin = enterprise_rpc(
+        &client,
+        "mcpServer/oauth/login",
+        json!({"name":"enterprise","threadId":connected_id}),
+    )
+    .await?;
+    browser
+        .get(enterprise_callback(&relogin, &issuer, callback_port)?)
+        .header(http::header::CONNECTION, "close")
+        .send()
+        .await?;
+    assert_eq!(
+        enterprise_completion(&mut client).await?,
+        json!({
+            "name":"enterprise","threadId":connected_id,"loginId":relogin["loginId"],"success":true,
+        })
+    );
+    assert_eq!(
+        enterprise_rpc(&client, "mcpServer/tool/call", call("enterprise")).await?["isError"],
+        true
+    );
+    assert_eq!(
+        enterprise_rpc(&client, "mcpServer/tool/call", call("ordinary")).await?,
+        ordinary_result
+    );
+
     let stalled = enterprise_rpc(
         &client,
         "mcpServer/oauth/login",
@@ -469,6 +751,11 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
     // It cannot finish draining the declared body while this socket stays open.
     let mut response = [0; 256];
     assert!(timeout(DEFAULT_READ_TIMEOUT, unfinished.read(&mut response)).await?? > 0);
+    let (exchange_arrived, exchange_wait) = tokio::sync::oneshot::channel();
+    let (release_exchange, exchange_release) = std::sync::mpsc::channel();
+    *pending_exchange.lock().unwrap() = Some((exchange_arrived, exchange_release));
+    let pending = enterprise_rpc(&client, "thread/start", json!({})).await?;
+    timeout(DEFAULT_READ_TIMEOUT, exchange_wait).await??;
     let logout = timeout(
         std::time::Duration::from_secs(15),
         enterprise_rpc(&client, "account/logout", json!({})),
@@ -476,8 +763,60 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
     .await;
     // Release the worker even when the regression fails, so child shutdown cannot hang.
     drop(unfinished);
+    let _ = release_exchange.send(());
     logout.context("an unfinished callback must not prevent primary logout")??;
+    // Observe the original startup's completion before a tool call can refresh it.
+    let mut startup_finished = false;
+    let mut login_completion = None;
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        while !startup_finished || login_completion.is_none() {
+            if let InProcessServerEvent::ServerNotification(notification) =
+                client.next_event().await.context("logout notification")?
+            {
+                match *notification {
+                    ServerNotification::McpServerStatusUpdated(notification)
+                        if notification.thread_id.as_deref()
+                            == pending["thread"]["id"].as_str()
+                            && notification.name == "enterprise"
+                            && notification.status != McpServerStartupState::Starting =>
+                    {
+                        startup_finished = true;
+                    }
+                    ServerNotification::McpServerOauthLoginCompleted(notification) => {
+                        login_completion = Some(serde_json::to_value(notification)?);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    assert_eq!(
+        login_completion.context("enterprise login completion")?,
+        json!({"name":"enterprise","threadId":thread_id,"loginId":stalled["loginId"],"success":false,"error":"Enterprise sign-in failed."})
+    );
+    assert_eq!(
+        resource_exchanges.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+    assert!(
+        enterprise_rpc(
+            &client,
+            "mcpServer/tool/call",
+            json!({
+                "threadId": pending["thread"]["id"], "server": "enterprise",
+                "tool": "calendar_list_events", "arguments": {},
+            })
+        )
+        .await
+        .is_err()
+    );
     assert!(!home.path().join("auth.json").exists());
+    assert_eq!(
+        enterprise_rpc(&client, "mcpServer/tool/call", call("ordinary")).await?,
+        ordinary_result
+    );
     assert!(
         stored_oauth_credentials(
             &idp.credential_name(
@@ -489,10 +828,6 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
             AuthKeyringBackendKind::Direct,
         )?
         .is_none()
-    );
-    assert_eq!(
-        enterprise_completion(&mut client).await?,
-        json!({"name":"enterprise","threadId":thread_id,"loginId":stalled["loginId"],"success":false,"error":"Enterprise sign-in failed."})
     );
     client.shutdown().await?;
     Ok(())

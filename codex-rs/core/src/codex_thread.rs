@@ -1152,6 +1152,7 @@ impl CodexThread {
         &self,
         server: &str,
         detail: codex_mcp::McpSnapshotDetail,
+        expected_registration: Option<&codex_mcp::ResolvedMcpServer>,
     ) -> anyhow::Result<(
         Arc<codex_mcp::McpConfig>,
         codex_mcp::McpServerStatusSnapshot,
@@ -1161,7 +1162,7 @@ impl CodexThread {
         self.session
             .services
             .mcp_runtime
-            .server_status_snapshot(server, detail, &runtime_context)
+            .server_status_snapshot(server, detail, expected_registration, &runtime_context)
             .await
     }
 

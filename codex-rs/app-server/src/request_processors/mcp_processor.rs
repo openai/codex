@@ -401,7 +401,7 @@ impl McpRequestProcessor {
             (thread.as_ref(), params.server_name.as_deref())
         {
             thread
-                .mcp_server_status_snapshot(server, detail)
+                .mcp_server_status_snapshot(server, detail, /*expected_registration*/ None)
                 .await
                 .map_err(|error| {
                     internal_error(format!("failed to read MCP server status: {error:#}"))
@@ -432,7 +432,7 @@ impl McpRequestProcessor {
                     ),
                 ),
             };
-            let snapshot = collect_mcp_server_status_snapshot_with_detail(
+            let mut snapshot = collect_mcp_server_status_snapshot_with_detail(
                 &mcp_config,
                 auth.as_ref(),
                 runtime_context,
@@ -442,6 +442,54 @@ impl McpRequestProcessor {
                 params.server_name.as_deref(),
             )
             .await;
+            if mcp_config.xaa_enabled
+                && let Some(thread) = thread.as_ref()
+            {
+                // EMA can only use its admitted thread connection. Keep ordinary
+                // status discovery unchanged and replace the threadless EMA results.
+                for (name, server) in mcp_config.mcp_server_catalog.configured_servers() {
+                    if !matches!(server.auth, McpServerAuth::EmaAuth) {
+                        continue;
+                    }
+                    let (selected_config, mut selected) = thread
+                        .mcp_server_status_snapshot(
+                            &name,
+                            detail,
+                            mcp_config.mcp_server_catalog.server(&name),
+                        )
+                        .await
+                        .map_err(|error| {
+                            internal_error(format!("failed to read MCP server status: {error:#}"))
+                        })?;
+                    if selected_config.mcp_server_catalog.server(&name)
+                        != mcp_config.mcp_server_catalog.server(&name)
+                    {
+                        continue;
+                    }
+                    snapshot.server_infos.remove(&name);
+                    snapshot.server_infos.extend(selected.server_infos);
+                    snapshot.server_capabilities.remove(&name);
+                    if let Some(capabilities) = selected.server_capabilities.remove(&name) {
+                        snapshot
+                            .server_capabilities
+                            .insert(name.clone(), capabilities);
+                    }
+                    snapshot.tools_by_server.remove(&name);
+                    snapshot.tools_by_server.extend(selected.tools_by_server);
+                    snapshot.tool_list_meta.remove(&name);
+                    snapshot.tool_list_meta.extend(selected.tool_list_meta);
+                    snapshot.tools_errors.remove(&name);
+                    snapshot.tools_errors.extend(selected.tools_errors);
+                    snapshot.resources.remove(&name);
+                    snapshot.resources.extend(selected.resources);
+                    snapshot.resource_templates.remove(&name);
+                    snapshot
+                        .resource_templates
+                        .extend(selected.resource_templates);
+                    snapshot.auth_statuses.remove(&name);
+                    snapshot.auth_statuses.extend(selected.auth_statuses);
+                }
+            }
             (Arc::new(mcp_config), snapshot)
         };
 
