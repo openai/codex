@@ -4,6 +4,8 @@ use super::*;
 use crate::app_server_session::AppServerSessionEvent;
 use crate::backend_id::BackendId;
 use codex_app_server_client::AppServerEvent;
+use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
+use codex_app_server_protocol::AccountUpdatedNotification;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -23,6 +25,7 @@ async fn foreign_backend_events_leave_thread_cache_and_connection_untouched() ->
     while events.try_recv().is_ok() {}
     requests.lock().unwrap().clear();
     let input = app.chat_widget.capture_thread_input_state();
+    let hard_stop_generation = app.rate_limit_hard_stop_generation;
     let foreign = BackendId::new();
     let request = exec_approval_request(id, "foreign-turn", "command", /*approval_id*/ None);
     for event in [
@@ -42,7 +45,37 @@ async fn foreign_backend_events_leave_thread_cache_and_connection_untouched() ->
         )
         .await;
     }
+    for event in [
+        AppServerEvent::Lagged { skipped: 1 },
+        AppServerEvent::Disconnected {
+            message: "background disconnected".into(),
+        },
+        AppServerEvent::ServerNotification(Box::new(ServerNotification::AccountUpdated(
+            AccountUpdatedNotification {
+                auth_mode: None,
+                plan_type: None,
+            },
+        ))),
+        AppServerEvent::ServerNotification(Box::new(ServerNotification::AccountRateLimitsUpdated(
+            AccountRateLimitsUpdatedNotification {
+                rate_limits: serde_json::from_value(
+                    serde_json::json!({ "spendControlReached": true }),
+                )?,
+            },
+        ))),
+    ] {
+        app.handle_polled_backend_event(
+            &server,
+            foreign,
+            AppServerSessionEvent {
+                backend_id: server.backend_id(),
+                event,
+            },
+        )
+        .await;
+    }
     assert!(!app.reconnect.offline);
+    assert_eq!(app.rate_limit_hard_stop_generation, hard_stop_generation);
     assert!(
         !app.pending_app_server_requests
             .contains_server_request(&request)

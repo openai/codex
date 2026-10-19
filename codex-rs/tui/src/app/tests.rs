@@ -71,6 +71,8 @@ mod quick_dials_tests;
 #[path = "tests/unavailable_commands_tests.rs"]
 mod unavailable_commands;
 
+#[path = "tests/backend_sessions_tests.rs"]
+mod backend_sessions;
 #[path = "tests/history_hydration_tests.rs"]
 mod history_hydration_tests;
 #[path = "tests/permission_shortcuts_tests.rs"]
