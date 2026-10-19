@@ -73,6 +73,7 @@ struct ScoreState {
 #[derive(Debug, PartialEq)]
 pub(super) struct CachedScore {
     pub(super) lag: usize,
+    pub(super) sampled_at: Option<SystemTime>,
     pub(super) score_at_or_before_action: bool,
     pub(super) has_unscored_failure: bool,
     pub(super) js_executions: usize,
@@ -196,6 +197,11 @@ impl GuardianV2ScoreProgress {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         CachedScore {
+            sampled_at: state
+                .score
+                .as_ref()
+                .and_then(|score| score.sampled_at)
+                .map(SystemTime::from),
             // Use the accepted score's source, not the coverage high-water mark.
             score_at_or_before_action: state
                 .wrapper_lag

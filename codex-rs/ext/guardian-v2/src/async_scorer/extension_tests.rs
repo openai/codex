@@ -432,8 +432,8 @@ struct RecordingMetrics(Mutex<Vec<RecordedMetric>>);
 impl RecordingMetrics {
     fn classification_samples(&self) -> Vec<RecordedMetric> {
         self.0.lock().unwrap().iter().filter(|sample| {
-            !matches!(sample, RecordedMetric::Histogram(name, _, _) if name == codex_guardian_context::SECTION_COST_METRIC || name == codex_guardian_context::REQUEST_TOKENS_METRIC || name.starts_with("codex.guardian_v2.connection.") || name.starts_with("codex.guardian_v2.sampling."))
-                && !matches!(sample, RecordedMetric::Counter(name, _, _) if name.starts_with("codex.guardian_v2.sampling."))
+            !matches!(sample, RecordedMetric::Histogram(name, _, _) if name == codex_guardian_context::SECTION_COST_METRIC || name == codex_guardian_context::REQUEST_TOKENS_METRIC || name.starts_with("codex.guardian_v2.connection.") || name.starts_with("codex.guardian_v2.sampling.") || name == "codex.guardian_v2.score_age_ms")
+                && !matches!(sample, RecordedMetric::Counter(name, _, _) if name.starts_with("codex.guardian_v2.sampling.") || name == "codex.guardian_v2.adaptive_review" || name == "codex.guardian_v2.score_readiness" || name == "codex.guardian.review.route")
         }).cloned().collect()
     }
 }
@@ -1144,6 +1144,7 @@ async fn unscored_tools_invalidate_cached_scores() -> Result<()> {
         .expect("score progress");
     let mut expected = progress.inspect(/*call_id*/ None);
     expected.action_risk = Some(0.25);
+    expected.sampled_at = None;
     fixture.score_tool(ToolName::plain("wait")).await;
     assert_eq!(progress.inspect(/*call_id*/ None), expected);
     // A dynamic function named exec is not a Code Mode wrapper. An MCP tool
@@ -1593,7 +1594,7 @@ max_recent_non_user_entries = 8
             scores: BTreeMap::from([("action_risk".to_owned(), 0.65)]),
             call_id: None,
             action: None,
-            sampled_at: None,
+            sampled_at: Some((std::time::SystemTime::now() - Duration::from_secs(1)).into()),
         },
     );
     assert_eq!(
@@ -1769,8 +1770,15 @@ max_recent_non_user_entries = 8
         .collect::<Vec<_>>()
     );
     let metrics = thread_store.get::<RecordingMetrics>().unwrap();
+    assert_eq!(metrics.0.lock().unwrap().iter().filter(|sample| matches!(sample, RecordedMetric::Counter(name, _, _) if name == "codex.guardian.review.route")).cloned().collect::<Vec<_>>(), vec![RecordedMetric::Counter(
+        "codex.guardian.review.route".to_owned(), 1,
+        vec![("route".to_owned(), "async_fallback".to_owned()), ("reason".to_owned(), "stale_score".to_owned())],
+    )]);
+    assert_eq!(metrics.0.lock().unwrap().iter().filter(|sample| matches!(sample, RecordedMetric::Counter(name, _, _) if name == "codex.guardian_v2.adaptive_review")).count(), 2);
+    assert_eq!(metrics.0.lock().unwrap().iter().filter(|sample| matches!(sample, RecordedMetric::Counter(name, _, tags) if name == "codex.guardian_v2.score_readiness" && tags == &vec![("ready".to_owned(), "true".to_owned())])).count(), 2);
+    assert!(initial_metrics.0.lock().unwrap().iter().any(|sample| matches!(sample, RecordedMetric::Histogram(name, age, _) if name == "codex.guardian_v2.score_age_ms" && *age >= 1000)));
     assert_eq!(
-        *metrics.0.lock().unwrap(),
+        metrics.classification_samples(),
         vec![
             RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 3, vec![]),
             RecordedMetric::Counter(
@@ -3797,6 +3805,7 @@ async fn cached_score_publication_rejects_delayed_results_without_changing_cover
     let mut expected = cached;
     expected.lag = 0;
     expected.action_risk = Some(0.0);
+    expected.sampled_at = delayed_score.sampled_at.map(std::time::SystemTime::from);
     expected.authorization = Some(authorization);
     assert_eq!(progress.inspect(/*call_id*/ None), expected);
     assert!(progress.inspect(Some("active-overflow")).oversized);
