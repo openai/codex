@@ -6,14 +6,22 @@ use zeroize::Zeroize;
 /// Use a generous buffer size to avoid truncation and to allow for longer API
 /// keys in the future.
 const BUFFER_SIZE: usize = 1024;
-const AUTH_HEADER_PREFIX: &[u8] = b"Bearer ";
+pub(crate) const AUTH_HEADER_PREFIX: &[u8] = b"Bearer ";
 
 /// Reads the auth token from stdin and returns a static `Authorization` header
 /// value with the auth token used with `Bearer`. The header value is returned
 /// as a `&'static str` whose bytes are locked in memory to avoid accidental
 /// exposure.
 pub(crate) fn read_auth_header_from_stdin() -> Result<&'static str> {
-    read_auth_header_with(read_from_stdin)
+    read_api_key_with(read_from_stdin)
+}
+
+fn read_api_key_with(
+    read_fn: impl FnMut(&mut [u8]) -> std::io::Result<usize>,
+) -> Result<&'static str> {
+    read_auth_header_with::<BUFFER_SIZE>(read_fn, validate_auth_header_bytes, || {
+        anyhow!("API key is too large to fit in the {BUFFER_SIZE}-byte buffer")
+    })
 }
 
 #[cfg(windows)]
@@ -68,18 +76,23 @@ pub(crate) fn read_from_stdin(buffer: &mut [u8]) -> std::io::Result<usize> {
     }
 }
 
-fn read_auth_header_with<F>(mut read_fn: F) -> Result<&'static str>
-where
-    F: FnMut(&mut [u8]) -> std::io::Result<usize>,
-{
+/// Reads and locks one permanent credential. The validator receives the raw
+/// token line and returns the length of its validated prefix after trimming.
+/// The buffer size includes the Bearer prefix and any line terminators.
+/// Do not use for renewable tokens: the allocation lives until process exit.
+pub(crate) fn read_auth_header_with<const N: usize>(
+    mut read_fn: impl FnMut(&mut [u8]) -> std::io::Result<usize>,
+    validate: impl FnOnce(&[u8]) -> Result<usize>,
+    buffer_full_error: impl FnOnce() -> anyhow::Error,
+) -> Result<&'static str> {
     // TAKE CARE WHEN MODIFYING THIS CODE!!!
     //
-    // This function goes to great lengths to avoid leaving the API key in
+    // This function goes to great lengths to avoid leaving the credential in
     // memory longer than necessary and to avoid copying it around. We read
     // directly into a stack buffer so the only heap allocation should be the
     // one to create the String (with the exact size) for the header value,
     // which we then immediately protect with mlock(2).
-    let mut buf = [0u8; BUFFER_SIZE];
+    let mut buf = [0u8; N];
     buf[..AUTH_HEADER_PREFIX.len()].copy_from_slice(AUTH_HEADER_PREFIX);
 
     let prefix_len = AUTH_HEADER_PREFIX.len();
@@ -119,32 +132,21 @@ where
     // If buffer filled and we did not see newline or EOF, error out.
     if total_read == capacity && !saw_newline && !saw_eof {
         buf.zeroize();
-        return Err(anyhow!(
-            "API key is too large to fit in the {BUFFER_SIZE}-byte buffer"
-        ));
+        return Err(buffer_full_error());
     }
 
-    let mut total = prefix_len + total_read;
-    while total > prefix_len && (buf[total - 1] == b'\n' || buf[total - 1] == b'\r') {
-        total -= 1;
-    }
-
-    if total == AUTH_HEADER_PREFIX.len() {
-        buf.zeroize();
-        return Err(anyhow!(
-            "API key must be provided via stdin (e.g. printenv OPENAI_API_KEY | codex responses-api-proxy)"
-        ));
-    }
-
-    if let Err(err) = validate_auth_header_bytes(&buf[AUTH_HEADER_PREFIX.len()..total]) {
-        buf.zeroize();
-        return Err(err);
-    }
+    let total = match validate(&buf[prefix_len..prefix_len + total_read]) {
+        Ok(len) => prefix_len + len,
+        Err(err) => {
+            buf.zeroize();
+            return Err(err);
+        }
+    };
 
     let header_str = match std::str::from_utf8(&buf[..total]) {
         Ok(value) => value,
         Err(err) => {
-            // In theory, validate_auth_header_bytes() should have caught
+            // In theory, the validator should have caught
             // any invalid UTF-8 sequences, but just in case...
             buf.zeroize();
             return Err(err).context("reading Authorization header from stdin as UTF-8");
@@ -161,7 +163,7 @@ where
 }
 
 #[cfg(unix)]
-fn mlock_str(value: &str) {
+fn mlock_str(value: &'static str) {
     use libc::_SC_PAGESIZE;
     use libc::c_void;
     use libc::mlock;
@@ -200,16 +202,27 @@ fn mlock_str(value: &str) {
 }
 
 #[cfg(not(unix))]
-fn mlock_str(_value: &str) {}
+fn mlock_str(_value: &'static str) {}
 
 /// The key should match /^[A-Za-z0-9\-_]+$/. Ensure there is no funny business
 /// with NUL characters and whatnot.
-fn validate_auth_header_bytes(key_bytes: &[u8]) -> Result<()> {
+fn validate_auth_header_bytes(mut key_bytes: &[u8]) -> Result<usize> {
+    while key_bytes
+        .last()
+        .is_some_and(|byte| matches!(byte, b'\n' | b'\r'))
+    {
+        key_bytes = &key_bytes[..key_bytes.len() - 1];
+    }
+    if key_bytes.is_empty() {
+        return Err(anyhow!(
+            "API key must be provided via stdin (e.g. printenv OPENAI_API_KEY | codex responses-api-proxy)"
+        ));
+    }
     if key_bytes
         .iter()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
-        return Ok(());
+        return Ok(key_bytes.len());
     }
 
     Err(anyhow!(
@@ -226,7 +239,7 @@ mod tests {
     #[test]
     fn reads_key_with_no_newlines() {
         let mut sent = false;
-        let result = read_auth_header_with(|buf| {
+        let result = read_api_key_with(|buf| {
             if sent {
                 return Ok(0);
             }
@@ -244,7 +257,7 @@ mod tests {
     fn reads_key_with_short_reads() {
         let mut chunks: VecDeque<&[u8]> =
             VecDeque::from(vec![b"sk-".as_ref(), b"abc".as_ref(), b"123\n".as_ref()]);
-        let result = read_auth_header_with(|buf| match chunks.pop_front() {
+        let result = read_api_key_with(|buf| match chunks.pop_front() {
             Some(chunk) if !chunk.is_empty() => {
                 buf[..chunk.len()].copy_from_slice(chunk);
                 Ok(chunk.len())
@@ -259,7 +272,7 @@ mod tests {
     #[test]
     fn reads_key_and_trims_newlines() {
         let mut sent = false;
-        let result = read_auth_header_with(|buf| {
+        let result = read_api_key_with(|buf| {
             if sent {
                 return Ok(0);
             }
@@ -275,14 +288,14 @@ mod tests {
 
     #[test]
     fn errors_when_no_input_provided() {
-        let err = read_auth_header_with(|_| Ok(0)).unwrap_err();
+        let err = read_api_key_with(|_| Ok(0)).unwrap_err();
         let message = format!("{err:#}");
         assert!(message.contains("must be provided"));
     }
 
     #[test]
     fn errors_when_buffer_filled() {
-        let err = read_auth_header_with(|buf| {
+        let err = read_api_key_with(|buf| {
             let data = vec![b'a'; BUFFER_SIZE - AUTH_HEADER_PREFIX.len()];
             buf[..data.len()].copy_from_slice(&data);
             Ok(data.len())
@@ -296,7 +309,7 @@ mod tests {
 
     #[test]
     fn propagates_io_error() {
-        let err = read_auth_header_with(|_| Err(io::Error::other("boom"))).unwrap_err();
+        let err = read_api_key_with(|_| Err(io::Error::other("boom"))).unwrap_err();
 
         let io_error = err.downcast_ref::<io::Error>().unwrap();
         assert_eq!(io_error.kind(), io::ErrorKind::Other);
@@ -306,7 +319,7 @@ mod tests {
     #[test]
     fn errors_on_invalid_utf8() {
         let mut sent = false;
-        let err = read_auth_header_with(|buf| {
+        let err = read_api_key_with(|buf| {
             if sent {
                 return Ok(0);
             }
@@ -323,19 +336,26 @@ mod tests {
 
     #[test]
     fn errors_on_invalid_characters() {
-        let mut sent = false;
-        let err = read_auth_header_with(|buf| {
-            if sent {
-                return Ok(0);
-            }
-            let data = b"sk-abc!23";
-            buf[..data.len()].copy_from_slice(data);
-            sent = true;
-            Ok(data.len())
-        })
-        .unwrap_err();
-
-        let message = format!("{err:#}");
-        assert!(message.contains("API key may only contain ASCII letters, numbers, '-' or '_'"));
+        for data in [
+            b"sk-abc!23".as_slice(),
+            b"sk.abc123",
+            b"sk-abc+123",
+            b"sk-abc=123",
+        ] {
+            let mut sent = false;
+            let err = read_api_key_with(|buf| {
+                if sent {
+                    return Ok(0);
+                }
+                buf[..data.len()].copy_from_slice(data);
+                sent = true;
+                Ok(data.len())
+            })
+            .unwrap_err();
+            let message = format!("{err:#}");
+            assert!(
+                message.contains("API key may only contain ASCII letters, numbers, '-' or '_'")
+            );
+        }
     }
 }

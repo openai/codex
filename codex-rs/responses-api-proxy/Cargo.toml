@@ -19,14 +19,20 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+codex-http-client = { workspace = true }
 codex-process-hardening = { workspace = true }
 ctor = { workspace = true }
+http = { workspace = true }
 libc = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tiny_http = { workspace = true }
-zeroize = { workspace = true }
+tokio = { workspace = true, features = ["rt", "time", "net"] }
+url = { workspace = true }
+zeroize = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+tracing = { workspace = true }
+tracing-test = { workspace = true, features = ["no-env-filter"] }

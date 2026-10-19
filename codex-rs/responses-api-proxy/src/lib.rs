@@ -30,6 +30,8 @@ use tiny_http::StatusCode;
 
 mod auth;
 mod dump;
+#[cfg_attr(not(test), allow(dead_code, reason = "used by a later stack layer"))]
+mod github_oidc;
 mod read_api_key;
 use auth::Auth;
 use dump::ExchangeDumper;
