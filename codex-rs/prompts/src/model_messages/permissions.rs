@@ -55,6 +55,7 @@ impl<'a> ResolvedApprovalMessages<'a> {
 /// Permission text retains its source so renderers can distinguish catalog text from templates.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ResolvedPermissionMessages<'a> {
+    pub(crate) approved_prefixes: ResolvedMessage<'a>,
     pub(crate) danger_full_access: ResolvedMessage<'a>,
     pub(crate) workspace_write: ResolvedMessage<'a>,
     pub(crate) read_only: ResolvedMessage<'a>,
@@ -63,6 +64,10 @@ pub(crate) struct ResolvedPermissionMessages<'a> {
 impl<'a> ResolvedPermissionMessages<'a> {
     pub(crate) fn new(messages: Option<&'a PermissionMessages>) -> Self {
         Self {
+            approved_prefixes: ResolvedMessage::new(
+                messages.and_then(|m| m.approved_prefixes.as_deref()),
+                include_str!("../../templates/permissions/approved_prefixes.md").trim_end(),
+            ),
             danger_full_access: ResolvedMessage::new(
                 messages.and_then(|m| m.danger_full_access.as_deref()),
                 DANGER_FULL_ACCESS_TEMPLATE,

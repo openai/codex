@@ -51,6 +51,7 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
         danger_full_access: Some("danger".to_string()),
         workspace_write: Some(String::new()),
         read_only: None,
+        approved_prefixes: None,
     };
     let multi_agent = MultiAgentMessages {
         role: Some(MultiAgentRoleMessages {

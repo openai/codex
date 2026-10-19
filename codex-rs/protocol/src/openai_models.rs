@@ -784,6 +784,10 @@ pub struct PermissionMessages {
     pub danger_full_access: Option<String>,
     pub workspace_write: Option<String>,
     pub read_only: Option<String>,
+    /// Supports `{{ approved_prefixes }}`. Missing or null uses the bundled text;
+    /// an empty string suppresses the approved-prefix section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_prefixes: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
@@ -1310,6 +1314,7 @@ mod tests {
                 danger_full_access: None,
                 workspace_write: Some(String::new()),
                 read_only: None,
+                approved_prefixes: None,
             })
         );
     }
@@ -1554,6 +1559,7 @@ mod tests {
                 danger_full_access: None,
                 workspace_write: Some("workspace".to_string()),
                 read_only: None,
+                approved_prefixes: None,
             }),
             multi_agent: None,
             token_budget: None,

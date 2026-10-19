@@ -142,6 +142,7 @@ async fn protected_model_settings_use_the_proposed_permissions(
         danger_full_access: None,
         workspace_write: None,
         read_only: Some(PERMISSION_INSTRUCTIONS.to_string()),
+        approved_prefixes: None,
     });
     let test = test_codex()
         .with_model(INITIAL_MODEL)

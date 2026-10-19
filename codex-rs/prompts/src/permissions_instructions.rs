@@ -32,8 +32,6 @@ const REQUEST_PERMISSION_RULE: &str =
     include_str!("../templates/permissions/approval_policy/on_request_rule_request_permission.md");
 const REQUEST_PERMISSIONS_TOOL: &str = "# request_permissions Tool\n\nThe built-in `request_permissions` tool is available in this session. Invoke it when you need to request additional `network` or `file_system` permissions before later shell-like commands need them. Request only the specific permissions required for the task.";
 const AUTO_REVIEW_SUFFIX: &str = "`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy. If a rejection happens, you should proceed only with a materially safer alternative, or inform the user of the risk and send a final message to ask for approval.";
-const APPROVED_PREFIXES: &str =
-    "## Approved command prefixes\nThe following prefix rules have already been approved: ";
 const GRANULAR_INTRO: &str = "# Approval Requests\n\nApproval policy is `granular`. Categories set to `false` are automatically rejected instead of prompting the user.";
 const GRANULAR_PROMPTED_CATEGORIES: &str =
     "These approval categories may still prompt the user when needed:";
@@ -135,8 +133,7 @@ impl PermissionsInstructions {
             &mut text,
             &approval_text(
                 context.approval_policy,
-                approval_context.reviewer,
-                approval_context.messages,
+                approval_context,
                 context.approved_command_prefixes,
                 context.exec_permission_approvals_enabled,
                 context.request_permissions_tool_enabled,
@@ -288,14 +285,14 @@ fn append_section(text: &mut String, section: &str) {
 
 fn approval_text(
     approval_policy: AskForApproval,
-    approvals_reviewer: ApprovalsReviewer,
-    messages: ResolvedApprovalMessages<'_>,
+    approval_context: ApprovalPromptContext<'_>,
     approved_command_prefixes: &[Vec<String>],
     exec_permission_approvals_enabled: bool,
     request_permissions_tool_enabled: bool,
 ) -> String {
+    let messages = approval_context.messages;
     let selected = match approval_policy {
-        AskForApproval::OnRequest => match approvals_reviewer {
+        AskForApproval::OnRequest => match approval_context.reviewer {
             ApprovalsReviewer::User => messages.on_request,
             ApprovalsReviewer::AutoReview => messages.on_request_auto_review,
         },
@@ -303,8 +300,25 @@ fn approval_text(
         AskForApproval::UnlessTrusted => messages.unless_trusted,
         AskForApproval::Granular(_) => ResolvedMessage::Bundled(GRANULAR_INTRO),
     };
+    let prefix_template = approval_context.permission_messages.approved_prefixes;
+    let render_prefixes =
+        || approved_command_prefixes_text(approved_command_prefixes, prefix_template.text());
     let base = match selected {
-        ResolvedMessage::Catalog(text) => return text.to_string(),
+        ResolvedMessage::Catalog(text) => {
+            // Catalog approval prose replaces the bundled section, but not an explicit
+            // approved-prefixes template supplied alongside it.
+            if approval_policy == AskForApproval::OnRequest
+                && matches!(prefix_template, ResolvedMessage::Catalog(_))
+                && let Some(prefixes) = render_prefixes()
+            {
+                return if text.is_empty() {
+                    prefixes
+                } else {
+                    format!("{text}\n\n{prefixes}")
+                };
+            }
+            return text.to_string();
+        }
         ResolvedMessage::Bundled(text) => text,
     };
     let text = match approval_policy {
@@ -326,20 +340,18 @@ fn approval_text(
             if request_permissions_tool_enabled {
                 sections.push(REQUEST_PERMISSIONS_TOOL.to_string());
             }
-            if let Some(prefixes) = approved_command_prefixes_text(approved_command_prefixes) {
-                sections.push(format!("{APPROVED_PREFIXES}{prefixes}"));
-            }
+            sections.extend(render_prefixes());
             sections.join("\n\n")
         }
         AskForApproval::Granular(granular_config) => granular_instructions(
             granular_config,
-            approved_command_prefixes,
+            render_prefixes(),
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
         ),
     };
 
-    if approvals_reviewer == ApprovalsReviewer::AutoReview {
+    if approval_context.reviewer == ApprovalsReviewer::AutoReview {
         format!("{text}\n\n{AUTO_REVIEW_SUFFIX}")
     } else {
         text
@@ -397,14 +409,17 @@ fn denied_reads_text(paths: &[String], globs: &[String]) -> Option<String> {
     ))
 }
 
-fn approved_command_prefixes_text(approved_command_prefixes: &[Vec<String>]) -> Option<String> {
-    format_allow_prefixes(approved_command_prefixes.to_vec())
-        .filter(|prefixes| !prefixes.is_empty())
+fn approved_command_prefixes_text(prefixes: &[Vec<String>], template: &str) -> Option<String> {
+    if template.is_empty() || prefixes.is_empty() {
+        return None;
+    }
+    let prefixes = format_allow_prefixes(prefixes.to_vec())?;
+    Some(template.replace("{{ approved_prefixes }}", &prefixes))
 }
 
 fn granular_instructions(
     granular_config: GranularApprovalConfig,
-    approved_command_prefixes: &[Vec<String>],
+    approved_command_prefixes: Option<String>,
     exec_permission_approvals_enabled: bool,
     request_permissions_tool_enabled: bool,
 ) -> String {
@@ -465,9 +480,7 @@ fn granular_instructions(
         sections.push(REQUEST_PERMISSIONS_TOOL.to_string());
     }
 
-    if let Some(prefixes) = approved_command_prefixes_text(approved_command_prefixes) {
-        sections.push(format!("{APPROVED_PREFIXES}{prefixes}"));
-    }
+    sections.extend(approved_command_prefixes);
 
     sections.join("\n\n")
 }
