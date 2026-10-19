@@ -237,12 +237,20 @@ pub(super) async fn ensure_listener_task_running(
     thread_state: Arc<Mutex<ThreadState>>,
 ) -> Result<(), JSONRPCErrorError> {
     let (cancel_tx, mut cancel_rx) = oneshot::channel();
-    let Some(mut unloading_state) = UnloadingState::new(
-        &listener_task_context,
-        conversation_id,
-        listener_task_context.thread_unload_delay,
-    )
-    .await
+    let config_snapshot = conversation.config_snapshot().await;
+    let thread_unload_delay = if config_snapshot.ephemeral
+        && config_snapshot
+            .thread_source
+            .as_ref()
+            .is_some_and(|source| source.as_str() == "composer_predictions")
+        && !matches!(config_snapshot.session_source, SessionSource::SubAgent(_))
+    {
+        Duration::ZERO
+    } else {
+        listener_task_context.thread_unload_delay
+    };
+    let Some(mut unloading_state) =
+        UnloadingState::new(&listener_task_context, conversation_id, thread_unload_delay).await
     else {
         return Err(invalid_request(format!(
             "thread {conversation_id} is closing; retry after the thread is closed"
@@ -258,7 +266,6 @@ pub(super) async fn ensure_listener_task_running(
             &environments,
         )
         .await;
-    let config_snapshot = conversation.config_snapshot().await;
     let is_v2_child = conversation.multi_agent_version() == Some(MultiAgentVersion::V2)
         && matches!(config_snapshot.session_source, SessionSource::SubAgent(_));
     let thread_settings_baseline = thread_settings_from_config_snapshot(&config_snapshot);

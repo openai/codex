@@ -32,6 +32,7 @@ use codex_app_server_protocol::ThreadAttachmentListParams;
 use codex_app_server_protocol::ThreadAttachmentListResponse;
 use codex_app_server_protocol::ThreadAttachmentRemoveParams;
 use codex_app_server_protocol::ThreadAttachmentRemoveResponse;
+use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
@@ -52,6 +53,8 @@ use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
+use codex_app_server_protocol::ThreadUnsubscribeParams;
+use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
@@ -2782,6 +2785,7 @@ async fn inheriting_fork_preserves_parent_config(history_mode: ThreadHistoryMode
             experimental_prediction_mode: true,
             ephemeral: true,
             exclude_turns: true,
+            thread_source: Some(ThreadSource::Feature("composer_predictions".into())),
             ..Default::default()
         })
         .await?;
@@ -2836,6 +2840,22 @@ async fn inheriting_fork_preserves_parent_config(history_mode: ThreadHistoryMode
         requests[1].body_json()["tools"]
             .to_string()
             .contains("parent_tool")
+    );
+    let _: ThreadUnsubscribeResponse = mcp
+        .request(|request_id| ClientRequest::ThreadUnsubscribe {
+            request_id,
+            params: ThreadUnsubscribeParams {
+                thread_id: child.thread.id.clone(),
+            },
+        })
+        .await?;
+    let closed: ThreadClosedNotification =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_notification("thread/closed")).await??;
+    assert_eq!(
+        closed,
+        ThreadClosedNotification {
+            thread_id: child.thread.id
+        }
     );
     Ok(())
 }
