@@ -242,37 +242,92 @@ pub fn find_executable_in_search_paths(
                 .iter()
                 .any(|root| root.is_path_writable(path))
     };
-    which::which_in_all(program, Some(search_path), &cwd)
-        .ok()?
+    let file_is_writable = |path: &Path| {
+        policy_can_write(path)
+            && std::fs::symlink_metadata(path)
+                .map_or(true, |metadata| !metadata.file_type().is_symlink())
+            && current_user_can_modify(path)
+    };
+    let path_is_replaceable = |path: &Path| {
+        path.ancestors().any(|component| {
+            let Some(parent) = component.parent() else {
+                return false;
+            };
+            let Some(file_name) = component.file_name() else {
+                return false;
+            };
+            let Ok(parent) = std::fs::canonicalize(parent) else {
+                return true;
+            };
+            // Match policy through parent aliases without resolving the child symlink.
+            let component = parent.join(file_name);
+            // Read-only carveouts are bind mounts and cannot themselves
+            // be renamed/unlinked. Continue checking above them, since a
+            // mutable ancestor could still redirect the installation path.
+            let is_read_only_mount = writable_roots.iter().any(|root| {
+                root.read_only_subpaths
+                    .iter()
+                    .any(|path| path.as_path() == component.as_path())
+            });
+            policy_can_write(&parent)
+                && !is_read_only_mount
+                && current_user_can_replace_child(&parent, &component)
+        })
+    };
+    std::env::split_paths(&search_path)
+        .filter_map(|path| {
+            // Let which resolve explicit program paths and expand ~/bin entries.
+            let binary = if Path::new(program).components().count() > 1 || path.starts_with("~") {
+                PathBuf::from(program)
+            } else {
+                cwd.join(&path).join(program)
+            };
+            which::which_in(binary, Some(path), &cwd).ok()
+        })
         .find_map(|path| {
+            if !path.is_absolute() || path_is_replaceable(&path) {
+                return None;
+            }
+            let file_name = path.file_name()?;
+            let resolved_parent = std::fs::canonicalize(path.parent()?).ok()?;
+            let resolved_alias = resolved_parent.join(file_name);
+            if (!cwd_is_root && resolved_alias.starts_with(&cwd))
+                || file_is_writable(&resolved_alias)
+                || path_is_replaceable(&resolved_alias)
+            {
+                return None;
+            }
             let path = std::fs::canonicalize(path).ok()?;
             // Preserve read-only carveouts, but also check ancestors: a protected
             // file can still be replaced by renaming a writable parent directory.
             // Host-protected installations remain usable even with full-disk writes.
             if (!cwd_is_root && path.starts_with(&cwd))
-                || (policy_can_write(&path) && current_user_can_modify(&path))
-                || path.ancestors().any(|component| {
-                    let Some(parent) = component.parent() else {
-                        return false;
-                    };
-                    // Read-only carveouts are bind mounts and cannot themselves
-                    // be renamed/unlinked. Continue checking above them, since a
-                    // mutable ancestor could still redirect the installation path.
-                    let is_read_only_mount = writable_roots.iter().any(|root| {
-                        root.read_only_subpaths
-                            .iter()
-                            .any(|path| path.as_path() == component)
-                    });
-                    policy_can_write(parent)
-                        && !is_read_only_mount
-                        && current_user_can_modify(parent)
-                })
+                || file_is_writable(&path)
+                || path_is_replaceable(&path)
             {
                 None
             } else {
                 Some(path)
             }
         })
+}
+
+fn current_user_can_replace_child(parent: &Path, child: &Path) -> bool {
+    if !current_user_can_modify(parent) {
+        return false;
+    }
+    // SAFETY: geteuid has no preconditions.
+    let euid = unsafe { libc::geteuid() };
+    if euid == 0 {
+        return true;
+    }
+    let Ok(parent_metadata) = std::fs::metadata(parent) else {
+        return true;
+    };
+    if parent_metadata.mode() & libc::S_ISVTX == 0 || parent_metadata.uid() == euid {
+        return true;
+    }
+    std::fs::symlink_metadata(child).map_or(true, |metadata| metadata.uid() == euid)
 }
 
 fn current_user_can_modify(path: &Path) -> bool {

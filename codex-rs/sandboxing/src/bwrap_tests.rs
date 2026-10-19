@@ -119,7 +119,7 @@ fn does_not_treat_wsl2_or_native_linux_as_wsl1() {
 #[test]
 fn finds_first_executable_bwrap_in_joined_search_path() {
     let temp_dir = tempdir().expect("temp dir");
-    let cwd = temp_dir.path().join("cwd");
+    let cwd = temp_dir.path().join("cwd:with-colon");
     let first_dir = temp_dir.path().join("first");
     let second_dir = temp_dir.path().join("second");
     std::fs::create_dir_all(&cwd).expect("create cwd");
@@ -127,18 +127,22 @@ fn finds_first_executable_bwrap_in_joined_search_path() {
     std::fs::create_dir_all(&second_dir).expect("create second dir");
     std::fs::write(first_dir.join("bwrap"), "not executable").expect("write non-executable bwrap");
     let expected_bwrap = write_named_fake_bwrap_in(&second_dir);
-    let search_path = std::env::join_paths([first_dir, second_dir]).expect("join search path");
-
-    assert_eq!(
-        find_executable_in_search_paths(
-            "bwrap",
-            std::env::split_paths(&search_path),
-            &cwd,
-            &PermissionProfile::read_only().file_system_sandbox_policy(),
-            &cwd,
-        ),
-        Some(expected_bwrap)
-    );
+    for search_paths in [
+        vec![first_dir, second_dir],
+        vec![PathBuf::from("../first"), PathBuf::from("../second")],
+    ] {
+        let search_path = std::env::join_paths(search_paths).expect("join search path");
+        assert_eq!(
+            find_executable_in_search_paths(
+                "bwrap",
+                std::env::split_paths(&search_path),
+                &cwd,
+                &PermissionProfile::read_only().file_system_sandbox_policy(),
+                &cwd,
+            ),
+            Some(expected_bwrap.clone())
+        );
+    }
 }
 
 #[test]
@@ -258,6 +262,53 @@ fn skips_bwrap_in_symlinked_writable_root() {
 }
 
 #[test]
+fn skips_writable_bwrap_symlink_to_read_only_target() {
+    let temp = tempdir().unwrap();
+    let bin = temp.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let system_binary = std::fs::canonicalize("/bin/true").unwrap();
+    std::os::unix::fs::symlink(&system_binary, bin.join("bwrap")).unwrap();
+    let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+        AbsolutePathBuf::try_from(bin.as_path()).unwrap().into(),
+        FileSystemAccessMode::Write,
+    )]);
+
+    assert_eq!(
+        find_executable_in_search_paths("bwrap", [bin], Path::new("/"), &policy, Path::new("/")),
+        None,
+    );
+}
+
+#[test]
+fn skips_bwrap_through_symlinked_path_directory_into_writable_root() {
+    let temp = tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let bin = workspace.join("bin");
+    let alias = temp.path().join("alias");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::os::unix::fs::symlink(&workspace, &alias).unwrap();
+    let system_binary = std::fs::canonicalize("/bin/true").unwrap();
+    std::os::unix::fs::symlink(&system_binary, bin.join("bwrap")).unwrap();
+    let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+        AbsolutePathBuf::try_from(workspace.as_path())
+            .unwrap()
+            .into(),
+        FileSystemAccessMode::Write,
+    )]);
+
+    assert_eq!(
+        find_executable_in_search_paths(
+            "bwrap",
+            [alias.join("bin")],
+            Path::new("/"),
+            &policy,
+            Path::new("/"),
+        ),
+        None,
+    );
+}
+
+#[test]
 fn full_disk_write_rejects_owned_bwrap_even_when_chmod_read_only() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -302,14 +353,14 @@ fn root_write_preserves_a_read_only_system_installation() {
     use codex_protocol::permissions::FileSystemPath;
     use codex_protocol::permissions::FileSystemSpecialPath;
 
-    let temp = tempdir().unwrap();
     // Use a system executable as a discovery-only candidate. Never execute it.
     let system_binary = std::fs::canonicalize("/bin/true").unwrap();
+    let system_program = system_binary.file_name().unwrap().to_str().unwrap();
+    let system_search_path = system_binary.parent().unwrap().to_path_buf();
     let protected_root = system_binary
         .ancestors()
         .find(|path| path.parent() == Some(Path::new("/")))
         .unwrap();
-    std::os::unix::fs::symlink(&system_binary, temp.path().join("bwrap")).unwrap();
     let policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry::new(
             FileSystemPath::Special {
@@ -333,8 +384,8 @@ fn root_write_preserves_a_read_only_system_installation() {
             policy.has_full_disk_write_access() && unsafe { libc::geteuid() } == 0;
         assert_eq!(
             find_executable_in_search_paths(
-                "bwrap",
-                [temp.path().to_path_buf()],
+                system_program,
+                [system_search_path.clone()],
                 Path::new("/"),
                 &policy,
                 Path::new("/"),
