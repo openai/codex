@@ -1,5 +1,6 @@
 //! Exercises asynchronous score publication through real tool calls and approval results.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -7,6 +8,8 @@ use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
 use codex_features::Feature;
 use codex_history::RolloutItem;
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
 use codex_protocol::approvals::GuardianAssessmentStatus;
 use codex_protocol::approvals::GuardianReviewReason;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -14,6 +17,7 @@ use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -29,6 +33,8 @@ use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio::sync::oneshot;
@@ -124,6 +130,17 @@ async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
     )
     .await;
     Mock::given(method("POST"))
+        .and(body_partial_json(json!({ "model": "gpt-5.5" })))
+        .respond_with(responses::sse_response(sse(vec![
+            ev_assistant_message("invalid", "invalid assessment"),
+            ev_completed("invalid"),
+        ])))
+        .with_priority(1)
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(body_partial_json(json!({
             "model": "gpt-5.5",
@@ -148,7 +165,8 @@ async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
         .mount(&server)
         .await;
 
-    let test = test_codex()
+    let mut test = test_codex()
+        .with_model("guardian-initial-model")
         .with_pre_build_hook(|home| {
             std::fs::write(
                 home.join("config.toml"),
@@ -175,12 +193,26 @@ async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
         })
         .build_with_auto_env(&server)
         .await?;
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "test", "1", Default::default()).with_runtime_reader(),
+    )?;
+    let mut options = test.start_thread_options().await;
+    options.history_mode = Some(codex_protocol::protocol::ThreadHistoryMode::Legacy);
+    options.thread_extension_init.insert(metrics.clone());
+    test.codex.shutdown_and_wait().await?;
+    test.codex = test.thread_manager.start_thread(options).await?.thread;
     test.codex.ensure_rollout_materialized().await;
     test.codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "Inspect the available permissions.".to_owned(),
-            text_elements: Vec::new(),
-        }]))
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Inspect the available permissions.".to_owned(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                model: Some("guardian-publication-parent".into()),
+                ..Default::default()
+            }),
+        )
         .await?;
 
     let mut parent_gates = parent_gates.into_iter();
@@ -283,6 +315,42 @@ async fn delayed_score_only_covers_the_tool_call_it_classified() -> Result<()> {
     }
 
     test.codex.shutdown_and_wait().await?;
+    let snapshot = metrics.snapshot()?;
+    let route = snapshot
+        .scope_metrics()
+        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+        .find(|metric| metric.name() == "codex.guardian.review.route")
+        .unwrap();
+    let AggregatedMetrics::U64(MetricData::Sum(routes)) = route.data() else {
+        panic!("expected route counter");
+    };
+    for point in routes.data_points() {
+        let model = point
+            .attributes()
+            .find(|tag| tag.key.as_str() == "model")
+            .unwrap();
+        assert_eq!(model.value.as_str(), "guardian-publication-parent");
+    }
+    let metric = snapshot
+        .scope_metrics()
+        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+        .find(|metric| metric.name() == "codex.guardian.review.retry_wait_ms")
+        .unwrap();
+    let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data() else {
+        panic!("expected retry-wait histogram");
+    };
+    let points = histogram.data_points().collect::<Vec<_>>();
+    assert_eq!(points.len(), 1);
+    let point = points[0];
+    let tags = point
+        .attributes()
+        .map(|tag| (tag.key.as_str(), tag.value.as_str().to_string()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(tags["model"], "guardian-publication-parent");
+    assert_eq!(tags["failure_reason"], "parse_error");
+    assert_eq!(tags["outcome"], "retry");
+    assert_eq!(point.count(), 1);
+    assert!(point.sum() > 0.0);
     parent_server.shutdown().await;
     classifier_server.shutdown().await;
     Ok(())

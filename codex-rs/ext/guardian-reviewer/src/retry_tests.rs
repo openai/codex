@@ -176,6 +176,7 @@ async fn stale_authorization_uses_the_shared_attempt_budget(success_on_attempt: 
             deadline,
         },
         /*external_cancel*/ None,
+        /*telemetry*/ None,
         |attempt_deadline| {
             assert_eq!(attempt_deadline, deadline);
             attempts += 1;
@@ -228,6 +229,7 @@ async fn stale_authorization_does_not_extend_the_deadline() {
             deadline,
         },
         /*external_cancel*/ None,
+        /*telemetry*/ None,
         |attempt_deadline| {
             attempts += 1;
             assert_eq!(attempt_deadline, deadline);

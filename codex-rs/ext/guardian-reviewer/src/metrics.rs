@@ -58,6 +58,22 @@ pub(crate) fn emit_guardian_review_metrics(
         &tag_refs,
     );
 
+    // Cached approvals may cancel an in-flight review: retain its attempt count,
+    // but use the final review status to distinguish recovery from async release.
+    session_telemetry.histogram_with_boundaries(
+        "codex.guardian.review.attempt_count",
+        result.attempt_count,
+        &[0.0, 1.0, 2.0, 3.0],
+        &tag_refs,
+    );
+    let mut retry_tags = tag_refs.clone();
+    retry_tags.push(("retried", bool_tag(result.attempt_count > 1)));
+    session_telemetry.counter(
+        "codex.guardian.review.retry_outcome",
+        /*inc*/ 1,
+        &retry_tags,
+    );
+
     if let Some(time_to_first_token_ms) = result.time_to_first_token_ms {
         session_telemetry.record_duration(
             GUARDIAN_REVIEW_TTFT_DURATION_METRIC,
@@ -183,7 +199,7 @@ fn terminal_status_tag(status: GuardianReviewTerminalStatus) -> &'static str {
     }
 }
 
-fn failure_reason_tag(reason: Option<GuardianReviewFailureReason>) -> &'static str {
+pub(crate) fn failure_reason_tag(reason: Option<GuardianReviewFailureReason>) -> &'static str {
     match reason {
         Some(GuardianReviewFailureReason::Timeout) => "timeout",
         Some(GuardianReviewFailureReason::Cancelled) => "cancelled",
@@ -407,6 +423,7 @@ mod tests {
     ) {
         let session_telemetry = test_session_telemetry();
         let result = GuardianReviewAnalyticsResult {
+            attempt_count: 2,
             decision: GuardianReviewDecision::Approved,
             terminal_status: GuardianReviewTerminalStatus::Approved,
             risk_level: Some(GuardianRiskLevel::Low),
@@ -467,6 +484,29 @@ mod tests {
         expected_counter_tags.insert("context_changed".to_string(), "false".to_string());
         assert_eq!((attrs, value), (expected_counter_tags, 1));
 
+        let AggregatedMetrics::F64(MetricData::Histogram(histogram)) =
+            find_metric(&snapshot, "codex.guardian.review.attempt_count").data()
+        else {
+            panic!("expected attempt count histogram");
+        };
+        let point = histogram
+            .data_points()
+            .next()
+            .expect("attempt count sample");
+        assert_eq!(
+            (
+                point.bounds().collect::<Vec<_>>(),
+                point.bucket_counts().collect::<Vec<_>>()
+            ),
+            (vec![0.0, 1.0, 2.0, 3.0], vec![0, 0, 1, 0, 0])
+        );
+        let mut retry_tags = expected_base_tags.clone();
+        retry_tags.insert("retried".to_string(), "true".to_string());
+        assert_eq!(
+            counter_point(&snapshot, "codex.guardian.review.retry_outcome"),
+            (retry_tags, 1)
+        );
+
         assert_eq!(
             histogram_sums(
                 &snapshot,
@@ -499,5 +539,66 @@ mod tests {
             ),
             BTreeMap::from([("sample".to_string(), 123)])
         );
+    }
+    #[test_case("retry", 2, 2000)]
+    #[test_case("cancelled", 1, 0)]
+    #[test_case("deadline", 1, 1000)]
+    #[tokio::test(start_paused = true)]
+    async fn retry_telemetry_records_waits_and_only_counts_resubmissions(
+        outcome: &str,
+        attempts: i64,
+        wait_ms: u64,
+    ) {
+        let telemetry = test_session_telemetry();
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        if outcome == "cancelled" {
+            cancellation.cancel();
+        }
+        let start = tokio::time::Instant::now();
+        let (_, result, _) = crate::run_with_retry(
+            crate::GuardianReviewSessionLimits {
+                max_attempts: 2,
+                deadline: start + Duration::from_secs(if outcome == "deadline" { 1 } else { 10 }),
+            },
+            Some(&cancellation),
+            Some(&telemetry),
+            |_| async {
+                (
+                    crate::GuardianReviewOutcome::Error(crate::GuardianReviewError::Session {
+                        message: "overloaded".into(),
+                        error_info: Some(
+                            codex_protocol::protocol::CodexErrorInfo::ServerOverloaded,
+                        ),
+                        retry_at: Some(start + Duration::from_secs(2)),
+                    }),
+                    GuardianReviewAnalyticsResult::without_session(),
+                    None::<()>,
+                )
+            },
+        )
+        .await;
+        assert_eq!(result.attempt_count, attempts);
+        let snapshot = telemetry.snapshot_metrics().unwrap();
+        let tags = BTreeMap::from([
+            ("failure_reason".to_owned(), "session_error".to_owned()),
+            ("outcome".to_owned(), outcome.to_owned()),
+        ]);
+        assert_eq!(
+            histogram_sums(&snapshot, "codex.guardian.review.retry_wait_ms", &tags),
+            BTreeMap::from([("sample".to_owned(), wait_ms)]),
+        );
+        if outcome == "retry" {
+            assert_eq!(
+                counter_point(&snapshot, "codex.guardian.review.retry"),
+                (tags, 1)
+            );
+        } else {
+            assert!(
+                !snapshot
+                    .scope_metrics()
+                    .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+                    .any(|metric| metric.name() == "codex.guardian.review.retry")
+            );
+        }
     }
 }
