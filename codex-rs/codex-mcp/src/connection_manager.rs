@@ -207,7 +207,8 @@ impl McpServerView {
             || match self.startup_readiness {
                 McpStartupReadiness::Connection => !tools.is_empty(),
                 McpStartupReadiness::Catalog => tools.iter().any(|tool| {
-                    self.tool_filter.allows(&tool.tool.name) && tool_is_model_visible(tool)
+                    self.tool_filter.allows(&tool.tool.name)
+                        && (self.connection.startup_is_dormant() || tool_is_model_visible(tool))
                 }),
             }
     }
@@ -700,10 +701,9 @@ impl McpConnectionSet {
                     .as_ref()
                     .and_then(McpToolCatalogCacheContext::current_tools)
                     .is_some_and(|tools| {
-                        tools.into_iter().any(|tool| {
-                            configured_tool_filter.allows(&tool.tool.name)
-                                && tool_is_model_visible(&tool)
-                        })
+                        tools
+                            .into_iter()
+                            .any(|tool| configured_tool_filter.allows(&tool.tool.name))
                     });
             let (startup_trigger, startup_receiver) = if defer_startup {
                 let (trigger, receiver) = watch::channel(false);
@@ -1036,18 +1036,13 @@ impl McpConnectionSet {
         }
     }
 
-    /// Invoke the tool indicated by the (server, tool) pair.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn call_tool(
+    /// Rejects invalid host calls before they can start a server or capture attribution.
+    pub(crate) fn validate_tool_call(
         &self,
         server: &str,
         tool: &str,
         environment_id: Option<&str>,
-        arguments: Option<serde_json::Value>,
-        mut meta: Option<serde_json::Value>,
-        requested_timeout: Option<Duration>,
-        wait_for_server: bool,
-    ) -> Result<CallToolResult> {
+    ) -> Result<()> {
         let view = self
             .servers
             .get(server)
@@ -1065,6 +1060,23 @@ impl McpConnectionSet {
                 "tool '{tool}' is disabled for MCP server '{server}'"
             ));
         }
+        Ok(())
+    }
+
+    /// Invoke the tool indicated by the (server, tool) pair.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn call_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        environment_id: Option<&str>,
+        arguments: Option<serde_json::Value>,
+        mut meta: Option<serde_json::Value>,
+        requested_timeout: Option<Duration>,
+        wait_for_server: bool,
+    ) -> Result<CallToolResult> {
+        self.validate_tool_call(server, tool, environment_id)?;
+        let view = &self.servers[server];
         let client = if wait_for_server {
             view.connection
                 .client()

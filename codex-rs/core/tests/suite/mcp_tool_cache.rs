@@ -950,8 +950,45 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
             ..StartThreadOptions::new(filtered_config)
         })
         .await?;
+    let filtered_response = mount_sse_once(
+        &responses_server,
+        responses::sse(vec![
+            responses::ev_response_created("filtered"),
+            responses::ev_assistant_message("filtered-message", "done"),
+            responses::ev_completed("filtered"),
+        ]),
+    )
+    .await;
+    filtered_thread
+        .start_or_steer_turn(user_turn("Do not use tools."))
+        .await?;
+    wait_for_event(&filtered_thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert!(
+        responses::namespace_child_tool(
+            &filtered_response.single_request().body_json(),
+            NAMESPACE,
+            "cwd",
+        )
+        .is_none()
+    );
+    let (mcp_config, _) = filtered_thread
+        .current_mcp_config_and_runtime_context()
+        .await;
+    assert_eq!(
+        filtered_thread
+            .mcp_connection_statuses(&mcp_config)
+            .await
+            .get(SERVER_NAME),
+        Some(&McpServerConnectionStatus::NotStarted),
+    );
+    let result = filtered_thread
+        .call_mcp_tool(SERVER_NAME, "cwd", Some(json!({})), /*meta*/ None)
+        .await?;
+    assert_ne!(result.is_error, Some(true));
     let filtered_pid = wait_for_new_pid(fs.as_ref(), &pid_file, Some(&second_pid)).await?;
-    wait_for_mcp_server(&filtered_thread, SERVER_NAME).await?;
     filtered_thread.shutdown_and_wait().await?;
     fs.remove(
         &barrier_file,

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::Context;
 use anyhow::bail;
 use codex_hooks::HookMcpCall;
 use codex_hooks::HookMcpExecutor;
@@ -25,18 +26,20 @@ impl HookMcpExecutor for CoreHookMcpExecutor {
                 Value::String(self.thread_id.to_string()),
             );
 
-            let call_result = self
-                .runtime
-                .latest_call_tool(
+            let call_result = tokio::time::timeout(
+                call.timeout,
+                self.runtime.latest_call_tool(
                     &call.server,
                     &call.tool,
                     call.environment_id.as_deref(),
                     Some(Value::Object(call.input)),
                     Some(Value::Object(metadata)),
                     Some(call.timeout),
-                    /*wait_for_server*/ false,
-                )
-                .await?;
+                    /*wait_for_server*/ true,
+                ),
+            )
+            .await
+            .context("MCP hook timed out")??;
             let result = call_result.result;
             let text = result
                 .content
