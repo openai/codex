@@ -336,7 +336,7 @@ impl Inner {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             match &connection.status {
                 ConnectionStatus::Connected(current)
-                    if Arc::ptr_eq(current, &failed_rpc_client) =>
+                    if Arc::ptr_eq(current, &failed_rpc_client) && !self.retired.is_cancelled() =>
                 {
                     connection.set_status(ConnectionStatus::Recovering);
                     true

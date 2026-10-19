@@ -304,7 +304,7 @@ async fn failed_noise_environment_recovers_and_reconnects_after_ready_report() -
     let _ = first_relay.await;
     assert_eq!(
         next_connection_state(&mut connection_state).await?,
-        EnvironmentConnectionState::Disconnected
+        EnvironmentConnectionState::Recovering
     );
     let first_reconnected_websocket = accept_websocket(&listener, "reconnected peer").await?;
     let second_reconnected_websocket = accept_websocket(&listener, "reconnected peer").await?;

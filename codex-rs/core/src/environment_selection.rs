@@ -867,6 +867,7 @@ impl ThreadEnvironments {
                     }
                 };
                 let msg = match state {
+                    EnvironmentConnectionState::Recovering => continue,
                     EnvironmentConnectionState::Connected => {
                         EventMsg::EnvironmentConnected(EnvironmentConnectionEvent {
                             environment_id: environment_id.clone(),
@@ -1427,6 +1428,10 @@ impl TurnEnvironmentSnapshot {
 mod snapshot_tests;
 
 #[cfg(test)]
+#[path = "environment_connection_tests.rs"]
+mod connection_tests;
+
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
@@ -1504,7 +1509,7 @@ mod tests {
         .expect("runtime paths")
     }
 
-    async fn read_websocket_json(websocket: &mut WebSocketStream<TcpStream>) -> Value {
+    pub(super) async fn read_websocket_json(websocket: &mut WebSocketStream<TcpStream>) -> Value {
         loop {
             match timeout(std::time::Duration::from_secs(5), websocket.next())
                 .await

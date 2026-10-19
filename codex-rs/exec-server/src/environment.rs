@@ -71,6 +71,8 @@ pub const CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR: &str =
 pub enum EnvironmentConnectionState {
     /// An initialized exec-server connection is available.
     Connected,
+    /// An established session is unavailable while its transport is being recovered.
+    Recovering,
     /// No initialized exec-server connection is currently available.
     Disconnected,
 }

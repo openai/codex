@@ -319,7 +319,7 @@ async fn accepted_websocket_interoperates_and_recovers_with_real_direct_executor
         }
         timeout(
             TEST_TIMEOUT,
-            connection_state.wait_for(|state| *state == EnvironmentConnectionState::Disconnected),
+            connection_state.wait_for(|state| *state == EnvironmentConnectionState::Recovering),
         )
         .await??;
         tokio::fs::write(&gate_path, b"").await?;

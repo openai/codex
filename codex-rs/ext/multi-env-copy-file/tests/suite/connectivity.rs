@@ -217,7 +217,7 @@ async fn copy_file_reports_disconnection_after_step_capture() -> Result<()> {
     streaming.wait_for_request_count(/*count*/ 1).await;
     drop(executor);
     state
-        .wait_for(|state| *state == EnvironmentConnectionState::Disconnected)
+        .wait_for(|state| *state == EnvironmentConnectionState::Recovering)
         .await?;
     release_response.send(()).unwrap();
     // Allow the client's recovery window to finish before checking the completed tool results.
