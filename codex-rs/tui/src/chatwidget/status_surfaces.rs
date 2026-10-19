@@ -25,7 +25,7 @@ use codex_utils_sandbox_summary::summarize_permission_profile;
 use super::status_state::TerminalTitleStatusKind;
 
 /// Items shown in the terminal title when the user has not configured a
-/// custom selection. Unnamed threads omit the name until generation starts.
+/// custom selection. Unnamed threads omit the name until one is available.
 pub(super) const DEFAULT_TERMINAL_TITLE_ITEMS: [&str; 3] =
     ["activity", "thread-name", "project-name"];
 
@@ -436,27 +436,6 @@ impl ChatWidget {
         selections: &StatusSurfaceSelections,
     ) -> Option<Duration> {
         if self.local_settings.tui.animations
-            && self.local_settings.tui.effects.progress
-            && self.status_state.thread_title_generation_pending
-            && (selections.status_line_items.iter().any(|item| {
-                matches!(
-                    item,
-                    StatusLineItem::ThreadName
-                        | StatusLineItem::ThreadTitle
-                        | StatusLineItem::SessionId
-                )
-            }) || selections.terminal_title_items.iter().any(|item| {
-                matches!(
-                    item,
-                    TerminalTitleItem::ThreadName
-                        | TerminalTitleItem::Thread
-                        | TerminalTitleItem::SessionId
-                )
-            }))
-        {
-            return Some(TERMINAL_TITLE_SPINNER_INTERVAL);
-        }
-        if self.local_settings.tui.animations
             && self.local_settings.tui.effects.title
             && self.terminal_title_shows_action_required_with_selections(selections)
         {
@@ -746,7 +725,7 @@ impl ChatWidget {
     /// Returning `None` means "omit this item for now", not "configuration error". Callers rely on
     /// this to keep partially available status lines readable while waiting for session, token, or
     /// git metadata.
-    pub(super) fn status_line_value(&mut self, item: StatusLineItem) -> Option<String> {
+    pub(super) fn status_line_value_for_item(&mut self, item: StatusLineItem) -> Option<String> {
         match item {
             StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
             StatusLineItem::ModelWithReasoning => Some(self.model_with_reasoning_display_name()),
@@ -945,10 +924,8 @@ impl ChatWidget {
                 } else {
                     StatusLineItem::ThreadTitle
                 };
-                let value = self
-                    .status_line_value(item)
-                    .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 48));
-                self.with_thread_title_progress(value, now)
+                self.status_line_value_for_item(item)
+                    .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 48))
             }
             TerminalTitleItem::GitBranch => self.status_line_branch.as_ref().map(|branch| {
                 Self::truncate_terminal_title_part(branch.clone(), /*max_chars*/ 32)
@@ -983,12 +960,9 @@ impl ChatWidget {
             TerminalTitleItem::EstimatedThreadCost => self
                 .status_line_value_for_item(StatusLineItem::EstimatedThreadCost)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
-            TerminalTitleItem::SessionId => {
-                let value = self
-                    .status_line_value(StatusLineItem::SessionId)
-                    .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32));
-                self.with_thread_title_progress(value, now)
-            }
+            TerminalTitleItem::SessionId => self
+                .status_line_value_for_item(StatusLineItem::SessionId)
+                .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::FastMode => self
                 .status_line_value_for_item(StatusLineItem::FastMode)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),

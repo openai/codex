@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/terminal_title.rs
+assertion_line: 320
+expression: "rendered.join(\"\\n\\n\")"
+---
+name=None
+status:  | 550e8400-e29b-41d4-a716-446655440000 | 550e8400-e29b-41d4-a716-446655440000
+title:  | 550e8400-e29b-41d4-a716-446655440000 | 550e8400-e29b-41d4-a716-44665...
+default title: project
+
+name=Some("Fix login timeout")
+status: Fix login timeout | Fix login timeout | 550e8400-e29b-41d4-a716-446655440000
+title: Fix login timeout | Fix login timeout | 550e8400-e29b-41d4-a716-44665...
+default title: Fix login timeout | project

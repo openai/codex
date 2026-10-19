@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/status_surface_previews.rs
+assertion_line: 43
+expression: "snapshot.join(\"\\n\")"
+---
+colors=true: Line::from_iter([Span::from("Named task").fg(Color::Rgb(242, 205, 205)), Span::from(" · ").fg(Color::Rgb(140, 140, 140)).not_bold().not_dim(), Span::from("Named task").fg(Color::Rgb(242, 205, 205))])
+colors=false: Line::from_iter([Span::from("Named task").fg(Color::Rgb(140, 140, 140)).not_bold().not_dim(), Span::from(" · ").fg(Color::Rgb(140, 140, 140)).not_bold().not_dim(), Span::from("Named task").fg(Color::Rgb(140, 140, 140)).not_bold().not_dim()])

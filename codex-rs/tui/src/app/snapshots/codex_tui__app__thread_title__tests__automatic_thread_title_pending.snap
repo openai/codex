@@ -1,0 +1,10 @@
+---
+source: tui/src/app/thread_title_tests.rs
+assertion_line: 302
+expression: "normalize_snapshot_paths(format!(\"terminal title: {}\\nfooter:\\n{}\",\napp.chat_widget.last_terminal_title.as_deref().unwrap_or_default(),\nrender_bottom_popup(&app.chat_widget, 120)))"
+---
+terminal title: project
+footer:
+› Ask Codex to do anything
+
+  gpt-5.2 default · /tmp/project
