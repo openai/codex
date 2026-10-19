@@ -3,13 +3,12 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
-use appcontainer_common::base_container_runner::BaseContainerRunner;
-use learning_mode_windows::SecurityEnvironmentApi;
-use wxc_common::logger::Logger;
-use wxc_common::logger::Mode;
-use wxc_common::models::ExecutionRequest;
-use wxc_common::sandbox_process::SandboxBackend;
-use wxc_common::sandbox_process::StdioMode;
+use mxc_sdk::mxc_common::logger::Logger;
+use mxc_sdk::mxc_common::logger::Mode;
+use mxc_sdk::mxc_common::models::ExecutionRequest;
+use mxc_sdk::mxc_common::sandbox_process::SandboxBackend;
+use mxc_sdk::mxc_common::sandbox_process::StdioMode;
+use mxc_sdk::process_container_common::base_container_runner::BaseContainerRunner;
 
 // The ETW functions used by tracelogging are documented Advapi32 exports on
 // both Windows toolchains; 1.2.3 leaves their import library to the application.
@@ -25,11 +24,9 @@ pub(super) fn launch(request: &ExecutionRequest) -> Result<i32> {
             .any(|capability| capability.eq_ignore_ascii_case("permissiveLearningMode")),
         "MXC native launch does not support permissiveLearningMode"
     );
-    // With no least-privilege mode, legacy proxy, or capture enabled, this
-    // probe guarantees BaseContainerRunner chooses PSEC rather than SBOX.
     if !request.policy.denied_paths.is_empty() {
         ensure!(
-            SecurityEnvironmentApi::load()?.supports_deny_paths()?,
+            BaseContainerRunner::supports_native_denied_paths(),
             "this Windows build cannot enforce native MXC deny paths"
         );
     }

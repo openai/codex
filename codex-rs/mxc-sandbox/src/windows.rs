@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use anyhow::ensure;
 use codex_utils_path_uri::PathUri;
+use mxc_sdk::mxc_common::filesystem_object::ExistingObjectComparison;
+use mxc_sdk::mxc_common::filesystem_object::compare_existing_filesystem_objects;
 use windows_sys::Win32::Foundation::RPC_E_CHANGED_MODE;
 use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
 use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
@@ -21,8 +23,6 @@ use windows_sys::Win32::UI::Shell::FOLDERID_ProgramData;
 use windows_sys::Win32::UI::Shell::FOLDERID_ProgramFiles;
 use windows_sys::Win32::UI::Shell::FOLDERID_ProgramFilesX86;
 use windows_sys::Win32::UI::Shell::SHGetKnownFolderPath;
-use wxc_common::filesystem_object::ExistingObjectComparison;
-use wxc_common::filesystem_object::compare_existing_filesystem_objects;
 
 struct ComUninitializeGuard;
 
