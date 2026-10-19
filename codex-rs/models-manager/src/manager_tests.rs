@@ -811,6 +811,21 @@ async fn get_model_info_uses_custom_catalog() {
     assert_eq!(model_info.context_window, Some(272_000));
     assert!(model_info.supports_image_detail_original);
     assert!(!model_info.used_fallback_model_metadata);
+
+    let config = ModelsManagerConfig {
+        model_context_window: Some(128_000),
+        ..Default::default()
+    };
+    let expected = ModelInfo {
+        context_window: Some(128_000),
+        ..model_info
+    };
+    assert_eq!(
+        manager
+            .get_model_info("gpt-overlay-experiment", &config)
+            .await,
+        expected
+    );
 }
 
 #[tokio::test]

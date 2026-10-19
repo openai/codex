@@ -764,6 +764,12 @@ mod tests {
         assert_eq!(manager.try_get_remote_models().unwrap(), bundled.models);
         assert_eq!(
             manager
+                .get_model_info(&model.slug, &Default::default())
+                .await,
+            model_info_from_slug(&model.slug)
+        );
+        assert_eq!(
+            manager
                 .raw_model_catalog(
                     RefreshStrategy::Offline,
                     HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),

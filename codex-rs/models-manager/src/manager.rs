@@ -15,6 +15,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
+use std::borrow::Cow;
 use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
@@ -430,53 +431,38 @@ impl ModelsManager for OpenAiModelsManager {
     fn get_remote_models(&self) -> ModelsManagerFuture<'_, Vec<ModelInfo>> {
         Box::pin(async move {
             let entry = self.remote_models.read().await;
-            if !self.api_key_discovery_disabled()
-                && entry.identity.is_some()
-                && entry.identity == self.endpoint_client.identity()
-            {
-                entry.models.clone()
-            } else {
-                self.catalog_source.fallback_models().unwrap_or_default()
-            }
+            self.models_for_entry(&entry).into_owned()
         })
     }
 
     fn try_get_remote_models(&self) -> Result<Vec<ModelInfo>, TryLockError> {
         let entry = self.remote_models.try_read()?;
-        Ok(
-            if !self.api_key_discovery_disabled()
-                && entry.identity.is_some()
-                && entry.identity == self.endpoint_client.identity()
-            {
-                entry.models.clone()
-            } else {
-                self.catalog_source.fallback_models().unwrap_or_default()
-            },
-        )
+        Ok(self.models_for_entry(&entry).into_owned())
     }
 
     fn auth_manager(&self) -> Option<&AuthManager> {
         self.auth_manager.as_deref()
     }
 
-    #[tracing::instrument(skip_all, fields(model))]
+    #[tracing::instrument(skip_all, fields(model = model))]
     fn get_model_info<'a>(
         &'a self,
         model: &'a str,
         config: &'a ModelsManagerConfig,
     ) -> ModelsManagerFuture<'a, ModelInfo> {
         Box::pin(async move {
-            let models = self.get_remote_models().await;
-            match &self.catalog_source {
-                CatalogSource::Default => {
-                    construct_model_info_from_candidates(model, &models, config)
+            let remote = {
+                let entry = self.remote_models.read().await;
+                let models = self.models_for_entry(&entry);
+                match &self.catalog_source {
+                    CatalogSource::Default => find_model_from_candidates(model, &models),
+                    CatalogSource::ExplicitProvider(_) => models
+                        .iter()
+                        .find(|candidate| candidate.slug == model)
+                        .cloned(),
                 }
-                CatalogSource::ExplicitProvider(_) => construct_model_info(
-                    model,
-                    models.into_iter().find(|candidate| candidate.slug == model),
-                    config,
-                ),
-            }
+            };
+            construct_model_info(model, remote, config)
         })
     }
 
@@ -498,6 +484,18 @@ impl ModelsManager for OpenAiModelsManager {
 }
 
 impl OpenAiModelsManager {
+    /// Selects the catalog available under the current provider and auth identity.
+    fn models_for_entry<'a>(&self, entry: &'a ModelsCacheEntry) -> Cow<'a, [ModelInfo]> {
+        if !self.api_key_discovery_disabled()
+            && entry.identity.is_some()
+            && entry.identity == self.endpoint_client.identity()
+        {
+            Cow::Borrowed(&entry.models)
+        } else {
+            Cow::Owned(self.catalog_source.fallback_models().unwrap_or_default())
+        }
+    }
+
     async fn raw_model_catalog(
         &self,
         refresh_strategy: RefreshStrategy,
@@ -766,6 +764,17 @@ impl OpenAiModelsManager {
 }
 
 impl ModelsManager for StaticModelsManager {
+    #[tracing::instrument(skip_all, fields(model = model))]
+    fn get_model_info<'a>(
+        &'a self,
+        model: &'a str,
+        config: &'a ModelsManagerConfig,
+    ) -> ModelsManagerFuture<'a, ModelInfo> {
+        Box::pin(
+            async move { construct_model_info_from_candidates(model, &self.remote_models, config) },
+        )
+    }
+
     fn get_default_model<'a>(
         &'a self,
         model: &'a Option<String>,
@@ -900,15 +909,20 @@ fn find_model_by_namespaced_suffix(model: &str, candidates: &[ModelInfo]) -> Opt
     find_model_by_longest_prefix(suffix, candidates)
 }
 
+/// Selects owned model metadata without applying configuration overrides.
+fn find_model_from_candidates(model: &str, candidates: &[ModelInfo]) -> Option<ModelInfo> {
+    // First use the normal longest-prefix match. If that misses, allow a narrowly scoped
+    // retry for namespaced slugs like `custom/gpt-5.3-codex`.
+    find_model_by_longest_prefix(model, candidates)
+        .or_else(|| find_model_by_namespaced_suffix(model, candidates))
+}
+
 pub(crate) fn construct_model_info_from_candidates(
     model: &str,
     candidates: &[ModelInfo],
     config: &ModelsManagerConfig,
 ) -> ModelInfo {
-    // First use the normal longest-prefix match. If that misses, allow a narrowly scoped
-    // retry for namespaced slugs like `custom/gpt-5.3-codex`.
-    let remote = find_model_by_longest_prefix(model, candidates)
-        .or_else(|| find_model_by_namespaced_suffix(model, candidates));
+    let remote = find_model_from_candidates(model, candidates);
     construct_model_info(model, remote, config)
 }
 

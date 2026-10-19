@@ -42,6 +42,7 @@ async fn api_key_discovery_flag_controls_fetches_and_cached_catalogs() {
     let manager =
         OpenAiModelsManager::new(home.path().into(), endpoint.clone(), Some(auth.clone()));
     let bundled = load_remote_models_from_file().unwrap();
+    let config = ModelsManagerConfig::default();
 
     for strategy in [
         RefreshStrategy::Online,
@@ -69,6 +70,7 @@ async fn api_key_discovery_flag_controls_fetches_and_cached_catalogs() {
         models
     );
     assert_eq!(endpoint.fetch_count(), 1);
+    assert_eq!(manager.get_model_info("dynamic", &config).await, models[0]);
 
     // A runtime rollback must also suppress the already-loaded catalog.
     manager.set_api_key_model_discovery_enabled(/*enabled*/ false);
@@ -80,6 +82,12 @@ async fn api_key_discovery_flag_controls_fetches_and_cached_catalogs() {
         bundled
     );
     assert_eq!(manager.try_get_remote_models().unwrap(), bundled);
+    assert!(
+        manager
+            .get_model_info("dynamic", &config)
+            .await
+            .used_fallback_model_metadata
+    );
     assert_eq!(endpoint.fetch_count(), 1);
 
     // A new session must honor its startup flag even when a matching disk cache exists.
