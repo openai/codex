@@ -695,6 +695,9 @@ async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -
             // Preserve existing behavior: skip branches that are not present on a remote.
             continue;
         };
+        if distance == 0 {
+            return Some(remote_sha);
+        }
         match &closest_sha {
             None => closest_sha = Some((remote_sha, distance)),
             Some((_, best_distance)) if distance < *best_distance => {
