@@ -1,9 +1,13 @@
 //! Offline editing, uncertain submissions, and stale events never consume local work.
 
 use super::*;
+use crate::app::reconnect::ReconnectPresentation;
+use crate::app::reconnect::reconnect;
 use crate::app_server_session::ThreadParamsMode;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::tests::helpers::normalize_agent_center_snapshot;
+use codex_app_server_client::AppServerEvent;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCRequest;
 use futures::SinkExt;
@@ -414,6 +418,10 @@ async fn lost_initial_thread_reply_keeps_startup_draft_offline() -> Result<()> {
     for disconnect_first in [false, true] {
         let (mut app, _events, mut ops) = make_test_app_with_channels().await;
         app.pending_startup_thread_start = true;
+        if disconnect_first {
+            app.reconnect.presentation =
+                ReconnectPresentation::Startup(tokio::time::Instant::now());
+        }
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let endpoint = crate::resolve_remote_addr(&format!("ws://{}", listener.local_addr()?))?;
         app.app_server_target = AppServerTarget::Remote {
@@ -446,7 +454,13 @@ async fn lost_initial_thread_reply_keeps_startup_draft_offline() -> Result<()> {
         .await;
         let mut tui = crate::tui::test_support::make_test_tui()?;
         if disconnect_first {
-            app.begin_reconnect();
+            app.handle_app_server_event(
+                &session,
+                AppServerEvent::Disconnected {
+                    message: "connection closed".into(),
+                },
+            )
+            .await;
         }
         app.handle_event(
             &mut tui,
@@ -455,6 +469,7 @@ async fn lost_initial_thread_reply_keeps_startup_draft_offline() -> Result<()> {
         )
         .await?;
         assert!(app.reconnect.offline);
+        assert!(!app.pending_startup_thread_start);
         app.handle_tui_event(
             &mut tui,
             &mut session,
@@ -470,6 +485,187 @@ async fn lost_initial_thread_reply_keeps_startup_draft_offline() -> Result<()> {
         );
         session.shutdown().await?;
         assert_eq!(server.await??, vec!["initialize", "thread/start"]);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejected_initial_thread_start_reconnects_and_submits_prompt_once() -> Result<()> {
+    for reject_again in [false, true] {
+        let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+        app.pending_startup_thread_start = true;
+        app.config.model = Some("gpt-retry".into());
+        app.chat_widget.initial_user_message = Some("startup prompt".into());
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = crate::resolve_remote_addr(&format!("ws://{}", listener.local_addr()?))?;
+        app.app_server_target = AppServerTarget::Remote {
+            endpoint: endpoint.clone(),
+        };
+        let thread_id = ThreadId::new();
+        let cwd = app.config.cwd.clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            serve_reconnect_requests(tokio_tungstenite::accept_async(stream).await?, |request| {
+                let cwd = cwd.clone();
+                async move {
+                    assert_eq!(request.method, "thread/start");
+                    let params = request.params.as_ref().expect("thread/start params");
+                    assert_eq!(params["model"], "gpt-retry");
+                    assert_eq!(params["config"]["model_reasoning_effort"], "high");
+                    if reject_again {
+                        return Some(json!({"error": {
+                            "code": -32600,
+                            "message": "Server is draining; retry after reconnecting",
+                            "data": {"reason": "serverShuttingDown"}
+                        }}));
+                    }
+                    Some(json!({"result": {
+                        "thread": {
+                            "id": thread_id,
+                            "sessionId": thread_id,
+                            "preview": "startup prompt",
+                            "ephemeral": false,
+                            "modelProvider": "test-provider",
+                            "createdAt": 1,
+                            "updatedAt": 1,
+                            "status": {"type": "idle"},
+                            "cwd": cwd,
+                            "cliVersion": "0.0.0",
+                            "source": "cli",
+                            "turns": []
+                        },
+                        "model": "gpt-retry",
+                        "modelProvider": "test-provider",
+                        "serviceTier": null,
+                        "cwd": cwd,
+                        "approvalPolicy": "never",
+                        "approvalsReviewer": "user",
+                        "sandbox": {"type": "dangerFullAccess"},
+                        "reasoningEffort": "high"
+                    }}))
+                }
+            })
+            .await
+        });
+        let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+        // A close notification can arrive before the already received refusal is dispatched.
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::Disconnected {
+                message: "connection closed".into(),
+            },
+        )
+        .await;
+        app.handle_startup_thread_started(
+            &mut app_server,
+            Err(color_eyre::Report::new(TypedRequestError::Server {
+                method: "thread/start".into(),
+                source: JSONRPCErrorError {
+                    code: -32600,
+                    message: "not accepting new actions".into(),
+                    data: Some(json!({"reason": "serverShuttingDown"})),
+                },
+            })),
+        )
+        .await?;
+        assert!(app.reconnect.offline);
+        assert!(app.pending_startup_thread_start);
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        app.handle_tui_event(
+            &mut tui,
+            &mut app_server,
+            TuiEvent::Paste("startup draft".into()),
+        )
+        .await?;
+        let reconnect_status =
+            regex_lite::Regex::new(r"^[•◦] (Reconnecting to server… )\([\dhms ]+\)")?;
+        assert_snapshot!(
+            "rejected_startup_reconnecting",
+            reconnect_status.replace(
+                &render_bottom_popup(&app.chat_widget, /*width*/ 80),
+                "• ${1}(<elapsed>)",
+            )
+        );
+
+        let mut launch_choices = crate::app_server_session::StartupLaunchChoices::default();
+        launch_choices.model = Some("gpt-retry".into());
+        launch_choices.effort = Some(json!("high"));
+        let connected = reconnect(
+            app_server.backend_id(),
+            AppServerTarget::Remote { endpoint },
+            app.config.clone(),
+            app.local_settings.clone(),
+            /*thread_id*/ None,
+            /*remote_cwd*/ None,
+            crate::dynamic_tools_mcp::ThreadToolTransport::Dynamic,
+            app.reconnect.presentation,
+        )
+        .await?;
+        app.finish_reconnect(
+            &mut tui,
+            &mut app_server,
+            &mut events,
+            connected,
+            CODEX_CLI_VERSION,
+        )
+        .await?;
+
+        assert!(!app.reconnect.offline);
+        assert!(app.pending_startup_thread_start);
+        let result = crate::app_server_session::start_thread_with_request_handle(
+            app_server.request_handle(),
+            &app.local_settings,
+            app.config.clone(),
+            ThreadParamsMode::Remote,
+            /*remote_cwd_override*/ None,
+            app_server.thread_tool_transport(),
+            launch_choices,
+        )
+        .await;
+        app.handle_startup_thread_started(&mut app_server, result)
+            .await?;
+        assert!(!app.pending_startup_thread_start);
+        if reject_again {
+            assert!(app.reconnect.offline);
+            assert!(app.reconnect.failed);
+            assert!(
+                app.chat_widget
+                    .composer_text_with_pending()
+                    .contains("startup prompt")
+            );
+        } else {
+            assert_eq!(app.primary_thread_id, Some(thread_id));
+            assert_snapshot!(
+                "rejected_startup_reconnected",
+                normalize_snapshot_paths(render_bottom_popup(&app.chat_widget, /*width*/ 80))
+            );
+        }
+        let submitted = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::CodexOp(Op::UserTurn { items, .. }) => Some(items),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            submitted,
+            if reject_again {
+                Vec::new()
+            } else {
+                vec![vec![UserInput::Text {
+                    text: "startup prompt".into(),
+                    text_elements: Vec::new(),
+                }]]
+            }
+        );
+        app_server.shutdown().await?;
+        let methods = server.await??;
+        assert_eq!(
+            methods
+                .iter()
+                .filter(|method| method.as_str() == "thread/start")
+                .count(),
+            1
+        );
     }
     Ok(())
 }

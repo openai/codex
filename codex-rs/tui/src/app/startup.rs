@@ -535,7 +535,7 @@ impl App {
                         &app_server,
                         local_settings.clone(),
                         config.clone(),
-                        launch_choices,
+                        launch_choices.clone(),
                         app_event_tx.clone(),
                         managed_worktree.clone(),
                     );
@@ -1206,6 +1206,12 @@ See the Codex keymap documentation for supported actions and examples."
                         "the initial backend is not registered"
                     ));
                 };
+                if !backends.is_listening(initial_owner)
+                    && !app.pending_startup_thread_start
+                    && !app.reconnect.offline
+                {
+                    app.begin_reconnect();
+                }
                 // Reconnect can dismiss an overlay from the server-event path.
                 if app.overlay.is_none() {
                     if !tui.is_owned_screen() && tui.is_alt_screen_active() {
@@ -1275,7 +1281,10 @@ See the Codex keymap documentation for supported actions and examples."
                     continue;
                 }
                 if app.reconnect.offline && !app.reconnect.failed && reconnect.is_none() {
-                    reconnect = Some(Box::pin(reconnect::reconnect(
+                    let presentation = app.reconnect.presentation;
+                    let wait_for_drain =
+                        app.pending_startup_thread_start && backends.is_listening(initial_owner);
+                    let attempt = reconnect::reconnect(
                         initial_owner,
                         app.app_server_target.clone(),
                         app.config.clone(),
@@ -1288,13 +1297,22 @@ See the Codex keymap documentation for supported actions and examples."
                         backends
                             .session_at(displayed_session)
                             .thread_tool_transport(),
-                        app.reconnect.presentation,
-                    )));
+                        presentation,
+                    );
+                    reconnect = Some(Box::pin(async move {
+                        if let reconnect::ReconnectPresentation::Startup(deadline) = presentation
+                            && wait_for_drain
+                        {
+                            tokio::time::sleep_until(deadline).await;
+                            color_eyre::eyre::bail!("Server connection could not be restored");
+                        }
+                        attempt.await
+                    }));
                 }
                 // Replay queues history and operations. A buffered closure must not switch
                 // widgets before those app events have been applied.
                 let has_pending_app_events = !app_event_rx.is_empty();
-                let paused_backend = (app.reconnect.offline
+                let paused_backend = ((app.reconnect.offline && !app.pending_startup_thread_start)
                     || (!matches!(app.app_server_target, AppServerTarget::Embedded)
                         && has_pending_app_events))
                     .then_some(initial_owner);
@@ -1419,14 +1437,19 @@ See the Codex keymap documentation for supported actions and examples."
                     }
                     (owner, app_server_event) = backends.next_event(paused_backend) => {
                         match app_server_event {
-                            Some(event) => {
+                            Some(event) if owner != initial_owner || !app.reconnect.offline => {
                                 if let Some(session) = backends.session(owner) {
                                     app.handle_polled_backend_event(session, initial_owner, event).await;
                                 }
                             }
+                            Some(_) => {}
                             None => {
                                 if owner == initial_owner {
-                                    app.begin_reconnect();
+                                    if app.reconnect.offline && app.pending_startup_thread_start {
+                                        reconnect = None;
+                                    } else if !app.pending_startup_thread_start {
+                                        app.begin_reconnect();
+                                    }
                                 }
                                 tracing::warn!("app-server event stream closed");
                             }
@@ -1441,9 +1464,32 @@ See the Codex keymap documentation for supported actions and examples."
                                     break Err(err);
                                 }
                                 backends.resume_events(initial_owner);
-                                waiting_for_initial_session_configured = false;
+                                waiting_for_initial_session_configured = app.pending_startup_thread_start;
+                                if app.pending_startup_thread_start {
+                                    spawn_startup_thread_start(
+                                        backends.session_at(displayed_session),
+                                        app.local_settings.clone(),
+                                        app.config.clone(),
+                                        launch_choices.clone(),
+                                        app.app_event_tx.clone(),
+                                        managed_worktree.clone(),
+                                    );
+                                }
                             }
                             Err(error) => {
+                                if app.pending_startup_thread_start {
+                                    app.pending_startup_thread_start = false;
+                                    app.chat_widget.cancel_startup_submission();
+                                    app.chat_widget
+                                        .set_initial_user_message_submit_suppressed(
+                                            /*suppressed*/ true,
+                                        );
+                                    if let Some(message) =
+                                        app.chat_widget.initial_user_message.take()
+                                    {
+                                        app.chat_widget.restore_user_message_to_composer(message);
+                                    }
+                                }
                                 app.reconnect.failed = true;
                                 app.chat_widget.reconnect_failed();
                                 app.chat_widget.add_error_message(error.to_string());
@@ -1530,7 +1576,7 @@ See the Codex keymap documentation for supported actions and examples."
                 }
                 match control {
                     AppRunControl::Continue => {
-                        if app.reconnect.offline {
+                        if app.reconnect.offline && !app.pending_startup_thread_start {
                             pending_startup_submission = false;
                             app.chat_widget.cancel_startup_submission();
                         }

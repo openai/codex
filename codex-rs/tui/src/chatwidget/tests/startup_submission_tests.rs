@@ -270,19 +270,35 @@ async fn startup_submission_waits_for_session_and_sends_exactly_once() {
 
 #[tokio::test]
 async fn startup_submission_escape_restores_editing_without_submitting() {
-    let (mut source, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    source.bottom_pane.insert_str("keep the draft");
-    source.bottom_pane.set_composer_cursor(/*cursor*/ 4);
-    let mut draft = Some(source.bottom_pane.composer_draft_snapshot());
-    let mut confirmed = true;
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.restore_startup_input_when_ready(&mut draft, &mut confirmed);
-    let before = chat.bottom_pane.composer_draft_snapshot();
-    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
-    chat.thread_id = Some(ThreadId::new());
-    chat.restore_startup_input_when_ready(&mut draft, &mut confirmed);
-    assert_eq!(chat.bottom_pane.composer_draft_snapshot(), before);
-    assert_no_submit_op(&mut op_rx);
+    for rejected_startup in [false, true] {
+        let (mut source, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        source.bottom_pane.insert_str("keep the draft");
+        source.bottom_pane.set_composer_cursor(/*cursor*/ 4);
+        let mut draft = Some(source.bottom_pane.composer_draft_snapshot());
+        let mut confirmed = true;
+        let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.restore_startup_input_when_ready(&mut draft, &mut confirmed);
+        let before = chat.bottom_pane.composer_draft_snapshot();
+        if rejected_startup {
+            chat.pause_for_rejected_startup();
+            chat.handle_restricted_key(
+                KeyEvent::from(KeyCode::Esc),
+                crate::bottom_pane::RestrictedInputMode::Disconnected,
+            );
+            assert_snapshot!(
+                render_bottom_popup(&chat, /*width*/ 80).lines().last().unwrap(),
+                @"  ⌃c quit"
+            );
+            chat.input_queue.suppress_queue_autosend = false;
+        } else {
+            chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+        }
+        assert!(chat.input_queue.startup_submission.is_none());
+        chat.thread_id = Some(ThreadId::new());
+        chat.restore_startup_input_when_ready(&mut draft, &mut confirmed);
+        assert_eq!(chat.bottom_pane.composer_draft_snapshot(), before);
+        assert_no_submit_op(&mut op_rx);
+    }
 }
 
 #[tokio::test]
@@ -302,6 +318,18 @@ async fn startup_submission_waits_for_protected_view_and_preserves_paste_provena
         assert!(draft.is_some());
         assert_no_submit_op(&mut op_rx);
         chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+        chat.thread_id = None;
+        chat.restore_startup_input_when_ready(&mut draft, &mut confirmed);
+        chat.pause_for_rejected_startup();
+        for key in [KeyCode::Null, KeyCode::Left, KeyCode::Right, KeyCode::Enter] {
+            chat.handle_restricted_key(
+                KeyEvent::from(key),
+                crate::bottom_pane::RestrictedInputMode::Disconnected,
+            );
+        }
+        assert_no_submit_op(&mut op_rx);
+        chat.input_queue.suppress_queue_autosend = false;
+        chat.thread_id = Some(ThreadId::new());
         chat.restore_startup_input_when_ready(&mut draft, &mut confirmed);
         if payload.starts_with(' ') {
             assert!(op_rx.try_recv().is_err());
@@ -320,7 +348,7 @@ async fn startup_submission_waits_for_protected_view_and_preserves_paste_provena
 
 #[tokio::test]
 async fn startup_submission_edit_or_disconnect_cancels_without_losing_draft() {
-    for action in ["edit", "disconnect", "parent-owned"] {
+    for action in ["edit", "disconnect", "parent-owned", "rejected-edit-undo"] {
         let (mut source, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
         source.bottom_pane.insert_str("confirmed draft");
         let mut draft = Some(source.bottom_pane.composer_draft_snapshot());
@@ -334,6 +362,15 @@ async fn startup_submission_edit_or_disconnect_cancels_without_losing_draft() {
             chat.pause_for_disconnect();
         } else if action == "edit" {
             chat.handle_paste(" edited".into());
+        } else if action == "rejected-edit-undo" {
+            chat.pause_for_rejected_startup();
+            for key in [KeyCode::Char('x'), KeyCode::Backspace] {
+                chat.handle_restricted_key(
+                    KeyEvent::from(key),
+                    crate::bottom_pane::RestrictedInputMode::Disconnected,
+                );
+            }
+            chat.input_queue.suppress_queue_autosend = false;
         }
         chat.thread_id = Some(ThreadId::new());
         chat.restore_startup_input_when_ready(&mut draft, &mut confirmed);

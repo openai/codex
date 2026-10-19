@@ -6,7 +6,7 @@ use crate::legacy_core::config::ConfigOverrides;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_config::LoaderOverrides;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct StartupLaunchChoices {
     pub(crate) model: Option<String>,
     pub(crate) effort: Option<serde_json::Value>,

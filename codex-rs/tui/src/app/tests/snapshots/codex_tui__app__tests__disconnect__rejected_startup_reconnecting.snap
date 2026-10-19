@@ -1,0 +1,10 @@
+---
+source: tui/src/app/tests/disconnect_tests.rs
+expression: "reconnect_status.replace(&render_bottom_popup(&app.chat_widget, 80),\n\"• ${1}(<elapsed>)\",)"
+---
+• Reconnecting to server… (<elapsed>)
+
+
+› startup draft
+
+  ⌃c quit

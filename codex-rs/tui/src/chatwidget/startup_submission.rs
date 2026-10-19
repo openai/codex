@@ -1,7 +1,8 @@
 //! Carry one startup submission intent across draft handoff without consuming editable text early.
 //!
-//! Confirmation applies to the visible draft only. Editing, cancellation, or disconnect removes
-//! the intent; normal submission parsing runs once the session and protected-input gates are ready.
+//! Confirmation applies to the visible draft only. Editing, cancellation, or an uncertain disconnect
+//! removes the intent; a refused initial start can preserve it while reconnecting. Normal submission
+//! parsing runs once the session and protected-input gates are ready.
 
 use super::*;
 use crate::bottom_pane::ComposerDraftSnapshot;

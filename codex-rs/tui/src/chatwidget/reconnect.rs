@@ -17,9 +17,19 @@ impl ChatWidget {
     }
 
     pub(crate) fn pause_for_disconnect(&mut self) {
+        self.pause_for_disconnect_inner(/*preserve_startup_input*/ false);
+    }
+
+    pub(crate) fn pause_for_rejected_startup(&mut self) {
+        self.pause_for_disconnect_inner(/*preserve_startup_input*/ true);
+    }
+
+    fn pause_for_disconnect_inner(&mut self, preserve_startup_input: bool) {
         self.permission_discovery = None;
         self.invalidate_permission_discovery();
-        self.cancel_startup_submission();
+        if !preserve_startup_input {
+            self.cancel_startup_submission();
+        }
         self.cancel_image_submission();
         // The app-server transport can fail while the separate WebRTC helper
         // still sends microphone audio. Retire local media before showing offline UI.
@@ -29,9 +39,11 @@ impl ChatWidget {
             questions.delivery_enabled = false;
         }
         self.input_queue.suppress_queue_autosend = true;
-        self.set_initial_user_message_submit_suppressed(/*suppressed*/ true);
-        if let Some(message) = self.initial_user_message.take() {
-            self.restore_user_message_to_composer(message);
+        if !preserve_startup_input {
+            self.set_initial_user_message_submit_suppressed(/*suppressed*/ true);
+            if let Some(message) = self.initial_user_message.take() {
+                self.restore_user_message_to_composer(message);
+            }
         }
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane
@@ -194,6 +206,26 @@ impl ChatWidget {
 
     pub(crate) fn handle_restricted_key(&mut self, key: KeyEvent, mode: RestrictedInputMode) {
         if self.external_writer_view {
+            return;
+        }
+        let startup_key_handled = self.input_queue.startup_submission.is_some()
+            && !self.startup_submission_has_protected_input()
+            && (key.code == KeyCode::Null || self.handle_startup_submission_key(key));
+        if mode == RestrictedInputMode::Disconnected {
+            self.set_footer_hint_override(Some(vec![(
+                crate::key_hint::ctrl(KeyCode::Char('c')).display_label(),
+                "quit".into(),
+            )]));
+        }
+        if startup_key_handled {
+            return;
+        }
+        if self.input_queue.startup_submission.is_some()
+            && !self.startup_submission_has_protected_input()
+        {
+            // Cursor movement must preserve the confirmed draft's paste provenance.
+            let result = self.bottom_pane.handle_key_event(key);
+            self.handle_composer_input_result(result, /*had_modal_or_popup*/ false);
             return;
         }
         if self.handle_question_key(key) {

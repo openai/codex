@@ -617,6 +617,8 @@ impl ChatWidget {
                 .as_deref_mut()
                 .map(crate::bottom_pane::AsyncQuestions::capture),
             pending_thread_settings: None,
+            initial_user_message: self.initial_user_message.clone(),
+            startup_submission: self.input_queue.startup_submission.clone(),
             composer: composer.has_content().then_some(composer),
             safety_buffering_prompt: self.safety_buffering_prompt.clone(),
             safety_buffering_source: self.safety_buffering_source,
@@ -655,6 +657,14 @@ impl ChatWidget {
             preserve_in_flight_turn && input_state.as_ref().is_some_and(|state| state.task_running);
         if let Some(input_state) = input_state {
             self.bottom_pane.restore_questions(input_state.questions);
+            self.initial_user_message = input_state.initial_user_message;
+            self.input_queue.startup_submission = input_state.startup_submission;
+            if self.input_queue.startup_submission.is_some() {
+                self.bottom_pane.set_footer_hint_override(Some(vec![
+                    ("Waiting for startup".into(), String::new()),
+                    ("esc".into(), "cancel".into()),
+                ]));
+            }
             self.input_queue.recovered_queue = input_state.recovered_queue;
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;

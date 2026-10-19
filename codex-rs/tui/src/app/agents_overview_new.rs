@@ -2,6 +2,7 @@
 //! Worktrees start at the repository default branch and bind only the new session.
 
 use super::*;
+use crate::app_server_session::is_server_shutting_down_error;
 use crate::startup_draft::StartupDraftInitialScreen;
 use crate::startup_draft::StartupDraftPump;
 use crate::startup_draft::StartupDraftSessionAction;
@@ -167,17 +168,10 @@ impl App {
         let started = match result {
             Ok(started) => started,
             Err(error) => {
-                // Older servers omit the reason. Only use their specific message when
-                // data is absent, so other invalid requests aren't misclassified.
                 let (title, message) = if matches!(
                     error.downcast_ref::<TypedRequestError>(),
                     Some(TypedRequestError::Server { source, .. })
-                        if source.code == -32600
-                            && match &source.data {
-                                Some(data) => data.get("reason").and_then(serde_json::Value::as_str)
-                                    == Some("serverShuttingDown"),
-                                None => source.message == "Server is draining; retry after reconnecting",
-                            }
+                        if is_server_shutting_down_error(source)
                 ) {
                     let mut message = String::from(
                         "New sessions are paused while active turns finish or are canceled. The default shutdown wait is up to one minute.",

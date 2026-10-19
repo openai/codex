@@ -145,6 +145,8 @@ pub(crate) struct ThreadInputState {
     pub(crate) questions: Option<crate::bottom_pane::QuestionState>,
     pub(crate) pending_thread_settings:
         Option<codex_app_server_protocol::ThreadSettingsUpdatedNotification>,
+    pub(super) initial_user_message: Option<UserMessage>,
+    pub(super) startup_submission: Option<crate::bottom_pane::ComposerDraftSnapshot>,
     pub(super) composer: Option<ThreadComposerState>,
     pub(super) safety_buffering_prompt: Option<UserMessage>,
     pub(super) safety_buffering_source: UserMessageSource,
