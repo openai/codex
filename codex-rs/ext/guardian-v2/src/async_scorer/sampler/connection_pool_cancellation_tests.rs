@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::async_scorer::sampler::CLASSIFICATION_TOKEN_USAGE_METRIC;
+use crate::async_scorer::sampler::LunaSamplerError;
 use crate::async_scorer::sampler::response::PendingResponse;
 use crate::async_scorer::sampler::tests::RecordingMetrics;
 use crate::async_scorer::sampler::tests::connect_sampler;
@@ -33,7 +34,7 @@ async fn cancelled_classifiers_interrupt_and_reuse_only_completed_streams() -> R
     // None means reuse; explicit failures must close before the one-second drain deadline.
     let close_now = Some(Duration::from_millis(500));
     let close_after_timeout = Some(Duration::from_secs(2));
-    for (interrupted, close_timeout, expected_tokens) in [
+    for (interrupted, close_timeout, expected_tokens, outcome) in [
         (vec![accepted.clone(), completed.clone()], None, Some(42)),
         (vec![completed.clone(), accepted], None, Some(42)),
         (vec![rejected.clone()], close_now, None),
@@ -50,7 +51,11 @@ async fn cancelled_classifiers_interrupt_and_reuse_only_completed_streams() -> R
         (vec![completed], close_after_timeout, Some(42)),
         (vec![error], close_after_timeout, None),
         (Vec::new(), close_after_timeout, None),
-    ] {
+    ]
+    .into_iter()
+    .flat_map(|(events, timeout, tokens)| {
+        ["cancelled", "superseded"].map(|outcome| (events.clone(), timeout, tokens, outcome))
+    }) {
         let server = responses::start_websocket_server(vec![vec![
             vec![responses::ev_response_created("stale")],
             interrupted,
@@ -63,15 +68,34 @@ async fn cancelled_classifiers_interrupt_and_reuse_only_completed_streams() -> R
         config.metrics = Some(metrics.clone());
         let sampler = Arc::new(connect_sampler(config).await?);
         let pending_sampler = Arc::clone(&sampler);
-        let pending =
-            tokio::spawn(async move { pending_sampler.sample(sample_request("stale")).await });
+        let mut request = sample_request("stale");
+        request.pending_score = Some(crate::async_scorer::score::PendingScore {
+            progress: Arc::default(),
+            index: 0,
+            max_lag: 0,
+        });
+        let pending = tokio::spawn(async move { pending_sampler.sample(request).await });
         tokio::time::timeout(
             Duration::from_secs(2),
             server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
         )
         .await?;
-        pending.abort();
-        assert!(pending.await.unwrap_err().is_cancelled());
+        if outcome == "cancelled" {
+            pending.abort();
+            assert!(pending.await.unwrap_err().is_cancelled());
+        } else {
+            sampler
+                .active_requests
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap()
+                .supersede
+                .send(())
+                .unwrap();
+            assert!(matches!(pending.await?, Err(LunaSamplerError::Superseded)));
+        }
+        metrics.assert_outcome(outcome, /*attempts*/ 1, outcome);
         let interrupt = tokio::time::timeout(
             Duration::from_secs(2),
             server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 1),

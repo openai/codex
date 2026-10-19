@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::async_scorer::conversation::ConversationBackend;
+use crate::async_scorer::sampler::tests::RecordingMetrics;
 use crate::async_scorer::sampler::tests::sampler_config;
 use pretty_assertions::assert_eq;
 
@@ -37,14 +38,17 @@ async fn stale_classifications_close_the_transport_without_invalidating_scores()
                 }])
                 .await;
             let store = fixture.test.codex.thread_extension_data();
-            store.insert(LunaSampler::new(sampler_config(
+            let metrics = Arc::new(RecordingMetrics::default());
+            let mut config = sampler_config(
                 proxy_websocket_servers_with_http(
                     &[&server],
                     ProxyPrewarmLimit::AllConnections,
                     /*http_url*/ None,
                 )
                 .await?,
-            )));
+            );
+            config.metrics = Some(metrics.clone());
+            store.insert(LunaSampler::new(config));
             let sampler = store.get::<LunaSampler>().unwrap();
             sampler.prewarm().await;
             if mode == "conversation" {
@@ -94,6 +98,15 @@ async fn stale_classifications_close_the_transport_without_invalidating_scores()
             expected.lag += max_lag + 1;
             assert_eq!(progress.inspect(/*call_id*/ None), expected);
             assert_eq!(cached_score(store), score);
+
+            let (outcome, failure_reason) = if early_score {
+                ("success", "none")
+            } else {
+                ("superseded", "superseded")
+            };
+            // Socket closure can precede the sampling task recording its outcome.
+            tokio::time::timeout(ASYNC_TEST_TIMEOUT, metrics.1.notified()).await?;
+            metrics.assert_outcome(outcome, /*attempts*/ 1, failure_reason);
 
             fixture.test.codex.shutdown_and_wait().await?;
             server.shutdown().await;

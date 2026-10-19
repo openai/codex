@@ -415,7 +415,7 @@ impl Classification {
                     tokio::select! {
                         biased;
                         () = pending_score.expired() => Err(LunaSamplerError::Superseded),
-                        result = score => result.unwrap_or(Err(LunaSamplerError::Superseded)),
+                        result = score => result.unwrap_or(Err(LunaSamplerError::Superseded)).map(super::sampler::SampledScore::accept),
                     }
                 }
             };

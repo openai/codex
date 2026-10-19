@@ -345,7 +345,53 @@ async fn classifier_preserves_api_key_cyber_program_policy() -> Result<()> {
 type RecordedMetric = (String, i64, Vec<(String, String)>);
 
 #[derive(Default)]
-pub(super) struct RecordingMetrics(pub(super) Mutex<Vec<RecordedMetric>>);
+pub(in crate::async_scorer) struct RecordingMetrics(
+    pub(in crate::async_scorer) Mutex<Vec<RecordedMetric>>,
+    pub(in crate::async_scorer) tokio::sync::Notify,
+);
+
+impl RecordingMetrics {
+    pub(in crate::async_scorer) fn assert_outcome(
+        &self,
+        outcome: &str,
+        attempts: i64,
+        failure_reason: &str,
+    ) {
+        let tags = json!([
+            ["outcome", outcome],
+            ["attempt_count", attempts.to_string()],
+            ["retried", if attempts > 1 { "true" } else { "false" }],
+            ["failure_reason", failure_reason]
+        ]);
+        let samples = self.0.lock().unwrap();
+        for (name, value) in [
+            ("codex.guardian_v2.sampling.attempt_count", attempts),
+            ("codex.guardian_v2.sampling.retry_outcome", 1),
+        ] {
+            assert_eq!(
+                json!(
+                    samples
+                        .iter()
+                        .filter(|metric| metric.0 == name)
+                        .map(|metric| (&metric.1, &metric.2))
+                        .collect::<Vec<_>>()
+                ),
+                json!([[value, tags]]),
+            );
+        }
+    }
+
+    fn retries(&self) -> serde_json::Value {
+        let samples = self.0.lock().unwrap();
+        let mut retries = samples
+            .iter()
+            .filter(|metric| metric.0 == "codex.guardian_v2.sampling.retry")
+            .map(|metric| (&metric.1, &metric.2))
+            .collect::<Vec<_>>();
+        retries.sort();
+        json!(retries)
+    }
+}
 
 impl ExtensionMetrics for RecordingMetrics {
     fn histogram_with_boundaries(
@@ -358,7 +404,12 @@ impl ExtensionMetrics for RecordingMetrics {
         self.histogram(name, value, tags);
     }
 
-    fn counter(&self, _name: &str, _inc: i64, _tags: &[(&str, &str)]) {}
+    fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
+        self.histogram(name, inc, tags);
+        if name == "codex.guardian_v2.sampling.retry_outcome" {
+            self.1.notify_one();
+        }
+    }
 
     fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) {
         if name == "codex.guardian_v2.connection.duration_ms" {
@@ -1290,17 +1341,33 @@ async fn sampler_reconnects_after_transient_service_failures() -> Result<()> {
         ]),
     )
     .await;
-    let sampler = connect_sampler(sampler_config(
+    let metrics = Arc::new(RecordingMetrics::default());
+    let mut config = sampler_config(
         proxy_websocket_servers_with_http(
             &[&first, &second],
             ProxyPrewarmLimit::AllConnections,
             Some(&http.uri()),
         )
         .await?,
-    ))
-    .await?;
+    );
+    config.metrics = Some(metrics.clone());
+    let sampler = connect_sampler(config).await?;
 
     assert_eq!(sampler.sample(sample_request("turn-1")).await?, "low");
+    metrics.assert_outcome("success", /*attempts*/ 3, "none");
+    assert_eq!(
+        metrics.retries(),
+        json!([
+            [
+                1,
+                [
+                    ["failure_reason", "flex_unavailable"],
+                    ["kind", "transport"]
+                ]
+            ],
+            [1, [["failure_reason", "http_5xx"], ["kind", "transport"]]],
+        ])
+    );
     assert_eq!(first.single_connection().len(), 1);
     assert_eq!(second.single_connection().len(), 1);
     let request = recovered.single_request();
@@ -1346,15 +1413,17 @@ async fn sampler_limits_transient_recovery_attempts() -> Result<()> {
         })]),
     )
     .await;
-    let sampler = connect_sampler(sampler_config(
+    let metrics = Arc::new(RecordingMetrics::default());
+    let mut config = sampler_config(
         proxy_websocket_servers_with_http(
             &[&first, &second],
             ProxyPrewarmLimit::AllConnections,
             Some(&http.uri()),
         )
         .await?,
-    ))
-    .await?;
+    );
+    config.metrics = Some(metrics.clone());
+    let sampler = connect_sampler(config).await?;
 
     let error = sampler
         .sample(sample_request("turn-1"))
@@ -1365,6 +1434,7 @@ async fn sampler_limits_transient_recovery_attempts() -> Result<()> {
         error,
         LunaSamplerError::Api(ApiError::FlexUnavailable)
     ));
+    metrics.assert_outcome("failure", /*attempts*/ 3, "flex_unavailable");
     assert_eq!(first.single_connection().len(), 1);
     assert_eq!(second.single_connection().len(), 1);
     assert_eq!(third.requests().len(), 1);
@@ -1398,6 +1468,8 @@ async fn parent_response_id_survives_classifier_transport_retry() -> Result<()> 
                 )),
             );
         }
+        let metrics = Arc::new(RecordingMetrics::default());
+        config.metrics = Some(metrics.clone());
         let sampler = connect_sampler(config).await?;
         let expired_id = expired.single_handshake().header("thread-id").unwrap();
         sampler
@@ -1410,6 +1482,7 @@ async fn parent_response_id_survives_classifier_transport_retry() -> Result<()> 
         let mut request = sample_request("turn-1");
         request.parent_response_id = Some(parent_response_id.to_owned());
         assert_eq!(sampler.sample(request).await?, "low");
+        metrics.assert_outcome("success", /*attempts*/ 2, "none");
         for server in [&expired, &healthy] {
             let requests = server.single_connection();
             assert_eq!(requests.len(), 1);
@@ -1425,5 +1498,49 @@ async fn parent_response_id_survives_classifier_transport_retry() -> Result<()> 
         }
     }
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sampler_records_401_recovery_separately_from_transport_retries() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let rejected = vec![vec![json!({"type": "error", "status": 401,
+        "error": {"type": "authentication_error", "message": "expired"}})]];
+    let ws = responses::start_websocket_server(vec![rejected.clone(), rejected]).await;
+    let http = responses::start_mock_server().await;
+    let recovered = responses::mount_sse_once(
+        &http,
+        responses::sse(vec![
+            ev_assistant_message("recovered", "low"),
+            ev_completed("recovered"),
+        ]),
+    )
+    .await;
+    let metrics = Arc::new(RecordingMetrics::default());
+    let base_url = proxy_websocket_servers_with_http(
+        &[&ws, &ws],
+        ProxyPrewarmLimit::AllConnections,
+        Some(&http.uri()),
+    )
+    .await?;
+    let mut config = sampler_config(base_url);
+    config.metrics = Some(metrics.clone());
+    let auth = config.provider.auth_manager().unwrap();
+    auth.set_external_auth(Arc::new(RefreshableAuth(Mutex::new("refreshed"))))
+        .await?;
+    let sampler = connect_sampler(config).await?;
+    assert_eq!(sampler.sample(sample_request("turn-1")).await?, "low");
+    assert_eq!(
+        recovered.single_request().header("authorization"),
+        Some("Bearer refreshed".to_owned())
+    );
+    metrics.assert_outcome("success", /*attempts*/ 2, "none");
+    assert_eq!(
+        metrics.retries(),
+        json!([[
+            1,
+            [["failure_reason", "http_401"], ["kind", "auth_recovery"]]
+        ],])
+    );
     Ok(())
 }

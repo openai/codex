@@ -26,6 +26,7 @@ use super::authorization::ScoreAuthorization;
 use super::sampler::LunaSampler;
 use super::sampler::LunaSamplerError;
 use super::sampler::LunaSamplingRequest;
+use super::sampler::SampledScore;
 use super::score::PendingScore;
 use super::transcript::CollectedTranscript;
 
@@ -58,7 +59,7 @@ pub(super) struct ConversationRequest {
     pub(super) reset_token_limit: usize,
     pub(super) authorization: ScoreAuthorization,
     pub(super) thread: Arc<CodexThread>,
-    pub(super) ready: oneshot::Sender<Result<String, LunaSamplerError>>,
+    pub(super) ready: oneshot::Sender<Result<SampledScore, LunaSamplerError>>,
     pub(super) metrics: Option<Arc<dyn ExtensionMetrics>>,
     pub(super) pending_score: PendingScore,
 }
@@ -108,7 +109,8 @@ impl ConversationBackend {
 }
 
 impl Reservation {
-    pub(super) async fn run(self, request: ConversationRequest) {
+    pub(super) async fn run(self, mut request: ConversationRequest) {
+        request.sampling.pending_score = Some(request.pending_score.clone());
         if self.generation.strong_count() == 0
             || !request.authorization.is_current(&request.thread).await
             || request.pending_score.is_expired()

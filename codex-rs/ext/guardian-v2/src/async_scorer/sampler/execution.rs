@@ -1,6 +1,7 @@
 //! Executes one prepared classifier request with the existing retry and streaming rules.
 //! Snapshot output returns immediately with a detached drain that retains cancellation.
 //! Retained requests publish the same early result but keep ownership through completion.
+//! Sampling outcomes describe score delivery, independently of retained response draining.
 //! Requests and retries stop when the account owner that started the classification changes.
 //! Dropped responses interrupt and drain before their transport can return to the pool.
 
@@ -9,8 +10,11 @@ use super::ConnectionPool;
 use super::LunaSamplerConfig;
 use super::LunaSamplerError;
 use super::MAX_OUTPUT_BYTES;
+use super::SampledScore;
 use super::connection_pool::RequestMode;
 use super::response::PendingResponse;
+use super::telemetry::SamplingTelemetry;
+use super::telemetry::record_retry;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_api::ResponsesApiRequest;
@@ -50,7 +54,7 @@ pub(super) struct SamplingExecution {
 }
 
 pub(super) struct RetainedCompletion {
-    pub(super) ready: Option<oneshot::Sender<Result<String, LunaSamplerError>>>,
+    pub(super) ready: Option<oneshot::Sender<Result<SampledScore, LunaSamplerError>>>,
     pub(super) output: Option<Vec<ResponseItem>>,
     pub(super) remaining_tokens: usize,
     pub(super) early_score: Option<String>,
@@ -112,13 +116,14 @@ impl RetainedCompletion {
     pub(super) fn finish(
         mut self,
         result: Result<String, LunaSamplerError>,
+        telemetry: &mut SamplingTelemetry,
     ) -> Option<Vec<ResponseItem>> {
         let reusable = result.as_ref().is_ok_and(|score| {
             matches!(score.as_str(), "high" | "low")
                 && self.early_score.as_ref().is_none_or(|early| early == score)
         });
         if let Some(ready) = self.ready.take() {
-            let _ = ready.send(result);
+            telemetry.deliver(ready, result);
         }
         self.output.filter(|output| reusable && !output.is_empty())
     }
@@ -157,6 +162,7 @@ impl SamplingExecution {
                         return false;
                     }
                     self.connections.clear();
+                    record_retry(self.config.metrics.as_deref(), "http_401", "auth_recovery");
                     return true;
                 } else {
                     status.is_server_error() || *status == StatusCode::TOO_MANY_REQUESTS
@@ -189,6 +195,11 @@ impl SamplingExecution {
         };
         if retryable && *retries < MAX_SAMPLING_RETRIES {
             *retries += 1;
+            record_retry(
+                self.config.metrics.as_deref(),
+                super::super::metrics::sampler_failure_reason(error),
+                "transport",
+            );
             return true;
         }
         false
@@ -197,6 +208,7 @@ impl SamplingExecution {
     pub(super) async fn run(
         &mut self,
         mut mode: SamplingMode<'_>,
+        telemetry: &mut SamplingTelemetry,
     ) -> Result<String, LunaSamplerError> {
         let auth_changes = self
             .config
@@ -244,6 +256,7 @@ impl SamplingExecution {
         };
         'retry: loop {
             ensure_account_owner()?;
+            telemetry.attempts = telemetry.attempts.saturating_add(1);
             if let SamplingMode::Retained(completion) = &mut mode {
                 completion.output = Some(Vec::new());
                 completion.remaining_tokens = retention_budget;
@@ -390,7 +403,7 @@ impl SamplingExecution {
                             SamplingMode::Retained(ref mut retained) => {
                                 retained.early_score = Some(delta.clone());
                                 if let Some(ready) = retained.ready.take() {
-                                    let _ = ready.send(Ok(delta));
+                                    telemetry.deliver(ready, Ok(delta));
                                 }
                                 continue;
                             }

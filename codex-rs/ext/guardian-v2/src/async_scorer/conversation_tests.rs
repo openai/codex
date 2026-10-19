@@ -5,6 +5,7 @@ use crate::async_scorer::conversation::ConversationRequest;
 use crate::async_scorer::sampler::LunaSampler;
 use crate::async_scorer::sampler::LunaSamplerError;
 use crate::async_scorer::sampler::LunaSamplingRequest;
+use crate::async_scorer::sampler::SampledScore;
 use crate::async_scorer::sampler::tests::sample_request;
 use crate::async_scorer::sampler::tests::sampler_config;
 use crate::async_scorer::score::PendingScore;
@@ -23,7 +24,9 @@ async fn pending_request(
     label: &str,
 ) -> Result<(
     ConversationRequest,
-    tokio::sync::oneshot::Receiver<Result<String, LunaSamplerError>>,
+    impl std::future::Future<
+        Output = Result<Result<String, LunaSamplerError>, tokio::sync::oneshot::error::RecvError>,
+    >,
 )> {
     let thread = Arc::clone(&fixture.test.codex);
     let config = thread
@@ -69,7 +72,7 @@ async fn pending_request(
                 ..sample_request(label)
             },
         },
-        score,
+        async move { score.await.map(|result| result.map(SampledScore::accept)) },
     ))
 }
 
@@ -395,10 +398,10 @@ async fn concurrent_requests_retain_only_the_newest_completed_history() -> Resul
             },
         ];
         let (server, _) = start_streaming_sse_server(streams).await;
-        let sampler = Arc::new(LunaSampler::new(sampler_config(format!(
-            "{}/v1",
-            server.uri()
-        ))));
+        let metrics = Arc::new(RecordingMetrics::default());
+        let mut config = sampler_config(format!("{}/v1", server.uri()));
+        config.metrics = Some(metrics.clone());
+        let sampler = Arc::new(LunaSampler::new(config));
         let backend = ConversationBackend::new(sampler);
         let (request, score) = pending_request(&fixture, "seed").await?;
         backend.reserve(|| 0).1.unwrap().run(request).await;
@@ -455,6 +458,23 @@ async fn concurrent_requests_retain_only_the_newest_completed_history() -> Resul
                 .unwrap_err();
             assert!(error.is_cancelled());
         }
+        assert_eq!(
+            metrics
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|metric| match metric {
+                    RecordedMetric::Counter(name, _, tags)
+                        if name == "codex.guardian_v2.sampling.retry_outcome" =>
+                        tags.iter()
+                            .find(|(key, _)| key == "outcome")
+                            .map(|(_, value)| value.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec!["success"; 4],
+        );
         drop(finish_older);
         let (request, score) = pending_request(&fixture, "probe").await?;
         backend.reserve(|| 4).1.unwrap().run(request).await;
@@ -624,5 +644,51 @@ async fn expiry_preserves_the_completed_checkpoint_and_transcript_cursor() -> Re
     drop(backend);
     fixture.test.codex.shutdown_and_wait().await?;
     server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn expiry_discards_a_queued_score_without_recording_success() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let fixture = GuardianFailureFixture::new().await?;
+    let store = fixture.test.codex.thread_extension_data();
+    let server = responses::start_mock_server().await;
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_output_text_delta("low"),
+            ev_assistant_message("score", "low"),
+            ev_completed("score"),
+        ]),
+    )
+    .await;
+    let metrics = Arc::new(crate::async_scorer::sampler::tests::RecordingMetrics::default());
+    let mut config = sampler_config(server.uri());
+    config.metrics = Some(metrics.clone());
+    let backend = ConversationBackend::new(Arc::new(LunaSampler::new(config)));
+    let (mut request, score) = pending_request(&fixture, "queued").await?;
+    request.pending_score.max_lag = 0;
+    let (index, reservation) =
+        backend.reserve(|| observe_unscored_call(&request.pending_score.progress, store));
+    request.pending_score.index = index;
+    let pending_score = request.pending_score.clone();
+    // Finish the worker while the score stays queued and the consumer remains unpolled.
+    tokio::time::timeout(ASYNC_TEST_TIMEOUT, reservation.unwrap().run(request)).await?;
+    assert!(
+        !metrics
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|metric| metric.0 == "codex.guardian_v2.sampling.retry_outcome")
+    );
+    observe_unscored_call(&pending_score.progress, store);
+    tokio::select! {
+        biased;
+        () = pending_score.expired() => {},
+        _ = score => panic!("expired score was accepted"),
+    }
+    metrics.assert_outcome("superseded", /*attempts*/ 1, "superseded");
+    fixture.test.codex.shutdown_and_wait().await?;
     Ok(())
 }
