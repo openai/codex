@@ -1,17 +1,41 @@
-//! Spawned agents inherit the invoking step's model settings after active-turn updates.
+//! Children inherit captured model settings and persistent environment attachments.
 
 use super::*;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_protocol::protocol::EnvironmentConfigState;
+use codex_protocol::protocol::TurnEnvironmentRequests;
+use codex_protocol::protocol::TurnEnvironmentSelection;
+use core_test_support::submit_thread_settings;
+use core_test_support::test_codex::environment_config_for_selection;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
 
-#[test_case(false, None; "v1 inherits captured settings")]
-#[test_case(true, None; "v2 inherits captured settings")]
-#[test_case(false, Some(ReasoningEffort::Medium); "v1 validates effort against captured model")]
-#[test_case(true, Some(ReasoningEffort::Medium); "v2 validates effort against captured model")]
+#[derive(Clone, Copy)]
+enum EnvironmentInheritanceCase {
+    Configured,
+    Legacy,
+    Empty,
+    Fork,
+    Pending,
+}
+
+#[test_case(false, None, EnvironmentInheritanceCase::Configured; "v1 inherits captured settings")]
+#[test_case(true, None, EnvironmentInheritanceCase::Configured; "v2 inherits captured settings")]
+#[test_case(false, Some(ReasoningEffort::Medium), EnvironmentInheritanceCase::Configured; "v1 validates effort against captured model")]
+#[test_case(true, Some(ReasoningEffort::Medium), EnvironmentInheritanceCase::Configured; "v2 validates effort against captured model")]
+#[test_case(false, None, EnvironmentInheritanceCase::Empty; "v1 excludes turn-only attachments")]
+#[test_case(true, None, EnvironmentInheritanceCase::Empty; "v2 excludes turn-only attachments")]
+#[test_case(false, None, EnvironmentInheritanceCase::Fork; "v1 fork inherits configured attachments")]
+#[test_case(true, None, EnvironmentInheritanceCase::Fork; "v2 fork inherits configured attachments")]
+#[test_case(false, None, EnvironmentInheritanceCase::Pending; "v1 retains replaced pending attachment")]
+#[test_case(true, None, EnvironmentInheritanceCase::Pending; "v2 retains replaced pending attachment")]
+#[test_case(false, None, EnvironmentInheritanceCase::Legacy; "v1 retains turn attachments before rollout")]
+#[test_case(true, None, EnvironmentInheritanceCase::Legacy; "v2 retains turn attachments before rollout")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawn_inherits_captured_settings_after_a_turn_update(
     multi_agent_v2: bool,
     requested_effort: Option<ReasoningEffort>,
+    inheritance: EnvironmentInheritanceCase,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -19,9 +43,16 @@ async fn spawn_inherits_captured_settings_after_a_turn_update(
     let mut spawn_arguments = json!({ "message": "Complete the delegated task." });
     let namespace = if multi_agent_v2 {
         spawn_arguments["task_name"] = json!("worker");
-        spawn_arguments["fork_turns"] = json!("none");
+        spawn_arguments["fork_turns"] =
+            json!(if matches!(inheritance, EnvironmentInheritanceCase::Fork) {
+                "all"
+            } else {
+                "none"
+            });
         "collaboration"
     } else {
+        spawn_arguments["fork_context"] =
+            json!(matches!(inheritance, EnvironmentInheritanceCase::Fork));
         "multi_agent_v1"
     };
     if let Some(effort) = &requested_effort {
@@ -50,6 +81,16 @@ async fn spawn_inherits_captured_settings_after_a_turn_update(
     mount_sse_once(&server, sse_completed("resp-child-notification")).await;
     let test = step_settings_test()
         .with_config(move |config| {
+            if !matches!(inheritance, EnvironmentInheritanceCase::Legacy) {
+                config
+                    .features
+                    .enable(Feature::SubagentThreadEnvironments)
+                    .expect("enable configured environment inheritance");
+            }
+            config
+                .features
+                .enable(Feature::DeferredExecutor)
+                .expect("enable deferred executor");
             config
                 .features
                 .enable(Feature::Collab)
@@ -85,6 +126,56 @@ async fn spawn_inherits_captured_settings_after_a_turn_update(
         .build_with_auto_env(&server)
         .await?;
     let mut created_threads = test.thread_manager.subscribe_thread_created();
+    if matches!(inheritance, EnvironmentInheritanceCase::Empty) {
+        submit_thread_settings(
+            &test.codex,
+            ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentRequests::new(
+                    test.config.cwd.clone(),
+                    Vec::new(),
+                )),
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
+    let mut configured = test.codex.environment_selections().await;
+    if matches!(inheritance, EnvironmentInheritanceCase::Pending) {
+        configured[0].config = EnvironmentConfigState::Pending;
+        submit_thread_settings(
+            &test.codex,
+            ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentRequests::new(
+                    test.config.cwd.clone(),
+                    configured
+                        .clone()
+                        .into_iter()
+                        .map(TurnEnvironmentSelection::into_request)
+                        .collect(),
+                )),
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
+    let mut temporary = test.executor_environment().selection().clone();
+    temporary.cwd = test.workspace_path_uri("turn-only-workspace")?;
+    temporary.workspace_roots = vec![temporary.cwd.clone()];
+    temporary.config =
+        EnvironmentConfigState::Ready(environment_config_for_selection(&test.config, &temporary));
+    test.fs()
+        .create_directory(
+            &temporary.cwd,
+            CreateDirectoryOptions {
+                recursive: false,
+                follow_symlinks: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+    if matches!(inheritance, EnvironmentInheritanceCase::Legacy) {
+        configured = vec![temporary.clone()];
+    }
     let request = start_paused_turn(&test.codex).await?;
     apply_turn_settings(
         &test.codex,
@@ -93,10 +184,18 @@ async fn spawn_inherits_captured_settings_after_a_turn_update(
             model: Some(MODEL_B.to_string()),
             effort: Some(Some(ReasoningEffort::High)),
             summary: Some(ReasoningSummary::Detailed),
+            environments: Some(vec![temporary.into_request()]),
             ..Default::default()
         },
     )
     .await?;
+    if matches!(inheritance, EnvironmentInheritanceCase::Pending) {
+        let config = environment_config_for_selection(&test.config, &configured[0]);
+        test.codex
+            .environment_ready(&configured[0], config.clone())
+            .await?;
+        configured[0].config = EnvironmentConfigState::Ready(config);
+    }
     answer_paused_turn(&test.codex, &request.turn_id).await?;
 
     let child_thread_id = tokio::time::timeout(
@@ -108,6 +207,7 @@ async fn spawn_inherits_captured_settings_after_a_turn_update(
     for thread in [child_thread.as_ref(), test.codex.as_ref()] {
         wait_for_event(thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     }
+    assert_eq!(child_thread.environment_selections().await, configured);
 
     let expected_effort = requested_effort.unwrap_or(ReasoningEffort::High);
     let requests = response_mock.requests();

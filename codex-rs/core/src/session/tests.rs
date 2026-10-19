@@ -289,6 +289,7 @@ impl StepContext {
                 mode_instructions: None,
             },
             turn: Arc::clone(&turn),
+            inherited_environments: environments.clone(),
             environments,
             executor_capability_discovery: None,
             extension_data: codex_extension_api::ExtensionData::new(turn.sub_id.clone()),

@@ -29,8 +29,10 @@ use core_test_support::wait_for_event;
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::sync::Arc;
 use std::time::Duration;
 use test_case::test_case;
+use tokio::net::TcpListener;
 
 const FIRST_PROMPT: &str = "spawn the first worker";
 const FIRST_TASK: &str = "first worker task";
@@ -322,15 +324,23 @@ async fn child_turn_start_preserves_root_attribution() -> Result<()> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ResidencyReload {
     Sender,
+    SenderChangesWorkspace,
+    SenderPendingConfiguration,
+    OwnerChangesWorkspace,
     OwnerNarrowsPermissions,
     OwnerPreservesStricterChild,
     OwnerRevokesWorkspaceRoot,
+    OwnerPendingConfiguration,
 }
 
 #[test_case(ResidencyReload::Sender; "sender preserves stricter child")]
+#[test_case(ResidencyReload::SenderChangesWorkspace; "sender retains child workspace")]
+#[test_case(ResidencyReload::SenderPendingConfiguration; "sender follows pending owner configuration")]
+#[test_case(ResidencyReload::OwnerChangesWorkspace; "owner retains child workspace")]
 #[test_case(ResidencyReload::OwnerNarrowsPermissions; "owner narrows cached permissions")]
 #[test_case(ResidencyReload::OwnerPreservesStricterChild; "owner preserves stricter child")]
 #[test_case(ResidencyReload::OwnerRevokesWorkspaceRoot; "owner revokes cached workspace root")]
+#[test_case(ResidencyReload::OwnerPendingConfiguration; "owner pending configuration blocks cached authority")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_residency_reload_preserves_inherited_environment_and_tools(
     reload: ResidencyReload,
@@ -374,12 +384,22 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
     let mut builder = test_codex()
         .with_model("gpt-5.6-sol")
         .with_exec_server_url("none")
-        .with_config(|config| {
-            for feature in [Feature::Collab, Feature::MultiAgentV2] {
+        .with_config(move |config| {
+            for feature in [
+                Feature::Collab,
+                Feature::MultiAgentV2,
+                Feature::SubagentThreadEnvironments,
+            ] {
                 config
                     .features
                     .enable(feature)
                     .expect("test config should allow feature update");
+            }
+            if reload == ResidencyReload::OwnerChangesWorkspace {
+                config
+                    .features
+                    .enable(Feature::DeferredExecutor)
+                    .expect("enable deferred executor");
             }
             config.multi_agent_v2.max_concurrent_threads_per_session = 2;
             config
@@ -390,9 +410,15 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
     let test = builder.build_with_remote_and_local_env(&server).await?;
     let mut child_environment = test.executor_environment().selection().clone();
     let (child_permissions, parent_permissions) = match reload {
-        ResidencyReload::Sender => (
+        ResidencyReload::Sender
+        | ResidencyReload::SenderChangesWorkspace
+        | ResidencyReload::OwnerChangesWorkspace => (
             PermissionProfile::read_only(),
             PermissionProfile::workspace_write(),
+        ),
+        ResidencyReload::SenderPendingConfiguration => (
+            PermissionProfile::read_only(),
+            PermissionProfile::read_only(),
         ),
         ResidencyReload::OwnerNarrowsPermissions => {
             (PermissionProfile::Disabled, PermissionProfile::read_only())
@@ -400,10 +426,12 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
         ResidencyReload::OwnerPreservesStricterChild => {
             (PermissionProfile::read_only(), PermissionProfile::Disabled)
         }
-        ResidencyReload::OwnerRevokesWorkspaceRoot => (
-            PermissionProfile::workspace_write(),
-            PermissionProfile::workspace_write(),
-        ),
+        ResidencyReload::OwnerRevokesWorkspaceRoot | ResidencyReload::OwnerPendingConfiguration => {
+            (
+                PermissionProfile::workspace_write(),
+                PermissionProfile::workspace_write(),
+            )
+        }
     };
     if reload == ResidencyReload::OwnerRevokesWorkspaceRoot {
         child_environment.cwd = test.workspace_path_uri("retained")?;
@@ -460,6 +488,30 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
                 /*connect_timeout*/ None,
             )?;
     }
+    let deferred_executor = if reload == ResidencyReload::OwnerChangesWorkspace {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        child_environment.environment_id = "deferred-child".to_string();
+        test.thread_manager
+            .environment_manager()
+            .upsert_environment(
+                child_environment.environment_id.clone(),
+                format!("ws://{}", listener.local_addr()?),
+                /*connect_timeout*/ None,
+            )?;
+        let (attach, connection) = tokio::sync::oneshot::channel();
+        let (shutdown, stop) = tokio::sync::oneshot::channel();
+        let executor = tokio::spawn(super::remote_env::serve_environment_with_agents_md(
+            listener, "", connection, stop,
+        ));
+        Some((attach, shutdown, executor))
+    } else {
+        None
+    };
+    let pending_owner = reload == ResidencyReload::SenderPendingConfiguration;
+    let mut initial_environment = child_environment.clone();
+    if pending_owner {
+        initial_environment.config = EnvironmentConfigState::Pending;
+    }
     let mut created_threads = test.thread_manager.subscribe_thread_created();
 
     submit_thread_settings(
@@ -467,7 +519,7 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
         ThreadSettingsOverrides {
             environments: Some(TurnEnvironmentRequests::new(
                 test.config.cwd.clone(),
-                vec![child_environment.clone().into_request()],
+                vec![initial_environment.clone().into_request()],
             )),
             ..Default::default()
         },
@@ -481,16 +533,31 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
     })
     .await;
 
+    let evicted_thread = Arc::downgrade(&first_thread);
+    drop(first_thread);
+
     let mut parent_environment = child_environment.clone();
+    if matches!(
+        reload,
+        ResidencyReload::SenderChangesWorkspace | ResidencyReload::OwnerChangesWorkspace
+    ) {
+        parent_environment.cwd = test.workspace_path_uri("owner-only-root")?;
+    }
     if reload == ResidencyReload::OwnerRevokesWorkspaceRoot {
         parent_environment.workspace_roots.truncate(1);
+    } else if reload == ResidencyReload::OwnerPendingConfiguration {
+        parent_environment.config = EnvironmentConfigState::Pending;
     } else {
         let EnvironmentConfigState::Ready(parent_config) = &mut parent_environment.config else {
             unreachable!("child environment config should be ready");
         };
         parent_config.permission_profile = PermissionProfileSnapshot::legacy(parent_permissions);
     }
-    if reload == ResidencyReload::Sender {
+    let sender_reload = matches!(
+        reload,
+        ResidencyReload::Sender | ResidencyReload::SenderChangesWorkspace
+    ) || pending_owner;
+    if sender_reload && !pending_owner {
         submit_thread_settings(
             &test.codex,
             ThreadSettingsOverrides {
@@ -520,7 +587,17 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
             .is_err()
     );
 
-    if reload != ResidencyReload::Sender {
+    assert!(
+        evicted_thread.upgrade().is_none(),
+        "evicted child must be dropped"
+    );
+
+    // Complete startup only after eviction has captured the child as Starting.
+    let deferred_executor = deferred_executor.map(|(attach, shutdown, executor)| {
+        attach.send(()).expect("release executor startup");
+        (shutdown, executor)
+    });
+    if !sender_reload {
         submit_thread_settings(
             &test.codex,
             ThreadSettingsOverrides {
@@ -536,13 +613,30 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
             test.codex.config_snapshot().await.environments.environments,
             vec![parent_environment]
         );
-        let result = test
-            .thread_manager
-            .ensure_multi_agent_v2_child_loaded(first_thread_id)
-            .await;
+        // Resume is nonblocking: retry while the released executor finishes startup.
+        let result = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let result = test
+                    .thread_manager
+                    .ensure_multi_agent_v2_child_loaded(first_thread_id)
+                    .await;
+                if reload != ResidencyReload::OwnerChangesWorkspace
+                    || !result.as_ref().is_err_and(|err| {
+                        err.to_string()
+                            .contains("has no matching ready environment binding")
+                    })
+                {
+                    break result;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .context("child should resume after deferred startup completes")?;
         let expected_error = match reload {
-            ResidencyReload::OwnerRevokesWorkspaceRoot => {
-                Some("no longer matches a ready parent environment")
+            ResidencyReload::OwnerRevokesWorkspaceRoot
+            | ResidencyReload::OwnerPendingConfiguration => {
+                Some("has no matching ready environment binding")
             }
             ResidencyReload::OwnerNarrowsPermissions
             | ResidencyReload::OwnerPreservesStricterChild
@@ -551,6 +645,9 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
                 Some("permissions changed on a remote executor")
             }
             ResidencyReload::Sender
+            | ResidencyReload::SenderChangesWorkspace
+            | ResidencyReload::SenderPendingConfiguration
+            | ResidencyReload::OwnerChangesWorkspace
             | ResidencyReload::OwnerNarrowsPermissions
             | ResidencyReload::OwnerPreservesStricterChild => None,
         };
@@ -582,6 +679,34 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    if pending_owner {
+        assert_eq!(
+            reloaded_worker.environment_selections().await,
+            vec![initial_environment.clone()]
+        );
+        let EnvironmentConfigState::Ready(config) = &child_environment.config else {
+            unreachable!("expected resolved owner configuration");
+        };
+        test.codex
+            .environment_ready(&initial_environment, config.clone())
+            .await?;
+        let selections = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let selections = reloaded_worker.environment_selections().await;
+                if selections
+                    .iter()
+                    .all(|selection| selection.config != EnvironmentConfigState::Pending)
+                {
+                    break selections;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .context("reloaded child should receive the original owner's configuration result")?;
+        assert_eq!(selections, vec![child_environment]);
+        return Ok(());
+    }
     assert_eq!(
         reloaded_worker
             .config_snapshot()
@@ -618,6 +743,10 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
     };
     let reloaded_tools = worker_tools(&reloaded_worker_request);
     assert!(reloaded_tools.to_string().contains("### `exec_command`"));
+    if let Some((shutdown, executor)) = deferred_executor {
+        shutdown.send(()).expect("stop executor fixture");
+        executor.await?;
+    }
 
     Ok(())
 }

@@ -165,6 +165,22 @@ type TurnEnvironmentResolution = Shared<BoxFuture<'static, TurnEnvironmentResult
 type PendingConfigurationResult = Result<EnvironmentConfig, String>;
 pub(crate) type PendingConfiguration = Shared<BoxFuture<'static, PendingConfigurationResult>>;
 
+fn pending_configuration(
+    completion: &watch::Sender<Option<PendingConfigurationResult>>,
+) -> PendingConfiguration {
+    let mut receiver = completion.subscribe();
+    async move {
+        receiver
+            .wait_for(Option::is_some)
+            .await
+            .ok()
+            .and_then(|result| result.clone())
+            .unwrap_or_else(|| Err("environment configuration was canceled".to_string()))
+    }
+    .boxed()
+    .shared()
+}
+
 // Shared startup result used to build each turn's environment with its own config
 // without restarting the connection or shell resolution.
 #[derive(Clone)]
@@ -191,7 +207,7 @@ struct SelectedTurnEnvironment {
     resolution: TurnEnvironmentResolution,
     // Executor retries keep this session's wait for its first accepted configuration.
     pending_completion: Option<watch::Sender<Option<PendingConfigurationResult>>>,
-    // Descendants can await the original attachment's first accepted config or failure.
+    // Inherited owner only; otherwise snapshots expose this attachment's own completion.
     owner_config_result: Option<PendingConfiguration>,
 }
 
@@ -223,6 +239,22 @@ fn resolve_selection_config(
 }
 
 impl SelectedTurnEnvironment {
+    // Pending configuration belongs to each attachment set; completed startup can be shared.
+    fn for_turn(&self, local_shell: &Shell, shell_snapshot: &ShellSnapshot) -> Self {
+        if matches!(self.selection.config, EnvironmentConfigState::Pending) {
+            return ThreadEnvironments::start_environment(
+                self.selection.clone(),
+                self.config_origin,
+                Arc::clone(&self.environment),
+                self.owner_config_result.clone(),
+                /*pending_completion*/ None,
+                local_shell,
+                shell_snapshot,
+            );
+        }
+        self.clone()
+    }
+
     fn refresh_thread_config(&mut self, defaults: &ThreadEnvironmentDefaults) {
         if self.config_origin == EnvironmentConfigOrigin::Thread {
             self.selection.config =
@@ -266,6 +298,8 @@ pub(crate) struct ThreadEnvironments {
     shell_snapshot: ShellSnapshot,
     non_blocking_snapshots: bool,
     state: Mutex<ThreadEnvironmentsState>,
+    // Retain configured bindings independently of active-turn membership and cancellation.
+    configured: Mutex<ThreadEnvironmentsState>,
     connection_event_tx: OnceLock<Sender<Event>>,
 }
 
@@ -283,10 +317,19 @@ impl ThreadEnvironments {
         current: TurnEnvironmentSnapshot,
         non_blocking_snapshots: bool,
     ) -> Self {
-        let environments = current
+        let environments: Vec<_> = current
             .environments
             .into_iter()
             .filter_map(|inherited| {
+                // Reuse completed startup without resolving a Pending owner's configuration.
+                let inherited = if let TurnEnvironmentState::Starting(starting) = &inherited
+                    && let EnvironmentConfigState::Ready(_) = &starting.selection.config
+                    && let Some(Ok(resolved)) = starting.resolution.clone().now_or_never()
+                {
+                    TurnEnvironmentState::from_resolution(starting.clone(), Some(Ok(resolved)))
+                } else {
+                    inherited
+                };
                 let environment = match inherited {
                     TurnEnvironmentState::Ready(environment) => environment,
                     TurnEnvironmentState::Starting(inherited) => {
@@ -349,12 +392,20 @@ impl ThreadEnvironments {
                 Some(inherited_environment)
             })
             .collect();
+        let active = environments
+            .iter()
+            .map(|environment| environment.for_turn(&local_shell, &shell_snapshot))
+            .collect();
         Self {
             environment_manager,
             local_shell,
             shell_snapshot,
             non_blocking_snapshots,
             state: Mutex::new(ThreadEnvironmentsState {
+                thread_defaults: thread_defaults.clone(),
+                environments: active,
+            }),
+            configured: Mutex::new(ThreadEnvironmentsState {
                 thread_defaults,
                 environments,
             }),
@@ -398,7 +449,40 @@ impl ThreadEnvironments {
 
     /// Updates the selected list before waking work that was waiting on the previous selection.
     pub(crate) fn update_selections(&self, environments: &[TurnEnvironmentSelection]) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let bindings = self
+            .configured
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .environments
+            .clone();
+        self.update_selections_with_bindings(
+            &self.state,
+            environments,
+            &bindings,
+            self.connection_event_tx.get(),
+        );
+        // Retry configured bindings with their own settings, keeping turn-only changes temporary.
+        self.update_configured_selections(&self.configured_snapshot_now().all_selections());
+    }
+
+    /// Retains configured bindings without changing the active turn's attachments.
+    pub(crate) fn update_configured_selections(&self, environments: &[TurnEnvironmentSelection]) {
+        self.update_selections_with_bindings(
+            &self.configured,
+            environments,
+            &[],
+            /*tx_event*/ None,
+        );
+    }
+
+    fn update_selections_with_bindings(
+        &self,
+        state: &Mutex<ThreadEnvironmentsState>,
+        environments: &[TurnEnvironmentSelection],
+        bindings: &[SelectedTurnEnvironment],
+        tx_event: Option<&Sender<Event>>,
+    ) {
+        let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
         let ThreadEnvironmentsState {
             thread_defaults,
             environments: current,
@@ -406,18 +490,52 @@ impl ThreadEnvironments {
         let mut seen_environment_ids = HashSet::with_capacity(environments.len());
         let mut next = Vec::with_capacity(environments.len());
         let mut pending_completions = Vec::new();
+        // Connection state belongs to the environment instance, not its cwd or roots.
+        let connection_events_task = |environment_id: &str, environment: &Arc<Environment>| {
+            current
+                .iter()
+                .find(|previous| {
+                    previous.selection.environment_id == environment_id
+                        && Arc::ptr_eq(&previous.environment, environment)
+                })
+                .and_then(|previous| previous.connection_events_task.clone())
+                .or_else(|| {
+                    Self::spawn_connection_event_listener(
+                        environment.as_ref(),
+                        environment_id.to_owned(),
+                        tx_event?.clone(),
+                    )
+                })
+        };
         for selected_environment in environments {
             if !seen_environment_ids.insert(selected_environment.environment_id.as_str()) {
                 continue;
             }
-            let previous = current.iter().find(|environment| {
-                let previous = &environment.selection;
-                previous.has_same_workspace(selected_environment)
+            let current_environment = current.iter().find(|environment| {
+                environment
+                    .selection
+                    .has_same_workspace(selected_environment)
+            });
+            let previous = current_environment.or_else(|| {
+                bindings.iter().find(|environment| {
+                    environment
+                        .selection
+                        .has_same_workspace(selected_environment)
+                })
             });
             let (selected_environment, config_origin) =
                 resolve_selection_config(selected_environment.clone(), thread_defaults);
             if let Some(environment) = previous {
-                let mut environment = environment.clone();
+                let failed =
+                    matches!(
+                        environment.selection.config,
+                        EnvironmentConfigState::Failed(_)
+                    ) || matches!(environment.resolution.clone().now_or_never(), Some(Err(_)));
+                let mut environment = if current_environment.is_some() {
+                    environment.clone()
+                } else {
+                    environment.for_turn(&self.local_shell, &self.shell_snapshot)
+                };
                 if let Some(completion) = environment.pending_completion.take() {
                     match &selected_environment.config {
                         EnvironmentConfigState::Ready(config) => {
@@ -431,11 +549,6 @@ impl ThreadEnvironments {
                         }
                     }
                 }
-                let failed =
-                    matches!(
-                        environment.selection.config,
-                        EnvironmentConfigState::Failed(_)
-                    ) || matches!(environment.resolution.clone().now_or_never(), Some(Err(_)));
                 let restarting_as_pending =
                     matches!(selected_environment.config, EnvironmentConfigState::Pending)
                         && !matches!(
@@ -459,6 +572,12 @@ impl ThreadEnvironments {
                     {
                         self.restart_shell_snapshot(&mut environment, resolved);
                     }
+                    if environment.connection_events_task.is_none() {
+                        environment.connection_events_task = connection_events_task(
+                            &environment.selection.environment_id,
+                            &environment.environment,
+                        );
+                    }
                     next.push(environment);
                     continue;
                 }
@@ -469,23 +588,7 @@ impl ThreadEnvironments {
                 tracing::warn!("skipping unknown turn environment `{environment_id}`");
                 continue;
             };
-            // Connection state belongs to the environment instance, not its cwd or roots.
-            let connection_events_task = current
-                .iter()
-                .find(|previous| {
-                    previous.selection.environment_id.as_str() == environment_id.as_str()
-                        && Arc::ptr_eq(&previous.environment, &environment)
-                })
-                .and_then(|previous| previous.connection_events_task.clone())
-                .or_else(|| {
-                    self.connection_event_tx.get().and_then(|tx_event| {
-                        Self::spawn_connection_event_listener(
-                            environment.as_ref(),
-                            environment_id.clone(),
-                            tx_event.clone(),
-                        )
-                    })
-                });
+            let connection_events_task = connection_events_task(environment_id, &environment);
             let pending = previous.filter(|previous| {
                 matches!(selected_environment.config, EnvironmentConfigState::Pending)
                     && previous.pending_completion.is_some()
@@ -495,7 +598,7 @@ impl ThreadEnvironments {
                 config_origin,
                 environment,
                 pending.and_then(|previous| previous.owner_config_result.clone()),
-                pending.and_then(|previous| previous.pending_completion.clone()),
+                current_environment.and_then(|previous| previous.pending_completion.clone()),
                 &self.local_shell,
                 &self.shell_snapshot,
             );
@@ -518,7 +621,13 @@ impl ThreadEnvironments {
 
         // Publish after installing the new list, including pending bindings replaced by retries.
         for (completion, result) in pending_completions {
-            let _ = completion.send_replace(Some(result));
+            completion.send_if_modified(|current| {
+                if current.is_some() {
+                    return false;
+                }
+                *current = Some(result);
+                true
+            });
         }
 
         for task in removed_connection_tasks {
@@ -541,25 +650,12 @@ impl ThreadEnvironments {
             if matches!(selection.config, EnvironmentConfigState::Pending) {
                 let sender =
                     pending_completion.unwrap_or_else(|| watch::channel(/*init*/ None).0);
-                let mut receiver = sender.subscribe();
-                let result = async move {
-                    receiver
-                        .wait_for(Option::is_some)
-                        .await
-                        .ok()
-                        .and_then(|result| result.clone())
-                        .unwrap_or_else(
-                            || Err("environment configuration was canceled".to_string()),
-                        )
-                }
-                .boxed()
-                .shared();
+                let result = pending_configuration(&sender);
                 (Some(sender), Some(result))
             } else {
                 (None, None)
             };
         // The resolver waits for this Session; descendants can follow the original owner.
-        let owner_config_result = owner_config_result.or_else(|| configuration_ready.clone());
         let (task, resolution) = Self::resolve_environment(
             selection.clone(),
             Arc::clone(&environment),
@@ -627,7 +723,19 @@ impl ThreadEnvironments {
     /// Changes the defaults inherited by all selected and later-added environments. A step that
     /// already captured its environments keeps the previous values.
     pub(crate) fn set_active_thread_defaults(&self, defaults: EnvironmentConfig) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        self.set_thread_defaults(&self.state, defaults);
+    }
+
+    pub(crate) fn set_configured_thread_defaults(&self, defaults: EnvironmentConfig) {
+        self.set_thread_defaults(&self.configured, defaults);
+    }
+
+    fn set_thread_defaults(
+        &self,
+        state: &Mutex<ThreadEnvironmentsState>,
+        defaults: EnvironmentConfig,
+    ) {
+        let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
         let ThreadEnvironmentsState {
             thread_defaults,
             environments,
@@ -658,11 +766,19 @@ impl ThreadEnvironments {
 
     pub(crate) fn set_snapshot_credential_broker(&self, broker: SnapshotCredentialBrokerState) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut configured = self
+            .configured
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         if !self.shell_snapshot.set_credential_broker(broker) {
             return;
         }
 
-        for selected in &mut state.environments {
+        for selected in state
+            .environments
+            .iter_mut()
+            .chain(&mut configured.environments)
+        {
             if !selected.environment.is_remote()
                 && let Some(Ok(resolved)) = selected.resolution.clone().now_or_never()
             {
@@ -909,23 +1025,35 @@ impl ThreadEnvironments {
 
     /// Copies the current selection without waiting for any executor to connect.
     pub(crate) fn snapshot_now(&self) -> TurnEnvironmentSnapshot {
+        Self::snapshot_state(&self.state).refresh_readiness()
+    }
+
+    /// Captures configured bindings without resolving readiness or losing config ownership.
+    /// Inheritance and eviction retain these bindings; execution and validation resolve a view.
+    pub(crate) fn configured_snapshot_now(&self) -> TurnEnvironmentSnapshot {
+        Self::snapshot_state(&self.configured)
+    }
+
+    fn snapshot_state(state: &Mutex<ThreadEnvironmentsState>) -> TurnEnvironmentSnapshot {
         // Keep the startup results, but not the senders that would keep removed Pending work alive.
-        let environments = self
-            .state
+        let environments = state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .environments
             .iter()
             .map(|environment| {
-                let starting = StartingTurnEnvironment {
+                TurnEnvironmentState::Starting(StartingTurnEnvironment {
                     selection: environment.selection.clone(),
                     config_origin: environment.config_origin,
                     resolution: environment.resolution.clone(),
                     environment: Arc::clone(&environment.environment),
-                    owner_config_result: environment.owner_config_result.clone(),
-                };
-                let resolved = starting.resolution.clone().now_or_never();
-                TurnEnvironmentState::from_resolution(starting, resolved)
+                    owner_config_result: environment.owner_config_result.clone().or_else(|| {
+                        environment
+                            .pending_completion
+                            .as_ref()
+                            .map(pending_configuration)
+                    }),
+                })
             })
             .collect();
         TurnEnvironmentSnapshot { environments }
