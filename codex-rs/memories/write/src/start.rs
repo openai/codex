@@ -37,7 +37,8 @@ pub fn start_memories_startup_task(
         return;
     }
 
-    let versions = if config.memories.dual_write {
+    // Dual-write warms v2 while v1 is selected; it is no longer needed after cutover.
+    let versions = if config.memories.dual_write && config.memories.version == MemoryVersion::V1 {
         vec![MemoryVersion::V1, MemoryVersion::V2]
     } else {
         vec![config.memories.version]

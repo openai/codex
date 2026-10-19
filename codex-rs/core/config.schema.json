@@ -2645,7 +2645,7 @@
           "type": "boolean"
         },
         "dual_write": {
-          "description": "Generate both versions while the selected version supplies context.",
+          "description": "Generate both versions while v1 is selected; v2 runs alone after cutover.",
           "type": "boolean"
         },
         "extract_model": {
