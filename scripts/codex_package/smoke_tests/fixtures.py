@@ -1,6 +1,7 @@
 import gzip
 import json
 import os
+import platform
 import subprocess
 import tarfile
 from collections.abc import Iterator
@@ -150,13 +151,28 @@ def package(
                 capture_output=True,
                 text=True,
             )
-    return SmokePackage.from_archives(
+    package = SmokePackage.from_archives(
         directory,
         target,
         request.config.getoption("cli_archive"),
         request.config.getoption("app_server_archive"),
         compression,
     )
+    if target == "x86_64-apple-darwin" and platform.machine() == "arm64":
+        # Freshly extracted Intel binaries need cold Rosetta translation before
+        # the command and SDK startup deadlines begin. Keep startup bounded and
+        # fail setup if either packaged entrypoint cannot run.
+        for executable in (package.cli, package.app_server):
+            subprocess.run(
+                [str(executable), "--help"],
+                cwd=package.directory,
+                env=package.environment,
+                check=True,
+                text=True,
+                capture_output=True,
+                timeout=180,
+            )
+    return package
 
 
 @pytest.fixture
