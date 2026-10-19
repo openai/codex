@@ -725,9 +725,22 @@ impl ExecServerClient {
             Ok(Err(_)) => Err(ExecServerError::Disconnected(
                 "Noise harness handshake failed before connection became ready".to_string(),
             )),
-            Err(_) => Err(ExecServerError::InitializeTimedOut {
-                timeout: initialize_timeout,
-            }),
+            Err(_) => {
+                tracing::event!(
+                    name: "codex.exec_server.noise_handshake_failed",
+                    target: "codex_otel.trace_safe",
+                    tracing::Level::WARN,
+                    event.name = "codex.exec_server.noise_handshake_failed",
+                    noise_event = "handshake",
+                    noise_outcome = "failed",
+                    noise_side = "harness",
+                    noise_reason = "timeout",
+                    timeout_ms = initialize_timeout.as_millis() as u64,
+                );
+                Err(ExecServerError::InitializeTimedOut {
+                    timeout: initialize_timeout,
+                })
+            }
         }
     }
 

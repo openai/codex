@@ -101,7 +101,8 @@ where
     let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (disconnected_tx, disconnected_rx) = watch::channel(false);
     let (handshake_ready_tx, handshake_ready_rx) = oneshot::channel();
-    let stream_span = tracing::debug_span!("noise_relay.stream", noise_side = "harness",);
+    let stream_span =
+        tracing::debug_span!("noise_relay.stream", noise_side = "harness",).or_current();
     debug!(
         environment_id,
         executor_registration_id, stream_id, "Noise harness relay details"
@@ -110,6 +111,22 @@ where
     let websocket_task = tokio::spawn(async move {
         let mut handshake_ready_tx = Some(handshake_ready_tx);
         let mut websocket = stream;
+        // Readiness only carries success; record failures before that signal is dropped.
+        let record_handshake_failure = |reason: &'static str| {
+            tracing::event!(
+                name: "codex.exec_server.noise_handshake_failed",
+                target: "codex_otel.trace_safe",
+                tracing::Level::WARN,
+                event.name = "codex.exec_server.noise_handshake_failed",
+                noise_event = "handshake",
+                noise_outcome = "failed",
+                noise_side = "harness",
+                noise_reason = reason,
+                environment_id,
+                executor_registration_id,
+                stream_id,
+            );
+        };
 
         // Bind the Noise transcript to the exact environment registration and
         // virtual relay stream before emitting any handshake bytes. A captured
@@ -124,6 +141,7 @@ where
         ) {
             Ok(handshake) => handshake,
             Err(error) => {
+                record_handshake_failure("handshake_start");
                 send_disconnected(
                     &incoming_tx,
                     &disconnected_tx,
@@ -149,6 +167,7 @@ where
                 .await
                 .is_err()
         {
+            record_handshake_failure("websocket_write");
             let _ = disconnected_tx.send(true);
             return;
         }
@@ -158,6 +177,7 @@ where
         // create a plaintext or unauthenticated application path.
         let mut transport = loop {
             let Some(incoming_message) = websocket.next().await else {
+                record_handshake_failure("websocket_ended");
                 send_disconnected(
                     &incoming_tx,
                     &disconnected_tx,
@@ -168,6 +188,7 @@ where
             let message = match incoming_message {
                 Ok(Message::Binary(payload)) => payload,
                 Ok(Message::Close(_)) => {
+                    record_handshake_failure("websocket_close");
                     send_disconnected(
                         &incoming_tx,
                         &disconnected_tx,
@@ -177,6 +198,7 @@ where
                 }
                 Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => continue,
                 Ok(Message::Text(_)) => {
+                    record_handshake_failure("unexpected_text");
                     send_disconnected(
                         &incoming_tx,
                         &disconnected_tx,
@@ -185,6 +207,7 @@ where
                     return;
                 }
                 Err(error) => {
+                    record_handshake_failure("websocket_read");
                     send_disconnected(
                         &incoming_tx,
                         &disconnected_tx,
@@ -198,6 +221,7 @@ where
             let frame = match decode_relay_message_frame(message.as_ref()) {
                 Ok(frame) => frame,
                 Err(error) => {
+                    record_handshake_failure("invalid_frame");
                     send_disconnected(
                         &incoming_tx,
                         &disconnected_tx,
@@ -215,6 +239,7 @@ where
                     let response = match frame.into_handshake_payload() {
                         Ok(response) => response,
                         Err(error) => {
+                            record_handshake_failure("invalid_response");
                             send_disconnected(
                                 &incoming_tx,
                                 &disconnected_tx,
@@ -236,6 +261,7 @@ where
                             break transport;
                         }
                         Err(error) => {
+                            record_handshake_failure("handshake_finish");
                             send_disconnected(
                                 &incoming_tx,
                                 &disconnected_tx,
@@ -246,6 +272,7 @@ where
                     }
                 }
                 Ok(RelayFrameBodyKind::Reset) => {
+                    record_handshake_failure("relay_reset");
                     send_disconnected(
                         &incoming_tx,
                         &disconnected_tx,
@@ -259,6 +286,7 @@ where
                     | RelayFrameBodyKind::Heartbeat,
                 ) => {}
                 Ok(RelayFrameBodyKind::Data) | Err(_) => {
+                    record_handshake_failure("unexpected_frame");
                     send_disconnected(
                         &incoming_tx,
                         &disconnected_tx,
