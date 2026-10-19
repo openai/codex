@@ -1,3 +1,5 @@
+//! Reads durable history into bounded batches ending at complete records, each with a checkpoint.
+
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Read;
@@ -18,8 +20,13 @@ use super::thread_history::RolloutProjectionStep;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
+#[path = "thread_history_materialization_pipeline.rs"]
+mod pipeline;
+
 const SQLITE_PROJECTION_METRIC: &str = "codex.thread_history.sqlite_projection";
 const SQLITE_PROJECTION_ANOMALY_METRIC: &str = "codex.thread_history.sqlite_projection.anomaly";
+const BATCH_SOURCE_BYTES: u64 = 1024 * 1024;
+const BATCH_STEPS: usize = 256;
 
 pub(super) async fn materialize_to_sqlite(
     store: &LocalThreadStore,
@@ -61,71 +68,32 @@ async fn materialize_to_sqlite_with_state_db(
     let expected_ordinal = projection_state
         .as_ref()
         .map_or(initial_ordinal, |state| state.next_ordinal);
-    let (projections, next_offset) = read_projection_steps(
+    pipeline::read_and_apply(
+        store,
+        thread_id,
         rollout_path,
         start_offset,
         expected_ordinal,
-        thread_id,
+        initial_ordinal,
         subagent_history_start_ordinal,
     )
-    .await?;
-    // Empty valid records can still consume bytes through blank complete lines.
-    if projections.is_empty() && start_offset == next_offset {
-        return Ok(());
-    }
-    super::thread_history::apply_projection(
-        store,
-        thread_id,
-        start_offset,
-        next_offset,
-        initial_ordinal,
-        projections,
-    )
     .await
-}
-
-async fn read_projection_steps(
-    rollout_path: &Path,
-    start_offset: u64,
-    expected_ordinal: u64,
-    thread_id: ThreadId,
-    subagent_history_start_ordinal: Option<u64>,
-) -> ThreadStoreResult<(Vec<RolloutProjectionStep>, u64)> {
-    let path = rollout_path.to_path_buf();
-    let span = tracing::Span::current();
-    let (stop, keep_running) = tokio::sync::oneshot::channel::<()>();
-    let result = tokio::task::spawn_blocking(move || {
-        let _entered = span.enter();
-        read_projection_steps_sync(
-            &path,
-            start_offset,
-            expected_ordinal,
-            thread_id,
-            subagent_history_start_ordinal,
-            || stop.is_closed(),
-        )
-    })
-    .await
-    .map_err(|err| ThreadStoreError::Internal {
-        message: format!("failed to join rollout projection read: {err}"),
-    })?;
-    drop(keep_running);
-    result
 }
 
 /// Read and project the complete durable prefix in one blocking task.
-fn read_projection_steps_sync(
+fn read_projection_batches(
     rollout_path: &Path,
     start_offset: u64,
     expected_ordinal: u64,
     thread_id: ThreadId,
     subagent_history_start_ordinal: Option<u64>,
     is_cancelled: impl Fn() -> bool,
-) -> ThreadStoreResult<(Vec<RolloutProjectionStep>, u64)> {
+    mut emit: impl FnMut(Vec<RolloutProjectionStep>, u64) -> ThreadStoreResult<()>,
+) -> ThreadStoreResult<()> {
     let mut file = match codex_rollout::open_rollout_seekable_reader(rollout_path, &is_cancelled) {
         Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound && start_offset == 0 => {
-            return Ok((Vec::new(), 0));
+            return Ok(());
         }
         Err(err) => return Err(thread_store_io_error(err)),
     };
@@ -143,15 +111,22 @@ fn read_projection_steps_sync(
     let mut line_bytes = Vec::new();
     // Only project the newline-terminated prefix; leave a trailing partial record for the next
     // pass.
-    let mut projections = Vec::new();
     let mut next_ordinal = expected_ordinal;
     let mut next_offset = start_offset;
     let mut line_start_offset = start_offset;
+    let mut batch_start_offset = start_offset;
+    let mut batch = Vec::new();
     loop {
         if is_cancelled() {
             return Err(thread_store_io_error(std::io::Error::other(
                 "rollout read cancelled",
             )));
+        }
+        // Flush only between complete records: an ordinal gap and its following line must
+        // share a checkpoint. Byte-only progress from skipped records also bounds batches.
+        if next_offset - batch_start_offset >= BATCH_SOURCE_BYTES || batch.len() >= BATCH_STEPS {
+            emit(std::mem::take(&mut batch), next_offset)?;
+            batch_start_offset = next_offset;
         }
         line_bytes.clear();
         if reader
@@ -285,7 +260,7 @@ fn read_projection_steps_sync(
                             .ok_or_else(|| ThreadStoreError::Internal {
                                 message: "rollout ordinal exceeds SQLite integer range".to_string(),
                             })?;
-                    projections.push(RolloutProjectionStep::SkippedOrdinalRange {
+                    batch.push(RolloutProjectionStep::SkippedOrdinalRange {
                         start_ordinal: next_ordinal,
                         end_ordinal_exclusive,
                     });
@@ -311,7 +286,7 @@ fn read_projection_steps_sync(
                 "skipping missing rollout ordinal range during projection"
             );
             record_projection_anomaly(ProjectionAnomaly::ForwardOrdinalGap);
-            projections.push(RolloutProjectionStep::SkippedOrdinalRange {
+            batch.push(RolloutProjectionStep::SkippedOrdinalRange {
                 start_ordinal: next_ordinal,
                 end_ordinal_exclusive: ordinal,
             });
@@ -322,7 +297,7 @@ fn read_projection_steps_sync(
                 .ok_or_else(|| ThreadStoreError::Internal {
                     message: "rollout ordinal exceeds SQLite integer range".to_string(),
                 })?;
-        projections.push(RolloutProjectionStep::Line(Box::new(
+        batch.push(RolloutProjectionStep::Line(Box::new(
             ProjectedRolloutLine {
                 ordinal,
                 start_byte_offset: line_start_offset,
@@ -345,7 +320,10 @@ fn read_projection_steps_sync(
             "durable rollout shrank during projection",
         )));
     }
-    Ok((projections, next_offset))
+    if next_offset != batch_start_offset {
+        emit(batch, next_offset)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]

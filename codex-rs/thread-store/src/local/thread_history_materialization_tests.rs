@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -2362,6 +2363,242 @@ async fn jsonl_failure_does_not_create_projection_database() {
     );
 }
 
+/// A failed batch rolls back atomically; retries start after the last committed complete record.
+#[tokio::test]
+async fn catch_up_preserves_committed_batches_on_reader_or_writer_failure() {
+    enum Failure {
+        Reader,
+        Writer,
+    }
+
+    for failure in [Failure::Reader, Failure::Writer] {
+        let home = TempDir::new().expect("temp dir");
+        let store = projection_store(home.path()).await;
+        let thread_id = ThreadId::default();
+        create_paginated_thread(&store, thread_id).await;
+        store
+            .persist_thread(thread_id, PersistContext::Standard)
+            .await
+            .expect("persist session metadata");
+        let pool = codex_state::open_thread_history_db(
+            &codex_state::SqliteConfig::new_for_testing(home.path().abs()),
+        )
+        .await
+        .expect("open thread history db");
+        let rollout_path = store
+            .live_rollout_path(thread_id)
+            .await
+            .expect("rollout path");
+        // More than the producer, queue and consumer can hold: failures exercise backpressure.
+        append_suffix(rollout_path.as_path(), "\nnot-json\n");
+        for index in 1..=2049 {
+            // The gap and following record cross the step limit, but must commit together.
+            let ordinal = if index >= 256 { index + 1 } else { index };
+            append_suffix(
+                rollout_path.as_path(),
+                &format!(
+                    "{}\n",
+                    rollout_line(Some(ordinal), turn_started(&format!("turn-{index}")))
+                ),
+            );
+        }
+        append_suffix(rollout_path.as_path(), "\n");
+        let valid_len = fs::metadata(rollout_path.as_path())
+            .expect("rollout metadata")
+            .len();
+        match failure {
+            Failure::Reader => append_suffix(
+                rollout_path.as_path(),
+                &format!(
+                    "{}\n",
+                    rollout_line(Some(u64::MAX), turn_started("overflow"))
+                ),
+            ),
+            Failure::Writer => {
+                sqlx::query(
+                    "CREATE TRIGGER reject_projection BEFORE INSERT ON thread_turns
+                     WHEN NEW.turn_id = 'turn-300'
+                     BEGIN SELECT RAISE(FAIL, 'reject projection'); END",
+                )
+                .execute(&pool)
+                .await
+                .expect("reject a later batch");
+            }
+        }
+        super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+            .await
+            .expect_err("failed batch must not commit");
+        let turn_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM thread_turns WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(&pool)
+                .await
+                .expect("count committed turns");
+        let committed_turns = match failure {
+            Failure::Reader => 2048,
+            Failure::Writer => 256,
+        };
+        let committed_ordinal = committed_turns + 1;
+        let (_, committed_offset) =
+            rollout_line_byte_offsets(rollout_path.as_path(), committed_ordinal);
+        assert_eq!(
+            (projection_state(&pool, thread_id).await, turn_count),
+            (
+                (committed_offset, committed_ordinal as i64 + 1),
+                committed_turns as i64
+            )
+        );
+
+        match failure {
+            Failure::Reader => fs::OpenOptions::new()
+                .write(true)
+                .open(rollout_path.as_path())
+                .expect("open rollout")
+                .set_len(valid_len)
+                .expect("remove invalid suffix"),
+            Failure::Writer => {
+                sqlx::query("DROP TRIGGER reject_projection")
+                    .execute(&pool)
+                    .await
+                    .expect("allow retry");
+            }
+        }
+        sqlx::query(
+            "CREATE TRIGGER reject_replay BEFORE INSERT ON thread_turns
+             WHEN NEW.turn_id = 'turn-1'
+             BEGIN SELECT RAISE(FAIL, 'replayed committed prefix'); END",
+        )
+        .execute(&pool)
+        .await
+        .expect("reject replay of committed rows");
+        super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+            .await
+            .expect("retry uncommitted suffix");
+        let turn_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM thread_turns WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(&pool)
+                .await
+                .expect("count committed turns");
+        assert_eq!(
+            (projection_state(&pool, thread_id).await, turn_count),
+            (
+                (i64::try_from(valid_len).expect("rollout length"), 2051),
+                2049
+            )
+        );
+    }
+}
+
+#[tokio::test]
+async fn paused_projection_releases_writer_and_retains_progress_when_stopped() {
+    enum Stop {
+        Disconnect,
+        Cancel,
+    }
+
+    for stop in [Stop::Disconnect, Stop::Cancel] {
+        let home = TempDir::new().expect("temp dir");
+        let store = Arc::new(projection_store(home.path()).await);
+        let thread_id = ThreadId::default();
+        let other_thread_id = ThreadId::default();
+        for id in [thread_id, other_thread_id] {
+            create_paginated_thread(&store, id).await;
+            store
+                .persist_thread(id, PersistContext::Standard)
+                .await
+                .expect("persist session metadata");
+        }
+        let pool = store.thread_history_db().await.expect("history db");
+        let before = projection_state(pool, thread_id).await;
+        let rollout_path = store
+            .live_rollout_path(thread_id)
+            .await
+            .expect("rollout path");
+        append_suffix(
+            rollout_path.as_path(),
+            &format!("{}\n", rollout_line(Some(1), turn_started("turn-1"))),
+        );
+        let (_, next_offset) =
+            rollout_line_byte_offsets(rollout_path.as_path(), /*ordinal*/ 1);
+        let (sender, receiver) = tokio::sync::mpsc::channel(2);
+        super::read_projection_batches(
+            rollout_path.as_path(),
+            before.0 as u64,
+            before.1 as u64,
+            thread_id,
+            /*subagent_history_start_ordinal*/ None,
+            || false,
+            |projections, next_offset| {
+                assert!(
+                    sender
+                        .try_send(super::pipeline::ProjectionMessage::Batch {
+                            projections,
+                            next_offset,
+                        })
+                        .is_ok(),
+                    "queue the complete record"
+                );
+                Ok(())
+            },
+        )
+        .expect("read batch");
+        let consumer_store = Arc::clone(&store);
+        let consumer = tokio::spawn(async move {
+            super::pipeline::apply_batches(
+                &consumer_store,
+                thread_id,
+                before.0 as u64,
+                /*initial_ordinal*/ 0,
+                receiver,
+            )
+            .await
+        });
+        // Keep the producer connected but idle until its first batch is visibly committed.
+        while projection_state(pool, thread_id).await == before {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(projection_state(pool, thread_id).await, (next_offset, 2));
+        store
+            .append_items(AppendThreadItemsParams {
+                thread_id: other_thread_id,
+                items: vec![turn_started("unrelated-turn")],
+            })
+            .await
+            .expect("append while the reader is idle");
+        store
+            .flush_thread(other_thread_id)
+            .await
+            .expect("flush unrelated writer");
+        assert_eq!(projection_state(pool, other_thread_id).await.1, 2);
+
+        match stop {
+            Stop::Disconnect => {
+                drop(sender);
+                consumer
+                    .await
+                    .expect("join consumer")
+                    .expect_err("missing completion");
+            }
+            Stop::Cancel => {
+                consumer.abort();
+                assert!(
+                    consumer
+                        .await
+                        .expect_err("cancelled consumer")
+                        .is_cancelled()
+                );
+                sender.closed().await;
+            }
+        }
+        assert_eq!(projection_state(pool, thread_id).await, (next_offset, 2));
+        super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+            .await
+            .expect("resume after stopped producer");
+        assert_eq!(projection_state(pool, thread_id).await, (next_offset, 2));
+    }
+}
+
 #[tokio::test]
 async fn catch_up_rejects_missing_rollout_after_projection() {
     let home = TempDir::new().expect("temp dir");
@@ -2479,13 +2716,14 @@ async fn blank_and_rejected_rollout_lines_advance_projection() {
     // Replay this small file, cancelling between records.
     let checks = Cell::new(0);
     assert!(
-        super::read_projection_steps_sync(
+        super::read_projection_batches(
             rollout_path.as_path(),
             /*start_offset*/ 0,
             /*expected_ordinal*/ 0,
             thread_id,
             /*subagent_history_start_ordinal*/ None,
             || checks.replace(checks.get() + 1) >= 6,
+            |_batch, _next_offset| Ok(()),
         )
         .is_err()
     );
