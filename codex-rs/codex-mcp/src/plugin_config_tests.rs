@@ -1,5 +1,6 @@
 use super::PluginMcpConfigParseOutcome;
 use super::PluginMcpServerParseError;
+use super::normalize_executor_plugin_mcp_declarations;
 use super::parse_agent_plugin_mcp_config;
 use super::parse_executor_plugin_mcp_config;
 use super::parse_plugin_mcp_config;
@@ -750,6 +751,18 @@ fn executor_environment_placement_resolves_foreign_uri_cwd() {
         "executor-1",
     )
     .expect("parse plugin MCP config");
+
+    assert_eq!(
+        normalize_executor_plugin_mcp_declarations(
+            &plugin_root,
+            BTreeMap::from([(
+                "demo".to_string(),
+                serde_json::json!({"command": "demo-mcp", "cwd": "scripts"}),
+            )]),
+            "executor-1",
+        ),
+        outcome
+    );
 
     assert_eq!(
         outcome,

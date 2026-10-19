@@ -597,12 +597,25 @@ impl TurnContext {
         const MAX_TELEMETRY_PLUGIN_ID_BYTES: usize = 128;
 
         let mut identities = self.active_host_plugin_identities.clone()?;
-        // Selected roots provide a package key, not a remote identity for that object.
+        // Selected catalogs preserve local package keys or canonical remote identities.
         if let Some(selected) = selected {
-            identities.extend(selected.plugins.iter().map(|plugin| PluginIdentity {
-                plugin_id: plugin.plugin_id.clone(),
-                remote_plugin_id: None,
-            }));
+            identities.extend(
+                selected
+                    .plugins
+                    .iter()
+                    .map(|plugin| match &plugin.plugin_id {
+                        codex_core_plugins::PluginIdentity::Local { plugin_id } => PluginIdentity {
+                            plugin_id: plugin_id.clone(),
+                            remote_plugin_id: None,
+                        },
+                        codex_core_plugins::PluginIdentity::Remote { remote_plugin_id } => {
+                            PluginIdentity {
+                                plugin_id: String::new(),
+                                remote_plugin_id: Some(remote_plugin_id.clone()),
+                            }
+                        }
+                    }),
+            );
         }
         let mut ids = Vec::with_capacity(identities.len());
         for identity in identities {

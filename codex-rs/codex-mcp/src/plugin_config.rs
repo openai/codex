@@ -63,6 +63,13 @@ impl PluginMcpFile {
     }
 }
 
+/// Parses wrapped or plain plugin MCP declarations without runtime normalization.
+pub fn parse_plugin_mcp_declarations(
+    contents: &str,
+) -> Result<BTreeMap<String, JsonValue>, serde_json::Error> {
+    serde_json::from_str::<PluginMcpFile>(contents).map(PluginMcpFile::into_mcp_servers)
+}
+
 /// Parses the two supported plugin MCP file shapes and normalizes each server.
 ///
 /// Native plugin HTTP servers share the regular MCP transport configuration;
@@ -93,6 +100,21 @@ pub fn parse_executor_plugin_mcp_config(
     )
 }
 
+/// Normalizes already-parsed declarations for one executor installation.
+pub fn normalize_executor_plugin_mcp_declarations(
+    plugin_root: &PathUri,
+    declarations: BTreeMap<String, JsonValue>,
+    environment_id: &str,
+) -> PluginMcpConfigParseOutcome {
+    normalize_plugin_mcp_declarations(
+        declarations,
+        PluginMcpSource::Environment {
+            root: plugin_root,
+            environment_id,
+        },
+    )
+}
+
 impl PluginMcpSource<'_> {
     fn display(self) -> String {
         match self {
@@ -106,10 +128,17 @@ fn parse_plugin_mcp_config_from(
     contents: &str,
     source: PluginMcpSource<'_>,
 ) -> Result<PluginMcpConfigParseOutcome, serde_json::Error> {
-    let parsed = serde_json::from_str::<PluginMcpFile>(contents)?;
+    let declarations = parse_plugin_mcp_declarations(contents)?;
+    Ok(normalize_plugin_mcp_declarations(declarations, source))
+}
+
+fn normalize_plugin_mcp_declarations(
+    declarations: BTreeMap<String, JsonValue>,
+    source: PluginMcpSource<'_>,
+) -> PluginMcpConfigParseOutcome {
     let mut outcome = PluginMcpConfigParseOutcome::default();
 
-    for (name, config_value) in parsed.into_mcp_servers() {
+    for (name, config_value) in declarations {
         match normalize_plugin_mcp_server(config_value, source) {
             Ok(config) => {
                 outcome.servers.insert(name, config);
@@ -120,7 +149,7 @@ fn parse_plugin_mcp_config_from(
         }
     }
 
-    Ok(outcome)
+    outcome
 }
 
 fn normalize_plugin_mcp_server(

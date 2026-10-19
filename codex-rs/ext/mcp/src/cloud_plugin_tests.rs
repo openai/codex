@@ -275,7 +275,12 @@ impl ContextContributor for StepPackages {
                     snapshot
                         .plugins
                         .iter()
-                        .map(|plugin| (plugin.plugin_id.clone(), plugin.selected_root_id.clone()))
+                        .map(|plugin| {
+                            (
+                                plugin.plugin_id.as_str().to_string(),
+                                plugin.selected_root_id.clone(),
+                            )
+                        })
                         .collect()
                 });
             Vec::new()
@@ -331,11 +336,12 @@ impl PluginProvider for CloudProvider {
 fn cloud_catalog() -> PluginCatalog {
     PluginCatalog {
         entries: vec![PluginCatalogEntry {
+            enabled: true,
             id: PluginIdentity::Remote {
                 remote_plugin_id: "plugin_remote".to_string(),
             },
             display_name: "Cloud Demo".to_string(),
-            version: Some("1.0.0".to_string()),
+            version: "1.0.0".to_string(),
             mcp_servers: Default::default(),
             connector_ids: vec!["calendar".to_string()],
             locations: vec![codex_core_plugins::PluginSourceLocation::Cloud {
@@ -343,7 +349,7 @@ fn cloud_catalog() -> PluginCatalog {
                 bundle_uri: None,
             }],
         }],
-        warnings: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -384,6 +390,15 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
     };
     gmail_catalog.entries[0].display_name = "Gmail Demo".to_string();
     gmail_catalog.entries[0].connector_ids = vec!["gmail".to_string()];
+    let mut disabled_catalog = cloud_catalog();
+    disabled_catalog.entries[0].enabled = false;
+    let mut partial_catalog = gmail_catalog.clone();
+    partial_catalog.is_partial = true;
+    let partial_empty_catalog = PluginCatalog {
+        is_partial: true,
+        warnings: vec!["resource listing was truncated".to_string()],
+        ..Default::default()
+    };
     let provider = Arc::new(CloudProvider::default());
     let step_packages = Arc::new(StepPackages::default());
     let mut extensions = ExtensionRegistryBuilder::new();
@@ -422,11 +437,42 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
     let gmail = ("gmail", "search_email", "Gmail Demo");
     for (turn, reply, expected_plugin, new_account, tool_call) in [
         (
+            "initial-partial",
+            Ok(partial_catalog.clone()),
+            Some("plugin_gmail"),
+            None,
+            None,
+        ),
+        (
+            "partial-replaces-partial",
+            Ok(PluginCatalog {
+                is_partial: true,
+                ..cloud_catalog()
+            }),
+            Some("plugin_remote"),
+            None,
+            Some(calendar),
+        ),
+        (
+            "partial-empty-replaces-partial",
+            Ok(partial_empty_catalog.clone()),
+            None,
+            None,
+            None,
+        ),
+        (
             "empty",
             Ok(PluginCatalog::default()),
             None,
             None,
             Some(calendar),
+        ),
+        (
+            "partial-after-complete-empty",
+            Ok(partial_catalog.clone()),
+            None,
+            None,
+            None,
         ),
         (
             "discovered",
@@ -436,8 +482,46 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
             Some(calendar),
         ),
         (
+            "partial-refresh",
+            Ok(partial_catalog.clone()),
+            Some("plugin_remote"),
+            None,
+            Some(calendar),
+        ),
+        (
+            "partial-empty-refresh",
+            Ok(partial_empty_catalog),
+            Some("plugin_remote"),
+            None,
+            None,
+        ),
+        (
             "same-account-failure",
             Err("temporarily unavailable".to_string()),
+            Some("plugin_remote"),
+            None,
+            None,
+        ),
+        (
+            "complete-with-warning-disables-plugin",
+            Ok(PluginCatalog {
+                warnings: vec!["optional bundle hint ignored".to_string()],
+                ..disabled_catalog
+            }),
+            None,
+            None,
+            None,
+        ),
+        (
+            "partial-after-disable",
+            Ok(partial_catalog.clone()),
+            None,
+            None,
+            None,
+        ),
+        (
+            "re-enabled",
+            Ok(cloud_catalog()),
             Some("plugin_remote"),
             None,
             None,
@@ -456,6 +540,13 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
             None,
             Some("account-b"),
             None,
+        ),
+        (
+            "new-account-partial",
+            Ok(partial_catalog),
+            Some("plugin_gmail"),
+            None,
+            Some(gmail),
         ),
         (
             "new-account-discovered",

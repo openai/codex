@@ -38,7 +38,8 @@ pub type PluginProviderFuture<'a, T> =
 /// Cloud providers implement `list`; executor listing is not yet supported.
 /// Package access uses [`crate::ExecutorPluginProvider::resolve_bound`] directly.
 pub trait PluginProvider: Send + Sync {
-    /// Returns a complete snapshot; on error, callers retain the previous snapshot.
+    /// Returns a snapshot; on error, callers retain the previous snapshot.
+    /// Providers set `is_partial` when listing omits entries; warnings are diagnostic only.
     fn list(&self, _query: PluginListQuery) -> PluginProviderFuture<'_, PluginCatalog> {
         Box::pin(async { Ok(PluginCatalog::default()) })
     }

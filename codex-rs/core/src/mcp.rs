@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::config::Config;
@@ -7,6 +8,7 @@ use codex_config::McpServerConfig;
 use codex_config::types::PluginsConfigToml;
 use codex_connectors::ConnectorRuntimeManager;
 use codex_connectors::PluginConnectorSource;
+use codex_core_plugins::PluginIdentity as CatalogPluginIdentity;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
@@ -202,30 +204,52 @@ impl McpManager {
         let roots = context
             .ready_selected_capability_roots()
             .unwrap_or_default();
-        let mut selected = SelectedPluginSnapshot::default();
-        if roots.is_empty() {
+        let mut selected = SelectedPluginSnapshot {
+            disabled_plugin_ids: disabled_plugin_ids.to_vec(),
+            ..Default::default()
+        };
+        let v2 = context.executor_capability_discovery_v2().is_some();
+        let available_roots = available_plugin_roots(context);
+        if roots.is_empty() && !v2 {
             return selected;
         }
         for contributor in self.extensions.mcp_server_contributors() {
             for SelectedPlugin {
                 selected_root_id,
                 plugin_id,
+                identity,
+                enabled,
                 ..
             } in contributor.selected_plugins(context, plugins_config).await
             {
-                if !roots.iter().any(|root| root.id == selected_root_id) {
+                if !available_roots.contains(&selected_root_id) {
                     continue;
                 }
-                if !context.config().features.enabled(Feature::Plugins)
+                if !enabled
+                    || !context.config().features.enabled(Feature::Plugins)
                     || !plugins_config.allows_plugin(&plugin_id)
                     || disabled_plugin_ids.contains(&plugin_id)
+                    || disabled_plugin_ids.iter().any(|id| id == identity.as_str())
                 {
                     selected.disabled_plugin_roots.push(selected_root_id);
+                    selected.disabled_plugin_ids.push(plugin_id);
                 } else {
                     selected.plugins.push(SelectedPluginIdentity {
                         selected_root_id: Some(selected_root_id),
-                        plugin_id,
+                        plugin_id: identity,
                     });
+                }
+            }
+            if context.config().features.enabled(Feature::Plugins) {
+                for plugin_id in contributor.hosted_plugin_ids(context) {
+                    if !disabled_plugin_ids.contains(&plugin_id) {
+                        selected.plugins.push(SelectedPluginIdentity {
+                            selected_root_id: None,
+                            plugin_id: CatalogPluginIdentity::Remote {
+                                remote_plugin_id: plugin_id,
+                            },
+                        });
+                    }
                 }
             }
         }
@@ -245,6 +269,7 @@ impl McpManager {
         let mut selected_plugin_registrations = Vec::new();
         let mut selected_plugins = Vec::new();
         let mut disabled_plugin_roots = Vec::new();
+        let mut suppressed_plugin_ids = disabled_plugin_ids.to_vec();
         let mut overlays = Vec::new();
         // A contributor can emit multiple ordered actions, so order each action globally rather
         // than enumerating contributors.
@@ -256,22 +281,27 @@ impl McpManager {
             for SelectedPlugin {
                 selected_root_id,
                 plugin_id,
+                identity,
+                enabled,
                 mcp,
             } in contributor.selected_plugins(context, plugins_config).await
             {
-                if !plugins_config.allows_plugin(&plugin_id) {
+                if !enabled || !plugins_config.allows_plugin(&plugin_id) {
                     disabled_plugin_roots.push(selected_root_id);
+                    suppressed_plugin_ids.push(plugin_id);
                     continue;
                 }
                 let selection_order = plugin_selection_order;
                 plugin_selection_order += 1;
-                let disabled = disabled_plugin_ids.contains(&plugin_id);
+                let disabled = disabled_plugin_ids.contains(&plugin_id)
+                    || disabled_plugin_ids.iter().any(|id| id == identity.as_str());
                 if !config.features.enabled(Feature::Plugins) || disabled {
                     disabled_plugin_roots.push(selected_root_id);
+                    suppressed_plugin_ids.push(plugin_id.clone());
                 } else {
                     selected_plugins.push(SelectedPluginIdentity {
                         selected_root_id: Some(selected_root_id),
-                        plugin_id: plugin_id.clone(),
+                        plugin_id: identity,
                     });
                 }
                 let contribution = mcp.await;
@@ -355,7 +385,9 @@ impl McpManager {
                             if !disabled_plugin_ids.contains(&plugin_id) {
                                 selected_plugins.push(SelectedPluginIdentity {
                                     selected_root_id: None,
-                                    plugin_id: plugin_id.clone(),
+                                    plugin_id: CatalogPluginIdentity::Remote {
+                                        remote_plugin_id: plugin_id.clone(),
+                                    },
                                 });
                             }
                             if !connector_ids.is_empty() {
@@ -456,6 +488,7 @@ impl McpManager {
             selected_plugins: SelectedPluginSnapshot {
                 plugins: selected_plugins,
                 disabled_plugin_roots,
+                disabled_plugin_ids: suppressed_plugin_ids,
             },
         }
     }
@@ -481,4 +514,27 @@ impl McpManager {
         let mcp_config = self.runtime_config(config).await;
         effective_mcp_servers(&mcp_config, auth)
     }
+}
+
+fn available_plugin_roots(context: McpServerContributionContext<'_, Config>) -> HashSet<String> {
+    let mut roots = context
+        .ready_selected_capability_roots()
+        .unwrap_or_default()
+        .iter()
+        .map(|root| root.id.clone())
+        .collect::<HashSet<_>>();
+    for snapshot in context
+        .executor_capability_discovery_v2()
+        .unwrap_or_default()
+    {
+        if let Ok(inventory) = &snapshot.result {
+            roots.extend(
+                inventory
+                    .plugins
+                    .iter()
+                    .map(|plugin| format!("{}:{}", snapshot.environment_id, plugin.id)),
+            );
+        }
+    }
+    roots
 }

@@ -1675,6 +1675,10 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                 vec![codex_extension_api::SelectedPlugin {
                     selected_root_id: selected_root_id.clone(),
                     plugin_id: plugin_id.clone(),
+                    identity: codex_core_plugins::PluginIdentity::Local {
+                        plugin_id: plugin_id.clone(),
+                    },
+                    enabled: true,
                     mcp: Box::pin(async move {
                         mcp_loaded.fetch_add(1, Ordering::Relaxed);
                         codex_extension_api::SelectedPluginContribution {

@@ -1,25 +1,55 @@
-//! Source-neutral plugin discovery types.
+//! Source-neutral plugin catalogs, reconciliation, and source-aware enablement policy.
 
+use codex_config::types::PluginConfig;
+use codex_core_plugin_common::PluginIdentity;
 use codex_utils_path_uri::PathUri;
+use serde_json::Value;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 
-/// One source's complete discovery snapshot; no entries means no plugins were found.
+/// One source's discovery snapshot; only a complete empty catalog establishes absence.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PluginCatalog {
     pub entries: Vec<PluginCatalogEntry>,
     pub warnings: Vec<String>,
+    /// Listing omitted entries.
+    pub is_partial: bool,
 }
 
 /// Manifest metadata and every location that can supply the same logical plugin.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PluginCatalogEntry {
     pub id: PluginIdentity,
+    pub enabled: bool,
     pub display_name: String,
-    pub version: Option<String>,
-    /// Serialized `.mcp.json` server declarations keyed by their authored names.
-    pub mcp_servers: BTreeMap<String, String>,
+    pub version: String,
+    /// Raw MCP server declarations keyed by their authored names.
+    pub mcp_servers: BTreeMap<String, Value>,
     pub connector_ids: Vec<String>,
     pub locations: Vec<PluginSourceLocation>,
+}
+
+impl PluginCatalogEntry {
+    /// Disabled entries never project. Otherwise Cloud membership supplies enablement;
+    /// executor-only entries require every installation's local plugin ID in the supplied
+    /// config, where omitted enablement retains the configured plugin's default.
+    /// A remote identity alone does not establish Cloud membership.
+    pub fn is_enabled(&self, configured_plugins: &HashMap<String, PluginConfig>) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let is_cloud_plugin = self
+            .locations
+            .iter()
+            .any(|location| matches!(location, PluginSourceLocation::Cloud { .. }));
+        is_cloud_plugin
+            || self.locations.iter().all(|location| match location {
+                PluginSourceLocation::Executor { plugin_id, .. } => configured_plugins
+                    .get(plugin_id)
+                    .is_some_and(|plugin| plugin.enabled.unwrap_or(true)),
+                PluginSourceLocation::Cloud { .. } => true,
+            })
+    }
 }
 
 impl std::fmt::Debug for PluginCatalogEntry {
@@ -27,6 +57,7 @@ impl std::fmt::Debug for PluginCatalogEntry {
         formatter
             .debug_struct("PluginCatalogEntry")
             .field("id", &self.id)
+            .field("enabled", &self.enabled)
             .field("display_name", &self.display_name)
             .field("version", &self.version)
             // Declaration values can contain secrets, so only log their keys.
@@ -40,27 +71,8 @@ impl std::fmt::Debug for PluginCatalogEntry {
     }
 }
 
-/// Stable key used to merge discoveries of the same logical plugin.
-/// Identity is independent of whether the plugin is supplied by the cloud or an executor.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum PluginIdentity {
-    /// Stable ID assigned by plugin-service and shared by its materialized installations.
-    Remote { remote_plugin_id: String },
-    /// Local `name@marketplace` config key for a plugin without a remote ID.
-    Local { plugin_id: String },
-}
-
-impl PluginIdentity {
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Remote { remote_plugin_id } => remote_plugin_id,
-            Self::Local { plugin_id } => plugin_id,
-        }
-    }
-}
-
 /// A source that can supply a plugin; cloud URIs are opaque, not local paths.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PluginSourceLocation {
     Cloud {
         resource_uri: String,
@@ -74,3 +86,54 @@ pub enum PluginSourceLocation {
         root: PathUri,
     },
 }
+
+/// Uses Cloud membership and metadata, retaining version-matched installations in order.
+/// Unavailable Cloud data preserves executor enablement. With a Cloud catalog, unmatched remote
+/// plugins are retained but disabled. Local plugins retain their existing enablement.
+pub fn merge_catalogs(
+    executor: Option<&PluginCatalog>,
+    cloud: Option<&PluginCatalog>,
+) -> PluginCatalog {
+    let Some(executor) = executor else {
+        return cloud.cloned().unwrap_or_default();
+    };
+    let Some(cloud) = cloud else {
+        return executor.clone();
+    };
+    let mut merged = cloud.clone();
+    merged.is_partial |= executor.is_partial;
+    merged.warnings.extend(executor.warnings.iter().cloned());
+    for installation in &executor.entries {
+        if matches!(&installation.id, PluginIdentity::Local { .. }) {
+            merged.entries.push(installation.clone());
+            continue;
+        }
+        // Appended executor entries are not Cloud definitions and cannot authorize each other.
+        let Some(definition) = merged.entries[..cloud.entries.len()]
+            .iter_mut()
+            .find(|definition| definition.id == installation.id)
+        else {
+            let mut disabled = installation.clone();
+            disabled.enabled = false;
+            merged.entries.push(disabled);
+            continue;
+        };
+        if definition.version != installation.version {
+            merged.warnings.push(format!(
+                "plugin `{}` has different cloud and executor versions; retaining the cloud definition",
+                definition.id.as_str(),
+            ));
+            continue;
+        }
+        for location in &installation.locations {
+            if !definition.locations.contains(location) {
+                definition.locations.push(location.clone());
+            }
+        }
+    }
+    merged
+}
+
+#[cfg(test)]
+#[path = "catalog_tests.rs"]
+mod tests;

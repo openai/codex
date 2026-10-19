@@ -295,7 +295,7 @@ fn allowed_configured_marketplace_names_with_policy(
         .collect()
 }
 
-pub(crate) fn configured_plugins_from_stack(
+pub fn configured_plugins_from_stack(
     config_layer_stack: &ConfigLayerStack,
     codex_home: &Path,
 ) -> HashMap<String, PluginConfig> {

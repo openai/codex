@@ -3381,6 +3381,7 @@ dependencies = [
  "codex-api",
  "codex-config",
  "codex-context-fragments",
+ "codex-core-plugin-common",
  "codex-exec-server-protocol",
  "codex-file-system",
  "codex-guardian-context",

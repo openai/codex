@@ -78,9 +78,11 @@ pub use mcp::hosted_plugin_runtime_mcp_server_config;
 pub use mcp::tool_plugin_context;
 pub use plugin_config::PluginMcpConfigParseOutcome;
 pub use plugin_config::PluginMcpServerParseError;
+pub use plugin_config::normalize_executor_plugin_mcp_declarations;
 pub use plugin_config::parse_agent_plugin_mcp_config;
 pub use plugin_config::parse_executor_plugin_mcp_config;
 pub use plugin_config::parse_plugin_mcp_config;
+pub use plugin_config::parse_plugin_mcp_declarations;
 
 pub use mcp::McpServerStatusSnapshot;
 pub use mcp::McpSnapshotDetail;

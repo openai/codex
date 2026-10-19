@@ -4,14 +4,19 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_core::config::Config;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_core_plugins::PluginIdentity;
 use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
 use codex_exec_server::HttpRequestBodyDeltaNotification;
 use codex_exec_server::HttpRequestParams;
+use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
+use codex_extension_api::SelectedPluginSnapshot;
+use codex_extension_api::WorldStateContributionInput;
+use codex_extension_api::WorldStateSectionContribution;
 use codex_features::Feature;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use core_test_support::responses;
@@ -33,6 +38,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 struct DiscoveryRecorder {
     snapshots: Arc<Mutex<Vec<ExecutorCapabilityDiscoveryV2Snapshot>>>,
+    selected_plugins: Arc<Mutex<Option<SelectedPluginSnapshot>>>,
 }
 
 impl McpServerContributor<Config> for DiscoveryRecorder {
@@ -42,12 +48,32 @@ impl McpServerContributor<Config> for DiscoveryRecorder {
 
     fn contribute<'a>(
         &'a self,
-        context: McpServerContributionContext<'a, Config>,
+        _context: McpServerContributionContext<'a, Config>,
     ) -> ExtensionFuture<'a, Vec<McpServerContribution>> {
+        Box::pin(async {
+            vec![McpServerContribution::HostedPluginConnectors {
+                plugin_id: "plugin_sentinel".to_string(),
+                plugin_display_name: "Inert sentinel".to_string(),
+                connector_ids: Vec::new(),
+            }]
+        })
+    }
+
+    fn hosted_plugin_ids(&self, _context: McpServerContributionContext<'_, Config>) -> Vec<String> {
+        vec!["plugin_sentinel".to_string()]
+    }
+
+    fn selected_plugins<'a>(
+        &'a self,
+        context: McpServerContributionContext<'a, Config>,
+        _plugins_config: &'a codex_config::types::PluginsConfigToml,
+    ) -> ExtensionFuture<'a, Vec<codex_extension_api::SelectedPlugin<'a>>> {
         Box::pin(async move {
+            let mut package_roots = vec!["unavailable-root".to_string()];
             let selected_roots = context
                 .ready_selected_capability_roots()
                 .unwrap_or_default();
+            package_roots.extend(selected_roots.iter().map(|root| root.id.clone()));
             if !selected_roots.is_empty() {
                 let legacy = context.executor_capability_discovery();
                 assert_eq!(
@@ -60,6 +86,49 @@ impl McpServerContributor<Config> for DiscoveryRecorder {
             }
             if let Some(snapshots) = context.executor_capability_discovery_v2() {
                 self.snapshots.lock().await.extend_from_slice(snapshots);
+                for snapshot in snapshots {
+                    if let Ok(inventory) = &snapshot.result {
+                        package_roots.extend(
+                            inventory
+                                .plugins
+                                .iter()
+                                .map(|plugin| format!("{}:{}", snapshot.environment_id, plugin.id)),
+                        );
+                    }
+                }
+            }
+            package_roots
+                .into_iter()
+                .map(|selected_root_id| codex_extension_api::SelectedPlugin {
+                    selected_root_id,
+                    identity: PluginIdentity::Local {
+                        plugin_id: "inert-sentinel@market".to_string(),
+                    },
+                    plugin_id: "inert-sentinel@market".to_string(),
+                    enabled: true,
+                    mcp: Box::pin(async {
+                        codex_extension_api::SelectedPluginContribution {
+                            plugin_display_name: "Inert sentinel".to_string(),
+                            source_environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID
+                                .to_string(),
+                            servers: Vec::new(),
+                            connector_ids: Vec::new(),
+                        }
+                    }),
+                })
+                .collect()
+        })
+    }
+}
+
+impl ContextContributor for DiscoveryRecorder {
+    fn contribute_world_state<'a>(
+        &'a self,
+        input: WorldStateContributionInput<'a>,
+    ) -> ExtensionFuture<'a, Vec<WorldStateSectionContribution>> {
+        Box::pin(async move {
+            if let Some(snapshot) = input.step_store.get::<SelectedPluginSnapshot>() {
+                *self.selected_plugins.lock().await = Some(snapshot.as_ref().clone());
             }
             Vec::new()
         })
@@ -274,16 +343,20 @@ async fn check_acquisition(enabled: bool, supported: bool) -> Result<()> {
     let executor = Executor::start(supported, DiscoveryFailure::None).await?;
     let model = responses::start_mock_server().await;
     let observed = Arc::new(Mutex::new(Vec::new()));
+    let selected_plugins = Arc::new(Mutex::new(None));
     let mut extensions = ExtensionRegistryBuilder::new();
     let recorder = Arc::new(DiscoveryRecorder {
         snapshots: Arc::clone(&observed),
+        selected_plugins: Arc::clone(&selected_plugins),
     });
+    extensions.prompt_contributor(recorder.clone());
     extensions.mcp_server_contributor(recorder);
     let test = test_codex()
         .with_extensions(Arc::new(extensions.build()))
         .with_exec_server_url(executor.url.clone())
         .with_config(move |config| {
             config.update_plan_enabled = true;
+            assert!(config.features.enable(Feature::Plugins).is_ok());
             assert!(
                 config
                     .features
@@ -345,19 +418,24 @@ async fn check_acquisition(enabled: bool, supported: bool) -> Result<()> {
             exec_policy: None,
             mcp_policy: None,
             network_policy: None,
-            selected_capability_roots: vec![codex_protocol::capabilities::SelectedCapabilityRoot {
-                id: "legacy-root".to_string(),
-                location: codex_protocol::capabilities::CapabilityRootLocation::Environment {
-                    environment_id: selection.environment_id.clone(),
-                    path: cwd.clone(),
-                },
-            }],
+            selected_capability_roots: if acquires_v2 {
+                Vec::new()
+            } else {
+                vec![codex_protocol::capabilities::SelectedCapabilityRoot {
+                    id: "legacy-root".to_string(),
+                    location: codex_protocol::capabilities::CapabilityRootLocation::Environment {
+                        environment_id: selection.environment_id.clone(),
+                        path: cwd.clone(),
+                    },
+                }]
+            },
         });
     // Only the successful lifecycle case needs two turns and multiple model steps.
     let turns = if acquires_v2 { 2 } else { 1 };
     let mut previous_inventory = None;
     for turn in 0..turns {
         observed.lock().await.clear();
+        *selected_plugins.lock().await = None;
         let before_turn = calls().await;
         let mut bodies = Vec::new();
         if acquires_v2 {
@@ -381,6 +459,37 @@ async fn check_acquisition(enabled: bool, supported: bool) -> Result<()> {
         }
         test.submit_turn_with_environments("Say hello.", Some(vec![selection.clone()]))
             .await?;
+        let executor_root = if acquires_v2 {
+            format!("{}:inert-sentinel@market", selection.environment_id)
+        } else {
+            "legacy-root".to_string()
+        };
+        let local_identity = PluginIdentity::Local {
+            plugin_id: "inert-sentinel@market".to_string(),
+        };
+        // Both paths publish accepted Cloud packages and available installations only.
+        let expected_plugins = vec![
+            (Some(executor_root), local_identity),
+            (
+                None,
+                PluginIdentity::Remote {
+                    remote_plugin_id: "plugin_sentinel".to_string(),
+                },
+            ),
+        ];
+        {
+            let selected_plugins = selected_plugins.lock().await;
+            let snapshot = selected_plugins.as_ref().context("turn plugin snapshot")?;
+            assert_eq!(
+                snapshot
+                    .plugins
+                    .iter()
+                    .map(|plugin| (plugin.selected_root_id.clone(), plugin.plugin_id.clone()))
+                    .collect::<Vec<_>>(),
+                expected_plugins,
+            );
+            assert_eq!(snapshot.disabled_plugin_ids, Vec::<String>::new());
+        }
         let model_requests = responses
             .iter()
             .flat_map(core_test_support::responses::ResponseMock::requests)
@@ -426,11 +535,13 @@ async fn check_acquisition(enabled: bool, supported: bool) -> Result<()> {
         }
     }
     let requests = executor.requests.lock().await.clone();
-    assert!(
-        requests
-            .iter()
-            .any(|request| request["method"] == "capabilityRoots/discoverV1")
-    );
+    if !acquires_v2 {
+        assert!(
+            requests
+                .iter()
+                .any(|request| request["method"] == "capabilityRoots/discoverV1")
+        );
+    }
     let discovery = requests
         .iter()
         .filter(|request| request["method"] == "capabilities/discoverV2")

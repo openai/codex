@@ -14,6 +14,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+codex-core-plugin-common = { workspace = true }
 codex-api = { workspace = true }
 futures = { workspace = true }
 codex-guardian-context = { workspace = true }

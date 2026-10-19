@@ -2,12 +2,15 @@
 
 use codex_core_plugins::PluginCatalog;
 use codex_core_plugins::PluginRootOwnership;
+use codex_core_plugins::catalog_from_snapshots;
+use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::SelectedPluginContribution;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpResourceClient;
 use codex_mcp::McpResourceClientAuthKey;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
@@ -35,6 +38,8 @@ impl PluginsThreadState {
 pub(crate) struct PluginContributorState {
     pub(crate) plugins_enabled: bool,
     pub(crate) cloud_generation: Option<CloudPluginGeneration>,
+    pub(crate) executor_catalog: Option<PluginCatalog>,
+    executor_snapshots: Vec<ExecutorCapabilityDiscoveryV2Snapshot>,
     pub(crate) executor_cache: Vec<CachedSelectedRoot>,
 }
 
@@ -67,8 +72,36 @@ impl CloudPluginGeneration {
 }
 
 impl PluginContributorState {
+    /// Reuses unchanged discovery and preserves surviving installations' order on refresh.
+    pub(crate) fn update_executor_catalog(
+        &mut self,
+        snapshots: &[ExecutorCapabilityDiscoveryV2Snapshot],
+    ) {
+        if self.executor_catalog.is_some() && self.executor_snapshots == snapshots {
+            return;
+        }
+        let mut catalog = catalog_from_snapshots(snapshots);
+        if let Some(previous) = &self.executor_catalog {
+            // Preserve installation order to keep MCPs on the same executor while it remains available.
+            let mut previous_ranks = HashMap::with_capacity(previous.entries.len());
+            for (rank, entry) in previous.entries.iter().enumerate() {
+                previous_ranks
+                    .entry((&entry.id, entry.locations.as_slice()))
+                    .or_insert(rank);
+            }
+            catalog.entries.sort_by_key(|entry| {
+                previous_ranks
+                    .get(&(&entry.id, entry.locations.as_slice()))
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        self.executor_catalog = Some(catalog);
+        self.executor_snapshots = snapshots.to_vec();
+    }
+
     /// Returns the cloud catalog only while it belongs to the live auth generation.
-    fn cloud_catalog(&self) -> Option<&PluginCatalog> {
+    pub(crate) fn cloud_catalog(&self) -> Option<&PluginCatalog> {
         self.cloud_generation
             .as_ref()
             .filter(|generation| generation.is_current())
@@ -105,6 +138,14 @@ impl PluginContributorState {
         else {
             return false;
         };
+        if catalog.is_partial
+            && generation
+                .catalog
+                .as_ref()
+                .is_some_and(|previous| !previous.is_partial)
+        {
+            return true;
+        }
         generation.catalog = Some(catalog);
         true
     }
@@ -122,3 +163,15 @@ pub(crate) enum CachedPluginMetadata {
     Unloaded,
     Loaded(Option<SelectedPluginContribution>),
 }
+
+/// Bounded declarations projected from merged plugin metadata.
+#[derive(Clone, Default)]
+pub(crate) struct SelectedPluginMetadata {
+    pub(crate) plugin_display_name: String,
+    pub(crate) servers: Vec<(String, codex_config::McpServerConfig)>,
+    pub(crate) connector_ids: Vec<String>,
+}
+
+#[cfg(test)]
+#[path = "plugin_contributor_state_tests.rs"]
+mod tests;

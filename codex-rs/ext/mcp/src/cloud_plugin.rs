@@ -21,8 +21,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 const MAX_PROJECTED_CLOUD_PLUGINS: usize = 100;
-const MAX_PLUGIN_DISPLAY_NAME_CHARS: usize = 64;
-const MAX_CONNECTOR_IDS_PER_PLUGIN: usize = 64;
+pub(crate) const MAX_PLUGIN_DISPLAY_NAME_CHARS: usize = 64;
+pub(crate) const MAX_CONNECTOR_IDS_PER_PLUGIN: usize = 64;
 
 impl ThreadLifecycleContributor<Config> for PluginContributor {
     fn on_thread_start<'a>(
@@ -123,6 +123,7 @@ pub(crate) fn hosted_plugin_connectors(catalog: &PluginCatalog) -> Vec<McpServer
     catalog
         .entries
         .iter()
+        .filter(|entry| entry.enabled)
         .filter_map(|entry| {
             let PluginIdentity::Remote { remote_plugin_id } = &entry.id else {
                 return None;

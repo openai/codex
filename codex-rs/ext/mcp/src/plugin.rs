@@ -2,8 +2,12 @@ use codex_config::types::PluginsConfigToml;
 use codex_connectors_extension::PluginAppProvider;
 use codex_core::config::Config;
 use codex_core_plugins::ExecutorPluginProviderError;
+use codex_core_plugins::PluginIdentity;
 use codex_core_plugins::PluginRootOwnership;
+use codex_core_plugins::PluginSourceLocation;
+use codex_core_plugins::configured_plugins_from_stack;
 use codex_core_plugins::loader::apply_configured_plugin_mcp_server_policies;
+use codex_core_plugins::merge_catalogs;
 use codex_exec_server::CapabilityRootDiscovery;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::ExtensionFuture;
@@ -210,6 +214,36 @@ impl McpServerContributor<Config> for PluginContributor {
         })
     }
 
+    fn hosted_plugin_ids(&self, context: McpServerContributionContext<'_, Config>) -> Vec<String> {
+        if self.providers.cloud.is_none() || !context.config().features.enabled(Feature::Plugins) {
+            return Vec::new();
+        }
+        let Some(state) = context
+            .thread_store()
+            .and_then(codex_extension_api::ExtensionData::get::<PluginsThreadState>)
+        else {
+            return Vec::new();
+        };
+        state
+            .contributor_state()
+            .cloud_catalog()
+            .map(|catalog| {
+                hosted_plugin_connectors(catalog)
+                    .into_iter()
+                    .filter_map(|contribution| {
+                        if let McpServerContribution::HostedPluginConnectors { plugin_id, .. } =
+                            contribution
+                        {
+                            Some(plugin_id)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn selected_plugins<'a>(
         &'a self,
         context: McpServerContributionContext<'a, Config>,
@@ -228,6 +262,69 @@ impl McpServerContributor<Config> for PluginContributor {
                 .ready_selected_capability_roots()
                 .unwrap_or_default();
             let mut plugins = Vec::new();
+            if let Some(snapshots) = context.executor_capability_discovery_v2() {
+                let merged = {
+                    let mut cache = state.contributor_state();
+                    cache.update_executor_catalog(snapshots);
+                    let cloud = (self.providers.cloud.is_some()
+                        && context.config().features.enabled(Feature::Plugins))
+                    .then(|| cache.cloud_catalog())
+                    .flatten();
+                    merge_catalogs(cache.executor_catalog.as_ref(), cloud)
+                };
+                for warning in &merged.warnings {
+                    tracing::warn!(%warning, "plugin catalog merge reported a warning");
+                }
+                let configured = configured_plugins_from_stack(
+                    &context.config().config_layer_stack,
+                    context.config().codex_home.as_path(),
+                );
+                for entry in merged.entries {
+                    for location in &entry.locations {
+                        let PluginSourceLocation::Executor {
+                            environment_id,
+                            plugin_id,
+                            ..
+                        } = location
+                        else {
+                            continue;
+                        };
+                        let selected_root_id = format!("{environment_id}:{plugin_id}");
+                        let root_id = selected_root_id.clone();
+                        let plugin_id = plugin_id.clone();
+                        let metadata_plugin_id = plugin_id.clone();
+                        let environment_id = environment_id.clone();
+                        let captured = entry.clone();
+                        plugins.push(SelectedPlugin {
+                            selected_root_id,
+                            plugin_id,
+                            identity: entry.id.clone(),
+                            enabled: entry.is_enabled(&configured),
+                            mcp: Box::pin(async move {
+                                let metadata = discovery::v2_metadata_from_catalog(&captured)
+                                    .into_iter()
+                                    .find(|(id, _)| id == &root_id)
+                                    .map(|(_, metadata)| metadata)
+                                    .unwrap_or_default();
+                                let contribution = SelectedPluginContribution {
+                                    plugin_display_name: metadata.plugin_display_name,
+                                    source_environment_id: environment_id,
+                                    servers: metadata.servers,
+                                    connector_ids: metadata.connector_ids,
+                                };
+                                project_metadata(
+                                    context.config(),
+                                    plugins_config,
+                                    &metadata_plugin_id,
+                                    contribution,
+                                )
+                            }),
+                        });
+                    }
+                }
+                return plugins;
+            }
+            state.contributor_state().update_executor_catalog(&[]);
 
             if let Some(snapshot) = context.executor_capability_discovery() {
                 for root in snapshot.roots() {
@@ -270,6 +367,10 @@ impl McpServerContributor<Config> for PluginContributor {
                     plugins.push(SelectedPlugin {
                         selected_root_id: root.selected_root.id.clone(),
                         plugin_id: root.selected_root.id.clone(),
+                        identity: PluginIdentity::Local {
+                            plugin_id: root.selected_root.id.clone(),
+                        },
+                        enabled: true,
                         mcp: Box::pin(async move {
                             let metadata = discovery::metadata_from_discovery(
                                 &root.selected_root,
@@ -309,6 +410,10 @@ impl McpServerContributor<Config> for PluginContributor {
                     plugins.push(SelectedPlugin {
                         selected_root_id: selected_root.id.clone(),
                         plugin_id: selected_root.id.clone(),
+                        identity: PluginIdentity::Local {
+                            plugin_id: selected_root.id.clone(),
+                        },
+                        enabled: true,
                         mcp: Box::pin(async move {
                             project_metadata(
                                 context.config(),
@@ -336,6 +441,10 @@ fn denied_plugin(selected_root: &SelectedCapabilityRoot) -> SelectedPlugin<'stat
     SelectedPlugin {
         selected_root_id: selected_root.id.clone(),
         plugin_id: selected_root.id.clone(),
+        identity: PluginIdentity::Local {
+            plugin_id: selected_root.id.clone(),
+        },
+        enabled: false,
         mcp: Box::pin(async move { metadata }),
     }
 }

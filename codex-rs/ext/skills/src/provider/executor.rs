@@ -78,7 +78,7 @@ pub(crate) fn attribute_executor_plugins(
             .iter()
             .find(|plugin| plugin.selected_root_id.as_ref() == Some(&skill.authority.id))
         {
-            skill.plugin_id = Some(plugin.plugin_id.clone());
+            skill.plugin_id = Some(plugin.plugin_id.as_str().to_string());
             skill.analytics_scope = Some(SkillScope::User);
         }
     }

@@ -79,7 +79,9 @@ async fn active_plugin_ids_select_and_validate_by_source() {
             .into_iter()
             .map(|plugin_id| SelectedPluginIdentity {
                 selected_root_id: Some("capability-root".to_string()),
-                plugin_id: plugin_id.to_string(),
+                plugin_id: codex_core_plugins::PluginIdentity::Local {
+                    plugin_id: plugin_id.to_string(),
+                },
             })
             .collect::<Vec<_>>();
         turn_context.active_host_plugin_identities = Some(identities);
@@ -125,7 +127,9 @@ async fn active_plugin_ids_enforce_bounds_after_selection_and_deduplication() {
         let id = format!("{}@local", "p".repeat(length - 6));
         let selected_plugin = SelectedPluginIdentity {
             selected_root_id: Some("capability-root".to_string()),
-            plugin_id: id.clone(),
+            plugin_id: codex_core_plugins::PluginIdentity::Local {
+                plugin_id: id.clone(),
+            },
         };
         turn_context.active_host_plugin_identities = Some(Vec::new());
         let selected_plugins = SelectedPluginSnapshot {
@@ -154,7 +158,9 @@ async fn active_plugin_ids_enforce_bounds_after_selection_and_deduplication() {
             .iter()
             .map(|id| SelectedPluginIdentity {
                 selected_root_id: Some("capability-root".to_string()),
-                plugin_id: id.clone(),
+                plugin_id: codex_core_plugins::PluginIdentity::Local {
+                    plugin_id: id.clone(),
+                },
             })
             .collect::<Vec<_>>();
         turn_context.active_host_plugin_identities = Some(identities);

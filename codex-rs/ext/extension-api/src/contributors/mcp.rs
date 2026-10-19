@@ -1,4 +1,5 @@
 use codex_config::McpServerConfig;
+use codex_core_plugin_common::PluginIdentity;
 use codex_exec_server_protocol::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server_protocol::ExecutorCapabilityDiscoveryV2Snapshot;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -151,7 +152,7 @@ impl<'a, C> McpServerContributionContext<'a, C> {
         self.ready_selected_capability_roots
     }
 
-    /// Returns the V2 inventories supplied by the host, when available.
+    /// `Some` selects V2, including an empty inventory list; `None` selects legacy discovery.
     pub fn executor_capability_discovery_v2(
         &self,
     ) -> Option<&'a [ExecutorCapabilityDiscoveryV2Snapshot]> {
@@ -170,6 +171,7 @@ pub struct SelectedPluginSnapshot {
     pub plugins: Vec<SelectedPluginIdentity>,
     /// Selected plugin roots suppressed by the effective plugin feature policy.
     pub disabled_plugin_roots: Vec<String>,
+    pub disabled_plugin_ids: Vec<String>,
 }
 
 /// The configured identity of a selected plugin and, when present, the root owning its skills.
@@ -177,7 +179,7 @@ pub struct SelectedPluginSnapshot {
 pub struct SelectedPluginIdentity {
     /// Hosted plugins have no executor root and cannot own skills from an executor folder.
     pub selected_root_id: Option<String>,
-    pub plugin_id: String,
+    pub plugin_id: PluginIdentity,
 }
 
 /// An executor plugin and its deferred MCP data. Callers that only need the identity can drop
@@ -186,6 +188,8 @@ pub struct SelectedPluginIdentity {
 pub struct SelectedPlugin<'a> {
     pub selected_root_id: String,
     pub plugin_id: String,
+    pub identity: PluginIdentity,
+    pub enabled: bool,
     pub mcp: ExtensionFuture<'a, SelectedPluginContribution>,
 }
 

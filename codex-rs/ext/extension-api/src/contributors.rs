@@ -90,6 +90,11 @@ pub trait McpServerContributor<C: Sync>: Send + Sync {
         context: McpServerContributionContext<'a, C>,
     ) -> ExtensionFuture<'a, Vec<McpServerContribution>>;
 
+    /// Reads canonical hosted-plugin IDs from published state without discovery or MCP I/O.
+    fn hosted_plugin_ids(&self, _context: McpServerContributionContext<'_, C>) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Declares executor plugins, including those without MCP servers or connectors. Each
     /// declaration identifies the plugin once; its deferred MCP data cannot change that identity.
     /// Return plugins in precedence order: across contributors in registration order, the first
