@@ -46,6 +46,7 @@ const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
 const ACCESS_TOKEN_LOGIN_DISABLED_MESSAGE: &str =
     "Access token login is disabled. Use API key login instead.";
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
+const API_KEY_AUTHENTICATION_NOTICE: &str = "Authentication is checked when you send a request.";
 const DEFAULT_LOGIN_LOG_FILTER: &str =
     "codex_cli=info,codex_core=info,codex_login=info,codex_otel::auth_storage=warn";
 
@@ -228,7 +229,7 @@ pub async fn run_login_with_api_key(
         config.auth_keyring_backend_kind(),
     ) {
         Ok(_) => {
-            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
+            eprintln!("API key saved. {API_KEY_AUTHENTICATION_NOTICE}");
             std::process::exit(0);
         }
         Err(e) => {
@@ -468,7 +469,8 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
         Ok(Some(auth)) => match auth.auth_mode() {
             AuthMode::ApiKey => match auth.get_token() {
                 Ok(api_key) => {
-                    eprintln!("Logged in using an API key - {}", safe_format_key(&api_key));
+                    eprintln!("API key configured - {}", safe_format_key(&api_key));
+                    eprintln!("{API_KEY_AUTHENTICATION_NOTICE}");
                     std::process::exit(0);
                 }
                 Err(e) => {
