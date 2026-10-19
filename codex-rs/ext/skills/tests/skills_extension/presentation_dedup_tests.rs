@@ -111,23 +111,24 @@ async fn cloud_preference_preserves_aliases_reads_and_executor_fallback() -> Tes
         ] {
             start_registered_turn(&registry, &session_store, &thread_store, stage).await;
             let turn_store = ExtensionData::new(stage);
-            let sections = registry.context_contributors()[0]
-                .contribute_world_state(WorldStateContributionInput {
+            let sections = prepared_world_state(
+                &registry,
+                if ready { &roots } else { &[] },
+                WorldStateContributionInput {
                     previous_world_state: Some(&previous),
                     model_info: &model_info,
                     thread_id: codex_protocol::ThreadId::new(),
                     turn_id: stage,
                     environments: &[],
-                    ready_selected_capability_roots: if ready { &roots } else { &[] },
-                    executor_capability_discovery: None,
-                    executor_capability_discovery_v2: None,
+
                     extension_metrics: None,
                     session_store: &session_store,
                     thread_store: &thread_store,
                     turn_store: &turn_store,
                     step_store: &turn_store,
-                })
-                .await;
+                },
+            )
+            .await;
             let snapshots: serde_json::Map<String, serde_json::Value> = sections
                 .iter()
                 .map(|section| {

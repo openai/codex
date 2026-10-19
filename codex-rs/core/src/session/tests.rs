@@ -290,10 +290,8 @@ impl StepContext {
             },
             turn: Arc::clone(&turn),
             environments,
-            selected_capability_roots: Vec::new(),
             executor_capability_discovery: None,
             extension_data: codex_extension_api::ExtensionData::new(turn.sub_id.clone()),
-            executor_capability_discovery_v2: None,
             mcp: Arc::new(codex_mcp::McpBinding::empty(mcp_config_for_test(
                 &turn.config,
             ))),

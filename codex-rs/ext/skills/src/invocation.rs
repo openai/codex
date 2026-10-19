@@ -71,8 +71,8 @@ pub fn detect_implicit_skill_invocation(
     if accesses.is_empty() {
         return None;
     }
-    let step_state = step_store.get::<crate::skills_extension_state::SkillsStepState>()?;
-    let step_catalog = step_state.get()?;
+    let step_state = step_store.get::<crate::step_state::SkillsStepState>()?;
+    let step_catalog = &step_state.catalog;
     for access in accesses {
         let matches_route = |authority: &SkillAuthority, main_prompt: &SkillResourceId| {
             if authority.kind != SkillSourceKind::Executor
@@ -91,7 +91,7 @@ pub fn detect_implicit_skill_invocation(
                     .is_some_and(|scripts_dir| path.starts_with(&scripts_dir)),
             }
         };
-        for entry in step_catalog.catalog.entries.iter().filter(|entry| {
+        for entry in step_catalog.merged.entries.iter().filter(|entry| {
             matches!(
                 entry.authority.kind,
                 SkillSourceKind::Cloud | SkillSourceKind::Executor

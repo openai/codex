@@ -6,8 +6,6 @@ use std::sync::Arc;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
-use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
-use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::FunctionCallError;
@@ -36,15 +34,14 @@ use serde_json::Value;
 
 use crate::aliases::SkillLocator;
 use crate::catalog::SkillAuthority;
-use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillSourceKind;
 use crate::catalog::SkillSourceLocation;
-use crate::skills_extension_state::SkillToolAuthoritySelector;
-use crate::skills_extension_state::SkillsStepState;
 use crate::sources::SkillProviders;
 use crate::state::SkillsSessionState;
 use crate::state::SkillsThreadState;
+use crate::step_state::SkillToolAuthoritySelector;
+use crate::step_state::SkillsStepState;
 use crate::telemetry::ActiveSkillTurnMetrics;
 use crate::telemetry::SkillTurnMetrics;
 
@@ -66,14 +63,10 @@ pub(crate) fn skill_tools(
     let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {
         return Vec::new();
     };
-    let discovery_v2 = step_store
-        .get::<Vec<ExecutorCapabilityDiscoveryV2Snapshot>>()
-        .is_some();
-    let has_executor = step_store
-        .get::<Vec<ResolvedSelectedCapabilityRoot>>()
-        .is_some_and(|roots| !roots.is_empty())
-        || discovery_v2;
-    if !thread_state.cloud_skill_enabled() && !has_executor {
+    let Some(step_state) = step_store.get::<SkillsStepState>() else {
+        return Vec::new();
+    };
+    if !step_state.tools_enabled {
         return Vec::new();
     }
     let mcp_resources = session_store
@@ -81,12 +74,11 @@ pub(crate) fn skill_tools(
         .and_then(|state| state.mcp_resources.clone());
     let analytics = SkillAnalytics::from_stores(session_store, thread_store);
     let context = SkillToolContext {
-        discovery_v2,
         providers,
         mcp_resources,
         thread_state,
         analytics,
-        step_catalog: step_store.get_or_init(SkillsStepState::new),
+        step_state,
     };
     let mut tools: Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> = vec![
         Arc::new(list::ListTool {
@@ -96,7 +88,7 @@ pub(crate) fn skill_tools(
             context: context.clone(),
         }),
     ];
-    if context.discovery_v2 {
+    if context.step_state.discovery_v2 {
         tools.push(Arc::new(installations::InstallationsTool { context }));
     }
     tools
@@ -212,25 +204,19 @@ impl SkillAnalytics {
 
 #[derive(Clone)]
 struct SkillToolContext {
-    discovery_v2: bool,
     providers: SkillProviders,
     mcp_resources: Option<Arc<McpResourceClient>>,
     thread_state: Arc<SkillsThreadState>,
     analytics: Option<SkillAnalytics>,
-    step_catalog: Arc<SkillsStepState>,
+    step_state: Arc<SkillsStepState>,
 }
 
 impl SkillToolContext {
     fn matching_packages<'a>(
         &'a self,
         package: &SkillLocator,
-    ) -> Result<Vec<(&'a SkillCatalogEntry, SkillSourceLocation)>, FunctionCallError> {
-        let snapshot = self.step_catalog.get().ok_or_else(|| {
-            FunctionCallError::RespondToModel(
-                "skill catalog is not ready for this step".to_string(),
-            )
-        })?;
-        let catalog = &snapshot.catalog;
+    ) -> Vec<(&'a SkillCatalogEntry, SkillSourceLocation)> {
+        let catalog = &self.step_state.catalog.merged;
         let matching_entries = |resolved_package: &str, alias_source: Option<&SkillSourceKind>| {
             catalog
                 .entries
@@ -250,24 +236,12 @@ impl SkillToolContext {
         };
         let exact = matching_entries(package.as_str(), /*alias_source*/ None);
         if !exact.is_empty() || package.alias_source().is_none() {
-            return Ok(exact);
+            return exact;
         }
-        let resolved_package = snapshot.aliases.resolve(package);
-        Ok(resolved_package.map_or_else(Vec::new, |resolved| {
+        let resolved_package = self.step_state.catalog.aliases.resolve(package);
+        resolved_package.map_or_else(Vec::new, |resolved| {
             matching_entries(&resolved, package.alias_source())
-        }))
-    }
-
-    fn catalog(
-        &self,
-        authorities: &[SkillToolAuthoritySelector],
-    ) -> Result<SkillCatalog, FunctionCallError> {
-        let snapshot = self.step_catalog.get().ok_or_else(|| {
-            FunctionCallError::RespondToModel(
-                "skill catalog is not ready for this step".to_string(),
-            )
-        })?;
-        Ok(snapshot.select_from_catalog(authorities))
+        })
     }
 }
 

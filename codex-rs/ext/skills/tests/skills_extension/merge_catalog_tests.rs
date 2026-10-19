@@ -42,7 +42,8 @@ fn installed_skill(
         ),
     )
     .with_display_path(format!("{package}/SKILL.md"))
-    .with_remote_plugin_id(Some("Plugin_123".to_string())))
+    .with_remote_plugin_id(Some("Plugin_123".to_string()))
+    .with_plugin_id(Some(root.to_string())))
 }
 
 fn provider(entries: Vec<SkillCatalogEntry>) -> StaticSkillProvider {
@@ -135,7 +136,7 @@ impl MergeHarness {
         Ok(harness)
     }
 
-    fn tools(
+    async fn tools(
         &self,
         step: &ExtensionData,
     ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
@@ -145,6 +146,25 @@ impl MergeHarness {
         if let Some(discovery) = &self.discovery {
             step.insert(discovery.clone());
         }
+        if let Some(plugins) = self.turn_store.get::<SelectedPluginSnapshot>() {
+            step.insert(plugins.as_ref().clone());
+        }
+        let selected_plugins = step.get::<SelectedPluginSnapshot>().unwrap_or_default();
+        prepare_step(
+            &self.registry,
+            codex_extension_api::StepPreparationInput {
+                selected_plugins: &selected_plugins,
+                turn_id: self.turn_store.level_id(),
+                ready_selected_capability_roots: &self.roots,
+                executor_capability_discovery: self.discovery.as_ref(),
+                executor_capability_discovery_v2: self.snapshots.as_deref(),
+                session_store: &self.session_store,
+                thread_store: &self.thread_store,
+                turn_store: &self.turn_store,
+                step_store: step,
+            },
+        )
+        .await;
         self.registry.tool_contributors()[0].tools_for_step(
             &self.session_store,
             &self.thread_store,
@@ -164,23 +184,29 @@ impl MergeHarness {
         if let Some(plugins) = turn_store.get::<codex_extension_api::SelectedPluginSnapshot>() {
             step_store.insert(plugins.as_ref().clone());
         }
-        let sections = self.registry.context_contributors()[0]
-            .contribute_world_state(WorldStateContributionInput {
+        if let Some(snapshots) = &self.snapshots {
+            step_store.insert(snapshots.clone());
+        }
+        if let Some(discovery) = &self.discovery {
+            step_store.insert(discovery.clone());
+        }
+        let sections = prepared_world_state(
+            &self.registry,
+            &self.roots,
+            WorldStateContributionInput {
                 previous_world_state: None,
                 step_store,
                 model_info: &catalog_model_info(),
                 thread_id: codex_protocol::ThreadId::new(),
                 turn_id: turn_store.level_id(),
                 environments: &[],
-                ready_selected_capability_roots: &self.roots,
-                executor_capability_discovery: self.discovery.as_ref(),
-                executor_capability_discovery_v2: self.snapshots.as_deref(),
                 extension_metrics: None,
                 session_store: &self.session_store,
                 thread_store: &self.thread_store,
                 turn_store,
-            })
-            .await;
+            },
+        )
+        .await;
         Ok(sections
             .iter()
             .filter_map(|section| section.render_diff(PreviousWorldStateSection::Absent).1)
@@ -190,7 +216,7 @@ impl MergeHarness {
     }
 }
 
-async fn call_tool(
+pub(super) async fn call_tool(
     tools: &[Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>],
     name: &str,
     arguments: Value,
@@ -293,7 +319,8 @@ async fn v2_merged_skills_preserve_cloud_metadata_and_accepted_plugin_routes() -
     let standalone_cloud =
         cloud_skill("cloud").with_remote_plugin_id(/*remote_plugin_id*/ None);
     let standalone_executor = installed_skill("standalone", "executor")?
-        .with_remote_plugin_id(/*remote_plugin_id*/ None);
+        .with_remote_plugin_id(/*remote_plugin_id*/ None)
+        .with_plugin_id(/*plugin_id*/ None);
     installed.push(standalone_executor.clone());
     let mut executor_provider = provider(installed.clone());
     executor_provider.catalog.warnings =
@@ -318,7 +345,7 @@ async fn v2_merged_skills_preserve_cloud_metadata_and_accepted_plugin_routes() -
         },
     });
     harness.turn_store.insert(selection);
-    let tools = harness.tools(&harness.step_store);
+    let tools = harness.tools(&harness.step_store).await;
     let rendered = harness.render().await?;
     assert_eq!(rendered.matches("- deploy:work:").count(), 1);
     assert!(rendered.contains("Cloud work description"));
@@ -389,7 +416,9 @@ async fn executor_aliases_survive_cloud_promotion_without_reassigning_remaining_
         for name in names {
             let mut entry = installed_skill(root, name)?.with_alias_root(format!("skill://{root}"));
             if root == &local_root {
-                entry = entry.with_remote_plugin_id(/*remote_plugin_id*/ None);
+                entry = entry
+                    .with_remote_plugin_id(/*remote_plugin_id*/ None)
+                    .with_plugin_id(/*plugin_id*/ None);
                 entry.name = format!("local:{name}");
             }
             installed.push(entry);
@@ -426,7 +455,11 @@ async fn executor_aliases_survive_cloud_promotion_without_reassigning_remaining_
             )
             .await;
         }
-        let tools = harness.tools(&harness.step_store);
+        harness.turn_store.insert(selected_plugins(
+            &[None, Some(&format!("env-1:{promoted_root}"))],
+            &[],
+        ));
+        let tools = harness.tools(&harness.step_store).await;
         let rendered = harness.render().await?;
         assert!(rendered.contains("e1/work"), "{rendered}");
         assert!(
@@ -485,14 +518,24 @@ async fn executor_aliases_survive_cloud_promotion_without_reassigning_remaining_
 #[tokio::test]
 async fn rejected_roots_do_not_starve_accepted_alternate_and_standalone_aliases() -> TestResult {
     let mut entries = Vec::new();
+    let mut selection = selected_plugins(&[None], &[]);
     // Together these individually allocatable roots exceed the shared 16 KiB allowance.
     for index in 0..180 {
         let root = format!("a-rejected-{index:03}-{}", "x".repeat(120));
         let entry = installed_skill(&root, "work")?
             .with_alias_root(format!("skill://{root}"))
             .with_remote_plugin_id(Some(format!("Rejected_{index}")));
+        selection.plugins.push(SelectedPluginIdentity {
+            selected_root_id: Some(format!("env-1:{root}")),
+            plugin_id: PluginIdentity::Remote {
+                remote_plugin_id: format!("Rejected_{index}"),
+            },
+        });
         entries.push(entry);
     }
+    selection
+        .plugins
+        .extend(selected_plugins(&[Some("env-1:b-promoted")], &[]).plugins);
     let promoted = installed_skill("b-promoted", "work")?.with_alias_root("skill://b-promoted");
     let mut standalone = installed_skill("c-local", "work")?
         .with_alias_root("skill://c-local")
@@ -506,7 +549,8 @@ async fn rejected_roots_do_not_starve_accepted_alternate_and_standalone_aliases(
         default_config(),
     )
     .await?;
-    let tools = harness.tools(&harness.step_store);
+    harness.turn_store.insert(selection);
+    let tools = harness.tools(&harness.step_store).await;
     harness.render().await?;
     for (alias, entry) in [("e0/work", promoted), ("e1/work", standalone)] {
         let output = call_tool(&tools, "read", json!({"package": alias})).await?;
@@ -541,6 +585,18 @@ async fn cloud_rendering_and_reads_share_aliases_after_a_plugin_is_disabled() ->
         .collect();
     let harness =
         MergeHarness::new(provider(Vec::new()), provider(entries), default_config()).await?;
+    harness.step_store.insert(SelectedPluginSnapshot {
+        plugins: roots
+            .iter()
+            .map(|root| SelectedPluginIdentity {
+                selected_root_id: None,
+                plugin_id: PluginIdentity::Remote {
+                    remote_plugin_id: root.clone(),
+                },
+            })
+            .collect(),
+        ..Default::default()
+    });
     let rendered = harness.render().await?;
     assert!(rendered.contains(
         "For each alias listed below, this mapping replaces any earlier mapping for that alias."
@@ -564,7 +620,7 @@ async fn cloud_rendering_and_reads_share_aliases_after_a_plugin_is_disabled() ->
     let rendered = harness.render_step(&step).await?;
     assert!(rendered.contains("c1/work"), "{rendered}");
     assert!(!rendered.contains(&roots[0]), "{rendered}");
-    let tools = harness.tools(&step);
+    let tools = harness.tools(&step).await;
     let aliased = call_tool(&tools, "read", json!({"package": "c1/work"})).await?;
     let full = call_tool(
         &tools,
@@ -604,7 +660,8 @@ async fn v2_only_complete_cloud_catalog_excludes_unmatched_remote_skills() -> Te
             provider(vec![
                 installed_skill("matching", "work")?.with_plugin_id(Some("matching".to_string())),
                 installed_skill("standalone", "local")?
-                    .with_remote_plugin_id(/*remote_plugin_id*/ None),
+                    .with_remote_plugin_id(/*remote_plugin_id*/ None)
+                    .with_plugin_id(/*plugin_id*/ None),
             ]),
             cloud,
             config,
@@ -636,7 +693,7 @@ async fn v2_disabled_remote_plugin_blocks_both_read_routes() -> TestResult {
         &[None, Some("env-1:matching")],
         &["Plugin_123"],
     ));
-    let tools = harness.tools(&harness.step_store);
+    let tools = harness.tools(&harness.step_store).await;
     assert!(!harness.render().await?.contains("- deploy:work:"));
     for package in [&cloud.id, &installed.id] {
         let result = call_tool(&tools, "read", json!({"package": package.0})).await;
@@ -659,13 +716,14 @@ async fn v1_reads_preserve_response_shape_without_installations_tool() -> TestRe
     assert_eq!(
         disabled
             .tools(&disabled.step_store)
+            .await
             .iter()
             .map(|tool| tool.tool_name().name)
             .collect::<Vec<_>>(),
         ["list", "read"],
     );
     disabled.render().await?;
-    let tools = disabled.tools(&disabled.step_store);
+    let tools = disabled.tools(&disabled.step_store).await;
     for entry in [&cloud, &executor] {
         let mut expected = json!({
             "resource": entry.main_prompt.as_str(),
@@ -707,12 +765,26 @@ async fn v2_reads_preserve_content_routes_with_bounded_installations() -> TestRe
         "environment_id": "env-1",
         "skill_root": PathUri::parse("file:///skills/selected")?.inferred_native_path_string(),
     }));
+    let mut selection = selected_plugins(&[None], &[]);
+    selection
+        .plugins
+        .extend(entries.iter().map(|entry| SelectedPluginIdentity {
+            selected_root_id: Some(format!(
+                "{}:{}",
+                entry.main_prompt.environment_id().unwrap(),
+                entry.plugin_id.as_ref().unwrap()
+            )),
+            plugin_id: PluginIdentity::Remote {
+                remote_plugin_id: "Plugin_123".into(),
+            },
+        }));
     let executor = provider(entries);
     let executor_reads = executor.read_requests.clone();
     let cloud_provider = provider(vec![cloud.clone()]);
     let cloud_reads = cloud_provider.read_requests.clone();
     let harness = MergeHarness::new(executor, cloud_provider, default_config()).await?;
-    let tools = harness.tools(&harness.step_store);
+    harness.turn_store.insert(selection);
+    let tools = harness.tools(&harness.step_store).await;
     harness.render().await?;
     for (package, source, requested, limit) in [
         ("c0/work", Value::Null, &cloud, 10_000),
@@ -770,6 +842,7 @@ async fn v2_reads_preserve_content_routes_with_bounded_installations() -> TestRe
     }
 
     let first = installed_skill("shared", "work")?
+        .with_plugin_id(/*plugin_id*/ None)
         .with_remote_plugin_id(/*remote_plugin_id*/ None)
         .with_alias_root("skill://shared");
     let mut second = first.clone();
@@ -781,7 +854,7 @@ async fn v2_reads_preserve_content_routes_with_bounded_installations() -> TestRe
     let executor = provider(vec![first.clone(), second.clone()]);
     let reads = executor.read_requests.clone();
     let harness = MergeHarness::new(executor, provider(Vec::new()), default_config()).await?;
-    let tools = harness.tools(&harness.step_store);
+    let tools = harness.tools(&harness.step_store).await;
     harness.render().await?;
     let locations = ["env-1", "env-2"].map(|environment_id| {
         json!({
@@ -913,12 +986,26 @@ async fn v2_installations_filter_all_matching_locations_and_paginate_within_budg
         }));
     }
     entries.push(entries[2].clone());
+    let mut selection = selected_plugins(&[None], &[]);
+    selection
+        .plugins
+        .extend(entries.iter().map(|entry| SelectedPluginIdentity {
+            selected_root_id: Some(format!(
+                "{}:{}",
+                entry.main_prompt.environment_id().unwrap(),
+                entry.plugin_id.as_ref().unwrap()
+            )),
+            plugin_id: PluginIdentity::Remote {
+                remote_plugin_id: "Plugin_123".into(),
+            },
+        }));
     let executor = provider(entries);
     let executor_reads = executor.read_requests.clone();
     let cloud_provider = provider(vec![cloud]);
     let cloud_reads = cloud_provider.read_requests.clone();
     let harness = MergeHarness::new(executor, cloud_provider, default_config()).await?;
-    let tools = harness.tools(&harness.step_store);
+    harness.turn_store.insert(selection);
+    let tools = harness.tools(&harness.step_store).await;
     harness.render().await?;
     assert_eq!(
         call_tool(
@@ -1013,23 +1100,24 @@ async fn v2_rendering_and_tools_retain_their_step_catalog() -> TestResult {
     harness
         .turn_store
         .insert(selected_plugins(&[None, Some("env-1:matching")], &[]));
-    // Core constructs tools before World State prepares their shared step store.
-    let original_tools = harness.tools(&harness.step_store);
+    // Preparation makes tools usable before any World State rendering.
+    let original_tools = harness.tools(&harness.step_store).await;
     let early_list = call_tool(
         &original_tools,
         "list",
         json!({"authority": {"kind": "cloud"}}),
     )
-    .await;
-    assert_matches!(early_list, Err(FunctionCallError::RespondToModel(message)) if message == "skill catalog is not ready for this step");
-    assert_eq!(executor_calls.load(Ordering::SeqCst), 0);
+    .await?;
+    assert_eq!(early_list["skills"].as_array().unwrap().len(), 1);
+    call_tool(&original_tools, "read", json!({"package": installed.id.0})).await?;
+    assert_eq!(executor_calls.load(Ordering::SeqCst), 1);
     let original_rendering = harness.render().await?;
     assert!(original_rendering.contains("- deploy:work:"));
     let next_step = ExtensionData::new("step-2");
-    let next_tools = harness.tools(&next_step);
     harness
         .turn_store
         .insert(selected_plugins(&[], &["Plugin_123"]));
+    let next_tools = harness.tools(&next_step).await;
     assert!(
         !harness
             .render_step(&next_step)
@@ -1056,7 +1144,7 @@ async fn v2_rendering_and_tools_retain_their_step_catalog() -> TestResult {
     harness
         .turn_store
         .insert(selected_plugins(&[None, Some("env-1:matching")], &[]));
-    let enabled_tools = harness.tools(&enabled_step);
+    let enabled_tools = harness.tools(&enabled_step).await;
     assert_eq!(
         harness.render_step(&enabled_step).await?,
         original_rendering
@@ -1117,23 +1205,23 @@ async fn v2_implicit_and_explicit_invocations_retain_their_step_catalog() -> Tes
     );
     assert!(detect(&next_step).is_none());
     for (step_store, allowed) in [(&harness.step_store, true), (&next_step, false)] {
-        let fragments = harness.registry.turn_input_contributors()[0]
-            .contribute(
-                TurnInputContext {
-                    step_store,
-                    turn_id: "turn-1".to_string(),
-                    user_input: vec![UserInput::Mention {
-                        name: installed.name.clone(),
-                        path: installed.main_prompt.as_str().to_string(),
-                    }],
-                    environments: Vec::new(),
-                },
-                /*extension_metrics*/ None,
-                &harness.session_store,
-                &harness.thread_store,
-                &harness.turn_store,
-            )
-            .await;
+        let fragments = prepared_turn_input(
+            &harness.registry,
+            TurnInputContext {
+                step_store,
+                turn_id: "turn-1".to_string(),
+                user_input: vec![UserInput::Mention {
+                    name: installed.name.clone(),
+                    path: installed.main_prompt.as_str().to_string(),
+                }],
+                environments: Vec::new(),
+            },
+            /*extension_metrics*/ None,
+            &harness.session_store,
+            &harness.thread_store,
+            &harness.turn_store,
+        )
+        .await;
         assert_eq!(fragments.len(), usize::from(allowed));
         if allowed {
             assert!(
@@ -1182,7 +1270,7 @@ async fn v1_retains_legacy_plugin_disablement() -> TestResult {
             },
             ..Default::default()
         });
-        let tools = harness.tools(&harness.step_store);
+        let tools = harness.tools(&harness.step_store).await;
         let rendered = harness.render().await?;
         assert!(rendered.contains("Cloud work description"));
         assert!(!rendered.contains("Installed legacy description"));
@@ -1225,14 +1313,19 @@ async fn v2_shadow_observation_tracks_merged_skills_independently_of_read_route(
         let cloud_provider = provider(vec![cloud.clone()]);
         let executor_reads = executor.read_requests.clone();
         let cloud_reads = cloud_provider.read_requests.clone();
+        let config = TestConfig {
+            include_instructions: false,
+            shadow_selection_enabled: true,
+            ..default_config()
+        };
+        let updated_config = TestConfig {
+            shadow_selection_enabled: false,
+            ..config.clone()
+        };
         let mut harness = MergeHarness::with_metrics(
             executor,
             cloud_provider,
-            TestConfig {
-                include_instructions: false,
-                shadow_selection_enabled: true,
-                ..default_config()
-            },
+            config.clone(),
             Some(metrics.clone()),
         )
         .await?;
@@ -1249,8 +1342,15 @@ async fn v2_shadow_observation_tracks_merged_skills_independently_of_read_route(
             harness
                 .turn_store
                 .insert(selected_plugins(&[None, Some("env-1:matching")], &[]));
-            let tools = harness.tools(&harness.step_store);
+            let tools = harness.tools(&harness.step_store).await;
             harness.render().await?;
+            // Turn input must retain the config captured before this update.
+            harness.registry.config_contributors()[0].on_config_changed(
+                &harness.session_store,
+                &harness.thread_store,
+                &config,
+                &updated_config,
+            );
             let fragments = harness.registry.turn_input_contributors()[0]
                 .contribute(
                     TurnInputContext {
@@ -1269,6 +1369,12 @@ async fn v2_shadow_observation_tracks_merged_skills_independently_of_read_route(
                 )
                 .await;
             assert!(fragments.is_empty());
+            harness.registry.config_contributors()[0].on_config_changed(
+                &harness.session_store,
+                &harness.thread_store,
+                &updated_config,
+                &config,
+            );
             if turn_id == "turn-1" {
                 let entry = if executor_route { &installed } else { &cloud };
                 // Repeated reads should yield only one shadow observation for this turn.

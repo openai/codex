@@ -3932,6 +3932,8 @@ impl Session {
                 .executor_capability_discovery_for_step_v2(&turn_context.config, &environments)
                 .await;
             let v2_snapshots = executor_capability_discovery_v2.as_ref();
+            // V1 discovery is still retained on StepContext for executor Stop/Interrupt hooks.
+            // TODO: Prepare hook sources at capture time, including V2, instead.
             let (executor_capability_discovery, discovery_recovered) = if v2_snapshots.is_some() {
                 (None, false)
             } else {
@@ -3947,9 +3949,6 @@ impl Session {
             }
             let extension_data =
                 codex_extension_api::ExtensionData::new(turn_context.sub_id.clone());
-            if let Some(snapshots) = &executor_capability_discovery_v2 {
-                extension_data.insert(snapshots.clone());
-            }
             if let Some(messages) = settings
                 .model_info
                 .model_messages
@@ -3958,10 +3957,6 @@ impl Session {
                 .and_then(|tools| tools.multi_agent.as_ref())
             {
                 extension_data.insert(messages.clone());
-            }
-            extension_data.insert(selected_capability_roots.clone());
-            if let Some(discovery) = &executor_capability_discovery {
-                extension_data.insert(discovery.as_ref().clone());
             }
             let (mcp, prepared_recommendations) = tokio::join!(
                 // MCP refresh can be large; keep it off the sampling request's stack.
@@ -3973,6 +3968,7 @@ impl Session {
                 )),
                 turn::prepare_tool_recommendations(self.as_ref(), turn_context.as_ref()),
             );
+            extension_data.insert(selected_capability_roots);
             // A step keeps the plugins from the environments it captured, even if shared MCP
             // moves on to another environment. Its skill tools and the model use this same copy.
             // Policy follows this step's MCP binding, which may have refreshed mid-turn.
@@ -3995,6 +3991,23 @@ impl Session {
                     &turn_context.disabled_plugin_ids,
                 )
                 .await;
+            for contributor in self.services.extensions.tool_contributors() {
+                contributor
+                    .prepare_for_step(codex_extension_api::StepPreparationInput {
+                        turn_id: &turn_context.sub_id,
+                        ready_selected_capability_roots: &ready_selected_capability_roots,
+                        executor_capability_discovery: executor_capability_discovery.as_deref(),
+                        executor_capability_discovery_v2: executor_capability_discovery_v2
+                            .as_deref(),
+                        selected_plugins: &selected_plugins,
+                        session_store: &self.services.session_extension_data,
+                        thread_store: &self.services.thread_extension_data,
+                        turn_store: turn_context.extension_data.as_ref(),
+                        step_store: &extension_data,
+                    })
+                    .or_cancel(cancellation_token)
+                    .await?;
+            }
             extension_data.insert(selected_plugins);
             let tool_router = turn::built_tools(
                 self.as_ref(),
@@ -4007,9 +4020,7 @@ impl Session {
             )
             .await?;
             Ok::<_, CodexErr>((
-                selected_capability_roots,
                 executor_capability_discovery,
-                executor_capability_discovery_v2,
                 mcp,
                 tool_router,
                 extension_data,
@@ -4022,14 +4033,7 @@ impl Session {
         if cancellation_token.is_cancelled() {
             return Err(CodexErr::TurnAborted);
         }
-        let (
-            selected_capability_roots,
-            executor_capability_discovery,
-            executor_capability_discovery_v2,
-            mcp,
-            tool_router,
-            extension_data,
-        ) = prepared_tools??;
+        let (executor_capability_discovery, mcp, tool_router, extension_data) = prepared_tools??;
         Ok(Arc::new(StepContext {
             preempt: turn_context
                 .config
@@ -4043,9 +4047,7 @@ impl Session {
             turn: turn_context,
             extension_data,
             environments,
-            selected_capability_roots,
             executor_capability_discovery,
-            executor_capability_discovery_v2,
             mcp,
             tool_router,
             loaded_agents_md,

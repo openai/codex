@@ -1,5 +1,4 @@
 use pretty_assertions::assert_eq;
-use std::sync::Arc;
 
 use super::*;
 use crate::catalog::SkillAuthority;
@@ -31,16 +30,27 @@ fn detect_executor_skill(command: &str, environments: &[&str]) -> Option<SkillIn
         warnings: Vec::new(),
     };
     let turn_store = ExtensionData::new("test-turn");
-    let step_catalog = Arc::new(crate::skills_extension_state::SkillStepCatalog::new(
+    let step_catalog = crate::step_state::SkillStepCatalog::new(
         /*cloud*/ None,
         catalog,
         /*discovery_v2*/ false,
         Default::default(),
-    ));
+    );
     let step_store = ExtensionData::new("step");
-    step_store.insert(crate::skills_extension_state::SkillsStepState::new_with(
-        Some(step_catalog),
-    ));
+    step_store.insert(crate::step_state::SkillsStepState {
+        discovery_v2: false,
+        tools_enabled: true,
+        catalog: step_catalog,
+        host_catalog: None,
+        cloud_status: crate::step_state::CatalogStatus::Unavailable,
+        config: crate::SkillsExtensionConfig {
+            include_instructions: true,
+            max_context_tokens: None,
+            bundled_skills_enabled: false,
+            cloud_skill_enabled: false,
+            shadow_selection_enabled: false,
+        },
+    });
 
     detect_implicit_skill_invocation(
         &turn_store,

@@ -127,10 +127,21 @@ impl McpServerContributor<Config> for DiscoveryRecorder {
     }
 }
 
+impl codex_extension_api::ToolContributor for DiscoveryRecorder {
+    fn prepare_for_step<'a>(
+        &'a self,
+        input: codex_extension_api::StepPreparationInput<'a>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            *self.selected_plugins.lock().await = Some(input.selected_plugins.clone());
+        })
+    }
+}
+
 impl ContextContributor for DiscoveryRecorder {
     fn contribute_world_state<'a>(
         &'a self,
-        input: WorldStateContributionInput<'a>,
+        _input: WorldStateContributionInput<'a>,
     ) -> ExtensionFuture<'a, Vec<WorldStateSectionContribution>> {
         Box::pin(async move {
             let snapshot_count = self.snapshots.lock().await.len();
@@ -138,9 +149,6 @@ impl ContextContributor for DiscoveryRecorder {
                 .lock()
                 .await
                 .push(snapshot_count);
-            if let Some(snapshot) = input.step_store.get::<SelectedPluginSnapshot>() {
-                *self.selected_plugins.lock().await = Some(snapshot.as_ref().clone());
-            }
             Vec::new()
         })
     }
@@ -315,15 +323,17 @@ async fn v2_changed_inventory_refreshes_mcp_without_selection_changes() -> Resul
         }
     }
 
-    impl ContextContributor for InventoryRecorder {
-        fn contribute_world_state<'a>(
+    impl codex_extension_api::ToolContributor for InventoryRecorder {
+        fn prepare_for_step<'a>(
             &'a self,
-            input: WorldStateContributionInput<'a>,
-        ) -> ExtensionFuture<'a, Vec<WorldStateSectionContribution>> {
+            input: codex_extension_api::StepPreparationInput<'a>,
+        ) -> ExtensionFuture<'a, ()> {
             Box::pin(async move {
-                let inventory = input
+                let snapshots = input
                     .executor_capability_discovery_v2
-                    .and_then(|snapshots| snapshots.first())
+                    .expect("captured inventories");
+                let inventory = snapshots
+                    .first()
                     .and_then(|snapshot| snapshot.result.as_ref().ok())
                     .expect("step V2 inventory")
                     .clone();
@@ -334,7 +344,6 @@ async fn v2_changed_inventory_refreshes_mcp_without_selection_changes() -> Resul
                 input
                     .thread_store
                     .insert(ExecutorCapabilityDiscoveryV2Cache::default());
-                Vec::new()
             })
         }
     }
@@ -343,7 +352,7 @@ async fn v2_changed_inventory_refreshes_mcp_without_selection_changes() -> Resul
     let model = responses::start_mock_server().await;
     let recorder = Arc::new(InventoryRecorder::default());
     let mut extensions = ExtensionRegistryBuilder::new();
-    extensions.prompt_contributor(recorder.clone());
+    extensions.tool_contributor(recorder.clone());
     extensions.mcp_server_contributor(recorder.clone());
     let test = test_codex()
         .with_extensions(Arc::new(extensions.build()))
@@ -498,6 +507,7 @@ async fn check_acquisition(enabled: bool, supported: bool) -> Result<()> {
         mcp_snapshots_per_step: Arc::clone(&mcp_snapshots_per_step),
     });
     extensions.prompt_contributor(recorder.clone());
+    extensions.tool_contributor(recorder.clone());
     extensions.mcp_server_contributor(recorder);
     codex_skills_extension::install_with_providers(
         &mut extensions,

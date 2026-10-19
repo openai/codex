@@ -1,4 +1,5 @@
-//! Stores published skill catalogs, executor discovery projections, and cached cloud resources.
+//! Reusable provider catalog caches and Cloud resource contents.
+//! Provider catalogs remain unfiltered until step preparation applies policy.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,26 +12,19 @@ use codex_mcp::McpResourceClientAuthKey;
 use codex_mcp::McpResourceServerCacheKey;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 
-use crate::aliases::SkillCatalogAliases;
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillPackageId;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillResourceId;
-use crate::catalog::SkillSourceKind;
-use crate::catalog::merge_catalogs;
 use crate::provider::SkillReadRequest;
-use schemars::JsonSchema;
-use serde::Deserialize;
-use serde::Serialize;
-use tokio::sync::OnceCell;
 
 const MAX_CACHED_CLOUD_RESOURCES: usize = 100;
 const MAX_CACHED_CLOUD_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 
 /// Reusable provider catalogs, before step-specific plugin policy and merging.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct SkillsExtensionState {
+pub(crate) struct SkillCatalogState {
     // Roots-only discovery, reused within a turn.
     pub(crate) executor_cache: Option<CachedExecutorCatalog>,
     // DiscoveryV1.
@@ -224,112 +218,5 @@ impl std::fmt::Debug for CloudResourceCache {
             .field("entry_count", &self.entries.len())
             .field("contents_bytes", &self.contents_bytes)
             .finish_non_exhaustive()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum SkillToolAuthoritySelector {
-    Cloud,
-    Executor,
-}
-
-impl SkillToolAuthoritySelector {
-    pub(crate) fn matches(self, authority: &SkillAuthority) -> bool {
-        match self {
-            Self::Cloud => authority.kind == SkillSourceKind::Cloud,
-            Self::Executor => authority.kind == SkillSourceKind::Executor,
-        }
-    }
-}
-
-/// Filled once by World State preparation; retained by this step's list/read tools.
-pub(crate) type SkillsStepState = OnceCell<Arc<SkillStepCatalog>>;
-
-/// Policy-checked, enabled skill routes for one step. Hidden skills remain explicitly readable.
-#[derive(Debug)]
-pub(crate) struct SkillStepCatalog {
-    pub(super) catalog: SkillCatalog,
-    pub(crate) aliases: SkillCatalogAliases,
-    /// None means no Cloud catalog was captured for this step.
-    pub(super) cloud_warnings: Option<Vec<String>>,
-    pub(super) executor_warnings: Vec<String>,
-}
-
-impl SkillStepCatalog {
-    pub(crate) fn new(
-        cloud: Option<SkillCatalog>,
-        executor: SkillCatalog,
-        discovery_v2: bool,
-        aliases: SkillCatalogAliases,
-    ) -> Self {
-        let cloud_skill_count = cloud.as_ref().map(|catalog| catalog.entries.len());
-        let executor_skill_count = executor.entries.len();
-        let cloud_warnings = cloud.as_ref().map(|catalog| catalog.warnings.clone());
-        let executor_warnings = executor.warnings.clone();
-        let mut catalog = if discovery_v2 {
-            merge_catalogs(cloud, executor)
-        } else {
-            let mut catalog = cloud.unwrap_or_default();
-            catalog.is_partial |= executor.is_partial;
-            catalog.entries.extend(executor.entries);
-            catalog.warnings.extend(executor.warnings);
-            catalog
-        };
-        catalog.entries.retain_mut(|entry| {
-            if !entry.enabled {
-                return false;
-            }
-            entry.sources.retain(|source| source.enabled);
-            true
-        });
-        tracing::debug!(
-            discovery_v2,
-            ?cloud_skill_count,
-            executor_skill_count,
-            enabled_skill_count = catalog.entries.len(),
-            warning_count = catalog.warnings.len(),
-            "prepared step skill catalog"
-        );
-        Self {
-            catalog,
-            aliases,
-            cloud_warnings,
-            executor_warnings,
-        }
-    }
-
-    /// Selects authorities from the prepared catalog without consulting thread state.
-    pub(crate) fn select_from_catalog(
-        &self,
-        authorities: &[SkillToolAuthoritySelector],
-    ) -> SkillCatalog {
-        let entries = self
-            .catalog
-            .entries
-            .iter()
-            .filter(|entry| {
-                authorities
-                    .iter()
-                    .any(|authority| authority.matches(&entry.authority))
-            })
-            .cloned()
-            .collect();
-        let mut catalog = SkillCatalog {
-            is_partial: self.catalog.is_partial,
-            entries,
-            warnings: Vec::new(),
-        };
-        if authorities.contains(&SkillToolAuthoritySelector::Cloud)
-            && let Some(warnings) = &self.cloud_warnings
-        {
-            catalog.warnings.extend(warnings.iter().cloned());
-        }
-        if authorities.contains(&SkillToolAuthoritySelector::Executor) {
-            catalog
-                .warnings
-                .extend(self.executor_warnings.iter().cloned());
-        }
-        catalog
     }
 }

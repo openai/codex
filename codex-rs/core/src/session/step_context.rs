@@ -11,8 +11,6 @@ use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::tools::router::ToolRouter;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
-use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
-use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_extension_api::ExtensionData;
 use codex_file_system::EnvironmentAccess;
 use codex_mcp::McpBinding;
@@ -35,13 +33,10 @@ pub(crate) struct StepContext {
     /// Telemetry context tagged with this sampling request's model.
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) environments: TurnEnvironmentSnapshot,
-    /// Capability roots bound to ready environments in this exact step.
-    pub(crate) selected_capability_roots: Vec<ResolvedSelectedCapabilityRoot>,
-    /// Executor-materialized capability files shared by MCP and skills in this exact step.
+    /// Legacy discovery retained for executor hook materialization in this exact step.
     pub(crate) executor_capability_discovery: Option<Arc<ExecutorCapabilityDiscoverySnapshot>>,
     /// Keeps the extension inputs used to build this step's tools for its World State as well.
     pub(crate) extension_data: ExtensionData,
-    pub(crate) executor_capability_discovery_v2: Option<Vec<ExecutorCapabilityDiscoveryV2Snapshot>>,
     /// The exact MCP connections, configuration, and catalog captured for this step.
     pub(crate) mcp: Arc<McpBinding>,
     /// The finalized tool plan advertised and executed for this exact sampling request.

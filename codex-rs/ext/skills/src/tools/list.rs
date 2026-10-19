@@ -86,14 +86,16 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ListTool {
         Box::pin(async move {
             let args: ListArgs = parse_args(&call)?;
             let response_byte_budget = call.response_byte_budget(MAX_SKILL_RESPONSE_BYTES);
-            let catalog = self.context.catalog(&[args.authority])?;
+            let catalog = self
+                .context
+                .step_state
+                .catalog
+                .select_from_catalog(args.authority);
             let mut omitted_oversized_entry = false;
             let canonical_skills = catalog
                 .entries
                 .into_iter()
-                .filter(|entry| {
-                    entry.is_model_visible() && args.authority.matches(&entry.authority)
-                })
+                .filter(SkillCatalogEntry::is_model_visible)
                 .filter_map(|entry| {
                     let listed = listed_skill(entry);
                     omitted_oversized_entry |= listed.is_none();

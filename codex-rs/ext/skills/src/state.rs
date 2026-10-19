@@ -1,3 +1,6 @@
+//! Shared skill lifecycle state, including session resources and thread-owned caches.
+//! Keeps discovery caches and live authorization checks separate from step preparation.
+
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -7,7 +10,6 @@ use codex_extension_api::ExtensionMetrics;
 use codex_mcp::McpResourceClient;
 
 use crate::SkillsExtensionConfig;
-use crate::SkillsExtensionState;
 use crate::aliases::SkillAliasState;
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
@@ -16,21 +18,22 @@ use crate::catalog::SkillProviderError;
 use crate::catalog::SkillProviderResult;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillSourceKind;
+use crate::catalog_state::CachedExecutorCatalog;
+use crate::catalog_state::CachedExecutorDiscoveryCatalog;
+use crate::catalog_state::CachedExecutorV2Catalog;
+use crate::catalog_state::CloudResourceCache;
+use crate::catalog_state::CloudSkillGeneration;
+use crate::catalog_state::ExecutorCatalogCacheKey;
+use crate::catalog_state::SkillCatalogState;
+use crate::catalog_state::SkillReadCacheKey;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillReadContext;
 use crate::provider::SkillReadRequest;
 use crate::shadow_selection_experiment::RecentSkillInvocations;
 use crate::shadow_selection_experiment::ShadowSelectionTurnState;
 use crate::shadow_selection_experiment::ShadowTaskContext;
-use crate::skills_extension_state::CachedExecutorCatalog;
-use crate::skills_extension_state::CachedExecutorDiscoveryCatalog;
-use crate::skills_extension_state::CachedExecutorV2Catalog;
-use crate::skills_extension_state::CloudResourceCache;
-use crate::skills_extension_state::CloudSkillGeneration;
-use crate::skills_extension_state::ExecutorCatalogCacheKey;
-use crate::skills_extension_state::SkillReadCacheKey;
-use crate::skills_extension_state::SkillStepCatalog;
 use crate::sources::SkillProviders;
+use crate::step_state::SkillStepCatalog;
 
 #[cfg(test)]
 #[path = "cloud_cache_tests.rs"]
@@ -45,7 +48,7 @@ pub(crate) struct SkillsSessionState {
 pub struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
     cloud_skills_available: bool,
-    skills_extension_state: Mutex<SkillsExtensionState>,
+    catalog_state: Mutex<SkillCatalogState>,
     aliases: SkillAliasState,
     shadow_selection_turn: Mutex<Option<ShadowSelectionTurn>>,
     pub(crate) executor_read_snapshot: Mutex<Option<ExecutorReadSnapshot>>,
@@ -58,7 +61,7 @@ impl SkillsThreadState {
         Self {
             config: Mutex::new(config),
             cloud_skills_available,
-            skills_extension_state: Mutex::new(SkillsExtensionState::default()),
+            catalog_state: Mutex::new(SkillCatalogState::default()),
             aliases: SkillAliasState::default(),
             shadow_selection_turn: Mutex::new(None),
             executor_read_snapshot: Mutex::new(None),
@@ -81,7 +84,7 @@ impl SkillsThreadState {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if previous.cloud_skill_enabled != config.cloud_skill_enabled {
             let mut catalogs = self
-                .skills_extension_state
+                .catalog_state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             catalogs.cloud_cache = None;
@@ -89,35 +92,12 @@ impl SkillsThreadState {
         *previous = config;
     }
 
+    pub(crate) fn cloud_skills_available(&self) -> bool {
+        self.cloud_skills_available
+    }
+
     pub(crate) fn cloud_skill_enabled(&self) -> bool {
         self.cloud_skills_available && self.config().cloud_skill_enabled
-    }
-
-    pub(crate) fn replace_shadow_selection_turn(
-        &self,
-        turn_id: String,
-        state: Option<ShadowSelectionTurnState>,
-    ) {
-        *self
-            .shadow_selection_turn
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            state.map(|state| ShadowSelectionTurn {
-                turn_id,
-                state: Arc::new(state),
-            });
-    }
-
-    pub(crate) fn shadow_selection_turn(
-        &self,
-        turn_id: &str,
-    ) -> Option<Arc<ShadowSelectionTurnState>> {
-        self.shadow_selection_turn
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .filter(|turn| turn.turn_id == turn_id)
-            .map(|turn| Arc::clone(&turn.state))
     }
 
     pub(crate) fn prepare_step_catalog(
@@ -128,7 +108,7 @@ impl SkillsThreadState {
     ) -> SkillStepCatalog {
         let mut step = SkillStepCatalog::new(cloud, executor, discovery_v2, Default::default());
         step.aliases = self.aliases.capture(
-            step.catalog
+            step.merged
                 .entries
                 .iter()
                 .flat_map(super::catalog::SkillCatalogEntry::source_locations)
@@ -148,13 +128,12 @@ impl SkillsThreadState {
     pub(crate) async fn refresh_executor_catalog(
         &self,
         providers: &SkillProviders,
-        mut query: SkillListQuery,
+        query: SkillListQuery,
     ) -> SkillCatalog {
-        query.include_bundled_skills = self.config().bundled_skills_enabled;
         if let Some(snapshots) = &query.executor_capability_discovery_v2 {
             let snapshots = snapshots.clone();
             let cached = self
-                .skills_extension_state
+                .catalog_state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .executor_v2_cache
@@ -165,7 +144,7 @@ impl SkillsThreadState {
                 Some(catalog) => catalog,
                 None => {
                     let catalog = providers.list_executor_for_turn(query).await;
-                    self.skills_extension_state
+                    self.catalog_state
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .executor_v2_cache = Some(CachedExecutorV2Catalog {
@@ -180,7 +159,7 @@ impl SkillsThreadState {
                 .await
         } else {
             if let Some(cached) = self
-                .skills_extension_state
+                .catalog_state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .executor_cache
@@ -200,7 +179,7 @@ impl SkillsThreadState {
             } else {
                 providers.list_executor_for_turn(query).await
             };
-            self.skills_extension_state
+            self.catalog_state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .executor_cache = Some(CachedExecutorCatalog {
@@ -228,7 +207,7 @@ impl SkillsThreadState {
         });
         if !discovery_failed
             && let Some(cached) = self
-                .skills_extension_state
+                .catalog_state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .executor_discovery_cache
@@ -248,7 +227,7 @@ impl SkillsThreadState {
         let include_bundled_skills = query.include_bundled_skills;
         let discovered = providers.list_executor_for_turn(query).await;
         let mut state = self
-            .skills_extension_state
+            .catalog_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Failed discovery is returned to this caller but is never reused by another request.
@@ -262,16 +241,10 @@ impl SkillsThreadState {
         discovered
     }
 
-    /// Returns the cached Cloud catalog when enabled and authorized, without refreshing it.
+    /// Returns the currently authorized cached Cloud catalog without refreshing it.
+    /// Preparation decides whether Cloud is enabled using its captured config.
     pub(crate) fn available_cloud_catalog(&self) -> Option<SkillCatalog> {
-        let config = self
-            .config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !config.cloud_skill_enabled || !self.cloud_skills_available {
-            return None;
-        }
-        self.skills_extension_state
+        self.catalog_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .cloud_cache
@@ -282,7 +255,7 @@ impl SkillsThreadState {
 
     fn cloud_cache(&self, mcp_resources: Option<&McpResourceClient>) -> Arc<CloudSkillGeneration> {
         let mut state = self
-            .skills_extension_state
+            .catalog_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let cache_key = mcp_resources
@@ -333,7 +306,7 @@ impl SkillsThreadState {
         let mut catalog = providers.list_cloud_for_turn(query).await?;
         catalog.entries.sort_by(|a, b| a.id.0.cmp(&b.id.0));
         let mut catalogs = self
-            .skills_extension_state
+            .catalog_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !cache.is_current()
@@ -398,7 +371,7 @@ impl SkillsThreadState {
                 return Err(SkillProviderError::new("cloud skills are disabled"));
             }
             let catalogs = self
-                .skills_extension_state
+                .catalog_state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if !cache.is_current()
@@ -423,7 +396,7 @@ impl SkillsThreadState {
 
         let result = providers.read(request).await?;
         let catalogs = self
-            .skills_extension_state
+            .catalog_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !cache.is_current()
@@ -444,6 +417,33 @@ impl SkillsThreadState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(cache_key, result))
+    }
+
+    pub(crate) fn replace_shadow_selection_turn(
+        &self,
+        turn_id: String,
+        state: Option<ShadowSelectionTurnState>,
+    ) {
+        *self
+            .shadow_selection_turn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            state.map(|state| ShadowSelectionTurn {
+                turn_id,
+                state: Arc::new(state),
+            });
+    }
+
+    pub(crate) fn shadow_selection_turn(
+        &self,
+        turn_id: &str,
+    ) -> Option<Arc<ShadowSelectionTurnState>> {
+        self.shadow_selection_turn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .filter(|turn| turn.turn_id == turn_id)
+            .map(|turn| Arc::clone(&turn.state))
     }
 }
 
@@ -476,6 +476,3 @@ impl EmittedCatalogBudgetWarnings {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HostSkillsCatalogInWorldState;
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct HostSkillsStepState(pub(crate) SkillCatalog);

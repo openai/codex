@@ -3,7 +3,6 @@ use std::sync::Arc;
 use crate::HostSkillsSnapshot;
 use crate::InjectedHostSkillPrompts;
 use codex_analytics::InvocationType;
-use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
@@ -40,6 +39,7 @@ use crate::catalog::SkillSourceKind;
 use crate::fragments::AvailableSkillsInstructions;
 use crate::fragments::SkillInstructions;
 use crate::fragments::SkillResourceAccess;
+use crate::preparation::prepare_catalogs;
 use crate::provider::HostSkillProvider;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillReadContext;
@@ -58,20 +58,17 @@ use crate::render_observability::CatalogSurface;
 use crate::render_observability::record_catalog_render;
 use crate::selection::collect_explicit_skill_mentions;
 use crate::shadow_selection_experiment::ShadowSelectionExperiment;
-use crate::skills_extension_state::SkillToolAuthoritySelector;
-use crate::skills_extension_state::SkillsStepState;
 use crate::sources::SkillProviders;
 use crate::state::HostSkillsCatalogInWorldState;
-use crate::state::HostSkillsStepState;
 use crate::state::SkillsSessionState;
 use crate::state::SkillsThreadState;
+use crate::step_state::SkillsStepState;
 use crate::telemetry::SkillTelemetry;
 use crate::tools::SkillAnalytics;
 use crate::tools::SkillToolAuthority;
 use crate::tools::skill_tools;
 use crate::warnings::bounded_warnings;
-use crate::world_state_catalogs::CatalogContext;
-use crate::world_state_catalogs::CatalogStatus;
+use crate::world_state_catalogs::render_world_state_sections;
 
 #[path = "cloud_skill.rs"]
 mod cloud_skill;
@@ -253,21 +250,7 @@ where
         &'a self,
         input: WorldStateContributionInput<'a>,
     ) -> ExtensionFuture<'a, Vec<WorldStateSectionContribution>> {
-        Box::pin(async move {
-            let Some(context) =
-                CatalogContext::new(&self.providers, Arc::clone(&self.event_sink), input)
-            else {
-                return Vec::new();
-            };
-            let catalogs = context.discover_catalogs().await;
-
-            context
-                .render_catalogs(catalogs)
-                .into_iter()
-                .filter(|catalog| catalog.status != CatalogStatus::Unavailable)
-                .map(|catalog| context.build_world_state_section(catalog))
-                .collect()
-        })
+        Box::pin(async move { render_world_state_sections(Arc::clone(&self.event_sink), input) })
     }
 }
 
@@ -275,6 +258,21 @@ impl<C> ToolContributor for SkillsExtension<C>
 where
     C: Send + Sync + 'static,
 {
+    fn prepare_for_step<'a>(
+        &'a self,
+        input: codex_extension_api::StepPreparationInput<'a>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if input.step_store.get::<SkillsStepState>().is_some() {
+                return;
+            }
+            if let Some(thread_state) = input.thread_store.get::<SkillsThreadState>() {
+                let state = prepare_catalogs(&thread_state, &self.providers, &input).await;
+                input.step_store.insert(state);
+            }
+        })
+    }
+
     fn tools_for_step(
         &self,
         session_store: &ExtensionData,
@@ -336,14 +334,17 @@ where
                 return Vec::new();
             };
 
-            let config = thread_state.config();
             let mcp_resources = session_store
                 .get::<SkillsSessionState>()
                 .and_then(|state| state.mcp_resources.clone());
             let host_snapshot = turn_store.get::<HostSkillsSnapshot>();
             let host_catalog_in_world_state =
                 turn_store.get::<HostSkillsCatalogInWorldState>().is_some();
-            let host_skills = turn_store.get::<HostSkillsStepState>();
+            let Some(step_state) = input.step_store.get::<SkillsStepState>() else {
+                return Vec::new();
+            };
+            let config = &step_state.config;
+            let host_skills = step_state.host_catalog.as_ref();
             let query = SkillListQuery {
                 turn_id: input.turn_id.clone(),
                 executor_roots: Vec::new(),
@@ -357,23 +358,10 @@ where
                 executor_capability_discovery: None,
                 executor_capability_discovery_v2: None,
             };
-            let step_state = input.step_store.get::<SkillsStepState>();
-            let step_catalog = step_state.as_ref().and_then(|state| state.get());
-            let mut catalog = match &step_catalog {
-                Some(step_catalog) => step_catalog.select_from_catalog(&[
-                    SkillToolAuthoritySelector::Cloud,
-                    SkillToolAuthoritySelector::Executor,
-                ]),
-                // Preserve legacy callers that select Cloud skills before World State preparation.
-                None if input
-                    .step_store
-                    .get::<Vec<ExecutorCapabilityDiscoveryV2Snapshot>>()
-                    .is_none() =>
-                {
-                    thread_state.available_cloud_catalog().unwrap_or_default()
-                }
-                None => SkillCatalog::default(),
-            };
+            let mut catalog = step_state.catalog.merged.clone();
+            if !host_catalog_in_world_state && let Some(host_skills) = host_skills {
+                catalog.extend(host_skills.clone());
+            }
             catalog.extend(self.providers.list_for_turn(query).await);
             for warning in bounded_warnings(&catalog.warnings) {
                 self.emit_warning(thread_store.level_id(), Some(&input.turn_id), warning);
@@ -383,7 +371,7 @@ where
             let shadow_selection_turn = if config.shadow_selection_enabled {
                 let mut shadow_catalog = catalog.clone();
                 if let Some(host_skills) = host_skills {
-                    shadow_catalog.extend(host_skills.0.clone());
+                    shadow_catalog.extend(host_skills.clone());
                 }
                 let shadow_selected_entries =
                     collect_explicit_skill_mentions(&input.user_input, &shadow_catalog);

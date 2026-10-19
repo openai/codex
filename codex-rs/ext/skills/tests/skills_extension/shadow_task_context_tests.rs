@@ -165,28 +165,28 @@ async fn task_context_recovers_prior_requests_and_explicit_intent_without_changi
             .await;
         let observed_turn = turns.last().ok_or("test needs a turn")?.0;
         for (turn_id, user_input) in turns {
-            let fragments = registry.turn_input_contributors()[0]
-                .contribute(
-                    TurnInputContext {
-                        step_store: &ExtensionData::new("step"),
-                        turn_id: turn_id.to_string(),
-                        user_input,
-                        environments: vec![codex_extension_api::TurnInputEnvironment {
-                            environment_id: "test".to_string(),
-                            cwd: PathUri::from_host_native_path(
-                                std::env::current_dir().expect("test cwd"),
-                            )
-                            .expect("absolute cwd"),
-                            is_primary: true,
-                            fs: &FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS),
-                        }],
-                    },
-                    /*extension_metrics*/ None,
-                    &session_store,
-                    &thread_store,
-                    &ExtensionData::new(turn_id),
-                )
-                .await;
+            let fragments = prepared_turn_input(
+                &registry,
+                TurnInputContext {
+                    step_store: &ExtensionData::new("step"),
+                    turn_id: turn_id.to_string(),
+                    user_input,
+                    environments: vec![codex_extension_api::TurnInputEnvironment {
+                        environment_id: "test".to_string(),
+                        cwd: PathUri::from_host_native_path(
+                            std::env::current_dir().expect("test cwd"),
+                        )
+                        .expect("absolute cwd"),
+                        is_primary: true,
+                        fs: &FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS),
+                    }],
+                },
+                /*extension_metrics*/ None,
+                &session_store,
+                &thread_store,
+                &ExtensionData::new(turn_id),
+            )
+            .await;
             assert!(fragments.is_empty());
         }
         registry.skill_invocation_contributors()[0]

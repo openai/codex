@@ -54,7 +54,8 @@ async fn turn_input_and_history_advance_while_ranking_is_blocked()
     use crate::catalog::SkillPackageId;
     use crate::catalog::SkillResourceId;
     use crate::install_with_providers_and_metrics;
-    use crate::state::HostSkillsStepState;
+    use crate::step_state::CatalogStatus;
+    use crate::step_state::SkillsStepState;
 
     let _serial = RANKING_TESTS.acquire().await.unwrap();
     let slots = RANKING_SLOTS.acquire_many(2).await?;
@@ -99,7 +100,7 @@ async fn turn_input_and_history_advance_while_ranking_is_blocked()
 
     for turn_id in ["first", "second"] {
         let turn_store = ExtensionData::new(turn_id);
-        turn_store.insert(HostSkillsStepState(SkillCatalog {
+        let host_catalog = SkillCatalog {
             is_partial: false,
             entries: ["x", "hidden", "selected"]
                 .into_iter()
@@ -116,7 +117,22 @@ async fn turn_input_and_history_advance_while_ranking_is_blocked()
                 })
                 .collect(),
             warnings: Vec::new(),
-        }));
+        };
+        turn_store.insert(SkillsStepState {
+            discovery_v2: false,
+            tools_enabled: false,
+            catalog: thread_store
+                .get::<SkillsThreadState>()
+                .unwrap()
+                .prepare_step_catalog(
+                    /*cloud*/ None,
+                    SkillCatalog::default(),
+                    /*discovery_v2*/ false,
+                ),
+            host_catalog: Some(host_catalog),
+            cloud_status: CatalogStatus::Unavailable,
+            config: config.clone(),
+        });
         let fragments = tokio::time::timeout(
             Duration::from_secs(10),
             registry.turn_input_contributors()[0].contribute(

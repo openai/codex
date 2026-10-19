@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::catalog::SkillSourceKind;
-use crate::skills_extension_state::SkillToolAuthoritySelector;
+use crate::step_state::SkillToolAuthoritySelector;
 
 fn alias_prefix(source: &SkillSourceKind) -> Option<&'static str> {
     match source {

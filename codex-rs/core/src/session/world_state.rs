@@ -72,7 +72,10 @@ impl Session {
         let model_info = settings.model_info.as_ref();
         let model_messages = ResolvedModelMessages::from_model(model_info);
         tracing::trace!(
-            selected_capability_root_count = step_context.selected_capability_roots.len(),
+            selected_capability_root_count = step_context
+                .extension_data
+                .get::<Vec<codex_exec_server::ResolvedSelectedCapabilityRoot>>()
+                .map_or(0, |roots| roots.len()),
             "building step world state"
         );
         let render_current_instructions = || {
@@ -339,26 +342,14 @@ impl Session {
             ));
         }
         let environments = step_context.environments.to_selections();
-        let ready_selected_capability_roots = step_context
-            .selected_capability_roots
-            .iter()
-            .map(|root| root.selected_root().clone())
-            .collect::<Vec<_>>();
         let previous_world_state = self.state.lock().await.history.world_state_checkpoint();
         for contributor in self.services.extensions.context_contributors() {
             for section in contributor
                 .contribute_world_state(WorldStateContributionInput {
-                    executor_capability_discovery_v2: step_context
-                        .executor_capability_discovery_v2
-                        .as_deref(),
                     thread_id: self.thread_id(),
                     turn_id: turn_context.sub_id.as_str(),
                     model_info: &step_context.settings.model_info,
                     environments: &environments,
-                    ready_selected_capability_roots: &ready_selected_capability_roots,
-                    executor_capability_discovery: step_context
-                        .executor_capability_discovery
-                        .as_deref(),
                     extension_metrics: Some(Arc::clone(&extension_metrics)),
                     session_store: &self.services.session_extension_data,
                     thread_store: &self.services.thread_extension_data,

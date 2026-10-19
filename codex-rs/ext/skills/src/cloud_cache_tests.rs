@@ -163,7 +163,7 @@ async fn late_discovery_cannot_publish_into_a_new_generation() {
     assert!(late.is_err());
     assert!(
         state
-            .skills_extension_state
+            .catalog_state
             .lock()
             .unwrap()
             .cloud_cache

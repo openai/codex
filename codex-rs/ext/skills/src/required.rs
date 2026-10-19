@@ -2,7 +2,7 @@
 
 use codex_extension_api::ExtensionData;
 
-use crate::skills_extension_state::SkillsStepState;
+use crate::step_state::SkillsStepState;
 
 /// Skill names that must be supplied by one selected environment before inference.
 pub struct EnvironmentSkillRequirements<'a> {
@@ -23,17 +23,13 @@ pub fn validate_required_skills<'a>(
         "Required skills cannot be validated because the skills extension is unavailable"
             .to_string()
     })?;
-    let step_catalog = step_state.get().ok_or_else(|| {
-        "Required skills cannot be validated because the step skill catalog is unavailable"
-            .to_string()
-    })?;
     for EnvironmentSkillRequirements {
         environment_id,
         skill_names,
     } in environments
     {
         for name in skill_names {
-            let available = step_catalog.catalog.entries.iter().any(|entry| {
+            let available = step_state.catalog.merged.entries.iter().any(|entry| {
                 entry.enabled
                     && entry.name == name.as_str()
                     && (entry.main_prompt.environment_id() == Some(environment_id)

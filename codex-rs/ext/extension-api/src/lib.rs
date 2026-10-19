@@ -71,6 +71,7 @@ pub use contributors::SelectedPluginSnapshot;
 pub use contributors::SkillInvocationContributor;
 pub use contributors::SkillInvocationInput;
 pub use contributors::SkillInvocationKind;
+pub use contributors::StepPreparationInput;
 pub use contributors::SynchronousApprovalReviewer;
 pub use contributors::ThreadIdleCause;
 pub use contributors::ThreadIdleInput;

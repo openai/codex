@@ -207,23 +207,40 @@ async fn v2_steps_refresh_metadata_and_preserve_separate_environments() -> TestR
         } else {
             snapshots.clear();
         }
-        let sections = registry.context_contributors()[0]
-            .contribute_world_state(WorldStateContributionInput {
+        let step_store = ExtensionData::new("step");
+        step_store.insert(snapshots.clone());
+        step_store.insert(SelectedPluginSnapshot {
+            plugins: snapshots
+                .iter()
+                .map(|snapshot| codex_extension_api::SelectedPluginIdentity {
+                    selected_root_id: Some(format!(
+                        "{}:local-name@marketplace",
+                        snapshot.environment_id
+                    )),
+                    plugin_id: codex_core_plugin_common::PluginIdentity::Remote {
+                        remote_plugin_id: "Plugin_123".into(),
+                    },
+                })
+                .collect(),
+            ..Default::default()
+        });
+        let sections = prepared_world_state(
+            &registry,
+            &[],
+            WorldStateContributionInput {
                 previous_world_state: None,
-                step_store: &ExtensionData::new("step"),
-                executor_capability_discovery_v2: Some(&snapshots),
+                step_store: &step_store,
                 model_info: &catalog_model_info(),
                 thread_id: codex_protocol::ThreadId::new(),
                 turn_id: "turn-1",
                 environments: &[],
-                ready_selected_capability_roots: &[],
-                executor_capability_discovery: None,
                 extension_metrics: None,
                 session_store: &session_store,
                 thread_store: &thread_store,
                 turn_store: &turn_store,
-            })
-            .await;
+            },
+        )
+        .await;
         let rendered = sections
             .iter()
             .filter_map(|section| section.render_diff(PreviousWorldStateSection::Absent).1)

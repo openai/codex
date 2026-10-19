@@ -189,14 +189,21 @@ impl ContextContributor for ReadyCapabilityRootsTestExtension {
         &'a self,
         input: WorldStateContributionInput<'a>,
     ) -> ExtensionFuture<'a, Vec<WorldStateSectionContribution>> {
+        let roots = input
+            .step_store
+            .get::<Vec<codex_exec_server::ResolvedSelectedCapabilityRoot>>()
+            .expect("captured capability roots should be present in step state");
+        let selected_roots = roots
+            .iter()
+            .map(|root| root.selected_root().clone())
+            .collect::<Vec<_>>();
         if let Some(observed_roots) = &self.observed_roots {
             observed_roots
                 .lock()
                 .expect("observed capability roots should not be poisoned")
-                .push(input.ready_selected_capability_roots.to_vec());
+                .push(selected_roots.clone());
         }
-        let root_ids = input
-            .ready_selected_capability_roots
+        let root_ids = selected_roots
             .iter()
             .map(|root| root.id.clone())
             .collect::<Vec<_>>();

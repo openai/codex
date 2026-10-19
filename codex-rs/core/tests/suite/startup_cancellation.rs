@@ -1,4 +1,4 @@
-//! Cancelling partially initialized sessions must release their persistent writers.
+//! Startup and step preparation establish readiness and release state on cancellation.
 
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use std::sync::Arc;
@@ -177,5 +177,122 @@ async fn failed_resume_releases_writer_before_returning() -> Result<()> {
 
     assert_eq!(resumed.thread_id, thread_id);
     resumed.thread.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn step_preparation_finishes_before_tools_and_world_state() -> Result<()> {
+    use codex_extension_api::ContextContributor;
+    use codex_extension_api::ExtensionData;
+    use codex_extension_api::ExtensionFuture;
+    use codex_extension_api::SelectedPluginSnapshot;
+    use codex_extension_api::StepPreparationInput;
+    use codex_extension_api::ToolCall;
+    use codex_extension_api::ToolContributor;
+    use codex_extension_api::ToolExecutor;
+    use codex_extension_api::WorldStateContributionInput;
+    use codex_extension_api::WorldStateSectionContribution;
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicUsize;
+
+    skip_if_no_network!(Ok(()));
+    struct Prepared(Mutex<[bool; 2]>);
+    struct Contributor {
+        index: usize,
+        constructed: AtomicUsize,
+    }
+    impl ToolContributor for Contributor {
+        fn prepare_for_step<'a>(
+            &'a self,
+            input: StepPreparationInput<'a>,
+        ) -> ExtensionFuture<'a, ()> {
+            Box::pin(async move {
+                tokio::task::yield_now().await;
+                let prepared = input
+                    .step_store
+                    .get_or_init(|| Prepared(Mutex::new([false; 2])));
+                let mut flags = prepared.0.lock().unwrap();
+                assert!(!flags[self.index], "a step must be prepared only once");
+                flags[self.index] = true;
+            })
+        }
+        fn tools_for_step(
+            &self,
+            _session_store: &ExtensionData,
+            _thread_store: &ExtensionData,
+            step_store: &ExtensionData,
+        ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+            assert!(step_store.get::<SelectedPluginSnapshot>().is_some());
+            assert_eq!(
+                *step_store
+                    .get::<Prepared>()
+                    .expect("prepared step")
+                    .0
+                    .lock()
+                    .unwrap(),
+                [true; 2]
+            );
+            self.constructed.fetch_add(1, Ordering::SeqCst);
+            Vec::new()
+        }
+    }
+    impl ContextContributor for Contributor {
+        fn contribute_world_state<'a>(
+            &'a self,
+            input: WorldStateContributionInput<'a>,
+        ) -> ExtensionFuture<'a, Vec<WorldStateSectionContribution>> {
+            Box::pin(async move {
+                assert_eq!(
+                    *input
+                        .step_store
+                        .get::<Prepared>()
+                        .expect("prepared step")
+                        .0
+                        .lock()
+                        .unwrap(),
+                    [true; 2]
+                );
+                Vec::new()
+            })
+        }
+    }
+    let first = Arc::new(Contributor {
+        index: 0,
+        constructed: AtomicUsize::new(0),
+    });
+    let second = Arc::new(Contributor {
+        index: 1,
+        constructed: AtomicUsize::new(0),
+    });
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    for contributor in [&first, &second] {
+        extensions.tool_contributor(contributor.clone());
+        extensions.prompt_contributor(contributor.clone());
+    }
+    let server = start_mock_server().await;
+    let mock = core_test_support::responses::mount_sse_sequence(
+        &server,
+        vec![
+            core_test_support::responses::sse(vec![core_test_support::responses::ev_completed(
+                "first",
+            )]),
+            core_test_support::responses::sse(vec![core_test_support::responses::ev_completed(
+                "second",
+            )]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn("First turn.").await?;
+    test.submit_turn("Second turn.").await?;
+    assert_eq!(mock.requests().len(), 2);
+    assert!(first.constructed.load(Ordering::SeqCst) >= 2);
+    assert_eq!(
+        first.constructed.load(Ordering::SeqCst),
+        second.constructed.load(Ordering::SeqCst)
+    );
     Ok(())
 }

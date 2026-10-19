@@ -4,6 +4,9 @@ use std::sync::Arc;
 
 use codex_config::types::PluginsConfigToml;
 use codex_context_fragments::ContextualUserFragment;
+use codex_exec_server_protocol::ExecutorCapabilityDiscoverySnapshot;
+use codex_exec_server_protocol::ExecutorCapabilityDiscoveryV2Snapshot;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_tools::ToolCall;
@@ -349,8 +352,30 @@ pub trait SkillInvocationContributor: Send + Sync {
     }
 }
 
+/// Runtime inputs shared by preparation, tool construction, and later context consumers.
+#[derive(Clone, Copy)]
+pub struct StepPreparationInput<'a> {
+    pub turn_id: &'a str,
+    pub ready_selected_capability_roots: &'a [SelectedCapabilityRoot],
+    pub executor_capability_discovery: Option<&'a ExecutorCapabilityDiscoverySnapshot>,
+    pub executor_capability_discovery_v2: Option<&'a [ExecutorCapabilityDiscoveryV2Snapshot]>,
+    /// Captured plugin policy; an empty snapshot represents no selected plugins.
+    pub selected_plugins: &'a SelectedPluginSnapshot,
+    pub session_store: &'a ExtensionData,
+    pub thread_store: &'a ExtensionData,
+    pub turn_store: &'a ExtensionData,
+    /// Contains captured environment handles and permissions.
+    pub step_store: &'a ExtensionData,
+}
+
 /// Extension contribution that exposes native tools owned by a feature.
 pub trait ToolContributor: Send + Sync {
+    /// Prepares step state once, before tools are built and without rendering.
+    /// Never publish partial state; discovery failures may report warnings.
+    fn prepare_for_step<'a>(&'a self, _input: StepPreparationInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async {})
+    }
+
     /// Returns native tools bound to the supplied extension state.
     /// Step-only contributors can leave this empty default unchanged.
     fn tools(

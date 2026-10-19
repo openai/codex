@@ -77,7 +77,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for InstallationsTool {
             if let Some(source) = &args.source {
                 source.validate()?;
             }
-            let matches = self.context.matching_packages(&args.package)?;
+            let matches = self.context.matching_packages(&args.package);
             let (entry, _) = matches.first().ok_or_else(|| {
                 FunctionCallError::RespondToModel("skill package is not available".to_string())
             })?;

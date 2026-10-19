@@ -98,7 +98,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
     }
 
     fn spec(&self) -> ToolSpec {
-        if !self.context.discovery_v2 {
+        if !self.context.step_state.discovery_v2 {
             return skill_function_tool::<ReadArgs, ReadResponse<LegacyReadMetadata>>(
                 TOOL_NAME,
                 "Read one page from a skill. Pass its provided package directly; root aliases are resolved automatically. Omit resource to read SKILL.md; to read another file, use the same package and pass the file's complete skill:// identifier as resource. For executor-backed skills, skill_root is the skill's absolute directory in the executor filesystem and can be used to locate bundled scripts. If the package is not provided, use skills.list to find it. Pass next_cursor back as cursor to continue the same snapshot while it is cached; omit cursor to read again.",
@@ -115,7 +115,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
         'call: 'a,
     {
         Box::pin(async move {
-            let (args, source) = if self.context.discovery_v2 {
+            let (args, source) = if self.context.step_state.discovery_v2 {
                 let args: ReadInstallationArgs = parse_args(&call)?;
                 (args.read, args.source)
             } else {
@@ -130,7 +130,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                 validate_handle("resource", resource, MAX_HANDLE_BYTES)?;
             }
 
-            let matches = self.context.matching_packages(&args.package)?;
+            let matches = self.context.matching_packages(&args.package);
             let (skill_entry, selected_source, output_authority) = matches
                 .iter()
                 .find_map(|(entry, matched_source)| {
@@ -186,7 +186,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                 }
             };
             let cursor_start = |contents: &str| {
-                if self.context.discovery_v2 {
+                if self.context.step_state.discovery_v2 {
                     parse_pagination_cursor(
                         args.cursor.as_deref(),
                         &(&source, &package, contents),
@@ -267,7 +267,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
             {
                 state.record_invocation(skill_entry.main_prompt.as_str());
             }
-            let metadata = if self.context.discovery_v2 {
+            let metadata = if self.context.step_state.discovery_v2 {
                 let mut installations = Vec::new();
                 let mut installations_truncated = false;
                 let mut installation_bytes = 2; // JSON array brackets.
@@ -320,7 +320,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                 start,
                 response_byte_budget,
                 |offset| {
-                    if self.context.discovery_v2 {
+                    if self.context.step_state.discovery_v2 {
                         pagination_cursor(&(&source, &package, result.contents.as_str()), offset)
                     } else {
                         pagination_cursor(result.contents.as_str(), offset)
