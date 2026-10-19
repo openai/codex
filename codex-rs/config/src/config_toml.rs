@@ -348,7 +348,7 @@ pub struct ConfigToml {
 
     /// Seconds a thread must have no subscribers and no activity before app-server
     /// unloads it. Defaults to 1800 (30 minutes); zero unloads immediately.
-    /// Changes require a server restart.
+    /// Resolved when each thread is loaded; request config overrides apply per thread.
     pub thread_unload_delay_secs: Option<u64>,
 
     /// Deprecated: ignored.

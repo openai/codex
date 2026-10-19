@@ -547,8 +547,8 @@ pub struct ThreadForkParams {
     /// Start from the loaded parent's effective config, tools, environments, and
     /// persisted history to maximize prompt-cache reuse. Requires a loaded,
     /// persisted parent and `ephemeral: true`. Enables `features.reasoning_effort_override`
-    /// on the fork. Cannot be combined with configuration overrides, `path`, `lastTurnId`,
-    /// or `beforeTurnId`.
+    /// on the fork. Only `config.thread_unload_delay_secs` may override the inherited
+    /// config. Cannot be combined with `path`, `lastTurnId`, or `beforeTurnId`.
     #[experimental("thread/fork.experimentalPredictionMode")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub experimental_prediction_mode: bool,

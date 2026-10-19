@@ -200,14 +200,33 @@ async fn thread_unsubscribe_keeps_thread_loaded_until_idle_timeout() -> Result<(
 #[test_case(0, 0, ThreadStartParams::default(); "zero_delay")]
 #[test_case(1, 1, ThreadStartParams::default(); "one_second_delay")]
 #[test_case(
+    0,
+    1,
+    ThreadStartParams {
+        ephemeral: Some(true),
+        config: Some([("thread_unload_delay_secs".into(), json!(1))].into()),
+        ..Default::default()
+    };
+    "per_thread_one_second_delay"
+)]
+#[test_case(
     1800,
     0,
     ThreadStartParams {
         ephemeral: Some(true),
-        thread_source: Some(ThreadSource::Feature("composer_predictions".into())),
+        config: Some([("thread_unload_delay_secs".into(), json!(0))].into()),
         ..Default::default()
     };
-    "composer_prediction"
+    "immediate_ephemeral"
+)]
+#[test_case(
+    1800,
+    0,
+    ThreadStartParams {
+        config: Some([("thread_unload_delay_secs".into(), json!(0))].into()),
+        ..Default::default()
+    };
+    "immediate_persistent"
 )]
 #[tokio::test]
 async fn thread_unsubscribe_during_turn_keeps_turn_running(
@@ -215,6 +234,8 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running(
     expected_delay_secs: u64,
     thread_params: ThreadStartParams,
 ) -> Result<()> {
+    let check_cold_resume =
+        thread_params.config.is_some() && !thread_params.ephemeral.unwrap_or_default();
     let call_id = "deterministic-wait-call";
     let tool_name = "deterministic_wait";
     let tool_args = json!({});
@@ -378,7 +399,41 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running(
     }
     let closed: ThreadClosedNotification =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_notification("thread/closed")).await??;
-    assert_eq!(closed, ThreadClosedNotification { thread_id });
+    assert_eq!(
+        closed,
+        ThreadClosedNotification {
+            thread_id: thread_id.clone()
+        }
+    );
+    if check_cold_resume {
+        // Immediate unloading preserves durable history. A cold resume uses the
+        // server's default delay rather than restoring the old runtime's override.
+        let resume: ThreadResumeResponse = mcp
+            .request(|request_id| ClientRequest::ThreadResume {
+                request_id,
+                params: ThreadResumeParams {
+                    thread_id: thread_id.clone(),
+                    ..Default::default()
+                },
+            })
+            .await?;
+        assert_eq!(resume.thread.id, thread_id);
+        assert_eq!(resume.thread.turns.len(), 1);
+        let _: ThreadUnsubscribeResponse = mcp
+            .request(|request_id| ClientRequest::ThreadUnsubscribe {
+                request_id,
+                params: ThreadUnsubscribeParams { thread_id },
+            })
+            .await?;
+        assert!(
+            timeout(
+                std::time::Duration::from_millis(250),
+                mcp.read_stream_until_notification_message("thread/closed"),
+            )
+            .await
+            .is_err()
+        );
+    }
     server.shutdown().await;
 
     Ok(())
@@ -475,7 +530,10 @@ async fn thread_unsubscribe_preserves_cached_status_before_idle_unload() -> Resu
 }
 
 #[test_case(ThreadStartParams::default(); "persistent")]
-#[test_case(ThreadStartParams { ephemeral: Some(true), ..Default::default() }; "ephemeral")]
+#[test_case(ThreadStartParams {
+    ephemeral: Some(true),
+    ..Default::default()
+}; "ephemeral")]
 #[test_case(
     ThreadStartParams {
         thread_source: Some(ThreadSource::Feature("composer_predictions".into())),

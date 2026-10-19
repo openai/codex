@@ -11,7 +11,10 @@ use tokio::net::TcpListener;
 #[tokio::test]
 async fn thread_close_exits_only_when_displayed_thread_is_unloaded() -> Result<()> {
     let (mut app, mut events, _commands) = make_test_app_with_channels().await;
-    app.config.thread_unload_delay = Duration::ZERO;
+    std::fs::write(
+        app.config.codex_home.join("config.toml"),
+        "thread_unload_delay_secs = 0\n",
+    )?;
     let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let started = server.start_thread(&app.config).await?;
     let thread_id = started.session.thread_id;

@@ -1102,7 +1102,6 @@ impl ThreadRequestProcessor {
             pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
             thread_watch_manager: self.thread_watch_manager.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
-            thread_unload_delay: self.config.thread_unload_delay,
             skills_watcher: Arc::clone(&self.skills_watcher),
             turn_cost_worker: self.turn_cost_worker.clone(),
         }
@@ -1233,7 +1232,6 @@ impl ThreadRequestProcessor {
             pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
             thread_watch_manager: self.thread_watch_manager.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
-            thread_unload_delay: self.config.thread_unload_delay,
             skills_watcher: Arc::clone(&self.skills_watcher),
             turn_cost_worker: self.turn_cost_worker.clone(),
         };
@@ -5105,7 +5103,7 @@ impl ThreadRequestProcessor {
             || params
                 .config
                 .as_ref()
-                .is_some_and(|config| !config.is_empty());
+                .is_some_and(|config| config.keys().any(|key| key != "thread_unload_delay_secs"));
         if params.experimental_prediction_mode && has_config_overrides {
             return Err(invalid_request(
                 "`experimentalPredictionMode` cannot be combined with configuration overrides",
@@ -5175,6 +5173,20 @@ impl ThreadRequestProcessor {
                 _ => internal_error(format!("failed to inherit parent state: {err}")),
             })?;
             options.config.ephemeral = ephemeral;
+            // Runtime retention does not change the inherited prompt or cache key.
+            if let Some(value) = cli_overrides
+                .as_ref()
+                .and_then(|config| config.get("thread_unload_delay_secs"))
+            {
+                let seconds = value.as_u64().ok_or_else(|| {
+                    invalid_request("`thread_unload_delay_secs` must be a non-negative integer")
+                })?;
+                let delay = Duration::from_secs(seconds);
+                if std::time::Instant::now().checked_add(delay).is_none() {
+                    return Err(invalid_request("`thread_unload_delay_secs` is too large"));
+                }
+                options.config.thread_unload_delay = delay;
+            }
             options
                 .thread_extension_init
                 .insert(codex_core::compact::AutoCompactionDisabled);

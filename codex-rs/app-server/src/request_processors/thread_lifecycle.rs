@@ -15,7 +15,6 @@ pub(super) struct ListenerTaskContext {
     pub(super) pending_thread_unloads: PendingThreadUnloads,
     pub(super) thread_watch_manager: ThreadWatchManager,
     pub(super) codex_home: PathBuf,
-    pub(super) thread_unload_delay: Duration,
     pub(super) skills_watcher: Arc<SkillsWatcher>,
     pub(super) turn_cost_worker: Option<crate::turn_cost_worker::TurnCostWorkerHandle>,
 }
@@ -238,25 +237,18 @@ pub(super) async fn ensure_listener_task_running(
 ) -> Result<(), JSONRPCErrorError> {
     let (cancel_tx, mut cancel_rx) = oneshot::channel();
     let config_snapshot = conversation.config_snapshot().await;
-    let thread_unload_delay = if config_snapshot.ephemeral
-        && config_snapshot
-            .thread_source
-            .as_ref()
-            .is_some_and(|source| source.as_str() == "composer_predictions")
-        && !matches!(config_snapshot.session_source, SessionSource::SubAgent(_))
-    {
-        Duration::ZERO
-    } else {
-        listener_task_context.thread_unload_delay
-    };
-    let Some(mut unloading_state) =
-        UnloadingState::new(&listener_task_context, conversation_id, thread_unload_delay).await
+    let config = conversation.config().await;
+    let Some(mut unloading_state) = UnloadingState::new(
+        &listener_task_context,
+        conversation_id,
+        config.thread_unload_delay,
+    )
+    .await
     else {
         return Err(invalid_request(format!(
             "thread {conversation_id} is closing; retry after the thread is closed"
         )));
     };
-    let config = conversation.config().await;
     let environments = conversation.environment_selections().await;
     let watch_registration = listener_task_context
         .skills_watcher

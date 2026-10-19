@@ -1569,6 +1569,7 @@ async fn thread_fork_creates_reference_backed_paginated_thread() -> Result<()> {
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
             thread_id: conversation_id.clone(),
+            config: Some([("thread_unload_delay_secs".into(), json!(0))].into()),
             ..Default::default()
         })
         .await?;
@@ -1672,6 +1673,40 @@ async fn thread_fork_creates_reference_backed_paginated_thread() -> Result<()> {
             .expect("nested fork history base")
             .thread_id,
         ThreadId::from_string(forked_thread_id.as_str())?
+    );
+    let _: ThreadUnsubscribeResponse = mcp
+        .request(|request_id| ClientRequest::ThreadUnsubscribe {
+            request_id,
+            params: ThreadUnsubscribeParams {
+                thread_id: forked_thread_id.clone(),
+            },
+        })
+        .await?;
+    let closed: ThreadClosedNotification =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_notification("thread/closed")).await??;
+    assert_eq!(
+        closed,
+        ThreadClosedNotification {
+            thread_id: forked_thread_id
+        }
+    );
+
+    // The nested fork did not inherit its parent's unload delay.
+    let _: ThreadUnsubscribeResponse = mcp
+        .request(|request_id| ClientRequest::ThreadUnsubscribe {
+            request_id,
+            params: ThreadUnsubscribeParams {
+                thread_id: nested_thread.id,
+            },
+        })
+        .await?;
+    assert!(
+        timeout(
+            std::time::Duration::from_millis(250),
+            mcp.read_stream_until_notification_message("thread/closed"),
+        )
+        .await
+        .is_err()
     );
     Ok(())
 }
@@ -2779,13 +2814,37 @@ async fn inheriting_fork_preserves_parent_config(history_mode: ThreadHistoryMode
     })
     .await?;
 
+    for (delay, message) in [
+        (
+            json!(-1),
+            "`thread_unload_delay_secs` must be a non-negative integer",
+        ),
+        (json!(u64::MAX), "`thread_unload_delay_secs` is too large"),
+    ] {
+        let request_id = mcp
+            .send_thread_fork_request(ThreadForkParams {
+                thread_id: parent.thread.id.clone(),
+                experimental_prediction_mode: true,
+                ephemeral: true,
+                config: Some([("thread_unload_delay_secs".into(), delay)].into()),
+                ..Default::default()
+            })
+            .await?;
+        let error = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        assert_eq!(error.error.message, message);
+    }
+
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
             thread_id: parent.thread.id.clone(),
             experimental_prediction_mode: true,
             ephemeral: true,
             exclude_turns: true,
-            thread_source: Some(ThreadSource::Feature("composer_predictions".into())),
+            config: Some([("thread_unload_delay_secs".into(), json!(0))].into()),
             ..Default::default()
         })
         .await?;
