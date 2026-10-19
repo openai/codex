@@ -28,8 +28,10 @@ use tiny_http::Response;
 use tiny_http::Server;
 use tiny_http::StatusCode;
 
+mod auth;
 mod dump;
 mod read_api_key;
+use auth::Auth;
 use dump::ExchangeDumper;
 use read_api_key::read_auth_header_from_stdin;
 
@@ -71,7 +73,7 @@ struct ForwardConfig {
 
 /// Entry point for the library main, for parity with other crates.
 pub fn run_main(args: Args) -> Result<()> {
-    let auth_header = read_auth_header_from_stdin()?;
+    let auth = Arc::new(Auth::ApiKey(read_auth_header_from_stdin()?));
 
     let upstream_url = Url::parse(&args.upstream_url).context("parsing --upstream-url")?;
     let host = match (upstream_url.host_str(), upstream_url.port()) {
@@ -101,6 +103,7 @@ pub fn run_main(args: Args) -> Result<()> {
         .map_err(|err| anyhow!("creating HTTP server: {err}"))?;
     let client = Arc::new(
         Client::builder()
+            .redirect(auth.redirect_policy())
             // Disable reqwest's 30s default so long-lived response streams keep flowing.
             .timeout(None::<Duration>)
             .build()
@@ -112,6 +115,7 @@ pub fn run_main(args: Args) -> Result<()> {
     let http_shutdown = args.http_shutdown;
     for request in server.incoming_requests() {
         let client = client.clone();
+        let auth = auth.clone();
         let forward_config = forward_config.clone();
         let dump_dir = dump_dir.clone();
         std::thread::spawn(move || {
@@ -122,7 +126,7 @@ pub fn run_main(args: Args) -> Result<()> {
 
             if let Err(e) = forward_request(
                 &client,
-                auth_header,
+                &auth,
                 &forward_config,
                 dump_dir.as_deref(),
                 request,
@@ -162,7 +166,7 @@ fn write_server_info(path: &Path, port: u16) -> Result<()> {
 
 fn forward_request(
     client: &Client,
-    auth_header: &'static str,
+    auth: &Auth,
     config: &ForwardConfig,
     dump_dir: Option<&ExchangeDumper>,
     mut req: Request,
@@ -212,11 +216,15 @@ fn forward_request(
         }
     }
 
-    // As part of our effort to to keep `auth_header` secret, we use a
-    // combination of `from_static()` and `set_sensitive(true)`.
-    let mut auth_header_value = HeaderValue::from_static(auth_header);
-    auth_header_value.set_sensitive(true);
-    headers.insert(AUTHORIZATION, auth_header_value);
+    let auth_header = match auth.header() {
+        Ok(value) => value,
+        Err(err) => {
+            // No token, request URL or upstream error body is exposed to the caller.
+            let _ = req.respond(Response::new_empty(StatusCode(502)));
+            return Err(err);
+        }
+    };
+    headers.insert(AUTHORIZATION, auth_header.value);
 
     headers.insert(HOST, config.host_header.clone());
 

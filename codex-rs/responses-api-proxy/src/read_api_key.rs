@@ -12,21 +12,20 @@ const AUTH_HEADER_PREFIX: &[u8] = b"Bearer ";
 /// value with the auth token used with `Bearer`. The header value is returned
 /// as a `&'static str` whose bytes are locked in memory to avoid accidental
 /// exposure.
-#[cfg(unix)]
 pub(crate) fn read_auth_header_from_stdin() -> Result<&'static str> {
-    read_auth_header_with(read_from_unix_stdin)
+    read_auth_header_with(read_from_stdin)
 }
 
 #[cfg(windows)]
-pub(crate) fn read_auth_header_from_stdin() -> Result<&'static str> {
+pub(crate) fn read_from_stdin(buffer: &mut [u8]) -> std::io::Result<usize> {
     use std::io::Read;
 
     // Use of `stdio::io::stdin()` has the problem mentioned in the docstring on
-    // the UNIX version of `read_from_unix_stdin()`, so this should ultimately
+    // the UNIX version of `read_from_stdin()`, so this should ultimately
     // be replaced the low-level Windows equivalent. Because we do not have an
     // equivalent of mlock() on Windows right now, it is not pressing until we
     // address that issue.
-    read_auth_header_with(|buffer| std::io::stdin().read(buffer))
+    std::io::stdin().read(buffer)
 }
 
 /// We perform a low-level read with `read(2)` because `stdio::io::stdin()` has
@@ -38,7 +37,7 @@ pub(crate) fn read_auth_header_from_stdin() -> Result<&'static str> {
 /// it out, whereas we aim to guarantee there is exactly one copy of the API key
 /// in memory, protected by mlock(2).
 #[cfg(unix)]
-fn read_from_unix_stdin(buffer: &mut [u8]) -> std::io::Result<usize> {
+pub(crate) fn read_from_stdin(buffer: &mut [u8]) -> std::io::Result<usize> {
     use libc::c_void;
     use libc::read;
 
