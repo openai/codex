@@ -84,28 +84,30 @@ mod tests {
 
     #[test]
     fn session_metric_tags_include_expected_tags_in_order() {
-        let tags = SessionMetricTagValues {
-            auth_mode: Some("api_key"),
-            session_source: "cli",
-            originator: "codex_cli",
-            service_name: Some("desktop_app"),
-            model: "gpt-5.1",
-            app_version: "1.2.3",
-        }
-        .into_tags()
-        .expect("tags");
+        for app_version in ["1.2.3", "0.164.0-alpha.1+internal"] {
+            let tags = SessionMetricTagValues {
+                auth_mode: Some("api_key"),
+                session_source: "cli",
+                originator: "codex_cli",
+                service_name: Some("desktop_app"),
+                model: "gpt-5.1",
+                app_version,
+            }
+            .into_tags()
+            .expect("tags");
 
-        assert_eq!(
-            tags,
-            vec![
-                (AUTH_MODE_TAG, "api_key"),
-                (SESSION_SOURCE_TAG, "cli"),
-                (ORIGINATOR_TAG, "codex_cli"),
-                (SERVICE_NAME_TAG, "desktop_app"),
-                (MODEL_TAG, "gpt-5.1"),
-                (APP_VERSION_TAG, "1.2.3"),
-            ]
-        );
+            assert_eq!(
+                tags,
+                vec![
+                    (AUTH_MODE_TAG, "api_key"),
+                    (SESSION_SOURCE_TAG, "cli"),
+                    (ORIGINATOR_TAG, "codex_cli"),
+                    (SERVICE_NAME_TAG, "desktop_app"),
+                    (MODEL_TAG, "gpt-5.1"),
+                    (APP_VERSION_TAG, app_version),
+                ]
+            );
+        }
     }
 
     #[test]
