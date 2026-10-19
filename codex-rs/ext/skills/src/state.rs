@@ -5,13 +5,11 @@ use std::sync::Mutex;
 use codex_exec_server::EnvironmentAccessKey;
 use codex_extension_api::ExtensionMetrics;
 use codex_mcp::McpResourceClient;
-use codex_protocol::capabilities::SelectedCapabilityRoot;
 
 use crate::SkillsExtensionConfig;
 use crate::SkillsExtensionState;
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
-use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillPackageId;
 use crate::catalog::SkillProviderError;
 use crate::catalog::SkillProviderResult;
@@ -25,8 +23,10 @@ use crate::shadow_selection_experiment::ShadowSelectionTurnState;
 use crate::shadow_selection_experiment::ShadowTaskContext;
 use crate::skills_extension_state::CachedExecutorCatalog;
 use crate::skills_extension_state::CachedExecutorDiscoveryCatalog;
+use crate::skills_extension_state::CachedExecutorV2Catalog;
 use crate::skills_extension_state::CloudResourceCache;
 use crate::skills_extension_state::CloudSkillGeneration;
+use crate::skills_extension_state::ExecutorCatalogCacheKey;
 use crate::skills_extension_state::SkillReadCacheKey;
 use crate::sources::SkillProviders;
 
@@ -116,7 +116,7 @@ impl SkillsThreadState {
             .map(|turn| Arc::clone(&turn.state))
     }
 
-    /// Returns the catalog for these exact roots, using the existing thread caches.
+    /// Returns the executor catalog, reusing matching discovery caches.
     #[tracing::instrument(
         name = "skills.executor.refresh_executor_catalog",
         level = "info",
@@ -128,21 +128,63 @@ impl SkillsThreadState {
         providers: &SkillProviders,
         mut query: SkillListQuery,
     ) -> SkillCatalog {
-        if query.executor_capability_discovery.is_some() {
-            // High-level discovery is enabled: reuse or project its discovery snapshot.
+        query.include_bundled_skills = self.config().bundled_skills_enabled;
+        if let Some(snapshots) = &query.executor_capability_discovery_v2 {
+            let snapshots = snapshots.clone();
+            let cached = self
+                .skills_extension_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .executor_v2_cache
+                .as_ref()
+                .filter(|cached| cached.matches(&snapshots))
+                .map(|cached| cached.catalog.clone());
+            match cached {
+                Some(catalog) => catalog,
+                None => {
+                    let catalog = providers.list_executor_for_turn(query).await;
+                    self.skills_extension_state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .executor_v2_cache = Some(CachedExecutorV2Catalog {
+                        snapshots,
+                        catalog: catalog.clone(),
+                    });
+                    catalog
+                }
+            }
+        } else if query.executor_capability_discovery.is_some() {
             self.executor_discovery_catalog_snapshot(providers, query)
                 .await
         } else {
-            // High-level discovery is not enabled: retain the legacy per-root cache path.
-            let roots = std::mem::take(&mut query.executor_roots);
-            let mut catalog = SkillCatalog::default();
-            for root in roots {
-                query.executor_roots = vec![root.clone()];
-                catalog.extend(
-                    self.executor_root_catalog(providers, root, query.clone())
-                        .await,
-                );
+            if let Some(cached) = self
+                .skills_extension_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .executor_cache
+                .as_ref()
+                .filter(|cached| cached.key.matches(&query))
+            {
+                return cached.catalog.clone();
             }
+
+            let key = ExecutorCatalogCacheKey {
+                turn_id: query.turn_id.clone(),
+                resolved_roots: query.resolved_executor_roots.clone(),
+                include_bundled_skills: query.include_bundled_skills,
+            };
+            let catalog = if query.executor_roots.is_empty() {
+                SkillCatalog::default()
+            } else {
+                providers.list_executor_for_turn(query).await
+            };
+            self.skills_extension_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .executor_cache = Some(CachedExecutorCatalog {
+                key,
+                catalog: catalog.clone(),
+            });
             catalog
         }
     }
@@ -198,66 +240,22 @@ impl SkillsThreadState {
         discovered
     }
 
-    #[tracing::instrument(name = "skills.executor.catalog_root", level = "info", skip_all)]
-    async fn executor_root_catalog(
-        &self,
-        providers: &SkillProviders,
-        root: SelectedCapabilityRoot,
-        query: SkillListQuery,
-    ) -> SkillCatalog {
-        if let Some(cached) = self
-            .skills_extension_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .executor_cache
-            .iter()
-            .find(|cached| cached.root == root)
-        {
-            return cached.catalog.clone();
-        }
-
-        let discovered = providers.list_executor_for_turn(query).await;
-        let mut state = self
-            .skills_extension_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let cache = &mut state.executor_cache;
-        if let Some(cached) = cache.iter().find(|cached| cached.root == root) {
-            return cached.catalog.clone();
-        }
-        cache.push(CachedExecutorCatalog {
-            root,
-            catalog: discovered.clone(),
-        });
-        discovered
-    }
-
-    /// Reads the last authorized turn-start catalog without discovery or retries.
-    /// Same-auth failures may retain it; disabled or invalidated catalogs are empty.
-    pub fn cloud_catalog_snapshot(&self) -> SkillCatalog {
-        self.with_cloud_catalog(|catalog| catalog.cloned().unwrap_or_default())
-    }
-
-    /// Borrows the authorized catalog under the cache lock. The reader must not re-enter this state.
-    pub(crate) fn with_cloud_catalog<T>(&self, read: impl FnOnce(Option<&SkillCatalog>) -> T) -> T {
+    /// Returns the cached Cloud catalog when enabled and authorized, without refreshing it.
+    pub(crate) fn available_cloud_catalog(&self) -> Option<SkillCatalog> {
         let config = self
             .config
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !config.cloud_skill_enabled || !self.cloud_skills_available {
-            return read(None);
+            return None;
         }
-        let state = self
-            .skills_extension_state
+        self.skills_extension_state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        read(
-            state
-                .cloud_cache
-                .as_ref()
-                .filter(|cache| cache.is_current())
-                .and_then(|cache| cache.catalog.as_ref()),
-        )
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .cloud_cache
+            .as_ref()
+            .filter(|cache| cache.is_current())
+            .and_then(|cache| cache.catalog.clone())
     }
 
     fn cloud_cache(&self, mcp_resources: Option<&McpResourceClient>) -> Arc<CloudSkillGeneration> {
@@ -305,7 +303,7 @@ impl SkillsThreadState {
             && cache
                 .catalog
                 .as_ref()
-                .is_some_and(|catalog| catalog.warnings.is_empty())
+                .is_some_and(|catalog| !catalog.is_partial && catalog.warnings.is_empty())
             && cache.resource_cache_key == resource_cache_key
         {
             return Ok(());
@@ -327,12 +325,28 @@ impl SkillsThreadState {
                 "cloud skill cache changed during discovery",
             ));
         }
+        let resources = if catalog.is_partial
+            && let Some(previous) = cache
+                .catalog
+                .as_ref()
+                .filter(|previous| !previous.is_partial)
+        {
+            catalog = previous.clone();
+            catalog.is_partial = true;
+            cache
+                .resources
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        } else {
+            CloudResourceCache::default()
+        };
         catalogs.cloud_cache = Some(Arc::new(CloudSkillGeneration {
             auth_cache_key: cache.auth_cache_key.clone(),
             resource_cache_key,
             mcp_resources: cache.mcp_resources.clone(),
             catalog: Some(catalog),
-            resources: Mutex::new(CloudResourceCache::default()),
+            resources: Mutex::new(resources),
         }));
         Ok(())
     }
@@ -438,19 +452,8 @@ impl EmittedCatalogBudgetWarnings {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct SkillsTurnState {
-    pub(crate) catalog: SkillCatalog,
-    pub(crate) selected_entries: Vec<SkillCatalogEntry>,
-    pub(crate) warnings: Vec<String>,
-    pub(crate) main_prompts_injected: bool,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HostSkillsCatalogInWorldState;
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ExecutorSkillsStepState(pub(crate) SkillCatalog);
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct HostSkillsStepState(pub(crate) SkillCatalog);

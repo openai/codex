@@ -3,6 +3,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_exec_server::EnvironmentAccess;
+mod discovery_v2;
+
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_extension_api::SelectedPluginSnapshot;
@@ -87,6 +89,9 @@ pub(crate) fn attribute_executor_plugins(
 impl SkillProvider for ExecutorSkillProvider {
     fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
         Box::pin(async move {
+            if let Some(snapshots) = &query.executor_capability_discovery_v2 {
+                return Ok(self.list_from_discovery_v2(snapshots));
+            }
             if let Some(discovery) = query.executor_capability_discovery {
                 return Ok(self.list_from_discovery(&discovery));
             }

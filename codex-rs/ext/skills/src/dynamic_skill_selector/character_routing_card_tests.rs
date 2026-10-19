@@ -42,6 +42,7 @@ fn host_interface_metadata_makes_unlisted_workflow_discoverable() {
     });
     let snapshot = HostSkillsSnapshot::new(std::sync::Arc::new(outcome));
     let catalog = SkillCatalog {
+        is_partial: false,
         entries: vec![SkillCatalogEntry::new(
             SkillPackageId(resource.clone()),
             SkillAuthority::new(SkillSourceKind::Host, "host"),

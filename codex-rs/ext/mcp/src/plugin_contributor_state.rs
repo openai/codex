@@ -125,10 +125,12 @@ impl PluginContributorState {
         auth_cache_key
     }
 
+    /// Accepts current-auth results, retaining prior complete entries as partial after an incomplete refresh.
+    /// Returns false only when the result belongs to a stale auth generation.
     pub(crate) fn publish_cloud_catalog(
         &mut self,
         auth_cache_key: Option<&McpResourceClientAuthKey>,
-        catalog: PluginCatalog,
+        mut catalog: PluginCatalog,
     ) -> bool {
         let Some(generation) = self
             .cloud_generation
@@ -139,12 +141,16 @@ impl PluginContributorState {
             return false;
         };
         if catalog.is_partial
-            && generation
+            && let Some(previous) = generation
                 .catalog
                 .as_ref()
-                .is_some_and(|previous| !previous.is_partial)
+                .filter(|previous| !previous.is_partial)
         {
-            return true;
+            catalog = previous.clone();
+            catalog.is_partial = true;
+            tracing::warn!(
+                "cloud plugin discovery was partial; retaining prior auth-scoped entries as partial"
+            );
         }
         generation.catalog = Some(catalog);
         true

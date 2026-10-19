@@ -242,7 +242,7 @@ impl ExecCommandHandler {
         let hook_command = args.cmd.clone();
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
-            context.step_context.turn.as_ref(),
+            context.step_context.as_ref(),
             &hook_command,
             &cwd,
             native_cwd.as_ref(),

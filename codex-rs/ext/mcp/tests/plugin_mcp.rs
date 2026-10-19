@@ -653,9 +653,18 @@ async fn raw_selected_plugin_contributions(
         .features
         .enabled(Feature::ExecutorCapabilityDiscovery)
     {
+        let resolved_roots = environment_manager
+            .resolve_selected_capability_roots(
+                &selected_capability_roots,
+                &HashMap::from([(
+                    LOCAL_ENVIRONMENT_ID.to_string(),
+                    environment_manager.get_environment(LOCAL_ENVIRONMENT_ID),
+                )]),
+            )
+            .await;
         Some(
-            ExecutorCapabilityDiscoveryCache::new(environment_manager)
-                .snapshot(&selected_capability_roots, &Default::default())
+            ExecutorCapabilityDiscoveryCache::default()
+                .snapshot(&resolved_roots, &Default::default())
                 .await,
         )
     } else {

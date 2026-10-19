@@ -54,3 +54,7 @@ impl Drop for McpRefreshInvalidationGuard<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mcp_refresh_tests.rs"]
+mod tests;

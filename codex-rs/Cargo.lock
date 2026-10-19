@@ -4693,6 +4693,7 @@ dependencies = [
  "codex-analytics",
  "codex-attachment-store",
  "codex-config",
+ "codex-core-plugin-common",
  "codex-exec-server",
  "codex-extension-api",
  "codex-mcp",

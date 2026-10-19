@@ -64,6 +64,7 @@ async fn cloud_preference_preserves_executor_aliases_and_description_budget() ->
     let provider = |entries| {
         Arc::new(CatalogSkillProvider {
             catalog: SkillCatalog {
+                is_partial: false,
                 entries,
                 warnings: Vec::new(),
             },

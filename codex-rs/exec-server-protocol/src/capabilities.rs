@@ -20,6 +20,18 @@ pub struct ExecutorCapabilityDiscoveryV2Snapshot {
     pub result: Result<Arc<DiscoverV2CapabilitiesResponse>, String>,
 }
 
+impl ExecutorCapabilityDiscoveryV2Snapshot {
+    /// Compares discovery identity, not inventory contents; repeated errors compare by message.
+    pub fn same_discovery(&self, other: &Self) -> bool {
+        self.environment_id == other.environment_id
+            && match (&self.result, &other.result) {
+                (Ok(previous), Ok(current)) => Arc::ptr_eq(previous, current),
+                (Err(previous), Err(current)) => previous == current,
+                (Ok(_), Err(_)) | (Err(_), Ok(_)) => false,
+            }
+    }
+}
+
 /// Discover installed capabilities for a thread, without client-supplied installation paths.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

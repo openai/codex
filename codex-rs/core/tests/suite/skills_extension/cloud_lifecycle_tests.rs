@@ -41,6 +41,7 @@ impl SkillProvider for CloudTurnProvider {
                 })
                 .collect();
             Ok(SkillCatalog {
+                is_partial: false,
                 entries,
                 warnings: Vec::new(),
             })

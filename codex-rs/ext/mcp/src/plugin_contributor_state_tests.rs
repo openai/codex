@@ -108,6 +108,39 @@ fn executor_snapshot(
 }
 
 #[test]
+fn partial_refresh_retains_entries_without_excluding_new_executor_plugins() -> anyhow::Result<()> {
+    let mut state = PluginContributorState::default();
+    let auth_key = state.prepare_cloud_generation(/*mcp_resources*/ None);
+    let original = PluginCatalog {
+        entries: vec![cloud_plugin("old_plugin")],
+        ..Default::default()
+    };
+    assert!(state.publish_cloud_catalog(auth_key.as_ref(), original.clone()));
+    assert!(state.publish_cloud_catalog(
+        auth_key.as_ref(),
+        PluginCatalog {
+            entries: vec![cloud_plugin("plugin_a")],
+            is_partial: true,
+            ..Default::default()
+        },
+    ));
+    let mut expected = original;
+    expected.is_partial = true;
+    assert_eq!(state.cloud_catalog(), Some(&expected));
+
+    state.update_executor_catalog(&[executor_snapshot("executor-a")?]);
+    let merged =
+        codex_core_plugins::merge_catalogs(state.executor_catalog.as_ref(), state.cloud_catalog());
+    assert!(
+        merged
+            .entries
+            .iter()
+            .any(|entry| { entry.id.as_str() == "plugin_a" && entry.enabled })
+    );
+    Ok(())
+}
+
+#[test]
 fn executor_refresh_preserves_order_and_removes_stale_entries() -> anyhow::Result<()> {
     let mut state = PluginContributorState::default();
     // Reuse equal snapshots, including equal responses allocated by a later discovery.
@@ -181,8 +214,17 @@ async fn projection_respects_discovery_mode_and_preserves_enabled_plugins() -> a
             path: PathUri::from_host_native_path(&root)?,
         },
     }];
-    let v1 = ExecutorCapabilityDiscoveryCache::new(Arc::clone(&environments))
-        .snapshot(&roots, &Default::default())
+    let resolved_roots = environments
+        .resolve_selected_capability_roots(
+            &roots,
+            &std::collections::HashMap::from([(
+                LOCAL_ENVIRONMENT_ID.to_string(),
+                environments.get_environment(LOCAL_ENVIRONMENT_ID),
+            )]),
+        )
+        .await;
+    let v1 = ExecutorCapabilityDiscoveryCache::default()
+        .snapshot(&resolved_roots, &Default::default())
         .await;
     let mut contributor = PluginContributor {
         providers: PluginProviders::new(Arc::new(ExecutorPluginProvider::new(environments)))
@@ -348,7 +390,7 @@ async fn projection_respects_discovery_mode_and_preserves_enabled_plugins() -> a
                 warnings: vec!["partial cloud listing".to_string()],
                 ..Default::default()
             }),
-            false,
+            true,
         ),
         (
             "disabled",
@@ -379,7 +421,9 @@ async fn projection_respects_discovery_mode_and_preserves_enabled_plugins() -> a
             true,
         ),
     ] {
-        let cloud_available = catalog.is_some();
+        let has_cloud_counterpart = catalog
+            .as_ref()
+            .is_some_and(|catalog| !catalog.entries.is_empty());
         contributor.providers.cloud = if cloud_enabled {
             Some(Arc::new(CloudProvider))
         } else {
@@ -406,7 +450,7 @@ async fn projection_respects_discovery_mode_and_preserves_enabled_plugins() -> a
             ),
         )
         .await;
-        let expected = if !cloud_enabled || !cloud_available {
+        let expected = if enabled && !has_cloud_counterpart {
             vec!["mcp:executor-only", "executor-a:example@marketplace"]
         } else if enabled {
             vec![

@@ -352,11 +352,14 @@ pub trait SkillInvocationContributor: Send + Sync {
 /// Extension contribution that exposes native tools owned by a feature.
 pub trait ToolContributor: Send + Sync {
     /// Returns native tools bound to the supplied extension state.
+    /// Step-only contributors can leave this empty default unchanged.
     fn tools(
         &self,
-        session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>>;
+        _session_store: &ExtensionData,
+        _thread_store: &ExtensionData,
+    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+        Vec::new()
+    }
 
     /// Returns native tools bound to one sampling step.
     fn tools_for_step(

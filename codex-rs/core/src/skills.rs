@@ -167,14 +167,16 @@ pub(crate) async fn emit_explicit_skill_invocations(
 
 pub(crate) async fn maybe_emit_implicit_skill_invocation(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &crate::session::step_context::StepContext,
     command: &str,
     workdir: &PathUri,
     native_workdir: Option<&AbsolutePathBuf>,
     environment_id: &str,
 ) {
+    let turn_context = step_context.turn.as_ref();
     let Some(invocation) = detect_implicit_skill_invocation(
         turn_context.extension_data.as_ref(),
+        &step_context.extension_data,
         environment_id,
         command,
         workdir,

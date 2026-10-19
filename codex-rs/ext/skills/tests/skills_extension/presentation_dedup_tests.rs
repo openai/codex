@@ -53,6 +53,7 @@ async fn cloud_preference_preserves_aliases_reads_and_executor_fallback() -> Tes
         let provider = |entries| {
             Arc::new(StaticSkillProvider {
                 catalog: SkillCatalog {
+                    is_partial: false,
                     entries,
                     warnings: Vec::new(),
                 },

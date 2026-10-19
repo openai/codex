@@ -19,6 +19,8 @@ pub struct TurnInputEnvironment<'a> {
 /// Turn facts supplied before the host records turn-local model input items.
 #[derive(Clone)]
 pub struct TurnInputContext<'a> {
+    /// Prepared extension snapshots and read routes for the step processing this input.
+    pub step_store: &'a crate::ExtensionData,
     /// Stable host-owned turn identifier.
     pub turn_id: String,
     /// User input submitted for this turn.

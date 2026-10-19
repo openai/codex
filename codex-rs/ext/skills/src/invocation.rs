@@ -10,12 +10,37 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 
 use crate::HostSkillsSnapshot;
+use crate::catalog::SkillAuthority;
+use crate::catalog::SkillCatalogEntry;
+use crate::catalog::SkillResourceId;
 use crate::catalog::SkillSourceKind;
-use crate::state::ExecutorSkillsStepState;
+use crate::catalog::SkillSourceLocation;
+
+impl SkillCatalogEntry {
+    /// Uses merged identity and scope, with plugin attribution from the route actually used.
+    pub(crate) fn invocation(
+        &self,
+        source: &SkillSourceLocation,
+        invocation_type: InvocationType,
+    ) -> SkillInvocation {
+        SkillInvocation {
+            skill_name: self.name.clone(),
+            location: SkillInvocationLocation::Resource {
+                id: self.main_prompt.as_str().to_owned(),
+                skill_id: self.canonical_skill_id.clone(),
+                scope: self.analytics_scope,
+            },
+            plugin_id: source.plugin_id.clone(),
+            remote_plugin_id: self.remote_plugin_id.clone(),
+            invocation_type,
+        }
+    }
+}
 
 /// Identifies the executor-owned or host-owned skill referenced by a command.
 pub fn detect_implicit_skill_invocation(
     turn_store: &ExtensionData,
+    step_store: &ExtensionData,
     environment_id: &str,
     command: &str,
     workdir: &PathUri,
@@ -42,39 +67,43 @@ pub fn detect_implicit_skill_invocation(
         });
     }
 
-    let catalog = turn_store.get::<ExecutorSkillsStepState>()?;
-    for access in implicit_skill_accesses_for_command(command, workdir) {
-        for entry in &catalog.0.entries {
-            let Some((skill_environment_id, skill_path)) = entry.main_prompt.environment_path()
-            else {
-                continue;
-            };
-            if !entry.enabled
-                || entry.authority.kind != SkillSourceKind::Executor
-                || skill_environment_id != environment_id
+    let accesses = implicit_skill_accesses_for_command(command, workdir);
+    if accesses.is_empty() {
+        return None;
+    }
+    let step_state = step_store.get::<crate::skills_extension_state::SkillsStepState>()?;
+    let step_catalog = step_state.get()?;
+    for access in accesses {
+        let matches_route = |authority: &SkillAuthority, main_prompt: &SkillResourceId| {
+            if authority.kind != SkillSourceKind::Executor
+                || main_prompt.environment_id() != Some(environment_id)
             {
-                continue;
+                return false;
             }
-
-            let matches = match &access {
+            let Some((_, skill_path)) = main_prompt.environment_path() else {
+                return false;
+            };
+            match &access {
                 ImplicitSkillAccess::Document(path) => path == skill_path,
                 ImplicitSkillAccess::Script(path) => skill_path
                     .parent()
                     .and_then(|skill_dir| skill_dir.join("scripts").ok())
                     .is_some_and(|scripts_dir| path.starts_with(&scripts_dir)),
-            };
-            if matches {
-                return Some(SkillInvocation {
-                    skill_name: entry.name.clone(),
-                    location: SkillInvocationLocation::Resource {
-                        id: entry.main_prompt.as_str().to_owned(),
-                        skill_id: entry.canonical_skill_id.clone(),
-                        scope: entry.analytics_scope,
-                    },
-                    plugin_id: entry.plugin_id.clone(),
-                    remote_plugin_id: None,
-                    invocation_type: InvocationType::Implicit,
-                });
+            }
+        };
+        for entry in step_catalog.catalog.entries.iter().filter(|entry| {
+            matches!(
+                entry.authority.kind,
+                SkillSourceKind::Cloud | SkillSourceKind::Executor
+            )
+        }) {
+            if entry.enabled && matches_route(&entry.authority, &entry.main_prompt) {
+                return Some(entry.invocation(&entry.primary_source(), InvocationType::Implicit));
+            }
+            if let Some(source) = entry.sources.iter().find(|source| {
+                source.enabled && matches_route(&source.authority, &source.main_prompt)
+            }) {
+                return Some(entry.invocation(source, InvocationType::Implicit));
             }
         }
     }

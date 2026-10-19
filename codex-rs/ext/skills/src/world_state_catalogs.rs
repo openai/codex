@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionWarning;
@@ -12,6 +13,7 @@ use serde::Serialize;
 use crate::HostSkillsSnapshot;
 use crate::SkillsExtensionConfig;
 use crate::catalog::SkillCatalog;
+use crate::catalog::apply_plugin_denials;
 use crate::provider::SkillListQuery;
 use crate::provider::attribute_executor_plugins;
 use crate::render::AvailableSkillsRender;
@@ -24,9 +26,11 @@ use crate::render::render_prepared_skill_catalogs;
 use crate::render::skill_metadata_budget;
 use crate::render_observability::CatalogSurface;
 use crate::render_observability::record_catalog_render;
+use crate::skills_extension_state::SkillStepCatalog;
+use crate::skills_extension_state::SkillToolAuthoritySelector;
+use crate::skills_extension_state::SkillsStepState;
 use crate::sources::SkillProviders;
 use crate::state::EmittedCatalogBudgetWarnings;
-use crate::state::ExecutorSkillsStepState;
 use crate::state::HostSkillsCatalogInWorldState;
 use crate::state::HostSkillsStepState;
 use crate::state::SkillsSessionState;
@@ -152,12 +156,28 @@ impl<'a> CatalogContext<'a> {
     }
 
     pub(crate) async fn discover_catalogs(&self) -> CatalogContributions {
-        let cloud_enabled =
-            self.thread_state.cloud_skill_enabled() && self.providers.has_cloud_provider();
+        let cloud_enabled = self.thread_state.cloud_skill_enabled();
+        // Core always supplies this vector, including when no captured roots are ready.
+        // Descriptor-only callers retain their unbound discovery path.
+        let captured_roots = self
+            .input
+            .step_store
+            .get::<Vec<ResolvedSelectedCapabilityRoot>>();
+        let executor_roots = captured_roots
+            .as_ref()
+            .map(|roots| {
+                roots
+                    .iter()
+                    .map(|root| root.selected_root().clone())
+                    .collect()
+            })
+            .unwrap_or_else(|| self.input.ready_selected_capability_roots.to_vec());
         let query = SkillListQuery {
             turn_id: self.input.turn_id.to_string(),
-            executor_roots: self.input.ready_selected_capability_roots.to_vec(),
-            resolved_executor_roots: Vec::new(),
+            executor_roots,
+            resolved_executor_roots: captured_roots
+                .map(|roots| roots.as_ref().clone())
+                .unwrap_or_default(),
             host_snapshot: None,
             include_host_skills: false,
             include_bundled_skills: self.config.bundled_skills_enabled,
@@ -171,56 +191,50 @@ impl<'a> CatalogContext<'a> {
             executor_capability_discovery_v2: self
                 .input
                 .executor_capability_discovery_v2
-                .map(Vec::from)
-                .unwrap_or_default(),
+                .map(Vec::from),
         };
 
-        let cloud = self.cloud_catalog_contribution(&query);
-        let (executor, host) = futures::join!(
-            self.discover_executor_catalog(query),
+        let selected_plugins = self.input.step_store.get::<SelectedPluginSnapshot>();
+        let step_state = self.input.step_store.get_or_init(SkillsStepState::new);
+        let (step_catalog, host) = futures::join!(
+            step_state.get_or_init(|| async {
+                let discovery_v2_enabled = query.executor_capability_discovery_v2.is_some();
+                let mut executor = self
+                    .thread_state
+                    .refresh_executor_catalog(self.providers, query)
+                    .await;
+                let mut cloud = self.thread_state.available_cloud_catalog();
+                if let Some(selected_plugins) = selected_plugins.as_deref() {
+                    if discovery_v2_enabled {
+                        apply_plugin_denials(&mut executor, selected_plugins);
+                        if let Some(cloud) = &mut cloud {
+                            apply_plugin_denials(cloud, selected_plugins);
+                        }
+                    } else {
+                        attribute_executor_plugins(&mut executor, selected_plugins);
+                    }
+                }
+                Arc::new(SkillStepCatalog::new(cloud, executor, discovery_v2_enabled))
+            }),
             self.discover_host_catalog(),
         );
-
+        let cloud_status = if !self.providers.has_cloud_provider() {
+            CatalogStatus::Unavailable
+        } else if cloud_enabled || step_catalog.cloud_warnings.is_some() {
+            CatalogStatus::Enabled
+        } else {
+            CatalogStatus::Disabled
+        };
         CatalogContributions {
-            executor,
-            cloud,
+            executor: CatalogContribution {
+                catalog: step_catalog.select_from_catalog(&[SkillToolAuthoritySelector::Executor]),
+                status: CatalogStatus::Enabled,
+            },
+            cloud: CatalogContribution {
+                catalog: step_catalog.select_from_catalog(&[SkillToolAuthoritySelector::Cloud]),
+                status: cloud_status,
+            },
             host,
-        }
-    }
-
-    async fn discover_executor_catalog(&self, query: SkillListQuery) -> CatalogContribution {
-        let mut catalog = self
-            .thread_state
-            .refresh_executor_catalog(self.providers, query)
-            .await;
-        if let Some(selected_plugins) = self.input.step_store.get::<SelectedPluginSnapshot>() {
-            attribute_executor_plugins(&mut catalog, &selected_plugins);
-        }
-        self.input
-            .turn_store
-            .insert(ExecutorSkillsStepState(catalog.clone()));
-
-        CatalogContribution {
-            catalog,
-            status: CatalogStatus::Enabled,
-        }
-    }
-
-    fn cloud_catalog_contribution(&self, query: &SkillListQuery) -> CatalogContribution {
-        if !self.providers.has_cloud_provider() {
-            return CatalogContribution::unavailable();
-        }
-
-        if !query.include_cloud_skills {
-            return CatalogContribution {
-                catalog: SkillCatalog::default(),
-                status: CatalogStatus::Disabled,
-            };
-        }
-
-        CatalogContribution {
-            catalog: self.thread_state.cloud_catalog_snapshot(),
-            status: CatalogStatus::Enabled,
         }
     }
 
@@ -249,7 +263,7 @@ impl<'a> CatalogContext<'a> {
                     include_cloud_skills: false,
                     mcp_resources: None,
                     executor_capability_discovery: None,
-                    executor_capability_discovery_v2: Vec::new(),
+                    executor_capability_discovery_v2: None,
                 })
                 .await;
             self.input

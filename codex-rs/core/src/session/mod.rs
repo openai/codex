@@ -3928,16 +3928,23 @@ impl Session {
                 .await;
             let ready_selected_capability_roots =
                 Self::ready_selected_capability_roots(&selected_capability_roots);
-            let executor_capability_discovery_v2 = self
+            let (executor_capability_discovery_v2, inventory_changed) = self
                 .executor_capability_discovery_for_step_v2(&turn_context.config, &environments)
                 .await;
-            let executor_capability_discovery = self
-                .executor_capability_discovery_for_step(
+            let v2_snapshots = executor_capability_discovery_v2.as_ref();
+            let (executor_capability_discovery, discovery_recovered) = if v2_snapshots.is_some() {
+                (None, false)
+            } else {
+                self.executor_capability_discovery_for_step(
                     &turn_context.config,
-                    &ready_selected_capability_roots,
+                    &selected_capability_roots,
                     &environments,
                 )
-                .await;
+                .await
+            };
+            if inventory_changed || discovery_recovered {
+                self.mark_mcp_runtime_dirty();
+            }
             let extension_data =
                 codex_extension_api::ExtensionData::new(turn_context.sub_id.clone());
             if let Some(snapshots) = &executor_capability_discovery_v2 {
@@ -4034,10 +4041,10 @@ impl Session {
             token_budget,
             session_telemetry,
             turn: turn_context,
+            extension_data,
             environments,
             selected_capability_roots,
             executor_capability_discovery,
-            extension_data,
             executor_capability_discovery_v2,
             mcp,
             tool_router,

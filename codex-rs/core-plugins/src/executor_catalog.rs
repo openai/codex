@@ -18,6 +18,7 @@ pub fn catalog_from_snapshots(
         let inventory = match &snapshot.result {
             Ok(inventory) => inventory,
             Err(error) => {
+                catalog.is_partial = true;
                 catalog.warnings.push(format!(
                     "could not discover plugins in environment `{}`; skipping its plugin inventory: {error}",
                     snapshot.environment_id

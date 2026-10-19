@@ -123,6 +123,7 @@ text({ names: result.skills.map(skill => skill.name), warnings: result.warnings,
         &mut extensions,
         SkillProviders::new().with_cloud_provider(Arc::new(FakeCloudSkillProvider {
             catalog: SkillCatalog {
+                is_partial: false,
                 entries: [
                     "alpha-visible",
                     "bravo-visible-skill",
@@ -482,6 +483,7 @@ async fn production_turn_aliases_discovered_singleton_cloud_root() -> Result<()>
         &mut extensions,
         SkillProviders::new().with_cloud_provider(Arc::new(FakeCloudSkillProvider {
             catalog: SkillCatalog {
+                is_partial: false,
                 entries: vec![
                     SkillCatalogEntry::new(
                         SkillPackageId(format!("{SKILL_ROOT}/search")),
@@ -580,6 +582,7 @@ async fn cloud_skill_reads_run_in_parallel() -> Result<()> {
         &mut extensions,
         SkillProviders::new().with_cloud_provider(Arc::new(FakeCloudSkillProvider {
             catalog: SkillCatalog {
+                is_partial: false,
                 entries: vec![SkillCatalogEntry::new(
                     SkillPackageId(PACKAGE.to_string()),
                     SkillAuthority::new(SkillSourceKind::Cloud, CODEX_APPS_MCP_SERVER_NAME),
@@ -689,6 +692,7 @@ async fn cloud_skill_can_read_referenced_resource_without_an_executor() -> Resul
     let responses_server = responses::start_mock_server().await;
     let provider = Arc::new(FakeCloudSkillProvider {
         catalog: SkillCatalog {
+            is_partial: false,
             entries: vec![
                 SkillCatalogEntry::new(
                     SkillPackageId(SKILL_RESOURCE_URI.to_string()),

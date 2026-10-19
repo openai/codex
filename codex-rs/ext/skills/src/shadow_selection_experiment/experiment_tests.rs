@@ -100,6 +100,7 @@ async fn turn_input_and_history_advance_while_ranking_is_blocked()
     for turn_id in ["first", "second"] {
         let turn_store = ExtensionData::new(turn_id);
         turn_store.insert(HostSkillsStepState(SkillCatalog {
+            is_partial: false,
             entries: ["x", "hidden", "selected"]
                 .into_iter()
                 .map(|name| {
@@ -120,6 +121,7 @@ async fn turn_input_and_history_advance_while_ranking_is_blocked()
             Duration::from_secs(10),
             registry.turn_input_contributors()[0].contribute(
                 TurnInputContext {
+                    step_store: &turn_store,
                     turn_id: turn_id.to_string(),
                     user_input: vec![UserInput::Skill {
                         name: "selected".to_string(),

@@ -1,3 +1,6 @@
+//! Skill catalog data and reconciliation, retaining source-local policy and read routes.
+
+use codex_extension_api::SelectedPluginSnapshot;
 use codex_protocol::protocol::SkillScope;
 use codex_skills::SkillDependencies;
 use codex_utils_path_uri::PathUri;
@@ -127,6 +130,12 @@ impl SkillResourceId {
         &self.id
     }
 
+    pub fn environment_id(&self) -> Option<&str> {
+        self.environment_path
+            .as_ref()
+            .map(|resource| resource.environment_id.as_str())
+    }
+
     pub(crate) fn bind_environment_package_resource(
         &self,
         package: &SkillPackageId,
@@ -168,7 +177,7 @@ struct EnvironmentSkillResource {
     contents: Option<Arc<str>>,
 }
 
-/// Metadata shown in the always-visible skills catalog.
+/// Skill metadata and source-owned read routes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SkillCatalogEntry {
     pub id: SkillPackageId,
@@ -181,6 +190,10 @@ pub struct SkillCatalogEntry {
     pub canonical_skill_id: Option<String>,
     pub plugin_id: Option<String>,
     pub analytics_scope: Option<SkillScope>,
+    /// Plugin-service identity for cross-source matching.
+    pub remote_plugin_id: Option<String>,
+    /// Alternate read routes that retain their original authority.
+    pub sources: Vec<SkillSourceLocation>,
     alias_root: Option<String>,
     alias_root_order: Option<usize>,
     prompt_scope: Option<SkillScope>,
@@ -208,6 +221,8 @@ impl SkillCatalogEntry {
             canonical_skill_id: None,
             plugin_id: None,
             analytics_scope: None,
+            remote_plugin_id: None,
+            sources: Vec::new(),
             alias_root: None,
             alias_root_order: None,
             prompt_scope: None,
@@ -215,6 +230,16 @@ impl SkillCatalogEntry {
             enabled: true,
             prompt_visible: true,
         }
+    }
+
+    pub fn with_remote_plugin_id(mut self, remote_plugin_id: Option<String>) -> Self {
+        self.remote_plugin_id = remote_plugin_id;
+        self
+    }
+
+    pub fn with_plugin_id(mut self, plugin_id: Option<String>) -> Self {
+        self.plugin_id = plugin_id;
+        self
     }
 
     pub fn with_short_description(mut self, short_description: Option<String>) -> Self {
@@ -262,6 +287,21 @@ impl SkillCatalogEntry {
         self.enabled && self.prompt_visible
     }
 
+    pub(crate) fn primary_source(&self) -> SkillSourceLocation {
+        SkillSourceLocation {
+            authority: self.authority.clone(),
+            package: self.id.clone(),
+            main_prompt: self.main_prompt.clone(),
+            display_path: self.display_path.clone(),
+            plugin_id: self.plugin_id.clone(),
+            enabled: self.enabled,
+        }
+    }
+
+    pub(crate) fn source_locations(&self) -> impl Iterator<Item = SkillSourceLocation> + '_ {
+        std::iter::once(self.primary_source()).chain(self.sources.iter().cloned())
+    }
+
     pub(crate) fn rendered_path(&self) -> &str {
         self.display_path
             .as_deref()
@@ -281,11 +321,24 @@ impl SkillCatalogEntry {
     }
 }
 
+/// One original provider route retained by a reconciled skill.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkillSourceLocation {
+    pub authority: SkillAuthority,
+    pub package: SkillPackageId,
+    pub main_prompt: SkillResourceId,
+    pub display_path: Option<String>,
+    /// Installation attribution belongs to the route used, not the merged primary entry.
+    pub plugin_id: Option<String>,
+    pub enabled: bool,
+}
+
 /// Merged catalog for one turn.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SkillCatalog {
     pub entries: Vec<SkillCatalogEntry>,
     pub warnings: Vec<String>,
+    pub is_partial: bool,
 }
 
 impl SkillCatalog {
@@ -294,19 +347,114 @@ impl SkillCatalog {
             self.push_entry(entry);
         }
         self.warnings.extend(other.warnings);
+        self.is_partial |= other.is_partial;
     }
 
     pub fn push_entry(&mut self, entry: SkillCatalogEntry) {
-        if self
-            .entries
-            .iter()
-            .any(|existing| existing.authority == entry.authority && existing.id == entry.id)
-        {
+        if self.entries.iter().any(|existing| {
+            existing.authority == entry.authority
+                && existing.id == entry.id
+                && existing.main_prompt.environment_id() == entry.main_prompt.environment_id()
+        }) {
             return;
         }
 
         self.entries.push(entry);
     }
+}
+
+/// Applies plugin denials and requires accepted Cloud or executor roots before merging skills.
+pub(crate) fn apply_plugin_denials(catalog: &mut SkillCatalog, snapshot: &SelectedPluginSnapshot) {
+    for skill in &mut catalog.entries {
+        if !matches!(
+            skill.authority.kind,
+            SkillSourceKind::Cloud | SkillSourceKind::Executor
+        ) {
+            continue;
+        }
+        // Standalone skills do not require plugin acceptance.
+        if skill.remote_plugin_id.is_none() && skill.plugin_id.is_none() {
+            continue;
+        }
+        let accepted = if skill.authority.kind == SkillSourceKind::Executor {
+            let (Some(environment_id), Some(plugin_id)) =
+                (skill.main_prompt.environment_id(), &skill.plugin_id)
+            else {
+                skill.enabled = false;
+                continue;
+            };
+            let root_id = format!("{environment_id}:{plugin_id}");
+            snapshot
+                .plugins
+                .iter()
+                .any(|plugin| plugin.selected_root_id.as_deref() == Some(root_id.as_str()))
+        } else {
+            let Some(remote_plugin_id) = &skill.remote_plugin_id else {
+                skill.enabled = false;
+                continue;
+            };
+            snapshot.plugins.iter().any(|plugin| {
+                plugin.selected_root_id.is_none() && plugin.plugin_id.as_str() == remote_plugin_id
+            })
+        };
+        skill.enabled &= skill
+            .remote_plugin_id
+            .as_ref()
+            .is_none_or(|id| !snapshot.disabled_plugin_ids.contains(id))
+            && skill
+                .plugin_id
+                .as_ref()
+                .is_none_or(|id| !snapshot.disabled_plugin_ids.contains(id))
+            && accepted;
+    }
+}
+
+fn remote_key(entry: &SkillCatalogEntry) -> Option<(&str, &str)> {
+    Some((entry.remote_plugin_id.as_deref()?, entry.name.as_str()))
+}
+
+/// Merges available Cloud counterparts, disabling unmatched remote skills only when Cloud is complete.
+pub fn merge_catalogs(cloud: Option<SkillCatalog>, executor: SkillCatalog) -> SkillCatalog {
+    let Some(mut merged) = cloud else {
+        return executor;
+    };
+    let cloud_is_partial = merged.is_partial;
+    merged.is_partial |= executor.is_partial;
+    let cloud_entry_count = merged.entries.len();
+    merged.warnings.extend(executor.warnings);
+    for mut entry in executor.entries {
+        let Some(key) = remote_key(&entry) else {
+            merged.entries.push(entry);
+            continue;
+        };
+        // Executor entries cannot authorize or merge with one another.
+        let Some(cloud_entry) = merged.entries[..cloud_entry_count]
+            .iter_mut()
+            .find(|cloud_entry| remote_key(cloud_entry) == Some(key))
+        else {
+            if !cloud_is_partial {
+                entry.enabled = false;
+                for source in &mut entry.sources {
+                    source.enabled = false;
+                }
+            }
+            merged.entries.push(entry);
+            continue;
+        };
+        let primary_source = entry.primary_source();
+        for mut source in std::iter::once(primary_source).chain(entry.sources) {
+            source.enabled &= cloud_entry.enabled;
+            let already_present = cloud_entry.sources.iter().any(|existing| {
+                existing.authority == source.authority
+                    && existing.package == source.package
+                    && existing.main_prompt.environment_id() == source.main_prompt.environment_id()
+            });
+            if !already_present {
+                cloud_entry.sources.push(source);
+            }
+        }
+    }
+    merged
 }
 
 /// Contents returned after resolving a skill resource through its owner.
@@ -352,3 +500,7 @@ impl std::fmt::Display for SkillProviderError {
 impl std::error::Error for SkillProviderError {}
 
 pub type SkillProviderResult<T> = Result<T, SkillProviderError>;
+
+#[cfg(test)]
+#[path = "catalog_tests.rs"]
+mod tests;

@@ -125,16 +125,19 @@ impl Session {
             .await;
         let ready_selected_capability_roots =
             Self::ready_selected_capability_roots(&selected_capability_roots);
-        let executor_capability_discovery_v2 = self
+        let (executor_capability_discovery_v2, inventory_changed) = self
             .executor_capability_discovery_for_step_v2(config, &environments)
             .await;
-        let executor_capability_discovery = self
+        let (executor_capability_discovery, discovery_recovered) = self
             .executor_capability_discovery_for_step(
                 config,
-                &ready_selected_capability_roots,
+                &selected_capability_roots,
                 &environments,
             )
             .await;
+        if inventory_changed || discovery_recovered {
+            self.mark_mcp_runtime_dirty();
+        }
         let mcp_projection =
             self.services
                 .mcp_manager
@@ -236,13 +239,13 @@ impl Session {
                 .await;
             let ready_selected_capability_roots =
                 Self::ready_selected_capability_roots(&selected_capability_roots);
-            let executor_capability_discovery_v2 = self
+            let (executor_capability_discovery_v2, _) = self
                 .executor_capability_discovery_for_step_v2(&desired.config, &desired.environments)
                 .await;
-            let executor_capability_discovery = self
+            let (executor_capability_discovery, _) = self
                 .executor_capability_discovery_for_step(
                     &desired.config,
-                    &ready_selected_capability_roots,
+                    &selected_capability_roots,
                     &desired.environments,
                 )
                 .await;
@@ -298,12 +301,17 @@ impl Session {
     pub(crate) async fn hard_refresh_latest_codex_apps_tools(
         self: &Arc<Self>,
     ) -> anyhow::Result<Vec<codex_mcp::ToolInfo>> {
-        self.refresh_mcp_if_dirty().await;
         let _refresh = self
             .mcp_refresh
             .acquire()
             .await
             .map_err(|_| anyhow::anyhow!("MCP runtime refresh semaphore closed"))?;
+        // This is forced work even when there was no pending invalidation.
+        self.mcp_refresh.claim();
+        let mut refresh_invalidation = McpRefreshInvalidationGuard {
+            refresh: &self.mcp_refresh,
+            published: false,
+        };
         let auth = self.services.auth_manager.auth().await;
         let environments = self.services.turn_environments.snapshot().await;
         let environment_selections = environments.all_selections();
@@ -313,13 +321,13 @@ impl Session {
             .await;
         let ready_selected_capability_roots =
             Self::ready_selected_capability_roots(&selected_capability_roots);
-        let executor_capability_discovery_v2 = self
+        let (executor_capability_discovery_v2, _) = self
             .executor_capability_discovery_for_step_v2(&desired.config, &desired.environments)
             .await;
-        let executor_capability_discovery = self
+        let (executor_capability_discovery, _) = self
             .executor_capability_discovery_for_step(
                 &desired.config,
-                &ready_selected_capability_roots,
+                &selected_capability_roots,
                 &desired.environments,
             )
             .await;
@@ -367,6 +375,7 @@ impl Session {
             .scope(self.services.mcp_runtime.replace_fresh(input))
             .await;
         self.services.thread_extension_data.insert(selected_plugins);
+        refresh_invalidation.published = refreshed.is_ok();
         refreshed
     }
 
@@ -436,14 +445,20 @@ impl Session {
     #[tracing::instrument(
         name = "capability_roots.snapshot_for_step",
         skip_all,
-        fields(root_count = ready_selected_capability_roots.len())
+        fields(root_count = resolved_roots.len())
     )]
     pub(crate) async fn executor_capability_discovery_for_step(
         &self,
         config: &Config,
-        ready_selected_capability_roots: &[SelectedCapabilityRoot],
+        resolved_roots: &[ResolvedSelectedCapabilityRoot],
         environments: &TurnEnvironmentSnapshot,
-    ) -> Option<Arc<ExecutorCapabilityDiscoverySnapshot>> {
+    ) -> (Option<Arc<ExecutorCapabilityDiscoverySnapshot>>, bool) {
+        if config
+            .features
+            .enabled(Feature::ExecutorCapabilityDiscoveryV2)
+        {
+            return (None, false);
+        }
         let restricted_file_system = environments.primary().map_or_else(
             || {
                 !config
@@ -465,7 +480,7 @@ impl Session {
                 .features
                 .enabled(Feature::ExecutorCapabilityDiscovery)
         {
-            return None;
+            return (None, false);
         }
         let sandbox_contexts = if restricted_file_system {
             environments
@@ -480,14 +495,14 @@ impl Session {
         } else {
             HashMap::new()
         };
-        let environment_manager = self.services.turn_environments.environment_manager();
         let cache = self
             .services
             .thread_extension_data
-            .get_or_init(|| ExecutorCapabilityDiscoveryCache::new(environment_manager));
-        let selected_capability_roots = ready_selected_capability_roots
+            .get_or_init(ExecutorCapabilityDiscoveryCache::default);
+        let selected_capability_roots = resolved_roots
             .iter()
-            .filter(|selected_root| {
+            .filter(|root| {
+                let selected_root = root.selected_root();
                 if !restricted_file_system {
                     return true;
                 }
@@ -507,24 +522,20 @@ impl Session {
         let discovery = cache
             .snapshot(&selected_capability_roots, &sandbox_contexts)
             .await;
-        if cache.take_recovered_discovery() {
-            // Root selection is unchanged, but recovered manifests can change MCP servers.
-            self.mark_mcp_runtime_dirty();
-        }
-        Some(Arc::new(discovery))
+        (Some(Arc::new(discovery)), cache.take_recovered_discovery())
     }
 
-    /// Acquires V2 inventories from the thread's current cache.
+    /// Acquires V2 inventories and reports changes without scheduling an MCP refresh.
     pub(super) async fn executor_capability_discovery_for_step_v2(
         &self,
         config: &Config,
         environments: &TurnEnvironmentSnapshot,
-    ) -> Option<Vec<ExecutorCapabilityDiscoveryV2Snapshot>> {
+    ) -> (Option<Vec<ExecutorCapabilityDiscoveryV2Snapshot>>, bool) {
         if !config
             .features
             .enabled(Feature::ExecutorCapabilityDiscoveryV2)
         {
-            return None;
+            return (None, false);
         }
         // Retain this cache if a new turn replaces the thread's current cache.
         let cache = self
@@ -567,11 +578,19 @@ impl Session {
                 result,
             });
         }
-        if cache.take_recovered_discovery() {
-            // Refresh MCP after discovery recovers.
-            self.mark_mcp_runtime_dirty();
-        }
-        Some(snapshots)
+        let previous = self
+            .services
+            .thread_extension_data
+            .insert(snapshots.clone());
+        let inventory_changed = previous.as_ref().map_or(!snapshots.is_empty(), |previous| {
+            previous.len() != snapshots.len()
+                || previous
+                    .iter()
+                    .zip(&snapshots)
+                    .any(|(previous, current)| !previous.same_discovery(current))
+        });
+        let inventory_changed = cache.take_recovered_discovery() || inventory_changed;
+        (Some(snapshots), inventory_changed)
     }
 
     pub(crate) async fn resolve_selected_capability_roots_for_step(
@@ -769,7 +788,6 @@ impl Session {
             error!("MCP runtime refresh semaphore closed");
             return;
         };
-        let auth = self.services.auth_manager.auth().await;
         {
             let mut state = self.state.lock().await;
             let mut config = (*state.session_configuration.original_config_do_not_use).clone();
@@ -783,20 +801,45 @@ impl Session {
             }
             state.session_configuration.original_config_do_not_use = Arc::new(config);
         }
+        // Claim after config mutation, before capturing the state this forced refresh handles.
+        self.mcp_refresh.claim();
+        let mut refresh_invalidation = McpRefreshInvalidationGuard {
+            refresh: &self.mcp_refresh,
+            published: false,
+        };
+        let auth = self.services.auth_manager.auth().await;
         let ready_selected_capability_roots = self
             .services
             .mcp_runtime
             .current_ready_selected_capability_roots();
         let environments = self.services.turn_environments.snapshot().await;
+        // Adding MCP dependencies preserves the published root selection.
+        let mut captured_environments = environments.captured_environments();
+        for root in &ready_selected_capability_roots {
+            let CapabilityRootLocation::Environment { environment_id, .. } = &root.location;
+            // A previously published root must not reconnect an environment absent from this capture.
+            captured_environments
+                .entry(environment_id.clone())
+                .or_insert(None);
+        }
+        let selected_capability_roots = self
+            .services
+            .turn_environments
+            .environment_manager()
+            .resolve_selected_capability_roots(
+                &ready_selected_capability_roots,
+                &captured_environments,
+            )
+            .await;
         let environment_selections = environments.all_selections();
         let desired = self.latest_mcp_desired_state(auth, environments).await;
-        let executor_capability_discovery_v2 = self
+        let (executor_capability_discovery_v2, _) = self
             .executor_capability_discovery_for_step_v2(&desired.config, &desired.environments)
             .await;
-        let executor_capability_discovery = self
+        let (executor_capability_discovery, _) = self
             .executor_capability_discovery_for_step(
                 &desired.config,
-                &ready_selected_capability_roots,
+                &selected_capability_roots,
                 &desired.environments,
             )
             .await;
@@ -829,6 +872,7 @@ impl Session {
             elicitation_reviewer,
         )
         .await;
+        refresh_invalidation.published = true;
     }
 
     pub(crate) fn ready_selected_capability_roots(

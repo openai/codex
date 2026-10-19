@@ -125,7 +125,11 @@ fn cloud_catalog_controls_remote_plugins_but_preserves_local_plugins() -> anyhow
         assert_eq!(
             merge_catalogs(Some(&unmatched), cloud.as_ref()),
             PluginCatalog {
-                entries: disabled_entries.clone(),
+                entries: if cloud.as_ref().is_some_and(|catalog| catalog.is_partial) {
+                    unmatched.entries.clone()
+                } else {
+                    disabled_entries.clone()
+                },
                 is_partial: cloud.as_ref().is_some_and(|catalog| catalog.is_partial),
                 warnings: cloud.map(|catalog| catalog.warnings).unwrap_or_default(),
             },
@@ -157,6 +161,35 @@ fn cloud_catalog_controls_remote_plugins_but_preserves_local_plugins() -> anyhow
         merge_catalogs(Some(&local_only), Some(&cloud)),
         PluginCatalog {
             entries: vec![definition, local],
+            ..Default::default()
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn partial_cloud_merges_known_plugins_and_preserves_unmatched_enablement() -> anyhow::Result<()> {
+    let definition = cloud_plugin("matched");
+    let matched = executor_plugin("matched", "executor-a")?;
+    let mut denied = executor_plugin("denied", "executor-a")?;
+    denied.enabled = false;
+    let unmatched = executor_plugin("unmatched", "executor-a")?;
+    let executor = PluginCatalog {
+        entries: vec![matched.clone(), denied.clone(), unmatched.clone()],
+        ..Default::default()
+    };
+    let cloud = PluginCatalog {
+        entries: vec![definition.clone()],
+        is_partial: true,
+        ..Default::default()
+    };
+    let mut expected = definition;
+    expected.locations.extend(matched.locations);
+    assert_eq!(
+        merge_catalogs(Some(&executor), Some(&cloud)),
+        PluginCatalog {
+            entries: vec![expected, denied, unmatched],
+            is_partial: true,
             ..Default::default()
         }
     );

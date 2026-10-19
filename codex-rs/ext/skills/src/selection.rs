@@ -105,12 +105,15 @@ fn push_selected(
 }
 
 fn entry_matches_path(entry: &SkillCatalogEntry, path: &str) -> bool {
-    entry.main_prompt.as_str() == path
-        || entry.id.0 == path
-        || entry
-            .display_path
-            .as_deref()
-            .is_some_and(|display_path| normalize_skill_path(display_path) == path)
+    entry.source_locations().any(|source| {
+        source.enabled
+            && (source.main_prompt.as_str() == path
+                || source.package.0 == path
+                || source
+                    .display_path
+                    .as_deref()
+                    .is_some_and(|display_path| normalize_skill_path(display_path) == path))
+    })
 }
 
 fn path_is_skill(path: &str) -> bool {

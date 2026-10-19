@@ -1,4 +1,4 @@
-//! V2 discovery requests and responses round-trip through JSON.
+//! V2 discovery wire contracts.
 
 use super::*;
 use crate::CapabilityTextFile;

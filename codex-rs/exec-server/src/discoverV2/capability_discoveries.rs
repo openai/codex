@@ -229,12 +229,15 @@ fn parse_root(
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| "skill".to_string())
         });
-        let Ok(parsed) = parsed else {
-            warnings.push(format!(
-                "invalid skill metadata at {}",
-                skill.instructions.path
-            ));
-            continue;
+        let parsed = match parsed {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                warnings.push(format!(
+                    "invalid skill metadata at {}: {error}",
+                    skill.instructions.path
+                ));
+                continue;
+            }
         };
         let path = skill.instructions.path;
         let mut ancestor = path.parent();

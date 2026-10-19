@@ -1959,6 +1959,42 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             mcp_loaded.load(Ordering::Relaxed) - loaded_before,
             expected_mcp_loads
         );
+        // Installation-derived rejections must not become global plugin-ID denials.
+        let ready_roots = vec![SelectedCapabilityRoot {
+            id: "selected-a".to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: "env-a".to_string(),
+                path: PathUri::parse("file:///plugins/selected-a").expect("plugin root URI"),
+            },
+        }];
+        let selected = first_session
+            .services
+            .mcp_manager
+            .selected_plugins_for_step(
+                codex_extension_api::McpServerContributionContext::for_step(
+                    &config,
+                    &first_session.services.mcp_thread_init,
+                    &first_session.services.thread_extension_data,
+                    &first_originator,
+                    &ready_roots,
+                    /*executor_capability_discovery*/ None,
+                    /*executor_capability_discovery_v2*/ None,
+                )
+                .with_selected_environments(&[])
+                .with_session_source(&SessionSource::Exec),
+                &config.plugins,
+                &disabled_plugin_ids,
+            )
+            .await;
+        let mut selected_disabled_ids = selected.disabled_plugin_ids;
+        selected_disabled_ids.sort();
+        selected_disabled_ids.dedup();
+        assert_eq!(selected_disabled_ids, disabled_plugin_ids);
+        assert_eq!(
+            selected.disabled_plugin_roots,
+            projection.selected_plugins.disabled_plugin_roots
+        );
+        assert_eq!(selected.plugins.len(), usize::from(selected_enabled));
     }
 }
 

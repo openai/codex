@@ -88,8 +88,8 @@ pub enum PluginSourceLocation {
 }
 
 /// Uses Cloud membership and metadata, retaining version-matched installations in order.
-/// Unavailable Cloud data preserves executor enablement. With a Cloud catalog, unmatched remote
-/// plugins are retained but disabled. Local plugins retain their existing enablement.
+/// Unavailable or partial Cloud data preserves unmatched executor entries. Complete Cloud
+/// catalogs disable unmatched remote entries; local entries retain their enablement.
 pub fn merge_catalogs(
     executor: Option<&PluginCatalog>,
     cloud: Option<&PluginCatalog>,
@@ -113,9 +113,11 @@ pub fn merge_catalogs(
             .iter_mut()
             .find(|definition| definition.id == installation.id)
         else {
-            let mut disabled = installation.clone();
-            disabled.enabled = false;
-            merged.entries.push(disabled);
+            let mut unmatched = installation.clone();
+            if !cloud.is_partial {
+                unmatched.enabled = false;
+            }
+            merged.entries.push(unmatched);
             continue;
         };
         if definition.version != installation.version {

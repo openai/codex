@@ -491,14 +491,14 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
         (
             "partial-empty-refresh",
             Ok(partial_empty_catalog),
-            Some("plugin_remote"),
+            None,
             None,
             None,
         ),
         (
             "same-account-failure",
             Err("temporarily unavailable".to_string()),
-            Some("plugin_remote"),
+            None,
             None,
             None,
         ),

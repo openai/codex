@@ -1,6 +1,7 @@
 //! Regression tests for cloud cache generation isolation and late completion.
 
 use super::*;
+use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillResourceId;
 use crate::catalog::SkillSearchResult;
 use crate::provider::SkillProvider;
@@ -17,6 +18,8 @@ use tokio::sync::Notify;
 #[derive(Default)]
 struct Provider {
     reads: AtomicUsize,
+    partial_list: AtomicBool,
+    next_catalog: Mutex<Option<SkillCatalog>>,
     pause_read: AtomicBool,
     pause_list: AtomicBool,
     entered: Notify,
@@ -30,8 +33,17 @@ impl SkillProvider for Provider {
                 self.entered.notify_one();
                 self.resume.notified().await;
             }
+            if let Some(catalog) = self.next_catalog.lock().unwrap().take() {
+                return Ok(catalog);
+            }
+            let is_partial = self.partial_list.swap(false, Ordering::SeqCst);
             Ok(SkillCatalog {
-                warnings: vec!["account catalog".into()],
+                is_partial,
+                warnings: if is_partial {
+                    Vec::new()
+                } else {
+                    vec!["account catalog".into()]
+                },
                 ..Default::default()
             })
         })
@@ -89,7 +101,7 @@ fn query(client: Option<Arc<McpResourceClient>>) -> SkillListQuery {
         include_cloud_skills: true,
         mcp_resources: client,
         executor_capability_discovery: None,
-        executor_capability_discovery_v2: Vec::new(),
+        executor_capability_discovery_v2: None,
     }
 }
 
@@ -160,4 +172,113 @@ async fn late_discovery_cannot_publish_into_a_new_generation() {
             .catalog
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn partial_cloud_catalog_without_warnings_is_refreshed_next_turn() {
+    let state = state();
+    let provider = Arc::new(Provider::default());
+    provider.partial_list.store(true, Ordering::SeqCst);
+    let providers = SkillProviders::new().with_cloud_provider(provider);
+    let client = Some(client());
+    state
+        .refresh_cloud_catalog(&providers, query(client.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        state.available_cloud_catalog().unwrap(),
+        SkillCatalog {
+            is_partial: true,
+            ..Default::default()
+        }
+    );
+    state
+        .refresh_cloud_catalog(&providers, query(client))
+        .await
+        .unwrap();
+    assert_eq!(
+        state.available_cloud_catalog().unwrap(),
+        SkillCatalog {
+            is_partial: false,
+            warnings: vec!["account catalog".into()],
+            ..Default::default()
+        }
+    );
+}
+
+#[tokio::test]
+async fn cloud_refresh_preserves_complete_catalogs_only_within_the_same_auth_scope() {
+    let catalog = |name: &str, is_partial| SkillCatalog {
+        entries: vec![SkillCatalogEntry::new(
+            SkillPackageId("skill://demo".into()),
+            SkillAuthority::new(SkillSourceKind::Cloud, "codex_apps"),
+            name,
+            "test catalog",
+            SkillResourceId::new("skill://demo/SKILL.md"),
+        )],
+        // Complete listings can have diagnostics; these also keep discovery eligible for refresh.
+        warnings: vec![format!("{name} catalog diagnostic")],
+        is_partial,
+    };
+    for previous_partial in [false, true] {
+        for incoming_partial in [false, true] {
+            for changed_auth in [false, true] {
+                let state = state();
+                let provider = Arc::new(Provider::default());
+                let providers = SkillProviders::new().with_cloud_provider(provider.clone());
+                let original_client = client();
+                let mut previous = catalog("previous", previous_partial);
+                *provider.next_catalog.lock().unwrap() = Some(previous.clone());
+                state
+                    .refresh_cloud_catalog(&providers, query(Some(original_client.clone())))
+                    .await
+                    .unwrap();
+                let generation = state.cloud_cache(Some(&original_client));
+                let contents = state
+                    .read_skill(&providers, request(Some(original_client.clone())))
+                    .await
+                    .unwrap();
+
+                let incoming = catalog("incoming", incoming_partial);
+                *provider.next_catalog.lock().unwrap() = Some(incoming.clone());
+                let current_client = if changed_auth {
+                    client()
+                } else {
+                    original_client
+                };
+                state
+                    .refresh_cloud_catalog(&providers, query(Some(current_client.clone())))
+                    .await
+                    .unwrap();
+                let retained = !changed_auth && !previous_partial && incoming_partial;
+                assert_eq!(
+                    generation.catalog.as_ref().unwrap().is_partial,
+                    previous_partial
+                );
+                if retained {
+                    previous.is_partial = true;
+                }
+                assert_eq!(
+                    state.available_cloud_catalog(),
+                    Some(if retained { previous } else { incoming })
+                );
+                assert!(!Arc::ptr_eq(
+                    &generation,
+                    &state.cloud_cache(Some(&current_client))
+                ));
+                assert_eq!(
+                    state
+                        .read_skill(&providers, request(Some(current_client)))
+                        .await
+                        .unwrap()
+                        .contents,
+                    if retained {
+                        contents.contents
+                    } else {
+                        "contents 1".to_string()
+                    },
+                );
+            }
+        }
+    }
 }

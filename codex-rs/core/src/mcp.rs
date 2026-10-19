@@ -232,7 +232,6 @@ impl McpManager {
                     || disabled_plugin_ids.iter().any(|id| id == identity.as_str())
                 {
                     selected.disabled_plugin_roots.push(selected_root_id);
-                    selected.disabled_plugin_ids.push(plugin_id);
                 } else {
                     selected.plugins.push(SelectedPluginIdentity {
                         selected_root_id: Some(selected_root_id),
@@ -519,6 +518,7 @@ impl McpManager {
 fn available_plugin_roots(context: McpServerContributionContext<'_, Config>) -> HashSet<String> {
     let mut roots = context
         .ready_selected_capability_roots()
+        .filter(|_| context.executor_capability_discovery_v2().is_none())
         .unwrap_or_default()
         .iter()
         .map(|root| root.id.clone())

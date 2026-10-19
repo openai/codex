@@ -95,7 +95,7 @@ impl ShadowSelectionExperiment {
         let mut eligible_ids = HashSet::new();
         let mut eligible_skill_resources = HashSet::new();
         for (id, entry) in catalog.entries.iter().enumerate() {
-            // Invocation observation exists only for host shell use and cloud reads.
+            // Invocation observation covers host shell use and reads of Cloud-primary skills.
             if !entry.is_model_visible()
                 || !matches!(
                     &entry.authority.kind,

@@ -104,6 +104,7 @@ fn catalog_from_outcome(outcome: &SkillLoadOutcome) -> SkillCatalog {
         .map(|(index, root)| (root.as_path(), index))
         .collect::<HashMap<_, _>>();
     let mut catalog = SkillCatalog {
+        is_partial: false,
         entries: Vec::new(),
         warnings: outcome
             .errors

@@ -1,3 +1,6 @@
+use pretty_assertions::assert_eq;
+use std::sync::Arc;
+
 use super::*;
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
@@ -8,6 +11,7 @@ use crate::catalog::SkillResourceId;
 fn detect_executor_skill(command: &str, environments: &[&str]) -> Option<SkillInvocation> {
     let skill_path = PathUri::parse("file:///skills/demo/SKILL.md").expect("valid skill URI");
     let catalog = SkillCatalog {
+        is_partial: false,
         entries: environments
             .iter()
             .map(|environment| {
@@ -27,10 +31,17 @@ fn detect_executor_skill(command: &str, environments: &[&str]) -> Option<SkillIn
         warnings: Vec::new(),
     };
     let turn_store = ExtensionData::new("test-turn");
-    turn_store.insert(ExecutorSkillsStepState(catalog));
+    let step_catalog = Arc::new(crate::skills_extension_state::SkillStepCatalog::new(
+        /*cloud*/ None, catalog, /*discovery_v2*/ false,
+    ));
+    let step_store = ExtensionData::new("step");
+    step_store.insert(crate::skills_extension_state::SkillsStepState::new_with(
+        Some(step_catalog),
+    ));
 
     detect_implicit_skill_invocation(
         &turn_store,
+        &step_store,
         "executor-a",
         command,
         &PathUri::parse("file:///skills").expect("valid workdir URI"),
@@ -66,4 +77,9 @@ fn ignores_matching_paths_from_other_environments() {
 
     assert_eq!(invocation.skill_name, "executor-a-skill");
     assert!(detect_executor_skill("cat demo/SKILL.md", &["executor-b"]).is_none());
+}
+
+#[test]
+fn ignores_commands_without_skill_access() {
+    assert!(detect_executor_skill("echo hello", &["executor-a"]).is_none());
 }

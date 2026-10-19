@@ -87,6 +87,10 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                 validate_handle("resource", resource, MAX_HANDLE_BYTES)?;
             }
 
+            let catalog = self.context.catalog(&[
+                SkillToolAuthoritySelector::Cloud,
+                SkillToolAuthoritySelector::Executor,
+            ])?;
             let search_authorities: &[_] = match args.package.alias_source() {
                 Some(SkillSourceKind::Cloud) => &[SkillToolAuthoritySelector::Cloud],
                 Some(SkillSourceKind::Executor) => &[SkillToolAuthoritySelector::Executor],
@@ -97,36 +101,47 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
             };
             let mut selected_skill = None;
             for &selector in search_authorities {
-                let catalog = self.context.catalog(&call.turn_id, selector).await;
+                // Resolve prompt aliases within their primary-authority partition.
+                let entries = catalog
+                    .entries
+                    .iter()
+                    .filter(|entry| selector.matches(&entry.authority))
+                    .collect::<Vec<_>>();
                 let alias_plan = build_alias_plan(
-                    &catalog
-                        .entries
+                    &entries
                         .iter()
+                        .copied()
                         .filter(|entry| entry.is_model_visible())
                         .collect::<Vec<_>>(),
                 );
-                if let Some(entry) = catalog.entries.into_iter().find(|entry| {
-                    entry.enabled
-                        && (entry.id.0 == args.package.as_str()
-                            || alias_plan
-                                .as_ref()
-                                .and_then(|plan| plan.shorten(&entry.id.0))
-                                .is_some_and(|alias| alias == args.package.as_str()))
-                        && SkillToolAuthority::from_authority(&entry.authority)
-                            .is_some_and(|authority| authority.selector() == selector)
-                }) {
-                    selected_skill = Some((entry, selector));
+                selected_skill = entries.into_iter().find_map(|entry| {
+                    let matches_alias = alias_plan
+                        .as_ref()
+                        .and_then(|plan| plan.shorten(&entry.id.0))
+                        .is_some_and(|alias| alias == args.package.as_str());
+                    entry.source_locations().find_map(|source| {
+                        if !(source.package.0 == args.package.as_str()
+                            || (source.package == entry.id && matches_alias))
+                        {
+                            return None;
+                        }
+                        let output_authority =
+                            SkillToolAuthority::from_authority(&source.authority)?.selector();
+                        Some((entry.clone(), source, output_authority))
+                    })
+                });
+                if selected_skill.is_some() {
                     break;
                 }
             }
-            let Some((skill_entry, output_authority)) = selected_skill else {
+            let Some((skill_entry, selected_source, output_authority)) = selected_skill else {
                 return Err(FunctionCallError::RespondToModel(
                     "skill package is not available".to_string(),
                 ));
             };
-            let authority = skill_entry.authority.clone();
-            let package = skill_entry.id.clone();
-            let main_prompt = skill_entry.main_prompt.clone();
+            let authority = selected_source.authority.clone();
+            let package = selected_source.package.clone();
+            let main_prompt = selected_source.main_prompt.clone();
             let requested_resource = match args.resource {
                 None => main_prompt.clone(),
                 Some(resource) if resource == main_prompt.as_str() => main_prompt.clone(),
@@ -216,14 +231,6 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                             "skill provider returned a different resource".to_string(),
                         ));
                     }
-                    if output_authority == super::SkillToolAuthoritySelector::Cloud
-                        && let Some(state) = self
-                            .context
-                            .thread_state
-                            .shadow_selection_turn(&call.turn_id)
-                    {
-                        state.record_invocation(main_prompt.as_str());
-                    }
                     let start = parse_pagination_cursor(
                         args.cursor.as_deref(),
                         result.contents.as_str(),
@@ -236,6 +243,15 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                 return Err(FunctionCallError::RespondToModel(
                     "skills.read cursor is invalid".to_string(),
                 ));
+            }
+            // Shadow candidates use the merged identity, not the selected read route.
+            if skill_entry.authority.kind == SkillSourceKind::Cloud
+                && let Some(state) = self
+                    .context
+                    .thread_state
+                    .shadow_selection_turn(&call.turn_id)
+            {
+                state.record_invocation(skill_entry.main_prompt.as_str());
             }
             let skill_root = if output_authority == super::SkillToolAuthoritySelector::Executor {
                 main_prompt
@@ -278,6 +294,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
             {
                 analytics.track_skill_invocation(
                     &skill_entry,
+                    &selected_source,
                     call.model.clone(),
                     call.turn_id.clone(),
                     InvocationType::Implicit,

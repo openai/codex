@@ -16,10 +16,9 @@ use crate::state::SkillsThreadState;
 
 impl<C: Send + Sync + 'static> TurnLifecycleContributor for SkillsExtension<C> {
     fn turn_start_phase(&self, thread_store: &ExtensionData) -> TurnStartPhase {
-        if self.providers.has_cloud_provider()
-            && thread_store
-                .get::<SkillsThreadState>()
-                .is_some_and(|state| state.cloud_skill_enabled())
+        if thread_store
+            .get::<SkillsThreadState>()
+            .is_some_and(|state| state.cloud_skill_enabled())
         {
             TurnStartPhase::RegularTaskStart
         } else {
@@ -36,7 +35,7 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for SkillsExtension<C> {
             let Some(state) = input.thread_store.get::<SkillsThreadState>() else {
                 return;
             };
-            if !state.cloud_skill_enabled() || !self.providers.has_cloud_provider() {
+            if !state.cloud_skill_enabled() {
                 return;
             }
             let config = state.config();
@@ -53,7 +52,7 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for SkillsExtension<C> {
                     .get::<SkillsSessionState>()
                     .and_then(|state| state.mcp_resources.clone()),
                 executor_capability_discovery: None,
-                executor_capability_discovery_v2: Vec::new(),
+                executor_capability_discovery_v2: None,
             };
             if let Err(error) = state.refresh_cloud_catalog(&self.providers, query).await {
                 self.emit_warning(

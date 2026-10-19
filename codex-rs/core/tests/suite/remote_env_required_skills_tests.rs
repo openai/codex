@@ -58,6 +58,7 @@ async fn required_environment_skill_gates_inference(availability: Availability) 
     );
     entry.enabled = !matches!(availability, Availability::Disabled);
     let catalog = SkillCatalog {
+        is_partial: false,
         entries: if matches!(
             availability,
             Availability::Missing | Availability::FailedEnvironment

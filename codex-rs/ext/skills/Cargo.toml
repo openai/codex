@@ -39,6 +39,7 @@ tracing = { workspace = true }
 [dev-dependencies]
 assert_matches = { workspace = true }
 codex-attachment-store = { workspace = true }
+codex-core-plugin-common = { workspace = true }
 codex-models-manager = { workspace = true }
 codex-protocol-test-support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }

@@ -10112,14 +10112,14 @@ async fn capability_discovery_uses_environment_permission_profile() {
     let environment_id = environment.selection.environment_id.clone();
     turn_context.initial_environments.environments[0] = TurnEnvironmentState::Ready(environment);
 
-    let discovery = session
+    let (discovery, _) = session
         .executor_capability_discovery_for_step(
             &turn_context.config,
-            /*ready_selected_capability_roots*/ &[],
+            /*resolved_roots*/ &[],
             &turn_context.initial_environments,
         )
-        .await
-        .expect("restricted environment should trigger capability discovery");
+        .await;
+    let discovery = discovery.expect("restricted environment should trigger capability discovery");
 
     assert_eq!(
         discovery.sandbox_contexts().get(&environment_id),

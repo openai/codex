@@ -17,6 +17,7 @@ async fn yielded_skill_read_keeps_originating_turn_metadata() -> Result<()> {
         &mut extensions,
         SkillProviders::new().with_cloud_provider(Arc::new(FakeCloudSkillProvider {
             catalog: SkillCatalog {
+                is_partial: false,
                 entries: vec![SkillCatalogEntry::new(
                     SkillPackageId(PACKAGE.to_string()),
                     SkillAuthority::new(SkillSourceKind::Cloud, CODEX_APPS_MCP_SERVER_NAME),

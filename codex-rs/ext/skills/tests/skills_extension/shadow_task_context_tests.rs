@@ -88,6 +88,7 @@ async fn task_context_recovers_prior_requests_and_explicit_intent_without_changi
     opaque.description = "zzzz".to_string();
     let provider = Arc::new(FailedReads(StaticSkillProvider {
         catalog: SkillCatalog {
+            is_partial: false,
             entries: vec![
                 test_entry(
                     SkillSourceKind::Host,
@@ -167,6 +168,7 @@ async fn task_context_recovers_prior_requests_and_explicit_intent_without_changi
             let fragments = registry.turn_input_contributors()[0]
                 .contribute(
                     TurnInputContext {
+                        step_store: &ExtensionData::new("step"),
                         turn_id: turn_id.to_string(),
                         user_input,
                         environments: vec![codex_extension_api::TurnInputEnvironment {
