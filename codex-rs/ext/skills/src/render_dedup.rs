@@ -1,5 +1,6 @@
 //! Prefers cloud skills before budgeting while retaining aliases from the full visible inventory.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 use super::AvailableSkillsRender;
@@ -17,19 +18,29 @@ use crate::catalog_prompt::SkillPromptKind;
 
 pub(crate) struct PreparedSkillCatalog<'a> {
     pub(super) entries: Vec<&'a SkillCatalogEntry>,
-    alias_plan: Option<AliasPlan>,
+    alias_plan: Option<Cow<'a, AliasPlan>>,
     policy: SkillCatalogRenderPolicy,
 }
 
 impl<'a> PreparedSkillCatalog<'a> {
     pub(crate) fn new(catalog: &'a SkillCatalog, policy: SkillCatalogRenderPolicy) -> Self {
+        Self::with_alias_plan(catalog, policy, /*alias_plan*/ None)
+    }
+
+    pub(crate) fn with_alias_plan(
+        catalog: &'a SkillCatalog,
+        policy: SkillCatalogRenderPolicy,
+        alias_plan: Option<&'a AliasPlan>,
+    ) -> Self {
         let mut entries = catalog
             .entries
             .iter()
             .filter(|entry| entry.is_model_visible())
             .collect::<Vec<_>>();
         policy.order_entries(&mut entries);
-        let alias_plan = build_alias_plan(&entries);
+        let alias_plan = alias_plan
+            .map(Cow::Borrowed)
+            .or_else(|| build_alias_plan(&entries).map(Cow::Owned));
         Self {
             entries,
             alias_plan,

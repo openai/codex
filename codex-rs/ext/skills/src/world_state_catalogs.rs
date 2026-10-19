@@ -26,7 +26,6 @@ use crate::render::render_prepared_skill_catalogs;
 use crate::render::skill_metadata_budget;
 use crate::render_observability::CatalogSurface;
 use crate::render_observability::record_catalog_render;
-use crate::skills_extension_state::SkillStepCatalog;
 use crate::skills_extension_state::SkillToolAuthoritySelector;
 use crate::skills_extension_state::SkillsStepState;
 use crate::sources::SkillProviders;
@@ -114,6 +113,7 @@ pub(crate) struct CatalogContext<'a> {
     thread_state: Arc<SkillsThreadState>,
     config: SkillsExtensionConfig,
     metadata_budget: SkillMetadataBudget,
+    render_policy: SkillCatalogRenderPolicy,
     include_usage: bool,
     warning_emitter: CatalogWarningEmitter,
 }
@@ -144,12 +144,18 @@ impl<'a> CatalogContext<'a> {
             }
         });
 
+        let render_policy = if input.executor_capability_discovery_v2.is_some() {
+            SkillCatalogRenderPolicy::DiscoveryV2
+        } else {
+            SkillCatalogRenderPolicy::ExtensionCompatible
+        };
         Some(Self {
             providers,
             input,
             thread_state,
             config,
             metadata_budget,
+            render_policy,
             include_usage,
             warning_emitter,
         })
@@ -214,7 +220,11 @@ impl<'a> CatalogContext<'a> {
                         attribute_executor_plugins(&mut executor, selected_plugins);
                     }
                 }
-                Arc::new(SkillStepCatalog::new(cloud, executor, discovery_v2_enabled))
+                Arc::new(self.thread_state.prepare_step_catalog(
+                    cloud,
+                    executor,
+                    discovery_v2_enabled,
+                ))
             }),
             self.discover_host_catalog(),
         );
@@ -286,9 +296,19 @@ impl<'a> CatalogContext<'a> {
     ) -> [RenderedCatalogContribution; 3] {
         let total_limit = self.metadata_budget.limit();
         let default_cloud_limit = total_limit - total_limit / FILESYSTEM_BUDGET_DIVISOR;
-        let mut executor = PreparedSkillCatalog::new(
+        let step_state = self.input.step_store.get::<SkillsStepState>();
+        let executor_aliases = step_state
+            .as_ref()
+            .and_then(|state| state.get())
+            .map(|catalog| {
+                catalog
+                    .aliases
+                    .for_authority(SkillToolAuthoritySelector::Executor)
+            });
+        let mut executor = PreparedSkillCatalog::with_alias_plan(
             &catalogs.executor.catalog,
-            SkillCatalogRenderPolicy::ExtensionCompatible,
+            self.render_policy,
+            executor_aliases,
         );
         executor.prefer_cloud_skills(&catalogs.cloud.catalog);
         // Identify the full visible cloud inventory before budgeting, including entries
@@ -382,11 +402,21 @@ impl<'a> CatalogContext<'a> {
             return None;
         }
 
+        let step_state = self.input.step_store.get::<SkillsStepState>();
+        let cloud_aliases = step_state
+            .as_ref()
+            .and_then(|state| state.get())
+            .map(|catalog| {
+                catalog
+                    .aliases
+                    .for_authority(SkillToolAuthoritySelector::Cloud)
+            });
         let shared = render_prepared_skill_catalogs(
             executor,
-            &PreparedSkillCatalog::new(
+            &PreparedSkillCatalog::with_alias_plan(
                 &catalogs.cloud.catalog,
-                SkillCatalogRenderPolicy::ExtensionCompatible,
+                self.render_policy,
+                cloud_aliases,
             ),
             &PreparedSkillCatalog::new(
                 &catalogs.host.catalog,
@@ -421,12 +451,22 @@ impl<'a> CatalogContext<'a> {
             return (RenderedSkillCatalogs::default(), self.metadata_budget);
         }
 
+        let step_state = self.input.step_store.get::<SkillsStepState>();
+        let cloud_aliases = step_state
+            .as_ref()
+            .and_then(|state| state.get())
+            .map(|catalog| {
+                catalog
+                    .aliases
+                    .for_authority(SkillToolAuthoritySelector::Cloud)
+            });
         let cloud_budget = self.metadata_budget.with_limit(cloud_limit);
         let cloud = render_available_skills(
             &catalogs.cloud.catalog,
-            SkillCatalogRenderPolicy::ExtensionCompatible,
+            self.render_policy,
             cloud_budget,
             self.include_usage,
+            cloud_aliases,
         );
         // Empty or disabled cloud catalogs leave the full allowance to filesystem skills.
         let cloud_cost = cloud.as_ref().map_or(0, |rendered| {
@@ -437,10 +477,7 @@ impl<'a> CatalogContext<'a> {
             .with_limit(self.metadata_budget.limit().saturating_sub(cloud_cost));
         let mut rendered = render_prepared_skill_catalogs(
             executor,
-            &PreparedSkillCatalog::new(
-                &SkillCatalog::default(),
-                SkillCatalogRenderPolicy::ExtensionCompatible,
-            ),
+            &PreparedSkillCatalog::new(&SkillCatalog::default(), self.render_policy),
             &PreparedSkillCatalog::new(
                 &catalogs.host.catalog,
                 SkillCatalogRenderPolicy::CoreCompatible,

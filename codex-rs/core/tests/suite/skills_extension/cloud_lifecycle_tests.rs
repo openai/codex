@@ -247,6 +247,12 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
         }
         // Empty catalogs must also reject reads of the previously cached skill.
         let (plugin, _) = expected_skill.unwrap_or(last_available_skill);
+        // Auth changes revoke the old catalog, but never reuse its alias for a different root.
+        let alias = if plugin == "calendar" {
+            "c0/demo"
+        } else {
+            "c1/demo"
+        };
         let package = format!("skill://{plugin}/demo");
         let list_id = format!("list-{turn}");
         let read_id = format!("read-{turn}");
@@ -265,7 +271,7 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
                         &read_id,
                         "skills",
                         "read",
-                        &json!({"package": package}).to_string(),
+                        &json!({"package": alias}).to_string(),
                     ),
                     ev_completed("tools"),
                 ]),

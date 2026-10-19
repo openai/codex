@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
-expression: "context_snapshot::format_context_snapshot(\"Astra keeps disabled skills hidden and uses each step's selected skills after the environment changes during preparation.\",\n&entries, &ContextSnapshotOptions::default().include_request_settings(),)"
+expression: "context_snapshot::format_context_snapshot(description, &entries,\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Astra keeps disabled skills hidden and uses each step's selected skills after the environment changes during preparation.
 
@@ -130,8 +130,8 @@ Settings:
     ## Skills
     A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that ...locators can be expanded using the skill roots table. [hash=f00d6a4d3e192f06]
     ### Skill roots
-    - `e0` = `skill://other-skills/<SKILLS_ROOT>/other-skills`
+    - `e1` = `skill://other-skills/<SKILLS_ROOT>/other-skills`
     Read a skill package directly with `skills.read({"package":"<package>"})` to read its `SKILL.md`; root a...ackage is not provided, use `skills.list` to find it. [hash=25bf84ea2123d647]
     ### Available skills
-    - next-helper: Use the next workflow (executor package: e0/next-helper)
+    - next-helper: Use the next workflow (executor package: e1/next-helper)
     </skills_instructions>

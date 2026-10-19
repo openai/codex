@@ -63,6 +63,7 @@ fn shortens_filesystem_and_skill_resource_locators() {
 
         let shortened = plan.shorten(locator).expect("known root");
         assert_eq!(shortened, expected);
+        assert_eq!(plan.expand(&shortened).as_deref(), Some(locator));
         let json = serde_json::to_string(&shortened).unwrap();
         let parsed: SkillLocator = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.alias_source(), Some(&source));
@@ -126,4 +127,52 @@ fn locator_serde_recognizes_aliases_and_preserves_package_strings() {
         assert_eq!(locator.as_str(), value);
         assert_eq!(serde_json::to_string(&locator).unwrap(), json);
     }
+}
+
+#[test]
+fn appended_aliases_preserve_captured_steps_and_existing_locators() {
+    let mut aliases = std::sync::Arc::new(AliasPlan::default());
+    let mut budget = super::AliasBudget::default();
+    aliases.extend_alias_plan("e", ["skill://root"], &mut budget);
+    let previous = std::sync::Arc::clone(&aliases);
+    let locator = "skill://root/nested/demo";
+    let original = aliases.shorten(locator).unwrap();
+
+    aliases.extend_alias_plan("e", ["skill://root/nested", "skill://root"], &mut budget);
+    assert_eq!(previous.root_lines(), vec!["- `e0` = `skill://root`"]);
+    assert_eq!(previous.shorten(locator), Some(original.clone()));
+    assert_eq!(aliases.shorten(locator), Some("e1/demo".into()));
+    assert_eq!(aliases.expand(&original).as_deref(), Some(locator));
+    assert_eq!(aliases.expand("e1/demo").as_deref(), Some(locator));
+    assert_eq!(
+        aliases.root_lines_for(&std::collections::HashSet::from(["e1".to_string()])),
+        vec!["- `e1` = `skill://root/nested`"]
+    );
+}
+
+#[test]
+fn alias_number_and_byte_budgets_are_shared_without_reassigning_existing_roots() {
+    let mut cloud = std::sync::Arc::new(AliasPlan::default());
+    let mut executor = std::sync::Arc::new(AliasPlan::default());
+    let mut budget = super::AliasBudget {
+        roots: super::MAX_ALIAS_ROOTS - 2,
+        ..Default::default()
+    };
+    cloud.extend_alias_plan("c", ["skill://cloud"], &mut budget);
+    executor.extend_alias_plan("e", ["skill://first", "skill://second"], &mut budget);
+    assert_eq!(budget.roots, super::MAX_ALIAS_ROOTS);
+    assert_eq!(executor.root_lines(), vec!["- `e0` = `skill://first`"]);
+    assert_eq!(executor.shorten("skill://second/demo"), None);
+    assert_eq!(cloud.shorten("skill://cloud/demo"), Some("c0/demo".into()));
+
+    let mut budget = super::AliasBudget::default();
+    let mut aliases = std::sync::Arc::new(AliasPlan::default());
+    let oversized = "x".repeat(super::MAX_ALIAS_BYTES);
+    aliases.extend_alias_plan("e", ["skill://first", &oversized], &mut budget);
+    aliases.extend_alias_plan("e", ["skill://second"], &mut budget);
+    assert_eq!(
+        aliases.root_lines(),
+        vec!["- `e0` = `skill://first`", "- `e1` = `skill://second`"]
+    );
+    assert_eq!(aliases.shorten(&format!("{oversized}/demo")), None);
 }

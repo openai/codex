@@ -174,7 +174,10 @@ async fn cloud_preference_preserves_aliases_reads_and_executor_fallback() -> Tes
             } else {
                 assert!(executor_body.contains("(executor package: e1/s0)"));
                 for (index, root) in executor_roots.iter().enumerate() {
-                    assert!(executor_body.contains(&format!("- `e{index}` = `{root}`")));
+                    assert_eq!(
+                        executor_body.contains(&format!("- `e{index}` = `{root}`")),
+                        index == 1 || !cloud_enabled,
+                    );
                 }
             }
             previous = snapshots;

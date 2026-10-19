@@ -1,0 +1,115 @@
+---
+source: core/tests/suite/scenarios.rs
+assertion_line: 1456
+expression: "context_snapshot::format_context_snapshot(\"Astra reads Cloud instructions, discovers an omitted deployment installation, and reads its instructions from env-04.\",\n&bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: Astra reads Cloud instructions, discovers an omitted deployment installation, and reads its instructions from env-04.
+
+## Window 1
+-- request 1 (request) --
+00:additional_tools/developer (3; hash=e075a43448be3246):
+        - namespace/functions; hash=bbcd688349ca7e12
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[3]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+    [03] <SKILLS_INSTRUCTIONS>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user:
+    Read the review and deployment instructions, find all deployment installations, then read the instructions from env-04.
+-- request 2 (request) --
+07:function_call/skills.read:{"package":"skill://executor-00/review","source":{"kind":"cloud"}}
+08:function_call_output:{
+      "contents": "# Deployment\\nRun scripts/check.py from an available installation.",
+      "installations": [
+        {
+          "package": "skill://deployment/review",
+          "resource": "skill://deployment/review/SKILL.md"
+        },
+        {
+          "environment_id": "env-00",
+          "skill_root": "/opt/skills/review"
+        },
+        {
+          "environment_id": "env-01",
+          "skill_root": "/opt/skills/review"
+        }
+      ],
+      "next_cursor": null,
+      "resource": "skill://deployment/review/SKILL.md"
+    }
+-- request 3 (request) --
+09:function_call/skills.read:{"package":"skill://deployment/deploy"}
+10:function_call_output:{
+      "contents": "# Deployment\\nRun scripts/check.py from an available installation.",
+      "installations": [
+        {
+          "package": "skill://deployment/deploy",
+          "resource": "skill://deployment/deploy/SKILL.md"
+        },
+        {
+    <OMITTED 12 LINES; ~65 TOKENS; hash=acd1e9324679b8e2>
+          "environment_id": "env-03",
+          "skill_root": "/opt/skills/deploy"
+        }
+      ],
+      "installations_truncated": true,
+      "next_cursor": null,
+      "resource": "skill://deployment/deploy/SKILL.md"
+    }
+-- request 4 (request) --
+11:function_call/skills.installations:{"package":"skill://deployment/deploy"}
+12:function_call_output:{
+      "installations": [
+        {
+          "package": "skill://deployment/deploy",
+          "resource": "skill://deployment/deploy/SKILL.md"
+        },
+        {
+          "environment_id": "env-00",
+    <OMITTED 13 LINES; ~76 TOKENS; hash=9220bf30c6cda548>
+        },
+        {
+          "environment_id": "env-04",
+          "skill_root": "<ENV_04_SKILL_ROOT>"
+        }
+      ],
+      "next_cursor": null
+    }
+-- request 5 (request) --
+13:function_call/skills.read:{"package":"skill://deployment/deploy","source":{"environment_id":"env-04","kind":"executor"}}
+14:function_call_output:{
+      "contents": "# Deployment in env-04\\nRun scripts/check.py from this installation.",
+      "installations": [
+        {
+          "environment_id": "env-04",
+          "skill_root": "<ENV_04_SKILL_ROOT>"
+        },
+        {
+          "package": "skill://deployment/deploy",
+          "resource": "skill://deployment/deploy/SKILL.md"
+        }
+      ],
+      "installations_truncated": true,
+      "next_cursor": null,
+      "resource": "skill://executor-04/deploy/SKILL.md"
+    }

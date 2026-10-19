@@ -32,7 +32,10 @@ fn detect_executor_skill(command: &str, environments: &[&str]) -> Option<SkillIn
     };
     let turn_store = ExtensionData::new("test-turn");
     let step_catalog = Arc::new(crate::skills_extension_state::SkillStepCatalog::new(
-        /*cloud*/ None, catalog, /*discovery_v2*/ false,
+        /*cloud*/ None,
+        catalog,
+        /*discovery_v2*/ false,
+        Default::default(),
     ));
     let step_store = ExtensionData::new("step");
     step_store.insert(crate::skills_extension_state::SkillsStepState::new_with(

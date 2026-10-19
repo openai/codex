@@ -50,13 +50,21 @@ impl ExecutorSkillProvider {
                 }
             }
             for skill in &discovered.skills {
-                let Some(root) = skill.path.parent() else {
-                    continue;
+                // Use the skills namespace when discovery-root metadata is absent.
+                let fallback_root;
+                let (root_id, root_path) = if let Some(root) = &skill.discovery_root {
+                    (root.id.as_str(), &root.path)
+                } else {
+                    let Some(parent) = skill.path.parent() else {
+                        continue;
+                    };
+                    fallback_root = parent;
+                    ("skills", &fallback_root)
                 };
                 if let Some(entry) = self.catalog_entry_from_discovered_skill(
                     skill,
-                    "skills",
-                    &root,
+                    root_id,
+                    root_path,
                     &snapshot.environment_id,
                 ) {
                     catalog.push_entry(entry);

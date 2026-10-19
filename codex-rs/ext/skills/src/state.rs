@@ -8,6 +8,7 @@ use codex_mcp::McpResourceClient;
 
 use crate::SkillsExtensionConfig;
 use crate::SkillsExtensionState;
+use crate::aliases::SkillAliasState;
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillPackageId;
@@ -28,6 +29,7 @@ use crate::skills_extension_state::CloudResourceCache;
 use crate::skills_extension_state::CloudSkillGeneration;
 use crate::skills_extension_state::ExecutorCatalogCacheKey;
 use crate::skills_extension_state::SkillReadCacheKey;
+use crate::skills_extension_state::SkillStepCatalog;
 use crate::sources::SkillProviders;
 
 #[cfg(test)]
@@ -44,6 +46,7 @@ pub struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
     cloud_skills_available: bool,
     skills_extension_state: Mutex<SkillsExtensionState>,
+    aliases: SkillAliasState,
     shadow_selection_turn: Mutex<Option<ShadowSelectionTurn>>,
     pub(crate) executor_read_snapshot: Mutex<Option<ExecutorReadSnapshot>>,
     pub(crate) recent_skill_invocations: Arc<RecentSkillInvocations>,
@@ -56,6 +59,7 @@ impl SkillsThreadState {
             config: Mutex::new(config),
             cloud_skills_available,
             skills_extension_state: Mutex::new(SkillsExtensionState::default()),
+            aliases: SkillAliasState::default(),
             shadow_selection_turn: Mutex::new(None),
             executor_read_snapshot: Mutex::new(None),
             recent_skill_invocations: Arc::new(RecentSkillInvocations::default()),
@@ -114,6 +118,24 @@ impl SkillsThreadState {
             .as_ref()
             .filter(|turn| turn.turn_id == turn_id)
             .map(|turn| Arc::clone(&turn.state))
+    }
+
+    pub(crate) fn prepare_step_catalog(
+        &self,
+        cloud: Option<SkillCatalog>,
+        executor: SkillCatalog,
+        discovery_v2: bool,
+    ) -> SkillStepCatalog {
+        let mut step = SkillStepCatalog::new(cloud, executor, discovery_v2, Default::default());
+        step.aliases = self.aliases.capture(
+            step.catalog
+                .entries
+                .iter()
+                .flat_map(super::catalog::SkillCatalogEntry::source_locations)
+                .filter(|source| source.enabled && source.prompt_visible)
+                .filter_map(|source| source.alias_root.map(|root| (source.authority.kind, root))),
+        );
+        step
     }
 
     /// Returns the executor catalog, reusing matching discovery caches.

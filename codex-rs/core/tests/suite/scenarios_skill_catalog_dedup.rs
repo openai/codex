@@ -136,7 +136,10 @@ async fn cloud_preference_preserves_executor_aliases_and_description_budget() ->
             assert!(!body.contains(&format!("(executor package: e0/s{index})")));
         }
         for (index, root) in roots.iter().enumerate() {
-            assert!(body.contains(&format!("- `e{index}` = `{root}`")));
+            assert_eq!(
+                body.contains(&format!("- `e{index}` = `{root}`")),
+                index == 1
+            );
         }
         assert_eq!(body.matches("UNIQUE_DESCRIPTION_END").count(), 3);
     }

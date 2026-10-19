@@ -20,6 +20,7 @@ use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
 use codex_exec_server::ExecutorSkill;
 use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_exec_server::LOCAL_FS;
+use codex_exec_server::SkillDiscoveryRoot;
 use codex_extension_api::ConversationHistory;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
@@ -2542,9 +2543,11 @@ async fn cloud_discovery_is_gated_and_reports_failures() -> TestResult {
 }
 
 #[tokio::test]
-async fn v2_read_cache_is_scoped_to_the_captured_environment() -> TestResult {
+async fn v2_root_aliases_and_read_cache_use_the_captured_environment() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let path = directory.path().join("SKILL.md");
+    let root = directory.path().join("skills");
+    let path = root.join("nested/demo/SKILL.md");
+    std::fs::create_dir_all(path.parent().ok_or("skill directory")?)?;
     std::fs::write(&path, "original\n".repeat(2_000))?;
     let manager = Arc::new(EnvironmentManager::default_for_tests());
     let environment = manager
@@ -2578,21 +2581,31 @@ async fn v2_read_cache_is_scoped_to_the_captured_environment() -> TestResult {
     let snapshots = vec![ExecutorCapabilityDiscoveryV2Snapshot {
         environment_id: "captured".to_string(),
         result: Ok(Arc::new(DiscoverV2CapabilitiesResponse {
-            skills: vec![ExecutorSkill {
-                name: "demo".to_string(),
-                description: "Demo".to_string(),
-                short_description: None,
-                path: PathUri::from_host_native_path(&path)?,
-                discovery_root: None,
-                dependencies: None,
-                policy: None,
-            }],
+            skills: ["demo", "build", "check", "deploy", "review", "test"]
+                .into_iter()
+                .map(|name| {
+                    Ok(ExecutorSkill {
+                        name: name.to_string(),
+                        description: "Demo".to_string(),
+                        short_description: None,
+                        path: PathUri::from_host_native_path(
+                            root.join(format!("nested/{name}/SKILL.md")),
+                        )?,
+                        discovery_root: Some(SkillDiscoveryRoot {
+                            id: "codex-home-skills".to_string(),
+                            path: PathUri::from_host_native_path(&root)?,
+                        }),
+                        dependencies: None,
+                        policy: None,
+                    })
+                })
+                .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?,
             ..Default::default()
         })),
     }];
     let package = format!(
-        "skill://skills/{}",
-        PathUri::from_host_native_path(directory.path())?
+        "skill://codex-home-skills/{}",
+        PathUri::from_host_native_path(path.parent().ok_or("skill directory")?)?
             .inferred_native_path_string()
             .replace('\\', "/")
             .trim_start_matches('/')
@@ -2623,7 +2636,7 @@ async fn v2_read_cache_is_scoped_to_the_captured_environment() -> TestResult {
                 .into_iter()
                 .collect::<HashMap<_, _>>(),
         );
-        registry.context_contributors()[0]
+        let sections = registry.context_contributors()[0]
             .contribute_world_state(WorldStateContributionInput {
                 previous_world_state: None,
                 step_store: &step_store,
@@ -2640,6 +2653,13 @@ async fn v2_read_cache_is_scoped_to_the_captured_environment() -> TestResult {
                 turn_store: &turn_store,
             })
             .await;
+        let rendered = sections
+            .iter()
+            .filter_map(|section| section.render_diff(PreviousWorldStateSection::Absent).1)
+            .map(|fragment| fragment.body().clone().expect_text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("e0/nested/demo"), "{rendered}");
         let tools = registry.tool_contributors()[0].tools_for_step(
             &session_store,
             &thread_store,
@@ -2650,7 +2670,8 @@ async fn v2_read_cache_is_scoped_to_the_captured_environment() -> TestResult {
             .find(|tool| tool.tool_name().name == "read")
             .ok_or("skills.read")?;
         let payload = ToolPayload::Function {
-            arguments: serde_json::json!({"package": package, "cursor": cursor}).to_string(),
+            arguments: serde_json::json!({"package": "e0/nested/demo", "cursor": cursor})
+                .to_string(),
         };
         let result = read
             .handle(ToolCall {
@@ -2686,6 +2707,15 @@ async fn v2_read_cache_is_scoped_to_the_captured_environment() -> TestResult {
             let response = result?
                 .post_tool_use_response("read", &payload)
                 .ok_or("read output")?;
+            assert_eq!(response["resource"], format!("{package}/SKILL.md"));
+            assert_eq!(
+                response["installations"],
+                serde_json::json!([{
+                    "environment_id": "captured",
+                    "skill_root": PathUri::from_host_native_path(path.parent().ok_or("skill directory")?)?
+                        .inferred_native_path_string(),
+                }])
+            );
             assert!(
                 response["contents"]
                     .as_str()

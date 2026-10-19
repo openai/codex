@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
 
 use codex_protocol::protocol::SkillScope;
@@ -32,13 +33,14 @@ pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
 pub(crate) enum SkillCatalogRenderPolicy {
     CoreCompatible,
     ExtensionCompatible,
+    DiscoveryV2,
 }
 
 impl SkillCatalogRenderPolicy {
     fn description(self, entry: &SkillCatalogEntry) -> &str {
         match self {
             Self::CoreCompatible => entry.description.as_str(),
-            Self::ExtensionCompatible => entry
+            Self::ExtensionCompatible | Self::DiscoveryV2 => entry
                 .short_description
                 .as_deref()
                 .unwrap_or(entry.description.as_str()),
@@ -62,14 +64,14 @@ impl SkillCatalogRenderPolicy {
                         .then_with(|| a.main_prompt.as_str().cmp(b.main_prompt.as_str()))
                 });
             }
-            Self::ExtensionCompatible => {}
+            Self::ExtensionCompatible | Self::DiscoveryV2 => {}
         }
     }
 
     fn includes_omission_notice(self) -> bool {
         match self {
             Self::CoreCompatible => false,
-            Self::ExtensionCompatible => true,
+            Self::ExtensionCompatible | Self::DiscoveryV2 => true,
         }
     }
 }
@@ -525,8 +527,10 @@ pub(crate) fn render_available_skills(
     policy: SkillCatalogRenderPolicy,
     budget: SkillMetadataBudget,
     include_skills_usage_instructions: bool,
+    alias_plan: Option<&AliasPlan>,
 ) -> Option<AvailableSkillsRender> {
-    PreparedSkillCatalog::new(catalog, policy).render(budget, include_skills_usage_instructions)
+    PreparedSkillCatalog::with_alias_plan(catalog, policy, alias_plan)
+        .render(budget, include_skills_usage_instructions)
 }
 
 pub(crate) fn render_prepared_skill_catalogs(
@@ -642,28 +646,42 @@ impl<'a> CatalogLines<'a> {
     fn aliased(
         entries: &[&'a SkillCatalogEntry],
         policy: SkillCatalogRenderPolicy,
-        alias_plan: Option<&AliasPlan>,
+        alias_plan: Option<&Cow<'_, AliasPlan>>,
     ) -> Self {
         let Some(plan) = alias_plan.filter(|_| !entries.is_empty()) else {
             return Self::unaliased(entries, policy);
         };
 
+        let mut used_roots = HashSet::new();
+        let skills = entries
+            .iter()
+            .map(|entry| {
+                SkillLine::with_locator(
+                    entry,
+                    policy,
+                    render_skill_locator_with_aliases(entry, plan, &mut used_roots),
+                )
+            })
+            .collect();
         Self {
             prompt_kind: entries
                 .first()
-                .map(|entry| SkillPromptKind::for_aliased_source(&entry.authority.kind))
-                .unwrap_or(SkillPromptKind::Unaliased),
-            skills: entries
-                .iter()
                 .map(|entry| {
-                    SkillLine::with_locator(
-                        entry,
-                        policy,
-                        render_skill_locator_with_aliases(entry, plan),
-                    )
+                    let kind = SkillPromptKind::for_aliased_source(&entry.authority.kind);
+                    if policy == SkillCatalogRenderPolicy::DiscoveryV2
+                        && kind == SkillPromptKind::ResourceAliases
+                    {
+                        SkillPromptKind::ResourceAliasesV2
+                    } else {
+                        kind
+                    }
                 })
-                .collect(),
-            root_lines: plan.root_lines(),
+                .unwrap_or(SkillPromptKind::Unaliased),
+            skills,
+            root_lines: match plan {
+                Cow::Borrowed(plan) => plan.root_lines_for(&used_roots),
+                Cow::Owned(plan) => plan.root_lines(),
+            },
         }
     }
 }
@@ -943,8 +961,14 @@ fn available_skills_fragment(
     policy: SkillCatalogRenderPolicy,
     budget: SkillMetadataBudget,
 ) -> Option<AvailableSkillsInstructions> {
-    render_available_skills(catalog, policy, budget, include_skills_usage_instructions)?
-        .into_fragment(include_skills_usage_instructions)
+    render_available_skills(
+        catalog,
+        policy,
+        budget,
+        include_skills_usage_instructions,
+        /*alias_plan*/ None,
+    )?
+    .into_fragment(include_skills_usage_instructions)
 }
 
 fn build_aliased_catalog(
@@ -1001,7 +1025,11 @@ pub(crate) fn build_alias_plan(entries: &[&SkillCatalogEntry]) -> Option<AliasPl
     AliasPlan::build(source, &roots)
 }
 
-fn render_skill_locator_with_aliases(entry: &SkillCatalogEntry, plan: &AliasPlan) -> String {
+fn render_skill_locator_with_aliases(
+    entry: &SkillCatalogEntry,
+    plan: &AliasPlan,
+    used_roots: &mut HashSet<String>,
+) -> String {
     let locator = match &entry.authority.kind {
         SkillSourceKind::Executor | SkillSourceKind::Cloud => entry.id.0.as_str(),
         SkillSourceKind::Host | SkillSourceKind::Custom(_) => entry.rendered_path(),
@@ -1009,7 +1037,13 @@ fn render_skill_locator_with_aliases(entry: &SkillCatalogEntry, plan: &AliasPlan
     if entry.alias_root().is_none() {
         return locator.to_string();
     }
-    plan.shorten(locator).unwrap_or_else(|| locator.to_string())
+    let Some(alias) = plan.shorten(locator) else {
+        return locator.to_string();
+    };
+    if let Some((root, _)) = alias.split_once('/') {
+        used_roots.insert(root.to_string());
+    }
+    alias
 }
 
 fn aliased_metadata_overhead_cost(

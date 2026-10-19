@@ -80,7 +80,10 @@ async fn v2_steps_refresh_metadata_and_preserve_separate_environments() -> TestR
                 description: "Build a dashboard".to_string(),
                 short_description: None,
                 path: skill_path.clone(),
-                discovery_root: None,
+                discovery_root: Some(SkillDiscoveryRoot {
+                    id: "codex-home-skills".to_string(),
+                    path: PathUri::parse("file:///executor/skills")?,
+                }),
                 dependencies: dependencies.clone(),
                 policy: Some(SkillPolicy {
                     allow_implicit_invocation: Some(false),
@@ -100,6 +103,25 @@ async fn v2_steps_refresh_metadata_and_preserve_separate_environments() -> TestR
         executor_capability_discovery: None,
         executor_capability_discovery_v2: Some(snapshots.clone()),
     };
+    // Standalone skills without discovery-root metadata use the skills namespace.
+    let mut fallback_query = query.clone();
+    for snapshot in fallback_query
+        .executor_capability_discovery_v2
+        .as_mut()
+        .unwrap()
+    {
+        Arc::make_mut(snapshot.result.as_mut().unwrap()).skills[0].discovery_root = None;
+    }
+    let fallback = provider.list(fallback_query).await?;
+    assert_eq!(fallback.entries.len(), 4);
+    assert_eq!(
+        fallback.entries[1].id.0,
+        "skill://skills/executor/skills/dashboard"
+    );
+    assert_eq!(
+        fallback.entries[1].main_prompt.environment_id(),
+        Some("remote-a")
+    );
     let catalog = provider.list(query).await?;
     assert_eq!(catalog.entries.len(), 4);
     let merged = merge_catalogs(/*cloud*/ None, catalog.clone());
@@ -148,8 +170,11 @@ async fn v2_steps_refresh_metadata_and_preserve_separate_environments() -> TestR
     assert_eq!(entry.dependencies, dependencies);
     assert!(entry.enabled);
     assert!(!entry.prompt_visible);
-    assert_eq!(entry.authority.id, "skills");
-    assert_eq!(entry.id.0, "skill://skills/executor/skills/dashboard");
+    assert_eq!(entry.authority.id, "codex-home-skills");
+    assert_eq!(
+        entry.id.0,
+        "skill://codex-home-skills/executor/skills/dashboard"
+    );
     assert_eq!(
         entry.main_prompt,
         SkillResourceId::environment(entry.main_prompt.as_str(), "remote-a", skill_path.clone(),)

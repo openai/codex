@@ -295,6 +295,8 @@ impl SkillCatalogEntry {
             display_path: self.display_path.clone(),
             plugin_id: self.plugin_id.clone(),
             enabled: self.enabled,
+            alias_root: self.alias_root.clone(),
+            prompt_visible: self.prompt_visible,
         }
     }
 
@@ -331,6 +333,8 @@ pub struct SkillSourceLocation {
     /// Installation attribution belongs to the route used, not the merged primary entry.
     pub plugin_id: Option<String>,
     pub enabled: bool,
+    pub alias_root: Option<String>,
+    pub prompt_visible: bool,
 }
 
 /// Merged catalog for one turn.

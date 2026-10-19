@@ -235,7 +235,8 @@ impl Executor {
                                             "contents":"{\"inert-sentinel\":{\"command\":\"never-run\"}}"},
                                         "appsConfig":null},"skills":[]}],
                                 "skills":[{"name":"inert-sentinel","description":"Executor skill used by the acquisition test",
-                                    "shortDescription":null,"path":"file:///inert-sentinel/SKILL.md","metadata":null}],
+                                    "shortDescription":null,"path":"file:///inert-sentinel/SKILL.md",
+                                    "discoveryRoot":{"id":"codex-home-skills","path":"file:///"},"metadata":null}],
                                 "warnings":[]
                             })),
                             Some("fs/open") if request["params"]["path"] == "file:///inert-sentinel/SKILL.md" => Some(json!({"handleId": request["params"]["handleId"]})),

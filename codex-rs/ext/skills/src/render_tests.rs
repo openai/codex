@@ -467,7 +467,7 @@ fn path_aliases_retain_every_skill_under_budget_pressure() {
             SkillLine::with_locator(
                 entry,
                 SkillCatalogRenderPolicy::ExtensionCompatible,
-                render_skill_locator_with_aliases(entry, &plan),
+                render_skill_locator_with_aliases(entry, &plan, &mut HashSet::new()),
             )
             .minimum_cost(SkillMetadataBudget::Characters(usize::MAX)),
         )
@@ -510,7 +510,10 @@ fn executor_aliases_preserve_literal_backslashes_in_package_ids() {
     .with_alias_root(root);
     let plan = build_alias_plan(&[&entry]).expect("alias plan should build");
 
-    assert_eq!(render_skill_locator_with_aliases(&entry, &plan), "e0/demo");
+    assert_eq!(
+        render_skill_locator_with_aliases(&entry, &plan, &mut HashSet::new()),
+        "e0/demo"
+    );
 }
 
 #[tokio::test]
@@ -957,11 +960,11 @@ async fn singleton_plugin_versions_share_the_marketplace_alias_root()
         vec![format!("- `r0` = `{marketplace_root}`")]
     );
     assert_eq!(
-        render_skill_locator_with_aliases(github, &plan),
+        render_skill_locator_with_aliases(github, &plan, &mut HashSet::new()),
         "r0/github/hash123/skills/github/SKILL.md"
     );
     assert_eq!(
-        render_skill_locator_with_aliases(slack, &plan),
+        render_skill_locator_with_aliases(slack, &plan, &mut HashSet::new()),
         "r0/slack/hash456/skills/slack/SKILL.md"
     );
 
@@ -1081,6 +1084,7 @@ fn catalog_report_counts_partial_description_truncation() {
         SkillCatalogRenderPolicy::ExtensionCompatible,
         budget,
         /*include_skills_usage_instructions*/ false,
+        /*alias_plan*/ None,
     )
     .expect("catalog should render");
     assert_eq!(
@@ -1132,6 +1136,7 @@ fn catalog_emits_omission_marker_when_every_minimum_skill_line_exceeds_budget() 
         SkillCatalogRenderPolicy::CoreCompatible,
         SkillMetadataBudget::Tokens(100),
         /*include_skills_usage_instructions*/ false,
+        /*alias_plan*/ None,
     )
     .expect("core-compatible report should render");
     assert_eq!(core_render.report, expected_report);
@@ -1145,6 +1150,7 @@ fn catalog_emits_omission_marker_when_every_minimum_skill_line_exceeds_budget() 
         SkillCatalogRenderPolicy::ExtensionCompatible,
         SkillMetadataBudget::Tokens(100),
         /*include_skills_usage_instructions*/ false,
+        /*alias_plan*/ None,
     )
     .expect("catalog should render");
     assert_eq!(render.report, expected_report);
@@ -1180,6 +1186,7 @@ fn catalog_preserves_report_when_no_fragment_fits_budget() {
         SkillCatalogRenderPolicy::ExtensionCompatible,
         SkillMetadataBudget::Tokens(1),
         /*include_skills_usage_instructions*/ false,
+        /*alias_plan*/ None,
     )
     .expect("catalog should produce a report");
     assert_eq!(

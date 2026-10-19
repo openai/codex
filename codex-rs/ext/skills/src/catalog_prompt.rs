@@ -44,6 +44,7 @@ pub(crate) enum SkillPromptKind {
     Unaliased,
     HostAliases,
     ResourceAliases,
+    ResourceAliasesV2,
 }
 
 impl SkillPromptKind {
@@ -59,20 +60,22 @@ impl SkillPromptKind {
         match self {
             Self::Unaliased => SKILLS_INTRO_WITH_SOURCE_LOCATORS,
             Self::HostAliases => SKILLS_INTRO_WITH_HOST_ALIASES,
-            Self::ResourceAliases => SKILLS_INTRO_WITH_RESOURCE_ALIASES,
+            Self::ResourceAliases | Self::ResourceAliasesV2 => SKILLS_INTRO_WITH_RESOURCE_ALIASES,
         }
     }
 
     pub(crate) fn usage_instructions(self) -> &'static str {
         match self {
-            Self::Unaliased | Self::ResourceAliases => SKILLS_HOW_TO_USE_WITH_SOURCE_LOCATORS,
+            Self::Unaliased | Self::ResourceAliases | Self::ResourceAliasesV2 => {
+                SKILLS_HOW_TO_USE_WITH_SOURCE_LOCATORS
+            }
             Self::HostAliases => SKILLS_HOW_TO_USE_WITH_HOST_ALIASES,
         }
     }
 
     pub(crate) fn alias_instructions(self) -> Option<&'static str> {
         match self {
-            Self::ResourceAliases => Some(RESOURCE_ALIAS_INSTRUCTIONS),
+            Self::ResourceAliases | Self::ResourceAliasesV2 => Some(RESOURCE_ALIAS_INSTRUCTIONS),
             Self::Unaliased | Self::HostAliases => None,
         }
     }
@@ -88,6 +91,9 @@ pub(crate) fn render_available_skills_body(
     lines.push(prompt_kind.intro().to_string());
     if !skill_root_lines.is_empty() {
         lines.push("### Skill roots".to_string());
+        if prompt_kind == SkillPromptKind::ResourceAliasesV2 {
+            lines.push("For each alias listed below, this mapping replaces any earlier mapping for that alias. Use it for subsequent skill calls.".to_string());
+        }
         lines.extend(skill_root_lines.iter().cloned());
     }
     if skill_lines

@@ -54,6 +54,7 @@ use codex_protocol::protocol::EventMsg;
 #[cfg(not(target_os = "windows"))]
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
@@ -1342,6 +1343,259 @@ async fn child_completion_wakes_parent_after_final_answer() -> Result<()> {
     test.thread_manager
         .shutdown_all_threads_bounded(Duration::from_secs(5))
         .await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skill_read_recovers_omitted_installation_and_reads_selected_environment() -> Result<()> {
+    use codex_skills_extension::SkillProvider;
+    use codex_skills_extension::catalog::SkillAuthority;
+    use codex_skills_extension::catalog::SkillCatalog;
+    use codex_skills_extension::catalog::SkillCatalogEntry;
+    use codex_skills_extension::catalog::SkillPackageId;
+    use codex_skills_extension::catalog::SkillReadResult;
+    use codex_skills_extension::catalog::SkillResourceId;
+    use codex_skills_extension::catalog::SkillSearchResult;
+    use codex_skills_extension::catalog::SkillSourceKind;
+    use codex_skills_extension::catalog::SkillSourceLocation;
+    use codex_skills_extension::provider::SkillListQuery;
+    use codex_skills_extension::provider::SkillProviderFuture;
+    use codex_skills_extension::provider::SkillReadRequest;
+    use codex_skills_extension::provider::SkillSearchRequest;
+
+    skip_if_no_network!(Ok(()));
+
+    // Supply already-reconciled catalog fixtures; exercise production preparation and reads.
+    struct InstallationSkills(SkillCatalog);
+    impl SkillProvider for InstallationSkills {
+        fn list(&self, _query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
+            Box::pin(async { Ok(self.0.clone()) })
+        }
+
+        fn read<'a>(
+            &'a self,
+            request: SkillReadRequest<'a>,
+        ) -> SkillProviderFuture<'a, SkillReadResult> {
+            Box::pin(async move {
+                assert!(
+                    self.0
+                        .entries
+                        .iter()
+                        .any(|entry| entry.id == request.package)
+                );
+                Ok(SkillReadResult {
+                    resource: request.resource,
+                    contents: "# Deployment\nRun scripts/check.py from an available installation."
+                        .to_string(),
+                })
+            })
+        }
+
+        fn search(
+            &self,
+            _request: SkillSearchRequest,
+        ) -> SkillProviderFuture<'_, SkillSearchResult> {
+            Box::pin(async { Ok(SkillSearchResult::default()) })
+        }
+    }
+
+    let executor = core_test_support::exec_server::ExecServerProcess::start().await?;
+    // Keep byte-budget decisions stable across host temporary-directory lengths.
+    let temp_root = fs::canonicalize(std::env::temp_dir())?;
+    let workspace = tempfile::Builder::new()
+        .rand_bytes(185_usize.saturating_sub(temp_root.to_string_lossy().len()))
+        .tempdir_in(temp_root)?;
+    let workspace_path = fs::canonicalize(workspace.path())?;
+    let deployment_root = workspace_path.join("skills/deploy");
+    fs::create_dir_all(&deployment_root)?;
+    let deployment_path = PathUri::from_host_native_path(&deployment_root)?;
+    let executor_contents = "# Deployment in env-04\nRun scripts/check.py from this installation.";
+    fs::write(deployment_root.join("SKILL.md"), executor_contents)?;
+
+    let mut catalog = SkillCatalog::default();
+    for (name, installation_count) in [("review", 2), ("deploy", 5)] {
+        let package = format!("skill://deployment/{name}");
+        let mut entry = SkillCatalogEntry::new(
+            SkillPackageId(package.clone()),
+            SkillAuthority::new(SkillSourceKind::Cloud, "codex_apps"),
+            name,
+            "Check an installed deployment before proceeding.",
+            SkillResourceId::new(format!("{package}/SKILL.md")),
+        );
+        for index in 0..installation_count {
+            let environment_id = format!("env-{index:02}");
+            let package = format!("skill://executor-{index:02}/{name}");
+            entry.sources.push(SkillSourceLocation {
+                authority: SkillAuthority::new(
+                    SkillSourceKind::Executor,
+                    format!("executor-{index:02}"),
+                ),
+                package: SkillPackageId(package.clone()),
+                main_prompt: SkillResourceId::environment(
+                    format!("{package}/SKILL.md"),
+                    environment_id,
+                    if name == "deploy" && index == 4 {
+                        PathUri::from_host_native_path(deployment_root.join("SKILL.md"))?
+                    } else {
+                        PathUri::parse(&format!("file:///opt/skills/{name}/SKILL.md"))?
+                    },
+                ),
+                display_path: None,
+                plugin_id: None,
+                enabled: true,
+                alias_root: None,
+                prompt_visible: true,
+            });
+        }
+        catalog.entries.push(entry);
+    }
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    install_with_providers(
+        &mut extensions,
+        SkillProviders::new()
+            .with_cloud_provider(Arc::new(InstallationSkills(catalog)))
+            .with_executor_provider(Arc::new(
+                ExecutorSkillProvider::new_with_restriction_product(
+                    Arc::new(EnvironmentManager::default_for_tests()),
+                    /*restriction_product*/ None,
+                ),
+            )),
+        |config: &Config| SkillsExtensionConfig {
+            include_instructions: config.include_skill_instructions,
+            max_context_tokens: config.skill_max_context_tokens,
+            bundled_skills_enabled: false,
+            cloud_skill_enabled: true,
+            shadow_selection_enabled: false,
+        },
+    );
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "read-review",
+                    "skills",
+                    "read",
+                    r#"{"package":"skill://executor-00/review","source":{"kind":"cloud"}}"#,
+                ),
+                ev_completed("review-response"),
+            ]),
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "read-deploy",
+                    "skills",
+                    "read",
+                    r#"{"package":"skill://deployment/deploy"}"#,
+                ),
+                ev_completed("deploy-response"),
+            ]),
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "find-deploy",
+                    "skills",
+                    "installations",
+                    r#"{"package":"skill://deployment/deploy"}"#,
+                ),
+                ev_completed("installation-response"),
+            ]),
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "read-env-04",
+                    "skills",
+                    "read",
+                    r#"{"package":"skill://deployment/deploy","source":{"kind":"executor","environment_id":"env-04"}}"#,
+                ),
+                ev_completed("executor-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message(
+                    "done",
+                    "I found the omitted env-04 installation and read its deployment instructions.",
+                ),
+                ev_completed("done-response"),
+            ]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_model("gpt-6-astra")
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        // Start without a local attachment so Cloud skills remain available.
+        .with_exec_server_url("none")
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            configure_scenario_catalog(config);
+            config.cloud_skill_enabled = true;
+            config
+                .features
+                .enable(Feature::ExecutorCapabilityDiscoveryV2)
+                .expect("enable discovery V2");
+        })
+        .with_model_info_override("gpt-6-astra", |model| {
+            model.truncation_policy =
+                codex_protocol::openai_models::TruncationPolicyConfig::bytes(/*limit*/ 1200);
+        })
+        // The named executor runs on this host and reads the temporary workspace above.
+        .build(&server)
+        .await?;
+    test.thread_manager
+        .environment_manager()
+        .upsert_environment(
+            "env-04".to_string(),
+            executor.websocket_url.clone(),
+            /*connect_timeout*/ None,
+        )?;
+    let cwd = PathUri::from_host_native_path(&workspace_path)?;
+    test.submit_turn_with_environments(
+        "Read the review and deployment instructions, find all deployment installations, then read the instructions from env-04.",
+        Some(vec![TurnEnvironmentSelection {
+            selected_capability_roots: Default::default(),
+            environment_id: "env-04".to_string(),
+            cwd: cwd.clone(),
+            workspace_roots: vec![cwd],
+            config: EnvironmentConfigState::FromThread,
+        }]),
+    )
+    .await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 5);
+    let recovered: serde_json::Value = serde_json::from_str(
+        &mock
+            .function_call_output_text("read-env-04")
+            .expect("executor read output"),
+    )?;
+    assert_eq!(recovered["contents"], executor_contents);
+    assert_eq!(recovered["resource"], "skill://executor-04/deploy/SKILL.md");
+    // Canonicalize JSON only in snapshot copies (Cargo/Bazel differ in map ordering).
+    // Pretty printing keeps installation fields visible rather than hashing one long line.
+    let mut bodies = requests
+        .iter()
+        .map(core_test_support::responses::ResponsesRequest::body_json)
+        .collect::<Vec<_>>();
+    for body in &mut bodies {
+        for item in body["input"].as_array_mut().expect("request input") {
+            if item["type"] == "function_call_output" {
+                let mut output: serde_json::Value =
+                    serde_json::from_str(item["output"].as_str().expect("tool output"))?;
+                for location in output["installations"].as_array_mut().into_iter().flatten() {
+                    if location["skill_root"] == deployment_path.inferred_native_path_string() {
+                        location["skill_root"] = json!("<ENV_04_SKILL_ROOT>");
+                    }
+                }
+                output.sort_all_objects();
+                item["output"] = json!(serde_json::to_string_pretty(&output)?);
+            }
+        }
+    }
+    insta::assert_snapshot!(
+        "skill_read_installation_recovery_request_history",
+        context_snapshot::format_context_snapshot(
+            "Astra reads Cloud instructions, discovers an omitted deployment installation, and reads its instructions from env-04.",
+            &bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),
+            &ContextSnapshotOptions::default().rewrite_known_segments(),
+        )
+    );
     Ok(())
 }
 

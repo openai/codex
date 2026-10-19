@@ -11,6 +11,7 @@ use codex_mcp::McpResourceClientAuthKey;
 use codex_mcp::McpResourceServerCacheKey;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 
+use crate::aliases::SkillCatalogAliases;
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillPackageId;
@@ -249,6 +250,7 @@ pub(crate) type SkillsStepState = OnceCell<Arc<SkillStepCatalog>>;
 #[derive(Debug)]
 pub(crate) struct SkillStepCatalog {
     pub(super) catalog: SkillCatalog,
+    pub(crate) aliases: SkillCatalogAliases,
     /// None means no Cloud catalog was captured for this step.
     pub(super) cloud_warnings: Option<Vec<String>>,
     pub(super) executor_warnings: Vec<String>,
@@ -259,6 +261,7 @@ impl SkillStepCatalog {
         cloud: Option<SkillCatalog>,
         executor: SkillCatalog,
         discovery_v2: bool,
+        aliases: SkillCatalogAliases,
     ) -> Self {
         let cloud_skill_count = cloud.as_ref().map(|catalog| catalog.entries.len());
         let executor_skill_count = executor.entries.len();
@@ -290,6 +293,7 @@ impl SkillStepCatalog {
         );
         Self {
             catalog,
+            aliases,
             cloud_warnings,
             executor_warnings,
         }
