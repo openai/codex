@@ -446,16 +446,67 @@ async fn sampler_records_token_usage_after_returning_an_early_classification() -
         .iter()
         .map(codex_guardian_context::estimate_input_tokens)
         .sum::<usize>();
-    assert!(metrics.0.lock().unwrap().contains(&(
-        codex_guardian_context::REQUEST_TOKENS_METRIC.to_owned(),
-        i64::try_from(estimated)?,
-        vec![
-            ("target".to_owned(), "async".to_owned()),
-            ("component".to_owned(), "total".to_owned()),
-        ],
-    )));
+    assert_eq!(
+        metrics
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(
+                |metric| metric.0 == codex_guardian_context::REQUEST_TOKENS_METRIC
+                    && metric.2.iter().any(|(key, _)| key == "token_bucket")
+            )
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![(
+            codex_guardian_context::REQUEST_TOKENS_METRIC.to_owned(),
+            i64::try_from(estimated)?,
+            vec![
+                ("target".to_owned(), "async".to_owned()),
+                ("component".to_owned(), "total".to_owned()),
+                (
+                    "token_bucket".to_owned(),
+                    codex_guardian_context::request_token_bucket(estimated).to_owned()
+                ),
+            ],
+        )],
+    );
 
     Ok(())
+}
+
+#[tokio::test]
+async fn oversized_classification_keeps_untagged_request_histograms() {
+    let metrics = Arc::new(RecordingMetrics::default());
+    let mut config = sampler_config("http://localhost".to_owned());
+    config.max_input_tokens = 1;
+    config.metrics = Some(metrics.clone());
+    let sampler = LunaSampler::new(config);
+    assert!(matches!(
+        sampler.sample(sample_request("parent")).await,
+        Err(LunaSamplerError::InputTooLarge)
+    ));
+    assert_eq!(
+        metrics
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|metric| metric.2.iter().any(|(key, _)| key == "token_bucket"))
+            .cloned()
+            .collect::<Vec<_>>(),
+        Vec::<RecordedMetric>::new(),
+    );
+    assert_eq!(
+        metrics
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|metric| metric.0 == codex_guardian_context::REQUEST_TOKENS_METRIC)
+            .count(),
+        3,
+    );
 }
 
 struct RefreshableAuth(std::sync::Mutex<&'static str>);

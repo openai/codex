@@ -1861,9 +1861,6 @@ impl ResponsesHttpExecutor<'_> {
             )?;
             self.client
                 .prepare_response_items_for_request(&mut request.input);
-            if crate::guardian::is_basic_session_source(&self.client.state.session_source) {
-                crate::guardian::observe_guardian_request(session_telemetry, &request);
-            }
             let request_session_telemetry =
                 session_telemetry_for_request(session_telemetry, &request);
             options.extra_headers.extend(responses_headers);
@@ -2074,12 +2071,6 @@ impl ModelClientSession {
                 Err(err) => return Err(provider.map_api_error(err)),
             }
 
-            // Measure the complete logical request, not only the websocket delta.
-            if !warmup
-                && crate::guardian::is_basic_session_source(&self.client.state.session_source)
-            {
-                crate::guardian::observe_guardian_request(session_telemetry, &request);
-            }
             let mut client_metadata = self.client.build_ws_client_metadata(
                 responses_metadata,
                 include_internal,

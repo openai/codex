@@ -167,6 +167,7 @@ impl Reservation {
             request.metrics.as_deref(),
             prepared.existing_context_tokens,
             prepared.input_tokens,
+            super::metrics::RequestAdmission::Admitted,
         );
         drop(request.evidence);
         let cursor = prepared.cursor;

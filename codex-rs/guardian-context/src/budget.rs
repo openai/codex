@@ -30,6 +30,33 @@ pub const REQUEST_TOKENS_BOUNDARIES: &[f64] = &[
     1_000_000.0,
     2_000_000.0,
 ];
+
+/// Returns a bounded, sortable label with 20k steps and a final 256k cutoff.
+/// Upper bounds are inclusive; zero belongs to the first bucket and values above 256k to the last.
+pub fn request_token_bucket(tokens: usize) -> &'static str {
+    const BOUNDARIES: [usize; 13] = [
+        20_000, 40_000, 60_000, 80_000, 100_000, 120_000, 140_000, 160_000, 180_000, 200_000,
+        220_000, 240_000, 256_000,
+    ];
+    const LABELS: [&str; 14] = [
+        "01_0-20k",
+        "02_20k-40k",
+        "03_40k-60k",
+        "04_60k-80k",
+        "05_80k-100k",
+        "06_100k-120k",
+        "07_120k-140k",
+        "08_140k-160k",
+        "09_160k-180k",
+        "10_180k-200k",
+        "11_200k-220k",
+        "12_220k-240k",
+        "13_240k-256k",
+        "14_256k-max",
+    ];
+    LABELS[BOUNDARIES.partition_point(|bound| tokens > *bound)]
+}
+
 /// One shared scale for the section metric's count, token and byte measurements.
 /// Buckets belong to the metric name, not its measurement tag.
 pub const SECTION_COST_BOUNDARIES: &[f64] = &[

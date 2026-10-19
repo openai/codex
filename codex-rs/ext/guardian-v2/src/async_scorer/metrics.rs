@@ -145,10 +145,17 @@ pub(super) fn record_section_costs(
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum RequestAdmission {
+    Admitted,
+    Rejected,
+}
+
 pub(super) fn record_request_tokens(
     metrics: Option<&dyn ExtensionMetrics>,
     existing: usize,
     total: usize,
+    admission: RequestAdmission,
 ) {
     let Some(metrics) = metrics else {
         return;
@@ -158,11 +165,19 @@ pub(super) fn record_request_tokens(
         ("new_input", total.saturating_sub(existing)),
         ("total", total),
     ] {
+        let mut tags = vec![("target", "async"), ("component", component)];
+        // Histogram Count grouped by token_bucket counts only admitted complete inputs.
+        if component == "total" && matches!(admission, RequestAdmission::Admitted) {
+            tags.push((
+                "token_bucket",
+                codex_guardian_context::request_token_bucket(total),
+            ));
+        }
         metrics.histogram_with_boundaries(
             codex_guardian_context::REQUEST_TOKENS_METRIC,
             i64::try_from(tokens).unwrap_or(i64::MAX),
             codex_guardian_context::REQUEST_TOKENS_BOUNDARIES,
-            &[("target", "async"), ("component", component)],
+            &tags,
         );
     }
 }

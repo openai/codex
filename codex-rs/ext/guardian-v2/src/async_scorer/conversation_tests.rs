@@ -89,13 +89,51 @@ async fn configured_reset_limit_rebuilds_history_without_rejecting_fresh_evidenc
             ev_completed("score"),
         ]);
         let mock = responses::mount_sse_sequence(&server, vec![events; 2]).await;
+        let metrics = Arc::new(RecordingMetrics::default());
         for index in 0..2 {
-            let (request, score) = pending_request(&fixture, "parent").await?;
+            let (mut request, score) = pending_request(&fixture, "parent").await?;
+            request.metrics = Some(metrics.clone());
             backend.reserve(|| index).1.unwrap().run(request).await;
             assert_eq!(score.await??, "low");
         }
         let requests = mock.requests();
         assert_eq!(requests.len(), 2);
+        let expected_buckets = requests
+            .iter()
+            .map(|request| {
+                let input: Vec<ResponseItem> =
+                    serde_json::from_value(request.body_json()["input"].clone()).unwrap();
+                let tokens = input
+                    .iter()
+                    .map(codex_guardian_context::estimate_input_tokens)
+                    .sum();
+                RecordedMetric::Histogram(
+                    codex_guardian_context::REQUEST_TOKENS_METRIC.to_owned(),
+                    i64::try_from(tokens).unwrap(),
+                    vec![
+                        ("target".to_owned(), "async".to_owned()),
+                        ("component".to_owned(), "total".to_owned()),
+                        (
+                            "token_bucket".to_owned(),
+                            codex_guardian_context::request_token_bucket(tokens).to_owned(),
+                        ),
+                    ],
+                )
+            })
+            .collect::<Vec<_>>();
+        let buckets = metrics
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|sample| {
+                matches!(sample, RecordedMetric::Histogram(name, _, tags)
+                if name == codex_guardian_context::REQUEST_TOKENS_METRIC
+                    && tags.iter().any(|(key, _)| key == "token_bucket"))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(buckets, expected_buckets);
         let input = requests[1].input();
         assert_eq!(input.iter().any(|item| item["id"] == "score"), reused);
         assert_eq!(

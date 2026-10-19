@@ -8,6 +8,39 @@ use codex_protocol::models::ImageReference;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn request_token_ranges_keep_boundary_values_in_the_lower_bucket() {
+    let tokens = [
+        0,
+        19_999,
+        20_000,
+        20_001,
+        40_000,
+        40_001,
+        240_000,
+        240_001,
+        256_000,
+        256_001,
+        usize::MAX,
+    ];
+    assert_eq!(
+        tokens.map(request_token_bucket),
+        [
+            "01_0-20k",
+            "01_0-20k",
+            "01_0-20k",
+            "02_20k-40k",
+            "02_20k-40k",
+            "03_40k-60k",
+            "12_220k-240k",
+            "13_240k-256k",
+            "13_240k-256k",
+            "14_256k-max",
+            "14_256k-max"
+        ]
+    );
+}
+
+#[test]
 fn section_costs_keep_multimodal_payloads_separate() {
     let context = ComposedContext {
         sections: vec![

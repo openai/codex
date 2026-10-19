@@ -298,13 +298,20 @@ impl LunaSampler {
             .into_iter()
             .map(ResponseItemEnvelope::into_item)
             .collect();
+        let admission =
+            if total_tokens > self.config.max_input_tokens.saturating_sub(/*rhs*/ 256) {
+                super::metrics::RequestAdmission::Rejected
+            } else {
+                super::metrics::RequestAdmission::Admitted
+            };
         super::metrics::record_request_tokens(
             self.config.metrics.as_deref(),
             /*existing*/ 0,
             total_tokens,
+            admission,
         );
         // Oversized classifications defer to sync with the existing failure score.
-        if total_tokens > self.config.max_input_tokens.saturating_sub(/*rhs*/ 256) {
+        if matches!(admission, super::metrics::RequestAdmission::Rejected) {
             return Err(LunaSamplerError::InputTooLarge);
         }
         let (supersede, superseded) = oneshot::channel();
