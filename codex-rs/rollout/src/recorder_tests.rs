@@ -174,6 +174,31 @@ async fn opening_existing_rollout_preserves_modified_time() -> std::io::Result<(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn open_log_file_materializes_rollout_when_acl_denies_timestamp_changes() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let rollout_path = home.path().join("rollout.jsonl");
+    let compressed_path = rollout_path.with_extension("jsonl.zst");
+    fs::write(
+        &compressed_path,
+        zstd::stream::encode_all(&b"original\n"[..], 0)?,
+    )?;
+    let acl = std::process::Command::new("/bin/chmod")
+        .args(["+a", "everyone deny writeattr"])
+        .arg(&compressed_path)
+        .output()?;
+    assert!(acl.status.success(), "{acl:?}");
+
+    let mut file = open_log_file(&rollout_path)?;
+    file.write_all(b"appended\n")?;
+    drop(file);
+
+    assert!(!compressed_path.exists());
+    assert_eq!(fs::read(&rollout_path)?, b"original\nappended\n");
+    Ok(())
+}
+
 #[tokio::test]
 async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
     let home = TempDir::new().expect("temp dir");

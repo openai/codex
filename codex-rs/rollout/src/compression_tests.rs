@@ -3,6 +3,7 @@ use std::fs;
 use std::fs::FileTimes;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::SystemTime;
 
@@ -441,9 +442,20 @@ async fn worker_compresses_old_active_and_archived_rollouts() -> anyhow::Result<
     let stale_temp = active_path.with_file_name("rollout-stale.jsonl.zst.tmp");
     fs::write(&stale_temp, "stale temp")?;
     set_old_mtime(&stale_temp)?;
+    // A crash during metadata restoration can leave the data file unreadable.
+    #[cfg(unix)]
+    fs::set_permissions(&stale_temp, fs::Permissions::from_mode(0o000))?;
 
     let fresh_temp = active_path.with_file_name("rollout-fresh.jsonl.zst.tmp");
     fs::write(&fresh_temp, "fresh temp")?;
+
+    // Pause materialization after restoring the old metadata, before publication.
+    let mut live_temp = tempfile::Builder::new()
+        .prefix(".rollout-materialize-")
+        .tempfile_in(active_path.parent().unwrap())?;
+    live_temp.write_all(b"live materialization")?;
+    access_metadata::copy(&fs::File::open(&active_path)?, live_temp.as_file())?;
+    let source_modified = fs::metadata(&active_path)?.modified()?;
 
     worker::run(home.path().to_path_buf(), Startup).await?;
 
@@ -455,6 +467,13 @@ async fn worker_compresses_old_active_and_archived_rollouts() -> anyhow::Result<
     assert!(!compressed_rollout_path(&fresh_path).exists());
     assert!(!stale_temp.exists());
     assert!(fresh_temp.exists());
+    let materialized_path = home.path().join("materialized.jsonl");
+    persist_temp_file_noclobber(live_temp, &materialized_path)?;
+    assert_eq!(
+        fs::metadata(&materialized_path)?.modified()?,
+        source_modified
+    );
+    assert_eq!(fs::read(&materialized_path)?, b"live materialization");
     assert!(
         home.path()
             .join(".tmp")
@@ -623,6 +642,211 @@ async fn compression_preserves_rollout_permissions() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn worker_preserves_inherited_acl_through_append() -> anyhow::Result<()> {
+    use anyhow::Context;
+    use std::os::unix::fs::MetadataExt;
+    use std::process::Command;
+
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(61);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let path = archived_rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&path, thread_id, "ACL-protected transcript")?;
+    set_old_mtime(&path)?;
+    // An archived rollout can retain inherited denies from its former directory.
+    let acl = Command::new("/bin/chmod")
+        .args(["+ai#", "0", "everyone deny writeattr"])
+        .arg(&path)
+        .output()?;
+    assert!(acl.status.success(), "{acl:?}");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000))?;
+    let acl = Command::new("/bin/chmod")
+        .args(["+a#", "1", "everyone allow read,write,append,writeattr"])
+        .arg(&path)
+        .output()?;
+    assert!(acl.status.success(), "{acl:?}");
+    let before = fs::metadata(&path)?;
+    let expected = RolloutRecorder::load_rollout_items(&path)
+        .await
+        .context("read the ACL-protected source")?;
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .context("the source ACL must permit appending before compression")?;
+    assert_eq!(
+        fs::File::open(&path)?
+            .set_times(FileTimes::new().set_modified(SystemTime::now()))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+
+    // Exercise discovery, compression, final metadata and publication through
+    // the real worker, not the test-only compress_now helper.
+    worker::run(home.path().to_path_buf(), Startup).await?;
+    let compressed = compressed_rollout_path(&path);
+    assert!(!path.exists());
+    assert_eq!(
+        fs::File::open(&compressed)?
+            .set_times(FileTimes::new().set_modified(SystemTime::now()))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    let after = fs::metadata(&compressed)?;
+    assert_eq!(after.modified()?, before.modified()?);
+    assert_eq!(
+        (after.uid(), after.gid(), after.permissions().mode()),
+        (before.uid(), before.gid(), before.permissions().mode())
+    );
+    assert_eq!(
+        serde_json::to_value(
+            RolloutRecorder::load_rollout_items(&path)
+                .await
+                .context("read the worker's compressed replacement")?
+        )?,
+        serde_json::to_value(&expected)?
+    );
+
+    let appended = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+        message: "append through the preserved ACL".to_string(),
+        ..Default::default()
+    }));
+    append_rollout_item_to_path(&path, &appended)
+        .await
+        .context("materialize and append through the preserved ACL")?;
+    assert!(!compressed.exists());
+    assert_eq!(
+        fs::File::open(&path)?
+            .set_times(FileTimes::new().set_modified(SystemTime::now()))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    let after = fs::metadata(&path)?;
+    assert_eq!(
+        (after.uid(), after.gid(), after.permissions().mode()),
+        (before.uid(), before.gid(), before.permissions().mode())
+    );
+    let mut expected_items = expected.0;
+    expected_items.push(appended);
+    assert_eq!(
+        serde_json::to_value(RolloutRecorder::load_rollout_items(&path).await?)?,
+        serde_json::to_value((expected_items, expected.1, expected.2))?
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn worker_preserves_alternate_group_through_materialization() -> anyhow::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    use std::process::Command;
+
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(62);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let path = archived_rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&path, thread_id, "different group")?;
+    set_old_mtime(&path)?;
+    let original_group = fs::metadata(&path)?.gid();
+    let groups = Command::new("id").arg("-G").output()?;
+    assert!(groups.status.success());
+    let Some(group) = std::str::from_utf8(&groups.stdout)?
+        .split_whitespace()
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .find(|group| *group != original_group)
+    else {
+        eprintln!("skipping ownership regression: no alternate supplementary group");
+        return Ok(());
+    };
+    std::os::unix::fs::chown(&path, /*uid*/ None, Some(group))?;
+    assert_eq!(fs::metadata(&path)?.gid(), group);
+
+    worker::run(home.path().to_path_buf(), Startup).await?;
+    assert!(!path.exists());
+    assert_eq!(fs::metadata(compressed_rollout_path(&path))?.gid(), group);
+    materialize_rollout_for_append(&path, /*writer_lock*/ None).await?;
+    assert_eq!(fs::metadata(&path)?.gid(), group);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn worker_does_not_leak_temps_for_deletion_protected_rollouts() -> anyhow::Result<()> {
+    use std::process::Command;
+
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(63);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let path = archived_rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&path, thread_id, "deletion-protected transcript")?;
+    set_old_mtime(&path)?;
+    let acl = Command::new("/bin/chmod")
+        .args(["+a", "everyone deny delete,writesecurity"])
+        .arg(&path)
+        .output()?;
+    assert!(acl.status.success(), "{acl:?}");
+    let contents = fs::read(&path)?;
+    let modified = fs::metadata(&path)?.modified()?;
+    let access = Command::new("/bin/ls").arg("-le").arg(&path).output()?;
+    assert!(access.status.success(), "{access:?}");
+
+    // Collect results before asserting so even a regression's protected temps
+    // have their ACLs cleared before TempDir tries to remove them.
+    let result: anyhow::Result<_> = async {
+        let mut files_after_passes = Vec::new();
+        for _ in 0..2 {
+            worker::run(home.path().to_path_buf(), Startup).await?;
+            files_after_passes.push(
+                fs::read_dir(path.parent().unwrap())?
+                    .map(|entry| entry.map(|entry| entry.path()))
+                    .collect::<io::Result<Vec<_>>>()?,
+            );
+            // Allow the next pass without waiting for the run marker to expire.
+            fs::remove_file(home.path().join(".tmp/rollout-compression.lock"))?;
+        }
+        let access_after = Command::new("/bin/ls").arg("-le").arg(&path).output()?;
+        Ok((
+            files_after_passes,
+            fs::read(&path)?,
+            fs::metadata(&path)?.modified()?,
+            access_after,
+            fs::remove_file(&path).map_err(|err| err.kind()),
+        ))
+    }
+    .await;
+    for entry in fs::read_dir(path.parent().unwrap())? {
+        let cleanup = Command::new("/bin/chmod")
+            .arg("-N")
+            .arg(entry?.path())
+            .output()?;
+        assert!(cleanup.status.success(), "{cleanup:?}");
+    }
+    let (files_after_passes, contents_after, modified_after, access_after, deletion) = result?;
+    assert!(access_after.status.success(), "{access_after:?}");
+    assert_eq!(files_after_passes, vec![vec![path.clone()], vec![path]]);
+    assert_eq!(
+        (
+            contents_after,
+            modified_after,
+            access_after.stdout,
+            deletion
+        ),
+        (
+            contents,
+            modified,
+            access.stdout,
+            Err(io::ErrorKind::PermissionDenied)
+        )
+    );
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn append_materialization_preserves_compressed_rollout_permissions() -> anyhow::Result<()> {
@@ -656,11 +880,12 @@ async fn append_materialization_preserves_compressed_rollout_permissions() -> an
 #[test]
 fn persist_temp_file_noclobber_installs_completed_temp() -> anyhow::Result<()> {
     let home = TempDir::new()?;
-    let temp_path = home.path().join("rollout.jsonl.tmp");
+    let mut temp_file = tempfile::NamedTempFile::new_in(home.path())?;
+    let temp_path = temp_file.path().to_path_buf();
     let destination = home.path().join("rollout.jsonl");
-    fs::write(&temp_path, "completed rollout")?;
+    temp_file.write_all(b"completed rollout")?;
 
-    persist_temp_file_noclobber(&temp_path, &destination)?;
+    persist_temp_file_noclobber(temp_file, &destination)?;
 
     assert!(!temp_path.exists());
     assert_eq!(fs::read_to_string(destination)?, "completed rollout");
@@ -670,12 +895,13 @@ fn persist_temp_file_noclobber_installs_completed_temp() -> anyhow::Result<()> {
 #[test]
 fn persist_temp_file_noclobber_does_not_replace_existing_destination() -> anyhow::Result<()> {
     let home = TempDir::new()?;
-    let temp_path = home.path().join("rollout.jsonl.tmp");
+    let mut temp_file = tempfile::NamedTempFile::new_in(home.path())?;
+    let temp_path = temp_file.path().to_path_buf();
     let destination = home.path().join("rollout.jsonl");
-    fs::write(&temp_path, "candidate rollout")?;
+    temp_file.write_all(b"candidate rollout")?;
     fs::write(&destination, "existing rollout")?;
 
-    persist_temp_file_noclobber(&temp_path, &destination)?;
+    persist_temp_file_noclobber(temp_file, &destination)?;
 
     assert!(!temp_path.exists());
     assert_eq!(fs::read_to_string(destination)?, "existing rollout");
@@ -693,6 +919,18 @@ async fn compression_preserves_read_only_rollout_permissions() -> anyhow::Result
     set_old_mtime(&rollout_path)?;
     fs::set_permissions(&rollout_path, fs::Permissions::from_mode(0o400))?;
     let source_modified = fs::metadata(&rollout_path)?.modified()?;
+    #[cfg(target_os = "macos")]
+    {
+        // New files inherit an allow that is absent from the existing source.
+        let acl = std::process::Command::new("/bin/chmod")
+            .args([
+                "+a",
+                "everyone allow write,append,file_inherit,only_inherit",
+            ])
+            .arg(rollout_path.parent().unwrap())
+            .output()?;
+        assert!(acl.status.success(), "{acl:?}");
+    }
 
     worker::run(home.path().to_path_buf(), Startup).await?;
 
@@ -701,6 +939,27 @@ async fn compression_preserves_read_only_rollout_permissions() -> anyhow::Result
     assert!(!rollout_path.exists());
     assert_eq!(compressed_metadata.permissions().mode() & 0o777, 0o400);
     assert_eq!(compressed_metadata.modified()?, source_modified);
+    #[cfg(target_os = "macos")]
+    {
+        assert_eq!(
+            fs::OpenOptions::new()
+                .append(true)
+                .open(&compressed_path)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        crate::materialize_rollout_for_reference(&rollout_path).await?;
+        assert_eq!(fs::metadata(&rollout_path)?.modified()?, source_modified);
+        assert_eq!(
+            fs::OpenOptions::new()
+                .append(true)
+                .open(&rollout_path)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
     Ok(())
 }
 

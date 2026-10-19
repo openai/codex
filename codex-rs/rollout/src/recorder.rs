@@ -1776,10 +1776,20 @@ fn open_log_file(path: &Path) -> std::io::Result<File> {
         .create(true)
         .open(path)?;
     if refresh_modified_time {
-        file.set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()))?;
+        refresh_rollout_modified_time(&file)?;
     }
     ensure_rollout_is_newline_terminated(&mut file)?;
     Ok(file)
+}
+
+fn refresh_rollout_modified_time(file: &File) -> std::io::Result<()> {
+    match file.set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now())) {
+        Ok(()) => Ok(()),
+        // A preserved ACL can permit appending while denying explicit timestamp changes.
+        // The append itself will update mtime, so this refresh must not prevent it.
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 /// Mutable state owned by the background rollout writer.
@@ -2045,7 +2055,7 @@ async fn open_rollout_for_append(
             .append(true)
             .open(path_for_open.as_path())?;
         if refresh_modified_time {
-            file.set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()))?;
+            refresh_rollout_modified_time(&file)?;
         }
         ensure_rollout_is_newline_terminated(&mut file)?;
         let ordinal_state = ordinal_state_for_rollout(&mut file, path_for_open.as_path())?;

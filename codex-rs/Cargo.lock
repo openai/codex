@@ -4556,6 +4556,7 @@ dependencies = [
  "codex-utils-path",
  "codex-utils-process",
  "codex-utils-string",
+ "libc",
  "memchr",
  "pretty_assertions",
  "regex",
