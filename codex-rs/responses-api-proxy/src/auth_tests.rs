@@ -167,6 +167,66 @@ fn oversized_serialized_exchange_request_is_rejected_before_sending() {
 }
 
 #[test]
+fn shared_oidc_transport_honors_custom_ca_in_cli_blocking_context() {
+    // Use a subprocess so certificate settings cannot affect parallel tests.
+    // run_main also runs under spawn_blocking when invoked via the Codex CLI.
+    const CHILD_ENV: &str = "CODEX_TEST_PROXY_OIDC_CUSTOM_CA";
+    if std::env::var_os(CHILD_ENV).is_some() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::task::spawn_blocking(|| {
+                let (server, url) = server();
+                let auth = Auth::federated(
+                    RotatingSource { calls: 0 },
+                    "ip-test".to_owned(),
+                    "sa-test".to_owned(),
+                )
+                .unwrap();
+                let Auth::Federated { state, .. } = &auth else {
+                    unreachable!()
+                };
+                // Exercise the production pool, only replacing the destination.
+                state.lock().unwrap().token_url = url.join("/oauth/token").unwrap();
+                let error = format!("{:#}", auth.header().unwrap_err());
+                assert_eq!(error, "OpenAI workload identity token exchange failed");
+                assert!(
+                    server
+                        .recv_timeout(Duration::from_millis(100))
+                        .unwrap()
+                        .is_none(),
+                    "must fail closed when a configured CA cannot be loaded"
+                );
+            })
+            .await
+            .unwrap();
+        });
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "auth::tests::shared_oidc_transport_honors_custom_ca_in_cli_blocking_context",
+            "--nocapture",
+        ])
+        .env(CHILD_ENV, "1")
+        .env(
+            "CODEX_CA_CERTIFICATE",
+            "/invalid-oidc-test-ca/credential.pem",
+        )
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
 fn oversized_exchange_never_becomes_a_cached_credential() {
     let (server, url) = server();
     let worker = thread::spawn(move || {

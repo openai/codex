@@ -1,5 +1,7 @@
 use super::*;
+use crate::Args;
 use crate::auth::tests::direct_token_client;
+use clap::Parser;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::io::Cursor;
@@ -10,6 +12,75 @@ use tiny_http::Header;
 use tiny_http::Server;
 use tiny_http::StatusCode;
 use tokio::runtime::Runtime;
+
+const FLAGS: &[&str] = &[
+    "responses-api-proxy",
+    "--github-oidc",
+    "--oidc-audience",
+    "https://api.openai.com/v1",
+    "--identity-provider-id",
+    "ip-test",
+    "--service-account-id",
+    "sa-test",
+    "--github-oidc-request-url",
+    "https://example.github.test/oidc?opaque=1",
+];
+
+#[test]
+fn cli_requires_complete_oidc_configuration_and_keeps_api_key_default() {
+    assert!(!Args::try_parse_from(["proxy"]).unwrap().github_oidc);
+    assert!(Args::try_parse_from(["proxy", "--github-oidc"]).is_err());
+    assert!(Args::try_parse_from(["proxy", "--oidc-audience", "openai"]).is_err());
+    assert!(Args::try_parse_from(FLAGS).unwrap().github_oidc);
+    for name in [
+        "--oidc-audience",
+        "--identity-provider-id",
+        "--service-account-id",
+        "--github-oidc-request-url",
+    ] {
+        let pos = FLAGS.iter().position(|flag| *flag == name).unwrap();
+        let mut missing = FLAGS.to_vec();
+        missing.drain(pos..pos + 2);
+        assert!(Args::try_parse_from(missing).is_err(), "missing {name}");
+    }
+}
+
+#[test]
+fn oidc_disallows_provider_overrides_before_reading_any_credentials() {
+    let mut flags = FLAGS.to_vec();
+    flags.extend(["--upstream-url", "https://example.test/v1/responses"]);
+    let args = Args::try_parse_from(flags).unwrap();
+    assert!(
+        crate::run_main(args)
+            .unwrap_err()
+            .to_string()
+            .contains("default OpenAI")
+    );
+}
+
+#[test]
+fn rejects_unsafe_or_empty_oidc_settings_without_echoing_input() {
+    for url in [
+        "http://example.test?secret=sensitive",
+        "https://name:sensitive@example.test/",
+        "https://example.test/#sensitive",
+        "sensitive",
+    ] {
+        let mut args = Args::try_parse_from(FLAGS).unwrap();
+        args.github_oidc_request_url = Some(url.to_owned());
+        let Err(err) = args.auth() else {
+            panic!("accepted {url}")
+        };
+        let error = format!("{err:#}");
+        assert!(!error.contains("sensitive"), "{error}");
+    }
+    let mut args = Args::try_parse_from(FLAGS).unwrap();
+    args.oidc_audience = Some(" ".to_owned());
+    let Err(err) = args.auth() else {
+        panic!("accepted empty audience")
+    };
+    assert!(err.to_string().contains("--oidc-audience"));
+}
 
 #[test]
 fn stdin_accepts_bounded_bearer_tokens_in_short_reads_and_rejects_injection() {

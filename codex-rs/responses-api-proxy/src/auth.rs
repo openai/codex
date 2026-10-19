@@ -33,6 +33,8 @@ use tokio::runtime::Runtime;
 use url::Url;
 use zeroize::Zeroizing;
 
+use crate::OPENAI_RESPONSES_URL;
+
 const OPENAI_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub(crate) const MAX_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
@@ -117,7 +119,16 @@ impl AuthHeader {
 }
 
 impl Auth {
-    #[cfg_attr(not(test), allow(dead_code, reason = "used by a later stack layer"))]
+    /// Must be checked before reading any source credential, including stdin.
+    pub(crate) fn validate_federated_upstream(upstream: &str) -> Result<()> {
+        if upstream != OPENAI_RESPONSES_URL {
+            return Err(anyhow!(
+                "workload identity requires the default OpenAI Responses endpoint"
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn federated(
         source: impl SubjectTokenSource + 'static,
         provider: String,

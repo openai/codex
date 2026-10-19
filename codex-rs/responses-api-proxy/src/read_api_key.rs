@@ -215,7 +215,7 @@ fn validate_auth_header_bytes(mut key_bytes: &[u8]) -> Result<usize> {
     }
     if key_bytes.is_empty() {
         return Err(anyhow!(
-            "API key must be provided via stdin (e.g. printenv OPENAI_API_KEY | codex responses-api-proxy)"
+            "API key must be provided via stdin (e.g. printenv OPENAI_API_KEY | env -u OPENAI_API_KEY codex-responses-api-proxy)"
         ));
     }
     if key_bytes

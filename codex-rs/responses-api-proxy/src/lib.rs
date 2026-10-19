@@ -30,15 +30,17 @@ use tiny_http::StatusCode;
 
 mod auth;
 mod dump;
-#[cfg_attr(not(test), allow(dead_code, reason = "used by a later stack layer"))]
 mod github_oidc;
 mod read_api_key;
 use auth::Auth;
 use dump::ExchangeDumper;
+use github_oidc::GithubOidc;
 use read_api_key::read_auth_header_from_stdin;
 
+const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
+
 /// CLI arguments for the proxy.
-#[derive(Debug, Clone, Parser)]
+#[derive(Clone, Debug, Parser)]
 #[command(name = "responses-api-proxy", about = "Minimal OpenAI responses proxy")]
 pub struct Args {
     /// Port to listen on. If not set, an ephemeral port is used.
@@ -60,6 +62,57 @@ pub struct Args {
     /// Directory where request/response dumps should be written as JSON.
     #[arg(long, value_name = "DIR")]
     pub dump_dir: Option<PathBuf>,
+
+    /// Authenticate to the OpenAI API using GitHub Actions workload identity.
+    /// In this mode stdin supplies the GitHub OIDC request token, not an API key.
+    #[arg(long, requires_all = ["oidc_audience", "identity_provider_id", "service_account_id", "github_oidc_request_url"])]
+    pub github_oidc: bool,
+
+    /// Audience configured on the OpenAI workload identity provider.
+    #[arg(long, requires = "github_oidc", value_name = "AUDIENCE")]
+    pub oidc_audience: Option<String>,
+
+    /// OpenAI workload identity provider ID.
+    #[arg(long, requires = "github_oidc", value_name = "ID")]
+    pub identity_provider_id: Option<String>,
+
+    /// OpenAI service account ID selected by the provider mapping.
+    #[arg(long, requires = "github_oidc", value_name = "ID")]
+    pub service_account_id: Option<String>,
+
+    /// HTTPS token-request URL from GitHub's runner-provided ACTIONS_ID_TOKEN_REQUEST_URL.
+    ///
+    /// Use the value directly from the trusted runner environment, never from
+    /// a workflow input or repository content. The proxy sends the GitHub
+    /// request credential to this URL.
+    #[arg(long, requires = "github_oidc", value_name = "URL")]
+    pub github_oidc_request_url: Option<String>,
+}
+
+impl Args {
+    fn auth(&self) -> Result<Auth> {
+        if self.github_oidc {
+            Auth::validate_federated_upstream(&self.upstream_url)?;
+            let provider = required(&self.identity_provider_id, "--identity-provider-id")?;
+            let service_account = required(&self.service_account_id, "--service-account-id")?;
+            let audience = required(&self.oidc_audience, "--oidc-audience")?;
+            let request_url = required(&self.github_oidc_request_url, "--github-oidc-request-url")?;
+            Auth::federated(
+                GithubOidc::from_stdin(request_url, audience)?,
+                provider.to_owned(),
+                service_account.to_owned(),
+            )
+        } else {
+            Ok(Auth::ApiKey(read_auth_header_from_stdin()?))
+        }
+    }
+}
+
+fn required<'a>(value: &'a Option<String>, name: &str) -> Result<&'a str> {
+    value
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow!("workload identity requires a nonempty {name}"))
 }
 
 #[derive(Serialize)]
@@ -75,7 +128,12 @@ struct ForwardConfig {
 
 /// Entry point for the library main, for parity with other crates.
 pub fn run_main(args: Args) -> Result<()> {
-    let auth = Arc::new(Auth::ApiKey(read_auth_header_from_stdin()?));
+    let auth = Arc::new(args.auth()?);
+    if args.github_oidc {
+        // Complete the initial exchange before publishing server info.
+        // API keys have already been validated when read from stdin.
+        auth.header()?;
+    }
 
     let upstream_url = Url::parse(&args.upstream_url).context("parsing --upstream-url")?;
     let host = match (upstream_url.host_str(), upstream_url.port()) {

@@ -29,7 +29,6 @@ pub(crate) struct GithubOidc {
 }
 
 impl GithubOidc {
-    #[expect(dead_code, reason = "CLI is wired in a later stack layer")]
     pub(crate) fn from_stdin(request_url: &str, audience: &str) -> Result<Self> {
         // Avoid echoing caller-supplied URL parameters in parsing errors.
         let mut request_url =
