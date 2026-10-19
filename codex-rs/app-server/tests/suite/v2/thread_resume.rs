@@ -447,8 +447,15 @@ async fn wait_for_responses_request_count(
     Ok(())
 }
 
+#[test_case(ThreadHistoryMode::Legacy, false; "legacy with turns")]
+#[test_case(ThreadHistoryMode::Legacy, true; "legacy without turns")]
+#[test_case(ThreadHistoryMode::Paginated, false; "paginated with turns")]
+#[test_case(ThreadHistoryMode::Paginated, true; "paginated without turns")]
 #[tokio::test]
-async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
+async fn thread_resume_rejects_unmaterialized_thread(
+    history_mode: ThreadHistoryMode,
+    exclude_turns: bool,
+) -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri()).write(codex_home.path())?;
@@ -462,6 +469,7 @@ async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
     let start_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("gpt-5.4".to_string()),
+            history_mode: Some(history_mode),
             ..Default::default()
         })
         .await?;
@@ -472,6 +480,7 @@ async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id.clone(),
+            exclude_turns,
             ..Default::default()
         })
         .await?;

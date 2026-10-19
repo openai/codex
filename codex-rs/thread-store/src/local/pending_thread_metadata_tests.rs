@@ -234,6 +234,97 @@ async fn pending_rollout_compatible_metadata_is_written_with_observed_update() {
 }
 
 #[tokio::test]
+async fn deferred_reads_preserve_creation_metadata_and_updates() {
+    for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
+        let (_home, store, runtime) = store_with_runtime().await;
+        let thread_id = ThreadId::new();
+        let mut params = create_thread_params(thread_id);
+        params.history_mode = history_mode;
+        params.forked_from_id = Some(ThreadId::new());
+        params.parent_thread_id = Some(ThreadId::new());
+        let live_thread = LiveThread::create(store.clone(), params.clone())
+            .await
+            .expect("create live thread");
+        let rollout_path = store
+            .live_rollout_path(thread_id)
+            .await
+            .expect("live rollout path");
+        let initial = live_thread
+            .read_thread(
+                /*include_archived*/ false, /*include_history*/ false,
+            )
+            .await
+            .expect_err("untouched threads still have no stored record");
+        assert!(matches!(
+            initial,
+            ThreadStoreError::InvalidRequest { message }
+                if message == format!("no rollout found for thread id {thread_id}")
+        ));
+        assert!(!rollout_path.exists());
+        assert_eq!(
+            runtime.get_thread(thread_id).await.expect("read index"),
+            None
+        );
+
+        let updated = live_thread
+            .update_metadata(
+                ThreadMetadataPatch {
+                    daybreak_enabled: Some(true),
+                    ..Default::default()
+                },
+                /*include_archived*/ false,
+            )
+            .await
+            .expect("update metadata without materializing history");
+        let read = live_thread
+            .read_thread(
+                /*include_archived*/ false, /*include_history*/ false,
+            )
+            .await
+            .expect("read updated metadata");
+        assert_eq!(
+            serde_json::to_value(read).expect("serialize metadata read"),
+            serde_json::to_value(&updated).expect("serialize update result")
+        );
+        assert_eq!(
+            (
+                updated.forked_from_id,
+                updated.parent_thread_id,
+                updated.originator.clone(),
+                updated.history_mode,
+                updated.daybreak_enabled,
+            ),
+            (
+                params.forked_from_id,
+                params.parent_thread_id,
+                Some(params.originator),
+                history_mode,
+                Some(true),
+            )
+        );
+        assert!(!rollout_path.exists());
+
+        live_thread
+            .persist(PersistContext::Standard)
+            .await
+            .expect("persist history");
+        live_thread.shutdown().await.expect("shutdown writer");
+        let durable = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("read durable metadata");
+        assert_eq!(
+            serde_json::to_value(durable).expect("serialize durable metadata"),
+            serde_json::to_value(updated).expect("serialize initial metadata")
+        );
+    }
+}
+
+#[tokio::test]
 async fn idle_shutdown_clears_pending_thread_metadata_without_materializing() {
     let (_home, store, runtime) = store_with_runtime().await;
     let thread_id = ThreadId::new();
@@ -245,6 +336,24 @@ async fn idle_shutdown_clears_pending_thread_metadata_without_materializing() {
     let live_thread = LiveThread::create(store.clone(), create_thread_params(thread_id))
         .await
         .expect("create live thread");
+    let read_error = live_thread
+        .read_thread(
+            /*include_archived*/ false, /*include_history*/ false,
+        )
+        .await
+        .expect_err("untouched threads still have no stored record");
+    assert!(matches!(
+        read_error,
+        ThreadStoreError::InvalidRequest { message }
+            if message == format!("no rollout found for thread id {thread_id}")
+    ));
+    assert!(
+        !store
+            .live_rollout_path(thread_id)
+            .await
+            .expect("live rollout path")
+            .exists()
+    );
     live_thread.shutdown().await.expect("shutdown idle thread");
 
     assert_eq!(

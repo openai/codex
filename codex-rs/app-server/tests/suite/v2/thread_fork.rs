@@ -1475,8 +1475,10 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
     Ok(())
 }
 
+#[test_case(ThreadHistoryMode::Legacy; "legacy")]
+#[test_case(ThreadHistoryMode::Paginated; "paginated")]
 #[tokio::test]
-async fn thread_fork_rejects_unmaterialized_thread() -> Result<()> {
+async fn thread_fork_rejects_unmaterialized_thread(history_mode: ThreadHistoryMode) -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
@@ -1489,6 +1491,7 @@ async fn thread_fork_rejects_unmaterialized_thread() -> Result<()> {
     let start_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            history_mode: Some(history_mode),
             ..Default::default()
         })
         .await?;

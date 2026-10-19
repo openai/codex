@@ -822,10 +822,20 @@ async fn referenced_paginated_rollout_starts_at_history_cutoff_and_resumes() -> 
     )
     .await?;
     let rollout_path = recorder.rollout_path().to_path_buf();
+    let initial_meta = recorder
+        .unpersisted_session_meta()
+        .await?
+        .expect("new rollout retains its creation metadata");
+    assert!(!rollout_path.exists());
     recorder.persist().await?;
+    assert!(recorder.unpersisted_session_meta().await?.is_none());
     recorder.shutdown().await?;
 
     let meta = crate::read_session_meta_line(&rollout_path).await?.meta;
+    assert_eq!(
+        serde_json::to_value(&initial_meta)?,
+        serde_json::to_value(&meta)?
+    );
     assert_eq!(
         meta.forked_from_ordinal_exclusive,
         Some(history_base.end_ordinal_exclusive)
@@ -833,6 +843,7 @@ async fn referenced_paginated_rollout_starts_at_history_cutoff_and_resumes() -> 
 
     let resumed =
         RolloutRecorder::new(&config, RolloutRecorderParams::resume(rollout_path.clone())).await?;
+    assert!(resumed.unpersisted_session_meta().await?.is_none());
     resumed
         .record_canonical_items(&[agent_message_item("first child record")])
         .await?;

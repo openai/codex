@@ -2,6 +2,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -34,6 +35,24 @@ pub(super) async fn read_thread(
 ) -> ThreadStoreResult<StoredThread> {
     let thread_id = params.thread_id;
     let sqlite_metadata = read_sqlite_metadata(store, thread_id).await;
+    if !params.include_history
+        && let Some((path, meta)) =
+            super::live_writer::unpersisted_session_meta(store, thread_id).await
+        && sqlite_metadata
+            .as_ref()
+            .is_none_or(|metadata| metadata.rollout_path == path && metadata.archived_at.is_none())
+    {
+        // A new writer already owns its metadata. Missing JSONL is intentional, so neither
+        // filesystem discovery nor compression-race retries can find anything more authoritative.
+        return match sqlite_metadata {
+            Some(metadata) => Ok(stored_thread_from_metadata(store, metadata, Some(meta)).await),
+            // Preserve the saved-thread contract used by fork/resume. A live but untouched
+            // thread has no stored record yet; its absence is known without searching history.
+            None => Err(ThreadStoreError::InvalidRequest {
+                message: format!("no rollout found for thread id {thread_id}"),
+            }),
+        };
+    }
     let persisted_model_settings = sqlite_metadata
         .as_ref()
         .map(|metadata| (metadata.model.clone(), metadata.reasoning_effort.clone()));
@@ -376,6 +395,14 @@ pub(super) async fn stored_thread_from_sqlite_metadata(
             });
         }
     };
+    Ok(stored_thread_from_metadata(store, metadata, session_meta).await)
+}
+
+async fn stored_thread_from_metadata(
+    store: &LocalThreadStore,
+    metadata: ThreadMetadata,
+    session_meta: Option<SessionMeta>,
+) -> StoredThread {
     let forked_from_id = session_meta.as_ref().and_then(|meta| meta.forked_from_id);
     let parent_thread_id = session_meta.as_ref().and_then(|meta| meta.parent_thread_id);
     let history_mode = session_meta
@@ -392,7 +419,7 @@ pub(super) async fn stored_thread_from_sqlite_metadata(
     thread.forked_from_id = forked_from_id;
     thread.history_mode = history_mode;
     thread.name = name;
-    Ok(thread)
+    thread
 }
 
 pub(super) fn stored_thread_from_state_metadata(
