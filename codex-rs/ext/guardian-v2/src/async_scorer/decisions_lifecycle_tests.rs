@@ -200,25 +200,8 @@ async fn guardian_budget_rejects_both_backends_before_sending() -> Result<()> {
     .await?;
     let server = responses::start_mock_server().await;
     let store = fixture.test.codex.thread_extension_data();
-    let mut config = fixture.test.config.clone();
-    config.features.enable(Feature::GuardianApproval)?;
-    config.features.enable(Feature::GuardianV2)?;
-    config
-        .features
-        .enable(Feature::GuardianV2DecisionsComparison)?;
     let metrics = Arc::new(RecordingMetrics::default());
-    fixture.registry.thread_lifecycle_contributors()[0]
-        .on_thread_start(ThreadStartInput {
-            config: &config,
-            session_source: &SessionSource::Exec,
-            persistent_thread_state_available: false,
-            environments: &[],
-            mcp_resource_client: None,
-            extension_metrics: Some(metrics.clone()),
-            session_store: &fixture.session_store,
-            thread_store: store,
-        })
-        .await;
+    store.insert(GuardianV2ScoreProgress::new(Some(metrics.clone())));
     let mut sampler_config = crate::async_scorer::sampler::tests::sampler_config(server.uri());
     sampler_config.max_input_tokens = 256;
     store.insert(LunaSampler::new(sampler_config));
@@ -227,7 +210,6 @@ async fn guardian_budget_rejects_both_backends_before_sending() -> Result<()> {
         "synthetic-key".into(),
         server.uri(),
     )?);
-    metrics.0.lock().unwrap().clear();
     fixture.score_tool(ToolName::plain("read_file")).await;
     fixture.assert_fails_closed("elevated_risk").await?;
     tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {

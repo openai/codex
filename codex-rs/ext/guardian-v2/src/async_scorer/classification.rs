@@ -313,6 +313,9 @@ impl Classification {
             truncations.extend(std::mem::take(&mut context.truncations));
             super::metrics::record_section_costs(metrics.as_deref(), context.section_costs());
         }
+        let decisions_comparison_enabled = config
+            .features
+            .enabled(codex_features::Feature::GuardianV2DecisionsComparison);
         let mut decisions_task = None;
         let mut responses_duration = None;
         let mut failure_reason = "invalid_output";
@@ -363,12 +366,11 @@ impl Classification {
                     sampling.pending_score = Some(pending_score.clone());
                     sampling.input = context.into_messages();
                     if let Some(decisions_sampler) = decisions_sampler.as_ref() {
-                        decisions_task =
-                            Some(decisions_sampler.spawn(&sampling, sampler.max_input_tokens()));
-                    } else if config
-                        .features
-                        .enabled(codex_features::Feature::GuardianV2DecisionsComparison)
-                    {
+                        decisions_task = Some(decisions_sampler.start_snapshot_comparison(
+                            &sampling,
+                            sampler.max_input_tokens(),
+                        ));
+                    } else if decisions_comparison_enabled {
                         super::metrics::record_decisions_comparison_outcome(
                             metrics.as_deref(),
                             "skipped",
@@ -390,10 +392,7 @@ impl Classification {
                     reservation,
                 } => {
                     // The retained prefix is owned by the conversation backend, not this snapshot.
-                    if config
-                        .features
-                        .enabled(codex_features::Feature::GuardianV2DecisionsComparison)
-                    {
+                    if decisions_comparison_enabled {
                         super::metrics::record_decisions_comparison_outcome(
                             metrics.as_deref(),
                             "skipped",
@@ -554,9 +553,7 @@ impl Classification {
                 baseline_risk.zip(responses_duration),
                 metrics.as_deref(),
             );
-        } else if config
-            .features
-            .enabled(codex_features::Feature::GuardianV2DecisionsComparison)
+        } else if decisions_comparison_enabled
             && let Some(risk) = baseline_risk
             && let Some(metrics) = metrics.as_deref()
         {

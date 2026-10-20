@@ -2,6 +2,7 @@ use super::super::startup::decisions_api_key;
 use super::*;
 use codex_context_fragments::AnnotatedContent;
 use codex_context_fragments::ContextualUserFragment;
+use codex_context_fragments::RenderedFragment;
 use codex_guardian_context::TrustedTool;
 use codex_guardian_context::TrustedToolSource;
 use codex_http_client::HttpClientBuilder;
@@ -21,14 +22,9 @@ use wiremock::matchers::path;
 
 #[test]
 fn adapter_rejects_unsupported_evidence() {
-    let rubric = RenderedFragment::new(
-        "developer",
-        AnnotatedContent::text(
-            "Classify risk.",
-            ContentItemKind("guardian.test".into()),
-            ContentItemMetadata::harness(),
-        ),
-    );
+    let rubric = ContentItem::InputText {
+        text: "Classify risk.".into(),
+    };
     let user: ResponseItem = serde_json::from_value(json!({"type":"message", "role":"user", "content":[
         {"type":"input_text", "text":"Authorized task"}, {"type":"input_text", "text":"Planned action"}
     ]})).unwrap();
@@ -66,14 +62,9 @@ fn adapter_rejects_unsupported_evidence() {
 
 #[test]
 fn adapter_preserves_trusted_tool_authority_and_scope() {
-    let rubric = RenderedFragment::new(
-        "developer",
-        AnnotatedContent::text(
-            "Classify risk.",
-            ContentItemKind("guardian.test".into()),
-            ContentItemMetadata::harness(),
-        ),
-    );
+    let rubric = ContentItem::InputText {
+        text: "Classify risk.".into(),
+    };
     let tool = TrustedTool {
         server: "example".into(),
         connector_id: None,
@@ -256,7 +247,7 @@ async fn http_contract_and_untrusted_response_validation() {
     )
     .unwrap();
     let mut sampler = Arc::new(sampler);
-    let task = sampler.spawn(&request, /*max_input_tokens*/ 128_000);
+    let task = sampler.start_snapshot_comparison(&request, /*max_input_tokens*/ 128_000);
     assert_eq!(task.finish().await.unwrap().0, Ok("low"));
     let mut invalid = response;
     invalid["answers"][0]["choice"] = json!("untrusted server text");
@@ -293,11 +284,11 @@ async fn decisions_admits_newest_request_by_cancelling_oldest() {
         .acquire_many(MAX_CONCURRENT_REQUESTS as u32)
         .await
         .unwrap();
-    let oldest = sampler.spawn(&request, /*max_input_tokens*/ 128_000);
+    let oldest = sampler.start_snapshot_comparison(&request, /*max_input_tokens*/ 128_000);
     let mut remaining = (1..MAX_CONCURRENT_REQUESTS)
-        .map(|_| sampler.spawn(&request, /*max_input_tokens*/ 128_000))
+        .map(|_| sampler.start_snapshot_comparison(&request, /*max_input_tokens*/ 128_000))
         .collect::<Vec<_>>();
-    remaining.push(sampler.spawn(&request, /*max_input_tokens*/ 128_000));
+    remaining.push(sampler.start_snapshot_comparison(&request, /*max_input_tokens*/ 128_000));
     assert!(oldest.finish().await.unwrap_err().is_cancelled());
     assert!(server.received_requests().await.unwrap().is_empty());
     drop(permits);
@@ -320,7 +311,7 @@ fn adapter_preserves_inline_images_and_bounds_image_bytes() {
         .unwrap();
     request.input = vec![image];
     let body = request_body(
-        &request.instructions,
+        request.instructions.annotated_content().content(),
         &request.input,
         /*parent_compaction*/ None,
     )
@@ -340,7 +331,7 @@ fn adapter_preserves_inline_images_and_bounds_image_bytes() {
     ];
     assert_eq!(
         request_body(
-            &request.instructions,
+            request.instructions.annotated_content().content(),
             &request.input,
             /*parent_compaction*/ None
         ),
@@ -373,7 +364,7 @@ async fn cancelling_a_decisions_request_releases_thread_capacity() {
         .unwrap(),
     );
     let request = super::super::sampler::tests::sample_request("turn");
-    let task = sampler.spawn(&request, /*max_input_tokens*/ 128_000);
+    let task = sampler.start_snapshot_comparison(&request, /*max_input_tokens*/ 128_000);
     tokio::time::timeout(Duration::from_secs(5), received.notified())
         .await
         .unwrap();

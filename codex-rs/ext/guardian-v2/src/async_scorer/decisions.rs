@@ -6,7 +6,6 @@
 
 use super::sampler::LunaSampler;
 use super::sampler::LunaSamplingRequest;
-use codex_context_fragments::RenderedFragment;
 use codex_history::ResponseItemEnvelope;
 use codex_http_client::HttpClient;
 use codex_protocol::models::ContentItem;
@@ -117,15 +116,14 @@ impl DecisionsSampler {
         })
     }
 
-    /// Retain the newest requests; the caller joins after baseline publication.
-    pub(super) fn spawn(
+    pub(super) fn start_snapshot_comparison(
         self: &Arc<Self>,
         request: &LunaSamplingRequest,
         max_input_tokens: usize,
     ) -> DecisionsTask {
         let started = Instant::now();
         let body = request_body(
-            &request.instructions,
+            request.instructions.annotated_content().content(),
             &request.input,
             request.parent_compaction.as_ref(),
         )
@@ -147,6 +145,14 @@ impl DecisionsSampler {
             }
             Ok(body)
         });
+        self.spawn_request(body, started)
+    }
+
+    fn spawn_request(
+        self: &Arc<Self>,
+        body: Result<Value, DecisionsError>,
+        started: Instant,
+    ) -> DecisionsTask {
         let body = match body {
             Ok(body) => body,
             Err(error) => {
@@ -212,15 +218,15 @@ impl DecisionsSampler {
     }
 }
 
-fn request_body(
-    instructions: &RenderedFragment,
-    evidence: &[ResponseItem],
+fn request_body<'a>(
+    instructions: &ContentItem,
+    evidence: impl IntoIterator<Item = &'a ResponseItem>,
     parent_compaction: Option<&ResponseItem>,
 ) -> Result<Value, DecisionsError> {
     if parent_compaction.is_some() {
         return Err(DecisionsError::UnsupportedEvidence);
     }
-    let ContentItem::InputText { text: rubric } = instructions.annotated_content().content() else {
+    let ContentItem::InputText { text: rubric } = instructions else {
         return Err(DecisionsError::UnsupportedEvidence);
     };
     let mut image_bytes = 0usize;
