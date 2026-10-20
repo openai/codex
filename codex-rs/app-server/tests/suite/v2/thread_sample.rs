@@ -264,6 +264,7 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
             prompt: "Continue identically".to_string(),
             effort: Some(ReasoningEffort::Medium),
             turn_trigger: Some("composer_predictions".to_string()),
+            ..Default::default()
         },
     )
     .await?;
@@ -589,8 +590,14 @@ async fn sample_returns_null_for_custom_tool_calls() -> Result<()> {
     Ok(())
 }
 
+#[test_case(false, true; "inherit MCPs by default")]
+#[test_case(true, true; "disable MCPs with incremental tools")]
+#[test_case(true, false; "retain MCPs without incremental tools")]
 #[tokio::test]
-async fn sample_blocks_mcp_execution_without_changing_parent_tools() -> Result<()> {
+async fn sample_blocks_mcp_execution_without_changing_parent_tools(
+    disable_mcp: bool,
+    incremental_tools: bool,
+) -> Result<()> {
     let server = responses::start_mock_server().await;
     let mcp = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("POST"))
@@ -654,13 +661,24 @@ async fn sample_blocks_mcp_execution_without_changing_parent_tools() -> Result<(
         &extra_config,
     )
     .await?;
-    let (parent_id, turn_id) = ready_parent(&mut client, ThreadStartParams::default()).await?;
+    let (parent_id, turn_id) = ready_parent(
+        &mut client,
+        ThreadStartParams {
+            config: Some(std::collections::HashMap::from([(
+                "features.incremental_tools".to_string(),
+                json!(incremental_tools),
+            )])),
+            ..Default::default()
+        },
+    )
+    .await?;
     let response = sample(
         &mut client,
         ThreadSampleParams {
             thread_id: parent_id.clone(),
             expected_turn_id: turn_id,
             prompt: "Call the tool again".to_string(),
+            disable_mcp,
             ..Default::default()
         },
     )
@@ -669,20 +687,40 @@ async fn sample_blocks_mcp_execution_without_changing_parent_tools() -> Result<(
         (response.text, response.response_id),
         (None, "sample-tool".to_string())
     );
-    let fork = prediction_fork(&mut client, &parent_id).await?;
+    let fork_id = client
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: parent_id,
+            experimental_prediction_mode: true,
+            experimental_disable_prediction_mcp: disable_mcp,
+            ephemeral: true,
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let fork: ThreadForkResponse = timeout(WAIT, client.read_response(fork_id)).await??;
     client
         .start_turn_and_wait_for_completion(TurnStartParams {
-            thread_id: fork,
+            thread_id: fork.thread.id,
             input: input("Call the tool again"),
             ..Default::default()
         })
         .await?;
     let requests = mock.requests();
     assert_eq!(requests.len(), 4);
+    let parent = comparable_request(requests[1].body_json());
+    let sample = comparable_request(requests[2].body_json());
+    let prefix = parent["input"].as_array().expect("parent input");
+    let sample_input = sample["input"].as_array().expect("sample input");
+    assert_eq!(&sample_input[..prefix.len()], prefix);
+    let removes_mcp = disable_mcp && incremental_tools;
     assert_eq!(
-        comparable_request(requests[2].body_json()),
-        comparable_request(requests[3].body_json())
+        sample_input[prefix.len()..].iter().any(|item| {
+            let text = item.to_string();
+            text.contains("namespaces are no longer available") && text.contains("mcp__sample_test")
+        }),
+        removes_mcp
     );
+    assert_eq!(sample, comparable_request(requests[3].body_json()));
     assert_eq!(
         requests[2].body_json()["tools"],
         requests[1].body_json()["tools"]

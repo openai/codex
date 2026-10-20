@@ -123,10 +123,8 @@ impl SampleTask {
                 "sample source must be a persistent root thread",
             ));
         }
-        let revision = parent
-            .conversation_history_snapshot()
-            .await
-            .history_version();
+        let parent_history = parent.conversation_history_snapshot().await;
+        let revision = parent_history.history_version();
         parent
             .flush_rollout()
             .await
@@ -191,6 +189,16 @@ impl SampleTask {
         options
             .thread_extension_init
             .insert(codex_core::compact::AutoCompactionDisabled);
+        if params.disable_mcp
+            && model.use_responses_lite
+            && parent_history
+                .items()
+                .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
+        {
+            options
+                .thread_extension_init
+                .insert(codex_core::McpServersDisabled);
+        }
         options.thread_extension_init.insert(SampleThread);
         let effort = params.effort.filter(|_| {
             model.supports_reasoning_effort_updates && options.config.model_provider.is_openai()

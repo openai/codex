@@ -21,6 +21,7 @@ use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::McpServerRefreshResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SandboxPolicy;
@@ -61,7 +62,9 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_core::config::ConfigBuilder;
 use codex_core::test_support::all_model_presets;
+use codex_core::test_support::construct_model_info_offline;
 use codex_features::Feature;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::ThreadId;
@@ -2922,6 +2925,175 @@ async fn inheriting_fork_preserves_parent_config(history_mode: ThreadHistoryMode
     Ok(())
 }
 
+#[test_case(ThreadHistoryMode::Legacy, false, true, true; "prediction fork retains MCPs")]
+#[test_case(ThreadHistoryMode::Legacy, true, true, true; "disable MCPs in prediction fork")]
+#[test_case(ThreadHistoryMode::Paginated, true, true, true; "disable MCPs in paginated fork")]
+#[test_case(ThreadHistoryMode::Legacy, true, false, true; "retain MCPs without incremental tools")]
+#[test_case(ThreadHistoryMode::Legacy, true, true, false; "retain MCPs without Responses Lite")]
+#[tokio::test]
+async fn fork_option_disables_mcp_servers(
+    history_mode: ThreadHistoryMode,
+    disable_mcp: bool,
+    incremental_tools: bool,
+    responses_lite: bool,
+) -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let mock = responses::mount_sse_sequence(
+        &server,
+        ["parent", "child", "refreshed-child", "continued-parent"]
+            .into_iter()
+            .map(|id| responses::sse(vec![responses::ev_completed(id)]))
+            .collect(),
+    )
+    .await;
+    let mcp_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .respond_with(|request: &wiremock::Request| {
+            let request: Value =
+                serde_json::from_slice(&request.body).expect("MCP request must be valid JSON");
+            let result = match request["method"].as_str() {
+                Some("initialize") => json!({
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": { "tools": {} },
+                    "serverInfo": { "name": "fixture", "version": "1.0.0" }
+                }),
+                Some("tools/list") => json!({ "tools": [{
+                    "name": "prediction_mcp_lookup",
+                    "description": "Look up a test value.",
+                    "inputSchema": { "type": "object", "properties": {} }
+                }] }),
+                Some("resources/list") => json!({ "resources": [] }),
+                Some("resources/templates/list") => json!({ "resourceTemplates": [] }),
+                _ => return ResponseTemplate::new(202),
+            };
+            ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0", "id": request["id"], "result": result
+            }))
+        })
+        .mount(&mcp_server)
+        .await;
+    let codex_home = TempDir::new()?;
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .loader_overrides(codex_config::LoaderOverrides::without_managed_config_for_tests())
+        .build()
+        .await?;
+    let mut model = construct_model_info_offline("gpt-5.4", &config);
+    model.use_responses_lite = responses_lite;
+    model.supports_search_tool = false;
+    model.tool_mode = Some(codex_protocol::openai_models::ToolMode::Direct);
+    let catalog = codex_home.path().join("catalog.json");
+    std::fs::write(
+        &catalog,
+        serde_json::to_string(&json!({"models": [model]}))?,
+    )?;
+    MockResponsesConfig::new(&server.uri())
+        .with_model("gpt-5.4")
+        .with_root_config(&format!(
+            "model_catalog_json = {}\nfeatures.incremental_tools = {incremental_tools}",
+            serde_json::to_string(&catalog)?
+        ))
+        .with_extra_config(&format!(
+            "[mcp_servers.fixture]\nurl = \"{}/mcp\"\nrequired = true\n",
+            mcp_server.uri()
+        ))
+        .write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let parent = app
+        .start_thread(ThreadStartParams {
+            history_mode: Some(history_mode),
+            ..Default::default()
+        })
+        .await?;
+    app.start_turn_and_wait_for_completion(TurnStartParams {
+        thread_id: parent.thread.id.clone(),
+        input: vec![UserInput::Text {
+            text: "Initial turn".into(),
+            text_elements: vec![],
+        }],
+        ..Default::default()
+    })
+    .await?;
+    let child: ThreadForkResponse = app
+        .request(|request_id| ClientRequest::ThreadFork {
+            request_id,
+            params: ThreadForkParams {
+                thread_id: parent.thread.id.clone(),
+                experimental_prediction_mode: true,
+                experimental_disable_prediction_mcp: disable_mcp,
+                ephemeral: true,
+                exclude_turns: true,
+                ..Default::default()
+            },
+        })
+        .await?;
+    let removes_mcp = disable_mcp && incremental_tools && responses_lite;
+    for (index, thread_id) in [&child.thread.id, &child.thread.id, &parent.thread.id]
+        .into_iter()
+        .enumerate()
+    {
+        if index == 1 {
+            let initializations = mcp_server
+                .received_requests()
+                .await
+                .expect("MCP request recording must be enabled")
+                .iter()
+                .filter(|request| request.method.as_str() == "POST")
+                .filter(|request| {
+                    serde_json::from_slice::<Value>(&request.body)
+                        .expect("MCP request must be valid JSON")["method"]
+                        == "initialize"
+                })
+                .count();
+            if removes_mcp {
+                assert_eq!(initializations, 1, "disabled fork must not connect MCPs");
+            }
+            let _: McpServerRefreshResponse = app
+                .request(|request_id| ClientRequest::McpServerRefresh {
+                    request_id,
+                    params: None,
+                })
+                .await?;
+        }
+        app.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![UserInput::Text {
+                text: "Continue".into(),
+                text_elements: vec![],
+            }],
+            ..Default::default()
+        })
+        .await?;
+    }
+    let requests = mock.requests();
+    assert!(
+        requests[0]
+            .body_json()
+            .to_string()
+            .contains("prediction_mcp_lookup")
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.body_json()["input"]
+                .as_array()
+                .expect("input")
+                .iter()
+                .any(|item| {
+                    let text = item.to_string();
+                    text.contains("namespaces are no longer available")
+                        && text.contains("mcp__fixture")
+                }))
+            .collect::<Vec<_>>(),
+        vec![false, removes_mcp, removes_mcp, false],
+    );
+    Ok(())
+}
+
 #[test_case(ThreadHistoryMode::Legacy, false; "fresh persistent legacy")]
 #[test_case(ThreadHistoryMode::Legacy, true; "ephemeral legacy")]
 #[test_case(ThreadHistoryMode::Paginated, false; "fresh persistent paginated")]
@@ -3020,8 +3192,14 @@ async fn inheriting_fork_requires_loaded_parent() -> Result<()> {
     Ok(())
 }
 
+#[test_case(true, false, "`experimentalPredictionMode` requires `ephemeral: true`"; "ephemeral child")]
+#[test_case(false, true, "`experimentalDisablePredictionMcp` requires `experimentalPredictionMode: true`"; "MCP disablement requires prediction mode")]
 #[tokio::test]
-async fn inheriting_fork_requires_ephemeral_child() -> Result<()> {
+async fn inheriting_fork_rejects_invalid_prediction_flags(
+    prediction_mode: bool,
+    disable_mcp: bool,
+    expected_error: &str,
+) -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -3030,7 +3208,8 @@ async fn inheriting_fork_requires_ephemeral_child() -> Result<()> {
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
             thread_id: "not-loaded".into(),
-            experimental_prediction_mode: true,
+            experimental_prediction_mode: prediction_mode,
+            experimental_disable_prediction_mcp: disable_mcp,
             ..Default::default()
         })
         .await?;
@@ -3039,10 +3218,7 @@ async fn inheriting_fork_requires_ephemeral_child() -> Result<()> {
         mcp.read_stream_until_error_message(RequestId::Integer(fork_id)),
     )
     .await??;
-    assert_eq!(
-        error.error.message,
-        "`experimentalPredictionMode` requires `ephemeral: true`",
-    );
+    assert_eq!(error.error.message, expected_error);
     Ok(())
 }
 

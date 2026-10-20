@@ -20,6 +20,9 @@ pub struct ThreadSampleParams {
     pub effort: Option<ReasoningEffort>,
     #[ts(optional = nullable)]
     pub turn_trigger: Option<String>,
+    /// Disable MCP servers when the inherited window uses incremental tools on Responses Lite.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disable_mcp: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

@@ -42,6 +42,10 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 
 const LEGACY_CODEX_APPS_REGISTRATION_ID: &str = "legacy_codex_apps";
 
+/// Thread-local policy that excludes all MCP servers, including runtime contributions.
+/// Insert into `StartThreadOptions::thread_extension_init` before starting the thread.
+pub struct McpServersDisabled;
+
 /// MCP configuration and capability availability derived from the same inputs.
 #[derive(Clone)]
 pub(crate) struct McpRuntimeProjection {
@@ -263,6 +267,19 @@ impl McpManager {
         disabled_plugin_ids: &[String],
     ) -> McpRuntimeProjection {
         let config = context.config();
+        if context
+            .thread_init()
+            .is_some_and(|init| init.get::<McpServersDisabled>().is_some())
+        {
+            let mut mcp_config = config.to_mcp_config_with_loaded_plugins(&Default::default(), []);
+            mcp_config.mcp_server_catalog = Default::default();
+            mcp_config.apps_enabled = false;
+            return McpRuntimeProjection {
+                config: mcp_config,
+                plugins_available: false,
+                selected_plugins: Default::default(),
+            };
+        }
         let plugins_config = &config.plugins;
         let mut selected_plugin_connector_sources = Vec::new();
         let mut selected_plugin_registrations = Vec::new();
