@@ -59,6 +59,9 @@ pub(crate) fn oidc_identity(
     expected_issuer: &str,
     expected_audience: &str,
 ) -> Result<OidcClaims> {
+    if expected_issuer.trim().is_empty() || expected_audience.trim().is_empty() {
+        bail!("OIDC identity assertion requires a non-empty expected issuer and client");
+    }
     let claims: OidcClaims = signed_jwt(assertion)?;
     if claims.iss != expected_issuer || claims.sub.trim().is_empty() {
         bail!("OIDC identity assertion issuer or subject does not match the enterprise IdP");
@@ -80,6 +83,12 @@ pub(crate) fn oidc_identity(
         bail!("OIDC identity assertion audience or authorized party does not match the IdP client");
     }
     Ok(claims)
+}
+
+/// Unverified issuer claim used only to explain a legacy login migration.
+/// Never use this hint to choose where a refresh token is sent.
+pub(crate) fn oidc_issuer_hint(assertion: &str, expected_issuer: &str) -> bool {
+    signed_jwt::<OidcClaims>(assertion).is_ok_and(|claims| claims.iss == expected_issuer)
 }
 
 pub(crate) fn validate_oidc_identity_assertion(

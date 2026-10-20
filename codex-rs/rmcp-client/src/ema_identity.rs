@@ -39,10 +39,60 @@ pub struct EmaIdpIdentityRequest<'a> {
 }
 
 /// An opaque IdP refresh token paired with the credentials admitted for its exchange.
-pub struct EmaIdpIdentity {
+pub struct EmaIdpIdentity<L = EmaCredentialLease> {
     pub(crate) token_endpoint: String,
     pub(crate) refresh_token: String,
-    pub(crate) credentials: EmaCredentialLease,
+    pub(crate) credentials: L,
+}
+
+impl<L> EmaIdpIdentity<L> {
+    /// Preserve an opaque credential lease when selecting an EMA credential source.
+    /// The mapping must retain its owned refresh guard until the IdP exchange finishes.
+    pub fn map_credentials<U>(self, map: impl FnOnce(L) -> U) -> EmaIdpIdentity<U> {
+        EmaIdpIdentity {
+            token_endpoint: self.token_endpoint,
+            refresh_token: self.refresh_token,
+            credentials: map(self.credentials),
+        }
+    }
+}
+
+/// Resolve a refresh token issued by the account's validated OAuth authority.
+/// The caller supplies trusted persisted issuer/client provenance and an ID/refresh-token
+/// pair from one admitted account record, retaining its refresh guard in `credentials`.
+/// ID-token claims corroborate that record; this does not verify a JWT signature or
+/// authenticate an expired ID token. Only the refresh token is exchanged with the IdP.
+pub async fn resolve_ema_account_idp_identity<L: Send>(
+    issuer: &str,
+    client_id: &str,
+    id_token: &str,
+    refresh_token: String,
+    credentials: L,
+    http_client: Arc<dyn HttpClient>,
+    redirect_mode: StreamableHttpRedirectMode,
+) -> Result<EmaIdpIdentity<L>> {
+    if refresh_token.trim().is_empty() {
+        return Err(ema_reauthentication_required(
+            "Codex account has no refresh token; sign in again",
+        ));
+    }
+    crate::ema_claims::oidc_identity(id_token, issuer, client_id)?;
+    let token_endpoint = resolve_ema_idp_token_endpoint(issuer, http_client, redirect_mode).await?;
+    Ok(EmaIdpIdentity {
+        token_endpoint,
+        refresh_token,
+        credentials,
+    })
+}
+
+/// Validate account ID-token bindings without treating an expired ID token as an expired grant.
+pub fn account_oidc_identity_is_usable(id_token: &str, issuer: &str, client_id: &str) -> bool {
+    crate::ema_claims::oidc_identity(id_token, issuer, client_id).is_ok()
+}
+
+/// Only an explanatory legacy-login hint, never authority for RT exchange.
+pub fn account_oidc_issuer_hint(id_token: &str, issuer: &str) -> bool {
+    crate::ema_claims::oidc_issuer_hint(id_token, issuer)
 }
 
 /// Returns whether stored credentials contain a refresh token bound to the configured login.
@@ -110,30 +160,9 @@ async fn resolve_ema_idp_identity_in<K: KeyringStore + Clone + 'static>(
         bail!("stored enterprise IdP credentials do not match the configured issuer and client");
     }
     stored_oidc_identity(credentials)?;
-    let client = OAuthHttpClientAdapter::new_with_redirect_mode(
-        request.http_client,
-        build_default_headers(/*http_headers*/ None, /*env_http_headers*/ None)?,
-        request.issuer,
-        /*has_configured_headers*/ false,
-        request.redirect_mode,
-    )?;
-    let (_, metadata) =
-        resolve_ema_idp_authorization_manager(request.issuer, Arc::new(client)).await?;
-    for (name, expected) in [
-        (
-            "identity_chaining_requested_token_types_supported",
-            ID_JAG_TOKEN_TYPE,
-        ),
-        ("grant_types_supported", TOKEN_EXCHANGE_GRANT_TYPE),
-    ] {
-        if advertised_capability(metadata.additional_fields.get(name), expected, name)?
-            == Some(false)
-        {
-            bail!(
-                "enterprise IdP does not advertise the required ID-JAG token exchange capability"
-            );
-        }
-    }
+    let token_endpoint =
+        resolve_ema_idp_token_endpoint(request.issuer, request.http_client, request.redirect_mode)
+            .await?;
     let credentials = request.credentials;
     let credential_lock = RefreshCredentialLock::acquire_for_server(
         &credentials.credentials.credentials().server_name,
@@ -160,13 +189,44 @@ async fn resolve_ema_idp_identity_in<K: KeyringStore + Clone + 'static>(
                 )
             })?;
         Ok(EmaIdpIdentity {
-            token_endpoint: metadata.token_endpoint,
+            token_endpoint,
             refresh_token: refresh_token.secret().to_string(),
             credentials,
         })
     })
     .await
     .map_err(|_| anyhow!("enterprise IdP credential reread task failed"))?
+}
+
+async fn resolve_ema_idp_token_endpoint(
+    issuer: &str,
+    http_client: Arc<dyn HttpClient>,
+    redirect_mode: StreamableHttpRedirectMode,
+) -> Result<String> {
+    let client = OAuthHttpClientAdapter::new_with_redirect_mode(
+        http_client,
+        build_default_headers(/*http_headers*/ None, /*env_http_headers*/ None)?,
+        issuer,
+        /*has_configured_headers*/ false,
+        redirect_mode,
+    )?;
+    let (_, metadata) = resolve_ema_idp_authorization_manager(issuer, Arc::new(client)).await?;
+    for (name, expected) in [
+        (
+            "identity_chaining_requested_token_types_supported",
+            ID_JAG_TOKEN_TYPE,
+        ),
+        ("grant_types_supported", TOKEN_EXCHANGE_GRANT_TYPE),
+    ] {
+        if advertised_capability(metadata.additional_fields.get(name), expected, name)?
+            == Some(false)
+        {
+            bail!(
+                "enterprise IdP does not advertise the required ID-JAG token exchange capability"
+            );
+        }
+    }
+    Ok(metadata.token_endpoint)
 }
 
 #[cfg(test)]

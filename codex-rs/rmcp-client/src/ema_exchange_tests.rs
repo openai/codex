@@ -75,20 +75,25 @@ fn token_response() -> Value {
 async fn exchange(server: &MockServer, refresh_token: &str) -> Result<EmaAccessToken> {
     let issuer = format!("{}/idp", server.uri());
     let audience = format!("{}/as", server.uri());
-    exchange_id_jag(EmaIdJagExchangeRequest {
-        resource: &format!("{}/mcp", server.uri()),
-        scopes: &[],
-        mcp_client_id: "mcp-client",
-        authorization_server_issuer: &audience,
-        authorization_server_token_endpoint: &format!("{audience}/token"),
-        idp_token_endpoint: &format!("{issuer}/token"),
-        idp_issuer: &issuer,
-        idp_client_id: "idp-client",
-        refresh_token: refresh_token.to_string(),
-        idp_http_client: http_client(),
-        resource_http_client: http_client(),
-    })
+    exchange_id_jag(
+        EmaIdJagExchangeRequest {
+            resource: &format!("{}/mcp", server.uri()),
+            scopes: &[],
+            mcp_client_id: "mcp-client",
+            authorization_server_issuer: &audience,
+            authorization_server_token_endpoint: &format!("{audience}/token"),
+            idp_token_endpoint: &format!("{issuer}/token"),
+            idp_issuer: &issuer,
+            idp_client_id: "idp-client",
+            refresh_token: refresh_token.to_string(),
+            idp_http_client: http_client(),
+            resource_http_client: http_client(),
+        },
+        (),
+        std::convert::identity,
+    )
     .await
+    .map(|(token, ())| token)
 }
 
 #[tokio::test]
@@ -122,21 +127,26 @@ async fn public_client_round_trip_preserves_signed_narrowing() -> Result<()> {
                 .await;
         }
         let expected_subject = refresh_token.to_string();
-        let result = exchange_id_jag(EmaIdJagExchangeRequest {
-            resource: &resource,
-            scopes,
-            mcp_client_id: "mcp-client",
-            authorization_server_issuer: &audience,
-            authorization_server_token_endpoint: &format!("{audience}/token"),
-            idp_token_endpoint: &format!("{issuer}/token"),
-            idp_issuer: &issuer,
-            idp_client_id: "idp-client",
-            refresh_token: refresh_token.to_string(),
-            idp_http_client: Arc::clone(&client),
-            resource_http_client: Arc::clone(&client),
-        })
+        let result = exchange_id_jag(
+            EmaIdJagExchangeRequest {
+                resource: &resource,
+                scopes,
+                mcp_client_id: "mcp-client",
+                authorization_server_issuer: &audience,
+                authorization_server_token_endpoint: &format!("{audience}/token"),
+                idp_token_endpoint: &format!("{issuer}/token"),
+                idp_issuer: &issuer,
+                idp_client_id: "idp-client",
+                refresh_token: refresh_token.to_string(),
+                idp_http_client: Arc::clone(&client),
+                resource_http_client: Arc::clone(&client),
+            },
+            (),
+            std::convert::identity,
+        )
         .boxed()
-        .await;
+        .await
+        .map(|(token, ())| token);
         if !valid {
             assert!(result.is_err(), "invalid subject must fail before HTTP");
             assert!(

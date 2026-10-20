@@ -41,7 +41,7 @@ struct EmaAuthorizationMetadata {
 }
 
 /// Inputs for non-interactive enterprise-managed MCP authorization.
-pub struct EmaAuthTokenExchangeRequest<'a> {
+pub struct EmaAuthTokenExchangeRequest<'a, L = EmaCredentialLease> {
     pub server_url: &'a str,
     pub resource: Option<&'a str>,
     pub scopes: &'a [String],
@@ -49,13 +49,13 @@ pub struct EmaAuthTokenExchangeRequest<'a> {
     pub expected_authorization_server_issuer: Option<&'a str>,
     pub idp_issuer: &'a str,
     pub idp_client_id: &'a str,
-    pub idp_identity: BoxFuture<'a, Result<EmaIdpIdentity>>,
+    pub idp_identity: BoxFuture<'a, Result<EmaIdpIdentity<L>>>,
     pub idp_http_client: Arc<dyn HttpClient>,
     pub resource_http_client: Arc<dyn HttpClient>,
 }
 
-impl<'a> From<&EmaAuthTokenExchangeRequest<'a>> for EmaDiscoveryRequest<'a> {
-    fn from(request: &EmaAuthTokenExchangeRequest<'a>) -> Self {
+impl<'a, L> From<&EmaAuthTokenExchangeRequest<'a, L>> for EmaDiscoveryRequest<'a> {
+    fn from(request: &EmaAuthTokenExchangeRequest<'a, L>) -> Self {
         Self {
             server_url: request.server_url,
             resource: request.resource,
@@ -66,9 +66,10 @@ impl<'a> From<&EmaAuthTokenExchangeRequest<'a>> for EmaDiscoveryRequest<'a> {
 }
 
 /// Discover the resource's authorization server, then perform the ID-JAG flow.
-pub async fn exchange_ema_auth_token(
-    request: EmaAuthTokenExchangeRequest<'_>,
-) -> Result<(EmaAccessToken, EmaCredentialLease)> {
+pub async fn exchange_ema_auth_token<L: Send, R: Send>(
+    request: EmaAuthTokenExchangeRequest<'_, L>,
+    finish_idp: impl FnOnce(L) -> R + Send,
+) -> Result<(EmaAccessToken, R)> {
     validate_ema_auth_resource(request.server_url, request.resource)?;
     let client_id = request
         .mcp_client_id
@@ -89,21 +90,24 @@ pub async fn exchange_ema_auth_token(
         refresh_token,
         credentials,
     } = request.idp_identity.await?;
-    let token = exchange_id_jag(EmaIdJagExchangeRequest {
-        resource: &resource,
-        scopes: request.scopes,
-        mcp_client_id: client_id,
-        authorization_server_issuer: issuer,
-        authorization_server_token_endpoint: &metadata.token_endpoint,
-        idp_token_endpoint: &token_endpoint,
-        idp_issuer: request.idp_issuer,
-        idp_client_id: request.idp_client_id,
-        refresh_token,
-        idp_http_client: request.idp_http_client,
-        resource_http_client: request.resource_http_client,
-    })
-    .await?;
-    Ok((token, credentials))
+    exchange_id_jag(
+        EmaIdJagExchangeRequest {
+            resource: &resource,
+            scopes: request.scopes,
+            mcp_client_id: client_id,
+            authorization_server_issuer: issuer,
+            authorization_server_token_endpoint: &metadata.token_endpoint,
+            idp_token_endpoint: &token_endpoint,
+            idp_issuer: request.idp_issuer,
+            idp_client_id: request.idp_client_id,
+            refresh_token,
+            idp_http_client: request.idp_http_client,
+            resource_http_client: request.resource_http_client,
+        },
+        credentials,
+        finish_idp,
+    )
+    .await
 }
 
 async fn discover_ema_authorization_metadata(

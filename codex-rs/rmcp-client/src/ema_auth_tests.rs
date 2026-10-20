@@ -133,7 +133,7 @@ async fn discovery_pins_resource_issuer_and_public_jwt_bearer_before_identity() 
             polled.store(true, Ordering::SeqCst);
             bail!("identity resolver reached")
         });
-        exchange_ema_auth_token(exchange)
+        exchange_ema_auth_token(exchange, std::convert::identity)
             .await
             .expect_err("stop before token exchange");
         assert_eq!(polled.load(Ordering::SeqCst), valid, "{additions}");
@@ -452,7 +452,7 @@ async fn rejected_grants_preserve_their_source_and_release_the_credential_lease(
                 credentials: crate::EmaCredentialLease { credentials },
             })
         });
-        let error = exchange_ema_auth_token(exchange)
+        let error = exchange_ema_auth_token(exchange, std::convert::identity)
             .await
             .expect_err("invalid grant");
         assert_eq!(

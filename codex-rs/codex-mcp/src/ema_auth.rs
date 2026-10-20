@@ -301,28 +301,33 @@ impl EmaTokenSource for EnterpriseTokenSource {
     async fn access_token(&self) -> Result<EmaAccessToken> {
         self.auth.check_account().await?;
         let idp = self.registration.idp();
-        let exchange = exchange_ema_auth_token(EmaAuthTokenExchangeRequest {
-            server_url: self.registration.server_url(),
-            resource: self.registration.resource(),
-            scopes: self.registration.scopes(),
-            mcp_client_id: self.registration.client_id(),
-            expected_authorization_server_issuer: self.registration.authorization_server_issuer(),
-            idp_issuer: &idp.issuer,
-            idp_client_id: &idp.client_id,
-            idp_identity: Box::pin(async {
-                self.auth.check_account().await?;
-                resolve_ema_idp_identity(EmaIdpIdentityRequest {
-                    issuer: &idp.issuer,
-                    client_id: &idp.client_id,
-                    credentials: self.credentials.acquire_current_ema_credentials().await?,
-                    http_client: Arc::clone(&self.http_client),
-                    redirect_mode: StreamableHttpRedirectMode::Legacy,
-                })
-                .await
-            }),
-            idp_http_client: Arc::clone(&self.http_client),
-            resource_http_client: Arc::clone(&self.http_client),
-        });
+        let exchange = exchange_ema_auth_token(
+            EmaAuthTokenExchangeRequest {
+                server_url: self.registration.server_url(),
+                resource: self.registration.resource(),
+                scopes: self.registration.scopes(),
+                mcp_client_id: self.registration.client_id(),
+                expected_authorization_server_issuer: self
+                    .registration
+                    .authorization_server_issuer(),
+                idp_issuer: &idp.issuer,
+                idp_client_id: &idp.client_id,
+                idp_identity: Box::pin(async {
+                    self.auth.check_account().await?;
+                    resolve_ema_idp_identity(EmaIdpIdentityRequest {
+                        issuer: &idp.issuer,
+                        client_id: &idp.client_id,
+                        credentials: self.credentials.acquire_current_ema_credentials().await?,
+                        http_client: Arc::clone(&self.http_client),
+                        redirect_mode: StreamableHttpRedirectMode::Legacy,
+                    })
+                    .await
+                }),
+                idp_http_client: Arc::clone(&self.http_client),
+                resource_http_client: Arc::clone(&self.http_client),
+            },
+            std::convert::identity,
+        );
         let result = tokio::select! {
             biased;
             () = self.auth.config.mcp_ema_cancellation.cancelled() => {

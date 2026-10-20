@@ -58,9 +58,11 @@ pub(crate) struct EmaIdJagExchangeRequest<'a> {
 }
 
 /// Exchanges an enterprise IdP credential for a resource-bound MCP bearer token.
-pub(crate) async fn exchange_id_jag(
+pub(crate) async fn exchange_id_jag<L: Send, R: Send>(
     request: EmaIdJagExchangeRequest<'_>,
-) -> Result<EmaAccessToken> {
+    credentials: L,
+    finish_idp: impl FnOnce(L) -> R + Send,
+) -> Result<(EmaAccessToken, R)> {
     let idp_http = OAuthHttpClientAdapter::new_with_redirect_mode(
         request.idp_http_client,
         build_default_headers(/*http_headers*/ None, /*env_http_headers*/ None)?,
@@ -78,7 +80,7 @@ pub(crate) async fn exchange_id_jag(
     let refresh_token = RefreshToken::new(request.refresh_token);
     // Discovery has already verified both public-client registrations. The SDK owns
     // token validation and the two exchanges; Codex retains routing and credential policy.
-    let token = EmaExchangeRequest::new(
+    let assertion = EmaExchangeRequest::new(
         EmaAuthorizationServer::new(
             request.idp_issuer,
             request.idp_token_endpoint,
@@ -93,36 +95,47 @@ pub(crate) async fn exchange_id_jag(
         &refresh_token,
     )
     .with_scopes(request.scopes.iter().cloned())
-    .exchange(&idp_http, &resource_http)
+    .exchange_id_jag(&idp_http)
     .await
-    .map_err(|error| {
-        let failure = match &error {
-            EmaError::InvalidGrant(EmaExchangeStage::IdentityProvider) => {
-                Some(EmaAuthFailure::InvalidGrant {
-                    grant_source: EmaInvalidGrantSource::EnterpriseIdentity,
-                })
-            }
-            EmaError::InvalidGrant(EmaExchangeStage::ResourceAuthorizationServer) => {
-                Some(EmaAuthFailure::InvalidGrant {
-                    grant_source: EmaInvalidGrantSource::ResourceAuthorization,
-                })
-            }
-            EmaError::InsufficientUserAuthentication(_) => {
-                Some(EmaAuthFailure::InsufficientUserAuthentication)
-            }
-            // Future SDK stages must not invalidate the shared enterprise credential.
-            _ => None,
-        };
-        match failure {
-            Some(failure) => anyhow::Error::new(failure).context(error),
-            None => anyhow::Error::new(error),
+    .map_err(exchange_error)?;
+    drop(refresh_token);
+    // Only the IdP uses the refresh token. Release its lease before resource-AS I/O.
+    let receipt = finish_idp(credentials);
+    let token = assertion
+        .exchange(&resource_http)
+        .await
+        .map_err(exchange_error)?;
+    Ok((
+        EmaAccessToken {
+            access_token: token.access_token.secret().to_owned(),
+            expires_in: token.expires_in,
+            received_at: Instant::now(),
+        },
+        receipt,
+    ))
+}
+
+fn exchange_error(error: EmaError) -> anyhow::Error {
+    let failure = match &error {
+        EmaError::InvalidGrant(EmaExchangeStage::IdentityProvider) => {
+            Some(EmaAuthFailure::InvalidGrant {
+                grant_source: EmaInvalidGrantSource::EnterpriseIdentity,
+            })
         }
-    })?;
-    Ok(EmaAccessToken {
-        access_token: token.access_token.secret().to_owned(),
-        expires_in: token.expires_in,
-        received_at: Instant::now(),
-    })
+        EmaError::InvalidGrant(EmaExchangeStage::ResourceAuthorizationServer) => {
+            Some(EmaAuthFailure::InvalidGrant {
+                grant_source: EmaInvalidGrantSource::ResourceAuthorization,
+            })
+        }
+        EmaError::InsufficientUserAuthentication(_) => {
+            Some(EmaAuthFailure::InsufficientUserAuthentication)
+        }
+        _ => None,
+    };
+    match failure {
+        Some(failure) => anyhow::Error::new(failure).context(error),
+        None => anyhow::Error::new(error),
+    }
 }
 
 #[cfg(test)]
