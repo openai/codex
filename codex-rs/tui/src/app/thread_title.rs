@@ -305,7 +305,7 @@ where
                     .iter()
                     .filter_map(|input| match input {
                         UserInput::Text { text, .. } => {
-                            Some(crate::ide_context::extract_prompt_request_with_offset(text).0)
+                            Some(crate::user_prompt::extract_prompt_request_with_offset(text).0)
                         }
                         _ => None,
                     })
