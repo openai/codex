@@ -89,6 +89,8 @@ pub(crate) enum InputQueueActivity {
 #[derive(Default)]
 pub(crate) struct TurnInputQueue {
     items: Vec<TurnInput>,
+    /// Response items queued through a notifying injection, unlike passive context.
+    has_pending_injection: bool,
 }
 
 /// Session-scoped pending input storage and active-turn mailbox delivery coordination.
@@ -316,7 +318,7 @@ impl InputQueue {
     pub(crate) async fn clear_pending(&self, active_turn: &ActiveTurn) {
         let mut turn_state = active_turn.turn_state.lock().await;
         turn_state.clear_pending_waiters();
-        turn_state.pending_input.items.clear();
+        turn_state.pending_input = TurnInputQueue::default();
     }
 
     pub(crate) async fn defer_mailbox_delivery_to_next_turn(
@@ -372,6 +374,9 @@ impl InputQueue {
     ) {
         {
             let mut turn_state = turn_state.lock().await;
+            turn_state.pending_input.has_pending_injection |= input
+                .iter()
+                .any(|input| matches!(input, TurnInput::ResponseItem(_)));
             turn_state.pending_input.items.extend(input);
             turn_state.accept_mailbox_delivery_for_current_turn();
         }
@@ -390,7 +395,7 @@ impl InputQueue {
         &self,
         turn_state: &Mutex<TurnState>,
     ) -> Vec<TurnInput> {
-        turn_state.lock().await.pending_input.items.split_off(0)
+        std::mem::take(&mut turn_state.lock().await.pending_input).items
     }
 
     #[expect(
@@ -409,7 +414,7 @@ impl InputQueue {
                     let accepts_mailbox_delivery =
                         turn_state.accepts_mailbox_delivery_for_current_turn();
                     let pending_input = if accepts_mailbox_delivery {
-                        turn_state.pending_input.items.split_off(0)
+                        std::mem::take(&mut turn_state.pending_input).items
                     } else {
                         Vec::new()
                     };
@@ -471,12 +476,14 @@ impl TurnInputQueue {
     }
 
     fn pending_activity(&self) -> Option<InputQueueActivity> {
-        if self.items.iter().any(|input| {
-            matches!(
-                input,
-                TurnInput::UserInput { .. } | TurnInput::FunctionCallOutput(_)
-            )
-        }) {
+        if self.has_pending_injection
+            || self.items.iter().any(|input| {
+                matches!(
+                    input,
+                    TurnInput::UserInput { .. } | TurnInput::FunctionCallOutput(_)
+                )
+            })
+        {
             Some(InputQueueActivity::Steer)
         } else if self
             .items
@@ -628,10 +635,31 @@ mod tests {
     async fn input_queue_reports_already_pending_steer() {
         let input_queue = InputQueue::new();
         let turn_state = Mutex::new(TurnState::default());
-        let passive_output = serde_json::from_value(serde_json::json!({
+        let passive_output: TurnInput = serde_json::from_value(serde_json::json!({
             "ResponseItem": {"type": "function_call_output", "name": "notify", "output": "passive"}
         }))
         .unwrap();
+        input_queue
+            .extend_pending_input_for_turn_state(&turn_state, vec![passive_output.clone()])
+            .await;
+        assert_eq!(
+            input_queue.subscribe_activity(Some(&turn_state)).await.1,
+            None
+        );
+        input_queue
+            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+                &turn_state,
+                vec![passive_output.clone()],
+            )
+            .await;
+        assert_eq!(
+            input_queue.subscribe_activity(Some(&turn_state)).await.1,
+            Some(InputQueueActivity::Steer)
+        );
+        // Consuming the injection must not make later passive context wake a wait.
+        input_queue
+            .take_pending_input_for_turn_state(&turn_state)
+            .await;
         input_queue
             .extend_pending_input_for_turn_state(&turn_state, vec![passive_output])
             .await;

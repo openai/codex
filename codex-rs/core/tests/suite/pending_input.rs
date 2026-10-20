@@ -697,22 +697,38 @@ async fn queue_only_agent_mail_wakes_sleeping_root_with_previous_turn_context(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum WaitInput {
+    UserSteer,
+    PendingInjection,
+    LiveInjection,
+}
+
+#[test_case(WaitInput::UserSteer; "user_steer")]
+#[test_case(WaitInput::PendingInjection; "already_pending_injection")]
+#[test_case(WaitInput::LiveInjection; "injection_while_waiting")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
+async fn input_interrupts_wait_agent_and_is_sent_in_follow_up_request(input: WaitInput) {
     const WAIT_CALL_ID: &str = "wait-call";
     const INITIAL_PROMPT: &str = "wait for an agent";
     const STEER_PROMPT: &str = "stop waiting and continue";
     const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 
+    let (release_wait, wait_gate) = oneshot::channel();
     let first_chunks = vec![
         chunk(ev_response_created("resp-1")),
-        chunk(ev_function_call_with_namespace(
-            WAIT_CALL_ID,
-            MULTI_AGENT_V2_NAMESPACE,
-            "wait_agent",
-            r#"{"timeout_ms":10000}"#,
-        )),
-        chunk(ev_completed("resp-1")),
+        gated_chunk(
+            wait_gate,
+            vec![
+                ev_function_call_with_namespace(
+                    WAIT_CALL_ID,
+                    MULTI_AGENT_V2_NAMESPACE,
+                    "wait_agent",
+                    r#"{"timeout_ms":10000}"#,
+                ),
+                ev_completed("resp-1"),
+            ],
+        ),
     ];
     let (server, _completions) =
         start_streaming_sse_server(vec![first_chunks, response_completed_chunks("resp-2")]).await;
@@ -730,12 +746,28 @@ async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
         .codex;
 
     submit_user_input(&codex, INITIAL_PROMPT).await;
+    server.wait_for_request_count(/*count*/ 1).await;
+    if matches!(input, WaitInput::PendingInjection) {
+        // Hold the tool call until the injection and its activity signal are queued.
+        codex
+            .inject_if_running(vec![responses::user_message_item(STEER_PROMPT)])
+            .await
+            .expect("inject into active turn");
+    }
+    release_wait.send(()).expect("release wait tool call");
     wait_for_event(&codex, |event| {
         matches!(event, EventMsg::CollabWaitingBegin(_))
     })
     .await;
 
-    steer_user_input(&codex, STEER_PROMPT).await;
+    match input {
+        WaitInput::UserSteer => steer_user_input(&codex, STEER_PROMPT).await,
+        WaitInput::LiveInjection => codex
+            .inject_if_running(vec![responses::user_message_item(STEER_PROMPT)])
+            .await
+            .expect("inject into active turn"),
+        WaitInput::PendingInjection => {}
+    }
     wait_for_turn_complete(&codex).await;
 
     let requests = server.requests().await;
@@ -761,8 +793,11 @@ async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
     server.shutdown().await;
 }
 
+#[test_case(WaitInput::UserSteer; "user_steer")]
+#[test_case(WaitInput::PendingInjection; "already_pending_injection")]
+#[test_case(WaitInput::LiveInjection; "injection_while_waiting")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn any_new_input_interrupts_sleep() {
+async fn any_new_input_interrupts_sleep(input: WaitInput) {
     const FIRST_SLEEP_CALL_ID: &str = "sleep-call-1";
     const SECOND_SLEEP_CALL_ID: &str = "sleep-call-2";
     const SLEEP_DURATION_MS: u64 = 3_600_000;
@@ -770,15 +805,21 @@ async fn any_new_input_interrupts_sleep() {
     const STEER_PROMPT: &str = "stop sleeping and continue";
     let sleep_arguments = json!({ "duration_ms": SLEEP_DURATION_MS }).to_string();
 
+    let (release_sleep, sleep_gate) = oneshot::channel();
     let first_chunks = vec![
         chunk(ev_response_created("resp-1")),
-        chunk(ev_function_call_with_namespace(
-            FIRST_SLEEP_CALL_ID,
-            "clock",
-            "sleep",
-            &sleep_arguments,
-        )),
-        chunk(ev_completed("resp-1")),
+        gated_chunk(
+            sleep_gate,
+            vec![
+                ev_function_call_with_namespace(
+                    FIRST_SLEEP_CALL_ID,
+                    "clock",
+                    "sleep",
+                    &sleep_arguments,
+                ),
+                ev_completed("resp-1"),
+            ],
+        ),
     ];
     let second_chunks = vec![
         chunk(ev_response_created("resp-2")),
@@ -814,9 +855,24 @@ async fn any_new_input_interrupts_sleep() {
     let codex = test.codex.clone();
 
     submit_user_input(&codex, INITIAL_PROMPT).await;
+    server.wait_for_request_count(/*count*/ 1).await;
+    if matches!(input, WaitInput::PendingInjection) {
+        codex
+            .inject_if_running(vec![responses::user_message_item(STEER_PROMPT)])
+            .await
+            .expect("inject into active turn");
+    }
+    release_sleep.send(()).expect("release sleep tool call");
     wait_for_sleep_item_started(&codex, FIRST_SLEEP_CALL_ID, SLEEP_DURATION_MS).await;
 
-    steer_user_input(&codex, STEER_PROMPT).await;
+    match input {
+        WaitInput::UserSteer => steer_user_input(&codex, STEER_PROMPT).await,
+        WaitInput::LiveInjection => codex
+            .inject_if_running(vec![responses::user_message_item(STEER_PROMPT)])
+            .await
+            .expect("inject into active turn"),
+        WaitInput::PendingInjection => {}
+    }
     wait_for_sleep_item_completed(&codex, FIRST_SLEEP_CALL_ID, SLEEP_DURATION_MS).await;
     wait_for_sleep_item_started(&codex, SECOND_SLEEP_CALL_ID, SLEEP_DURATION_MS).await;
 
