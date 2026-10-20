@@ -83,6 +83,9 @@ mod spawn_settings_tests;
 #[path = "guardian_subagent_notification_tests.rs"]
 mod guardian_subagent_notification_tests;
 
+#[path = "code_mode_agent_message_tests.rs"]
+mod code_mode_agent_message_tests;
+
 const SPAWN_CALL_ID: &str = "spawn-call-1";
 const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
