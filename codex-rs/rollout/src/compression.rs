@@ -14,6 +14,7 @@ mod access_metadata;
 mod blocking_reader;
 mod error_metrics;
 mod path_metadata;
+mod read_diagnostics;
 mod read_metrics;
 
 pub(crate) use blocking_reader::read_rollout_lines;
@@ -1389,7 +1390,7 @@ mod reader {
             metrics.format = "zstd";
             let reader = tokio::task::spawn_blocking(move || {
                 let input = File::open(path.as_path())?;
-                let decoder = zstd::stream::read::Decoder::new(input)?;
+                let decoder = super::read_diagnostics::DiagnosticDecoder::new(input)?;
                 Ok::<_, io::Error>(
                     io::BufReader::new(Box::new(decoder) as Box<dyn Read + Send>).lines(),
                 )

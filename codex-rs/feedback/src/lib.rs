@@ -415,20 +415,45 @@ mod rollout_attachment_tests;
 impl FeedbackAttachmentPath {
     /// Read a whole regular file within the caller's size limit.
     pub fn read_attachment(&self, max_bytes: usize) -> io::Result<Option<FeedbackAttachment>> {
-        let rollout_path = codex_rollout::rollout_id_from_path(&self.path)
+        let mut attachment_path = self.path.clone();
+        let mut rollout_path = codex_rollout::rollout_id_from_path(&self.path)
             .map(|_| codex_rollout::plain_rollout_path(&self.path));
-        let buffer = if rollout_path.is_some() {
-            let Some(buffer) =
-                codex_rollout::read_rollout_prefix(&self.path, max_bytes.saturating_add(1))?
-            else {
-                tracing::error!(
-                    "feedback attachment skipped: rollout is missing or not a regular file"
-                );
-                return Ok(None);
-            };
+        let mut raw_rollout = false;
+        let decoded = if let Some(plain_path) = &rollout_path {
+            match codex_rollout::read_rollout_prefix(&self.path, max_bytes.saturating_add(1)) {
+                Ok(Some(buffer)) => Some(buffer),
+                Ok(None) => {
+                    tracing::error!(
+                        "feedback attachment skipped: rollout is missing or not a regular file"
+                    );
+                    return Ok(None);
+                }
+                Err(error)
+                    if error.raw_os_error().is_none()
+                        && matches!(
+                            error.kind(),
+                            io::ErrorKind::UnexpectedEof
+                                | io::ErrorKind::InvalidData
+                                | io::ErrorKind::Other
+                        )
+                        && !plain_path.try_exists().unwrap_or(true) =>
+                {
+                    // Preserve a selected, undecodable archive for diagnosis. Never replace
+                    // a preferred plain rollout with its potentially stale compressed sibling.
+                    attachment_path = plain_path.with_extension("jsonl.zst");
+                    rollout_path = None;
+                    raw_rollout = true;
+                    None
+                }
+                Err(error) => return Err(error),
+            }
+        } else {
+            None
+        };
+        let buffer = if let Some(buffer) = decoded {
             buffer
         } else {
-            let metadata = fs::metadata(&self.path)?;
+            let metadata = fs::metadata(&attachment_path)?;
             if !metadata.is_file() {
                 tracing::error!("feedback attachment skipped: not a regular file");
                 return Ok(None);
@@ -443,7 +468,7 @@ impl FeedbackAttachmentPath {
             }
             let mut buffer = Vec::new();
             // Detect files that grow past the limit after the metadata check.
-            fs::File::open(&self.path)?
+            fs::File::open(&attachment_path)?
                 .take(max_bytes as u64 + 1)
                 .read_to_end(&mut buffer)?;
             buffer
@@ -456,17 +481,20 @@ impl FeedbackAttachmentPath {
             );
             return Ok(None);
         }
-        let filename = self
+        let mut filename = self
             .attachment_filename_override
             .clone()
             .unwrap_or_else(|| {
                 rollout_path
                     .as_ref()
-                    .unwrap_or(&self.path)
+                    .unwrap_or(&attachment_path)
                     .file_name()
                     .map(|name| name.to_string_lossy().to_string())
                     .unwrap_or_else(|| "extra-log.log".to_string())
             });
+        if raw_rollout && !filename.ends_with(".zst") {
+            filename.push_str(".zst");
+        }
         let content_type = match Path::new(&filename)
             .extension()
             .and_then(|extension| extension.to_str())
