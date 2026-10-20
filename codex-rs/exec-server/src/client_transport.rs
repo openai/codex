@@ -179,7 +179,10 @@ pub(crate) struct ReconnectAttempt {
 }
 
 struct OpenNoiseRendezvousConnection {
+    environment_id: String,
     executor_registration_id: String,
+    stream_id: String,
+    handshake_started: Instant,
     connection: JsonRpcConnection,
     options: ExecServerClientConnectOptions,
     handshake_ready: tokio::sync::oneshot::Receiver<()>,
@@ -686,7 +689,7 @@ impl ExecServerClient {
             stream,
             NoiseHarnessConnectionArgs {
                 connection_label,
-                environment_id,
+                environment_id: environment_id.clone(),
                 executor_registration_id: executor_registration_id.clone(),
                 identity: harness_identity,
                 responder_public_key: executor_public_key,
@@ -694,7 +697,10 @@ impl ExecServerClient {
             },
         );
         Ok(OpenNoiseRendezvousConnection {
+            environment_id,
             executor_registration_id,
+            stream_id: connection.stream_id,
+            handshake_started: connection.handshake_started,
             connection: connection.connection,
             options: ExecServerClientConnectOptions {
                 client_name,
@@ -715,12 +721,12 @@ impl ExecServerClient {
         )
     )]
     async fn wait_for_noise_handshake(
-        handshake_ready: &mut tokio::sync::oneshot::Receiver<()>,
+        connection: &mut OpenNoiseRendezvousConnection,
         deadline: Instant,
         initialize_timeout: Duration,
         initialize_span: &tracing::Span,
     ) -> Result<(), ExecServerError> {
-        match timeout_at(deadline, handshake_ready).await {
+        match timeout_at(deadline, &mut connection.handshake_ready).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(_)) => Err(ExecServerError::Disconnected(
                 "Noise harness handshake failed before connection became ready".to_string(),
@@ -736,6 +742,10 @@ impl ExecServerClient {
                     noise_side = "harness",
                     noise_reason = "timeout",
                     timeout_ms = initialize_timeout.as_millis() as u64,
+                    elapsed_ms = connection.handshake_started.elapsed().as_millis() as u64,
+                    environment_id = %connection.environment_id,
+                    executor_registration_id = %connection.executor_registration_id,
+                    stream_id = %connection.stream_id,
                 );
                 Err(ExecServerError::InitializeTimedOut {
                     timeout: initialize_timeout,
@@ -751,7 +761,7 @@ impl ExecServerClient {
         // startup parent while making its two child operations visible.
         let initialize_timeout = connection.options.initialize_timeout;
         let noise_context = NoiseInitializeContext {
-            executor_registration_id: connection.executor_registration_id,
+            executor_registration_id: connection.executor_registration_id.clone(),
             span: tracing::info_span!(
                 "codex.exec_server.request",
                 otel.kind = "client",
@@ -762,7 +772,7 @@ impl ExecServerClient {
         };
         let deadline = Instant::now() + initialize_timeout;
         let readiness = Self::wait_for_noise_handshake(
-            &mut connection.handshake_ready,
+            &mut connection,
             deadline,
             initialize_timeout,
             &noise_context.span,

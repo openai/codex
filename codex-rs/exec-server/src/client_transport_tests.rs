@@ -18,6 +18,8 @@ use tokio::io::duplex;
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::instrument::WithSubscriber;
+use tracing_subscriber::layer::SubscriberExt;
 
 use super::ExecServerClient;
 use super::ExecServerReconnectStrategy;
@@ -244,7 +246,10 @@ async fn noise_handshake_uses_initialize_timeout() -> Result<()> {
         let mut websocket = accept_async(socket).await?;
         // Drain the frames sent before the harness waits for the responder,
         // then verify that a timed-out readiness wait closes the socket.
-        assert!(websocket.next().await.is_some());
+        let Some(Ok(Message::Binary(resume))) = websocket.next().await else {
+            anyhow::bail!("expected resume frame");
+        };
+        let stream_id = decode_relay_message_frame(&resume)?.stream_id;
         assert!(websocket.next().await.is_some());
         let closed =
             tokio::time::timeout(std::time::Duration::from_secs(1), websocket.next()).await?;
@@ -252,7 +257,7 @@ async fn noise_handshake_uses_initialize_timeout() -> Result<()> {
             matches!(closed, None | Some(Ok(Message::Close(_))) | Some(Err(_))),
             "timed-out Noise handshake must close its websocket"
         );
-        anyhow::Ok(())
+        anyhow::Ok(stream_id)
     });
     let initialize_timeout = std::time::Duration::from_millis(1);
     let opened = ExecServerClient::open_noise_rendezvous_connection(NoiseRendezvousConnectArgs {
@@ -274,7 +279,16 @@ async fn noise_handshake_uses_initialize_timeout() -> Result<()> {
     })
     .await?;
 
+    let stream_id = opened.stream_id.clone();
+    let mut log_file = tempfile::tempfile()?;
+    let writer = log_file.try_clone()?;
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(move || writer.try_clone().expect("clone log file")),
+    );
     let error = ExecServerClient::finish_noise_rendezvous_connection(opened)
+        .with_subscriber(subscriber)
         .await
         .err()
         .expect("stalled Noise handshake must time out");
@@ -283,7 +297,19 @@ async fn noise_handshake_uses_initialize_timeout() -> Result<()> {
         ExecServerError::InitializeTimedOut { timeout } if timeout == initialize_timeout
     ));
 
-    server.await??;
+    assert_eq!(server.await??, stream_id);
+    std::io::Seek::rewind(&mut log_file)?;
+    let mut logs = String::new();
+    std::io::Read::read_to_string(&mut log_file, &mut logs)?;
+    for field in [
+        "noise_reason=\"timeout\"",
+        "environment_id=environment",
+        "executor_registration_id=registration",
+        "elapsed_ms=",
+        &stream_id,
+    ] {
+        assert!(logs.contains(field), "missing {field} in {logs}");
+    }
     Ok(())
 }
 

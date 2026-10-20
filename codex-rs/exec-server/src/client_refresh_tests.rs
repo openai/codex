@@ -111,6 +111,7 @@ impl HarnessKeyValidator for Validator {
         &self,
         _: &NoiseChannelPublicKey,
         _: &str,
+        _: Option<uuid::Uuid>,
     ) -> Result<(), ExecServerError> {
         if let Some(handshake) = &self.handshake {
             self.started.notify_one();

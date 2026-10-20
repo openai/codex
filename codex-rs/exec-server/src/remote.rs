@@ -408,6 +408,7 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
         &self,
         harness_public_key: &NoiseChannelPublicKey,
         authorization: &str,
+        stream_id: Option<uuid::Uuid>,
     ) -> Result<(), ExecServerError> {
         let environment_id = &self.environment_id;
         let url = endpoint_url(
@@ -420,15 +421,17 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
             harness_key_authorization: authorization.to_string(),
         };
         let (auth_headers, executor_credential) = self.client.resolve_auth().await?;
-        let response = self
+        let mut request = self
             .client
             .http_for_auth()
             .post(url)
             .headers(auth_headers)
             .headers(current_trace_context_headers())
-            .json(&body)
-            .send()
-            .await?;
+            .json(&body);
+        if let Some(stream_id) = stream_id {
+            request = request.header("x-codex-noise-stream-id", stream_id.to_string());
+        }
+        let response = request.send().await?;
         let status = response.status();
         if !status.is_success() {
             // The request contains the short-lived authorization. Do not include
@@ -1235,7 +1238,11 @@ mod tests {
                 executor_registration_id: "registration".to_string(),
             };
             let validation = validator
-                .validate_harness_key(&public_key, "harness-authorization")
+                .validate_harness_key(
+                    &public_key,
+                    "harness-authorization",
+                    /*stream_id*/ None,
+                )
                 .await
                 .expect_err("invalid credentials must be rejected");
             assert!(matches!(
@@ -1317,7 +1324,11 @@ mod tests {
             executor_registration_id: "registration".to_string(),
         };
         let error = validator
-            .validate_harness_key(&public_key, "harness-authorization")
+            .validate_harness_key(
+                &public_key,
+                "harness-authorization",
+                /*stream_id*/ None,
+            )
             .await
             .expect_err("validation must reject a non-loopback HTTP registry");
         assert!(matches!(
@@ -1400,7 +1411,11 @@ mod tests {
             environment_id: "environment-requested".to_string(),
             executor_registration_id: "registration".to_string(),
         }
-        .validate_harness_key(&public_key, "harness-authorization")
+        .validate_harness_key(
+            &public_key,
+            "harness-authorization",
+            /*stream_id*/ None,
+        )
         .await
         .expect("validate directly");
         registry.verify().await;
@@ -1488,7 +1503,11 @@ mod tests {
                 executor_registration_id: "registration".to_string(),
             };
             let validation = validator
-                .validate_harness_key(&public_key, "harness-authorization")
+                .validate_harness_key(
+                    &public_key,
+                    "harness-authorization",
+                    /*stream_id*/ None,
+                )
                 .await
                 .expect_err("invalid validation response");
             assert!(!format!("{validation:?} {validation}").contains(TOKEN));

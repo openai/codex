@@ -29,19 +29,40 @@ use super::*;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::noise_channel::PendingResponderHandshake;
 
-fn noise_harness_connection_from_websocket<T, E>(
+fn noise_harness_connection_from_websocket<T>(
     stream: T,
     args: NoiseHarnessConnectionArgs,
 ) -> JsonRpcConnection
 where
-    T: Sink<Message, Error = E> + Stream<Item = Result<Message, E>> + Unpin + Send + 'static,
-    E: std::fmt::Display + Send + 'static,
+    T: Sink<Message, Error = WebSocketError>
+        + Stream<Item = Result<Message, WebSocketError>>
+        + Unpin
+        + Send
+        + 'static,
 {
     noise_harness_connection_from_websocket_with_readiness(stream, args).connection
 }
 
 const ENVIRONMENT_ID: &str = "environment-1";
 const EXECUTOR_REGISTRATION_ID: &str = "registration-1";
+
+#[test]
+fn websocket_read_diagnostics_use_typed_errors_only() {
+    let reset = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "private data");
+    for (error, expected) in [
+        (WebSocketError::Io(reset), "websocket_read_connection_reset"),
+        (
+            WebSocketError::Protocol(ProtocolError::ResetWithoutClosingHandshake),
+            "websocket_read_reset_without_close",
+        ),
+        (
+            WebSocketError::Protocol(ProtocolError::InvalidOpcode(255)),
+            "websocket_read_protocol",
+        ),
+    ] {
+        assert_eq!(websocket_read_error_reason(&error), expected);
+    }
+}
 
 #[tokio::test(start_paused = true)]
 async fn first_encrypted_request_frame_exposes_only_its_trace_context() -> Result<()> {
@@ -368,7 +389,7 @@ async fn connected_controlled_harness() -> Result<(
 }
 
 struct ControlledWebSocket {
-    inbound_rx: futures_mpsc::UnboundedReceiver<Result<Message, std::convert::Infallible>>,
+    inbound_rx: futures_mpsc::UnboundedReceiver<Result<Message, WebSocketError>>,
     outbound_tx: futures_mpsc::UnboundedSender<Message>,
     write_permit_rx: futures_mpsc::UnboundedReceiver<()>,
     blocked_write_tx: futures_mpsc::UnboundedSender<usize>,
@@ -378,7 +399,7 @@ struct ControlledWebSocket {
 }
 
 struct ControlledWebSocketHandle {
-    inbound_tx: futures_mpsc::UnboundedSender<Result<Message, std::convert::Infallible>>,
+    inbound_tx: futures_mpsc::UnboundedSender<Result<Message, WebSocketError>>,
     write_permit_tx: futures_mpsc::UnboundedSender<()>,
     blocked_write_rx: futures_mpsc::UnboundedReceiver<usize>,
     inbound_reads: Arc<AtomicUsize>,
@@ -452,7 +473,7 @@ impl ControlledWebSocketHandle {
 }
 
 impl Sink<Message> for ControlledWebSocket {
-    type Error = std::convert::Infallible;
+    type Error = WebSocketError;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Result<(), Self::Error>> {
         let this = self.get_mut();
@@ -497,7 +518,7 @@ impl Sink<Message> for ControlledWebSocket {
 }
 
 impl futures::Stream for ControlledWebSocket {
-    type Item = Result<Message, std::convert::Infallible>;
+    type Item = Result<Message, WebSocketError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
         let result = Pin::new(&mut self.inbound_rx).poll_next(cx);

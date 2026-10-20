@@ -14,7 +14,10 @@ use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
+use tokio::time::Instant;
+use tokio_tungstenite::tungstenite::Error as WebSocketError;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tracing::Instrument;
 use tracing::debug;
 use tracing::info;
@@ -66,6 +69,8 @@ pub(crate) struct NoiseHarnessConnectionArgs {
 pub(crate) struct NoiseHarnessConnection {
     pub(crate) connection: JsonRpcConnection,
     pub(crate) handshake_ready: oneshot::Receiver<()>,
+    pub(crate) stream_id: String,
+    pub(crate) handshake_started: Instant,
 }
 
 // Reset frames are cleartext relay control and are not authenticated by Noise.
@@ -80,13 +85,16 @@ const MAX_FRAMES_DRAINED_AFTER_PONG_DEADLINE: usize = 32;
 /// Callers that send application messages immediately after opening the
 /// websocket must await handshake_ready first. Dropping that receiver keeps
 /// the legacy fire-and-forget behavior for existing connection owners.
-pub(crate) fn noise_harness_connection_from_websocket_with_readiness<T, E>(
+pub(crate) fn noise_harness_connection_from_websocket_with_readiness<T>(
     stream: T,
     args: NoiseHarnessConnectionArgs,
 ) -> NoiseHarnessConnection
 where
-    T: Sink<Message, Error = E> + Stream<Item = Result<Message, E>> + Unpin + Send + 'static,
-    E: std::fmt::Display + Send + 'static,
+    T: Sink<Message, Error = WebSocketError>
+        + Stream<Item = Result<Message, WebSocketError>>
+        + Unpin
+        + Send
+        + 'static,
 {
     let NoiseHarnessConnectionArgs {
         connection_label,
@@ -97,12 +105,13 @@ where
         harness_key_authorization,
     } = args;
     let stream_id = Uuid::new_v4().to_string();
+    let connection_stream_id = stream_id.clone();
+    let handshake_started = Instant::now();
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (disconnected_tx, disconnected_rx) = watch::channel(false);
     let (handshake_ready_tx, handshake_ready_rx) = oneshot::channel();
-    let stream_span =
-        tracing::debug_span!("noise_relay.stream", noise_side = "harness",).or_current();
+    let stream_span = tracing::debug_span!("noise_relay.stream", noise_side = "harness",);
     debug!(
         environment_id,
         executor_registration_id, stream_id, "Noise harness relay details"
@@ -122,6 +131,7 @@ where
                 noise_outcome = "failed",
                 noise_side = "harness",
                 noise_reason = reason,
+                elapsed_ms = handshake_started.elapsed().as_millis() as u64,
                 environment_id,
                 executor_registration_id,
                 stream_id,
@@ -207,7 +217,7 @@ where
                     return;
                 }
                 Err(error) => {
-                    record_handshake_failure("websocket_read");
+                    record_handshake_failure(websocket_read_error_reason(&error));
                     send_disconnected(
                         &incoming_tx,
                         &disconnected_tx,
@@ -253,6 +263,11 @@ where
                             info!(
                                 noise_event = "handshake",
                                 noise_outcome = "ok",
+                                noise_side = "harness",
+                                elapsed_ms = handshake_started.elapsed().as_millis() as u64,
+                                environment_id,
+                                executor_registration_id,
+                                stream_id,
                                 "Noise harness handshake completed"
                             );
                             if let Some(handshake_ready_tx) = handshake_ready_tx.take() {
@@ -574,6 +589,28 @@ where
             transport: JsonRpcTransport::Plain,
         },
         handshake_ready: handshake_ready_rx,
+        stream_id: connection_stream_id,
+        handshake_started,
+    }
+}
+
+// Classify locally typed errors only; their text can contain untrusted wire data.
+fn websocket_read_error_reason(error: &WebSocketError) -> &'static str {
+    match error {
+        WebSocketError::Io(error) => match error.kind() {
+            std::io::ErrorKind::ConnectionReset => "websocket_read_connection_reset",
+            std::io::ErrorKind::ConnectionAborted => "websocket_read_connection_aborted",
+            std::io::ErrorKind::UnexpectedEof => "websocket_read_unexpected_eof",
+            std::io::ErrorKind::TimedOut => "websocket_read_timed_out",
+            _ => "websocket_read_io_other",
+        },
+        WebSocketError::Protocol(ProtocolError::ResetWithoutClosingHandshake) => {
+            "websocket_read_reset_without_close"
+        }
+        WebSocketError::Protocol(_) => "websocket_read_protocol",
+        WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed => "websocket_read_closed",
+        WebSocketError::Tls(_) => "websocket_read_tls",
+        _ => "websocket_read_other",
     }
 }
 
