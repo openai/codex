@@ -521,11 +521,12 @@ async fn child_session_inherits_client_mcp_extensions() {
         .await
         .expect("start parent thread");
 
+    let (client_mcp_extensions, _) = manager
+        .state
+        .inherited_child_settings(Some(parent.thread_id))
+        .await;
     assert_eq!(
-        manager
-            .state
-            .client_mcp_extensions_for_child(Some(parent.thread_id))
-            .await,
+        client_mcp_extensions,
         ClientMcpExtensions::new(HashMap::from([
             (OPENAI_FORM_EXTENSION_ID.to_string(), serde_json::json!({})),
             (

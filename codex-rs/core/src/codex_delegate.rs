@@ -105,6 +105,10 @@ pub(crate) async fn run_codex_thread_interactive(
     let spawn_result = Session::spawn(SessionSpawnArgs {
         startup: Some(Arc::clone(&startup)),
         config,
+        prompt_cache_key: parent_session
+            .services
+            .model_client
+            .prompt_cache_key_policy(),
         allow_provider_model_fallback: false,
         instructions,
         installation_id: parent_session.installation_id.clone(),

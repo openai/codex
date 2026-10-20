@@ -607,11 +607,21 @@ impl LocalAgentControl {
                 None,
             )
         };
-        let inherited_instructions = if let Some((parent, _)) = parent.as_ref() {
-            Some(parent.session.inherited_instructions().await)
-        } else if let Some(parent_thread_id) = parent_thread_id
-            && let Ok(parent) = state.get_thread(parent_thread_id).await
-        {
+        let inherited_parent = if let Some((parent, _)) = parent.as_ref() {
+            Some(Arc::clone(parent))
+        } else if let Some(parent_thread_id) = parent_thread_id {
+            state.get_thread(parent_thread_id).await.ok()
+        } else {
+            None
+        };
+        let prompt_cache_key = inherited_parent.as_ref().map(|parent| {
+            parent
+                .session
+                .services
+                .model_client
+                .prompt_cache_key_policy()
+        });
+        let inherited_instructions = if let Some(parent) = inherited_parent {
             Some(parent.session.inherited_instructions().await)
         } else {
             self.runtime
@@ -644,6 +654,7 @@ impl LocalAgentControl {
         match state
             .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
                 config,
+                prompt_cache_key,
                 initial_history,
                 agent_control: self.clone(),
                 session_source,
@@ -1524,6 +1535,7 @@ impl LocalAgentControl {
         let resumed_thread = state
             .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
                 config: config.clone(),
+                prompt_cache_key: None,
                 initial_history,
                 agent_control: self.clone(),
                 session_source,

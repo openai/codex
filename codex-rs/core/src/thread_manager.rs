@@ -267,8 +267,22 @@ pub struct InternalSessionParent {
     pub(crate) inherited_instructions: Option<SessionInstructions>,
 }
 
+/// Controls the prompt cache key sent on model requests, independently of session identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum PromptCacheKey {
+    /// Preserve the existing session-derived key, including internal-session and fork routing.
+    #[default]
+    SessionDerived,
+    /// Send the caller's key on every model request in the session.
+    Custom(String),
+    /// Leave `prompt_cache_key` out of model requests.
+    Omit,
+}
+
 pub struct StartThreadOptions {
     pub config: Config,
+    /// Request-body cache key policy for this thread and its children. Hosts must reapply it on cold resume.
+    pub prompt_cache_key: PromptCacheKey,
     /// Host-owned provider for this root thread's additional instructions.
     ///
     /// Core composes these after the global [`UserInstructionsProvider`]
@@ -313,6 +327,7 @@ impl StartThreadOptions {
     pub fn new(config: Config) -> Self {
         Self {
             config,
+            prompt_cache_key: PromptCacheKey::default(),
             thread_instructions_provider: None,
             allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
@@ -406,6 +421,7 @@ fn effective_originator_value(
 
 pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) config: Config,
+    pub(crate) prompt_cache_key: Option<PromptCacheKey>,
     pub(crate) initial_history: InitialHistory,
     pub(crate) agent_control: LocalAgentControl,
     pub(crate) session_source: SessionSource,
@@ -1993,8 +2009,8 @@ impl ThreadManagerState {
         parent_thread_id: Option<ThreadId>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
-        options.client_mcp_extensions =
-            self.client_mcp_extensions_for_child(parent_thread_id).await;
+        (options.client_mcp_extensions, options.prompt_cache_key) =
+            self.inherited_child_settings(parent_thread_id).await;
         let forked = matches!(options.initial_history, InitialHistory::Forked(_));
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.auth_manager), agent_control);
@@ -2013,6 +2029,7 @@ impl ThreadManagerState {
     ) -> CodexResult<NewThread> {
         let ResumeThreadWithHistoryOptions {
             config,
+            prompt_cache_key,
             initial_history,
             agent_control,
             session_source,
@@ -2023,12 +2040,13 @@ impl ThreadManagerState {
             inherited_exec_policy,
             client_mcp_extensions,
         } = options;
-        let client_mcp_extensions = match client_mcp_extensions {
-            Some(client_mcp_extensions) => client_mcp_extensions,
-            None => self.client_mcp_extensions_for_child(parent_thread_id).await,
-        };
+        let (parent_client_mcp_extensions, inherited_prompt_cache_key) =
+            self.inherited_child_settings(parent_thread_id).await;
+        let client_mcp_extensions = client_mcp_extensions.unwrap_or(parent_client_mcp_extensions);
+        let prompt_cache_key = prompt_cache_key.unwrap_or(inherited_prompt_cache_key);
         let thread_source = initial_history.get_resumed_thread_source();
         let options = StartThreadOptions {
+            prompt_cache_key,
             initial_history,
             session_source: Some(session_source),
             thread_source,
@@ -2050,16 +2068,25 @@ impl ThreadManagerState {
         Box::pin(self.spawn_thread(request)).await
     }
 
-    async fn client_mcp_extensions_for_child(
+    async fn inherited_child_settings(
         &self,
         parent_thread_id: Option<ThreadId>,
-    ) -> ClientMcpExtensions {
+    ) -> (ClientMcpExtensions, PromptCacheKey) {
         let Some(parent_thread_id) = parent_thread_id else {
-            return ClientMcpExtensions::default();
+            return Default::default();
         };
         self.get_thread(parent_thread_id)
             .await
-            .map(|parent| parent.session.services.client_mcp_extensions.clone())
+            .map(|parent| {
+                (
+                    parent.session.services.client_mcp_extensions.clone(),
+                    parent
+                        .session
+                        .services
+                        .model_client
+                        .prompt_cache_key_policy(),
+                )
+            })
             .unwrap_or_default()
     }
 
@@ -2107,6 +2134,7 @@ impl ThreadManagerState {
         };
         let StartThreadOptions {
             mut config,
+            prompt_cache_key,
             thread_instructions_provider,
             allow_provider_model_fallback,
             initial_history,
@@ -2338,6 +2366,7 @@ impl ThreadManagerState {
         let spawn_result = Session::spawn(SessionSpawnArgs {
             startup,
             config,
+            prompt_cache_key,
             allow_provider_model_fallback,
             instructions,
             installation_id: self.installation_id.clone(),

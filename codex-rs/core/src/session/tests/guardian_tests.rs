@@ -1290,6 +1290,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     let (session, io) = Session::spawn(SessionSpawnArgs {
         startup: None,
         config,
+        prompt_cache_key: PromptCacheKey::default(),
         allow_provider_model_fallback: false,
         instructions: Default::default(),
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),

@@ -1,5 +1,6 @@
 pub(crate) mod startup;
 
+use crate::PromptCacheKey;
 use crate::WithTurnExtensionData;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -483,6 +484,7 @@ impl From<CompactedHistoryMetadata> for CompactedHistoryInstallation<'_> {
 pub(crate) struct SessionSpawnArgs {
     pub(crate) startup: Option<Arc<startup::SessionStartup>>,
     pub(crate) config: Config,
+    pub(crate) prompt_cache_key: PromptCacheKey,
     pub(crate) allow_provider_model_fallback: bool,
     pub(crate) instructions: SessionInstructions,
     pub(crate) installation_id: String,
@@ -599,6 +601,7 @@ impl Session {
         let SessionSpawnArgs {
             startup,
             config,
+            prompt_cache_key,
             allow_provider_model_fallback,
             instructions,
             installation_id,
@@ -965,6 +968,7 @@ impl Session {
         let session = Box::pin(Session::new(
             startup.clone(),
             session_configuration,
+            prompt_cache_key,
             &environment_selections,
             config.clone(),
             instructions,

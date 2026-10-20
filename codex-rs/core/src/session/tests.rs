@@ -7175,6 +7175,7 @@ async fn make_session_with_config_and_rx(
     let session = Session::new(
         /*startup*/ None,
         session_configuration,
+        PromptCacheKey::default(),
         &default_environments,
         Arc::clone(&config),
         SessionInstructions::default(),
@@ -7311,6 +7312,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     let session = Session::new(
         /*startup*/ None,
         session_configuration,
+        PromptCacheKey::default(),
         &default_environments,
         Arc::clone(&config),
         SessionInstructions::default(),

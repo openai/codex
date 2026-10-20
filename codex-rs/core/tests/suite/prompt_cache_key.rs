@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_core::PromptCacheKey;
+use codex_core::StartThreadOptions;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::protocol::TurnEnvironmentSelection;
@@ -9,9 +11,11 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -21,6 +25,62 @@ const ROOT_PROMPT: &str = "delegate the cache audit";
 const CHILD_TASK: &str = "inspect the repository";
 const SPAWN_CALL_ID: &str = "spawn-worker";
 const COLLABORATION_NAMESPACE: &str = "collaboration";
+
+async fn start_with_prompt_cache_key(test: &mut TestCodex, policy: PromptCacheKey) -> Result<()> {
+    let thread = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            prompt_cache_key: policy,
+            ..test.start_thread_options().await
+        })
+        .await?;
+    test.codex = thread.thread;
+    test.session_configured = thread.session_configured;
+    Ok(())
+}
+
+fn expected_prompt_cache_key(policy: &PromptCacheKey, session_id: &str) -> Option<Value> {
+    match policy {
+        PromptCacheKey::SessionDerived => Some(json!(session_id)),
+        PromptCacheKey::Custom(key) => Some(json!(key)),
+        PromptCacheKey::Omit => None,
+    }
+}
+
+#[test_case::test_case(PromptCacheKey::SessionDerived; "session_derived")]
+#[test_case::test_case(PromptCacheKey::Custom("shared-prefix".to_string()); "custom")]
+#[test_case::test_case(PromptCacheKey::Omit; "omitted")]
+#[tokio::test]
+async fn prompt_cache_key_policy_applies_across_turns(policy: PromptCacheKey) -> Result<()> {
+    let server = start_mock_server().await;
+    let mut test = test_codex()
+        .with_auth(CodexAuth::from_api_key("dummy"))
+        .build_with_auto_env(&server)
+        .await?;
+    start_with_prompt_cache_key(&mut test, policy.clone()).await?;
+    let session_id = test.session_configured.session_id.to_string();
+    let expected_key = expected_prompt_cache_key(&policy, &session_id);
+
+    for turn in ["first", "second"] {
+        let response = mount_sse_once(&server, sse(vec![ev_completed(turn)])).await;
+        test.submit_text_turn(turn).await?;
+        let request = response.single_request();
+        let body = request.body_json();
+        assert_eq!(
+            (
+                body.get("prompt_cache_key"),
+                request.header("session-id"),
+                request.header("thread-id"),
+            ),
+            (
+                expected_key.as_ref(),
+                Some(session_id.clone()),
+                Some(test.session_configured.thread_id.to_string()),
+            ),
+        );
+    }
+    Ok(())
+}
 
 fn body_contains(request: &wiremock::Request, text: &str) -> bool {
     serde_json::from_slice::<Value>(&request.body).is_ok_and(|body| body.to_string().contains(text))
@@ -37,8 +97,10 @@ fn request_has_input_type(request: &wiremock::Request, input_type: &str) -> bool
         })
 }
 
+#[test_case::test_case(PromptCacheKey::SessionDerived; "session_derived")]
+#[test_case::test_case(PromptCacheKey::Omit; "omitted")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn api_key_subagent_uses_session_id_as_prompt_cache_key() -> Result<()> {
+async fn api_key_subagent_inherits_prompt_cache_key_policy(policy: PromptCacheKey) -> Result<()> {
     let server = start_mock_server().await;
     let spawn_args = serde_json::to_string(&json!({
         "message": CHILD_TASK,
@@ -98,8 +160,10 @@ async fn api_key_subagent_uses_session_id_as_prompt_cache_key() -> Result<()> {
                 .enable(Feature::MultiAgentV2)
                 .expect("test config should allow feature update");
         });
-    let test = builder.build(&server).await?;
+    let mut test = builder.build(&server).await?;
+    start_with_prompt_cache_key(&mut test, policy.clone()).await?;
     let expected_session_id = test.session_configured.session_id.to_string();
+    let expected_cache_key = expected_prompt_cache_key(&policy, &expected_session_id);
     test.submit_turn(ROOT_PROMPT).await?;
 
     let root_request = root_request
@@ -125,19 +189,24 @@ async fn api_key_subagent_uses_session_id_as_prompt_cache_key() -> Result<()> {
     let child_thread_id = child_request.header("thread-id").expect("child thread ID");
 
     assert_eq!(
+        (
+            root_request.body_json().get("prompt_cache_key").cloned(),
+            child_request.body_json().get("prompt_cache_key").cloned(),
+        ),
+        (expected_cache_key.clone(), expected_cache_key),
+    );
+    assert_eq!(
         json!({
             "differentThreadIds": root_thread_id != child_thread_id,
             "root": {
                 "sessionId": root_request.header("session-id"),
                 "threadId": &root_thread_id,
                 "clientRequestId": root_request.header("x-client-request-id"),
-                "promptCacheKey": root_request.body_json()["prompt_cache_key"].clone(),
             },
             "child": {
                 "sessionId": child_request.header("session-id"),
                 "threadId": &child_thread_id,
                 "clientRequestId": child_request.header("x-client-request-id"),
-                "promptCacheKey": child_request.body_json()["prompt_cache_key"].clone(),
             },
         }),
         json!({
@@ -146,13 +215,11 @@ async fn api_key_subagent_uses_session_id_as_prompt_cache_key() -> Result<()> {
                 "sessionId": &expected_session_id,
                 "threadId": &root_thread_id,
                 "clientRequestId": &root_thread_id,
-                "promptCacheKey": &expected_session_id,
             },
             "child": {
                 "sessionId": &expected_session_id,
                 "threadId": &child_thread_id,
                 "clientRequestId": &child_thread_id,
-                "promptCacheKey": &expected_session_id,
             },
         })
     );
@@ -163,7 +230,6 @@ async fn api_key_subagent_uses_session_id_as_prompt_cache_key() -> Result<()> {
 #[tokio::test]
 async fn ephemeral_fork_shares_cache_routing_but_keeps_session_identity() -> Result<()> {
     use codex_core::ForkSnapshot;
-    use codex_core::StartThreadOptions;
     use core_test_support::responses::mount_sse_sequence;
 
     let server = start_mock_server().await;
