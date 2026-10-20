@@ -9,6 +9,7 @@ use crate::agent::types::AgentMetadata;
 use crate::agent::types::LiveAgent;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
+use crate::agent_communication::MessageDelivery;
 use crate::config::Config;
 use crate::config::RolloutBudgetConfig;
 use crate::context::ContextualUserFragment;
@@ -25,6 +26,7 @@ use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
 use codex_history::RolloutItem;
 use codex_protocol::AgentPath;
+use codex_protocol::ResponseItemId;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
@@ -258,10 +260,20 @@ impl LocalAgentControl {
         &self,
         agent_id: ThreadId,
         state: &Arc<ThreadManagerState>,
-        communication: InterAgentCommunication,
+        mut communication: InterAgentCommunication,
         context: AgentCommunicationContext,
         start_options: TurnStartOptions,
     ) -> CodexResult<String> {
+        let observers = state.extensions.message_lifecycle_contributors();
+        let delivery = (!observers.is_empty()).then(|| {
+            let message_id = communication
+                .id
+                .take()
+                .filter(|id| !id.is_empty())
+                .unwrap_or_else(|| ResponseItemId::new("amsg"));
+            communication.id = Some(message_id.clone());
+            MessageDelivery::publish(context.sender_thread_id, message_id, observers)
+        });
         let communication_for_log =
             crate::agent_communication::logging_enabled().then(|| communication.clone());
         {
@@ -274,7 +286,7 @@ impl LocalAgentControl {
                 self.runtime.mailboxes.enqueue(
                     agent_id,
                     Some(submission_id.clone()),
-                    vec![communication],
+                    vec![crate::PendingAgentMessage::new(communication, delivery)],
                 )?;
                 if let Some(communication) = communication_for_log {
                     crate::agent_communication::emit_agent_communication_send(
@@ -309,6 +321,7 @@ impl LocalAgentControl {
                         },
                         parent_turn_id,
                         root_turn_id,
+                        delivery,
                     )
                     .await,
             )
@@ -338,6 +351,7 @@ impl LocalAgentControl {
                     Op::Interrupt,
                     /*parent_turn_id*/ None,
                     /*root_turn_id*/ None,
+                    /*message_delivery*/ None,
                 )
                 .await,
         )

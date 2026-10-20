@@ -404,7 +404,7 @@ impl CodexThread {
         self.io
             .submit_with_trace(
                 op, trace, /*parent_turn_id*/ None, /*root_turn_id*/ None,
-                /*residency_guard*/ None,
+                /*residency_guard*/ None, /*message_delivery*/ None,
             )
             .await
     }
@@ -550,6 +550,7 @@ impl CodexThread {
                 parent_turn_id: None,
                 root_turn_id: None,
                 residency_guard: None,
+                message_delivery: None,
             })
             .await
             .map_err(|_| CodexErr::Fatal("thread session has stopped".to_string()))?;

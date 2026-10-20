@@ -17,4 +17,6 @@ pub(crate) struct Submission {
     pub root_turn_id: Option<String>,
     /// Keeps a V2 recipient resident until this submission is handled or dropped.
     pub residency_guard: Option<OwnedRwLockReadGuard<()>>,
+    /// Owns delivery until dispatch; failed or abandoned submissions discard it.
+    pub message_delivery: Option<crate::agent_communication::MessageDelivery>,
 }

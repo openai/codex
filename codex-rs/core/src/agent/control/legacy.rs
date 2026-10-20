@@ -23,6 +23,7 @@ impl LocalAgentControl {
                         Op::Shutdown {},
                         /*parent_turn_id*/ None,
                         /*root_turn_id*/ None,
+                        /*message_delivery*/ None,
                     )
                     .await
             };
@@ -35,6 +36,7 @@ impl LocalAgentControl {
                     Op::Shutdown {},
                     /*parent_turn_id*/ None,
                     /*root_turn_id*/ None,
+                    /*message_delivery*/ None,
                 )
                 .await
         };

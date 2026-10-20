@@ -1,5 +1,6 @@
 mod capabilities;
 mod contributors;
+mod message_lifecycle;
 mod registry;
 mod session_isolation;
 mod state;
@@ -7,6 +8,8 @@ mod tool_policy;
 mod turn_admission;
 mod user_instructions;
 
+pub use message_lifecycle::MessageLifecycleContributor;
+pub use message_lifecycle::MessageLifecycleInput;
 pub use session_isolation::IsolatedSessionExtensions;
 pub use session_isolation::SessionIsolation;
 pub use tool_policy::ToolPolicy;

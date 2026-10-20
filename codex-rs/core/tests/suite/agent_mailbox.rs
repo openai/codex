@@ -5,14 +5,32 @@ use crate::suite::settings_commits::COMMITTED_MODEL;
 use crate::suite::settings_commits::PauseAfterCommit;
 use codex_core::config::Config;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::MessageLifecycleContributor;
+use codex_extension_api::MessageLifecycleInput;
+use codex_protocol::ResponseItemId;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::Op;
 use core_test_support::ThreadIdle;
 use pretty_assertions::assert_eq;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::mpsc;
 use tokio::sync::oneshot;
+
+#[derive(Default)]
+struct Messages(Mutex<HashSet<ResponseItemId>>);
+impl MessageLifecycleContributor for Messages {
+    fn on_publish(&self, input: &MessageLifecycleInput) {
+        let mut pending = self.0.lock().expect("messages lock");
+        assert!(pending.insert(input.message_id.clone()));
+    }
+    fn on_consumed(&self, input: &MessageLifecycleInput, _recipient: ThreadId) {
+        let mut pending = self.0.lock().expect("messages lock");
+        assert!(pending.remove(&input.message_id));
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idle_mail_survives_eviction_and_preserves_followup_order() -> Result<()> {
@@ -37,6 +55,8 @@ async fn idle_mail_survives_eviction_and_preserves_followup_order() -> Result<()
         gate: Mutex::new(Some((entered_tx, release_rx))),
     }));
     extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    let messages = Arc::new(Messages::default());
+    extensions.message_lifecycle_contributor(messages.clone());
     let test = test_codex()
         .with_model("gpt-5.6-sol")
         .with_extensions(Arc::new(extensions.build()))
@@ -106,6 +126,8 @@ async fn idle_mail_survives_eviction_and_preserves_followup_order() -> Result<()
     ThreadIdle::wait(&test.codex).await;
     assert!(test.thread_manager.get_thread(first_id).await.is_err());
 
+    let retained = messages.0.lock().unwrap().clone();
+    assert_eq!(retained.len(), 2);
     // Reload without starting a turn, then hold dispatch while both tools submit.
     // The older queued notes must precede the follow-up, and the newer note must follow it.
     test.thread_manager
@@ -130,10 +152,18 @@ async fn idle_mail_survives_eviction_and_preserves_followup_order() -> Result<()
         json!({ "target": "first", "message": FOLLOWUP }),
     )
     .await;
+    let (at_sampling, pending_at_sampling) = mpsc::channel();
     mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| {
-            body_contains(request, FOLLOWUP) && !has_function_call_output(request, "followup")
+        move |request: &wiremock::Request| {
+            let matches =
+                body_contains(request, FOLLOWUP) && !has_function_call_output(request, "followup");
+            if matches {
+                at_sampling
+                    .send(messages.0.lock().unwrap().clone())
+                    .unwrap();
+            }
+            matches
         },
         sse(vec![
             ev_response_created("worker-wait"),
@@ -171,6 +201,10 @@ async fn idle_mail_survives_eviction_and_preserves_followup_order() -> Result<()
     release_tx.send(())?;
     wait_for_event(&resumed, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     ThreadIdle::wait(&resumed).await;
+    assert!(
+        pending_at_sampling.try_recv()?.is_disjoint(&retained),
+        "both retained publications must be consumed before the first resumed sample"
+    );
     let request = delivered
         .requests()
         .into_iter()

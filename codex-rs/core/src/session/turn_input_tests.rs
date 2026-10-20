@@ -831,7 +831,8 @@ async fn start_only_rejects_pending_trigger_turn_without_injecting() {
                 Vec::new(),
                 "pending trigger".to_string(),
                 /*trigger_turn*/ true,
-            ),
+            )
+            .into(),
             Default::default(),
         )
         .await;
@@ -887,14 +888,14 @@ async fn agent_message_wake_reservation_preserves_existing_boundaries(
     );
     session
         .input_queue
-        .enqueue_mailbox_communication(communication.clone(), Default::default())
+        .enqueue_mailbox_communication(communication.clone().into(), Default::default())
         .await;
 
     assert!(session.reserve_pending_work_turn().await.is_none());
     assert!(session.active_turn.lock().await.is_none());
     assert_eq!(
         session.input_queue.drain_mailbox_input_items().await.0,
-        vec![TurnInput::InterAgentCommunication(communication)]
+        vec![TurnInput::InterAgentCommunication(communication.into())]
     );
 }
 

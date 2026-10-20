@@ -5,6 +5,7 @@ use crate::ConfigContributor;
 use crate::ContextContributor;
 use crate::ExtensionEventSink;
 use crate::McpServerContributor;
+use crate::MessageLifecycleContributor;
 use crate::ModelRequestContributor;
 use crate::NoopExtensionEventSink;
 use crate::SkillInvocationContributor;
@@ -40,6 +41,7 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
                 tool_contributors: Vec::new(),
                 tool_lifecycle_contributors: Vec::new(),
                 model_request_contributors: Vec::new(),
+                message_observers: Vec::new(),
                 turn_item_contributors: Vec::new(),
             },
         }
@@ -144,6 +146,11 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
         self.registry.turn_item_contributors.push(contributor);
     }
 
+    /// Registers a synchronous direct-message observer.
+    pub fn message_lifecycle_contributor(&mut self, hook: Arc<dyn MessageLifecycleContributor>) {
+        self.registry.message_observers.push(hook);
+    }
+
     /// Finishes construction and returns the immutable registry.
     pub fn build(self) -> ExtensionRegistry<C> {
         self.registry
@@ -165,6 +172,7 @@ pub struct ExtensionRegistry<C: Sync> {
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     tool_lifecycle_contributors: Vec<Arc<dyn ToolLifecycleContributor>>,
     model_request_contributors: Vec<Arc<dyn ModelRequestContributor>>,
+    message_observers: Vec<Arc<dyn MessageLifecycleContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
     approval_review_contributors: Vec<Arc<dyn ApprovalReviewContributor>>,
 }
@@ -187,6 +195,7 @@ impl<C: Sync> ExtensionRegistry<C> {
                 tool_contributors: self.tool_contributors.clone(),
                 tool_lifecycle_contributors: self.tool_lifecycle_contributors.clone(),
                 model_request_contributors: self.model_request_contributors.clone(),
+                message_observers: self.message_observers.clone(),
                 turn_item_contributors: self.turn_item_contributors.clone(),
                 approval_review_contributors: self.approval_review_contributors.clone(),
             },
@@ -274,6 +283,11 @@ impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the registered native tool contributors.
     pub fn tool_contributors(&self) -> &[Arc<dyn ToolContributor>] {
         &self.tool_contributors
+    }
+
+    /// Returns direct-message observers in registration order.
+    pub fn message_lifecycle_contributors(&self) -> &[Arc<dyn MessageLifecycleContributor>] {
+        &self.message_observers
     }
 
     /// Returns response interceptor contributors in registration order.

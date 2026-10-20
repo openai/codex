@@ -15,6 +15,7 @@ use codex_core::DeliveryReceipt;
 use codex_core::ForkSnapshot;
 use codex_core::GuardianRootSnapshot;
 use codex_core::LiveAgent;
+use codex_core::PendingAgentMessage;
 use codex_core::RolloutBudgetReminder;
 use codex_core::SendRequest;
 use codex_core::SpawnRequest;
@@ -53,7 +54,7 @@ use wiremock::MockServer;
 struct TestAgentControl {
     thread_id: ThreadId,
     service_tier: Mutex<Option<String>>,
-    mail: Mutex<Vec<codex_protocol::protocol::InterAgentCommunication>>,
+    mail: Mutex<Vec<PendingAgentMessage>>,
     mailbox_state: tokio::sync::watch::Sender<bool>,
     agents: Mutex<HashMap<String, ThreadId>>,
 }
@@ -104,10 +105,7 @@ impl AgentControl for TestAgentControl {
         Box::pin(async { Err(CodexErr::InvalidRequest("host send rejection".to_string())) })
     }
 
-    fn take_mailbox(
-        &self,
-        _agent: ThreadId,
-    ) -> Vec<codex_protocol::protocol::InterAgentCommunication> {
+    fn take_mailbox(&self, _agent: ThreadId) -> Vec<PendingAgentMessage> {
         let messages = std::mem::take(&mut *self.mail.lock().expect("mail lock"));
         self.mailbox_state.send_if_modified(std::mem::take);
         messages
@@ -287,13 +285,14 @@ async fn host_threads_preserve_lineage_settings_and_resume_routing() -> anyhow::
         (controller.identity(), Some(root_id))
     );
     assert_eq!(controller.service_tier(), Some("priority".to_string()));
-    let unread_mail = vec![codex_protocol::protocol::InterAgentCommunication::new(
+    let message = codex_protocol::protocol::InterAgentCommunication::new(
         AgentPath::root(),
         AgentPath::root().join("worker").expect("valid child path"),
         Vec::new(),
         "Retain this in the host mailbox".into(),
         /*trigger_turn*/ false,
-    )];
+    );
+    let unread_mail = vec![message.into()];
     *controller.mail.lock().expect("mail lock") = unread_mail.clone();
     let error = test
         .thread_manager
@@ -591,7 +590,8 @@ async fn host_mailbox_notifies_waiting_agent_and_delivers_once() -> anyhow::Resu
             Vec::new(),
             "Note from the host mailbox".into(),
             /*trigger_turn*/ false,
-        ),
+        )
+        .into(),
     );
     controller.mailbox_state.send_replace(true);
     wait_for_event(&test.codex, |event| {
@@ -658,7 +658,11 @@ async fn agent_mail_wakes_completed_root_when_enabled(
         /*trigger_turn*/ false,
     );
     if via_host_mailbox {
-        controller.mail.lock().expect("mail lock").push(message);
+        controller
+            .mail
+            .lock()
+            .expect("mail lock")
+            .push(message.into());
         controller.mailbox_state.send_replace(true);
     } else {
         test.codex
