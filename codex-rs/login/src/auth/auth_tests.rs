@@ -80,9 +80,14 @@ async fn refresh_without_id_token() -> anyhow::Result<()> {
         issuer: "https://idp.example".to_string(),
         client_id: "codex-client".to_string(),
     };
+    let initial = storage
+        .load()?
+        .context("stored auth")?
+        .tokens
+        .context("stored tokens")?;
     let updated = super::persist_tokens(
         &storage,
-        "test-refresh-token",
+        &initial,
         Some(provenance.clone()),
         /*id_token*/ None,
         Some("new-access-token".to_string()),
@@ -97,30 +102,35 @@ async fn refresh_without_id_token() -> anyhow::Result<()> {
 
     let updated = super::persist_tokens(
         &storage,
-        "new-refresh-token",
-        Some(provenance.clone()),
+        &tokens,
+        /*provenance*/ None,
         /*id_token*/ None,
         Some("later-access-token".to_string()),
         /*refresh_token*/ None,
     )?;
-    let tokens = updated.tokens.context("persisted auth is missing tokens")?;
-    assert_eq!(tokens.refresh_token, "new-refresh-token");
-    assert_eq!(tokens.oauth_provenance, Some(provenance.clone()));
-
-    // A response without a rotated token cannot establish authority for a token that
-    // another writer installed after this refresh began.
-    let updated = super::persist_tokens(
-        &storage,
-        "superseded-refresh-token",
-        Some(provenance),
-        /*id_token*/ None,
-        Some("latest-access-token".to_string()),
-        /*refresh_token*/ None,
-    )?;
-    assert_eq!(storage.load()?, Some(updated.clone()));
+    let previous = tokens;
     let tokens = updated.tokens.context("persisted auth is missing tokens")?;
     assert_eq!(tokens.refresh_token, "new-refresh-token");
     assert_eq!(tokens.oauth_provenance, None);
+
+    // Preserve ordinary same-login refresh behavior when the stored tokens changed.
+    let mut expected = previous.clone();
+    expected.access_token = "stale-access-token".into();
+    expected.refresh_token = "stale-refresh-token".into();
+    expected.oauth_provenance = Some(provenance.clone());
+    assert_eq!(
+        super::persist_tokens(
+            &storage,
+            &previous,
+            Some(provenance),
+            /*id_token*/ None,
+            Some("stale-access-token".into()),
+            Some("stale-refresh-token".into()),
+        )?
+        .tokens,
+        Some(expected)
+    );
+
     Ok(())
 }
 
@@ -600,6 +610,10 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
         },
         codex_home.path(),
     )?;
+    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let mut stored = storage.load()?.expect("auth should exist");
+    stored.tokens.as_mut().unwrap().login_owner_id = Some("login-a".into());
+    storage.save(&stored)?;
     let auth = super::load_auth(
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
@@ -613,6 +627,10 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
     )
     .await?
     .expect("auth should load");
+
+    // An older client rewrites the same credentials without login metadata.
+    stored.tokens.as_mut().unwrap().login_owner_id = None;
+    storage.save(&stored)?;
 
     assert!(
         auth.agent_identity_auth(
@@ -682,6 +700,8 @@ async fn chatgpt_auth_registers_agent_identity_when_enabled() -> anyhow::Result<
         .expect("identity should persist");
     assert_eq!(persisted.agent_runtime_id, "agent-runtime-123");
     assert_eq!(persisted.task_id.as_deref(), Some("task-123"));
+    stored.agent_identity = Some(AgentIdentityStorage::Record(agent_auth.record().clone()));
+    assert_eq!(storage.load()?, Some(stored));
 
     let reloaded = super::load_auth(
         codex_home.path(),

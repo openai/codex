@@ -298,7 +298,62 @@ fn auto_auth_storage_load_falls_back_when_keyring_errors() -> anyhow::Result<()>
     storage.file_storage.save(&expected)?;
 
     let loaded = storage.load()?;
-    assert_eq!(loaded, Some(expected));
+    assert_eq!(loaded, Some(expected.clone()));
+    mock_keyring.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));
+    assert!(storage.load_account_grant().is_err());
+    assert_eq!(storage.load()?, Some(encrypted));
+    assert_eq!(storage.file_storage.load()?, Some(expected));
+
+    // Preserve rotated tokens whether the keyring recovers before or during persistence.
+    let mut previous = auth_with_prefix("same-login");
+    previous.auth_mode = Some(AuthMode::Chatgpt);
+    previous.openai_api_key = None;
+    let backend: Arc<dyn AuthStorageBackend> = Arc::new(storage.clone());
+    for recover_before_persist in [false, true] {
+        seed_secrets_backend_with_auth(&mock_keyring, codex_home.path(), &previous)?;
+        let mut cached = previous.clone();
+        if recover_before_persist {
+            let tokens = cached.tokens.as_mut().context("fallback account tokens")?;
+            tokens.access_token = "fallback-access".into();
+            tokens.refresh_token = "fallback-refresh".into();
+        }
+        storage.file_storage.save(&cached)?;
+        mock_keyring.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));
+        if recover_before_persist {
+            assert_eq!(storage.load()?, Some(cached.clone()));
+        }
+        let refreshed = crate::auth::manager::persist_tokens(
+            &backend,
+            cached.tokens.as_ref().context("stored account tokens")?,
+            /*provenance*/ None,
+            /*id_token*/ None,
+            Some("rotated-access".into()),
+            Some("rotated-refresh".into()),
+        )?;
+        let tokens = refreshed
+            .tokens
+            .as_ref()
+            .context("refreshed account tokens")?;
+        assert_eq!(tokens.access_token, "rotated-access");
+        assert_eq!(tokens.refresh_token, "rotated-refresh");
+        assert_eq!(storage.load()?, Some(refreshed.clone()));
+        assert_keyring_saved_auth_and_removed_fallback(
+            &mock_keyring,
+            codex_home.path(),
+            &refreshed,
+        )?;
+    }
+
+    // An absent fallback must not select a plaintext destination for cached credentials.
+    storage.file_storage.delete()?;
+    mock_keyring.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));
+    assert_eq!(storage.load()?, None);
+    storage.save(&auth_with_prefix("cached"))?;
+    assert_keyring_saved_auth_and_removed_fallback(
+        &mock_keyring,
+        codex_home.path(),
+        &auth_with_prefix("cached"),
+    )?;
     Ok(())
 }
 

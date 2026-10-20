@@ -191,7 +191,7 @@ async fn refresh_token_honors_respect_system_proxy() -> Result<()> {
 
 #[serial_test::serial(auth_env)]
 #[tokio::test]
-async fn refresh_token_succeeds_updates_storage() -> Result<()> {
+async fn account_grant_tracks_refresh_replacement_and_logout() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let _client_id_guard = EnvGuard::set(CLIENT_ID_OVERRIDE_ENV_VAR, "staging-client".to_string());
@@ -400,6 +400,82 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
         before.login_generation + 2
     );
     assert!(!grant.check_current().await?);
+    server.verify().await;
+    server.reset().await;
+    for login_owner_id in [Some("login-during-refresh"), None] {
+        let grant = ctx
+            .auth_manager
+            .lease_account_oauth_grant()
+            .await?
+            .context("replacement login grant")?
+            .release();
+        let mut latest_login = replacement.clone();
+        let tokens = latest_login
+            .tokens
+            .as_mut()
+            .context("latest login tokens")?;
+        tokens.login_owner_id = login_owner_id.map(str::to_owned);
+        if login_owner_id.is_none() {
+            tokens.oauth_provenance = None;
+        }
+        let saved_login = latest_login.clone();
+        let home = ctx.codex_home.path().to_path_buf();
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(move |_: &wiremock::Request| {
+                // Replace the login or drop legacy metadata while refresh is in flight.
+                save_auth(
+                    &home,
+                    &saved_login,
+                    AuthCredentialsStoreMode::File,
+                    AuthKeyringBackendKind::default(),
+                )
+                .expect("replacement login saves");
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "access_token": "stale-access-token", "refresh_token": "stale-refresh-token"
+                }))
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+        let refreshed = ctx.auth_manager.refresh_token_from_authority().await;
+        if login_owner_id.is_some() {
+            assert!(refreshed.is_err());
+        } else {
+            refreshed?;
+            let tokens = latest_login
+                .tokens
+                .as_mut()
+                .context("rotated legacy tokens")?;
+            tokens.access_token = "stale-access-token".into();
+            tokens.refresh_token = "stale-refresh-token".into();
+            tokens.oauth_provenance = initial_tokens.oauth_provenance.clone();
+            assert!(
+                ctx.auth_manager
+                    .lease_account_oauth_grant()
+                    .await?
+                    .is_none()
+            );
+        }
+        let stored = ctx.load_auth()?;
+        if login_owner_id.is_none() {
+            assert!(stored.last_refresh >= latest_login.last_refresh);
+            latest_login.last_refresh = stored.last_refresh;
+        }
+        assert_eq!(stored, latest_login);
+        assert!(!grant.check_current().await?);
+        ctx.auth_manager.reload().await;
+        assert_eq!(
+            ctx.auth_manager
+                .auth_cached()
+                .context("new login cached")?
+                .get_token_data()?,
+            latest_login.tokens.context("new login tokens")?
+        );
+        server.verify().await;
+        server.reset().await;
+    }
+    ctx.write_auth(&replacement).await?;
     let lease = ctx
         .auth_manager
         .lease_account_oauth_grant()
@@ -1441,21 +1517,15 @@ async fn refresh_token_reloads_changed_auth_after_permanent_failure() -> Result<
 
 #[serial_test::serial(auth_env)]
 #[tokio::test]
-async fn refresh_token_preserves_credentials_on_server_or_decode_failure() -> Result<()> {
+async fn refresh_token_preserves_credentials_on_refresh_failure() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    for (status, body) in [
-        (500, json!({"error": "temporary-failure"})),
-        (200, json!(INITIAL_REFRESH_TOKEN)),
+    for (status, body, storage_failure) in [
+        (500, json!({"error": "temporary-failure"}), false),
+        (200, json!(INITIAL_REFRESH_TOKEN), false),
+        (200, json!({"access_token": "refreshed-access-token"}), true),
     ] {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/oauth/token"))
-            .respond_with(ResponseTemplate::new(status).set_body_json(body))
-            .expect(1)
-            .mount(&server)
-            .await;
-
         let ctx = RefreshTokenTestContext::new(&server).await?;
         let initial_last_refresh = Utc::now() - Duration::days(1);
         let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
@@ -1470,6 +1540,21 @@ async fn refresh_token_preserves_credentials_on_server_or_decode_failure() -> Re
             bedrock_access_keys: None,
         };
         ctx.write_auth(&initial_auth).await?;
+        let auth_path = ctx.codex_home.path().join("auth.json");
+        let unavailable_auth = auth_path.clone();
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(move |_: &wiremock::Request| {
+                if storage_failure {
+                    // Make persistence and readback fail after refresh is admitted.
+                    std::fs::remove_file(&unavailable_auth).expect("remove fixture auth");
+                    std::fs::create_dir(&unavailable_auth).expect("make auth unavailable");
+                }
+                ResponseTemplate::new(status).set_body_json(body.clone())
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
 
         let err = ctx
             .auth_manager
@@ -1481,8 +1566,9 @@ async fn refresh_token_preserves_credentials_on_server_or_decode_failure() -> Re
         assert_eq!(err.failed_reason(), None);
         assert!(!format!("{err} {err:?}").contains(INITIAL_REFRESH_TOKEN));
 
-        let stored = ctx.load_auth()?;
-        assert_eq!(stored, initial_auth);
+        if !storage_failure {
+            assert_eq!(ctx.load_auth()?, initial_auth);
+        }
         let cached_auth = ctx
             .auth_manager
             .auth()
@@ -1492,6 +1578,11 @@ async fn refresh_token_preserves_credentials_on_server_or_decode_failure() -> Re
             .get_token_data()
             .context("token data should remain cached")?;
         assert_eq!(cached, initial_tokens);
+        if storage_failure {
+            std::fs::remove_dir(&auth_path)?;
+            ctx.write_auth(&initial_auth).await?;
+            assert_eq!(ctx.load_auth()?, initial_auth);
+        }
 
         server.verify().await;
     }

@@ -74,12 +74,27 @@ async fn auth_owner_generation_preserves_logout_and_switches_when_coalesced() {
         AuthManager::from_auth_for_testing_with_home(initial.clone(), home.path().to_path_buf());
     let mut changes = manager.auth_change_state_receiver();
 
+    let generation = changes.borrow().generation;
     manager.logout().await.unwrap();
+    assert!(
+        manager
+            .publish_reloaded_auth(generation, Some(initial.clone()))
+            .is_none()
+    );
+    assert!(manager.auth_cached().is_none());
+    // Deletion also fences a read when the cache was already empty.
+    let generation = changes.borrow().generation;
+    manager.logout().await.unwrap();
+    assert!(
+        manager
+            .publish_reloaded_auth(generation, Some(initial.clone()))
+            .is_none()
+    );
     manager.set_cached_auth(Some(initial.clone()));
     assert_eq!(
         *changes.borrow_and_update(),
         AuthChangeState {
-            generation: 2,
+            generation: 4,
             owner_generation: 2,
             source_generation: 2,
             login_generation: 2,
@@ -91,7 +106,7 @@ async fn auth_owner_generation_preserves_logout_and_switches_when_coalesced() {
     assert_eq!(
         *changes.borrow_and_update(),
         AuthChangeState {
-            generation: 4,
+            generation: 6,
             owner_generation: 4,
             source_generation: 4,
             login_generation: 4,

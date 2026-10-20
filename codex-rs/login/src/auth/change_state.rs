@@ -5,7 +5,7 @@ use super::CodexAuth;
 /// Opaque revisions local to one auth manager. Consumers must reset on reconnect.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AuthChangeState {
-    /// Advances whenever cached credentials change.
+    /// Advances on cached credential changes and explicit invalidation of pending reads.
     pub generation: u64,
     /// Advances on login, logout, or changes of user, workspace, or auth mode.
     /// A verified legacy-to-OAuth credential migration preserves the same owner.

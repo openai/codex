@@ -80,8 +80,11 @@ impl AccountOAuthGrant {
 }
 
 pub(super) fn same_account_grant(a: &TokenData, b: &TokenData) -> bool {
-    a.oauth_provenance == b.oauth_provenance
-        && a.login_owner_id == b.login_owner_id
+    a.oauth_provenance == b.oauth_provenance && same_account_login(a, b)
+}
+
+pub(super) fn same_account_login(a: &TokenData, b: &TokenData) -> bool {
+    a.login_owner_id == b.login_owner_id
         && a.account_id == b.account_id
         && a.id_token.chatgpt_user_id == b.id_token.chatgpt_user_id
 }
