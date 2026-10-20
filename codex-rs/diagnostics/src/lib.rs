@@ -32,7 +32,7 @@ impl Gauge {
     pub fn decrement(&self) {
         let _ = self
             .value
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 Some(value.saturating_sub(1))
             });
     }

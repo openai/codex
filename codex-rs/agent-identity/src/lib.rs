@@ -564,7 +564,6 @@ fn signing_key_from_private_key_pkcs8_base64(private_key_pkcs8_base64: &str) -> 
 
 #[cfg(test)]
 mod tests {
-    use base64::Engine as _;
     use ed25519_dalek::Signature;
     use ed25519_dalek::Verifier as _;
     use jsonwebtoken::EncodingKey;

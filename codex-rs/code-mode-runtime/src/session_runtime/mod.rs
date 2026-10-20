@@ -153,7 +153,7 @@ impl SessionRuntime {
     fn allocate_cell_id(&self) -> Result<CellId, Error> {
         self.inner
             .next_cell_id
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next_cell_id| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |next_cell_id| {
                 next_cell_id.checked_add(1)
             })
             .map(|cell_id| CellId::new(cell_id.to_string()))

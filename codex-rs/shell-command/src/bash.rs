@@ -88,11 +88,8 @@ pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<V
 
     let mut commands = Vec::new();
     for node in command_nodes {
-        if let Some(words) = parse_plain_command_from_node(node, src) {
-            commands.push(words);
-        } else {
-            return None;
-        }
+        let words = parse_plain_command_from_node(node, src)?;
+        commands.push(words);
     }
     Some(commands)
 }

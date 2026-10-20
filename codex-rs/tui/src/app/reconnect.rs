@@ -118,7 +118,7 @@ pub(super) async fn reconnect(
         }
         // Transport errors can contain endpoint credentials. Do not render or log them.
     }
-    color_eyre::eyre::bail!("Server connection could not be restored")
+    color_eyre::eyre::bail!("Server connection could not be restored");
 }
 
 impl App {

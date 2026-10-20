@@ -616,7 +616,7 @@ pub(crate) fn backtrack_revert_before_turn_id(
         }
     }
 
-    bail!("the selected prompt was not found in the persisted thread")
+    bail!("the selected prompt was not found in the persisted thread");
 }
 
 /// Returns whether a turn is the reconstructed inline-review child with duplicated prompt inputs.

@@ -18,7 +18,7 @@ runs:
         cache-scope: bazel-release
 
     - name: Install Cargo for workspace metadata
-      uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
 
     - name: Configure MSVC environment
       if: ${{ runner.os == 'Windows' }}
