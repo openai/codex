@@ -8,8 +8,12 @@ pub struct AuthChangeState {
     /// Advances whenever cached credentials change.
     pub generation: u64,
     /// Advances on login, logout, or changes of user, workspace, or auth mode.
+    /// A verified legacy-to-OAuth credential migration preserves the same owner.
     /// Credential changes with incomplete owner identity also advance this revision.
     pub owner_generation: u64,
+    /// Advances on an underlying actor credential/source change, including a new OAuth login.
+    /// Ordinary refresh within an identifiable OAuth session preserves this revision.
+    pub source_generation: u64,
 }
 
 pub(super) fn same_owner(previous: Option<&CodexAuth>, current: Option<&CodexAuth>) -> bool {

@@ -954,7 +954,11 @@ fn persist_agent_identity_record(
         .ok_or_else(|| std::io::Error::other("auth data is not available"))?;
     auth.agent_identity = Some(AgentIdentityStorage::Record(record));
     storage.save(&auth)?;
-    *guard = Some(auth);
+    // Publishing credentials belongs to AuthManager. Persisting identity metadata must
+    // not reload different on-disk credentials into already selected auth values.
+    if let Some(cached) = guard.as_mut() {
+        cached.agent_identity = auth.agent_identity;
+    }
     Ok(())
 }
 
@@ -2385,6 +2389,15 @@ impl AuthManager {
             .and_then(|cached| cached.auth.clone())
     }
 
+    /// Current revisions if the selected credential still belongs to this manager's source.
+    pub fn auth_change_state_for(&self, expected: &CodexAuth) -> Option<AuthChangeState> {
+        let cached = self.inner.read().ok()?;
+        if !super::source::same_source(cached.auth.as_ref(), Some(expected)) {
+            return None;
+        }
+        Some(*self.auth_change_state_tx.borrow())
+    }
+
     /// Subscribes to cached auth changes that can affect request recovery.
     pub fn auth_change_receiver(&self) -> watch::Receiver<u64> {
         self.auth_change_tx.subscribe()
@@ -2653,6 +2666,8 @@ impl AuthManager {
                 !Self::auths_equal_for_refresh(previous, new_auth.as_ref());
             let owner_changed =
                 auth_changed_for_refresh && !same_owner(previous, new_auth.as_ref());
+            let source_changed = auth_changed_for_refresh
+                && !super::source::same_source(previous, new_auth.as_ref());
             if owner_changed {
                 self.auth_route_config
                     .application_network_policy()
@@ -2668,6 +2683,9 @@ impl AuthManager {
                     state.generation += 1;
                     if owner_changed {
                         state.owner_generation += 1;
+                    }
+                    if source_changed {
+                        state.source_generation += 1;
                     }
                 });
                 self.auth_change_tx.send_modify(|revision| *revision += 1);
@@ -3191,3 +3209,7 @@ mod change_state_tests;
 #[cfg(test)]
 #[path = "account_user_id_tests.rs"]
 mod account_user_id_tests;
+
+#[cfg(test)]
+#[path = "source_tests.rs"]
+mod source_tests;
