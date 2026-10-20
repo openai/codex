@@ -15,4 +15,6 @@ ignore = [
     "RUSTSEC-2026-0370", # zvariant 4.2.0 via zbus 4.4.0 in Linux TUI and keyring/secret-service; remove when those paths migrate off the retired standalone crates
     "RUSTSEC-2026-0371", # zbus_names 3.0.0 via zbus 4.4.0 in Linux TUI and keyring/secret-service; remove when those paths migrate off the retired standalone crates
     "RUSTSEC-2026-0372", # zvariant_derive 4.2.0 via zbus 4.4.0 in Linux TUI and keyring/secret-service; remove when those paths migrate off the retired standalone crates
+    # Reviewed 2026-10-20.
+    "RUSTSEC-2026-0374", # basic-toml 0.1.10 via i18n-config/i18n-embed-fl under age 0.12.1 in codex-secrets; no patched release; remove when age's localization dependencies migrate off basic-toml
 ]

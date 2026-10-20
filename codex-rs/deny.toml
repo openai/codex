@@ -87,6 +87,8 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant 4.2.0 is unmaintained; pulled in via zbus 4.4.0 by Linux TUI accessibility integration and keyring/secret-service; remove when those paths migrate off the retired standalone crates" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names 3.0.0 is unmaintained; pulled in via zbus 4.4.0 by Linux TUI accessibility integration and keyring/secret-service; remove when those paths migrate off the retired standalone crates" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 4.2.0 is unmaintained; pulled in via zbus 4.4.0 by Linux TUI accessibility integration and keyring/secret-service; remove when those paths migrate off the retired standalone crates" },
+    # Reviewed 2026-10-20.
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml 0.1.10 is unmaintained; pulled in via i18n-config/i18n-embed-fl under age 0.12.1 used by codex-secrets; no patched release; remove when age's localization dependencies migrate off basic-toml" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
