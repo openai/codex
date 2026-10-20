@@ -6,25 +6,15 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 #[test]
-fn audited_overrides_allow_daemon_without_allowing_arbitrary_config() {
+fn feature_overrides_allow_daemon_without_allowing_arbitrary_config() {
     for (raw, eligible) in [
         ("features.app_server_websocket_compression=true", true),
         ("features.app_server_websocket_compression=false", true),
-        ("features.worktrees=true", true),
-        ("features.worktrees=false", true),
-        ("features={worktrees=true}", true),
         ("features.worktrees='true'", false),
-        (
-            "features={worktrees=true,api_key_model_discovery=false}",
-            true,
-        ),
-        ("features.auth_elicitation=false", true),
-        ("features.code_mode_host=false", true),
-        ("features.mcp_oauth_refresh_coordination=false", true),
+        ("features={worktrees=true,shell_tool=false}", true),
         ("suppress_unstable_features_warning=true", true),
         ("suppress_unstable_features_warning='true'", false),
-        ("features={worktrees=true,shell_tool=false}", false),
-        ("features.shell_tool=false", false),
+        ("features.shell_tool=false", true),
         ("features.worktrees.enabled=true", false),
         ("tui.fullscreen_transcript=true", true),
         ("tui.fullscreen_transcript=false", true),
@@ -52,71 +42,6 @@ fn audited_overrides_allow_daemon_without_allowing_arbitrary_config() {
             "{raw}"
         );
     }
-}
-
-#[test]
-fn monorepo_wrapper_overrides_are_eligible_and_select_only_server_features() {
-    let overrides = codex_utils_cli::CliConfigOverrides {
-        raw_overrides: [
-            "features.realtime_conversation=true",
-            "features.app_server_websocket_compression=true",
-            "features.worktrees=true",
-            "features.remote_models=true",
-            "features.api_key_model_discovery=true",
-            "features.request_rule=true",
-            "features.auth_elicitation=true",
-            "features.mcp_oauth_refresh_coordination=true",
-            "features.responses_websockets_v2=true",
-            "features.workspace_owner_usage_nudge=true",
-            "features.tool_search_always_defer_mcp_tools=true",
-            "features.remote_compaction_v2=true",
-            "features.standalone_web_search=true",
-            "features.multi_agent_mode=true",
-            "features.code_mode_host=true",
-            "suppress_unstable_features_warning=true",
-        ]
-        .map(str::to_string)
-        .to_vec(),
-    }
-    .parse_overrides()
-    .unwrap();
-    assert_eq!(
-        daemon_startup::config_exclusion(
-            &overrides,
-            &LoaderOverrides::default(),
-            /*strict_config*/ false,
-            /*bypass_hook_trust*/ false,
-        ),
-        None
-    );
-    assert_eq!(
-        daemon_startup::server_features(&overrides),
-        std::collections::BTreeMap::from([
-            ("api_key_model_discovery".to_string(), true),
-            ("auth_elicitation".to_string(), true),
-            ("code_mode_host".to_string(), true),
-            ("mcp_oauth_refresh_coordination".to_string(), true),
-        ])
-    );
-}
-
-#[test]
-fn daemon_features_follow_cli_table_replacement_and_last_value() {
-    let overrides = codex_utils_cli::CliConfigOverrides {
-        raw_overrides: [
-            "features.api_key_model_discovery=true",
-            "features={code_mode_host=false}",
-            "features.code_mode_host=true",
-        ]
-        .map(str::to_string)
-        .to_vec(),
-    }
-    .parse_overrides()
-    .unwrap();
-    assert_eq!(
-        daemon_startup::server_features(&overrides),
-        std::collections::BTreeMap::from([("code_mode_host".to_string(), true),])
-    );
 }
 
 #[test]
@@ -151,40 +76,54 @@ async fn daemon_feature_compatibility_respects_required_and_optional_attachment(
     for allow_embedded_fallback in [false, true] {
         for scenario in [
             "matching",
-            "stale overrides",
+            "unreachable daemon",
             "conflicting client",
             "explicit enable",
+            "mixed flags",
+            "missing enabled",
             "managed",
             "legacy managed",
             "old requirements server",
             "unsupported RPC",
         ] {
+            let cli_overrides = codex_utils_cli::CliConfigOverrides {
+                raw_overrides: match scenario {
+                    "matching" => vec![
+                        "features.instant_interrupt=true",
+                        "features.remote_compaction_v2=true",
+                        "features.shell_tool=true",
+                        "features.zz_missing=false",
+                    ],
+                    "unreachable daemon" => Vec::new(),
+                    "explicit enable" => vec!["features.api_key_model_discovery=true"],
+                    "mixed flags" => vec![
+                        "features.zz_overridden=true",
+                        "features={api_key_model_discovery=false,code_mode_host=false,instant_interrupt=true}",
+                        "features.code_mode_host=true",
+                    ],
+                    "missing enabled" => vec!["features.zz_missing=true"],
+                    _ => vec!["features.api_key_model_discovery=false"],
+                }
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            }
+            .parse_overrides()
+            .unwrap();
             let home = TempDir::new()?;
-            let mut config = ConfigBuilder::default()
+            let config = ConfigBuilder::default()
                 .codex_home(home.path().to_path_buf())
                 .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
                 .build()
                 .await?;
-            config.features.enable(Feature::ApiKeyModelDiscovery)?;
-            let cli_overrides = match scenario {
-                "matching" | "stale overrides" => Vec::new(),
-                _ => vec![(
-                    "features.api_key_model_discovery".to_string(),
-                    toml::Value::Boolean(scenario == "explicit enable"),
-                )],
-            };
             let features = [
-                Feature::ApiKeyModelDiscovery,
-                Feature::CodeModeHost,
-                Feature::AuthElicitation,
-                Feature::McpOAuthRefreshCoordination,
-            ].map(|feature| {
-                let enabled = if feature == Feature::ApiKeyModelDiscovery && matches!(scenario, "stale overrides" | "explicit enable") {
-                    false
-                } else {
-                    config.features.enabled(feature)
-                };
-                json!({"name": feature.key(), "stage": "beta", "enabled": enabled, "defaultEnabled": false})
+                (Feature::ApiKeyModelDiscovery, scenario != "explicit enable", "beta"),
+                (Feature::CodeModeHost, false, "beta"),
+                (Feature::InstantInterrupt, true, "beta"),
+                (Feature::RemoteCompactionV2, false, "stable"),
+                (Feature::ShellTool, false, "removed"),
+            ].map(|(feature, enabled, stage)| {
+                json!({"name": feature.key(), "stage": stage, "enabled": enabled, "defaultEnabled": false})
             });
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
             let target = AppServerTarget::LocalDaemon {
@@ -194,6 +133,16 @@ async fn daemon_feature_compatibility_respects_required_and_optional_attachment(
                 },
                 allow_embedded_fallback,
             };
+            if cli_overrides.is_empty() {
+                drop(listener);
+                let result =
+                    daemon_startup::compatibility_warning(&target, &config, &cli_overrides).await;
+                assert!(matches!(
+                    (allow_embedded_fallback, result),
+                    (true, Ok(Some(_))) | (false, Err(_))
+                ));
+                continue;
+            }
             let server = tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.unwrap();
                 let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
@@ -240,30 +189,39 @@ async fn daemon_feature_compatibility_respects_required_and_optional_attachment(
             let result =
                 daemon_startup::compatibility_warning(&target, &config, &cli_overrides).await;
             server.await?;
-            if matches!(
-                scenario,
-                "matching" | "stale overrides" | "managed" | "legacy managed"
-            ) {
+            if matches!(scenario, "matching" | "managed" | "legacy managed") {
                 assert_eq!(result?, None);
                 continue;
             }
             let reason = match scenario {
                 "explicit enable" => "This session requires api_key_model_discovery to be enabled",
-                "conflicting client" | "old requirements server" => {
+                "conflicting client" | "old requirements server" | "mixed flags" => {
                     "This session requires api_key_model_discovery to be disabled"
                 }
+                "missing enabled" => "This session requires zz_missing to be enabled",
                 "unsupported RPC" => "Experimental feature request failed",
                 _ => unreachable!(),
             };
-            if allow_embedded_fallback {
+            let restartable = scenario != "unsupported RPC";
+            if allow_embedded_fallback && !restartable {
+                let warning = result?.expect("optional attachment should fall back");
                 assert_eq!(
-                    result?,
-                    Some(format!(
-                        "Running without the shared background server: {reason}."
-                    ))
+                    warning,
+                    format!("Running without the shared background server: {reason}.")
                 );
             } else {
-                let error = result.unwrap_err().to_string();
+                let error = result.unwrap_err();
+                assert_eq!(error.restart_features.is_some(), restartable);
+                if scenario == "mixed flags" {
+                    assert_eq!(
+                        error.restart_features,
+                        Some(std::collections::BTreeMap::from([
+                            ("api_key_model_discovery".to_string(), false),
+                            ("code_mode_host".to_string(), true),
+                        ]))
+                    );
+                }
+                let error = error.to_string();
                 assert_eq!(
                     error,
                     format!(
@@ -271,7 +229,7 @@ async fn daemon_feature_compatibility_respects_required_and_optional_attachment(
                         daemon_startup::FAILURE_HINT
                     )
                 );
-                if scenario == "explicit enable" {
+                if scenario == "explicit enable" && !allow_embedded_fallback {
                     insta::assert_snapshot!("daemon_feature_mismatch_error", error);
                 }
             }

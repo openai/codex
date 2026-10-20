@@ -580,16 +580,15 @@ pub(super) async fn run_main_inner(
     {
         daemon_exclusion = Some(daemon_startup::WSL_DRVFS_EXCLUSION);
     }
-    let mut daemon_features = daemon_startup::server_features(&cli_kv_overrides);
-    // Disabling shared services requires confirmation, even on a fresh auto-start.
-    daemon_features.retain(|_, enabled| *enabled);
     let mut managed_daemon = cli.managed_daemon;
     if auto_start_daemon && daemon_exclusion.is_none() {
         let output = startup_draft
             .run_until(async {
                 // Daemon startup needs no terminal input. Keep the composer visible and
                 // responsive while it checks the running server or prepares an installation.
-                let result = codex_app_server_daemon::start_with_features(&daemon_features).await;
+                // Preserve saved daemon settings until any mismatch is confirmed in recovery.
+                let result =
+                    codex_app_server_daemon::start_with_features(&Default::default()).await;
                 daemon_telemetry::record_start(&config, &result).await;
                 match result {
                     Ok(output) => Ok(Some(output)),

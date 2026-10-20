@@ -1,4 +1,4 @@
-//! Exercises daemon compatibility fallback through real TUI startup.
+//! Exercises daemon compatibility recovery through real TUI startup.
 
 use super::focus_palette::PtyCodex;
 use super::focus_palette::write_test_config;
@@ -13,7 +13,7 @@ use tokio::net::UnixListener;
 use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn incompatible_daemon_falls_back_for_explicit_features() -> Result<()> {
+async fn incompatible_daemon_can_run_embedded_for_explicit_features() -> Result<()> {
     for scenario in ["explicit enable", "explicit disable"] {
         let cwd = codex_utils_cargo_bin::repo_root()?;
         let home = tempfile::tempdir_in("/tmp")?;
@@ -61,6 +61,8 @@ async fn incompatible_daemon_falls_back_for_explicit_features() -> Result<()> {
             vec!["-c", "features.api_key_model_discovery=true"]
         };
         let mut terminal = PtyCodex::start(&cwd, home, &args)?;
+        terminal.wait_for_screen("Background server has incompatible feature settings")?;
+        terminal.write_input(b"1")?;
         terminal.wait_for_startup()?;
         terminal.wait_for_screen("warning")?;
         terminal.write_input(b"\x14")?;

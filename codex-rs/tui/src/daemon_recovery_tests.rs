@@ -13,6 +13,8 @@ fn daemon_recovery_requires_explicit_restart_and_defaults_to_cancel() {
         reason: "This session requires api_key_model_discovery to be enabled".to_string(),
         restart_features: Some(BTreeMap::from([
             ("api_key_model_discovery".to_string(), true),
+            ("code_mode_host".to_string(), true),
+            ("instant_interrupt".to_string(), true),
             ("mcp_oauth_refresh_coordination".to_string(), false),
         ])),
     };

@@ -187,7 +187,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
          notice.model_migrations.\"gpt-5.6-terra\" = \"gpt-6-sol\"\n\
          [projects.{}]\ntrust_level = \"{}\"\n",
             if command == "discovered" {
-                "tui.status_line=[\"model\",\"thread-id\",\"thread-name\"]"
+                "tui.status_line=[\"model\",\"thread-id\",\"thread-name\"]\nfeatures.daemon_auto_start=false"
             } else {
                 ""
             },

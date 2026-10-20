@@ -193,6 +193,7 @@ chatgpt_base_url = "{}/source/backend-api"
 analytics.enabled = false
 check_for_update_on_startup = false
 features.daemon_auto_start = {}
+features.mcp_oauth_refresh_coordination = true
 model_provider = "local"
 model = "test-model"
 sandbox_mode = "workspace-write"
@@ -306,8 +307,6 @@ trust_level = "trusted"
         "--enable".into(),
         "worktrees".into(),
         "--no-alt-screen".into(),
-        "-c".into(),
-        "features.mcp_oauth_refresh_coordination=true".into(),
         "-c".into(),
         "suppress_unstable_features_warning=true".into(),
     ];
