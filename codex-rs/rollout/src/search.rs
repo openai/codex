@@ -9,6 +9,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::strip_user_message_prefix;
+use futures::future::join_all;
 use regex::Regex;
 use regex::RegexBuilder;
 use tokio::process::Command;
@@ -223,8 +224,8 @@ async fn scan_compressed_rollout_matches(
     search_term: &str,
 ) -> io::Result<RolloutSearchMatches> {
     let mut matches = HashMap::new();
+    let mut paths = Vec::new();
     let mut dirs = vec![root.to_path_buf()];
-    let mut patterns = None;
 
     while let Some(dir) = dirs.pop() {
         let mut entries = match tokio::fs::read_dir(dir).await {
@@ -248,12 +249,21 @@ async fn scan_compressed_rollout_matches(
             if !rollout_file.is_compressed() {
                 continue;
             }
+            paths.push(rollout_file.into_path());
+        }
+    }
+
+    const COMPRESSED_SEARCH_WORKERS: usize = 4;
+    let scan = async |paths: &[PathBuf]| {
+        let mut matches = HashMap::new();
+        let mut patterns = None;
+        for path in paths {
             if let Some(snippet) =
-                first_content_match_snippet(rollout_file.path(), search_term, &mut patterns)
+                first_content_match_snippet(path.as_path(), search_term, &mut patterns)
                     .await
                     .unwrap_or_else(|err| {
                         tracing::warn!(
-                            path = %rollout_file.path().display(),
+                            path = %path.as_path().display(),
                             %err,
                             "Failed to search compressed rollout"
                         );
@@ -261,13 +271,17 @@ async fn scan_compressed_rollout_matches(
                     })
             {
                 matches.insert(
-                    compression::plain_rollout_path(rollout_file.path()),
+                    compression::plain_rollout_path(path.as_path()),
                     Some(snippet),
                 );
             }
         }
+        matches
+    };
+    let chunk_size = paths.len().div_ceil(COMPRESSED_SEARCH_WORKERS).max(1);
+    for batch in join_all(paths.chunks(chunk_size).map(scan)).await {
+        matches.extend(batch);
     }
-
     Ok(matches)
 }
 

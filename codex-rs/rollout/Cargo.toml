@@ -27,6 +27,7 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
 codex-utils-path = { workspace = true }
 codex-utils-string = { workspace = true }
+futures = { workspace = true, features = ["alloc"] }
 memchr = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
