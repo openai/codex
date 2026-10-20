@@ -332,6 +332,8 @@ async fn provider_errors_preserve_credential_policy_without_reflecting_credentia
             SENTINEL,
             "invalid_grant",
             "insufficient_user_authentication",
+            "unauthorized_client",
+            "invalid_client",
             "malformed",
         ] {
             let server = MockServer::builder().start().await;
@@ -367,7 +369,12 @@ async fn provider_errors_preserve_credential_policy_without_reflecting_credentia
             let expected = match code {
                 "invalid_grant" => Some(EmaAuthFailure::InvalidGrant { grant_source }),
                 "insufficient_user_authentication" => {
-                    Some(EmaAuthFailure::InsufficientUserAuthentication)
+                    Some(EmaAuthFailure::InsufficientUserAuthentication { grant_source })
+                }
+                "unauthorized_client" | "invalid_client"
+                    if grant_source == EmaInvalidGrantSource::EnterpriseIdentity =>
+                {
+                    Some(EmaAuthFailure::IdentityClientRejected)
                 }
                 _ => None,
             };

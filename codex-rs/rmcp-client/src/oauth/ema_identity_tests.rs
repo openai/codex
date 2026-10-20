@@ -78,8 +78,9 @@ async fn invalidation_rereads_under_exclusive_lock_and_preserves_newer_grants() 
             version: versions.replace()?,
         };
         store.save(&keyring, &tokens.server_name, &tokens)?;
-        let mut invalidation =
-            Box::pin(snapshot.invalidate_ema_credentials_if_current_in(&keyring));
+        let mut invalidation = Box::pin(
+            snapshot.invalidate_ema_credentials_if_current_in(&keyring, std::future::ready(true)),
+        );
         assert!(invalidation.as_mut().now_or_never().is_none());
         assert_eq!(
             store.load(&keyring, &tokens.server_name, &tokens.url)?,
@@ -331,7 +332,7 @@ async fn enterprise_credential_errors_and_keyring_traces_hide_account_key() -> R
         .0
         .set_error(&key, keyring::Error::Invalid("account".into(), key.clone()));
     let error = pinned
-        .invalidate_ema_credentials_if_current_in(&keyring)
+        .invalidate_ema_credentials_if_current_in(&keyring, std::future::ready(true))
         .await
         .unwrap_err();
     assert!(!format!("{error} {error:?} {error:#}").contains(sentinel));
@@ -342,7 +343,7 @@ async fn enterprise_credential_errors_and_keyring_traces_hide_account_key() -> R
         .clone()
         .pin_ema_credentials_in(&successful_keyring)
         .await?
-        .invalidate_ema_credentials_if_current_in(&successful_keyring)
+        .invalidate_ema_credentials_if_current_in(&successful_keyring, std::future::ready(true))
         .await?;
     assert_eq!(successful_keyring.0.saved_value(&key), None);
 
@@ -357,7 +358,7 @@ async fn enterprise_credential_errors_and_keyring_traces_hide_account_key() -> R
             .expect("lock must fail"),
         pinned.acquire_current_ema_credentials().await.unwrap_err(),
         pinned
-            .invalidate_ema_credentials_if_current_in(&keyring)
+            .invalidate_ema_credentials_if_current_in(&keyring, std::future::ready(true))
             .await
             .unwrap_err(),
     ] {

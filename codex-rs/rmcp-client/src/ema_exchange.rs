@@ -127,9 +127,22 @@ fn exchange_error(error: EmaError) -> anyhow::Error {
                 grant_source: EmaInvalidGrantSource::ResourceAuthorization,
             })
         }
-        EmaError::InsufficientUserAuthentication(_) => {
-            Some(EmaAuthFailure::InsufficientUserAuthentication)
+        EmaError::InsufficientUserAuthentication(EmaExchangeStage::IdentityProvider) => {
+            Some(EmaAuthFailure::InsufficientUserAuthentication {
+                grant_source: EmaInvalidGrantSource::EnterpriseIdentity,
+            })
         }
+        EmaError::InsufficientUserAuthentication(EmaExchangeStage::ResourceAuthorizationServer) => {
+            Some(EmaAuthFailure::InsufficientUserAuthentication {
+                grant_source: EmaInvalidGrantSource::ResourceAuthorization,
+            })
+        }
+        EmaError::OAuthRejected {
+            stage: EmaExchangeStage::IdentityProvider,
+            code: "unauthorized_client" | "invalid_client",
+            ..
+        } => Some(EmaAuthFailure::IdentityClientRejected),
+        // Future SDK stages must not invalidate the shared enterprise credential.
         _ => None,
     };
     match failure {

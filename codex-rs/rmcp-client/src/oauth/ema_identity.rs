@@ -1,6 +1,8 @@
 //! Pin enterprise credentials to a non-secret version advanced by cooperating writers.
 //! Exchanges reread the pinned keyring record and reject changes made outside this protocol.
 
+use std::future::Future;
+
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
@@ -156,14 +158,18 @@ impl EmaCredentialSnapshot {
     }
 
     /// Exclusively lock and delete a rejected grant only if its pinned record is still current.
-    pub async fn invalidate_ema_credentials_if_current(&self) -> Result<()> {
-        self.invalidate_ema_credentials_if_current_in(&DefaultKeyringStore)
+    pub async fn invalidate_ema_credentials_if_current(
+        &self,
+        is_current: impl Future<Output = bool> + Send,
+    ) -> Result<()> {
+        self.invalidate_ema_credentials_if_current_in(&DefaultKeyringStore, is_current)
             .await
     }
 
     async fn invalidate_ema_credentials_if_current_in<K: KeyringStore + Clone + 'static>(
         &self,
         keyring_store: &K,
+        is_current: impl Future<Output = bool> + Send,
     ) -> Result<()> {
         let credential_lock = RefreshCredentialLock::acquire_for_server(
             &self.snapshot.credentials.server_name,
@@ -172,6 +178,11 @@ impl EmaCredentialSnapshot {
         .with_subscriber(tracing::subscriber::NoSubscriber::default())
         .await
         .map_err(|_| anyhow!("failed to lock enterprise credentials"))?;
+        if !is_current.await {
+            return Ok(());
+        }
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        let _cancel_on_drop = cancelled.clone().drop_guard();
         let pinned = self.clone();
         let keyring_store = keyring_store.clone();
         tokio::task::spawn_blocking(move || {
@@ -193,7 +204,7 @@ impl EmaCredentialSnapshot {
                         .load(&keyring_store, &previous.server_name, &previous.url)?
                 {
                     latest.token_response.0.set_expires_in(None);
-                    if latest == *previous {
+                    if latest == *previous && !cancelled.is_cancelled() {
                         invalidate_enterprise_credential_version(
                             &previous.server_name,
                             &previous.url,

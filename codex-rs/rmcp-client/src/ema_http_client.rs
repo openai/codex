@@ -42,6 +42,7 @@ pub struct EmaRequestAuthority {
     revoked: CancellationToken,
     is_current: Arc<dyn Fn() -> bool + Send + Sync>,
     responses: Arc<RwLock<()>>,
+    policy: Option<codex_config::CloudConfigBundleBinding>,
 }
 
 impl Default for EmaRequestAuthority {
@@ -61,6 +62,24 @@ impl EmaRequestAuthority {
             revoked,
             is_current: Arc::new(is_current),
             responses: Arc::default(),
+            policy: None,
+        }
+    }
+
+    /// Policy changes stop new dispatches without cancelling already admitted responses.
+    pub fn with_policy(mut self, policy: Option<codex_config::CloudConfigBundleBinding>) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Isolate one connection's credential failure while sharing the owner's response drain.
+    pub fn child(&self) -> Self {
+        let owner = self.clone();
+        Self {
+            revoked: self.revoked.child_token(),
+            is_current: Arc::new(move || !owner.is_revoked()),
+            responses: Arc::clone(&self.responses),
+            policy: self.policy.clone(),
         }
     }
 
@@ -82,6 +101,19 @@ impl EmaRequestAuthority {
         Ok(())
     }
 
+    pub fn check_new_request(&self) -> Result<(), ExecServerError> {
+        self.check()?;
+        if self.policy.as_ref().is_some_and(|binding| {
+            binding.read().status != codex_config::CloudConfigBundleBindingStatus::Current
+        }) {
+            return Err(ExecServerError::RequestNotSent(
+                "enterprise MCP policy is updating or unavailable; retry after it is applied"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Wait until response futures admitted before revocation complete or are cancelled.
     pub async fn quiesce(&self) {
         let _responses = self.responses.clone().write_owned().await;
@@ -89,7 +121,7 @@ impl EmaRequestAuthority {
 
     async fn acquire(&self) -> Result<OwnedRwLockReadGuard<()>, ExecServerError> {
         let response = self.responses.clone().read_owned().await;
-        self.check()?;
+        self.check_new_request()?;
         Ok(response)
     }
 
@@ -180,7 +212,12 @@ impl<S: EmaTokenSource> EmaAuthenticatedHttpClient<S> {
             if let Some(value) = current_token() {
                 value
             } else {
-                let renewed = self.source.access_token().await.map_err(auth_error)?;
+                let renewed = self.source.access_token().await.map_err(|error| {
+                    if let Err(refusal) = self.authority.check_new_request() {
+                        return refusal;
+                    }
+                    auth_error(error)
+                })?;
                 let token = CachedToken::new(renewed);
                 if Instant::now() >= token.refresh_at {
                     return Err(ExecServerError::HttpRequest(
@@ -234,6 +271,13 @@ impl<S: EmaTokenSource> EmaAuthenticatedHttpClient<S> {
 }
 
 fn auth_error(error: anyhow::Error) -> ExecServerError {
+    if let Some(error) = error.downcast_ref::<crate::EmaTokenSourceError>() {
+        return if error.is_authentication_required() {
+            ExecServerError::AuthenticationRequired(error.to_string())
+        } else {
+            ExecServerError::HttpRequest(error.to_string())
+        };
+    }
     if is_authentication_required_error(&error) {
         ExecServerError::AuthenticationRequired(
             "enterprise MCP authentication is required".to_string(),
@@ -257,7 +301,7 @@ impl<S: EmaTokenSource> HttpClient for EmaAuthenticatedHttpClient<S> {
             let request = async {
                 let _authority = self.authority.acquire().await?;
                 let token = self.authenticate(&mut params).await?;
-                self.authority.check()?;
+                self.authority.check_new_request()?;
                 if let Some(deadline) = deadline {
                     params.timeout_ms = Some(remaining_timeout(deadline)?);
                 }
@@ -286,7 +330,7 @@ impl<S: EmaTokenSource> HttpClient for EmaAuthenticatedHttpClient<S> {
             let request = async {
                 let _authority = self.authority.acquire().await?;
                 let token = self.authenticate(&mut params).await?;
-                self.authority.check()?;
+                self.authority.check_new_request()?;
                 if let Some(deadline) = deadline {
                     params.timeout_ms = Some(remaining_timeout(deadline)?);
                 }

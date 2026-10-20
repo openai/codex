@@ -1,5 +1,8 @@
 //! Authentication, deadlines, and concurrent responses share the same request invariants.
 
+use codex_config::CloudConfigBundlePolicy;
+use codex_config::CloudConfigBundleSnapshot;
+use codex_config::test_support::CloudConfigBundleFixture;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -206,7 +209,9 @@ async fn credential_failures_are_classified_before_dispatch() -> anyhow::Result<
             EmaAuthFailure::InvalidGrant {
                 grant_source: EmaInvalidGrantSource::EnterpriseIdentity,
             },
-            EmaAuthFailure::InsufficientUserAuthentication,
+            EmaAuthFailure::InsufficientUserAuthentication {
+                grant_source: crate::EmaInvalidGrantSource::EnterpriseIdentity,
+            },
             EmaAuthFailure::ReauthenticationRequired,
         ] {
             let (client, source, params, mut requests) = controlled_fixture();
@@ -383,5 +388,71 @@ async fn authentication_time_is_removed_from_the_inner_timeout() -> anyhow::Resu
             assert_eq!(response.await??.status, 200);
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn policy_suspension_requires_fresh_authority_without_cancelling_admitted_request()
+-> anyhow::Result<()> {
+    let (mut client, source, params, mut requests) = controlled_fixture();
+    let policy = CloudConfigBundlePolicy::default();
+    let mut snapshot = CloudConfigBundleSnapshot {
+        bundle: Ok(None),
+        binding: None,
+    };
+    policy.publish_snapshot(&mut snapshot);
+    Arc::get_mut(&mut client)
+        .expect("single client owner")
+        .authority = EmaRequestAuthority::default().with_policy(snapshot.binding.take());
+
+    let pending = RequestMode::Buffered.start(Arc::clone(&client), params.clone());
+    let dispatched = requests.recv().await.expect("admitted request");
+    *client.cached_token() = None;
+    let (gate, waiting, release) = CredentialGate::new();
+    *source.credential_gate.lock().unwrap() = Some(gate);
+    let renewal = RequestMode::Streaming.start(Arc::clone(&client), params.clone());
+    waiting.await?;
+    let next = CloudConfigBundleFixture::enterprise_config("model = 'managed'").into_bundle();
+    policy.observe_remote_bundle(&next);
+    *source.renewal_error.lock().unwrap() =
+        Some(anyhow::anyhow!("exchange refused after policy changed"));
+    release.send(()).expect("release renewal");
+    assert!(matches!(
+        renewal.await?,
+        Err(ExecServerError::RequestNotSent(_))
+    ));
+    assert!(matches!(
+        client.http_request(params.clone()).await,
+        Err(ExecServerError::RequestNotSent(message)) if message.contains("retry")
+    ));
+    assert!(matches!(
+        requests.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    dispatched
+        .response
+        .send(200)
+        .expect("complete admitted request");
+    assert_eq!(pending.await??.status, 200);
+
+    snapshot.bundle = Ok(Some(next));
+    policy.publish_snapshot(&mut snapshot);
+    assert!(matches!(
+        client.http_request(params).await,
+        Err(ExecServerError::RequestNotSent(_))
+    ));
+    let (mut fresh_client, _source, fresh_params, mut fresh_requests) = controlled_fixture();
+    Arc::get_mut(&mut fresh_client)
+        .expect("single client owner")
+        .authority = EmaRequestAuthority::default().with_policy(snapshot.binding);
+    let pending = RequestMode::Buffered.start(fresh_client, fresh_params);
+    fresh_requests
+        .recv()
+        .await
+        .expect("request after recovery")
+        .response
+        .send(200)
+        .expect("complete recovered request");
+    assert_eq!(pending.await??.status, 200);
     Ok(())
 }

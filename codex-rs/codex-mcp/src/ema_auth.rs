@@ -131,7 +131,10 @@ impl EmaAuth {
         self.authority.check()?;
         if !self.manager.account_login_is_current(&self.account).await? {
             self.authority.revoke();
-            bail!(EmaAuthFailure::ReauthenticationRequired);
+            bail!(codex_rmcp_client::EmaTokenSourceError::new(
+                codex_rmcp_client::EmaCredentialKind::Account,
+                EmaAuthFailure::ReauthenticationRequired,
+            ));
         }
         self.authority.check()?;
         Ok(())
@@ -350,16 +353,24 @@ impl EmaTokenSource for EnterpriseTokenSource {
                     })
                 ) && self
                     .credentials
-                    .invalidate_ema_credentials_if_current()
+                    .invalidate_ema_credentials_if_current(async {
+                        self.auth.check_account().await.is_ok()
+                    })
                     .await
                     .is_err()
                 {
                     tracing::warn!("failed to clear rejected enterprise credentials");
                 }
-                Err(match error.downcast::<EmaAuthFailure>() {
-                    Ok(failure) => failure.into(),
-                    Err(_) => anyhow!("enterprise MCP token exchange failed"),
-                })
+                Err(match error.downcast_ref::<EmaAuthFailure>() {
+                    Some(failure) => codex_rmcp_client::EmaTokenSourceError::new(
+                        codex_rmcp_client::EmaCredentialKind::Keyring,
+                        *failure,
+                    ),
+                    None => codex_rmcp_client::EmaTokenSourceError::unexpected(
+                        codex_rmcp_client::EmaCredentialKind::Keyring,
+                    ),
+                }
+                .into())
             }
         }
     }

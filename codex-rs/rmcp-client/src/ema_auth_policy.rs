@@ -9,12 +9,14 @@ use url::Host;
 use url::Url;
 
 /// A sanitized enterprise-auth failure that callers may handle without parsing text.
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum EmaAuthFailure {
     #[error("invalid_grant")]
     InvalidGrant { grant_source: EmaInvalidGrantSource },
     #[error("insufficient_user_authentication")]
-    InsufficientUserAuthentication,
+    InsufficientUserAuthentication { grant_source: EmaInvalidGrantSource },
+    #[error("enterprise identity rejected the OAuth client")]
+    IdentityClientRejected,
     #[error("enterprise identity requires authentication")]
     ReauthenticationRequired,
 }
@@ -24,6 +26,138 @@ pub enum EmaInvalidGrantSource {
     EnterpriseIdentity,
     ResourceAuthorization,
 }
+
+/// The credential source selected for enterprise token acquisition or validation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EmaCredentialKind {
+    Account,
+    Keyring,
+}
+
+/// Carries only a credential kind and an already sanitized auth failure to transport.
+/// Unexpected errors deliberately retain neither provider text nor their source chain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EmaTokenSourceError {
+    AuthFailure {
+        credential: EmaCredentialKind,
+        failure: EmaAuthFailure,
+    },
+    Unexpected {
+        credential: EmaCredentialKind,
+    },
+}
+
+impl EmaTokenSourceError {
+    pub fn new(credential: EmaCredentialKind, failure: EmaAuthFailure) -> Self {
+        Self::AuthFailure {
+            credential,
+            failure,
+        }
+    }
+
+    pub fn unexpected(credential: EmaCredentialKind) -> Self {
+        Self::Unexpected { credential }
+    }
+
+    fn credential(self) -> EmaCredentialKind {
+        match self {
+            Self::AuthFailure { credential, .. } | Self::Unexpected { credential } => credential,
+        }
+    }
+
+    fn failure(self) -> Option<EmaAuthFailure> {
+        match self {
+            Self::AuthFailure { failure, .. } => Some(failure),
+            Self::Unexpected { .. } => None,
+        }
+    }
+
+    pub fn is_authentication_required(&self) -> bool {
+        match (self.credential(), self.failure()) {
+            (
+                _,
+                Some(
+                    EmaAuthFailure::InvalidGrant {
+                        grant_source: EmaInvalidGrantSource::EnterpriseIdentity,
+                    }
+                    | EmaAuthFailure::InsufficientUserAuthentication {
+                        grant_source: EmaInvalidGrantSource::EnterpriseIdentity,
+                    }
+                    | EmaAuthFailure::ReauthenticationRequired,
+                ),
+            )
+            | (EmaCredentialKind::Account, Some(EmaAuthFailure::IdentityClientRejected)) => true,
+            (
+                _,
+                Some(
+                    EmaAuthFailure::InvalidGrant {
+                        grant_source: EmaInvalidGrantSource::ResourceAuthorization,
+                    }
+                    | EmaAuthFailure::InsufficientUserAuthentication {
+                        grant_source: EmaInvalidGrantSource::ResourceAuthorization,
+                    },
+                )
+                | None,
+            )
+            | (EmaCredentialKind::Keyring, Some(EmaAuthFailure::IdentityClientRejected)) => false,
+        }
+    }
+}
+
+impl std::fmt::Display for EmaTokenSourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match (self.credential(), self.failure()) {
+            (
+                _,
+                Some(EmaAuthFailure::InsufficientUserAuthentication {
+                    grant_source: EmaInvalidGrantSource::ResourceAuthorization,
+                }),
+            ) => {
+                "The MCP authorization server requires additional user authentication; contact your administrator"
+            }
+            (EmaCredentialKind::Keyring, Some(EmaAuthFailure::IdentityClientRejected)) => {
+                "The enterprise IdP rejected the configured MCP OAuth client; contact your administrator"
+            }
+            (
+                EmaCredentialKind::Account,
+                Some(
+                    EmaAuthFailure::InvalidGrant {
+                        grant_source: EmaInvalidGrantSource::EnterpriseIdentity,
+                    }
+                    | EmaAuthFailure::InsufficientUserAuthentication {
+                        grant_source: EmaInvalidGrantSource::EnterpriseIdentity,
+                    }
+                    | EmaAuthFailure::IdentityClientRejected,
+                ),
+            ) => "Complete enterprise sign-in for this MCP server",
+            (EmaCredentialKind::Account, Some(EmaAuthFailure::ReauthenticationRequired)) => {
+                "Sign in to your Codex account to restore enterprise MCP access"
+            }
+            (
+                EmaCredentialKind::Keyring,
+                Some(
+                    EmaAuthFailure::InvalidGrant {
+                        grant_source: EmaInvalidGrantSource::EnterpriseIdentity,
+                    }
+                    | EmaAuthFailure::InsufficientUserAuthentication {
+                        grant_source: EmaInvalidGrantSource::EnterpriseIdentity,
+                    }
+                    | EmaAuthFailure::ReauthenticationRequired,
+                ),
+            ) => "Complete enterprise sign-in to restore MCP access",
+            (
+                _,
+                Some(EmaAuthFailure::InvalidGrant {
+                    grant_source: EmaInvalidGrantSource::ResourceAuthorization,
+                }),
+            ) => "The MCP authorization server rejected the enterprise grant: invalid_grant",
+            (_, None) => "enterprise MCP token exchange failed",
+        };
+        f.write_str(message)
+    }
+}
+
+impl std::error::Error for EmaTokenSourceError {}
 
 pub(crate) fn ema_reauthentication_required(message: &'static str) -> anyhow::Error {
     anyhow::Error::new(EmaAuthFailure::ReauthenticationRequired).context(message)

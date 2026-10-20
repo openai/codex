@@ -18,6 +18,9 @@ use crate::rmcp_client::ClientOperationError;
 /// transport error, which is not part of the standard error source chain.
 pub fn is_authentication_required_error(error: &Error) -> bool {
     error.chain().any(|source| {
+        if let Some(error) = source.downcast_ref::<crate::EmaTokenSourceError>() {
+            return error.is_authentication_required();
+        }
         source
             .downcast_ref::<AuthError>()
             .is_some_and(auth_error_requires_authentication)
@@ -27,10 +30,16 @@ pub fn is_authentication_required_error(error: &Error) -> bool {
                     EmaAuthFailure::InvalidGrant {
                         grant_source: EmaInvalidGrantSource::EnterpriseIdentity,
                     }
-                    | EmaAuthFailure::InsufficientUserAuthentication
+                    | EmaAuthFailure::InsufficientUserAuthentication {
+                        grant_source: EmaInvalidGrantSource::EnterpriseIdentity,
+                    }
+                    | EmaAuthFailure::IdentityClientRejected
                     | EmaAuthFailure::ReauthenticationRequired => true,
                     // Rejecting an ID-JAG does not invalidate the enterprise login itself.
                     EmaAuthFailure::InvalidGrant {
+                        grant_source: EmaInvalidGrantSource::ResourceAuthorization,
+                    }
+                    | EmaAuthFailure::InsufficientUserAuthentication {
                         grant_source: EmaInvalidGrantSource::ResourceAuthorization,
                     } => false,
                 })

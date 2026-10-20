@@ -32,6 +32,9 @@ fn retryable_initialize_error_includes_discovery_and_initialized_notification_co
 fn streamable_http_retry_classifies_transport_and_auth_errors() {
     let errors = [
         StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
+            ExecServerError::RequestNotSent("enterprise policy is updating".to_string()),
+        )),
+        StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
             ExecServerError::HttpRequest("error sending request for url".to_string()),
         )),
         StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
@@ -66,7 +69,9 @@ fn streamable_http_retry_classifies_transport_and_auth_errors() {
 
     assert_eq!(
         errors.map(|error| RmcpClient::is_retryable_streamable_http_error(&error)),
-        [true, true, true, false, true, false, true, false, false],
+        [
+            false, true, true, true, false, true, false, true, false, false
+        ],
     );
 }
 
