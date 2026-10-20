@@ -51,6 +51,15 @@ impl AccountOAuthGrantLease {
 }
 
 impl AccountOAuthGrant {
+    pub fn tokens(&self) -> &TokenData {
+        &self.tokens
+    }
+
+    /// Compare credential revisions without exposing the refresh token to state holders.
+    pub fn same_credential(&self, other: &Self) -> bool {
+        self.tokens == other.tokens
+    }
+
     pub(super) fn owner_is_current(&self) -> bool {
         let Ok(cached) = self.manager.inner.read() else {
             return false;
@@ -71,11 +80,7 @@ impl AccountOAuthGrant {
             return Ok(false);
         }
         let stored = self.manager.read_account_grant_tokens().await?;
-        Ok(self.owner_is_current()
-            && stored.as_ref().is_some_and(|tokens| {
-                same_account_grant(&self.tokens, tokens)
-                    && self.tokens.refresh_token == tokens.refresh_token
-            }))
+        Ok(self.owner_is_current() && stored.as_ref().is_some_and(|tokens| self.tokens == *tokens))
     }
 }
 

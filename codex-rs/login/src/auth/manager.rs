@@ -2587,6 +2587,63 @@ impl AuthManager {
         Ok(Some(AccountOAuthGrantLease { grant, permit }))
     }
 
+    /// Checks the persisted account owner without requiring an EMA-eligible account grant.
+    /// Dedicated enterprise credentials still belong to this account login.
+    pub async fn account_login_is_current(&self, expected: &CodexAuth) -> std::io::Result<bool> {
+        if !matches!(expected, CodexAuth::Chatgpt(_)) {
+            return Ok(self.auth_cached().is_some_and(|current| {
+                !matches!(current, CodexAuth::Chatgpt(_))
+                    && current.get_account_id() == expected.get_account_id()
+                    && current.get_chatgpt_user_id() == expected.get_chatgpt_user_id()
+            }));
+        }
+        let expected = expected.get_token_data()?;
+        if expected
+            .login_owner_id
+            .as_ref()
+            .is_none_or(String::is_empty)
+        {
+            return Ok(false);
+        }
+        let matches_owner = || {
+            self.auth_cached().is_some_and(|auth| {
+                matches!(auth, CodexAuth::Chatgpt(_))
+                    && auth
+                        .get_token_data()
+                        .is_ok_and(|tokens| account_grant::same_account_login(&expected, &tokens))
+            })
+        };
+        if !matches_owner() {
+            return Ok(false);
+        }
+        let stored = self.read_persisted_account_tokens().await?;
+        Ok(matches_owner()
+            && stored
+                .as_ref()
+                .is_some_and(|tokens| account_grant::same_account_login(&expected, tokens)))
+    }
+
+    async fn read_persisted_account_tokens(&self) -> std::io::Result<Option<TokenData>> {
+        let home = self.codex_home.clone();
+        let mode = self.auth_credentials_store_mode;
+        let backend = self.keyring_backend_kind;
+        let originator = codex_otel::auth_storage::AuthStorageOriginator::current();
+        let stored = tokio::task::spawn_blocking(move || {
+            originator.sync_scope(|| {
+                let _commit = auth_storage_commit_guard()?;
+                create_auth_storage(home, mode, backend).load_account_grant()
+            })
+        })
+        .await
+        .map_err(|_| std::io::Error::other("Account credential read failed."))?
+        .map_err(|_: std::io::Error| {
+            std::io::Error::other("Account credential storage is unavailable.")
+        })?;
+        Ok(stored
+            .filter(|auth| auth.resolved_mode() == AuthMode::Chatgpt)
+            .and_then(|auth| auth.tokens))
+    }
+
     async fn read_account_grant_tokens(&self) -> std::io::Result<Option<TokenData>> {
         if self.has_external_auth()
             || self.auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral
@@ -2607,25 +2664,8 @@ impl AuthManager {
             return Ok(None);
         }
         let cached = auth.get_token_data()?;
-        let home = self.codex_home.clone();
-        let mode = self.auth_credentials_store_mode;
-        let backend = self.keyring_backend_kind;
-        let originator = codex_otel::auth_storage::AuthStorageOriginator::current();
-        let stored = tokio::task::spawn_blocking(move || {
-            originator.sync_scope(|| {
-                let _commit = auth_storage_commit_guard()?;
-                create_auth_storage(home, mode, backend).load_account_grant()
-            })
-        })
-        .await
-        .map_err(|_| std::io::Error::other("Account credential read failed."))?
-        .map_err(|_: std::io::Error| {
-            std::io::Error::other("Account credential storage is unavailable.")
-        })?;
-        let Some(stored) = stored.filter(|auth| auth.resolved_mode() == AuthMode::Chatgpt) else {
-            return Ok(None);
-        };
-        Ok(stored.tokens.filter(|tokens| {
+        let stored = self.read_persisted_account_tokens().await?;
+        Ok(stored.filter(|tokens| {
             tokens.oauth_provenance.as_ref().is_some_and(|provenance| {
                 !provenance.issuer.trim().is_empty() && !provenance.client_id.trim().is_empty()
             }) && tokens

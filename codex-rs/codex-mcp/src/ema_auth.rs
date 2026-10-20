@@ -60,6 +60,8 @@ pub fn ema_auth_scope(auth: Option<&CodexAuth>) -> Option<McpEmaAuthScope> {
 pub(crate) struct EmaAuth {
     scope: McpEmaAuthScope,
     config: Arc<McpConfig>,
+    manager: Arc<AuthManager>,
+    account: CodexAuth,
     authority: EmaRequestAuthority,
     _revocation: AbortOnDropHandle<()>,
 }
@@ -116,9 +118,23 @@ impl EmaAuth {
         Ok(Arc::new(Self {
             scope,
             config,
+            manager: Arc::clone(manager),
+            account: auth
+                .context("enterprise MCP requires an account owner")?
+                .clone(),
             authority,
             _revocation: AbortOnDropHandle::new(revocation),
         }))
+    }
+
+    pub(crate) async fn check_account(&self) -> Result<()> {
+        self.authority.check()?;
+        if !self.manager.account_login_is_current(&self.account).await? {
+            self.authority.revoke();
+            bail!(EmaAuthFailure::ReauthenticationRequired);
+        }
+        self.authority.check()?;
+        Ok(())
     }
 
     pub(crate) async fn connect(
@@ -128,7 +144,7 @@ impl EmaAuth {
         http_client: Arc<dyn HttpClient>,
         protocol_mode: McpProtocolMode,
     ) -> Result<RmcpClient> {
-        self.authority.check()?;
+        self.check_account().await?;
         let config = server.config();
         config
             .validate_ema_auth_transport()
@@ -283,7 +299,7 @@ impl EmaTokenSource for EnterpriseTokenSource {
     }
 
     async fn access_token(&self) -> Result<EmaAccessToken> {
-        self.auth.authority.check()?;
+        self.auth.check_account().await?;
         let idp = self.registration.idp();
         let exchange = exchange_ema_auth_token(EmaAuthTokenExchangeRequest {
             server_url: self.registration.server_url(),
@@ -294,7 +310,7 @@ impl EmaTokenSource for EnterpriseTokenSource {
             idp_issuer: &idp.issuer,
             idp_client_id: &idp.client_id,
             idp_identity: Box::pin(async {
-                self.auth.authority.check()?;
+                self.auth.check_account().await?;
                 resolve_ema_idp_identity(EmaIdpIdentityRequest {
                     issuer: &idp.issuer,
                     client_id: &idp.client_id,
@@ -314,11 +330,11 @@ impl EmaTokenSource for EnterpriseTokenSource {
             }
             result = exchange => result,
         };
-        self.auth.authority.check()?;
+        self.auth.check_account().await?;
         match result {
             Ok((token, _credentials)) => {
                 self.credentials.acquire_current_ema_credentials().await?;
-                self.auth.authority.check()?;
+                self.auth.check_account().await?;
                 Ok(token)
             }
             Err(error) => {

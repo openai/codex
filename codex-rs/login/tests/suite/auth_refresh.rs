@@ -359,7 +359,28 @@ async fn account_grant_tracks_refresh_replacement_and_logout() -> Result<()> {
         AuthKeyringBackendKind::default(),
     )?;
     assert!(!grant.check_current().await?);
+    assert!(
+        !ctx.auth_manager
+            .account_login_is_current(&cached_auth)
+            .await?
+    );
+    assert_eq!(
+        ctx.auth_manager
+            .auth_cached()
+            .context("original cached auth")?
+            .get_token_data()?,
+        cached,
+    );
     ctx.auth_manager.reload().await;
+    assert!(
+        ctx.auth_manager
+            .account_login_is_current(
+                &ctx.auth_manager
+                    .auth_cached()
+                    .context("replacement cached")?
+            )
+            .await?
+    );
     let after = *changes.borrow();
     assert_eq!(after.owner_generation, before.owner_generation + 1);
     assert_eq!(after.login_generation, before.login_generation + 1);

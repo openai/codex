@@ -204,7 +204,9 @@ async fn enterprise_login_attempt_lifecycle() -> Result<()> {
         return Ok(());
     }
 
-    keyring::set_default_credential_builder(Box::<TestKeyring>::default());
+    let keyring = TestKeyring::default();
+    let account_read = Arc::clone(&keyring.account_read);
+    keyring::set_default_credential_builder(Box::new(keyring));
     let server = MockServer::builder().start().await;
     let idp_server = MockServer::start().await;
     let origin = server.uri();
@@ -394,20 +396,22 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
     write_chatgpt_auth(
         home.path(),
         ChatGptAuthFixture::new("account-access")
+            .login_owner_id("original-account-login")
             .account_id(WORKSPACE_ID_INITIAL)
             .chatgpt_user_id("enterprise-user")
             .plan_type("business"),
         AuthCredentialsStoreMode::File,
     )?;
     let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
-    let config = Arc::new(
-        ConfigBuilder::default()
-            .codex_home(home.path().to_path_buf())
-            .fallback_cwd(Some(home.path().to_path_buf()))
-            .loader_overrides(loader_overrides.clone())
-            .build()
-            .await?,
-    );
+    let mut config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .loader_overrides(loader_overrides.clone())
+        .build()
+        .await?;
+    // Development builds otherwise force file storage, bypassing the mock keyring.
+    config.cli_auth_credentials_store_mode = AuthCredentialsStoreMode::Auto;
+    let config = Arc::new(config);
     let mut client = in_process::start(InProcessStartArgs {
         arg0_paths: Arg0DispatchPaths::default(),
         config,
@@ -511,6 +515,7 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
     write_chatgpt_auth(
         home.path(),
         ChatGptAuthFixture::new("account-access")
+            .login_owner_id("original-account-login")
             .account_id(WORKSPACE_ID_REFRESHED)
             .chatgpt_user_id("enterprise-user")
             .plan_type("business"),
@@ -737,6 +742,66 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
         ordinary_result
     );
 
+    // A same-account login replacement refuses EMA without adopting the new owner.
+    let auth_path = home.path().join("auth.json");
+    let saved_auth = std::fs::read_to_string(&auth_path)?;
+    let mut replaced_auth: Value = serde_json::from_str(&saved_auth)?;
+    replaced_auth["tokens"]["login_owner_id"] = json!("replacement-account-login");
+    std::fs::write(&auth_path, serde_json::to_string(&replaced_auth)?)?;
+    let refused = enterprise_rpc(&client, "thread/start", json!({})).await?;
+    let refused_call = |server: &str| {
+        json!({
+            "threadId": refused["thread"]["id"], "server": server,
+            "tool": "calendar_list_events", "arguments": {"query": "hello"},
+        })
+    };
+    assert!(
+        enterprise_rpc(&client, "mcpServer/tool/call", refused_call("enterprise"))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        enterprise_rpc(&client, "mcpServer/tool/call", refused_call("ordinary")).await?,
+        ordinary_result
+    );
+    assert_eq!(
+        resource_exchanges.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+    std::fs::write(&auth_path, saved_auth)?;
+
+    // An EMA account read stays inside that server's startup, leaving ordinary MCP usable.
+    let (arrived, read_started) = tokio::sync::oneshot::channel();
+    let (release, read_release) = std::sync::mpsc::channel();
+    *account_read.lock().unwrap() = Some((arrived, read_release));
+    let startup = async {
+        let thread = enterprise_rpc(&client, "thread/start", json!({})).await?;
+        read_started.await?;
+        let result = enterprise_rpc(
+            &client,
+            "mcpServer/tool/call",
+            json!({
+                "threadId": thread["thread"]["id"], "server": "ordinary",
+                "tool": "calendar_list_events", "arguments": {"query":"hello"},
+            }),
+        )
+        .await?;
+        enterprise_rpc(
+            &client,
+            "thread/archive",
+            json!({"threadId": thread["thread"]["id"]}),
+        )
+        .await?;
+        anyhow::Ok(result)
+    };
+    let result = timeout(DEFAULT_READ_TIMEOUT, startup).await;
+    // Release even on failure so the blocking worker cannot hang child shutdown.
+    let _ = release.send(());
+    assert_eq!(
+        result.context("account read blocked ordinary MCP")??,
+        ordinary_result
+    );
+
     let stalled = enterprise_rpc(
         &client,
         "mcpServer/oauth/login",
@@ -892,16 +957,36 @@ async fn enterprise_completion(client: &mut InProcessClientHandle) -> Result<Val
     .context("timed out waiting for enterprise login completion")?
 }
 
-#[derive(Default)]
-struct TestKeyring(Mutex<HashMap<(String, String), Arc<MockCredential>>>);
+type AccountReadGate = Arc<
+    Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            std::sync::mpsc::Receiver<()>,
+        )>,
+    >,
+>;
 
-struct TestCredential(Arc<MockCredential>);
+#[derive(Default)]
+struct TestKeyring {
+    credentials: Mutex<HashMap<(String, String), Arc<MockCredential>>>,
+    account_read: AccountReadGate,
+}
+
+struct TestCredential(Arc<MockCredential>, Option<AccountReadGate>);
 
 impl CredentialApi for TestCredential {
     fn set_secret(&self, secret: &[u8]) -> keyring::Result<()> {
         self.0.set_secret(secret)
     }
     fn get_secret(&self) -> keyring::Result<Vec<u8>> {
+        let pending = self
+            .1
+            .as_ref()
+            .and_then(|gate| gate.lock().expect("account read gate").take());
+        if let Some((arrived, release)) = pending {
+            let _ = arrived.send(());
+            let _ = release.recv();
+        }
         self.0.get_secret()
     }
     fn delete_credential(&self) -> keyring::Result<()> {
@@ -920,13 +1005,16 @@ impl CredentialBuilderApi for TestKeyring {
         user: &str,
     ) -> keyring::Result<Box<Credential>> {
         let credential = self
-            .0
+            .credentials
             .lock()
             .expect("mock keyring")
             .entry((service.into(), user.into()))
             .or_default()
             .clone();
-        Ok(Box::new(TestCredential(credential)))
+        Ok(Box::new(TestCredential(
+            credential,
+            (service == "Codex Auth").then(|| Arc::clone(&self.account_read)),
+        )))
     }
     fn as_any(&self) -> &dyn Any {
         self
@@ -1058,6 +1146,7 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
         write_chatgpt_auth(
             home.path(),
             ChatGptAuthFixture::new("account-access")
+                .login_owner_id("original-account-login")
                 .account_id(WORKSPACE_ID_INITIAL)
                 .chatgpt_user_id("enterprise-user")
                 .plan_type("business"),

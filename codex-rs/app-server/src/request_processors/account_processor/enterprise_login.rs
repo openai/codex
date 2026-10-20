@@ -191,6 +191,26 @@ impl EnterpriseLoginState {
             };
             self.clear(&login_id).await;
         }
+        let login_generation = self
+            .auth_manager
+            .auth_change_state_receiver()
+            .borrow()
+            .login_generation;
+        let account = self
+            .auth_manager
+            .auth_cached()
+            .filter(|auth| ema_auth_scope(Some(auth)).as_ref() == Some(&scope))
+            .ok_or_else(|| internal_error("Codex account changed during enterprise sign-in"))?;
+        if !self
+            .auth_manager
+            .account_login_is_current(&account)
+            .await
+            .unwrap_or(false)
+        {
+            return Err(internal_error(
+                "Codex account changed during enterprise sign-in",
+            ));
+        }
         let keyring_backend = request.keyring_backend_kind;
         // Keep commit cancellation under `active`; cancelling the setup epoch must
         // not race an already-admitted synchronous credential write.
@@ -230,11 +250,12 @@ impl EnterpriseLoginState {
                     callback_closed.clone().await;
                     let mut active = credentials.commit_if(|| async {
                         lifecycle.auth_manager.reload().await;
-                        let eligible = lifecycle.configuration_is_current(&target, keyring_backend).await;
+                        let eligible = lifecycle.auth_manager.account_login_is_current(&account).await.unwrap_or(false)
+                            && lifecycle.configuration_is_current(&target, keyring_backend).await;
                         // Reread persisted account authority after acquiring the credential
                         // lock, including changes made by another app-server process.
                         lifecycle.auth_manager.reload().await;
-                        if !eligible {
+                        if !eligible || !lifecycle.auth_manager.account_login_is_current(&account).await.unwrap_or(false) {
                             return None;
                         }
                         // Keep cancellation responsive during the async checks above.
@@ -243,6 +264,7 @@ impl EnterpriseLoginState {
                         let current = active.as_ref().is_some_and(|attempt| {
                             attempt.login_id == completion_id && !attempt.cancel.is_cancelled()
                         })
+                            && lifecycle.auth_manager.auth_change_state_receiver().borrow().login_generation == login_generation
                             && ema_auth_scope(lifecycle.auth_manager.auth_cached().as_ref()).as_ref() == Some(&scope);
                         if !current {
                             return None;
