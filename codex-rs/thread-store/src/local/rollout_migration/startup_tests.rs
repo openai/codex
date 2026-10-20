@@ -2,6 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use codex_protocol::ThreadId;
@@ -22,6 +23,7 @@ use super::super::publish::migration_journal_path;
 use super::super::publish::write_migration_journal;
 use super::super::thread_history;
 use super::LocalThreadStore;
+use crate::local::StartupMigrationRetryGate;
 use crate::local::test_support::test_config;
 
 const TIMESTAMP: &str = "2025-01-03T12:00:00Z";
@@ -297,7 +299,9 @@ async fn waits_for_rollout_maintenance_before_migrating() {
     let home = TempDir::new().expect("create Codex home");
     let thread_id = ThreadId::new();
     let path = write_rollout(home.path(), thread_id, ThreadHistoryMode::Legacy);
-    let store = indexed_store(home.path()).await;
+    let mut store = indexed_store(home.path()).await;
+    let gate = Arc::new(StartupMigrationRetryGate::default());
+    store.startup_migration_retry_gate = Some(Arc::clone(&gate));
     let maintenance_guard = codex_rollout::try_acquire_rollout_maintenance_lock(home.path())
         .expect("acquire rollout maintenance lock")
         .expect("claim rollout maintenance lock");
@@ -309,13 +313,27 @@ async fn waits_for_rollout_maintenance_before_migrating() {
             .expect("migrate startup rollouts");
     });
 
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), &mut migration)
+    // Observe real lock contention instead of assuming the task reached it after 50 ms.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            result = &mut migration => panic!("migration should wait for rollout maintenance: {result:?}"),
+            _ = gate.retry_started.notified() => {}
+        }
+    })
+    .await
+    .expect("migration should encounter rollout maintenance");
+    assert_eq!(
+        codex_rollout::read_session_meta_line(&path)
             .await
-            .is_err(),
-        "migration should wait for rollout maintenance"
+            .expect("read metadata while maintenance is held")
+            .meta
+            .history_mode,
+        ThreadHistoryMode::Legacy
     );
+
     drop(maintenance_guard);
+    // Drive the retry explicitly so the completion budget does not include the production backoff.
+    gate.retry_allowed.notify_one();
     tokio::time::timeout(Duration::from_secs(2), migration)
         .await
         .expect("migration should retry rollout maintenance")

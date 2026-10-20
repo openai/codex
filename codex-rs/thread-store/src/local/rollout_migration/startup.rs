@@ -208,6 +208,12 @@ async fn run_startup_migration(
             codex_rollout::try_acquire_rollout_maintenance_lock(&store.config.codex_home)
                 .map_err(migration_error)?
         else {
+            #[cfg(test)]
+            if let Some(gate) = &store.startup_migration_retry_gate {
+                gate.retry_started.notify_one();
+                gate.retry_allowed.notified().await;
+                continue;
+            }
             tokio::time::sleep(MAINTENANCE_RETRY_DELAY).await;
             continue;
         };

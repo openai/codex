@@ -153,6 +153,8 @@ pub struct LocalThreadStore {
     state_db: Option<StateDbHandle>,
     thread_history_db: Arc<OnceCell<sqlx::SqlitePool>>,
     thread_data_cleanup: Option<Arc<ThreadDataCleanup>>,
+    #[cfg(test)]
+    startup_migration_retry_gate: Option<Arc<StartupMigrationRetryGate>>,
 }
 
 type ThreadDataCleanup = dyn Fn(Vec<ThreadId>) -> ThreadStoreFuture<'static, ()> + Send + Sync;
@@ -227,6 +229,14 @@ impl LiveWriterLocks {
     }
 }
 
+// Per-store synchronization for exercising startup contention through the public entry point.
+#[cfg(test)]
+#[derive(Default)]
+struct StartupMigrationRetryGate {
+    retry_started: tokio::sync::Notify,
+    retry_allowed: tokio::sync::Notify,
+}
+
 /// Process-scoped configuration for local thread storage.
 ///
 /// This describes where local storage lives. New-thread rollout metadata such
@@ -271,6 +281,8 @@ impl LocalThreadStore {
             state_db,
             thread_history_db: Arc::new(OnceCell::new()),
             thread_data_cleanup: None,
+            #[cfg(test)]
+            startup_migration_retry_gate: None,
         }
     }
 
