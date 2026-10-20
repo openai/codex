@@ -1583,6 +1583,7 @@ pub async fn prefetch_sibling_rollout_paths(
         directory,
         child_name.thread_id(),
         child_name.rollout_id(),
+        first_ancestor_id,
     )
     .await?;
     if ids.len() < 2 || !ids.contains(&first_ancestor_id) {

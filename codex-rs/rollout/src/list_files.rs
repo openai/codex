@@ -82,6 +82,7 @@ pub(super) async fn collect_sibling_rollout_ids(
     directory: &Path,
     thread_id: ThreadId,
     child_rollout_id: RolloutId,
+    first_ancestor_id: RolloutId,
 ) -> io::Result<HashSet<RolloutId>> {
     let directory = directory.to_path_buf();
     run_scan(move |scan| {
@@ -94,6 +95,13 @@ pub(super) async fn collect_sibling_rollout_ids(
                 && file_name.thread_id() == thread_id
                 && file_name.rollout_id() != child_rollout_id
             {
+                // Reserve the last slot for the first ancestor until it is found.
+                if ids.len() == MAX_SIBLING_ROLLOUT_IDS - 1
+                    && file_name.rollout_id() != first_ancestor_id
+                    && !ids.contains(&first_ancestor_id)
+                {
+                    continue;
+                }
                 ids.insert(file_name.rollout_id());
                 if ids.len() >= MAX_SIBLING_ROLLOUT_IDS {
                     break;

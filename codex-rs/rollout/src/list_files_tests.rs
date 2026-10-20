@@ -12,6 +12,33 @@ use std::time::UNIX_EPOCH;
 use tempfile::TempDir;
 
 #[tokio::test]
+async fn sibling_rollout_candidates_prioritize_first_ancestor_at_capacity() -> anyhow::Result<()> {
+    let directory = TempDir::new()?;
+    let thread_id = ThreadId::new();
+    let child_id = RolloutId::new();
+    let sibling_ids: Vec<_> = (0..=MAX_SIBLING_ROLLOUT_IDS)
+        .map(|_| RolloutId::new())
+        .collect();
+    for rollout_id in sibling_ids.iter().copied().chain([child_id]) {
+        let file_name = RolloutFileName::new(OffsetDateTime::UNIX_EPOCH, thread_id, rollout_id);
+        File::create(directory.path().join(file_name.render()?))?;
+    }
+
+    let initial =
+        collect_sibling_rollout_ids(directory.path(), thread_id, child_id, sibling_ids[0]).await?;
+    let omitted = sibling_ids
+        .into_iter()
+        .find(|id| !initial.contains(id))
+        .expect("one sibling must exceed the candidate limit");
+    let prioritized =
+        collect_sibling_rollout_ids(directory.path(), thread_id, child_id, omitted).await?;
+
+    assert_eq!(prioritized.len(), MAX_SIBLING_ROLLOUT_IDS);
+    assert!(prioritized.contains(&omitted));
+    Ok(())
+}
+
+#[tokio::test]
 async fn dropping_scan_stops_directory_enumeration() -> anyhow::Result<()> {
     let root = TempDir::new()?;
     for name in ["first", "second"] {
