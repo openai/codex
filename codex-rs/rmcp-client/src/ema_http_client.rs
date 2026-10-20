@@ -216,6 +216,9 @@ impl<S: EmaTokenSource> EmaAuthenticatedHttpClient<S> {
                     if let Err(refusal) = self.authority.check_new_request() {
                         return refusal;
                     }
+                    if is_authentication_required_error(&error) {
+                        self.authority.revoke();
+                    }
                     auth_error(error)
                 })?;
                 let token = CachedToken::new(renewed);

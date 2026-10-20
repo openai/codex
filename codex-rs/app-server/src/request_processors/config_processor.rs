@@ -374,7 +374,7 @@ pub(super) async fn reload_user_config(
 }
 
 async fn reload_user_config_inner(config_manager: &ConfigManager, thread_manager: &ThreadManager) {
-    config_manager.revoke_mcp_ema();
+    config_manager.revoke_mcp_ema_startups();
     if let Err(err) = config_manager.load_config_layers(/*cwd*/ None).await {
         tracing::warn!("failed to rebuild user config for runtime refresh: {err}");
         for thread_id in thread_manager.list_thread_ids().await {

@@ -3,7 +3,8 @@
 //! This module contains the thread-owned MCP runtime and data that describes the
 //! environment in which MCP servers execute. Transport startup lives in
 //! [`crate::rmcp_client`] and connection-set behavior lives in
-//! [`crate::connection_manager`].
+//! [`crate::connection_manager`]. Registry removal revokes EMA authority before
+//! the thread becomes untracked.
 
 mod status;
 
@@ -337,7 +338,24 @@ impl McpRuntime {
         self.latest_hard_refresh_codex_apps_tools_cache().await
     }
 
+    /// Revoke a removed thread's EMA access before releasing the registry lock.
+    pub fn revoke_ema(&self) {
+        if let Some(Ok(auth)) = self.ema_auth.get() {
+            auth.authority.revoke();
+        }
+    }
+
+    /// Drain EMA responses after its configuration binding has been revoked.
+    pub async fn quiesce_ema(&self) {
+        if let Some(Ok(auth)) = self.ema_auth.get() {
+            auth.authority.revoke();
+            auth.authority.quiesce().await;
+        }
+    }
+
     async fn publish(&self, input: McpRuntimeInput, previous: Option<&McpConnectionSet>) {
+        let current = self.current.load_full();
+        let retain_ema = current.config.is_some();
         let ema_auth = (input.config.xaa_enabled
             && input.mcp_servers.values().any(|server| {
                 server.config().enabled
@@ -359,7 +377,6 @@ impl McpRuntime {
         let config = Arc::clone(&input.config);
         let auth = input.auth.clone();
         let auth_token = auth.as_ref().and_then(|auth| auth.get_token().ok());
-        let current = self.current.load_full();
         let auth_generation = if current.auth_matches(auth.as_ref()) {
             Arc::clone(&current.auth_generation)
         } else {
@@ -372,6 +389,7 @@ impl McpRuntime {
         let connections = Arc::new(
             McpConnectionSet::new(
                 ema_auth,
+                retain_ema.then_some(current.connections.as_ref()),
                 previous,
                 publication_gate,
                 input,

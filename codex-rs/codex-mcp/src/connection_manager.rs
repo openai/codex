@@ -283,6 +283,7 @@ impl McpConnectionSet {
     /// notifications are then skipped and interactive elicitations are declined.
     pub async fn new(
         ema_auth: Option<crate::ema_auth::EmaAuthContext>,
+        existing_ema: Option<&Self>,
         previous: Option<&Self>,
         publication_gate: McpPublicationGate,
         input: McpRuntimeInput,
@@ -337,15 +338,27 @@ impl McpConnectionSet {
         // Explicit reconnects have no previous set and must replace their clients eagerly.
         let allow_deferred_startup =
             startup_policy == McpStartupPolicy::LazyWhenCached && previous.is_some();
-        let reusable_previous = previous.filter(|previous| {
-            !previous.servers.is_empty()
-                && previous.elicitation_requests.update(
-                    Arc::clone(&config),
-                    elicitation_reviewer.clone(),
-                    elicitation_lifecycle.clone(),
-                )
-        });
-        let elicitation_requests = if let Some(previous) = reusable_previous {
+        // Retained EMA clients keep callbacks attached to this manager even when
+        // an explicit reconnect replaces the ordinary clients.
+        let elicitation_previous = previous
+            .or_else(|| {
+                existing_ema.filter(|previous| {
+                    previous
+                        .servers
+                        .values()
+                        .any(|view| view.connection.client.ema_authority.is_some())
+                })
+            })
+            .filter(|previous| {
+                !previous.servers.is_empty()
+                    && previous.elicitation_requests.update(
+                        Arc::clone(&config),
+                        elicitation_reviewer.clone(),
+                        elicitation_lifecycle.clone(),
+                    )
+            });
+        let reusable_previous = previous.filter(|_| elicitation_previous.is_some());
+        let elicitation_requests = if let Some(previous) = elicitation_previous {
             previous.elicitation_requests.clone()
         } else {
             ElicitationRequestManager::new(
@@ -557,6 +570,67 @@ impl McpConnectionSet {
                     Some(_) => None,
                 },
             };
+            if matches!(configured_config.auth, McpServerAuth::EmaAuth) && existing_ema.is_some() {
+                if let Some(previous_view) = existing_ema
+                    .filter(|_| elicitation_previous.is_some())
+                    .and_then(|previous| previous.servers.get(&server_name))
+                {
+                    let connection = &previous_view.connection;
+                    let authority_is_current = || {
+                        connection
+                            .client
+                            .ema_authority
+                            .as_ref()
+                            .is_some_and(|authority| authority.check_new_request().is_ok())
+                    };
+                    let same_identity = connection.identity.as_ref() == Some(&connection_identity)
+                        && previous_view.catalog_item_limit == catalog_item_limit
+                        && previous_view.protocol_mode == protocol_mode;
+                    let pending = same_identity
+                        && !connection.client.startup_complete.load(Ordering::Acquire)
+                        && connection.startup_timeout == startup_timeout
+                        && !connection.startup_is_dormant()
+                        && !connection.client.cancel_token.is_cancelled();
+                    let ready = same_identity
+                        && !pending
+                        && connection
+                            .reusable_client(&connection_identity)
+                            .await
+                            .is_some_and(|client| {
+                                expected_protocol_mode == Some(client.client.protocol_mode())
+                            });
+                    if authority_is_current() && (pending || ready) {
+                        servers.insert(
+                            server_name.clone(),
+                            McpServerView {
+                                connection: Arc::clone(connection),
+                                protocol_mode,
+                                startup_readiness: configured_config.startup_readiness,
+                                refresh_tool_list: config.mcp_tool_list_changed,
+                                refresh_timeout: startup_timeout,
+                                metadata,
+                                tool_filter: configured_tool_filter,
+                                tool_timeout: configured_tool_timeout,
+                                catalog_item_limit,
+                            },
+                        );
+                        if pending {
+                            let client = connection.client.clone();
+                            let publication_gate = publication_gate.clone();
+                            join_set.spawn(async move {
+                                if !publication_gate.wait().await {
+                                    return (server_name, Err(StartupOutcomeError::Cancelled));
+                                }
+                                (server_name, client.client().await)
+                            });
+                        } else {
+                            reused_ready.push(server_name);
+                        }
+                    }
+                }
+                // Post-start publications may only retain the original EMA connection.
+                continue;
+            }
             if let Some(previous_view) =
                 reusable_previous.and_then(|previous| previous.servers.get(&server_name))
                 && previous_view.refresh_tool_list == config.mcp_tool_list_changed

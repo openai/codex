@@ -31,6 +31,7 @@ use codex_feedback::CodexFeedback;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
 use codex_protocol::protocol::SessionSource;
 use codex_rmcp_client::stored_oauth_credentials;
+use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use keyring::credential::Credential;
 use keyring::credential::CredentialApi;
@@ -411,6 +412,7 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
         .await?;
     // Development builds otherwise force file storage, bypassing the mock keyring.
     config.cli_auth_credentials_store_mode = AuthCredentialsStoreMode::Auto;
+    let state_db = codex_rollout::state_db::try_init(&config).await?;
     let config = Arc::new(config);
     let mut client = in_process::start(InProcessStartArgs {
         arg0_paths: Arg0DispatchPaths::default(),
@@ -422,7 +424,7 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
         thread_config_loader: Arc::new(NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),
         log_db: None,
-        state_db: None,
+        state_db: Some(state_db),
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         config_warnings: Vec::new(),
         embedded_network_policy: Default::default(),
@@ -578,7 +580,8 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
     }
 
     // A fresh thread uses the saved enterprise grant and renews it for MCP requests.
-    let connected = enterprise_rpc(&client, "thread/start", json!({})).await?;
+    let connected =
+        enterprise_rpc(&client, "thread/start", json!({"historyMode":"paginated"})).await?;
     let connected_id = connected["thread"]["id"]
         .as_str()
         .context("connected thread ID")?;
@@ -597,6 +600,44 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
         enterprise_rpc(&client, "mcpServer/tool/call", call("enterprise")).await?;
     let ordinary_result = enterprise_rpc(&client, "mcpServer/tool/call", call("ordinary")).await?;
     assert_eq!(enterprise_result, ordinary_result);
+
+    // Revert replaces the runtime without revoking its replacement's EMA access.
+    let _response =
+        responses::mount_sse_once(&server, responses::sse_completed("revert-turn")).await;
+    let turn = enterprise_rpc(
+        &client,
+        "turn/start",
+        json!({"threadId":connected_id,"input":[{"type":"text","text":"Before revert"}]}),
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            if let InProcessServerEvent::ServerNotification(notification) =
+                client.next_event().await.context("turn notification")?
+                && let ServerNotification::TurnCompleted(completed) = *notification
+                && completed.thread_id == connected_id
+            {
+                assert_eq!(
+                    completed.turn.status,
+                    codex_app_server_protocol::TurnStatus::Completed
+                );
+                return anyhow::Ok(());
+            }
+        }
+    })
+    .await??;
+    enterprise_rpc(
+        &client,
+        "thread/revert",
+        json!({"threadId":connected_id,"beforeTurnId":turn["turn"]["id"]}),
+    )
+    .await?;
+    assert_eq!(
+        enterprise_rpc(&client, "mcpServer/tool/call", call("enterprise"))
+            .await
+            .context("enterprise tools must survive revert")?,
+        enterprise_result
+    );
     let bulk_status = enterprise_rpc(
         &client,
         "mcpServerStatus/list",
@@ -707,12 +748,13 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
         [
             "Bearer enterprise-resource-1",
             "Bearer enterprise-resource-2",
-            "Bearer ordinary-access"
+            "Bearer ordinary-access",
+            "Bearer enterprise-resource-3"
         ]
     );
     assert_eq!(
         resource_exchanges.load(std::sync::atomic::Ordering::SeqCst),
-        2
+        3
     );
 
     // Replacing the enterprise grant fences old threads, including cached bearers.
@@ -766,7 +808,7 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
     );
     assert_eq!(
         resource_exchanges.load(std::sync::atomic::Ordering::SeqCst),
-        2
+        3
     );
     std::fs::write(&auth_path, saved_auth)?;
 
@@ -863,7 +905,7 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
     );
     assert_eq!(
         resource_exchanges.load(std::sync::atomic::Ordering::SeqCst),
-        2
+        3
     );
     assert!(
         enterprise_rpc(
@@ -878,6 +920,11 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
         .is_err()
     );
     assert!(!home.path().join("auth.json").exists());
+    assert!(
+        enterprise_rpc(&client, "mcpServer/tool/call", call("enterprise"))
+            .await
+            .is_err()
+    );
     assert_eq!(
         enterprise_rpc(&client, "mcpServer/tool/call", call("ordinary")).await?,
         ordinary_result

@@ -248,7 +248,7 @@ pub struct ConfigLayerStack {
     /// Runtime-only EMA authority; it does not change the configuration's contents.
     cloud_config_binding: Option<crate::CloudConfigBundleBinding>,
     /// Runtime-only cancellation inherited by config snapshots and pending EMA startups.
-    mcp_ema_cancellation: tokio_util::sync::CancellationToken,
+    mcp_ema_cancellation: crate::McpEmaCancellation,
     /// Cached TOML projection derived only from `requirements_toml`.
     /// Construction validates provider definitions and reports serialization errors,
     /// so `effective_config()` can replace complete entries without a fallible conversion.
@@ -314,7 +314,7 @@ impl ConfigLayerStack {
         )?);
         Ok(Self {
             cloud_config_binding: None,
-            mcp_ema_cancellation: tokio_util::sync::CancellationToken::new(),
+            mcp_ema_cancellation: crate::McpEmaCancellation::default(),
             model_provider_requirements,
             layers,
             requirements,
@@ -349,15 +349,12 @@ impl ConfigLayerStack {
         self.cloud_config_binding.as_ref()
     }
 
-    pub fn with_mcp_ema_cancellation(
-        mut self,
-        cancellation: tokio_util::sync::CancellationToken,
-    ) -> Self {
+    pub fn with_mcp_ema_cancellation(mut self, cancellation: crate::McpEmaCancellation) -> Self {
         self.mcp_ema_cancellation = cancellation;
         self
     }
 
-    pub fn mcp_ema_cancellation(&self) -> &tokio_util::sync::CancellationToken {
+    pub fn mcp_ema_cancellation(&self) -> &crate::McpEmaCancellation {
         &self.mcp_ema_cancellation
     }
 

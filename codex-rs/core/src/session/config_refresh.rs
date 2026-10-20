@@ -14,18 +14,20 @@ use tracing::warn;
 
 impl Session {
     pub(crate) async fn disable_mcp_enterprise_auth(&self) {
-        let mut state = self.state.lock().await;
-        let mut config = state
-            .session_configuration
-            .original_config_do_not_use
-            .as_ref()
-            .clone();
-        config.config_layer_stack.mcp_ema_cancellation().cancel();
-        config.disable_mcp_enterprise_auth();
-        state.session_configuration.original_config_do_not_use = Arc::new(config);
-        self.services.mcp_runtime.invalidate_resource_caches();
-        self.mark_mcp_runtime_dirty();
-        drop(state);
+        {
+            let mut state = self.state.lock().await;
+            let mut config = state
+                .session_configuration
+                .original_config_do_not_use
+                .as_ref()
+                .clone();
+            config.config_layer_stack.mcp_ema_cancellation().cancel();
+            config.disable_mcp_enterprise_auth();
+            state.session_configuration.original_config_do_not_use = Arc::new(config);
+            self.services.mcp_runtime.invalidate_resource_caches();
+            self.mark_mcp_runtime_dirty();
+        }
+        self.services.mcp_runtime.quiesce_ema().await;
         self.schedule_mcp_prewarm();
     }
 
@@ -164,6 +166,17 @@ impl Session {
             if config.mcp_enterprise_managed_auth.is_none() {
                 config.config_layer_stack.mcp_ema_cancellation().cancel();
             }
+            if !matches!(scope, RuntimeConfigRefresh::UserFiles) {
+                let cancellation = config
+                    .config_layer_stack
+                    .mcp_ema_cancellation()
+                    .refreshed(next_config.config_layer_stack.mcp_ema_cancellation());
+                let config = Arc::make_mut(&mut config);
+                config.config_layer_stack = config
+                    .config_layer_stack
+                    .clone()
+                    .with_mcp_ema_cancellation(cancellation);
+            }
             state.session_configuration.original_config_do_not_use = Arc::clone(&config);
             drop(policy_guard);
             if matches!(scope, RuntimeConfigRefresh::Mcp) {
@@ -174,6 +187,13 @@ impl Session {
                 .then(|| self.build_effective_session_config(&state.session_configuration));
             (previous_config, new_config)
         };
+        if config
+            .config_layer_stack
+            .mcp_ema_cancellation()
+            .is_cancelled()
+        {
+            self.services.mcp_runtime.quiesce_ema().await;
+        }
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.schedule_mcp_prewarm();
         self.refresh_hooks(config).await;

@@ -46,7 +46,7 @@ async fn reload_mcp_config_with_policy(
     config_manager: &ConfigManager,
     policy: ReloadPolicy,
 ) -> io::Result<()> {
-    config_manager.revoke_mcp_ema();
+    config_manager.revoke_mcp_ema_startups();
     let mut rejected = false;
     let mut load_error = None;
     let mut completed: Vec<Arc<CodexThread>> = Vec::new();
@@ -416,6 +416,14 @@ enabled = false
                 .mcp_ema_cancellation()
                 .is_cancelled()
         );
+        // Prediction forks inherit a published config and may outlive their parent.
+        let parent = thread_manager
+            .start_thread(codex_core::StartThreadOptions::new(pending_startup.clone()))
+            .await?;
+        let (inherited_fork, _) = thread_manager
+            .fork_options_from_parent(parent.thread_id)
+            .await?;
+        thread_manager.remove_thread(&parent.thread_id).await;
         std::fs::write(
             temp_dir.path().join(codex_config::CONFIG_TOML_FILE),
             r#"
@@ -427,6 +435,17 @@ enabled = false
 
         reload_mcp_config(&thread_manager, &config_manager).await?;
 
+        let fork = thread_manager.start_thread(inherited_fork).await?;
+        assert!(
+            fork.thread
+                .config()
+                .await
+                .config_layer_stack
+                .mcp_ema_cancellation()
+                .is_cancelled()
+        );
+        fork.thread.shutdown_and_wait().await?;
+        parent.thread.shutdown_and_wait().await?;
         assert!(
             pending_startup
                 .config_layer_stack

@@ -1,5 +1,6 @@
-//! Dedicated enterprise grants and one thread's EMA authorization lifetime.
-//! Account credentials identify the owner; only the separate keyring grant is exchanged.
+//! One thread's EMA authorization lifetime and guarded HTTP dispatch.
+//! Account and delivered-policy changes cancel the same owner and its admitted requests.
+//! Credential selection and recovery belong to each connection's token source.
 
 use std::sync::Arc;
 
@@ -7,7 +8,6 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
-use codex_config::CloudConfigBundleBindingStatus;
 use codex_config::McpEmaAuthScope;
 use codex_config::McpEmaRegistration;
 use codex_config::McpServerIdpOAuthConfig;
@@ -51,6 +51,12 @@ use crate::rmcp_client::StartupOutcomeError;
 
 pub(crate) type EmaAuthContext = Result<Arc<EmaAuth>, StartupOutcomeError>;
 
+#[derive(Clone)]
+pub(crate) struct EmaConnectionAuth {
+    pub(crate) owner: Arc<EmaAuth>,
+    pub(crate) authority: EmaRequestAuthority,
+}
+
 pub fn ema_auth_scope(auth: Option<&CodexAuth>) -> Option<McpEmaAuthScope> {
     let auth = auth?;
     McpEmaAuthScope::new(auth.get_chatgpt_user_id()?, auth.get_account_id()?)
@@ -58,11 +64,11 @@ pub fn ema_auth_scope(auth: Option<&CodexAuth>) -> Option<McpEmaAuthScope> {
 
 /// Retained by the thread across MCP refreshes; a revoked owner cannot be replaced.
 pub(crate) struct EmaAuth {
-    scope: McpEmaAuthScope,
-    config: Arc<McpConfig>,
-    manager: Arc<AuthManager>,
-    account: CodexAuth,
-    authority: EmaRequestAuthority,
+    pub(crate) scope: McpEmaAuthScope,
+    pub(crate) config: Arc<McpConfig>,
+    pub(crate) manager: Arc<AuthManager>,
+    pub(crate) account: CodexAuth,
+    pub(crate) authority: EmaRequestAuthority,
     _revocation: AbortOnDropHandle<()>,
 }
 
@@ -84,24 +90,23 @@ impl EmaAuth {
         }
         let cancellation = config.mcp_ema_cancellation.clone();
         let policy = config.config_layer_stack.cloud_config_binding().cloned();
-        let authority = EmaRequestAuthority::new(cancellation.clone(), {
+        let authority = EmaRequestAuthority::new(cancellation.token(), {
+            let cancellation = cancellation.clone();
             let changes = changes.clone();
-            let policy = policy.clone();
             move || {
-                changes.borrow().login_generation == login_generation
-                    && policy.as_ref().is_none_or(|binding| {
-                        binding.read().status == CloudConfigBundleBindingStatus::Current
-                    })
+                !cancellation.is_cancelled()
+                    && changes.borrow().login_generation == login_generation
             }
-        });
-        authority.check()?;
+        })
+        .with_policy(policy.clone());
+        authority.check_new_request()?;
         let revocation = tokio::spawn(async move {
             tokio::select! {
                 biased;
                 () = cancellation.cancelled() => {}
                 () = async {
                     match policy {
-                        Some(binding) => binding.invalidated().await,
+                        Some(policy) => policy.invalidated().await,
                         None => std::future::pending().await,
                     }
                 } => {}
@@ -142,12 +147,13 @@ impl EmaAuth {
 
     pub(crate) async fn connect(
         self: &Arc<Self>,
+        authority: EmaRequestAuthority,
         server_name: &str,
         server: &EffectiveMcpServer,
         http_client: Arc<dyn HttpClient>,
         protocol_mode: McpProtocolMode,
     ) -> Result<RmcpClient> {
-        self.check_account().await?;
+        self.authority.check()?;
         let config = server.config();
         config
             .validate_ema_auth_transport()
@@ -176,8 +182,8 @@ impl EmaAuth {
         .await?;
         let exchange_client: Arc<dyn HttpClient> = Arc::new(EnterpriseExchangeHttpClient {
             inner: Arc::clone(&http_client),
-            authority: self.authority.clone(),
-            cancellation: self.config.mcp_ema_cancellation.clone(),
+            authority: authority.clone(),
+            cancellation: self.config.mcp_ema_cancellation.token(),
         });
         let url = registration.server_url().to_owned();
         let source = EnterpriseTokenSource {
@@ -192,7 +198,7 @@ impl EmaAuth {
             http_client,
             source,
             token,
-            self.authority.clone(),
+            authority,
         ));
         RmcpClient::new_streamable_http_client_with_protocol_mode_and_redirect_mode(
             server_name,
@@ -258,7 +264,7 @@ impl HttpClient for EnterpriseExchangeHttpClient {
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<HttpRequestResponse, ExecServerError>> {
         Box::pin(async move {
-            self.authority.check()?;
+            self.authority.check_new_request()?;
             tokio::select! {
                 biased;
                 () = self.cancellation.cancelled() => Err(ExecServerError::HttpRequest("enterprise MCP authorization was revoked".into())),
@@ -275,7 +281,7 @@ impl HttpClient for EnterpriseExchangeHttpClient {
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>> {
         Box::pin(async move {
-            self.authority.check()?;
+            self.authority.check_new_request()?;
             tokio::select! {
                 biased;
                 () = self.cancellation.cancelled() => Err(ExecServerError::HttpRequest("enterprise MCP authorization was revoked".into())),

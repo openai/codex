@@ -90,7 +90,7 @@ pub(crate) fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         requires_read_only_mcp_tools: false,
         codex_home,
         mcp_enterprise_managed_auth: None,
-        mcp_ema_cancellation: tokio_util::sync::CancellationToken::new(),
+        mcp_ema_cancellation: codex_config::McpEmaCancellation::default(),
         xaa_enabled: false,
         mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode::default(),
         oauth_refresh_mode: McpOAuthRefreshMode::Legacy,

@@ -1408,7 +1408,7 @@ impl ThreadManager {
     /// as `Arc<CodexThread>`, it is possible that other references to it exist elsewhere.
     /// Returns the thread if the thread was found and removed.
     pub async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.state.threads.write().await.remove(thread_id)
+        self.state.remove_thread(thread_id).await
     }
 
     /// Removes a runtime for a client request, leaving internal workers with their owner.
@@ -1426,7 +1426,9 @@ impl ThreadManager {
                 "live internal threads can only be removed by their owner".to_owned(),
             ));
         }
-        Ok(threads.remove(thread_id))
+        Ok(threads.remove(thread_id).inspect(|thread| {
+            thread.session.services.mcp_runtime.revoke_ema();
+        }))
     }
 
     /// Removes a thread only if `thread_id` still maps to `expected`.
@@ -1443,7 +1445,9 @@ impl ThreadManager {
             .get(thread_id)
             .is_some_and(|thread| Arc::ptr_eq(thread, expected))
         {
-            threads.remove(thread_id)
+            threads.remove(thread_id).inspect(|thread| {
+                thread.session.services.mcp_runtime.revoke_ema();
+            })
         } else {
             None
         }
@@ -1485,7 +1489,9 @@ impl ThreadManager {
 
         let mut tracked_threads = self.state.threads.write().await;
         for thread_id in &report.completed {
-            tracked_threads.remove(thread_id);
+            if let Some(thread) = tracked_threads.remove(thread_id) {
+                thread.session.services.mcp_runtime.revoke_ema();
+            }
         }
 
         report
@@ -1850,7 +1856,13 @@ impl ThreadManagerState {
 
     /// Remove a thread from the manager by ID, returning it when present.
     pub(crate) async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.threads.write().await.remove(thread_id)
+        self.threads
+            .write()
+            .await
+            .remove(thread_id)
+            .inspect(|thread| {
+                thread.session.services.mcp_runtime.revoke_ema();
+            })
     }
 
     pub(crate) async fn effective_multi_agent_version_for_spawn(
@@ -2094,6 +2106,17 @@ impl ThreadManagerState {
 
     /// Spawn a new thread with optional history and register it with the manager.
     async fn spawn_thread(&self, mut request: ThreadSpawnRequest) -> CodexResult<NewThread> {
+        let cancellation = request
+            .options
+            .config
+            .config_layer_stack
+            .mcp_ema_cancellation()
+            .for_startup();
+        request.options.config.config_layer_stack = request
+            .options
+            .config
+            .config_layer_stack
+            .with_mcp_ema_cancellation(cancellation);
         let runtime = request.agent_control.runtime().clone();
         let membership = runtime.admit_start()?;
         let owns_startup = request.startup.is_none();
@@ -2241,6 +2264,7 @@ impl ThreadManagerState {
                     });
                 }
                 threads.remove(&resumed.conversation_id);
+                thread.session.services.mcp_runtime.revoke_ema();
             }
         }
         let agent_control = match (&self.agent_control_factory, agent_control) {
@@ -2511,6 +2535,12 @@ impl ThreadManagerState {
             }
         };
 
+        let ema_cancellation = session
+            .get_config()
+            .await
+            .config_layer_stack
+            .mcp_ema_cancellation()
+            .clone();
         {
             let mut threads = self.threads.write().await;
             if let std::collections::hash_map::Entry::Vacant(e) = threads.entry(thread_id) {
@@ -2520,6 +2550,7 @@ impl ThreadManagerState {
                         .agent_control
                         .propagate_config_update(update);
                 }
+                ema_cancellation.publish();
                 let thread = Arc::new(CodexThread::new(
                     session,
                     io,

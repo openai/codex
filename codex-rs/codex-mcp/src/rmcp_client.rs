@@ -297,7 +297,7 @@ fn codex_apps_reconnect_backoff(consecutive_failures: u32) -> Duration {
 
 #[derive(Clone)]
 struct ManagedClientStartup {
-    ema_auth: Option<crate::ema_auth::EmaAuthContext>,
+    ema_auth: Option<Result<crate::ema_auth::EmaConnectionAuth, StartupOutcomeError>>,
     originator: AuthStorageOriginator,
     server_name: String,
     server: EffectiveMcpServer,
@@ -447,6 +447,7 @@ impl ManagedClientStartup {
 
 #[derive(Clone)]
 pub(crate) struct AsyncManagedClient {
+    pub(crate) ema_authority: Option<codex_rmcp_client::EmaRequestAuthority>,
     pub(crate) client: ManagedClientFuture,
     pub(crate) is_codex_apps_mcp_server: bool,
     pub(crate) cached_server_info: Option<McpServerInfo>,
@@ -498,6 +499,18 @@ impl AsyncManagedClient {
         };
         let startup_complete = Arc::new(AtomicBool::new(false));
         let server_capabilities = Arc::new(StdMutex::new(None));
+        let ema_auth = ema_auth
+            .filter(|_| matches!(server.config().auth, McpServerAuth::EmaAuth))
+            .map(|auth| {
+                auth.map(|owner| crate::ema_auth::EmaConnectionAuth {
+                    authority: owner.authority.child(),
+                    owner,
+                })
+            });
+        let ema_authority = ema_auth
+            .as_ref()
+            .and_then(|auth| auth.as_ref().ok())
+            .map(|auth| auth.authority.clone());
         let startup = Arc::new(ManagedClientStartup {
             ema_auth,
             originator: AuthStorageOriginator::current(),
@@ -536,6 +549,7 @@ impl AsyncManagedClient {
         });
         Self {
             client,
+            ema_authority,
             is_codex_apps_mcp_server,
             cached_server_info,
             server_capabilities,
@@ -1241,7 +1255,7 @@ struct StartServerTaskParams {
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace", skip_all, fields(server_name = %server_name))]
 pub(crate) async fn make_rmcp_client(
-    ema_auth: Option<crate::ema_auth::EmaAuthContext>,
+    ema_auth: Option<Result<crate::ema_auth::EmaConnectionAuth, StartupOutcomeError>>,
     server_name: &str,
     server: EffectiveMcpServer,
     store_mode: OAuthCredentialsStoreMode,
@@ -1277,7 +1291,9 @@ pub(crate) async fn make_rmcp_client(
             ))
         })??;
         return auth
+            .owner
             .connect(
+                auth.authority,
                 server_name,
                 &server,
                 runtime_context.local_http_client(),

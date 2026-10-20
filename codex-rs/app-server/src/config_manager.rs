@@ -57,7 +57,13 @@ pub(crate) struct ConfigManager {
     network_policy_reload: Arc<tokio::sync::Semaphore>,
     network_policy_snapshot: Arc<RwLock<Option<Arc<ApplicationPolicySnapshot>>>>,
     /// Captured before config loading so a reload also revokes pending startups.
-    mcp_ema_cancellation: Arc<Mutex<CancellationToken>>,
+    mcp_ema_cancellation: Arc<Mutex<EmaCancellationRoots>>,
+}
+
+#[derive(Default)]
+struct EmaCancellationRoots {
+    startup: CancellationToken,
+    lifetime: CancellationToken,
 }
 
 /// Startup configuration, including whether loading had to fall back to defaults.
@@ -117,22 +123,33 @@ impl ConfigManager {
         self.codex_home.as_path()
     }
 
-    /// Retires EMA access for every config already loaded or being loaded.
-    /// New loads resolve their own settings under the next cancellation scope.
+    /// Explicit account, policy-owner, and enterprise-login changes revoke cached access.
     pub(crate) fn revoke_mcp_ema(&self) {
         let mut current = self
             .mcp_ema_cancellation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        current.cancel();
-        *current = CancellationToken::new();
+        current.startup.cancel();
+        current.lifetime.cancel();
+        *current = EmaCancellationRoots::default();
     }
 
-    fn capture_mcp_ema_cancellation(&self) -> CancellationToken {
-        self.mcp_ema_cancellation
+    /// Published threads are validated individually by the existing refresh loop.
+    pub(crate) fn revoke_mcp_ema_startups(&self) {
+        let mut current = self
+            .mcp_ema_cancellation
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .child_token()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        current.startup.cancel();
+        current.startup = CancellationToken::new();
+    }
+
+    fn capture_mcp_ema_cancellation(&self) -> codex_config::McpEmaCancellation {
+        let current = self
+            .mcp_ema_cancellation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        codex_config::McpEmaCancellation::pending(current.startup.clone(), current.lifetime.clone())
     }
 
     pub(crate) fn with_embedded_network_policy(
