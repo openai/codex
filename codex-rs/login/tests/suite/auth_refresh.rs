@@ -4,7 +4,9 @@ use base64::Engine;
 use chrono::Duration;
 use chrono::Utc;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_http_client::DestinationPolicy;
 use codex_http_client::HttpClientFactory;
+use codex_http_client::NetworkPolicyController;
 use codex_http_client::OutboundProxyPolicy;
 use codex_http_client::cache_system_proxy_route_for_test;
 use codex_login::AuthDotJson;
@@ -28,6 +30,10 @@ use std::ffi::OsString;
 use std::net::TcpListener;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::task::Wake;
+use std::task::Waker;
 use std::time::Duration as StdDuration;
 use tempfile::TempDir;
 use wiremock::Mock;
@@ -200,7 +206,19 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
         .mount(&server)
         .await;
 
-    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let mut ctx = RefreshTokenTestContext::new(&server).await?;
+    let policy_controller = NetworkPolicyController::default();
+    ctx.auth_manager = AuthManager::shared(
+        ctx.codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        codex_login::test_support::transport_default_auth_route_config()
+            .with_application_network_policy(policy_controller.policy()),
+    )
+    .await;
     // Exercise the recorded issuer instead of the test endpoint override.
     // SAFETY: auth_env serializes these tests; ctx restores the environment on drop.
     unsafe {
@@ -209,6 +227,12 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
     let initial_last_refresh = Utc::now() - Duration::days(1);
     let mut initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
     initial_tokens.login_owner_id = Some("completed-login".into());
+    initial_tokens.id_token = codex_login::token_data::parse_chatgpt_jwt_claims(
+        &jwt_with_payload(json!({
+            "sub": "user-123",
+            "https://api.openai.com/auth": { "chatgpt_user_id": "user-123", "chatgpt_account_id": "account-id" }
+        })),
+    )?;
     initial_tokens.oauth_provenance = Some(AccountOAuthProvenance {
         issuer: server.uri(),
         client_id: "recorded-client".into(),
@@ -225,10 +249,56 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
     };
     ctx.write_auth(&initial_auth).await?;
 
-    ctx.auth_manager
-        .refresh_token_from_authority()
+    let changes = ctx.auth_manager.auth_change_state_receiver();
+    let before = *changes.borrow();
+    let lease = ctx
+        .auth_manager
+        .lease_account_oauth_grant()
+        .await?
+        .context("eligible account")?;
+    assert_eq!(lease.tokens(), &initial_tokens);
+    let refresh = ctx.auth_manager.refresh_token_from_authority();
+    tokio::pin!(refresh);
+    struct RefreshWake(AtomicBool);
+    impl Wake for RefreshWake {
+        fn wake(self: Arc<Self>) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let refresh_wake = Arc::new(RefreshWake(AtomicBool::new(false)));
+    let waker = Waker::from(Arc::clone(&refresh_wake));
+    // Register the refresh waiter so lease release must wake it, not just return Pending.
+    assert!(
+        refresh
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(&waker))
+            .is_pending()
+    );
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+    // No await between clearing the flag and release: this wake must come from the lease.
+    refresh_wake.0.store(false, Ordering::SeqCst);
+    let grant = lease.release();
+    assert!(
+        refresh_wake.0.load(Ordering::SeqCst),
+        "releasing the account grant must wake the blocked refresh"
+    );
+    assert!(grant.check_current().await?);
+    refresh
         .await
-        .context("refresh should succeed")?;
+        .context("refresh should succeed once the IdP lease is released")?;
+    assert!(
+        !grant.check_current().await?,
+        "the old credential was rotated"
+    );
+    let after = *changes.borrow();
+    assert_eq!(after.owner_generation, before.owner_generation);
+    assert_eq!(after.login_generation, before.login_generation);
 
     let requests = server.received_requests().await.unwrap_or_default();
     assert_eq!(
@@ -267,6 +337,83 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
         .get_token_data()
         .context("token data should be cached")?;
     assert_eq!(cached, refreshed_tokens);
+
+    let lease = ctx
+        .auth_manager
+        .lease_account_oauth_grant()
+        .await?
+        .context("rotated account grant")?;
+    assert_eq!(lease.tokens(), &refreshed_tokens);
+    let grant = lease.release();
+    let mut replacement = stored.clone();
+    replacement
+        .tokens
+        .as_mut()
+        .context("replacement tokens")?
+        .login_owner_id = Some("new-login-same-account".into());
+    // A persisted replacement is visible even before the ordinary auth cache reloads.
+    save_auth(
+        ctx.codex_home.path(),
+        &replacement,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    assert!(!grant.check_current().await?);
+    ctx.auth_manager.reload().await;
+    let after = *changes.borrow();
+    assert_eq!(after.owner_generation, before.owner_generation + 1);
+    assert_eq!(after.login_generation, before.login_generation + 1);
+    let lease = ctx
+        .auth_manager
+        .lease_account_oauth_grant()
+        .await?
+        .context("new login grant")?;
+    let grant = lease.release();
+    let before = *changes.borrow();
+    let policy = ctx.auth_manager.application_network_policy();
+    assert!(policy_controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
+    let policy = policy.for_current_account();
+    let endpoint = server.uri().parse()?;
+    assert!(policy.acquire(&endpoint).is_ok());
+    // Older clients drop unknown login metadata when saving a same-account refresh.
+    let mut legacy = replacement.clone();
+    let tokens = legacy.tokens.as_mut().context("legacy tokens")?;
+    tokens.login_owner_id = None;
+    tokens.oauth_provenance = None;
+    ctx.write_auth(&legacy).await?;
+    let after = *changes.borrow();
+    assert_eq!(after.owner_generation, before.owner_generation);
+    assert!(policy.acquire(&endpoint).is_ok());
+    assert_eq!(after.login_generation, before.login_generation + 1);
+    assert!(!grant.check_current().await?);
+    assert!(
+        ctx.auth_manager
+            .lease_account_oauth_grant()
+            .await?
+            .is_none()
+    );
+
+    // Restoring identical credentials must not revive the old EMA grant.
+    ctx.write_auth(&replacement).await?;
+    assert_eq!(
+        changes.borrow().login_generation,
+        before.login_generation + 2
+    );
+    assert!(!grant.check_current().await?);
+    let lease = ctx
+        .auth_manager
+        .lease_account_oauth_grant()
+        .await?
+        .context("restored login grant")?;
+    // Logout must complete even while an IdP exchange holds the refresh lease.
+    ctx.auth_manager.logout().await?;
+    assert!(!lease.release().check_current().await?);
+    assert!(
+        ctx.auth_manager
+            .lease_account_oauth_grant()
+            .await?
+            .is_none()
+    );
 
     server.verify().await;
     Ok(())

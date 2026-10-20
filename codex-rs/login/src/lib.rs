@@ -32,6 +32,8 @@ pub use success_page::CODEX_OPEN_APP_URL;
 pub use success_page::LoginSuccessPage;
 pub use success_page::LoginSuccessPageBrand;
 
+pub use auth::AccountOAuthGrant;
+pub use auth::AccountOAuthGrantLease;
 pub use auth::AgentIdentityAuthPolicy;
 pub use auth::AuthChangeState;
 pub use auth::AuthConfig;

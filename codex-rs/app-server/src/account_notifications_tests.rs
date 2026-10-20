@@ -51,6 +51,7 @@ async fn queued_notifications_follow_auth_owner_changes(owner_generation: u64) {
             generation: 2,
             owner_generation,
             source_generation: owner_generation,
+            login_generation: owner_generation,
         });
         rx.recv().await.unwrap();
         send.await;

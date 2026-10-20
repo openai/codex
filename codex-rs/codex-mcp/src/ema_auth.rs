@@ -73,10 +73,10 @@ impl EmaAuth {
         let scope = ema_auth_scope(auth).ok_or(EmaAuthFailure::ReauthenticationRequired)?;
         let manager = auth_manager.context("enterprise MCP requires an account owner")?;
         let mut changes = manager.auth_change_state_receiver();
-        let owner_generation = changes.borrow().owner_generation;
+        let login_generation = changes.borrow().login_generation;
         // Never hold the watch guard while reading cached auth: writers take the auth lock first.
         if ema_auth_scope(manager.auth_cached().as_ref()).as_ref() != Some(&scope)
-            || changes.borrow().owner_generation != owner_generation
+            || changes.borrow().login_generation != login_generation
         {
             bail!(EmaAuthFailure::ReauthenticationRequired);
         }
@@ -86,7 +86,7 @@ impl EmaAuth {
             let changes = changes.clone();
             let policy = policy.clone();
             move || {
-                changes.borrow().owner_generation == owner_generation
+                changes.borrow().login_generation == login_generation
                     && policy.as_ref().is_none_or(|binding| {
                         binding.read().status == CloudConfigBundleBindingStatus::Current
                     })
@@ -105,7 +105,7 @@ impl EmaAuth {
                 } => {}
                 () = async {
                     while changes.changed().await.is_ok() {
-                        if changes.borrow().owner_generation != owner_generation {
+                        if changes.borrow().login_generation != login_generation {
                             break;
                         }
                     }

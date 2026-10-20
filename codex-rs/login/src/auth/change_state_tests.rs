@@ -59,6 +59,7 @@ fn auth_owner_generation_distinguishes_refreshes_from_identity_changes() {
                 generation,
                 owner_generation,
                 source_generation: generation,
+                login_generation: owner_generation,
             },
         );
         assert_eq!(*legacy_changes.borrow_and_update(), generation);
@@ -81,6 +82,7 @@ async fn auth_owner_generation_preserves_logout_and_switches_when_coalesced() {
             generation: 2,
             owner_generation: 2,
             source_generation: 2,
+            login_generation: 2,
         },
     );
 
@@ -92,6 +94,7 @@ async fn auth_owner_generation_preserves_logout_and_switches_when_coalesced() {
             generation: 4,
             owner_generation: 4,
             source_generation: 4,
+            login_generation: 4,
         },
     );
 }
