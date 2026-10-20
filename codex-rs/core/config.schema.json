@@ -1162,6 +1162,9 @@
             "rollout_budget": {
               "$ref": "#/definitions/FeatureToml_for_RolloutBudgetConfigToml"
             },
+            "runtime_agent_instances": {
+              "$ref": "#/definitions/FeatureToml_for_RuntimeAgentInstancesConfigToml"
+            },
             "runtime_metrics": {
               "type": "boolean"
             },
@@ -1716,6 +1719,16 @@
         },
         {
           "$ref": "#/definitions/RolloutBudgetConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_RuntimeAgentInstancesConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/RuntimeAgentInstancesConfigToml"
         }
       ]
     },
@@ -4273,6 +4286,36 @@
         }
       },
       "type": "object"
+    },
+    "RuntimeAgentInstancesConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "$ref": "#/definitions/RuntimeAuthMode"
+        }
+      },
+      "type": "object"
+    },
+    "RuntimeAuthMode": {
+      "oneOf": [
+        {
+          "description": "Send the actor credential and a runtime assertion together during migration.",
+          "enum": [
+            "dual_header"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Send only the runtime assertion as the request credential.",
+          "enum": [
+            "assertion_only"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "SandboxMode": {
       "enum": [
@@ -7573,6 +7616,9 @@
         },
         "rollout_budget": {
           "$ref": "#/definitions/FeatureToml_for_RolloutBudgetConfigToml"
+        },
+        "runtime_agent_instances": {
+          "$ref": "#/definitions/FeatureToml_for_RuntimeAgentInstancesConfigToml"
         },
         "runtime_metrics": {
           "type": "boolean"

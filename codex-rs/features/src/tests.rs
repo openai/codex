@@ -30,6 +30,28 @@ fn sleep_tool_config_rejects_unknown_mode() {
 }
 
 #[test]
+fn runtime_auth_config_accepts_modes_without_implicitly_enabling_the_feature() {
+    for mode in ["dual_header", "assertion_only"] {
+        let config: FeaturesToml =
+            toml::from_str(&format!("[runtime_agent_instances]\nmode = '{mode}'")).unwrap();
+        let mut features = Features::with_defaults();
+        features.apply_toml(&config);
+        assert!(!features.enabled(Feature::RuntimeAgentInstances));
+
+        let config: FeaturesToml = toml::from_str(&format!(
+            "[runtime_agent_instances]\nenabled = true\nmode = '{mode}'"
+        ))
+        .unwrap();
+        features.apply_toml(&config);
+        assert!(features.enabled(Feature::RuntimeAgentInstances));
+    }
+    assert!(
+        toml::from_str::<FeaturesToml>("[runtime_agent_instances]\nmode = 'credential_only'")
+            .is_err()
+    );
+}
+
+#[test]
 fn under_development_features_are_disabled_by_default() {
     for spec in crate::FEATURES {
         // Instant interrupts are enabled by default while retaining their development stage.

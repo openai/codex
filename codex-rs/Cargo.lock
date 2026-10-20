@@ -4581,6 +4581,8 @@ version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "codex-agent-identity",
+ "codex-api",
+ "codex-features",
  "codex-http-client",
  "codex-login",
  "codex-utils-redacted-string",

@@ -1,8 +1,12 @@
 //! Exercise shared bootstrap against HTTP and the existing external credential-provider boundary.
 
 use super::*;
+use crate::RuntimeAuthProvider;
 use crate::RuntimeRole;
 use base64::Engine;
+use codex_api::AuthError;
+use codex_api::AuthProvider;
+use codex_features::RuntimeAuthMode;
 use codex_http_client::DestinationPolicy;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::NetworkPolicyController;
@@ -13,6 +17,10 @@ use codex_login::AuthRouteConfig;
 use codex_login::ExternalAuth;
 use codex_login::ExternalAuthFuture;
 use codex_login::ExternalAuthRefreshContext;
+use http::HeaderMap;
+use http::HeaderValue;
+use http::Method;
+use http::header::AUTHORIZATION;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -177,7 +185,7 @@ async fn policy_recovery_preserves_pending_registration() {
         .await
         .unwrap();
     assert!(controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
-    let manager = RuntimeAuthManager::new(
+    let manager = Arc::new(RuntimeAuthManager::new(
         credentials,
         AgentHostAuthorization::InstallationId {
             installation_id: Uuid::nil(),
@@ -188,25 +196,24 @@ async fn policy_recovery_preserves_pending_registration() {
             role: RuntimeRole::OrchestratorAndExecutor,
         },
         format!("{}/agent/register", server.uri()).parse().unwrap(),
-    );
+    ));
+    let provider = RuntimeAuthProvider::new(manager.clone(), RuntimeAuthMode::DualHeader);
     assert!(matches!(
-        manager.auth().await,
-        Err(RuntimeAuthError::Registration(
-            RegistrationError::Rejected {
-                status: StatusCode::SERVICE_UNAVAILABLE,
-                ..
-            }
-        ))
+        provider.resolve_auth_headers().await,
+        Err(AuthError::Transient(_))
     ));
 
     policy.invalidate();
     assert!(matches!(
-        manager.auth().await,
-        Err(RuntimeAuthError::Policy(NetworkPolicyDenied::Unavailable))
+        provider.resolve_auth_headers().await,
+        Err(AuthError::Policy(NetworkPolicyDenied::Unavailable))
     ));
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
 
     assert!(controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
+    let headers = provider.resolve_auth_headers().await.unwrap();
+    assert_eq!(headers["authorization"], "Bearer key-a");
+    assert!(headers.contains_key("x-openai-agent-assertion"));
     let selected = manager.auth().await.unwrap();
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 2);
@@ -320,4 +327,129 @@ async fn a_late_registration_cannot_publish_the_previous_actor() {
         requests[0].headers["idempotency-key"],
         requests[1].headers["idempotency-key"]
     );
+}
+
+#[tokio::test]
+async fn request_auth_replaces_stale_headers_and_signs_each_attempt() {
+    for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
+        for initial in [
+            CodexAuth::from_api_key("key-a"),
+            oauth(Some("login-a"), "token-a"),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(registered)
+                .mount(&server)
+                .await;
+            let (manager, _, _) = setup(&server, initial.clone(), initial.clone()).await;
+            let provider = RuntimeAuthProvider::new(manager.clone(), mode);
+            let mut previous_assertion = None;
+            for _ in 0..2 {
+                let mut request = codex_http_client::Request::new(
+                    Method::POST,
+                    format!("{}/responses", server.uri()),
+                );
+                for name in [
+                    "authorization",
+                    "x-openai-agent-assertion",
+                    "chatgpt-account-id",
+                    "x-openai-fedramp",
+                ] {
+                    request
+                        .headers
+                        .insert(name, HeaderValue::from_static("stale"));
+                }
+                request
+                    .headers
+                    .insert("openai-project", HeaderValue::from_static("project-a"));
+                let mut headers = provider.apply_auth(request).await.unwrap().headers;
+                let mut expected = HeaderMap::new();
+                expected.insert("openai-project", HeaderValue::from_static("project-a"));
+                if initial.is_chatgpt_auth() {
+                    expected.insert(
+                        "chatgpt-account-id",
+                        HeaderValue::from_static("workspace-a"),
+                    );
+                }
+                let assertion = match mode {
+                    RuntimeAuthMode::DualHeader => {
+                        let bearer = headers.remove(AUTHORIZATION).unwrap();
+                        assert!(bearer.is_sensitive());
+                        assert_eq!(bearer, format!("Bearer {}", initial.get_token().unwrap()));
+                        headers.remove("x-openai-agent-assertion").unwrap()
+                    }
+                    RuntimeAuthMode::AssertionOnly => headers.remove(AUTHORIZATION).unwrap(),
+                };
+                assert!(assertion.is_sensitive());
+                assert_eq!(headers, expected);
+                assert_ne!(previous_assertion.as_ref(), Some(&assertion));
+                let assertion_text = assertion.to_str().unwrap();
+                let assertion_text = match mode {
+                    RuntimeAuthMode::DualHeader => assertion_text,
+                    RuntimeAuthMode::AssertionOnly => {
+                        assertion_text.strip_prefix("AgentAssertion ").unwrap()
+                    }
+                };
+                let segments: Vec<_> = assertion_text.split('.').collect();
+                let claims: Value = serde_json::from_slice(
+                    &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .decode(segments[2])
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    claims["runtime_agent_instance"],
+                    manager.auth().await.unwrap().runtime().id()
+                );
+                previous_assertion = Some(assertion);
+            }
+            assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn header_auth_uses_refreshed_credentials_without_replacing_the_runtime() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(registered)
+        .mount(&server)
+        .await;
+    let initial = oauth(Some("login-a"), "old");
+    let (manager, source, _) = setup(&server, initial.clone(), initial).await;
+    let provider = RuntimeAuthProvider::new(manager.clone(), RuntimeAuthMode::DualHeader);
+    let first = provider.resolve_auth_headers().await.unwrap();
+    let runtime = manager.auth().await.unwrap();
+    let refreshed = oauth(Some("login-a"), "new");
+    *source.current.write().unwrap() = refreshed.clone();
+    let next = provider.resolve_auth_headers().await.unwrap();
+    assert_eq!(
+        next[AUTHORIZATION],
+        format!("Bearer {}", refreshed.get_token().unwrap())
+    );
+    assert_ne!(first[AUTHORIZATION], next[AUTHORIZATION]);
+    assert!(Arc::ptr_eq(
+        runtime.runtime(),
+        manager.auth().await.unwrap().runtime()
+    ));
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn registration_failure_never_returns_credential_only_auth() {
+    for status in [403, 404, 429, 503] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(status))
+            .mount(&server)
+            .await;
+        let initial = CodexAuth::from_api_key("key-a");
+        let (manager, _, _) = setup(&server, initial.clone(), initial).await;
+        let provider = RuntimeAuthProvider::new(manager, RuntimeAuthMode::DualHeader);
+        let error = provider.resolve_auth_headers().await.unwrap_err();
+        assert_eq!(
+            matches!(error, AuthError::Transient(_)),
+            status == 429 || status == 503
+        );
+    }
 }

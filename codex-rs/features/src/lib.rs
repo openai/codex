@@ -16,6 +16,7 @@ use toml::Table;
 
 mod feature_configs;
 mod legacy;
+mod runtime_auth;
 pub use feature_configs::AsyncCompactionConfigToml;
 pub use feature_configs::CodeModeConfigToml;
 pub use feature_configs::CodeModeHostConfigToml;
@@ -42,6 +43,8 @@ pub use feature_configs::TokenBudgetConfigToml;
 pub use feature_configs::ToolRegistryConfigToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
+pub use runtime_auth::RuntimeAgentInstancesConfigToml;
+pub use runtime_auth::RuntimeAuthMode;
 
 /// High-level lifecycle stage for a feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -442,6 +445,8 @@ pub enum Feature {
     RetainClientToolOutputs,
     /// Use Agent Identity for ChatGPT-authenticated sessions.
     UseAgentIdentity,
+    /// Register an ephemeral runtime for OpenAI request authentication.
+    RuntimeAgentInstances,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
 
@@ -904,6 +909,8 @@ pub struct FeaturesToml {
     pub current_time_reminder: Option<FeatureToml<CurrentTimeReminderConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sleep_tool: Option<FeatureToml<SleepToolConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_agent_instances: Option<FeatureToml<RuntimeAgentInstancesConfigToml>>,
     #[serde(default, rename = "apps_mcp_path_override", skip_serializing)]
     #[schemars(skip)]
     removed_apps_mcp_path_override: Option<FeatureToml<RemovedAppsMcpPathOverrideConfigToml>>,
@@ -979,6 +986,13 @@ impl FeaturesToml {
         }
         if let Some(enabled) = self.sleep_tool.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::SleepTool.key().to_string(), enabled);
+        }
+        if let Some(enabled) = self
+            .runtime_agent_instances
+            .as_ref()
+            .and_then(FeatureToml::enabled)
+        {
+            entries.insert(Feature::RuntimeAgentInstances.key().to_string(), enabled);
         }
         entries
     }
@@ -2129,6 +2143,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::UseAgentIdentity,
         key: "use_agent_identity",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RuntimeAgentInstances,
+        key: "runtime_agent_instances",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
