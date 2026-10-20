@@ -79,7 +79,8 @@ pub const THREAD_SKILLS_TRUNCATED_METRIC: &str = "codex.thread.skills.truncated"
 pub const THREAD_TOOLS_NAMESPACES_TOTAL_METRIC: &str = "codex.thread.tools.namespaces_total";
 pub const THREAD_TOOLS_FRAGMENT_BYTES_METRIC: &str = "codex.thread.tools.fragment_bytes";
 
-/// Finalized tool registrations per sampling request, tagged by exposure and tool_mode.
+/// Finalized tool registrations per sampling request, tagged by exposure, tool_mode,
+/// and effective incremental_tools mode.
 pub const TOOL_REGISTRATIONS_METRIC: &str = "codex.tools.registered";
 pub const TOOL_REGISTRATIONS_METRIC_BUCKETS: &[f64] = &[
     0.0, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 50.0, 75.0, 100.0, 150.0, 200.0, 300.0, 500.0, 750.0,

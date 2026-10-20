@@ -8,6 +8,7 @@ use codex_features::Feature;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
 use codex_otel::TOOL_INCREMENTAL_UPDATES_METRIC;
+use codex_otel::TOOL_REGISTRATIONS_METRIC;
 use codex_otel::TOOL_SPEC_DESCRIPTION_BYTES_METRIC;
 use codex_protocol::openai_models::CodeModeToolMessages;
 use codex_protocol::openai_models::IncrementalToolMessages;
@@ -255,10 +256,26 @@ async fn incremental_tools_append_changed_catalog_without_rewriting_history(
     let requests = mock.requests();
     assert_eq!(requests.len(), if use_responses_lite { 6 } else { 4 });
     let snapshot = metrics.snapshot()?;
+    let mut registration_samples = 0;
     let mut counts = BTreeMap::<_, u64>::new();
     let mut bytes = BTreeMap::new();
     for metric in snapshot.scope_metrics().flat_map(ScopeMetrics::metrics) {
         match metric.name() {
+            TOOL_REGISTRATIONS_METRIC => {
+                let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data() else {
+                    panic!("tool registrations must be a histogram");
+                };
+                for point in histogram.data_points() {
+                    registration_samples += point.count();
+                    assert_eq!(
+                        point
+                            .attributes()
+                            .find(|tag| tag.key.as_str() == "incremental_tools")
+                            .map(|tag| tag.value.to_string()),
+                        Some(use_responses_lite.to_string())
+                    );
+                }
+            }
             TOOL_INCREMENTAL_UPDATES_METRIC => {
                 let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
                     panic!("tool updates must be a counter");
@@ -292,6 +309,11 @@ async fn incremental_tools_append_changed_catalog_without_rewriting_history(
             _ => {}
         }
     }
+    // Six exposure samples per sampling request, excluding compaction.
+    assert_eq!(
+        registration_samples,
+        6 * if use_responses_lite { 5 } else { 4 }
+    );
     if use_responses_lite {
         let body = requests[2].body_json();
         let exec = body["input"]

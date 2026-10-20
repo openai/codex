@@ -64,6 +64,11 @@ async fn sampling_records_tool_registrations_once_across_stream_retry() -> Resul
             model.experimental_supported_tools.clear();
         })
         .with_config(|config| {
+            // The feature flag alone cannot enable incremental tools on Responses API.
+            config
+                .features
+                .enable(Feature::IncrementalTools)
+                .expect("enable incremental tools");
             // Keep request_user_input as the only model-only registration.
             for feature in [
                 Feature::Collab,
@@ -166,6 +171,7 @@ async fn sampling_records_tool_registrations_once_across_stream_retry() -> Resul
                 .collect::<BTreeMap<_, _>>();
             assert_eq!(attributes.get("model").map(String::as_str), Some(MODEL));
             assert_eq!(attributes["tool_mode"], "direct");
+            assert_eq!(attributes["incremental_tools"], "false");
             assert!(
                 attributes.keys().all(|key| matches!(
                     *key,
@@ -177,6 +183,7 @@ async fn sampling_records_tool_registrations_once_across_stream_retry() -> Resul
                         | "app.version"
                         | "exposure"
                         | "tool_mode"
+                        | "incremental_tools"
                 )),
                 "registration telemetry must not label tool names or descriptions"
             );
