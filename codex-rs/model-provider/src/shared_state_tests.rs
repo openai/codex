@@ -131,10 +131,10 @@ async fn gateway_credentials_accompany_primary_auth_in_models_and_responses() {
             HeaderValue::from_static(value),
         );
         // WebSocket handshakes use the synchronous header interface.
-        assert_eq!(auth.to_auth_headers(), expected);
+        assert_eq!(auth.to_auth_headers().unwrap(), expected);
         assert_eq!(auth.resolve_auth_headers().await.unwrap(), expected);
-        assert_eq!(scoped.auth.to_auth_headers(), expected);
-        assert!(auth.to_auth_headers()[name].is_sensitive());
+        assert_eq!(scoped.auth.to_auth_headers().unwrap(), expected);
+        assert!(auth.to_auth_headers().unwrap()[name].is_sensitive());
         let api = info.to_api_provider(/*auth_mode*/ None).unwrap();
         let transport = ReqwestTransport::from_http_client(
             create_client_for_route(
@@ -219,7 +219,7 @@ async fn gateway_refresh_preserves_primary_auth_and_hides_issuer_errors() {
         let result = provider.api_auth().await;
         if succeeds {
             assert_eq!(
-                result.unwrap().to_auth_headers(),
+                result.unwrap().to_auth_headers().unwrap(),
                 HeaderMap::from_iter([
                     (
                         http::header::AUTHORIZATION,
@@ -407,7 +407,8 @@ async fn models_observe_gateway_rotation(instance: ProviderInstance) {
             .api_auth()
             .await
             .unwrap()
-            .to_auth_headers(),
+            .to_auth_headers()
+            .unwrap(),
         HeaderMap::from_iter([
             (
                 http::header::AUTHORIZATION,
@@ -442,7 +443,8 @@ async fn models_observe_gateway_rotation(instance: ProviderInstance) {
             .api_auth()
             .await
             .unwrap()
-            .to_auth_headers(),
+            .to_auth_headers()
+            .unwrap(),
         HeaderMap::from_iter([
             (
                 http::header::AUTHORIZATION,

@@ -46,6 +46,8 @@ pub struct UploadedOpenAiFile {
 pub enum OpenAiFileError {
     #[error("failed to open OpenAI file upload contents: {0}")]
     ReadContents(#[source] std::io::Error),
+    #[error(transparent)]
+    Auth(#[from] crate::AuthError),
     #[error(
         "file `{file_name}` is too large: {size_bytes} bytes exceeds the limit of {limit_bytes} bytes"
     )]
@@ -152,7 +154,7 @@ where
         "file_size": file_size_bytes,
         "use_case": OPENAI_FILE_USE_CASE,
     });
-    let request = authorized_request(client_pool, auth, Method::POST, &create_url);
+    let request = authorized_request(client_pool, auth, Method::POST, &create_url)?;
     let create_request = match hosted_upload {
         Some(context) => serde_json::json!({
             "file_name": file_name.as_str(),
@@ -363,7 +365,7 @@ where
     };
     let finalize_started_at = Instant::now();
     loop {
-        let finalize_response = authorized_request(client_pool, auth, Method::POST, &finalize_url)
+        let finalize_response = authorized_request(client_pool, auth, Method::POST, &finalize_url)?
             .json(&finalize_request)
             .send()
             .await
@@ -435,14 +437,14 @@ fn authorized_request(
     auth: &dyn AuthProvider,
     method: Method,
     url: &str,
-) -> RequestBuilder {
+) -> Result<RequestBuilder, OpenAiFileError> {
     let mut headers = http::HeaderMap::new();
-    auth.add_auth_headers(&mut headers);
+    auth.add_auth_headers(&mut headers)?;
 
-    client_pool
+    Ok(client_pool
         .request(method, url)
         .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
-        .headers(headers)
+        .headers(headers))
 }
 
 fn upload_response_header(response: &HttpResponse, header: &str) -> String {
@@ -511,12 +513,13 @@ mod tests {
     }
 
     impl AuthProvider for ChatGptTestAuth {
-        fn add_auth_headers(&self, headers: &mut http::HeaderMap) {
+        fn add_auth_headers(&self, headers: &mut http::HeaderMap) -> Result<(), crate::AuthError> {
             headers.insert(
                 http::header::AUTHORIZATION,
                 HeaderValue::from_static("Bearer token"),
             );
             headers.insert("ChatGPT-Account-ID", HeaderValue::from_static("account_id"));
+            Ok(())
         }
     }
 

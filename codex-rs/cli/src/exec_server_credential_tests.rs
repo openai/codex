@@ -43,7 +43,7 @@ async fn waits_for_initial_rotation_replaces_token_and_eof_clears_auth() {
         Err(CredentialError::InitialTimeout)
     );
     assert!(provider.resolve_auth_headers().await.is_err());
-    assert!(provider.to_auth_headers().is_empty());
+    assert!(provider.to_auth_headers().is_err());
     writer
         .write_all(&frame("env-a", "first-scoped-token", expires))
         .expect("write");

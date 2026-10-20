@@ -96,7 +96,7 @@ impl Client {
         }
         let request = self
             .request(Method::GET, url.as_str())
-            .headers(self.headers());
+            .headers(self.headers()?);
         let (body, _) = self
             .exec_request_detailed(request, "GET", url.as_str())
             .await?;

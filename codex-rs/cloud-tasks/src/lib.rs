@@ -206,7 +206,7 @@ async fn resolve_environment_id(ctx: &BackendContext, requested: &str) -> anyhow
         return Err(anyhow!("environment id must not be empty"));
     }
     let normalized = util::normalize_base_url(&ctx.base_url);
-    let headers = util::build_chatgpt_headers().await;
+    let headers = util::build_chatgpt_headers().await?;
     let environments =
         crate::env_detect::list_environments(&ctx.environment_http, &normalized, &headers).await?;
     if environments.is_empty() {
@@ -870,7 +870,13 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
         tokio::spawn(async move {
             let base_url = util::normalize_base_url(&base_url);
             // Build headers: UA + ChatGPT auth if available
-            let headers = util::build_chatgpt_headers().await;
+            let headers = match util::build_chatgpt_headers().await {
+                Ok(headers) => headers,
+                Err(error) => {
+                    let _ = tx.send(app::AppEvent::EnvironmentAutodetected(Err(error)));
+                    return;
+                }
+            };
 
             // Run autodetect. If it fails, we keep using "All".
             let res = crate::env_detect::autodetect_environment_id(
@@ -2030,8 +2036,10 @@ fn spawn_environment_load(
 ) {
     tokio::spawn(async move {
         let base_url = util::normalize_base_url(&base_url);
-        let headers = util::build_chatgpt_headers().await;
-        let result = crate::env_detect::list_environments(&http, &base_url, &headers).await;
+        let result = match util::build_chatgpt_headers().await {
+            Ok(headers) => crate::env_detect::list_environments(&http, &base_url, &headers).await,
+            Err(error) => Err(error),
+        };
         let _ = tx.send(app::AppEvent::EnvironmentsLoaded(result));
     });
 }

@@ -103,7 +103,7 @@ impl Client {
         }
         let request = self
             .request(Method::POST, &url)
-            .headers(self.headers())
+            .headers(self.headers()?)
             .json(&Query { threads });
         let (body, _) = self.exec_request_detailed(request, "POST", &url).await?;
         let response: TaskUsageResponse = serde_json::from_str(&body)

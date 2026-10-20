@@ -72,7 +72,9 @@ pub(super) struct RemoteControlConnectionAuth {
 impl RemoteControlConnectionAuth {
     pub(super) fn request_headers(&self) -> io::Result<HeaderMap> {
         let mut headers = HeaderMap::new();
-        self.auth_provider.add_auth_headers(&mut headers);
+        self.auth_provider
+            .add_auth_headers(&mut headers)
+            .map_err(io::Error::other)?;
         headers.insert(
             REMOTE_CONTROL_ACCOUNT_ID_HEADER,
             HeaderValue::from_str(&self.account_id).map_err(|err| {
@@ -239,7 +241,7 @@ mod tests {
     }
 
     impl AuthProvider for TestAuthProvider {
-        fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), codex_api::AuthError> {
             headers.insert(
                 axum::http::header::AUTHORIZATION,
                 HeaderValue::from_static("Bearer test-token"),
@@ -248,6 +250,7 @@ mod tests {
             for account_id in &self.account_ids {
                 headers.append("ChatGPT-Account-ID", HeaderValue::from_static(account_id));
             }
+            Ok(())
         }
     }
 

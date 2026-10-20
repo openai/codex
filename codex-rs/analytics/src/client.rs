@@ -1054,6 +1054,13 @@ async fn send_track_events_request(
         #[cfg(debug_assertions)]
         AnalyticsEventsDestination::CaptureFile { .. } => return,
     };
+    let headers = match codex_model_provider::auth_provider_from_auth(auth).to_auth_headers() {
+        Ok(headers) => headers,
+        Err(error) => {
+            tracing::warn!("failed to authenticate events request: {error}");
+            return;
+        }
+    };
     let client = match codex_login::default_client::create_client_for_route_async(
         http_client_factory.clone(),
         url.clone(),
@@ -1071,7 +1078,7 @@ async fn send_track_events_request(
     let mut request = client
         .post(url)
         .timeout(ANALYTICS_EVENTS_TIMEOUT)
-        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers())
+        .headers(headers)
         .header("Content-Type", "application/json")
         .json(&payload);
     if let Some(product_sku) = product_sku {

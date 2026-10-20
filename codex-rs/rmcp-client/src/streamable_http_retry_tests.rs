@@ -29,7 +29,7 @@ fn retryable_initialize_error_includes_discovery_and_initialized_notification_co
 }
 
 #[test]
-fn retryable_streamable_http_error_includes_remote_body_stream_failure() {
+fn streamable_http_retry_classifies_transport_and_auth_errors() {
     let errors = [
         StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
             ExecServerError::HttpRequest("error sending request for url".to_string()),
@@ -53,11 +53,20 @@ fn retryable_streamable_http_error_includes_remote_body_stream_failure() {
         )),
         StreamableHttpError::UnexpectedServerResponse("HTTP 502: upstream failure".into()),
         StreamableHttpError::UnexpectedServerResponse("HTTP 400: bad request".into()),
+        StreamableHttpError::Client(StreamableHttpClientAdapterError::Auth(
+            codex_api::AuthError::Transient("credential refresh unavailable".to_string()),
+        )),
+        StreamableHttpError::Client(StreamableHttpClientAdapterError::Auth(
+            codex_api::AuthError::Build("invalid authentication".to_string()),
+        )),
+        StreamableHttpError::Client(StreamableHttpClientAdapterError::Auth(
+            codex_api::AuthError::Policy(codex_http_client::NetworkPolicyDenied::Revoked),
+        )),
     ];
 
     assert_eq!(
         errors.map(|error| RmcpClient::is_retryable_streamable_http_error(&error)),
-        [true, true, true, false, true, false],
+        [true, true, true, false, true, false, true, false, false],
     );
 }
 

@@ -77,11 +77,12 @@ const SESSION_ALREADY_ATTACHED_ERROR_CODE: i64 = -32010;
 struct DirectExecutorAuth;
 
 impl AuthProvider for DirectExecutorAuth {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), codex_api::AuthError> {
         headers.insert(
             http::header::AUTHORIZATION,
             HeaderValue::from_static("AWS4-HMAC-SHA256 test-signature"),
         );
+        Ok(())
     }
 }
 

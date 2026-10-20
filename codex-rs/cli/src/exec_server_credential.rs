@@ -16,7 +16,6 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use codex_api::AuthError;
-use codex_api::AuthHeadersFuture;
 use codex_api::AuthProvider;
 use http::HeaderMap;
 use http::HeaderValue;
@@ -107,26 +106,20 @@ impl ExecutorCredentialProvider {
 }
 
 impl AuthProvider for ExecutorCredentialProvider {
-    // Only the fallible API can prevent an unauthenticated registry request.
-    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
-
-    fn resolve_auth_headers(&self) -> AuthHeadersFuture<'_> {
-        Box::pin(async {
-            let token = self
-                .current
-                .borrow()
-                .header()
-                .map_err(|error| AuthError::Build(error.to_string()))?;
-            let token = token
-                .to_str()
-                .map_err(|_| AuthError::Build(CredentialError::InvalidFrame.to_string()))?;
-            let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
-                .map_err(|_| AuthError::Build(CredentialError::InvalidFrame.to_string()))?;
-            authorization.set_sensitive(true);
-            let mut headers = HeaderMap::new();
-            headers.insert(AUTHORIZATION, authorization);
-            Ok(headers)
-        })
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), AuthError> {
+        let token = self
+            .current
+            .borrow()
+            .header()
+            .map_err(|error| AuthError::Build(error.to_string()))?;
+        let token = token
+            .to_str()
+            .map_err(|_| AuthError::Build(CredentialError::InvalidFrame.to_string()))?;
+        let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|_| AuthError::Build(CredentialError::InvalidFrame.to_string()))?;
+        authorization.set_sensitive(true);
+        headers.insert(AUTHORIZATION, authorization);
+        Ok(())
     }
 }
 

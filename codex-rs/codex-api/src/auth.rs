@@ -1,5 +1,6 @@
 use codex_client::Request;
 use codex_client::TransportError;
+use codex_http_client::NetworkPolicyDenied;
 use http::HeaderMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -8,6 +9,8 @@ use std::sync::Arc;
 /// Error returned while applying authentication to an outbound request.
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
+    #[error(transparent)]
+    Policy(#[from] NetworkPolicyDenied),
     #[error("request auth build error: {0}")]
     Build(String),
     #[error("transient auth error: {0}")]
@@ -17,6 +20,7 @@ pub enum AuthError {
 impl From<AuthError> for TransportError {
     fn from(error: AuthError) -> Self {
         match error {
+            AuthError::Policy(denied) => TransportError::Policy(denied),
             AuthError::Build(message) => TransportError::Build(message),
             AuthError::Transient(message) => TransportError::Network(message),
         }
@@ -31,14 +35,16 @@ pub trait AuthProvider: Send + Sync {
     /// Adds any auth headers that are available without request body access.
     ///
     /// Implementations should be cheap and non-blocking. This method is also
-    /// used by telemetry and non-HTTP request paths.
-    fn add_auth_headers(&self, headers: &mut HeaderMap);
+    /// used by telemetry and non-HTTP request paths. Providers that require async
+    /// work must return an error here and override `resolve_auth_headers`.
+    /// Callers must not send the request if this returns an error.
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), AuthError>;
 
     /// Returns any auth headers that are available without request body access.
-    fn to_auth_headers(&self) -> HeaderMap {
+    fn to_auth_headers(&self) -> Result<HeaderMap, AuthError> {
         let mut headers = HeaderMap::new();
-        self.add_auth_headers(&mut headers);
-        headers
+        self.add_auth_headers(&mut headers)?;
+        Ok(headers)
     }
 
     /// Resolves auth headers for an outbound request.
@@ -47,7 +53,7 @@ pub trait AuthProvider: Send + Sync {
     /// credentials before returning. Header-only providers with static credentials can rely on the
     /// default implementation.
     fn resolve_auth_headers(&self) -> AuthHeadersFuture<'_> {
-        Box::pin(async { Ok(self.to_auth_headers()) })
+        Box::pin(async { self.to_auth_headers() })
     }
 
     /// Applies auth to a complete outbound request and returns the request to send.
@@ -91,14 +97,14 @@ pub struct AuthHeaderTelemetry {
     pub name: Option<&'static str>,
 }
 
-pub fn auth_header_telemetry(auth: &dyn AuthProvider) -> AuthHeaderTelemetry {
+pub fn auth_header_telemetry(auth: &dyn AuthProvider) -> Result<AuthHeaderTelemetry, AuthError> {
     let mut headers = HeaderMap::new();
-    auth.add_auth_headers(&mut headers);
+    auth.add_auth_headers(&mut headers)?;
     let name = headers
         .contains_key(http::header::AUTHORIZATION)
         .then_some("authorization");
-    AuthHeaderTelemetry {
+    Ok(AuthHeaderTelemetry {
         attached: name.is_some(),
         name,
-    }
+    })
 }

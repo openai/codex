@@ -93,7 +93,7 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
     let mut request = client
         .get(&url)
         .headers(default_headers())
-        .headers(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers())
+        .headers(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers()?)
         .header(OAI_PRODUCT_SKU_HEADER, CODEX_PRODUCT_SKU)
         .header("Content-Type", "application/json");
     if let Some(timeout) = timeout {
@@ -147,7 +147,7 @@ pub(crate) async fn chatgpt_post_request_with_timeout<
     let response = client
         .post(&url)
         .headers(default_headers())
-        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers())
+        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers()?)
         .header(OAI_PRODUCT_SKU_HEADER, product_sku)
         .header("Content-Type", "application/json")
         .timeout(timeout)

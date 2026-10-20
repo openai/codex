@@ -105,7 +105,9 @@ impl HttpTransport for RecordingTransport {
 struct NoAuth;
 
 impl AuthProvider for NoAuth {
-    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) -> Result<(), AuthError> {
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -124,7 +126,7 @@ impl StaticAuth {
 }
 
 impl AuthProvider for StaticAuth {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), AuthError> {
         let token = &self.token;
         if let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}")) {
             headers.insert(http::header::AUTHORIZATION, header);
@@ -132,6 +134,7 @@ impl AuthProvider for StaticAuth {
         if let Ok(header) = HeaderValue::from_str(&self.account_id) {
             headers.insert("ChatGPT-Account-ID", header);
         }
+        Ok(())
     }
 }
 
@@ -199,19 +202,10 @@ struct FailsOnceAuth {
 }
 
 impl FailsOnceAuth {
-    fn transient() -> Self {
+    fn new(error: AuthError) -> Self {
         Self {
             attempts: Arc::new(Mutex::new(0)),
-            error: Arc::new(AuthError::Transient(
-                "sts temporarily unavailable".to_string(),
-            )),
-        }
-    }
-
-    fn build() -> Self {
-        Self {
-            attempts: Arc::new(Mutex::new(0)),
-            error: Arc::new(AuthError::Build("invalid auth configuration".to_string())),
+            error: Arc::new(error),
         }
     }
 
@@ -231,6 +225,7 @@ impl FailsOnceAuth {
 
         if *attempts == 1 {
             return match self.error.as_ref() {
+                AuthError::Policy(denied) => Err(AuthError::Policy(*denied)),
                 AuthError::Build(message) => Err(AuthError::Build(message.clone())),
                 AuthError::Transient(message) => Err(AuthError::Transient(message.clone())),
             };
@@ -241,7 +236,9 @@ impl FailsOnceAuth {
 }
 
 impl AuthProvider for FailsOnceAuth {
-    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) -> Result<(), AuthError> {
+        Ok(())
+    }
 
     fn apply_auth(&self, request: Request) -> codex_api::AuthProviderFuture<'_> {
         Box::pin(FailsOnceAuth::apply_auth(self, request))
@@ -545,7 +542,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
 async fn streaming_client_retries_on_transient_auth_error() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
-    let auth = FailsOnceAuth::transient();
+    let auth = FailsOnceAuth::new(AuthError::Transient("sts temporarily unavailable".into()));
 
     let mut provider = provider("openai");
     provider.retry.max_attempts = 2;
@@ -567,36 +564,39 @@ async fn streaming_client_retries_on_transient_auth_error() -> Result<()> {
 }
 
 #[tokio::test]
-async fn streaming_client_does_not_retry_auth_build_error() -> Result<()> {
-    let state = RecordingState::default();
-    let transport = RecordingTransport::new(state.clone());
-    let auth = FailsOnceAuth::build();
-
-    let mut provider = provider("openai");
-    provider.retry.max_attempts = 2;
-
-    let client = ResponsesClient::new(transport, provider, Arc::new(auth.clone()));
-    let body = serde_json::json!({ "model": "gpt-test" });
-    let result = client
-        .stream(
-            body,
-            HeaderMap::new(),
-            Compression::None,
-            /*turn_state*/ None,
-        )
-        .await;
-    let err = result
-        .err()
-        .expect("auth build errors should fail without retry");
-
-    assert!(matches!(
-        err,
-        ApiError::Transport(TransportError::Build(message))
-            if message == "invalid auth configuration"
-    ));
-    assert_eq!(auth.attempts(), 1);
-    assert_eq!(state.take_stream_requests().len(), 0);
-    Ok(())
+async fn streaming_client_does_not_retry_terminal_auth_errors() {
+    for error in [
+        AuthError::Build("invalid auth configuration".into()),
+        AuthError::Policy(codex_http_client::NetworkPolicyDenied::Revoked),
+    ] {
+        let state = RecordingState::default();
+        let transport = RecordingTransport::new(state.clone());
+        let auth = FailsOnceAuth::new(error);
+        let mut provider = provider("openai");
+        provider.retry.max_attempts = 2;
+        let client = ResponsesClient::new(transport, provider, Arc::new(auth.clone()));
+        let error = client
+            .stream(
+                serde_json::json!({ "model": "gpt-test" }),
+                HeaderMap::new(),
+                Compression::None,
+                /*turn_state*/ None,
+            )
+            .await
+            .err()
+            .expect("terminal auth errors must fail without retry");
+        match (error, auth.error.as_ref()) {
+            (ApiError::Transport(TransportError::Build(actual)), AuthError::Build(expected)) => {
+                assert_eq!(&actual, expected);
+            }
+            (ApiError::Transport(TransportError::Policy(actual)), AuthError::Policy(expected)) => {
+                assert_eq!(&actual, expected);
+            }
+            (actual, expected) => panic!("expected {expected:?}, got {actual:?}"),
+        }
+        assert_eq!(auth.attempts(), 1);
+        assert!(state.take_stream_requests().is_empty());
+    }
 }
 
 #[tokio::test]
@@ -686,5 +686,86 @@ async fn azure_store_sends_ids_and_headers() -> Result<()> {
         .and_then(|id| id.as_str());
     assert_eq!(input_id, Some("msg_1"));
 
+    Ok(())
+}
+
+struct RejectedHeaderAuth;
+
+impl AuthProvider for RejectedHeaderAuth {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), AuthError> {
+        headers.insert(
+            http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer partial-auth"),
+        );
+        Err(AuthError::Build("header authentication failed".to_string()))
+    }
+}
+
+#[tokio::test]
+async fn header_auth_error_prevents_sending_partial_authentication() {
+    let state = RecordingState::default();
+    let client = ResponsesClient::new(
+        RecordingTransport::new(state.clone()),
+        provider("openai"),
+        Arc::new(RejectedHeaderAuth),
+    );
+    let result = client
+        .stream(
+            serde_json::json!({"echo": true}),
+            HeaderMap::new(),
+            Compression::None,
+            /*turn_state*/ None,
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(ApiError::Transport(TransportError::Build(_)))
+    ));
+    assert!(state.take_stream_requests().is_empty());
+}
+
+struct AsyncHeaderAuth;
+
+impl AuthProvider for AsyncHeaderAuth {
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) -> Result<(), codex_api::AuthError> {
+        Err(codex_api::AuthError::Build(
+            "authentication requires async header resolution".to_string(),
+        ))
+    }
+
+    fn resolve_auth_headers(&self) -> codex_api::AuthHeadersFuture<'_> {
+        Box::pin(async {
+            Ok(HeaderMap::from_iter([(
+                http::header::AUTHORIZATION,
+                HeaderValue::from_static("Bearer async-auth"),
+            )]))
+        })
+    }
+}
+
+#[tokio::test]
+async fn async_auth_provider_rejects_sync_resolution_and_authenticates_requests() -> Result<()> {
+    assert!(AsyncHeaderAuth.to_auth_headers().is_err());
+    let state = RecordingState::default();
+    let client = ResponsesClient::new(
+        RecordingTransport::new(state.clone()),
+        provider("openai"),
+        Arc::new(AsyncHeaderAuth),
+    );
+    let _stream = client
+        .stream(
+            serde_json::json!({"echo": true}),
+            HeaderMap::new(),
+            Compression::None,
+            /*turn_state*/ None,
+        )
+        .await?;
+    let requests = state.take_stream_requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].headers.get(http::header::AUTHORIZATION),
+        Some(&HeaderValue::from_static("Bearer async-auth"))
+    );
     Ok(())
 }

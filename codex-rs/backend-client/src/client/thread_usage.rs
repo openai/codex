@@ -82,7 +82,7 @@ impl Client {
         let url = self.thread_usage_url();
         let request = self
             .request(Method::POST, &url)
-            .headers(self.headers())
+            .headers(self.headers()?)
             .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
             .json(&ThreadUsageQueryRequest { thread_ids });
         let (body, _) = self.exec_request_detailed(request, "POST", &url).await?;

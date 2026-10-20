@@ -117,7 +117,11 @@ pub(crate) fn prefetch(
                     "{}/wham/security-setup",
                     config.chatgpt_base_url.trim_end_matches('/')
                 ))
-                .headers(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers())
+                .headers(
+                    codex_model_provider::auth_provider_from_auth(&auth)
+                        .to_auth_headers()
+                        .ok()?,
+                )
                 .header(
                     "User-Agent",
                     codex_login::default_client::get_codex_user_agent(),

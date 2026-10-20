@@ -266,14 +266,14 @@ impl Client {
         self
     }
 
-    fn headers(&self) -> HeaderMap {
+    fn headers(&self) -> Result<HeaderMap> {
         let mut h = HeaderMap::new();
         if let Some(ua) = &self.user_agent {
             h.insert(USER_AGENT, ua.clone());
         } else {
             h.insert(USER_AGENT, HeaderValue::from_static("codex-cli"));
         }
-        self.auth_provider.add_auth_headers(&mut h);
+        self.auth_provider.add_auth_headers(&mut h)?;
         if let Some(acc) = &self.chatgpt_account_id
             && let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id")
             && let Ok(hv) = HeaderValue::from_str(acc)
@@ -285,7 +285,7 @@ impl Client {
         {
             h.insert(name, HeaderValue::from_static("true"));
         }
-        h
+        Ok(h)
     }
 
     fn request(&self, method: Method, url: &str) -> RequestBuilder {
@@ -344,7 +344,7 @@ impl Client {
         &self,
         url: &str,
     ) -> std::result::Result<(String, String), RequestError> {
-        let request = self.request(Method::GET, url).headers(self.headers());
+        let request = self.request(Method::GET, url).headers(self.headers()?);
         if !self.http.allows_system_proxy_fallback() {
             return self.exec_request_detailed(request, "GET", url).await;
         }
@@ -371,7 +371,7 @@ impl Client {
             .http
             .clone()
             .with_outbound_proxy_policy(OutboundProxyPolicy::RespectSystemProxy);
-        let request = http.get(url).headers(self.headers());
+        let request = http.get(url).headers(self.headers()?);
         self.exec_request_detailed(request, "GET", url).await
     }
 
@@ -411,7 +411,7 @@ impl Client {
 
     pub async fn get_token_usage_profile(&self) -> Result<TokenUsageProfile> {
         let url = self.token_usage_profile_url();
-        let req = self.request(Method::GET, &url).headers(self.headers());
+        let req = self.request(Method::GET, &url).headers(self.headers()?);
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json(&url, &ct, &body)
     }
@@ -430,7 +430,7 @@ impl Client {
         let url = self.send_add_credits_nudge_email_url();
         let req = self
             .request(Method::POST, &url)
-            .headers(self.headers())
+            .headers(self.headers()?)
             .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
             .json(&SendAddCreditsNudgeEmailRequest { credit_type });
         self.exec_request_detailed(req, "POST", &url).await?;
@@ -445,7 +445,7 @@ impl Client {
         cursor: Option<&str>,
     ) -> Result<PaginatedListTaskListItem> {
         let url = self.list_tasks_url(limit, task_filter, environment_id, cursor)?;
-        let req = self.request(Method::GET, &url).headers(self.headers());
+        let req = self.request(Method::GET, &url).headers(self.headers()?);
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json::<PaginatedListTaskListItem>(&url, &ct, &body)
     }
@@ -497,7 +497,7 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/tasks/{}", self.base_url, task_id),
             PathStyle::ChatGptApi => format!("{}/wham/tasks/{}", self.base_url, task_id),
         };
-        let req = self.request(Method::GET, &url).headers(self.headers());
+        let req = self.request(Method::GET, &url).headers(self.headers()?);
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let parsed: CodeTaskDetailsResponse = self.decode_json(&url, &ct, &body)?;
         Ok((parsed, body, ct))
@@ -518,7 +518,7 @@ impl Client {
                 self.base_url, task_id, turn_id
             ),
         };
-        let req = self.request(Method::GET, &url).headers(self.headers());
+        let req = self.request(Method::GET, &url).headers(self.headers()?);
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json::<TurnAttemptsSiblingTurnsResponse>(&url, &ct, &body)
     }
@@ -554,7 +554,7 @@ impl Client {
         let url = self.user_settings_url();
         let req = self
             .request(Method::GET, &url)
-            .headers(self.headers())
+            .headers(self.headers()?)
             .header(
                 CACHE_CONTROL,
                 HeaderValue::from_static("no-cache, no-store"),
@@ -570,7 +570,7 @@ impl Client {
         let url = self.workspace_messages_url();
         let req = self
             .request(Method::GET, &url)
-            .headers(self.headers())
+            .headers(self.headers()?)
             .header(CACHE_CONTROL, HeaderValue::from_static("no-store"));
         let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
         self.decode_json::<CodexWorkspaceMessagesResponse>(&url, &ct, &body)
@@ -586,7 +586,7 @@ impl Client {
         };
         let req = self
             .request(Method::POST, &url)
-            .headers(self.headers())
+            .headers(self.headers()?)
             .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
             .json(&request_body);
         let (body, ct) = self.exec_request(req, "POST", &url).await?;
@@ -1255,7 +1255,7 @@ mod tests {
             &auth,
             HttpClientFactory::new(codex_http_client::OutboundProxyPolicy::ReqwestDefault),
         );
-        let headers = client.headers();
+        let headers = client.headers().unwrap();
 
         assert_eq!(
             [

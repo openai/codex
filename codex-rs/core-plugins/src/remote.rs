@@ -1043,7 +1043,7 @@ pub async fn fetch_recommended_plugins(
         config.http_request(Method::GET, &url),
         auth,
         &config.product_sku,
-    )
+    )?
     .timeout(RECOMMENDED_PLUGINS_TIMEOUT);
     let response: RecommendedPluginsResponse = send_and_decode(request, &url).await?;
     Ok(recommended_plugins_mode(response))
@@ -1415,7 +1415,7 @@ pub async fn fetch_remote_plugin_skill_detail(
         config.http_request(Method::GET, &url),
         auth,
         &config.product_sku,
-    );
+    )?;
     let response: RemotePluginSkillDetailResponse = send_and_decode(request, &url).await?;
     if response.plugin_id != plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
@@ -1626,7 +1626,7 @@ async fn install_remote_plugin_inner(
         config.http_request(Method::POST, &url),
         auth,
         &config.product_sku,
-    );
+    )?;
     let request = if let Some(install_attempt_id) = install_attempt_id {
         request.json(&RemotePluginInstallRequest { install_attempt_id })
     } else {
@@ -1723,7 +1723,7 @@ pub async fn uninstall_remote_plugin(
         config.http_request(Method::POST, &url),
         auth,
         &config.product_sku,
-    );
+    )?;
     let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;
     if response.id != remote_plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
@@ -2221,7 +2221,7 @@ async fn get_remote_plugin_list_page(
         config.http_request(Method::GET, &url),
         auth,
         &config.product_sku,
-    );
+    )?;
     send_and_decode(request, &url).await
 }
 
@@ -2243,7 +2243,7 @@ async fn get_remote_shared_workspace_plugins_page(
         config.http_request(Method::GET, &url),
         auth,
         &config.product_sku,
-    );
+    )?;
     send_and_decode(request, &url).await
 }
 
@@ -2279,7 +2279,7 @@ async fn get_remote_plugin_installed_page(
         config.http_request(Method::GET, &url),
         auth,
         &config.product_sku,
-    );
+    )?;
     send_and_decode(request, &url).await
 }
 
@@ -2318,7 +2318,7 @@ async fn fetch_plugin_detail_with_timeout(
         config.http_request(Method::GET, &url),
         auth,
         &config.product_sku,
-    )
+    )?
     .timeout(timeout);
     send_and_decode(request, &url).await
 }
@@ -2358,11 +2358,16 @@ fn authenticated_request(
     request: RequestBuilder,
     auth: &CodexAuth,
     product_sku: &str,
-) -> RequestBuilder {
-    request
+) -> Result<RequestBuilder, RemotePluginCatalogError> {
+    Ok(request
         .timeout(REMOTE_PLUGIN_CATALOG_TIMEOUT)
-        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers())
-        .header(OAI_PRODUCT_SKU_HEADER, product_sku)
+        .headers(
+            codex_model_provider::auth_provider_from_auth(auth)
+                .to_auth_headers()
+                .map_err(std::io::Error::other)
+                .map_err(RemotePluginCatalogError::AuthToken)?,
+        )
+        .header(OAI_PRODUCT_SKU_HEADER, product_sku))
 }
 
 async fn send_and_decode<T: for<'de> Deserialize<'de>>(

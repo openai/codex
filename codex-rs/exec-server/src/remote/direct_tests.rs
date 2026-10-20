@@ -39,11 +39,12 @@ use crate::RemoteEnvironmentTransport;
 struct StaticAuthProvider;
 
 impl AuthProvider for StaticAuthProvider {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), codex_api::AuthError> {
         headers.insert(
             http::header::AUTHORIZATION,
             HeaderValue::from_static("AWS4-HMAC-SHA256 test-signature"),
         );
+        Ok(())
     }
 
     fn apply_auth(
@@ -56,7 +57,7 @@ impl AuthProvider for StaticAuthProvider {
                 assert!(request.headers.contains_key(http::header::HOST));
                 assert!(request.url.starts_with("http"));
             }
-            self.add_auth_headers(&mut request.headers);
+            self.add_auth_headers(&mut request.headers)?;
             Ok(request)
         })
     }
@@ -159,7 +160,9 @@ async fn direct_environment_accepts_large_file_writes() -> Result<()> {
 }
 
 impl AuthProvider for QueryAuthProvider {
-    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) -> Result<(), codex_api::AuthError> {
+        Ok(())
+    }
 
     fn apply_auth(
         &self,
@@ -178,11 +181,12 @@ impl AuthProvider for QueryAuthProvider {
 struct ScopedExecutorAuth;
 
 impl AuthProvider for ScopedExecutorAuth {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), codex_api::AuthError> {
         headers.insert(
             http::header::AUTHORIZATION,
             HeaderValue::from_static("Bearer synthetic-scoped-token"),
         );
+        Ok(())
     }
 }
 

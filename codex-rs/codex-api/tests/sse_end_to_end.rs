@@ -53,7 +53,9 @@ impl HttpTransport for FixtureSseTransport {
 struct NoAuth;
 
 impl AuthProvider for NoAuth {
-    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) -> Result<(), codex_api::AuthError> {
+        Ok(())
+    }
 }
 
 fn provider(name: &str) -> Provider {

@@ -35,11 +35,12 @@ const HARNESS_KEY_AUTHORIZATION: &str = "authorization-that-must-not-leak";
 struct StaticRegistryAuthProvider;
 
 impl AuthProvider for StaticRegistryAuthProvider {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), codex_api::AuthError> {
         let _ = headers.insert(
             http::header::AUTHORIZATION,
             HeaderValue::from_static("Bearer registry-token"),
         );
+        Ok(())
     }
 }
 

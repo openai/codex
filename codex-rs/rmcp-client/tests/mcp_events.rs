@@ -1,6 +1,9 @@
 mod streamable_http_test_support;
 
 use std::convert::Infallible;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -11,8 +14,16 @@ use axum::response::IntoResponse;
 use axum::response::sse::Event;
 use axum::response::sse::Sse;
 use axum::routing::post;
+use codex_api::AuthError;
+use codex_api::AuthProvider;
+use codex_config::types::AuthKeyringBackendKind;
+use codex_config::types::OAuthCredentialsStoreMode;
+use codex_exec_server::Environment;
+use codex_rmcp_client::RmcpClient;
 use futures::StreamExt as _;
 use futures::stream;
+use http::HeaderMap;
+use http::HeaderValue;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -22,6 +33,27 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use streamable_http_test_support::create_client;
+use streamable_http_test_support::initialize_client;
+
+#[derive(Default)]
+struct RevocableAuth {
+    unavailable: AtomicBool,
+}
+
+impl AuthProvider for RevocableAuth {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), AuthError> {
+        if self.unavailable.load(Ordering::SeqCst) {
+            return Err(AuthError::Transient(
+                "authentication unavailable".to_string(),
+            ));
+        }
+        headers.insert(
+            http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer test-bearer"),
+        );
+        Ok(())
+    }
+}
 
 struct StreamClosed {
     event_name: String,
@@ -127,7 +159,20 @@ async fn plugin_runtime_event_streams_are_isolated_and_cancel_locally() -> anyho
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let base_url = format!("http://{}", listener.local_addr()?);
     let server = tokio::spawn(async move { axum::serve(listener, router).await });
-    let client = create_client(&base_url).await?;
+    let auth = Arc::new(RevocableAuth::default());
+    let client = RmcpClient::new_streamable_http_client(
+        "test-streamable-http",
+        &format!("{base_url}/mcp"),
+        /*bearer_token*/ None,
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+        Environment::default_for_tests().get_http_client(),
+        Some(auth.clone()),
+    )
+    .await?;
+    initialize_client(&client).await?;
 
     let mut first = client
         .send_event_stream_request(Some(json!({
@@ -174,6 +219,8 @@ async fn plugin_runtime_event_streams_are_isolated_and_cancel_locally() -> anyho
         .context("cancelled stream did not close")?;
     assert_eq!(closed, "github.pull_request.opened");
 
+    // Local cleanup must still work if authentication fails after the stream starts.
+    auth.unavailable.store(true, Ordering::SeqCst);
     second
         .handle
         .cancel(Some("event subscription closed".to_string()))

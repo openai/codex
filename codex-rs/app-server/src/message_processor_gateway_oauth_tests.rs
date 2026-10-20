@@ -103,7 +103,7 @@ delivery = {{ kind = "header", name = "X-Gateway-Authorization" }}
         Some(Arc::clone(&auth_manager)),
     );
     assert_eq!(
-        provider.api_auth().await?.to_auth_headers()["x-gateway-authorization"],
+        provider.api_auth().await?.to_auth_headers().unwrap()["x-gateway-authorization"],
         "Bearer old-access"
     );
     let (processor, mut outgoing) = build_test_processor(config, auth_manager).await;
@@ -182,7 +182,7 @@ delivery = {{ kind = "header", name = "X-Gateway-Authorization" }}
     );
     assert_eq!(observer.resolve_access_token().await?, "new-access");
     assert_eq!(
-        provider.api_auth().await?.to_auth_headers()["x-gateway-authorization"],
+        provider.api_auth().await?.to_auth_headers().unwrap()["x-gateway-authorization"],
         "Bearer new-access"
     );
     processor.shutdown_threads().await;

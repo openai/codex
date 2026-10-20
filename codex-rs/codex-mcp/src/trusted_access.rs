@@ -205,6 +205,7 @@ impl TrustedAccessContext {
 
         let headers = codex_model_provider::auth_provider_from_auth(&auth)
             .to_auth_headers()
+            .ok()?
             .iter()
             .map(|(name, value)| {
                 Some(HttpHeader {

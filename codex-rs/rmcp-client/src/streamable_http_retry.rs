@@ -152,6 +152,9 @@ impl RmcpClient {
         error: &StreamableHttpError<StreamableHttpClientAdapterError>,
     ) -> bool {
         match error {
+            StreamableHttpError::Client(StreamableHttpClientAdapterError::Auth(
+                codex_api::AuthError::Transient(_),
+            )) => true,
             StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
                 ExecServerError::HttpRequest(_),
             )) => true,
@@ -172,6 +175,9 @@ impl RmcpClient {
             | StreamableHttpError::UnexpectedContentType(_)
             | StreamableHttpError::ServerDoesNotSupportSse
             | StreamableHttpError::Deserialize(_)
+            | StreamableHttpError::Client(StreamableHttpClientAdapterError::Auth(
+                codex_api::AuthError::Build(_),
+            ))
             | StreamableHttpError::Client(StreamableHttpClientAdapterError::SessionExpired404)
             | StreamableHttpError::Client(StreamableHttpClientAdapterError::Header(_)) => false,
             _ => false,

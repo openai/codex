@@ -563,7 +563,7 @@ impl std::fmt::Debug for StaticBearerAuthProvider {
 }
 
 impl AuthProvider for StaticBearerAuthProvider {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), codex_api::AuthError> {
         headers.insert(http::header::AUTHORIZATION, self.authorization.clone());
         if let Some(chatgpt_account_id) = &self.chatgpt_account_id {
             headers.insert(
@@ -571,6 +571,7 @@ impl AuthProvider for StaticBearerAuthProvider {
                 chatgpt_account_id.clone(),
             );
         }
+        Ok(())
     }
 }
 
@@ -1133,7 +1134,9 @@ mod tests {
     struct StaticRegistryAuthProvider;
 
     impl AuthProvider for StaticRegistryAuthProvider {
-        fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+        fn add_auth_headers(&self, _headers: &mut HeaderMap) -> Result<(), codex_api::AuthError> {
+            Ok(())
+        }
 
         fn resolve_auth_headers(&self) -> codex_api::AuthHeadersFuture<'_> {
             Box::pin(async {
@@ -1158,11 +1161,12 @@ mod tests {
     struct ScopedExecutorAuth;
 
     impl AuthProvider for ScopedExecutorAuth {
-        fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), codex_api::AuthError> {
             headers.insert(
                 AUTHORIZATION,
                 HeaderValue::from_static("Bearer synthetic-scoped-token"),
             );
+            Ok(())
         }
     }
 
@@ -1171,8 +1175,12 @@ mod tests {
         struct InvalidExecutorAuth(HeaderMap);
 
         impl AuthProvider for InvalidExecutorAuth {
-            fn add_auth_headers(&self, headers: &mut HeaderMap) {
+            fn add_auth_headers(
+                &self,
+                headers: &mut HeaderMap,
+            ) -> Result<(), codex_api::AuthError> {
                 headers.extend(self.0.clone());
+                Ok(())
             }
         }
 
@@ -1433,11 +1441,15 @@ mod tests {
         const TOKEN: &str = "synthetic-scoped-registry-secret";
         struct ExecutorAuth;
         impl AuthProvider for ExecutorAuth {
-            fn add_auth_headers(&self, headers: &mut HeaderMap) {
+            fn add_auth_headers(
+                &self,
+                headers: &mut HeaderMap,
+            ) -> Result<(), codex_api::AuthError> {
                 let mut credential =
                     HeaderValue::from_str(&format!("Bearer {TOKEN}")).expect("bearer");
                 credential.set_sensitive(true);
                 headers.insert(AUTHORIZATION, credential);
+                Ok(())
             }
         }
         let encoded_echo = serde_json::json!({

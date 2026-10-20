@@ -43,7 +43,9 @@ struct RegistrationAuthProvider {
 }
 
 impl AuthProvider for RegistrationAuthProvider {
-    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) -> Result<(), codex_api::AuthError> {
+        Ok(())
+    }
 
     fn resolve_auth_headers(&self) -> codex_api::AuthHeadersFuture<'_> {
         self.calls.fetch_add(1, Ordering::Relaxed);

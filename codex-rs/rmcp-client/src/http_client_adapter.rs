@@ -102,6 +102,8 @@ impl Drop for EventStreamCancellation {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum StreamableHttpClientAdapterError {
+    #[error(transparent)]
+    Auth(#[from] codex_api::AuthError),
     #[error("streamable HTTP session expired with 404 Not Found")]
     SessionExpired404,
     #[error(transparent)]
@@ -148,11 +150,24 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        if let JsonRpcMessage::Notification(notification) = &message
+            && let ClientNotification::CancelledNotification(cancelled) = &notification.notification
+            && let Some(request_id) = cancelled.params.request_id.as_ref()
+            && let Some(cancellation) = self
+                .event_stream_cancellations
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(request_id)
+        {
+            let _ = cancellation.send(());
+            return Ok(StreamableHttpPostResponse::Accepted);
+        }
+
         let (mcp_method, mcp_request_id) = client_jsonrpc_message_fields(&message);
         let has_session_id = session_id.is_some();
         let mut headers = self.default_headers.clone();
         headers.extend(custom_headers);
-        self.add_auth_headers(&mut headers);
+        self.add_auth_headers(&mut headers)?;
         insert_header(
             &mut headers,
             ACCEPT,
@@ -223,18 +238,6 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         let request_span = crate::trace_context::request_span(&body);
         let body = serde_json::to_vec(&body).map_err(StreamableHttpError::Deserialize)?;
         let has_authorization_header = headers.contains_key(AUTHORIZATION);
-        if let JsonRpcMessage::Notification(notification) = &message
-            && let ClientNotification::CancelledNotification(cancelled) = &notification.notification
-            && let Some(request_id) = cancelled.params.request_id.as_ref()
-            && let Some(cancellation) = self
-                .event_stream_cancellations
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remove(request_id)
-        {
-            let _ = cancellation.send(());
-            return Ok(StreamableHttpPostResponse::Accepted);
-        }
 
         let request = self
             .http_client
@@ -461,7 +464,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
     ) -> std::result::Result<(), StreamableHttpError<Self::Error>> {
         let mut headers = self.default_headers.clone();
         headers.extend(custom_headers);
-        self.add_auth_headers(&mut headers);
+        self.add_auth_headers(&mut headers)?;
         if let Some(auth_token) = auth_token {
             insert_header(
                 &mut headers,
@@ -518,7 +521,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
     > {
         let mut headers = self.default_headers.clone();
         headers.extend(custom_headers);
-        self.add_auth_headers(&mut headers);
+        self.add_auth_headers(&mut headers)?;
         insert_header(
             &mut headers,
             ACCEPT,
@@ -603,10 +606,19 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
 }
 
 impl StreamableHttpClientAdapter {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+    fn add_auth_headers(
+        &self,
+        headers: &mut HeaderMap,
+    ) -> Result<(), StreamableHttpError<StreamableHttpClientAdapterError>> {
         if let Some(auth_provider) = &self.auth_provider {
-            headers.extend(auth_provider.to_auth_headers());
+            headers.extend(
+                auth_provider
+                    .to_auth_headers()
+                    .map_err(StreamableHttpClientAdapterError::from)
+                    .map_err(StreamableHttpError::Client)?,
+            );
         }
+        Ok(())
     }
 }
 

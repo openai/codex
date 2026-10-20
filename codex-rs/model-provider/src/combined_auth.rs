@@ -49,7 +49,12 @@ pub(crate) async fn compose_auth(
         ))
     })?;
     let (name, value) = gateway_header(config, &token)?;
-    if resolved.auth.to_auth_headers().contains_key(&name) {
+    if resolved
+        .auth
+        .to_auth_headers()
+        .map_err(|error| codex_api::map_api_error(error.into()))?
+        .contains_key(&name)
+    {
         return Err(CodexErr::InvalidRequest(
             "gateway OAuth conflicts with primary auth headers".into(),
         ));
@@ -99,11 +104,12 @@ struct CombinedAuth {
 }
 
 impl AuthProvider for CombinedAuth {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
-        self.primary.add_auth_headers(headers);
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> std::result::Result<(), AuthError> {
+        self.primary.add_auth_headers(headers)?;
         headers
             .entry(self.name.clone())
             .or_insert(self.value.clone());
+        Ok(())
     }
 
     fn resolve_auth_headers(&self) -> AuthHeadersFuture<'_> {

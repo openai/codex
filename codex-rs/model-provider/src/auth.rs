@@ -85,7 +85,7 @@ struct AgentIdentityAuthProvider {
 }
 
 impl AuthProvider for AgentIdentityAuthProvider {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), AuthError> {
         let record = self.auth.record();
         let header_value = authorization_header_for_agent_task(
             AgentIdentityKey {
@@ -109,6 +109,7 @@ impl AuthProvider for AgentIdentityAuthProvider {
         if self.auth.is_fedramp_account() {
             let _ = headers.insert("X-OpenAI-Fedramp", HeaderValue::from_static("true"));
         }
+        Ok(())
     }
 }
 
@@ -118,8 +119,9 @@ struct HeaderAuthProvider {
 }
 
 impl AuthProvider for HeaderAuthProvider {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), AuthError> {
         headers.extend(self.auth.headers().clone());
+        Ok(())
     }
 }
 
@@ -146,11 +148,11 @@ impl AuthManagerAuthProvider {
 }
 
 impl AuthProvider for AuthManagerAuthProvider {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
-        let Some(auth) = self.current_auth() else {
-            return;
-        };
-        auth_provider_from_auth(&auth).add_auth_headers(headers);
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), AuthError> {
+        let auth = self.current_auth().ok_or_else(|| {
+            AuthError::Transient("managed authentication is unavailable".to_string())
+        })?;
+        auth_provider_from_auth(&auth).add_auth_headers(headers)
     }
 
     fn resolve_auth_headers(&self) -> AuthHeadersFuture<'_> {
@@ -163,7 +165,7 @@ impl AuthProvider for AuthManagerAuthProvider {
                 .ok_or_else(|| {
                     AuthError::Transient("managed authentication is unavailable".to_string())
                 })?;
-            Ok(auth_provider_from_auth(&auth).to_auth_headers())
+            auth_provider_from_auth(&auth).to_auth_headers()
         })
     }
 }
@@ -174,7 +176,9 @@ impl AuthProvider for AuthManagerAuthProvider {
 struct UnauthenticatedAuthProvider;
 
 impl AuthProvider for UnauthenticatedAuthProvider {
-    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) -> Result<(), AuthError> {
+        Ok(())
+    }
 }
 
 pub fn unauthenticated_auth_provider() -> SharedAuthProvider {
@@ -474,7 +478,7 @@ mod tests {
             create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
         let auth = resolve_provider_auth(/*auth*/ None, &provider).expect("auth should resolve");
 
-        assert!(auth.to_auth_headers().is_empty());
+        assert!(auth.to_auth_headers().unwrap().is_empty());
     }
 
     #[test]
@@ -495,7 +499,7 @@ mod tests {
         let auth =
             resolve_provider_auth(Some(&ambient_auth), &provider).expect("auth should resolve");
 
-        assert!(auth.to_auth_headers().is_empty());
+        assert!(auth.to_auth_headers().unwrap().is_empty());
     }
 
     #[test]
@@ -510,7 +514,7 @@ mod tests {
         let auth =
             resolve_provider_auth(Some(&ambient_auth), &provider).expect("auth should resolve");
 
-        assert!(auth.to_auth_headers().is_empty());
+        assert!(auth.to_auth_headers().unwrap().is_empty());
     }
 
     #[test]
@@ -525,7 +529,8 @@ mod tests {
 
         let headers = resolve_provider_auth(Some(&ambient_auth), &provider)
             .expect("auth should resolve")
-            .to_auth_headers();
+            .to_auth_headers()
+            .unwrap();
 
         assert_eq!(
             headers.get(AUTHORIZATION),
@@ -552,7 +557,8 @@ mod tests {
 
         let headers = resolve_provider_auth(Some(&command_auth), &provider)
             .expect("auth should resolve")
-            .to_auth_headers();
+            .to_auth_headers()
+            .unwrap();
 
         assert_eq!(
             headers.get(AUTHORIZATION),
@@ -577,7 +583,7 @@ mod tests {
         let auth =
             resolve_provider_auth(Some(&ambient_auth), &provider).expect("auth should resolve");
 
-        assert_eq!(auth.to_auth_headers(), expected);
+        assert_eq!(auth.to_auth_headers().unwrap(), expected);
     }
 
     #[test]
@@ -590,7 +596,7 @@ mod tests {
         expected.insert("x-external-auth", HeaderValue::from_static("enabled"));
         let auth = CodexAuth::Headers(AuthHeaders::new(expected.clone()));
 
-        let actual = auth_provider_from_auth(&auth).to_auth_headers();
+        let actual = auth_provider_from_auth(&auth).to_auth_headers().unwrap();
 
         assert_eq!(actual, expected);
     }
@@ -642,7 +648,7 @@ mod tests {
         let provider = auth_provider_from_auth_manager(Arc::clone(&auth_manager), &expected_auth);
 
         assert_eq!(
-            provider.to_auth_headers().get(AUTHORIZATION),
+            provider.to_auth_headers().unwrap().get(AUTHORIZATION),
             Some(&HeaderValue::from_static("Bearer header.e30.first"))
         );
 
@@ -673,7 +679,14 @@ mod tests {
         .expect("save switched-account auth");
         auth_manager.reload().await;
 
-        assert!(provider.to_auth_headers().is_empty());
+        assert!(matches!(
+            provider.to_auth_headers(),
+            Err(AuthError::Transient(_))
+        ));
+        assert!(matches!(
+            provider.resolve_auth_headers().await,
+            Err(AuthError::Transient(_))
+        ));
     }
 
     #[tokio::test]
@@ -702,7 +715,7 @@ mod tests {
                 task_id: "task-run-1".to_string(),
             })
         );
-        let headers = auth.auth.to_auth_headers();
+        let headers = auth.auth.to_auth_headers().unwrap();
         assert!(
             headers
                 .get(http::header::AUTHORIZATION)
@@ -716,7 +729,7 @@ mod tests {
         let auth = agent_identity_auth(/*chatgpt_account_is_fedramp*/ true).await;
         let provider = auth_provider_from_auth(&CodexAuth::AgentIdentity(auth));
 
-        let headers = provider.to_auth_headers();
+        let headers = provider.to_auth_headers().unwrap();
 
         assert!(
             headers
@@ -761,7 +774,7 @@ mod tests {
         .await
         .expect("fallback should resolve bearer auth");
 
-        let headers = provider_auth.auth.to_auth_headers();
+        let headers = provider_auth.auth.to_auth_headers().unwrap();
         assert_eq!(
             headers
                 .get(http::header::AUTHORIZATION)

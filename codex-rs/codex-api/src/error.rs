@@ -66,3 +66,9 @@ pub(crate) fn parse_flex_unavailable(error: &Value) -> Option<ApiError> {
     (error.get("code").and_then(Value::as_str) == Some("flex_unavailable"))
         .then_some(ApiError::FlexUnavailable)
 }
+
+impl From<crate::AuthError> for ApiError {
+    fn from(error: crate::AuthError) -> Self {
+        Self::Transport(error.into())
+    }
+}

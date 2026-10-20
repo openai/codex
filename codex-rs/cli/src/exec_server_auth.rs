@@ -43,7 +43,9 @@ struct AwsSigV4AuthProvider {
 }
 
 impl AuthProvider for AwsSigV4AuthProvider {
-    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) -> Result<(), AuthError> {
+        Ok(())
+    }
 
     fn apply_auth(&self, mut request: Request) -> codex_api::AuthProviderFuture<'_> {
         Box::pin(async move {

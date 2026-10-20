@@ -289,7 +289,7 @@ pub async fn delete_remote_plugin_share(
         config.http_request(Method::DELETE, &url),
         auth,
         &config.product_sku,
-    );
+    )?;
     send_and_expect_status(request, &url, &[StatusCode::NO_CONTENT]).await?;
     if let Err(err) = local_paths::remove_plugin_share_local_path(codex_home, remote_plugin_id) {
         warn!(
@@ -326,7 +326,7 @@ pub async fn update_remote_plugin_share_targets(
         config.http_request(Method::PUT, &url),
         auth,
         &config.product_sku,
-    )
+    )?
     .json(&RemotePluginShareUpdateTargetsRequest {
         discoverability,
         targets,
@@ -401,7 +401,7 @@ async fn get_created_workspace_plugins_page(
         config.http_request(Method::GET, &url),
         auth,
         &config.product_sku,
-    );
+    )?;
     send_and_decode(request, &url).await
 }
 
@@ -418,7 +418,7 @@ async fn create_workspace_plugin_upload(
         config.http_request(Method::POST, &url),
         auth,
         &config.product_sku,
-    )
+    )?
     .json(&RemoteWorkspacePluginUploadUrlRequest {
         filename,
         mime_type: "application/gzip",
@@ -480,7 +480,7 @@ async fn finalize_workspace_plugin_upload(
         config.http_request(Method::POST, &url),
         auth,
         &config.product_sku,
-    )
+    )?
     .json(&body);
     send_and_decode(request, &url).await
 }

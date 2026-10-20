@@ -331,6 +331,7 @@ fn websocket_diagnostic_url(url: &str) -> String {
 fn direct_auth_error(error: AuthError) -> ExecServerError {
     let message = format!("failed to resolve environment registry authentication: {error}");
     match error {
+        AuthError::Policy(denied) => ExecServerError::ApplicationNetworkPolicy(denied),
         AuthError::Build(_) => ExecServerError::EnvironmentRegistryAuth(message),
         AuthError::Transient(_) => ExecServerError::Disconnected(message),
     }

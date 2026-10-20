@@ -61,7 +61,7 @@ impl Client {
     /// Read the full profile using the same route as account token usage.
     pub async fn get_account_profile(&self) -> Result<AccountProfile, RequestError> {
         let url = self.token_usage_profile_url();
-        let request = self.request(Method::GET, &url).headers(self.headers());
+        let request = self.request(Method::GET, &url).headers(self.headers()?);
         let (body, _) = self.exec_request_detailed(request, "GET", &url).await?;
         serde_json::from_str(&body)
             .map_err(|_| RequestError::Other(anyhow::anyhow!("Invalid account profile response.")))

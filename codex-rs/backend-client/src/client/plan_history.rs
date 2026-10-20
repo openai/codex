@@ -66,7 +66,7 @@ impl Client {
             PathStyle::ChatGptApi => "wham",
         };
         let url = format!("{}/{prefix}/usage/plan_limit_history?days=7", self.base_url);
-        let request = self.request(Method::GET, &url).headers(self.headers());
+        let request = self.request(Method::GET, &url).headers(self.headers()?);
         let (body, _) = match self.exec_request_detailed(request, "GET", &url).await {
             Ok(response) => response,
             Err(error) if error.status().is_some_and(|status| status.as_u16() == 404) => {

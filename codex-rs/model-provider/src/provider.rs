@@ -714,7 +714,7 @@ mod tests {
             .await
             .expect("auth should resolve");
 
-        assert!(auth.auth.to_auth_headers().is_empty());
+        assert!(auth.auth.to_auth_headers().unwrap().is_empty());
     }
 
     #[test]
