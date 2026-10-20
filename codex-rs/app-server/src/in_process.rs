@@ -344,6 +344,9 @@ impl InProcessClientHandle {
     /// Shutdown is bounded by internal timeouts and may abort background tasks
     /// if graceful drain does not complete in time.
     pub async fn shutdown(self) -> IoResult<()> {
+        // Shutdown owns the only event receiver, so nobody can drain it anymore.
+        // Unblock notification delivery before waiting for space in the client queue.
+        drop(self.event_rx);
         let mut runtime_handle = self.runtime_handle;
         let (done_tx, done_rx) = oneshot::channel();
 
@@ -828,9 +831,12 @@ mod tests {
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
+    use codex_app_server_protocol::ThreadAttachmentAddParams;
     use codex_app_server_protocol::ThreadAttachmentOperation;
+    use codex_app_server_protocol::ThreadAttachmentRemoveParams;
     use codex_app_server_protocol::ThreadAttachmentUpdatedNotification;
     use codex_app_server_protocol::ThreadQueueChangedNotification;
+    use codex_app_server_protocol::ThreadSetNameParams;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::Turn;
@@ -838,6 +844,7 @@ mod tests {
     use codex_app_server_protocol::TurnItemsView;
     use codex_app_server_protocol::TurnStatus;
     use codex_core::config::ConfigBuilder;
+    use futures::FutureExt;
     use pretty_assertions::assert_eq;
     use std::path::Path;
     use tempfile::TempDir;
@@ -1086,5 +1093,110 @@ mod tests {
                 completed_at_ms: 0,
             })
         ));
+    }
+
+    #[tokio::test]
+    async fn in_process_shutdown_completes_with_full_request_and_event_queues() {
+        let capacity = DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
+        let mut client = start_test_client(SessionSource::Cli).await;
+        let response = client
+            .request(ClientRequest::ThreadStart {
+                request_id: RequestId::Integer(1),
+                params: ThreadStartParams::default(),
+            })
+            .await
+            .expect("thread/start transport should work")
+            .expect("thread/start should succeed");
+        let thread: ThreadStartResponse =
+            serde_json::from_value(response).expect("thread/start response should parse");
+        let thread_id = thread.thread.id;
+        // Persist the thread metadata so attachment requests can find it.
+        client
+            .request(ClientRequest::ThreadSetName {
+                request_id: RequestId::Integer(2),
+                params: ThreadSetNameParams {
+                    thread_id: thread_id.clone(),
+                    name: "Shutdown backpressure".to_string(),
+                },
+            })
+            .await
+            .expect("thread/name/set transport should work")
+            .expect("thread/name/set should succeed");
+
+        // Drain through the first attachment notification to establish a clean boundary,
+        // then leave capacity + 1 notifications unread. Reuse one identity to stay below
+        // the attachment limit. Each mutation responds before sending its notification.
+        for index in 0..(capacity + 2) {
+            let request_id = RequestId::Integer((index + 3) as i64);
+            let request = if index % 2 == 0 {
+                ClientRequest::ThreadAttachmentAdd {
+                    request_id,
+                    params: ThreadAttachmentAddParams {
+                        thread_id: thread_id.clone(),
+                        attachment_type: "pull_request".to_string(),
+                        identity_key: "one-attachment".to_string(),
+                        payload: serde_json::json!({}),
+                    },
+                }
+            } else {
+                ClientRequest::ThreadAttachmentRemove {
+                    request_id,
+                    params: ThreadAttachmentRemoveParams {
+                        thread_id: thread_id.clone(),
+                        attachment_type: "pull_request".to_string(),
+                        identity_key: "one-attachment".to_string(),
+                    },
+                }
+            };
+            client
+                .request(request)
+                .await
+                .expect("attachment request transport should work")
+                .expect("attachment mutation should succeed");
+            if index == 0 {
+                loop {
+                    let event = client
+                        .next_event()
+                        .await
+                        .expect("event stream should remain open");
+                    if let InProcessServerEvent::ServerNotification(notification) = event
+                        && matches!(
+                            *notification,
+                            ServerNotification::ThreadAttachmentUpdated(_)
+                        )
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+
+        let sender = client.sender();
+        let mut queued_requests = Vec::with_capacity(capacity);
+        for index in 0..capacity {
+            let mut request = Box::pin(sender.request(ClientRequest::ConfigRequirementsRead {
+                request_id: RequestId::Integer((1000 + index) as i64),
+                params: None,
+            }));
+            if index == 0 {
+                // Verify a normal read stalls behind the unread notification before
+                // filling the remaining request slots.
+                assert!(timeout(Duration::from_secs(1), &mut request).await.is_err());
+            } else {
+                assert!(request.as_mut().now_or_never().is_none());
+            }
+            queued_requests.push(request);
+        }
+        assert_eq!(sender.client_tx.capacity(), 0);
+
+        // Only advance time after the real requests have filled both queues.
+        tokio::time::pause();
+        timeout(
+            SHUTDOWN_ACK_TIMEOUT + SHUTDOWN_TIMEOUT + Duration::from_secs(1),
+            client.shutdown(),
+        )
+        .await
+        .expect("shutdown must complete with full request and event queues")
+        .expect("shutdown should succeed");
     }
 }
