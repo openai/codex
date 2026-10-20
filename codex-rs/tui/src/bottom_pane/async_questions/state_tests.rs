@@ -181,9 +181,11 @@ fn wrapped_question_url_keeps_its_complete_destination() {
 }
 
 #[test]
-fn multiline_question_preserves_line_breaks_and_link_destinations() {
+fn markdown_question_preserves_formatting_and_link_destinations() {
     let url = "https://example.com/diagnostics?view=full";
-    let title = format!("Run this command:\n\n```sh\nprintf '診断'\n```\nThen review ({url})?\n");
+    let title = format!(
+        "Run **this command**:\n\n```sh\nprintf '診断'\n```\nThen review the [diagnostics]({url})?\n"
+    );
     let mut rendered = Vec::new();
     for line_ending in ["\n", "\r\n"] {
         let mut editor = editor();
@@ -207,9 +209,17 @@ fn multiline_question_preserves_line_breaks_and_link_destinations() {
                     })
                 })
                 .collect::<String>();
-            assert_eq!(linked_text, url);
+            assert!(linked_text.contains("diagnostics"));
             let text = crate::terminal_hyperlinks::strip_osc8(&buffer_text(&buffer));
             if width == 60 {
+                let bold_text = buffer
+                    .content
+                    .iter()
+                    .filter(|cell| cell.modifier.contains(Modifier::BOLD))
+                    .map(ratatui::buffer::Cell::symbol)
+                    .collect::<String>();
+                assert!(bold_text.contains("this command"));
+                assert!(!bold_text.contains("Run "));
                 rendered.push(text);
             }
         }

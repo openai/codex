@@ -52,7 +52,7 @@ impl Renderable for AsyncQuestions {
         Paragraph::new(self.progress_prefix_text().dim()).render(sections.progress_area, buf);
         HyperlinkParagraph::new(
             &sections.question_lines,
-            crate::style::accent_style().bold(),
+            crate::style::accent_style().not_bold(),
         )
         .render(sections.question_area, buf);
 

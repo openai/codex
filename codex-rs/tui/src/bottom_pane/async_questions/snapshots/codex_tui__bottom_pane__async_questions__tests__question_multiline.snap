@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/async_questions/state_tests.rs
+assertion_line: 220
 expression: "rendered[0]"
 ---
 
@@ -7,11 +8,10 @@ expression: "rendered[0]"
 
   Run this command:
 
-  ```sh
   printf '診 断 '
-  ```
-  Then review (https://example.com/diagnostics?view=full)?
 
+  Then review the diagnostics
+  (https://example.com/diagnostics?view=full)?
 
   Type your answer
 
