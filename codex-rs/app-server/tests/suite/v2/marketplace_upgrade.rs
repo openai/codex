@@ -271,6 +271,12 @@ async fn automatic_upgrade_isolates_git_while_explicit_install_preserves_configu
     let manual_plugin_alias = "https://manual.example/plugin.git";
     let manual_plugin_rewrite = format!("url.{}.insteadOf", plugin_source.path().display());
     let config_before = std::fs::read_to_string(&config_path)?;
+    let abandoned = marketplace_install_root(codex_home.path())
+        .join(".staging")
+        .join(format!("marketplace-{}-abandoned", std::env::consts::OS));
+    std::fs::create_dir_all(abandoned.join("checkout"))?;
+    std::fs::write(abandoned.join(".lock"), "")?;
+    std::fs::write(abandoned.join("checkout/payload"), "abandoned upgrade")?;
     let mut builder = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_plugin_startup_tasks()
@@ -305,6 +311,7 @@ async fn automatic_upgrade_isolates_git_while_explicit_install_preserves_configu
         }
     })
     .await?;
+    assert!(!abandoned.exists());
 
     if invalid_user_config {
         // Subsequent explicit operations must pick up a repaired user config normally.

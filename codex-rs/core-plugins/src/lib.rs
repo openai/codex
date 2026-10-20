@@ -18,6 +18,7 @@ pub mod marketplace;
 pub mod marketplace_add;
 mod marketplace_policy;
 pub mod marketplace_remove;
+mod marketplace_staging;
 pub mod marketplace_upgrade;
 mod npm_source;
 mod plugin_bundle_archive;

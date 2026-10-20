@@ -1,4 +1,4 @@
-//! Path normalization, replacement, symlink resolution, and atomic writes.
+//! Path normalization, replacement, metadata inspection, symlink resolution, and atomic writes.
 
 pub(crate) mod env;
 pub use env::is_wsl;
@@ -14,6 +14,16 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
+
+/// Read metadata without following the final symlink, returning `None` for a missing path.
+/// Other I/O errors are returned to the caller.
+pub fn symlink_metadata_if_exists(path: &Path) -> io::Result<Option<std::fs::Metadata>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
+}
 
 pub fn normalize_for_path_comparison(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     let canonical = path.as_ref().canonicalize()?;

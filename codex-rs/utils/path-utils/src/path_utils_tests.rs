@@ -1,6 +1,32 @@
 use super::replace_path_and_deduplicate;
+use super::symlink_metadata_if_exists;
 use pretty_assertions::assert_eq;
 use std::path::Path;
+
+#[test]
+fn symlink_metadata_if_exists_distinguishes_files_directories_and_missing_paths()
+-> std::io::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let file = directory.path().join("file");
+    std::fs::write(&file, "contents")?;
+
+    let directory_metadata =
+        symlink_metadata_if_exists(directory.path())?.expect("directory exists");
+    let file_metadata = symlink_metadata_if_exists(&file)?.expect("file exists");
+    assert_eq!(
+        (directory_metadata.is_dir(), file_metadata.is_file()),
+        (true, true)
+    );
+    assert!(symlink_metadata_if_exists(&directory.path().join("missing"))?.is_none());
+    Ok(())
+}
+
+#[test]
+fn symlink_metadata_if_exists_preserves_io_errors() {
+    let error = symlink_metadata_if_exists(Path::new("invalid\0path"))
+        .expect_err("an invalid path must not be treated as missing");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
 
 #[test]
 fn replace_path_and_deduplicate_preserves_other_paths_and_order() {
@@ -22,8 +48,26 @@ fn replace_path_and_deduplicate_preserves_other_paths_and_order() {
 #[cfg(unix)]
 mod symlinks {
     use super::super::resolve_symlink_write_paths;
+    use super::super::symlink_metadata_if_exists;
     use pretty_assertions::assert_eq;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn symlink_metadata_if_exists_preserves_links_with_and_without_targets() -> std::io::Result<()>
+    {
+        let directory = tempfile::tempdir()?;
+        let target = directory.path().join("target");
+        let link = directory.path().join("link");
+        std::fs::write(&target, "contents")?;
+        symlink(&target, &link)?;
+
+        let linked_metadata = symlink_metadata_if_exists(&link)?.expect("symlink exists");
+        std::fs::remove_file(target)?;
+        let dangling_metadata = symlink_metadata_if_exists(&link)?.expect("symlink still exists");
+        assert!(linked_metadata.is_symlink());
+        assert_eq!(dangling_metadata.file_type(), linked_metadata.file_type());
+        Ok(())
+    }
 
     #[test]
     fn symlink_cycles_fall_back_to_root_write_path() -> std::io::Result<()> {

@@ -41,6 +41,104 @@ fn write_marketplace_source(source: &Path, marker: &str) -> Result<()> {
 }
 
 #[tokio::test]
+async fn marketplace_add_git_source_cleans_staging_after_failures() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    write_marketplace_source(source.path(), "git source")?;
+    for args in [
+        vec!["init", "--quiet"],
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Codex Tests",
+            "-c",
+            "user.email=codex@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "marketplace",
+        ],
+    ] {
+        let output = std::process::Command::new("git")
+            .current_dir(source.path())
+            .args(args)
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "git fixture failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    // Exercise real Git clones without using the network or changing the process environment.
+    let source_url = "https://example.com/marketplace.git";
+    let rewrite_key = format!("url.{}.insteadOf", source.path().display());
+    let install_root = marketplace_install_root(codex_home.path());
+    let staging_root = install_root.join(".staging");
+    let abandoned = staging_root.join(format!("marketplace-{}-abandoned", std::env::consts::OS));
+    std::fs::create_dir_all(abandoned.join("checkout"))?;
+    std::fs::write(abandoned.join(".lock"), "")?;
+    std::fs::write(abandoned.join("checkout/payload"), "abandoned clone")?;
+    for (args, error) in [
+        (["--ref", "missing-ref"], "git checkout missing-ref failed"),
+        (
+            ["--sparse", "plugins/sample"],
+            "marketplace root does not contain a supported manifest",
+        ),
+    ] {
+        for _ in 0..2 {
+            codex_command(codex_home.path())?
+                .current_dir(codex_home.path())
+                .env("GIT_CONFIG_COUNT", "1")
+                .env("GIT_CONFIG_KEY_0", &rewrite_key)
+                .env("GIT_CONFIG_VALUE_0", source_url)
+                .args(["plugin", "marketplace", "add", source_url])
+                .args(args)
+                .assert()
+                .failure()
+                .stderr(contains(error));
+
+            assert_eq!(std::fs::read_dir(&staging_root)?.count(), 0);
+            assert!(!install_root.join("debug").exists());
+            assert!(!codex_home.path().join(CONFIG_TOML_FILE).exists());
+        }
+    }
+
+    codex_command(codex_home.path())?
+        .current_dir(codex_home.path())
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", &rewrite_key)
+        .env("GIT_CONFIG_VALUE_0", source_url)
+        .args(["plugin", "marketplace", "add", source_url])
+        .assert()
+        .success();
+    let config = std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE))?;
+
+    // A different ref bypasses the already-added shortcut and conflicts after cloning.
+    codex_command(codex_home.path())?
+        .current_dir(codex_home.path())
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", &rewrite_key)
+        .env("GIT_CONFIG_VALUE_0", source_url)
+        .args(["plugin", "marketplace", "add", source_url, "--ref", "HEAD"])
+        .assert()
+        .failure()
+        .stderr(contains("already added from a different source"));
+
+    assert_eq!(std::fs::read_dir(&staging_root)?.count(), 0);
+    assert_eq!(
+        std::fs::read_to_string(install_root.join("debug/plugins/sample/marker.txt"))?,
+        "git source"
+    );
+    assert_eq!(
+        std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE))?,
+        config
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn marketplace_add_local_directory_source() -> Result<()> {
     let codex_home = TempDir::new()?;
     let source = TempDir::new()?;

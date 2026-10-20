@@ -16,12 +16,20 @@ fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
 #[tokio::test]
 async fn marketplace_upgrade_runs_under_plugin() -> Result<()> {
     let codex_home = TempDir::new()?;
+    let abandoned = marketplace_install_root(codex_home.path())
+        .join(".staging")
+        .join(format!("marketplace-{}-abandoned", std::env::consts::OS));
+    std::fs::create_dir_all(abandoned.join("checkout"))?;
+    std::fs::write(abandoned.join(".lock"), "")?;
+    std::fs::write(abandoned.join("checkout/payload"), "abandoned clone")?;
 
     codex_command(codex_home.path())?
         .args(["plugin", "marketplace", "upgrade"])
         .assert()
         .success()
         .stdout(contains("No configured Git marketplaces to upgrade."));
+
+    assert!(!abandoned.exists());
 
     Ok(())
 }
@@ -88,6 +96,10 @@ async fn marketplace_upgrade_json_prints_upgrade_outcome() -> Result<()> {
         manifest
     );
     assert!(!codex_home.path().join("config.toml").exists());
+    assert_eq!(
+        std::fs::read_dir(marketplace_install_root(codex_home.path()).join(".staging"))?.count(),
+        0
+    );
 
     Ok(())
 }

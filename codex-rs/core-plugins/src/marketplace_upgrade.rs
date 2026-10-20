@@ -13,6 +13,8 @@ use crate::marketplace::validate_marketplace_root;
 use crate::marketplace_add::MarketplaceSource;
 use crate::marketplace_policy::MarketplacePolicy;
 use crate::marketplace_policy::validate_marketplace_name_for_add;
+use crate::marketplace_staging::MarketplaceStagingDir;
+use crate::marketplace_staging::cleanup_marketplace_staging;
 use codex_config::ConfigLayerStack;
 use codex_config::types::MarketplaceConfig;
 use codex_config::types::MarketplaceSourceType;
@@ -93,6 +95,8 @@ pub(crate) fn upgrade_configured_git_marketplaces_with_mode(
     mode: PluginGitMode,
     reload_config: &ConfigLayerReload,
 ) -> ConfiguredMarketplaceUpgradeOutcome {
+    let install_root = marketplace_install_root(codex_home);
+    cleanup_marketplace_staging(&install_root);
     let loaded = load_configured_git_marketplaces(config_layer_stack);
     let marketplaces = loaded
         .marketplaces
@@ -108,7 +112,6 @@ pub(crate) fn upgrade_configured_git_marketplaces_with_mode(
         return ConfiguredMarketplaceUpgradeOutcome::default();
     }
 
-    let install_root = marketplace_install_root(codex_home);
     let mut selected_marketplaces = marketplaces
         .iter()
         .map(|marketplace| marketplace.name.clone())
@@ -254,22 +257,12 @@ fn upgrade_configured_git_marketplace(
         return Ok(None);
     }
 
-    let staging_parent = install_root.join(".staging");
-    std::fs::create_dir_all(&staging_parent).map_err(|err| {
+    let staged_dir = MarketplaceStagingDir::new(install_root).map_err(|err| {
         format!(
-            "failed to create marketplace upgrade staging directory {}: {err}",
-            staging_parent.display()
+            "failed to create temporary marketplace upgrade directory in {}: {err}",
+            install_root.display()
         )
     })?;
-    let staged_dir = tempfile::Builder::new()
-        .prefix("marketplace-upgrade-")
-        .tempdir_in(&staging_parent)
-        .map_err(|err| {
-            format!(
-                "failed to create temporary marketplace upgrade directory in {}: {err}",
-                staging_parent.display()
-            )
-        })?;
 
     let activated_revision = clone_git_source(
         codex_home,
@@ -289,7 +282,7 @@ fn upgrade_configured_git_marketplace(
         ));
     }
     write_installed_marketplace_metadata(staged_dir.path(), marketplace, &activated_revision)?;
-    activate_marketplace_root(&destination, staged_dir, &previous_snapshot, || {
+    activate_marketplace_root(&destination, staged_dir.path(), &previous_snapshot, || {
         ensure_configured_git_marketplace_unchanged(reload_config, marketplace)
     })?;
 

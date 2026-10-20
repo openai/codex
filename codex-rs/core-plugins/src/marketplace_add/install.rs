@@ -1,7 +1,6 @@
 use super::MarketplaceAddError;
 use std::fs;
 use std::path::Path;
-use std::path::PathBuf;
 
 pub(super) fn clone_git_source(
     url: &str,
@@ -103,10 +102,6 @@ pub(super) fn replace_marketplace_root(
         fs::create_dir_all(parent)?;
     }
     fs::rename(staged_root, destination)
-}
-
-pub(super) fn marketplace_staging_root(install_root: &Path) -> PathBuf {
-    install_root.join(".staging")
 }
 
 fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), MarketplaceAddError> {

@@ -311,6 +311,12 @@ fn up_to_date_fast_path_validates_marketplace_name() {
     .expect_err("mismatched marketplace name must not use the up-to-date fast path");
 
     assert!(err.contains("git clone marketplace source failed"));
+    assert_eq!(
+        std::fs::read_dir(install_root.join(".staging"))
+            .expect("read marketplace staging directory")
+            .count(),
+        0
+    );
 }
 
 #[test]
@@ -347,10 +353,9 @@ fn stale_activation_restores_newer_concurrently_installed_marketplace() {
     )
     .expect("write newer installed marketplace metadata");
 
-    let staged_dir = tempfile::Builder::new()
-        .prefix("marketplace-upgrade-")
-        .tempdir_in(&install_root)
-        .expect("create stale upgrade staging directory");
+    let staged_dir =
+        MarketplaceStagingDir::new(&install_root).expect("create stale upgrade staging directory");
+    std::fs::create_dir_all(staged_dir.path()).expect("create stale upgrade checkout");
     std::fs::write(staged_dir.path().join("marker.txt"), "stale snapshot")
         .expect("write stale staged marketplace snapshot");
     super::activation::write_installed_marketplace_metadata(
@@ -362,7 +367,7 @@ fn stale_activation_restores_newer_concurrently_installed_marketplace() {
 
     let err = super::activation::activate_marketplace_root(
         &destination,
-        staged_dir,
+        staged_dir.path(),
         &previous_snapshot,
         || Ok(()),
     )
@@ -384,6 +389,13 @@ fn stale_activation_restores_newer_concurrently_installed_marketplace() {
         &marketplace,
         NEWER_REVISION
     ));
+    drop(staged_dir);
+    assert_eq!(
+        std::fs::read_dir(install_root.join(".staging"))
+            .expect("read marketplace staging directory")
+            .count(),
+        0
+    );
 }
 
 fn config_reloader(codex_home: &Path) -> ConfigLayerReload {

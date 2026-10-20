@@ -1,12 +1,13 @@
 use crate::installed_marketplaces::marketplace_install_root;
 use crate::marketplace_policy::validate_marketplace_name_for_add;
 use crate::marketplace_policy::validate_marketplace_source_for_add;
+use crate::marketplace_staging::MarketplaceStagingDir;
+use crate::marketplace_staging::cleanup_marketplace_staging;
 use codex_config::ConfigRequirements;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use tempfile::Builder;
 
 mod install;
 mod metadata;
@@ -14,7 +15,6 @@ mod source;
 
 use install::clone_git_source;
 use install::ensure_marketplace_destination_is_inside_install_root;
-use install::marketplace_staging_root;
 use install::replace_marketplace_root;
 use install::safe_marketplace_dir_name;
 use metadata::MarketplaceInstallMetadata;
@@ -111,6 +111,10 @@ where
         ))
     })?;
 
+    // Remove abandoned staging directories from earlier operations.
+    // This is generally fast and rare operation so it doesn't deserve a separate cleanup task
+    cleanup_marketplace_staging(&install_root);
+
     let install_metadata = MarketplaceInstallMetadata::from_source(&source, &sparse_paths);
     if let Some(existing_root) =
         installed_marketplace_root_for_source(codex_home, &install_root, &install_metadata)?
@@ -153,27 +157,18 @@ where
         });
     }
 
-    let staging_root = marketplace_staging_root(&install_root);
-    fs::create_dir_all(&staging_root).map_err(|err| {
+    let staged_dir = MarketplaceStagingDir::new(&install_root).map_err(|err| {
         MarketplaceAddError::Internal(format!(
-            "failed to create marketplace staging directory {}: {err}",
-            staging_root.display()
+            "failed to create temporary marketplace directory in {}: {err}",
+            install_root.display()
         ))
     })?;
-    let staged_root = Builder::new()
-        .prefix("marketplace-add-")
-        .tempdir_in(&staging_root)
-        .map_err(|err| {
-            MarketplaceAddError::Internal(format!(
-                "failed to create temporary marketplace directory in {}: {err}",
-                staging_root.display()
-            ))
-        })?;
-    let staged_root = staged_root.keep();
+    // Retain the cleanup guard through validation, installation, and config-write rollback.
+    let staged_root = staged_dir.path();
 
-    stage_marketplace_source(&source, &sparse_paths, &staged_root, clone_source)?;
+    stage_marketplace_source(&source, &sparse_paths, staged_root, clone_source)?;
 
-    let marketplace_name = validate_marketplace_source_root(&staged_root)?;
+    let marketplace_name = validate_marketplace_source_root(staged_root)?;
     validate_marketplace_name_for_add(managed_marketplace_name, &marketplace_name)
         .map_err(MarketplaceAddError::InvalidRequest)?;
 
@@ -184,7 +179,7 @@ where
             "marketplace '{marketplace_name}' is already added from a different source; remove it before adding this source"
         )));
     }
-    replace_marketplace_root(&staged_root, &destination).map_err(|err| {
+    replace_marketplace_root(staged_root, &destination).map_err(|err| {
         MarketplaceAddError::Internal(format!(
             "failed to install marketplace at {}: {err}",
             destination.display()
@@ -193,7 +188,7 @@ where
     if let Err(err) =
         record_added_marketplace_entry(codex_home, &marketplace_name, &install_metadata)
     {
-        if let Err(rollback_err) = fs::rename(&destination, &staged_root) {
+        if let Err(rollback_err) = fs::rename(&destination, staged_root) {
             return Err(MarketplaceAddError::Internal(format!(
                 "{err}; additionally failed to roll back installed marketplace at {}: {rollback_err}",
                 destination.display()
