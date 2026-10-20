@@ -59,7 +59,8 @@ impl<L> EmaIdpIdentity<L> {
 
 /// Resolve a refresh token issued by the account's validated OAuth authority.
 /// The caller supplies trusted persisted issuer/client provenance and an ID/refresh-token
-/// pair from one admitted account record, retaining its refresh guard in `credentials`.
+/// pair from one admitted account record. Discovery may run before acquiring a refresh
+/// guard; before exchange, attach a lease that still matches that record with map_credentials.
 /// ID-token claims corroborate that record; this does not verify a JWT signature or
 /// authenticate an expired ID token. Only the refresh token is exchanged with the IdP.
 pub async fn resolve_ema_account_idp_identity<L: Send>(
