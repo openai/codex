@@ -14,6 +14,7 @@ use super::LoadedPlugin;
 use super::PluginLoadOutcome;
 use crate::PluginGitMode;
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
+use crate::app_mcp_routing::plugin_supports_apps;
 use crate::http_client_selector::HttpClientSelector;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use crate::is_openai_curated_marketplace_name;
@@ -2762,7 +2763,7 @@ impl PluginsManager {
             })
             .collect();
         let auth_mode = self.auth_mode();
-        let mut app_declarations = if manifest_format == PluginManifestFormat::Legacy {
+        let mut app_declarations = if plugin_supports_apps(manifest_format, &plugin_id) {
             load_plugin_apps_from_manifest(source_path.as_path(), &manifest.paths).await
         } else {
             Vec::new()
@@ -2777,14 +2778,12 @@ impl PluginsManager {
             manifest_format,
         )
         .await;
-        if manifest_format == PluginManifestFormat::Legacy {
-            apply_app_mcp_routing_policy(
-                &mut app_declarations,
-                &mut mcp_servers,
-                auth_mode,
-                /*plugin_active*/ true,
-            );
-        }
+        apply_app_mcp_routing_policy(
+            &mut app_declarations,
+            &mut mcp_servers,
+            auth_mode,
+            /*plugin_active*/ true,
+        );
         let apps = app_connector_ids_from_declarations(&app_declarations);
         let mut seen_app_connector_ids = HashSet::new();
         let mut app_category_by_id = HashMap::new();

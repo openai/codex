@@ -531,6 +531,73 @@ async fn plugin_auth_projection_hides_matching_mcp_with_chatgpt_apps_route() {
 }
 
 #[tokio::test]
+async fn agent_plugin_app_routing_respects_marketplace_and_auth() {
+    for (marketplace, uses_apps, apps_enabled) in [
+        (REMOTE_GLOBAL_MARKETPLACE_NAME, true, true),
+        (REMOTE_GLOBAL_MARKETPLACE_NAME, true, false),
+        ("test", false, true),
+        ("test", false, false),
+    ] {
+        let codex_home = TempDir::new().unwrap();
+        let plugin_root = codex_home
+            .path()
+            .join("plugins/cache")
+            .join(marketplace)
+            .join("sample/local");
+        write_file(
+            &plugin_root.join("plugin.json"),
+            r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample","extensions":{"com.openai":{"apps":"./.app.json"}}}"#,
+        );
+        write_file(
+            &plugin_root.join(".app.json"),
+            r#"{"apps":{"sample":{"id":"connector_sample"}}}"#,
+        );
+        write_file(
+            &plugin_root.join("mcp.json"),
+            r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"sample":{"type":"stdio","command":"sample-mcp"},"unrelated":{"type":"stdio","command":"other-mcp"}}}"#,
+        );
+        let outcome = load_plugins_from_config(
+            &format!(
+                "[features]\nplugins = true\napps = {apps_enabled}\n[plugins.\"sample@{marketplace}\"]\nenabled = true\n"
+            ),
+            codex_home.path(),
+            Some(AuthMode::Chatgpt),
+        )
+        .await;
+        let expected_apps = if uses_apps {
+            vec![AppConnectorId("connector_sample".to_string())]
+        } else {
+            Vec::new()
+        };
+        let expected_mcp = if uses_apps {
+            vec!["unrelated".to_string()]
+        } else {
+            vec!["sample".to_string(), "unrelated".to_string()]
+        };
+        assert_eq!(outcome.effective_apps(), expected_apps);
+        assert_eq!(sorted_effective_mcp_server_names(&outcome), expected_mcp);
+        let [summary] = outcome.capability_summaries() else {
+            panic!("expected one installed plugin");
+        };
+        assert_eq!(summary.app_connector_ids, expected_apps);
+        assert_eq!(summary.mcp_server_names, expected_mcp);
+
+        // Remote curated plugins are not selected in API-key mode, but the standalone
+        // loader must still preserve direct MCP when no app route is available.
+        let mut direct_servers = crate::loader::load_plugin_mcp_servers(
+            &plugin_root,
+            &PluginId::parse(&format!("sample@{marketplace}")).unwrap(),
+            Some(AuthMode::ApiKey),
+        )
+        .await
+        .into_keys()
+        .collect::<Vec<_>>();
+        direct_servers.sort();
+        assert_eq!(direct_servers, vec!["sample", "unrelated"]);
+    }
+}
+
+#[tokio::test]
 async fn plugin_auth_projection_hides_dual_surface_mcp_with_agent_identity_apps_route() {
     let codex_home = TempDir::new().unwrap();
     write_auth_projection_plugin(codex_home.path(), "sample", /*include_app*/ true);

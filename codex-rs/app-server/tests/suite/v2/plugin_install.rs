@@ -2302,23 +2302,51 @@ async fn plugin_install_skips_remote_mcp_oauth_disabled_by_plugin_config() -> Re
     Ok(())
 }
 
+#[test_case(false; "legacy manifest")]
+#[test_case(true; "agent plugin manifest")]
 #[tokio::test]
-async fn plugin_install_skips_remote_mcp_oauth_for_bundled_same_name_app() -> Result<()> {
+async fn plugin_install_skips_remote_mcp_oauth_for_service_generated_app(
+    agent_plugin: bool,
+) -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     let oauth_server = MockServer::start().await;
+    let plugin_manifest = if agent_plugin {
+        json!({
+            "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+            "name": "linear",
+            "extensions": {"com.openai": {"apps": "./.app.json"}}
+        })
+    } else {
+        json!({"name": "linear"})
+    };
+    let mcp_config = json!({
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+        "mcpServers": {"sample-mcp": {
+            "type": if agent_plugin { "streamable-http" } else { "http" },
+            "url": format!("{}/mcp", oauth_server.uri())
+        }}
+    });
+    let service_app_manifest = json!({"apps": {"sample-mcp": {"id": "alpha"}}});
     let bundle_url = mount_remote_plugin_bundle(
         &server,
         /*status_code*/ 200,
-        remote_plugin_bundle_tar_gz_bytes_with_app_and_mcp_config(
-            "linear",
-            r#"{"apps":{"sample-mcp":{"id":"alpha"}}}"#,
-            &oauth_server.uri(),
+        remote_plugin_bundle_tar_gz_bytes_with_entries(
+            &plugin_manifest.to_string(),
+            Some(r#"{"apps":{"bundled":{"id":"bundled-app"}}}"#),
+            Some(&mcp_config.to_string()),
         )?,
     )
     .await;
     configure_remote_plugin_with_apps_test(codex_home.path(), &server)?;
-    mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
+    mount_remote_plugin_detail_with_app_manifest(
+        &server,
+        REMOTE_PLUGIN_ID,
+        "1.2.3",
+        Some(&bundle_url),
+        service_app_manifest.clone(),
+    )
+    .await;
     mount_empty_remote_installed_plugins(&server).await;
     mount_remote_plugin_install_with_apps_needing_auth(&server, REMOTE_PLUGIN_ID, &["alpha"]).await;
 
@@ -2345,7 +2373,21 @@ async fn plugin_install_skips_remote_mcp_oauth_for_bundled_same_name_app() -> Re
             }],
         }
     );
-    assert_eq!(oauth_discovery_request_count(&oauth_server).await, 0);
+    assert_eq!(
+        oauth_server
+            .received_requests()
+            .await
+            .expect("recorded MCP endpoint requests")
+            .len(),
+        0
+    );
+    let installed_app_manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(
+            codex_home
+                .path()
+                .join("plugins/cache/openai-curated-remote/linear/1.2.3/.app.json"),
+        )?)?;
+    assert_eq!(installed_app_manifest, service_app_manifest);
     Ok(())
 }
 
@@ -3403,29 +3445,6 @@ fn remote_plugin_bundle_tar_gz_bytes_with_mcp_config(
     )
 }
 
-fn remote_plugin_bundle_tar_gz_bytes_with_app_and_mcp_config(
-    plugin_name: &str,
-    app_manifest: &str,
-    mcp_base_url: &str,
-) -> Result<Vec<u8>> {
-    let manifest = format!(r#"{{"name":"{plugin_name}"}}"#);
-    let mcp_config = format!(
-        r#"{{
-  "mcpServers": {{
-    "sample-mcp": {{
-      "type": "http",
-      "url": "{mcp_base_url}/mcp"
-    }}
-  }}
-}}"#
-    );
-    remote_plugin_bundle_tar_gz_bytes_with_entries(
-        &manifest,
-        Some(app_manifest),
-        Some(mcp_config.as_str()),
-    )
-}
-
 fn remote_plugin_bundle_tar_gz_bytes_with_contents(
     plugin_manifest: &str,
     app_manifest: Option<&str>,
@@ -3442,6 +3461,10 @@ fn remote_plugin_bundle_tar_gz_bytes_with_entries(
     app_manifest: Option<&str>,
     mcp_config: Option<&str>,
 ) -> Result<Vec<u8>> {
+    let agent_plugin =
+        serde_json::from_str::<serde_json::Value>(plugin_manifest).is_ok_and(|manifest| {
+            manifest["$schema"] == "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+        });
     let skill = "---\nname: plan-work\ndescription: Track work in Linear.\n---\n\n# Plan Work\n";
     let encoder = GzEncoder::new(Vec::new(), Compression::default());
     let mut tar = tar::Builder::new(encoder);
@@ -3457,11 +3480,23 @@ fn remote_plugin_bundle_tar_gz_bytes_with_entries(
             /*mode*/ 0o644,
         ),
     ];
+    if agent_plugin {
+        entries.push((
+            "plugin.json",
+            plugin_manifest.as_bytes(),
+            /*mode*/ 0o644,
+        ));
+    }
     if let Some(app_manifest) = app_manifest {
         entries.push((".app.json", app_manifest.as_bytes(), /*mode*/ 0o644));
     }
     if let Some(mcp_config) = mcp_config {
-        entries.push((".mcp.json", mcp_config.as_bytes(), /*mode*/ 0o644));
+        let path = if agent_plugin {
+            "mcp.json"
+        } else {
+            ".mcp.json"
+        };
+        entries.push((path, mcp_config.as_bytes(), /*mode*/ 0o644));
     }
     for (path, contents, mode) in entries {
         let mut header = tar::Header::new_gnu();

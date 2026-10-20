@@ -1,6 +1,7 @@
 use crate::PluginGitMode;
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::app_mcp_routing::apps_route_available;
+use crate::app_mcp_routing::plugin_supports_apps;
 use crate::is_openai_curated_marketplace_name;
 use crate::manifest::ManifestCache;
 use crate::manifest::PluginManifest;
@@ -962,7 +963,7 @@ async fn load_plugin(
                 loaded_manifest.format,
             )
             .await;
-            if loaded_manifest.format == PluginManifestFormat::Legacy {
+            if plugin_supports_apps(loaded_manifest.format, &loaded_plugin_id) {
                 loaded_plugin.apps =
                     load_plugin_apps_from_manifest(plugin_root.as_path(), manifest_paths).await;
             }
@@ -1151,9 +1152,9 @@ fn default_mcp_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
     paths
 }
 
-pub async fn load_plugin_apps(plugin_root: &Path) -> Vec<AppDeclaration> {
+pub async fn load_plugin_apps(plugin_root: &Path, plugin_id: &PluginId) -> Vec<AppDeclaration> {
     if let Some(loaded_manifest) = load_plugin_manifest_with_format(plugin_root) {
-        if loaded_manifest.format == PluginManifestFormat::AgentPlugin {
+        if !plugin_supports_apps(loaded_manifest.format, plugin_id) {
             return Vec::new();
         }
         return load_plugin_apps_from_manifest(plugin_root, &loaded_manifest.manifest.paths).await;
@@ -1397,10 +1398,10 @@ pub(crate) async fn plugin_capability_summary_from_root(
     mcp_server_names.sort_unstable();
     mcp_server_names.dedup();
 
-    let app_declarations = if manifest_format == PluginManifestFormat::AgentPlugin {
-        Vec::new()
-    } else {
+    let app_declarations = if plugin_supports_apps(manifest_format, plugin_id) {
         load_plugin_apps_from_manifest(plugin_root.as_path(), manifest_paths).await
+    } else {
+        Vec::new()
     };
     let app_connector_ids = app_connector_ids_from_declarations(&app_declarations);
 
@@ -1418,9 +1419,16 @@ pub(crate) async fn plugin_capability_summary_from_root(
 /// Loads plugin MCP servers without applying user-specific policy overrides.
 pub async fn load_plugin_mcp_servers(
     plugin_root: &Path,
+    plugin_id: &PluginId,
     auth_mode: Option<AuthMode>,
 ) -> HashMap<String, McpServerConfig> {
-    load_plugin_mcp_servers_with_policy(plugin_root, auth_mode, /*plugin_policy*/ None).await
+    load_plugin_mcp_servers_with_policy(
+        plugin_root,
+        plugin_id,
+        auth_mode,
+        /*plugin_policy*/ None,
+    )
+    .await
 }
 
 /// Loads plugin MCP servers with the effective configuration policy for an installed plugin.
@@ -1432,12 +1440,11 @@ pub async fn load_configured_plugin_mcp_servers(
     codex_home: &Path,
 ) -> HashMap<String, McpServerConfig> {
     let configured_plugins = configured_plugins_from_stack(config_layer_stack, codex_home);
-    let plugin_id = plugin_id.as_key();
     let plugin_policy = configured_plugins
-        .get(&plugin_id)
+        .get(&plugin_id.as_key())
         .map(|plugin| &plugin.mcp_servers);
 
-    load_plugin_mcp_servers_with_policy(plugin_root, auth_mode, plugin_policy).await
+    load_plugin_mcp_servers_with_policy(plugin_root, plugin_id, auth_mode, plugin_policy).await
 }
 
 /// Applies user policy without widening the selected plugin's declared restrictions.
@@ -1505,6 +1512,7 @@ pub fn apply_configured_plugin_mcp_server_policies(
 
 async fn load_plugin_mcp_servers_with_policy(
     plugin_root: &Path,
+    plugin_id: &PluginId,
     auth_mode: Option<AuthMode>,
     plugin_policy: Option<&HashMap<String, PluginMcpServerConfig>>,
 ) -> HashMap<String, McpServerConfig> {
@@ -1513,7 +1521,7 @@ async fn load_plugin_mcp_servers_with_policy(
         return mcp_servers;
     }
 
-    let mut app_declarations = load_plugin_apps(plugin_root).await;
+    let mut app_declarations = load_plugin_apps(plugin_root, plugin_id).await;
     apply_app_mcp_routing_policy(
         &mut app_declarations,
         &mut mcp_servers,

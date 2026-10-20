@@ -1575,7 +1575,8 @@ impl PluginRequestProcessor {
             .await;
         }
 
-        let plugin_app_declarations = load_plugin_apps(result.installed_path.as_path()).await;
+        let plugin_app_declarations =
+            load_plugin_apps(result.installed_path.as_path(), &result.plugin_id).await;
         let apps_needing_auth = self
             .plugin_apps_needing_auth_for_install(
                 &config,
@@ -1737,7 +1738,8 @@ impl PluginRequestProcessor {
                     .await
             }
         } else {
-            let plugin_app_declarations = load_plugin_apps(result.installed_path.as_path()).await;
+            let plugin_app_declarations =
+                load_plugin_apps(result.installed_path.as_path(), &result.plugin_id).await;
             self.plugin_apps_needing_auth_for_install(
                 &config,
                 auth.as_ref(),

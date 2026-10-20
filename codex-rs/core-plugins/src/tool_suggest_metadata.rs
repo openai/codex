@@ -17,6 +17,7 @@ use codex_utils_plugins::PluginSkillRoot;
 use tokio::sync::Semaphore;
 
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
+use crate::app_mcp_routing::plugin_supports_apps;
 use crate::loader::PluginSkillInventory;
 use crate::loader::load_plugin_apps_from_manifest;
 use crate::loader::load_plugin_mcp_servers_from_manifest_with_format;
@@ -24,7 +25,6 @@ use crate::loader::load_plugin_skill_inventory;
 use crate::manager::ConfiguredMarketplacePlugin;
 use crate::manager::remote_plugin_install_required_description;
 use crate::manifest::ManifestCache;
-use crate::manifest::PluginManifestFormat;
 use crate::marketplace::MarketplaceError;
 use crate::marketplace::MarketplacePluginSource;
 
@@ -257,10 +257,10 @@ async fn load_plugin_metadata(
     .collect::<Vec<_>>();
     mcp_server_names.sort_unstable();
     mcp_server_names.dedup();
-    let app_declarations = if loaded_manifest.format == PluginManifestFormat::AgentPlugin {
-        Vec::new()
-    } else {
+    let app_declarations = if plugin_supports_apps(loaded_manifest.format, &plugin_id) {
         load_plugin_apps_from_manifest(plugin_root.as_path(), &manifest.paths).await
+    } else {
+        Vec::new()
     };
 
     Ok(Arc::new(ToolSuggestMetadataFragment {

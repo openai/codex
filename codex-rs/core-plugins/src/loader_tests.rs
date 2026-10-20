@@ -45,7 +45,11 @@ async fn agent_plugin_overlay_apps_are_not_runtime_active() {
         r#"{"apps":{"example":{"id":"connector_example"}}}"#,
     );
 
-    assert!(load_plugin_apps(&plugin_root).await.is_empty());
+    assert!(
+        load_plugin_apps(&plugin_root, &PluginId::parse("plugin@test").unwrap())
+            .await
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -79,7 +83,12 @@ async fn agent_plugin_codex_mcp_overlay_only_forwards_matching_stdio_server_env_
 }"#,
     );
 
-    let mut expected = load_plugin_mcp_servers(&plugin_root, /*auth_mode*/ None).await;
+    let mut expected = load_plugin_mcp_servers(
+        &plugin_root,
+        &PluginId::parse("plugin@test").unwrap(),
+        /*auth_mode*/ None,
+    )
+    .await;
     let Some(McpServerConfig {
         transport: McpServerTransportConfig::Stdio { env, env_vars, .. },
         ..
@@ -111,7 +120,12 @@ async fn agent_plugin_codex_mcp_overlay_only_forwards_matching_stdio_server_env_
     );
 
     assert_eq!(
-        load_plugin_mcp_servers(&plugin_root, /*auth_mode*/ None).await,
+        load_plugin_mcp_servers(
+            &plugin_root,
+            &PluginId::parse("plugin@test").unwrap(),
+            /*auth_mode*/ None
+        )
+        .await,
         expected
     );
 }
@@ -137,7 +151,12 @@ async fn agent_plugin_codex_mcp_overlay_supports_inline_legacy_servers_without_p
 }"#,
     );
 
-    let mut expected = load_plugin_mcp_servers(&plugin_root, /*auth_mode*/ None).await;
+    let mut expected = load_plugin_mcp_servers(
+        &plugin_root,
+        &PluginId::parse("plugin@test").unwrap(),
+        /*auth_mode*/ None,
+    )
+    .await;
     let Some(McpServerConfig {
         transport: McpServerTransportConfig::Stdio { env_vars, .. },
         ..
@@ -158,7 +177,12 @@ async fn agent_plugin_codex_mcp_overlay_supports_inline_legacy_servers_without_p
     );
 
     assert_eq!(
-        load_plugin_mcp_servers(&plugin_root, /*auth_mode*/ None).await,
+        load_plugin_mcp_servers(
+            &plugin_root,
+            &PluginId::parse("plugin@test").unwrap(),
+            /*auth_mode*/ None
+        )
+        .await,
         expected
     );
 }
@@ -440,11 +464,17 @@ async fn legacy_ema_policy_disables_installed_and_selected_plugin_servers() {
         let policy = &config.plugins.plugins["plugin@market"].mcp_servers;
         let installed = load_plugin_mcp_servers_with_policy(
             &plugin_root,
+            &PluginId::parse("plugin@test").unwrap(),
             /*auth_mode*/ None,
             Some(policy),
         )
         .await;
-        let mut selected = load_plugin_mcp_servers(&plugin_root, /*auth_mode*/ None).await;
+        let mut selected = load_plugin_mcp_servers(
+            &plugin_root,
+            &PluginId::parse("plugin@test").unwrap(),
+            /*auth_mode*/ None,
+        )
+        .await;
         assert!(selected["example"].enabled);
         apply_configured_plugin_mcp_server_policies(policy, &mut selected);
         assert!(!installed["example"].enabled);
