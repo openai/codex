@@ -71,7 +71,6 @@ pub(crate) fn authorize_client_process(pipe: HANDLE) -> Result<AuthorizedClientP
             }
             None => bail!("provisioning service has no package identity"),
         },
-        None if service_family.is_some() => {}
         #[cfg(debug_assertions)]
         None if FOREGROUND_MODE.load(Ordering::Acquire) => {}
         None => bail!("provisioning clients must run with an installed Codex package identity"),
