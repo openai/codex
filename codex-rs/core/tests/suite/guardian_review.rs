@@ -26,6 +26,8 @@ use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -95,6 +97,7 @@ use wiremock::http::Method;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
+use super::guardian_mcp_elicitation::guardian_blocking_samples;
 use super::network_approval::guardian_parent_catalog;
 use super::rmcp_client::remote_aware_environment_id;
 use super::rmcp_client::remote_aware_stdio_server_bin;
@@ -2806,7 +2809,16 @@ async fn yielded_code_mode_denials_interrupt_the_servicing_turn() -> Result<()> 
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
         });
-    let test = builder.build_with_auto_env(&server).await?;
+    let mut test = builder.build_with_auto_env(&server).await?;
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "test", "1", Default::default()).with_runtime_reader(),
+    )?;
+    let mut options = test.start_thread_options().await;
+    options.history_mode = Some(codex_protocol::protocol::ThreadHistoryMode::Legacy);
+    options.thread_extension_init.insert(metrics.clone());
+    let thread = test.thread_manager.start_thread(options).await?;
+    test.codex.shutdown_and_wait().await?;
+    test.codex = thread.thread;
     let barrier = r#"await tools.test_sync_tool({barrier: {
         id: "guardian-origin", participants: 2, timeout_ms: 60000
     }});"#;
@@ -2950,5 +2962,145 @@ for (let index = 0; index < 6; index++) {{
             1
         );
     }
+    test.codex.shutdown_and_wait().await?;
+    let mut samples = guardian_blocking_samples(&metrics, "outcome")?;
+    assert_eq!(samples.remove("completed"), Some(0.0));
+    assert!(samples.remove("aborted").unwrap() > 0.0);
+    assert!(samples.is_empty());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_blocking_follows_a_pending_review_across_turns() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let code = r#"// @exec: {"yield_time_ms": 1}
+text(await tools.exec_command({
+    cmd: "echo spanning-review",
+    sandbox_permissions: "require_escalated",
+    justification: "Keep a Guardian review pending across turns."
+}));"#;
+    let (finish_a, a_gate) = tokio::sync::oneshot::channel();
+    let (finish_review, review_gate) = tokio::sync::oneshot::channel();
+    let chunk = |gate, events| StreamingSseChunk {
+        gate,
+        body: sse(events),
+    };
+    let (streaming, _) = start_streaming_sse_server(vec![
+        vec![
+            chunk(
+                /*gate*/ None,
+                vec![
+                    ev_response_created("a"),
+                    ev_custom_tool_call("cell-a", "exec", code),
+                ],
+            ),
+            chunk(Some(a_gate), vec![ev_completed("a")]),
+        ],
+        vec![chunk(
+            Some(review_gate),
+            vec![
+                ev_response_created("review"),
+                ev_assistant_message("assessment", r#"{"outcome":"deny"}"#),
+                ev_completed("review"),
+            ],
+        )],
+        vec![chunk(/*gate*/ None, vec![ev_completed("a-finished")])],
+        vec![chunk(
+            /*gate*/ None,
+            vec![
+                ev_function_call("wait-a", "wait", r#"{"cell_id":"1","yield_time_ms":60000}"#),
+                ev_completed("b"),
+            ],
+        )],
+        vec![chunk(/*gate*/ None, vec![ev_completed("b-finished")])],
+    ])
+    .await;
+    let server = start_mock_server().await;
+    let base_url = format!("{}/v1", streaming.uri());
+    let mut builder = test_codex().with_config(move |config| {
+        config.features.enable(Feature::CodeMode).unwrap();
+        config
+            .features
+            .disable(Feature::EnableRequestCompression)
+            .unwrap();
+        config.model_provider.base_url = Some(base_url);
+        config.model_provider.supports_websockets = false;
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    });
+    for model in ["gpt-5.2", "gpt-5.4"] {
+        builder = builder.with_model_info_override(model, |info| {
+            info.tool_mode = Some(codex_protocol::openai_models::ToolMode::CodeMode);
+        });
+    }
+    let mut test = builder
+        .with_model("gpt-5.4")
+        .build_with_auto_env(&server)
+        .await?;
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "test", "1", Default::default()).with_runtime_reader(),
+    )?;
+    let mut options = test.start_thread_options().await;
+    options.history_mode = Some(codex_protocol::protocol::ThreadHistoryMode::Legacy);
+    options.thread_extension_init.insert(metrics.clone());
+    let thread = test.thread_manager.start_thread(options).await?;
+    test.codex.shutdown_and_wait().await?;
+    test.codex = thread.thread;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Start A and leave its cell running.".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    // The review has reached its backend before A is allowed to finish.
+    streaming.wait_for_request_count(/*count*/ 2).await;
+    finish_a.send(()).unwrap();
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let requests = streaming.requests().await;
+    let yielded: Value = serde_json::from_slice(&requests[2])?;
+    let output = yielded["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["call_id"] == "cell-a" && item["type"] == "custom_tool_call_output")
+        .unwrap();
+    assert!(
+        output["output"]
+            .to_string()
+            .contains("Script running with cell ID 1"),
+        "{output}"
+    );
+
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Wait for A's cell.".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                model: Some("gpt-5.2".into()),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    // B is active while the same review is still blocked on its response gate.
+    streaming.wait_for_request_count(/*count*/ 4).await;
+    finish_review.send(()).unwrap();
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.codex.shutdown_and_wait().await?;
+    let samples = guardian_blocking_samples(&metrics, "model")?;
+    assert_eq!(samples.len(), 2);
+    assert!(samples["gpt-5.4"] > 0.0);
+    assert!(samples["gpt-5.2"] > 0.0);
+    streaming.shutdown().await;
     Ok(())
 }

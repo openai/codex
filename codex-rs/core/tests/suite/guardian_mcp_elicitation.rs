@@ -8,6 +8,8 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::items::McpToolCallStatus;
 use codex_protocol::items::TurnItem;
@@ -27,9 +29,12 @@ use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 use test_case::test_case;
@@ -955,6 +960,10 @@ async fn yielded_code_mode_elicitation_keeps_live_invocation_metadata() -> Resul
         }
     }))?;
     let mut builder = test_codex()
+        .with_model_info_override("gpt-5.2", |model| {
+            model.tool_mode = Some(codex_protocol::openai_models::ToolMode::CodeMode);
+            model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
+        })
         .with_model_info_override("gpt-5.4", |model| {
             model.tool_mode = Some(codex_protocol::openai_models::ToolMode::CodeMode);
             model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
@@ -968,7 +977,16 @@ async fn yielded_code_mode_elicitation_keeps_live_invocation_metadata() -> Resul
             config.approvals_reviewer = ApprovalsReviewer::User;
             config.mcp_servers.set(mcp_servers).unwrap();
         });
-    let test = builder.build_with_auto_env(&server).await?;
+    let mut test = builder.build_with_auto_env(&server).await?;
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "test", "1", Default::default()).with_runtime_reader(),
+    )?;
+    let mut options = test.start_thread_options().await;
+    options.history_mode = Some(codex_protocol::protocol::ThreadHistoryMode::Legacy);
+    options.thread_extension_init.insert(metrics.clone());
+    let thread = test.thread_manager.start_thread(options).await?;
+    test.codex.shutdown_and_wait().await?;
+    test.codex = thread.thread;
     wait_for_mcp_server(&test.codex, "node_repl").await?;
     let barrier = r#"await tools.test_sync_tool({barrier: {
         id: "elicitation-origin", participants: 2, timeout_ms: 60000
@@ -1043,10 +1061,16 @@ async fn yielded_code_mode_elicitation_keeps_live_invocation_metadata() -> Resul
     )
     .await;
     test.codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "Run B and wait for A.".into(),
-            text_elements: Vec::new(),
-        }]))
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Run B and wait for A.".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                model: Some("gpt-5.2".into()),
+                ..Default::default()
+            }),
+        )
         .await?;
     let mut invocation_id = None;
     let mut assessment_target = None;
@@ -1081,5 +1105,37 @@ async fn yielded_code_mode_elicitation_keeps_live_invocation_metadata() -> Resul
             .count(),
         1
     );
+    test.codex.shutdown_and_wait().await?;
+    let mut samples = guardian_blocking_samples(&metrics, "model")?;
+    assert_eq!(samples.remove("gpt-5.4"), Some(0.0));
+    assert!(samples.remove("gpt-5.2").unwrap() > 0.0);
+    assert!(samples.is_empty());
     Ok(())
+}
+
+/// Reads per-turn samples shared by command and MCP approval regressions.
+pub(super) fn guardian_blocking_samples(
+    metrics: &MetricsClient,
+    label: &str,
+) -> Result<BTreeMap<String, f64>> {
+    let snapshot = metrics.snapshot()?;
+    let metric = snapshot
+        .scope_metrics()
+        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+        .find(|metric| metric.name() == "codex.guardian.turn.blocking_ms")
+        .context("blocking histogram")?;
+    let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data() else {
+        panic!("expected blocking histogram");
+    };
+    histogram
+        .data_points()
+        .map(|point| {
+            let attribute = point
+                .attributes()
+                .find(|tag| tag.key.as_str() == label)
+                .context("blocking metric label")?;
+            assert_eq!(point.count(), 1);
+            Ok((attribute.value.as_str().to_string(), point.sum()))
+        })
+        .collect()
 }

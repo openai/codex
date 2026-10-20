@@ -22,6 +22,8 @@ use codex_extension_api::TurnAbortInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
+use codex_guardian_reviewer::ReviewBlocking;
+use codex_guardian_reviewer::ReviewBlockingTurn;
 use codex_guardian_reviewer::ReviewDenials;
 use codex_guardian_reviewer::ReviewerPool;
 use codex_guardian_reviewer::ReviewerTasks;
@@ -58,6 +60,7 @@ impl ThreadLifecycleContributor<Config> for GuardianExtension {
             let manager = self.thread_manager.clone();
             let parent_thread_id = input.thread_store.level_id().to_owned();
             let runtime = input.thread_store.get_or_init(ReviewerTasks::default);
+            input.thread_store.get_or_init(ReviewBlocking::default);
             input.thread_store.get_or_init(|| {
                 ReviewerPool::<GuardianReviewSession>::new(
                     Arc::clone(&runtime),
@@ -228,19 +231,39 @@ impl ThreadLifecycleContributor<Config> for GuardianExtension {
 
 impl TurnLifecycleContributor for GuardianExtension {
     fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
-        Box::pin(ReviewDenials::clear_turn(input.thread_store, input.turn_id))
+        Box::pin(async move {
+            if input.thread_store.get::<ReviewerTasks>().is_some()
+                && let Some(telemetry) = input.turn_store.get()
+            {
+                let tracker = input.thread_store.get_or_init(ReviewBlocking::default);
+                input
+                    .turn_store
+                    .get_or_init(|| tracker.start_turn(input.turn_id, telemetry));
+            }
+            ReviewDenials::clear_turn(input.thread_store, input.turn_id).await;
+        })
     }
     fn on_turn_stop<'a>(&'a self, input: TurnStopInput<'a>) -> ExtensionFuture<'a, ()> {
-        Box::pin(ReviewDenials::clear_turn(
-            input.thread_store,
-            input.turn_store.level_id(),
-        ))
+        Box::pin(async move {
+            if let (Some(tracker), Some(turn)) = (
+                input.thread_store.get::<ReviewBlocking>(),
+                input.turn_store.get::<ReviewBlockingTurn>(),
+            ) {
+                tracker.finish_turn(&turn, "completed");
+            }
+            ReviewDenials::clear_turn(input.thread_store, input.turn_store.level_id()).await;
+        })
     }
     fn on_turn_abort<'a>(&'a self, input: TurnAbortInput<'a>) -> ExtensionFuture<'a, ()> {
-        Box::pin(ReviewDenials::clear_turn(
-            input.thread_store,
-            input.turn_store.level_id(),
-        ))
+        Box::pin(async move {
+            if let (Some(tracker), Some(turn)) = (
+                input.thread_store.get::<ReviewBlocking>(),
+                input.turn_store.get::<ReviewBlockingTurn>(),
+            ) {
+                tracker.finish_turn(&turn, "aborted");
+            }
+            ReviewDenials::clear_turn(input.thread_store, input.turn_store.level_id()).await;
+        })
     }
 }
 

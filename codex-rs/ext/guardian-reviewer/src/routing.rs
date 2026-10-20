@@ -71,6 +71,10 @@ impl<H: ReviewHost> ReviewRequest<'_, H> {
             .telemetry
             .start_timer("codex.guardian.decision.duration_ms", &[])
             .ok();
+        let _blocking = self
+            .thread_store
+            .get::<crate::ReviewBlocking>()
+            .map(|blocking| blocking.enter());
         let runtime = self.thread_store.get::<crate::ReviewerTasks>();
         let _task = runtime.as_ref().map(|runtime| runtime.tasks.token());
         if runtime
