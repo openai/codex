@@ -101,6 +101,12 @@ pub struct LunaSamplingRequest {
     pub(super) pending_score: Option<PendingScore>,
 }
 
+/// Admitted retained input and Luna settings consumed together at execution.
+pub(super) struct ConversationSample {
+    pub(super) input: PreparedRequest,
+    pub(super) sampling: LunaSamplingRequest,
+}
+
 /// Failures returned while connecting or sampling the Luna model.
 #[derive(Debug, Error)]
 pub enum LunaSamplerError {
@@ -371,9 +377,13 @@ impl LunaSampler {
     /// Publishes the early score and returns only validated, completed history.
     pub(super) async fn sample_retained(
         &self,
-        prepared: PreparedRequest<'_>,
+        sample: ConversationSample,
         ready: oneshot::Sender<Result<SampledScore, LunaSamplerError>>,
     ) -> Option<Vec<ResponseItemEnvelope>> {
+        let ConversationSample {
+            input: review_request,
+            sampling,
+        } = sample;
         let auth_owner_generation = self.auth_owner_generation();
         let mut completion = execution::RetainedCompletion {
             ready: Some(ready),
@@ -383,19 +393,19 @@ impl LunaSampler {
                 .config
                 .max_input_tokens
                 .saturating_sub(/*rhs*/ 256)
-                .saturating_sub(prepared.input_tokens),
+                .saturating_sub(review_request.input_tokens),
         };
         // Transport sees model items; delivery proof follows the unchanged input prefix.
-        let (input, metadata): (Vec<_>, Vec<_>) = prepared
+        let (input, metadata): (Vec<_>, Vec<_>) = review_request
             .input
             .into_iter()
             .map(|envelope| (envelope.item, envelope.metadata))
             .unzip();
-        let mut execution = self.execution(prepared.sampling, input, auth_owner_generation);
+        let mut execution = self.execution(&sampling, input, auth_owner_generation);
         execution.request.include = vec!["reasoning.encrypted_content".to_owned()];
         let mut telemetry = telemetry::SamplingTelemetry::new(
             self.config.metrics.clone(),
-            prepared.sampling.pending_score.clone(),
+            sampling.pending_score.clone(),
         );
         let result = execution
             .run(

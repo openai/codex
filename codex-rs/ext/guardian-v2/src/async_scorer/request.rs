@@ -22,7 +22,7 @@ impl LunaSamplingRequest {
         evidence: &CollectedTranscript,
         conversation: &mut ConversationState<Vec<ResponseItemEnvelope>>,
         max_input_tokens: usize,
-    ) -> Option<PreparedRequest<'_>> {
+    ) -> Option<PreparedRequest> {
         let cursor = conversation.cursor();
         if conversation.snapshot().is_some() != cursor.is_some() {
             return None;
@@ -68,7 +68,6 @@ impl LunaSamplingRequest {
             input = history;
         }
         Some(PreparedRequest {
-            sampling: self,
             input,
             cursor: next_cursor,
             truncations,
@@ -79,9 +78,8 @@ impl LunaSamplingRequest {
     }
 }
 
-/// Admitted input and its token count, tied to the sampling settings used to prepare it.
-pub(super) struct PreparedRequest<'a> {
-    pub(super) sampling: &'a LunaSamplingRequest,
+/// Admitted input and accounting for one retained review.
+pub(super) struct PreparedRequest {
     pub(super) input: Vec<ResponseItemEnvelope>,
     pub(super) cursor: TranscriptCursor,
     pub(super) truncations: Vec<TruncationObservation>,

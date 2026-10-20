@@ -4,6 +4,7 @@
 //! Permits bound preparation and sampling through full response completion.
 //! Backend replacement invalidates its generation without changing snapshot shutdown policy.
 //! Oversized retained requests rebuild from fresh evidence before the model's hard limit.
+//! Preparation exposes the complete input without starting model execution.
 //! Each request owns its fork; failed or cancelled requests leave committed history intact.
 //! Host-only instruction delivery metadata is committed with its completed input messages.
 //! Expired classifications release their transport without committing partial history.
@@ -23,6 +24,8 @@ use tokio::sync::Semaphore;
 use tokio::sync::oneshot;
 
 use super::authorization::ScoreAuthorization;
+use super::request::PreparedRequest;
+use super::sampler::ConversationSample;
 use super::sampler::LunaSampler;
 use super::sampler::LunaSamplerError;
 use super::sampler::LunaSamplingRequest;
@@ -62,6 +65,19 @@ pub(super) struct ConversationRequest {
     pub(super) ready: oneshot::Sender<Result<SampledScore, LunaSamplerError>>,
     pub(super) metrics: Option<Arc<dyn ExtensionMetrics>>,
     pub(super) pending_score: PendingScore,
+}
+
+/// Owns an admitted history fork and its permit until execution completes or it is dropped.
+pub(super) struct PreparedConversation {
+    reservation: Reservation,
+    pub(super) request: PreparedRequest,
+    sampling: LunaSamplingRequest,
+    key: ReuseKey,
+    state: ConversationState<Vec<ResponseItemEnvelope>>,
+    thread: Arc<CodexThread>,
+    ready: oneshot::Sender<Result<SampledScore, LunaSamplerError>>,
+    metrics: Option<Arc<dyn ExtensionMetrics>>,
+    pending_score: PendingScore,
 }
 
 // Authorization covers model settings; local config changes replace the backend.
@@ -109,17 +125,20 @@ impl ConversationBackend {
 }
 
 impl Reservation {
-    pub(super) async fn run(self, mut request: ConversationRequest) {
+    pub(super) async fn prepare(
+        self,
+        mut request: ConversationRequest,
+    ) -> Option<PreparedConversation> {
         request.sampling.pending_score = Some(request.pending_score.clone());
         if self.generation.strong_count() == 0
             || !request.authorization.is_current(&request.thread).await
             || request.pending_score.is_expired()
         {
             let _ = request.ready.send(Err(LunaSamplerError::Superseded));
-            return;
+            return None;
         }
         let key = ReuseKey {
-            authorization: request.authorization.clone(),
+            authorization: request.authorization,
             instructions: request.sampling.instructions.clone(),
             parent_compaction: request.sampling.parent_compaction.clone(),
         };
@@ -135,16 +154,16 @@ impl Reservation {
             .map(ConversationState::from)
             .unwrap_or_default();
         let had_history = state.snapshot().is_some();
-        let prepared = request
+        let review_request = request
             .sampling
             .prepare_retained(
                 &request.evidence,
                 &mut state,
                 self.sampler.max_input_tokens(),
             )
-            .filter(|prepared| {
-                prepared.existing_context_tokens == 0
-                    || prepared.input_tokens <= request.reset_token_limit
+            .filter(|review_request| {
+                review_request.existing_context_tokens == 0
+                    || review_request.input_tokens <= request.reset_token_limit
             })
             .or_else(|| {
                 if !had_history {
@@ -157,53 +176,83 @@ impl Reservation {
                     self.sampler.max_input_tokens(),
                 )
             });
-        let Some(mut prepared) = prepared else {
+        let Some(review_request) = review_request else {
             let _ = request.ready.send(Err(LunaSamplerError::InputTooLarge));
-            return;
+            return None;
         };
         super::metrics::record_section_costs(
             request.metrics.as_deref(),
-            prepared.section_costs.iter().copied(),
+            review_request.section_costs.iter().copied(),
         );
         super::metrics::record_request_tokens(
             request.metrics.as_deref(),
-            prepared.existing_context_tokens,
-            prepared.input_tokens,
+            review_request.existing_context_tokens,
+            review_request.input_tokens,
             super::metrics::RequestAdmission::Admitted,
         );
         drop(request.evidence);
-        let cursor = prepared.cursor;
-        let pending_truncations = std::mem::take(&mut prepared.truncations);
+        Some(PreparedConversation {
+            reservation: self,
+            request: review_request,
+            sampling: request.sampling,
+            key,
+            state,
+            thread: request.thread,
+            ready: request.ready,
+            metrics: request.metrics,
+            pending_score: request.pending_score,
+        })
+    }
+}
+
+impl PreparedConversation {
+    /// Publishes the first score, then drains and commits only valid completed history.
+    pub(super) async fn run(mut self) {
+        // A caller can retain prepared input while authorization or admission expires.
+        if self.reservation.generation.strong_count() == 0
+            || !self.key.authorization.is_current(&self.thread).await
+            || self.pending_score.is_expired()
+        {
+            let _ = self.ready.send(Err(LunaSamplerError::Superseded));
+            return;
+        }
+        let cursor = self.request.cursor;
+        let pending_truncations = std::mem::take(&mut self.request.truncations);
+        let sample = ConversationSample {
+            input: self.request,
+            sampling: self.sampling,
+        };
         let history = tokio::select! {
             biased;
-            () = request.pending_score.expired() => None,
-            history = self.sampler.sample_retained(prepared, request.ready) => history,
+            () = self.pending_score.expired() => None,
+            history = self.reservation.sampler.sample_retained(sample, self.ready) => history,
         };
         if let Some(history) = history
-            && self.generation.strong_count() > 0
-            && request.authorization.is_current(&request.thread).await
+            && self.reservation.generation.strong_count() > 0
+            && self.key.authorization.is_current(&self.thread).await
         {
             let mut truncations = super::truncation::ClassificationTruncations::default();
             truncations.extend(pending_truncations);
-            truncations.emit(request.metrics.as_deref());
-            state.complete_review(cursor);
-            state.commit_snapshot(history);
+            truncations.emit(self.metrics.as_deref());
+            self.state.complete_review(cursor);
+            self.state.commit_snapshot(history);
             let mut latest = self
+                .reservation
                 .history
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if latest
                 .as_ref()
-                .is_none_or(|previous| previous.index < self.index)
+                .is_none_or(|previous| previous.index < self.reservation.index)
             {
                 *latest = Some(Arc::new(CompletedConversation {
-                    index: self.index,
-                    key,
-                    state,
+                    index: self.reservation.index,
+                    key: self.key,
+                    state: self.state,
                 }));
             }
         }
         // The permit is released only after completion and commit, not after the early score.
-        drop(self._permit);
+        drop(self.reservation._permit);
     }
 }

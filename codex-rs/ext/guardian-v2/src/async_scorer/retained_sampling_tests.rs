@@ -1,5 +1,6 @@
 use super::*;
 use crate::async_scorer::request::PreparedRequest;
+use crate::async_scorer::sampler::ConversationSample;
 use codex_guardian_context::TranscriptCursor;
 use codex_history::ResponseItemEnvelope;
 use pretty_assertions::assert_eq;
@@ -33,7 +34,6 @@ async fn retained_websocket_requests_preserve_model_output_and_ids() -> Result<(
             .map(codex_guardian_context::estimate_input_tokens)
             .fold(0usize, usize::saturating_add);
         let prepared = PreparedRequest {
-            sampling: &request,
             input: request
                 .input
                 .iter()
@@ -49,7 +49,11 @@ async fn retained_websocket_requests_preserve_model_output_and_ids() -> Result<(
             truncations: Vec::new(),
             section_costs: Vec::new(),
         };
-        let (completed, score) = tokio::join!(sampler.sample_retained(prepared, ready), score);
+        let request = ConversationSample {
+            input: prepared,
+            sampling: request,
+        };
+        let (completed, score) = tokio::join!(sampler.sample_retained(request, ready), score);
         assert_eq!(score??.accept(), "low");
         let completed = completed
             .expect("completed model history")
@@ -139,7 +143,6 @@ async fn retention_overflow_or_incomplete_stream_keeps_early_score() -> Result<(
             .map(codex_guardian_context::estimate_input_tokens)
             .fold(0usize, usize::saturating_add);
         let prepared = PreparedRequest {
-            sampling: &request,
             input: request
                 .input
                 .iter()
@@ -155,13 +158,17 @@ async fn retention_overflow_or_incomplete_stream_keeps_early_score() -> Result<(
             truncations: Vec::new(),
             section_costs: Vec::new(),
         };
+        let request = ConversationSample {
+            input: prepared,
+            sampling: request,
+        };
         let history = if receive_score {
-            let (history, score) = tokio::join!(sampler.sample_retained(prepared, ready), score);
+            let (history, score) = tokio::join!(sampler.sample_retained(request, ready), score);
             assert_eq!(score??.accept(), "low");
             history
         } else {
             let score = early_delta.then_some(score);
-            let history = sampler.sample_retained(prepared, ready).await;
+            let history = sampler.sample_retained(request, ready).await;
             // A queued score discarded without expiry remains a genuine cancellation.
             drop(score);
             history
