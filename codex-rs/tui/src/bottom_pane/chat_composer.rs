@@ -33,6 +33,7 @@
 //! By default, `@` lists plugins, filesystem entries, and skills. Skills are hidden when their
 //! owning plugin is listed. `$` lists individual skills and apps, but not plugins.
 //! Disabling `mentions_v2` restores file-only `@` search and adds plugins back to `$`.
+//! Confirmed `$` picker selections inform future ordering within each match tier.
 //!
 //! # Key Event Routing
 //!
@@ -352,6 +353,7 @@ use super::footer::single_line_footer_layout;
 use super::footer::status_line_right_indicator_line;
 use super::footer::toggle_shortcut_mode;
 use super::footer::uses_passive_footer_status_layout;
+use super::mention_usage::MentionUsage;
 use super::mentions_v2::MentionV2Popup;
 use super::mentions_v2::MentionV2Selection;
 use super::paste_burst::CharDecision;
@@ -614,6 +616,7 @@ impl ChatComposerConfig {
 pub(crate) struct ChatComposer {
     draft: DraftState,
     popups: PopupState,
+    pub(super) mention_usage: MentionUsage,
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
     agents_navigation_enabled: bool,
@@ -745,6 +748,7 @@ impl ChatComposer {
         let mut this = Self {
             draft: DraftState::new(),
             popups: PopupState::default(),
+            mention_usage: MentionUsage::default(),
             app_event_tx,
             history: ChatComposerHistory::new(),
             agents_navigation_enabled: false,
@@ -2287,6 +2291,9 @@ impl ChatComposer {
                 && let Some(target) = self.current_mention_target()
             {
                 self.insert_selected_mention(target.range, &insert_text, path.as_deref());
+                if let Some(path) = path {
+                    self.mention_usage.record(&path);
+                }
             }
             self.popups.active = ActivePopup::None;
         }
@@ -4113,7 +4120,8 @@ impl ChatComposer {
                 popup.set_mentions(mentions);
             }
             _ => {
-                let mut popup = SkillPopup::new(mentions);
+                let mut popup =
+                    SkillPopup::new(mentions).with_frequencies(self.mention_usage.frequencies());
                 popup.set_query(&query);
                 self.popups.active = ActivePopup::Skill(popup);
             }
@@ -7163,6 +7171,41 @@ mod tests {
             "skill_popup_targets_unbound_mention_left_of_bound_mention",
             /*enhanced_keys_supported*/ false,
             configure_partially_bound_skill_mentions,
+        );
+    }
+
+    #[test]
+    fn skill_popup_prefers_confirmed_selections_within_match_tier() {
+        snapshot_composer_state(
+            "skill_popup_prefers_confirmed_selections_within_match_tier",
+            /*enhanced_keys_supported*/ false,
+            |composer| {
+                composer.set_skill_mentions(Some(vec![
+                    test_skill_metadata("statsig"),
+                    test_skill_metadata("status"),
+                    test_skill_metadata("hello-statsig"),
+                ]));
+                for name in ["hello-statsig", "hello-statsig", "status"] {
+                    let text = format!("${name}");
+                    composer.set_text_content(text.clone(), Vec::new(), Vec::new());
+                    composer.set_current_cursor(text.len());
+                    composer.sync_popups();
+                    let _ = composer
+                        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                }
+                composer.set_text_content("$stat".to_owned(), Vec::new(), Vec::new());
+                composer.set_current_cursor("$stat".len());
+                composer.sync_popups();
+                let ActivePopup::Skill(popup) = &composer.popups.active else {
+                    panic!("expected skill popup");
+                };
+                assert_eq!(
+                    popup
+                        .selected_mention()
+                        .map(|item| item.insert_text.as_str()),
+                    Some("$status")
+                );
+            },
         );
     }
 

@@ -154,6 +154,8 @@ mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod memories_settings_view;
+mod mention_usage;
+pub(crate) use mention_usage::MentionUsage;
 mod mentions_v2;
 mod picker_presets;
 mod picker_rows;
@@ -352,6 +354,18 @@ pub(crate) struct BottomPaneParams {
 }
 
 impl BottomPane {
+    pub(crate) fn set_mention_usage_home(
+        &mut self,
+        codex_home: &std::path::Path,
+        persistence: codex_config::types::HistoryPersistence,
+    ) {
+        self.composer.mention_usage = MentionUsage::load(codex_home, persistence);
+    }
+
+    pub(crate) fn mention_usage_mut(&mut self) -> &mut MentionUsage {
+        &mut self.composer.mention_usage
+    }
+
     pub fn new(params: BottomPaneParams) -> Self {
         Self::new_with_composer_config(params, ChatComposerConfig::default())
     }

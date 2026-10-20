@@ -480,8 +480,8 @@ impl App {
         Ok(live_attached)
     }
 
-    /// Replaces the chat widget, carrying the editor yank and re-seeding collab metadata from the
-    /// navigation cache.
+    /// Replaces the chat widget, carrying composer preferences and the editor yank, and
+    /// re-seeding collab metadata from the navigation cache.
     ///
     /// Thread switches reconstruct the `ChatWidget`, which loses the `collab_agent_metadata` map.
     /// This helper copies every known nickname/role from `AgentNavigationState` into the
@@ -519,6 +519,9 @@ impl App {
         ));
         chat_widget.inherit_backend_banner_state(&mut self.chat_widget);
         chat_widget.inherit_security_setup(&mut self.chat_widget);
+        chat_widget
+            .mention_usage_mut()
+            .inherit(self.chat_widget.mention_usage_mut());
         for (thread_id, entry) in self.agent_navigation.ordered_threads() {
             chat_widget.set_collab_agent_metadata(
                 thread_id,
