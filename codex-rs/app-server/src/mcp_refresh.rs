@@ -525,6 +525,7 @@ enabled = false
                         sample_responses: Arc::new(
                             crate::thread_sample::SampleResponseRegistry::default(),
                         ),
+                        cloud_skill_provider: None,
                         event_sink: Arc::new(NoopExtensionEventSink),
                         auth_manager: auth_manager.clone(),
                         state_db: Some(state_db.clone()),

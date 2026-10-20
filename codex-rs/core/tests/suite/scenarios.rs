@@ -184,6 +184,9 @@ mod tools_namespace_budget;
 #[path = "scenarios_skill_catalog_dedup.rs"]
 mod skill_catalog_dedup;
 
+#[path = "scenarios_frozen_cloud_skills.rs"]
+mod frozen_cloud_skills;
+
 #[path = "scenarios_compaction_tests.rs"]
 mod compaction;
 

@@ -117,6 +117,51 @@ fn request(client: Option<Arc<McpResourceClient>>) -> SkillReadRequest<'static> 
 }
 
 #[tokio::test]
+async fn frozen_cloud_catalog_and_reads_ignore_live_mcp_changes() {
+    let state = state();
+    let provider = crate::FrozenCloudSkillProvider::from_json(
+        serde_json::json!({"skills": [{
+            "package": "skill://demo/work", "name": "demo", "description": "Frozen skill",
+            "alias_root": "skill://demo", "main_resource": "skill://demo/work/SKILL.md",
+            "resources": {"skill://demo/work/SKILL.md": "Frozen contents"}
+        }]})
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    let providers = SkillProviders::new().with_cloud_provider(Arc::new(provider));
+    state
+        .refresh_cloud_catalog(&providers, query(Some(client())))
+        .await
+        .unwrap();
+    let catalog = state.available_cloud_catalog().unwrap();
+    let generation = state.cloud_cache(/*mcp_resources*/ None);
+    for mcp_resources in [Some(client()), None, Some(client())] {
+        let request = SkillReadRequest {
+            package: SkillPackageId("skill://demo/work".into()),
+            resource: SkillResourceId::new("skill://demo/work/SKILL.md"),
+            ..request(mcp_resources.clone())
+        };
+        assert_eq!(
+            state.read_skill(&providers, request).await.unwrap(),
+            SkillReadResult {
+                resource: SkillResourceId::new("skill://demo/work/SKILL.md"),
+                contents: "Frozen contents".into(),
+            }
+        );
+        state
+            .refresh_cloud_catalog(&providers, query(mcp_resources))
+            .await
+            .unwrap();
+        assert_eq!(state.available_cloud_catalog(), Some(catalog.clone()));
+        assert!(Arc::ptr_eq(
+            &generation,
+            &state.cloud_cache(/*mcp_resources*/ None)
+        ));
+    }
+}
+
+#[tokio::test]
 async fn late_read_cannot_return_or_populate_a_replaced_cache() {
     for replacement in [Some(client()), None] {
         let state = state();

@@ -41,6 +41,7 @@ pub(crate) struct ThreadExtensionDependencies {
     pub(crate) goal_service: Arc<GoalService>,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider>,
+    pub(crate) cloud_skill_provider: Option<Arc<dyn codex_skills_extension::SkillProvider>>,
     pub(crate) git_attribution_base_url: String,
     pub(crate) http_client_factory: HttpClientFactory,
     /// Process-scoped queue shared by idle dispatch and app-server requests.
@@ -62,6 +63,7 @@ pub(crate) fn thread_extensions(
         goal_service,
         environment_manager,
         executor_skill_provider,
+        cloud_skill_provider,
         git_attribution_base_url,
         http_client_factory,
         queue_service,
@@ -110,9 +112,12 @@ pub(crate) fn thread_extensions(
     codex_image_generation_extension::install(&mut builder, auth_manager, |config: &Config| {
         Some(config.codex_home.clone())
     });
-    let skill_providers = codex_skills_extension::SkillProviders::new()
+    let mut skill_providers = codex_skills_extension::SkillProviders::new()
         .with_executor_provider(executor_skill_provider)
         .with_host_provider(Arc::new(codex_skills_extension::HostSkillProvider::new()));
+    if let Some(provider) = cloud_skill_provider {
+        skill_providers = skill_providers.with_cloud_provider(provider);
+    }
     codex_skills_extension::install_with_providers_and_metrics(
         &mut builder,
         skill_providers,

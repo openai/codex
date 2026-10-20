@@ -292,7 +292,7 @@ impl SkillsThreadState {
         }
         // Switch generations before the fallible lookup; only same-auth-scope failures
         // may retain previously authorized metadata and contents.
-        let cache = self.cloud_cache(query.mcp_resources.as_deref());
+        let cache = self.cloud_cache(providers.cloud_mcp_resources(query.mcp_resources.as_deref()));
         let resource_cache_key = cache.current_resource_cache_key();
         if cache.is_current()
             && cache
@@ -360,7 +360,7 @@ impl SkillsThreadState {
                 "cloud skill reads require a cloud context",
             ));
         };
-        let cache = self.cloud_cache(mcp_resources.as_deref());
+        let cache = self.cloud_cache(providers.cloud_mcp_resources(mcp_resources.as_deref()));
         let cache_key = SkillReadCacheKey::from(&request);
         {
             let config = self

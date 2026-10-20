@@ -109,6 +109,17 @@ impl SkillProviders {
             .any(|source| source.kind == SkillSourceKind::Cloud)
     }
 
+    pub(crate) fn cloud_mcp_resources<'a>(
+        &self,
+        resources: Option<&'a codex_mcp::McpResourceClient>,
+    ) -> Option<&'a codex_mcp::McpResourceClient> {
+        resources.filter(|_| {
+            self.sources.iter().any(|source| {
+                source.kind == SkillSourceKind::Cloud && source.provider.uses_mcp_resources()
+            })
+        })
+    }
+
     pub(crate) fn has_host_provider(&self) -> bool {
         self.sources
             .iter()

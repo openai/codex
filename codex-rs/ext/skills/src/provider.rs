@@ -3,6 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 mod executor;
+mod frozen_cloud;
 mod host;
 
 use crate::HostSkillsSnapshot;
@@ -23,6 +24,7 @@ use crate::catalog::SkillSearchResult;
 
 pub use executor::ExecutorSkillProvider;
 pub(crate) use executor::attribute_executor_plugins;
+pub use frozen_cloud::FrozenCloudSkillProvider;
 pub use host::HostSkillProvider;
 
 pub(crate) const MAX_SKILL_RESOURCE_CONTENT_BYTES: usize = 1024 * 1024;
@@ -85,6 +87,12 @@ pub type SkillProviderFuture<'a, T> =
 /// provider must be read or searched through the same provider/authority rather
 /// than converted into an ambient local path.
 pub trait SkillProvider: Send + Sync {
+    /// Whether Cloud catalog and read caches must follow the live MCP auth/resource scope.
+    /// When all configured Cloud providers opt out, their caches are independent of MCP.
+    fn uses_mcp_resources(&self) -> bool {
+        true
+    }
+
     /// Providers set `is_partial` when listing omits entries; warnings are diagnostic only.
     fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog>;
 
