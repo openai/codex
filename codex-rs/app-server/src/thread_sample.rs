@@ -49,6 +49,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 const SAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -68,6 +69,7 @@ pub(crate) struct SampleTask {
     pub(crate) samples: Arc<SampleResponseRegistry>,
     pub(crate) params: ThreadSampleParams,
     pub(crate) trace: Option<W3cTraceContext>,
+    pub(crate) cancellation: CancellationToken,
 }
 
 pub(crate) async fn generate_sample(
@@ -109,6 +111,7 @@ impl SampleTask {
             samples,
             params,
             trace,
+            cancellation,
         } = self;
         let id = parent.startup_metadata().thread_id;
         if parent.agent_status().await == AgentStatus::Running {
@@ -195,6 +198,9 @@ impl SampleTask {
         options.session_source = Some(SessionSource::Custom("thread_sample".to_string()));
         options.thread_source = Some(ThreadSource::Feature("thread_sample".to_string()));
         options.parent_trace = trace.clone();
+        if cancellation.is_cancelled() {
+            return Err(internal_error("sample canceled"));
+        }
         if Instant::now() >= deadline {
             return Err(internal_error("sample timed out"));
         }
@@ -280,6 +286,7 @@ impl SampleTask {
         };
         let result = tokio::select! {
             biased;
+            _ = cancellation.cancelled() => Err(internal_error("sample canceled")),
             _ = tokio::time::sleep_until(deadline) => Err(internal_error("sample timed out")),
             result = sample => result,
         };

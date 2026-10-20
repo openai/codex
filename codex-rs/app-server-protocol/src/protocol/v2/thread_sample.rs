@@ -1,6 +1,7 @@
 //! One model response on an ephemeral fork that inherits the source's configuration and context.
 
 use crate::JsonSchema;
+use crate::RequestId;
 use crate::TS;
 use codex_protocol::openai_models::ReasoningEffort;
 use serde::Deserialize;
@@ -33,3 +34,15 @@ pub struct ThreadSampleResponse {
     pub cached_input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct ThreadSampleCancelParams {
+    pub request_id: RequestId,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSampleCancelResponse {}

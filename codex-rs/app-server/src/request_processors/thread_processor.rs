@@ -637,6 +637,7 @@ impl ThreadRequestProcessor {
                 samples: Arc::clone(&self.sample_responses),
                 params,
                 trace: context.request_trace(),
+                cancellation: context.cancellation,
             },
             &self.background_tasks,
             rpc_gate,

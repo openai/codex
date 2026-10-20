@@ -12,6 +12,7 @@ use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadSampleCancelResponse;
 use codex_app_server_protocol::ThreadSampleParams;
 use codex_app_server_protocol::ThreadSampleResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -732,8 +733,15 @@ async fn sample_does_not_hide_stream_errors_after_tool_calls() -> Result<()> {
     Ok(())
 }
 
+enum SampleStop {
+    Timeout,
+    Cancel,
+}
+
+#[test_case(SampleStop::Timeout; "timeout")]
+#[test_case(SampleStop::Cancel; "cancel")]
 #[tokio::test]
-async fn sample_wait_keeps_parent_responsive_and_timeout_reclaims_child() -> Result<()> {
+async fn sample_wait_keeps_parent_responsive_and_reclaims_child(stop: SampleStop) -> Result<()> {
     let server = responses::start_mock_server().await;
     responses::mount_sse_once(
         &server,
@@ -781,16 +789,40 @@ async fn sample_wait_keeps_parent_responsive_and_timeout_reclaims_child() -> Res
         }),
     )
     .await??;
+    let (expected_error, wait) = match stop {
+        SampleStop::Timeout => ("sample timed out", WAIT),
+        SampleStop::Cancel => {
+            let cancel_id = client
+                .send_raw_request(
+                    "thread/sample/cancel",
+                    Some(json!({"requestId": sample_id})),
+                )
+                .await?;
+            let response: ThreadSampleCancelResponse =
+                timeout(Duration::from_secs(10), client.read_response(cancel_id)).await??;
+            assert_eq!(response, ThreadSampleCancelResponse {});
+            ("sample canceled", Duration::from_secs(10))
+        }
+    };
     let error = timeout(
-        WAIT,
+        wait,
         client.read_stream_until_error_message(RequestId::Integer(sample_id)),
     )
     .await??;
-    assert!(
-        error.error.message.contains("timed out"),
-        "{}",
-        error.error.message
-    );
+    assert_eq!(error.error.message, expected_error);
+    if matches!(stop, SampleStop::Cancel) {
+        for request_id in [json!(sample_id), json!("unknown")] {
+            let cancel_id = client
+                .send_raw_request(
+                    "thread/sample/cancel",
+                    Some(json!({"requestId": request_id})),
+                )
+                .await?;
+            let response: ThreadSampleCancelResponse =
+                timeout(Duration::from_secs(10), client.read_response(cancel_id)).await??;
+            assert_eq!(response, ThreadSampleCancelResponse {});
+        }
+    }
     assert_eq!(mock.requests().len(), 1);
     timeout(WAIT, async {
         loop {
