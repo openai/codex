@@ -119,12 +119,8 @@ pub(super) async fn lookup(
                             else {
                                 return Err(err);
                             };
-                            if source.message == format!("thread not loaded: {thread_id}") {
-                                if app_server.uses_embedded_app_server() {
-                                    continue;
-                                }
-                                thread.clone()
-                            } else if (source.message.starts_with("failed to read thread: thread-store internal error: session metadata ")
+                            if source.message == format!("thread not loaded: {thread_id}")
+                                || (source.message.starts_with("failed to read thread: thread-store internal error: session metadata ")
                                 && source.message.contains(" belongs to thread ")
                                 && source.message.ends_with(&format!(", expected {thread_id}")))
                                 || thread.path.as_ref().is_some_and(|path| {
@@ -135,9 +131,8 @@ pub(super) async fn lookup(
                                 })
                             {
                                 continue;
-                            } else {
-                                return Err(err);
                             }
+                            return Err(err);
                         }
                     };
                     if current.id != thread.id || display_label(&current) != name {

@@ -44,7 +44,21 @@ async fn resumed_initial_messages_render_history() {
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
 
+    // The first attachment can change project credentials even with an in-process server.
+    chat.status_account_display = Some(StatusAccountDisplay::ApiKey);
+    let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
+    model.available_access_programs = Some(codex_protocol::openai_models::ModelAccessPrograms {
+        cyber: vec![codex_protocol::turn_input::CyberAccessProgram::Standard],
+    });
+    chat.model_catalog = Arc::new(ModelCatalog::new(vec![model]));
     chat.handle_thread_session(configured.clone());
+    assert!(
+        chat.model_catalog
+            .models
+            .iter()
+            .all(|model| model.available_access_programs.is_none()),
+        "access from the launch directory must not carry over to the attached project"
+    );
     assert!(!chat.daybreak_enabled);
     insta::assert_snapshot!(
         drain_insert_history(&mut rx).into_iter().flatten()

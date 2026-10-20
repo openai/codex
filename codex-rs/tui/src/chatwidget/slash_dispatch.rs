@@ -415,16 +415,10 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
             SlashCommand::Permissions => {
-                if self.remote_connection.is_some()
-                    || self.windows_sandbox_local_server
-                        && self.windows_sandbox_host != WindowsSandboxHost::Remote
-                        && self.windows_sandbox_config.requirements.is_none()
-                {
-                    self.app_event_tx.send(AppEvent::OpenPermissionsPopup);
-                } else {
-                    self.open_permissions_popup();
-                }
-                self.defer_input_until_settings_applied();
+                // Hold queued prompts while the app checks whether it can open the menu.
+                self.set_queue_autosend_suppressed(/*suppressed*/ true);
+                self.permission_popup_pending = true;
+                self.app_event_tx.send(AppEvent::OpenPermissionsPopup);
             }
             SlashCommand::Vim => {
                 self.toggle_vim_mode_and_notify();

@@ -9601,7 +9601,7 @@ async fn override_turn_context_sends_thread_settings_update() {
 #[tokio::test]
 async fn selecting_cyber_model_defaults_active_thread_to_auto_review() {
     Box::pin(async {
-        let mut app = make_test_app().await;
+        let (mut app, mut events, _) = make_test_app_with_channels().await;
         app.config
             .permissions
             .approval_policy
@@ -9633,6 +9633,8 @@ async fn selecting_cyber_model_defaults_active_thread_to_auto_review() {
         );
         assert_eq!(started.session.approvals_reviewer, ApprovalsReviewer::User);
         let thread_id = started.session.thread_id;
+        app.chat_widget
+            .handle_thread_session_quiet(started.session.clone());
         app.enqueue_primary_thread_session(started.session, started.turns)
             .await
             .expect("primary thread should be registered");
@@ -9676,6 +9678,20 @@ async fn selecting_cyber_model_defaults_active_thread_to_auto_review() {
             !app.agents_overview
                 .requested_permission_profiles
                 .contains_key(&thread_id)
+        );
+        while events.try_recv().is_ok() {}
+        // Until the cyber model's permissions are confirmed, do not offer another selection.
+        app.chat_widget.handle_paste("/permissions".into());
+        app.chat_widget.handle_key_event(KeyCode::Enter.into());
+        let event = std::iter::from_fn(|| events.try_recv().ok())
+            .find(|event| matches!(event, AppEvent::OpenPermissionsPopup))
+            .expect("slash permissions goes through app permission guards");
+        app.handle_event(&mut tui, &mut app_server, event)
+            .await
+            .expect("permissions menu");
+        insta::assert_snapshot!(
+            next_history_message(&mut events),
+            @"■ Wait for permissions to update before changing permissions."
         );
         let notification = next_thread_settings_updated(&mut app_server, thread_id).await;
         assert_eq!(

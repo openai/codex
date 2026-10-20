@@ -170,8 +170,10 @@ impl ChatWidget {
 
     pub(super) fn invalidate_permission_discovery(&mut self) {
         self.permission_popup_request_id = None;
-        self.bottom_pane.dismiss_view_by_id(VIEW_ID);
-        if self.recover_inline_permission_profile_selection() {
+        let dismissed = self.bottom_pane.dismiss_view_by_id(VIEW_ID);
+        if self.recover_inline_permission_profile_selection()
+            || (dismissed && self.input_queue.suppress_queue_autosend)
+        {
             self.app_event_tx.send(AppEvent::SettingsSelectionClosed);
         }
     }

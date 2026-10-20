@@ -416,7 +416,7 @@ async fn skips_stale_listed_thread_before_valid_label() -> color_eyre::Result<()
 }
 
 #[tokio::test]
-async fn uses_listed_thread_when_older_server_cannot_read_it() -> color_eyre::Result<()> {
+async fn verifies_name_uniqueness_across_server_pages() -> color_eyre::Result<()> {
     let temp_dir = TempDir::new()?;
     let config = build_config(&temp_dir).await?;
     let runtime = state_runtime(&config).await?;
@@ -464,6 +464,9 @@ async fn uses_listed_thread_when_older_server_cannot_read_it() -> color_eyre::Re
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("ws://{}", listener.local_addr()?);
         let listed_for_server = listed.clone();
+        let mut unreadable = listed.clone();
+        let unreadable_id = ThreadId::new();
+        unreadable.id = unreadable_id.to_string();
         let paginated = next_cursor.is_some();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
@@ -479,7 +482,7 @@ async fn uses_listed_thread_when_older_server_cannot_read_it() -> color_eyre::Re
                         .is_some_and(|params| params["cursor"].is_string());
                 let response = match request.method.as_str() {
                     "initialize" => {
-                        json!({"id": request.id, "result": {"userAgent": "legacy-test"}})
+                        json!({"id": request.id, "result": {"userAgent": "lookup-test"}})
                     }
                     "thread/list" => {
                         assert_eq!(
@@ -493,25 +496,33 @@ async fn uses_listed_thread_when_older_server_cannot_read_it() -> color_eyre::Re
                         let data = if last_page {
                             Vec::new()
                         } else {
-                            vec![listed_for_server.clone()]
+                            vec![unreadable.clone(), listed_for_server.clone()]
                         };
                         let cursor = if last_page { None } else { next_cursor.clone() };
                         json!({"id": request.id, "result": {"data": data, "nextCursor": cursor}})
                     }
-                    "thread/read" => json!({
-                        "id": request.id,
-                        "error": {
+                    "thread/read"
+                        if request.params.as_ref().unwrap()["threadId"] == unreadable.id =>
+                    {
+                        json!({"id": request.id, "error": {
                             "code": -32603,
-                            "message": format!("thread not loaded: {thread_id}")
-                        }
-                    }),
+                            "message": format!("thread not loaded: {unreadable_id}")
+                        }})
+                    }
+                    "thread/read" => {
+                        json!({"id": request.id, "result": {"thread": listed_for_server}})
+                    }
                     other => panic!("unexpected request: {other}"),
                 };
                 socket
                     .send(Message::Text(response.to_string().into()))
                     .await
                     .unwrap();
-                if last_page || (!paginated && request.method == "thread/read") {
+                if last_page
+                    || (!paginated
+                        && request.method == "thread/read"
+                        && request.params.as_ref().unwrap()["threadId"] == listed_for_server.id)
+                {
                     break;
                 }
             }
@@ -521,7 +532,7 @@ async fn uses_listed_thread_when_older_server_cannot_read_it() -> color_eyre::Re
                 websocket_url: url,
                 auth_token: None,
             },
-            client_name: "legacy-test".to_string(),
+            client_name: "lookup-test".to_string(),
             client_version: "0.0.0".to_string(),
             experimental_api: true,
             mcp_server_openai_form_elicitation: false,

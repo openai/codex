@@ -416,8 +416,6 @@ impl App {
                 .selected_permission_profiles
                 .get(&thread_id)
                 != Some(&active.id)
-                && self.app_server_target.thread_params_mode()
-                    == crate::app_server_session::ThreadParamsMode::Embedded
                 && self
                     .config
                     .custom_permission_profiles
