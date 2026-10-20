@@ -25,13 +25,6 @@ fn adapter_rejects_unsupported_evidence() {
     let rubric = ContentItem::InputText {
         text: "Classify risk.".into(),
     };
-    let user: ResponseItem = serde_json::from_value(json!({"type":"message", "role":"user", "content":[
-        {"type":"input_text", "text":"Authorized task"}, {"type":"input_text", "text":"Planned action"}
-    ]})).unwrap();
-    assert_eq!(
-        request_body(&rubric, std::slice::from_ref(&user), Some(&user)),
-        Err(DecisionsError::UnsupportedEvidence)
-    );
     for (role, content, expected_error) in [
         (
             "user",
@@ -53,10 +46,7 @@ fn adapter_rejects_unsupported_evidence() {
             "type":"message", "role":role, "content":[content]
         }))
         .unwrap();
-        assert_eq!(
-            request_body(&rubric, &[evidence], /*parent_compaction*/ None),
-            Err(expected_error)
-        );
+        assert_eq!(request_body(&rubric, &[evidence]), Err(expected_error));
     }
 }
 
@@ -89,11 +79,7 @@ fn adapter_preserves_trusted_tool_authority_and_scope() {
     }))
     .unwrap();
     assert_eq!(
-        request_body(
-            &rubric,
-            &[trusted, user, review_message, assistant],
-            /*parent_compaction*/ None
-        ),
+        request_body(&rubric, &[trusted, user, review_message, assistant]),
         Ok(json!({
             "model": "gpt-6-luna",
             "input": [
@@ -216,11 +202,20 @@ async fn http_contract_and_untrusted_response_validation() {
             ContentItemMetadata::harness(),
         ),
     );
+    request.parent_compaction = Some(
+        serde_json::from_value(json!({
+            "type":"context_compaction", "encrypted_content":"parent compaction"
+        }))
+        .unwrap(),
+    );
     request.input.extend(
         serde_json::from_value::<Vec<ResponseItem>>(json!([
             {"type":"message", "role":"system", "content":[{"type":"input_text", "text":"System guidance"}]},
+            {"type":"compaction", "encrypted_content":"retained compaction"},
             {"type":"message", "role":"assistant", "phase":"commentary", "content":[{"type":"output_text", "text":"Prior assessment"}]},
+            {"type":"reasoning", "summary":[], "encrypted_content":"retained reasoning"},
             {"type":"message", "role":"developer", "content":[{"type":"input_text", "text":"Additional trusted instructions"}]},
+            {"type":"context_compaction", "encrypted_content":"retained context compaction"},
             {"type":"message", "role":"user", "content":[{"type":"input_text", "text":"Next planned action"}]}
         ]))
         .unwrap(),
@@ -251,6 +246,7 @@ async fn http_contract_and_untrusted_response_validation() {
     )
     .unwrap();
     let mut sampler = Arc::new(sampler);
+    // Both modes omit reasoning and compaction while preserving the messages.
     let task = sampler.start_snapshot_comparison(&request, /*max_input_tokens*/ 128_000);
     assert_eq!(task.finish().await.unwrap().0, Ok("low"));
     let (mut retained, _) = LunaSampler::prepare_input(
@@ -263,31 +259,19 @@ async fn http_contract_and_untrusted_response_validation() {
             .map(ResponseItemEnvelope::new)
             .collect(),
     );
-    retained.splice(
-        4..4,
-        serde_json::from_value::<Vec<ResponseItem>>(json!([
-            {"type":"reasoning", "summary":[], "encrypted_content":"retained reasoning"},
-            {"type":"compaction", "encrypted_content":"retained compaction"},
-            {"type":"context_compaction", "encrypted_content":"retained context compaction"}
-        ]))
-        .unwrap()
-        .into_iter()
-        .map(ResponseItemEnvelope::new),
-    );
-    // Only the three unsupported retained item types are omitted from the wire body.
     let task = sampler.start_conversation_comparison(&retained);
     assert_eq!(task.finish().await.unwrap().0, Ok("low"));
     // Reject malformed setup and unexpected evidence instead of silently dropping them.
     let task = sampler.start_conversation_comparison(&retained[1..]);
     assert_eq!(
         task.finish().await.unwrap().0,
-        Err(DecisionsError::UnsupportedEvidence)
+        Err(DecisionsError::UnexpectedRequestSetup)
     );
     retained.push(ResponseItemEnvelope::new(ResponseItem::Other));
     let task = sampler.start_conversation_comparison(&retained);
     assert_eq!(
         task.finish().await.unwrap().0,
-        Err(DecisionsError::UnsupportedEvidence)
+        Err(DecisionsError::UnsupportedInputItem)
     );
     server.verify().await;
     let mut invalid = response;
@@ -354,7 +338,6 @@ fn adapter_preserves_inline_images_and_bounds_image_bytes() {
     let body = request_body(
         request.instructions.annotated_content().content(),
         &request.input,
-        /*parent_compaction*/ None,
     )
     .unwrap();
     assert_eq!(
@@ -374,7 +357,6 @@ fn adapter_preserves_inline_images_and_bounds_image_bytes() {
         request_body(
             request.instructions.annotated_content().content(),
             &request.input,
-            /*parent_compaction*/ None
         ),
         Err(DecisionsError::InputTooLarge)
     );
