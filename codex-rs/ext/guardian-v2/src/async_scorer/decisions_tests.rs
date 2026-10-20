@@ -219,7 +219,9 @@ async fn http_contract_and_untrusted_response_validation() {
     request.input.extend(
         serde_json::from_value::<Vec<ResponseItem>>(json!([
             {"type":"message", "role":"system", "content":[{"type":"input_text", "text":"System guidance"}]},
-            {"type":"message", "role":"assistant", "content":[{"type":"output_text", "text":"Prior assessment"}]}
+            {"type":"message", "role":"assistant", "phase":"commentary", "content":[{"type":"output_text", "text":"Prior assessment"}]},
+            {"type":"message", "role":"developer", "content":[{"type":"input_text", "text":"Additional trusted instructions"}]},
+            {"type":"message", "role":"user", "content":[{"type":"input_text", "text":"Next planned action"}]}
         ]))
         .unwrap(),
     );
@@ -227,7 +229,9 @@ async fn http_contract_and_untrusted_response_validation() {
         "input":[
             {"role":"user", "content":[{"type":"input_text", "text":"The user requested a README summary."}]},
             {"role":"system", "content":[{"type":"input_text", "text":"System guidance"}]},
-            {"role":"assistant", "content":[{"type":"output_text", "text":"Prior assessment"}]}
+            {"role":"assistant", "phase":"commentary", "content":[{"type":"output_text", "text":"Prior assessment"}]},
+            {"role":"developer", "content":[{"type":"input_text", "text":"Additional trusted instructions"}]},
+            {"role":"user", "content":[{"type":"input_text", "text":"Next planned action"}]}
         ],
         "questions":[{"type":"choice",
         "name":"guardian_risk", "instructions":"Classify risk", "choices":[{"value":"low"},{"value":"high"}]}]});
@@ -237,7 +241,7 @@ async fn http_contract_and_untrusted_response_validation() {
         .and(header("authorization", "Bearer synthetic-key"))
         .and(body_json(body.clone()))
         .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(response.clone()))
-        .expect(/*r*/ 1)
+        .expect(/*r*/ 2)
         .mount(&server)
         .await;
     let sampler = DecisionsSampler::new(
@@ -249,6 +253,43 @@ async fn http_contract_and_untrusted_response_validation() {
     let mut sampler = Arc::new(sampler);
     let task = sampler.start_snapshot_comparison(&request, /*max_input_tokens*/ 128_000);
     assert_eq!(task.finish().await.unwrap().0, Ok("low"));
+    let (mut retained, _) = LunaSampler::prepare_input(
+        &request,
+        /*history*/ None,
+        request
+            .input
+            .iter()
+            .cloned()
+            .map(ResponseItemEnvelope::new)
+            .collect(),
+    );
+    retained.splice(
+        4..4,
+        serde_json::from_value::<Vec<ResponseItem>>(json!([
+            {"type":"reasoning", "summary":[], "encrypted_content":"retained reasoning"},
+            {"type":"compaction", "encrypted_content":"retained compaction"},
+            {"type":"context_compaction", "encrypted_content":"retained context compaction"}
+        ]))
+        .unwrap()
+        .into_iter()
+        .map(ResponseItemEnvelope::new),
+    );
+    // Only the three unsupported retained item types are omitted from the wire body.
+    let task = sampler.start_conversation_comparison(&retained);
+    assert_eq!(task.finish().await.unwrap().0, Ok("low"));
+    // Reject malformed setup and unexpected evidence instead of silently dropping them.
+    let task = sampler.start_conversation_comparison(&retained[1..]);
+    assert_eq!(
+        task.finish().await.unwrap().0,
+        Err(DecisionsError::UnsupportedEvidence)
+    );
+    retained.push(ResponseItemEnvelope::new(ResponseItem::Other));
+    let task = sampler.start_conversation_comparison(&retained);
+    assert_eq!(
+        task.finish().await.unwrap().0,
+        Err(DecisionsError::UnsupportedEvidence)
+    );
+    server.verify().await;
     let mut invalid = response;
     invalid["answers"][0]["choice"] = json!("untrusted server text");
     assert_eq!(parse_answer(&invalid), Err(DecisionsError::InvalidResponse));

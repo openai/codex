@@ -391,14 +391,6 @@ impl Classification {
                     evidence,
                     reservation,
                 } => {
-                    // The retained prefix is owned by the conversation backend, not this snapshot.
-                    if decisions_comparison_enabled {
-                        super::metrics::record_decisions_comparison_outcome(
-                            metrics.as_deref(),
-                            "skipped",
-                            "unsupported_evidence",
-                        );
-                    }
                     let (ready, score) = tokio::sync::oneshot::channel();
                     let request = ConversationRequest {
                         evidence,
@@ -411,14 +403,42 @@ impl Classification {
                         metrics: metrics.clone(),
                         pending_score: pending_score.clone(),
                     };
+                    let mut sampling_started = None;
                     if let Some(prepared) = reservation.prepare(request).await {
+                        if let Some(decisions_sampler) = decisions_sampler.as_ref() {
+                            decisions_task = Some(
+                                decisions_sampler
+                                    .start_conversation_comparison(&prepared.request.input),
+                            );
+                        } else if decisions_comparison_enabled {
+                            super::metrics::record_decisions_comparison_outcome(
+                                metrics.as_deref(),
+                                "skipped",
+                                "not_initialized",
+                            );
+                        }
+                        sampling_started = Some(Instant::now());
                         tokio::spawn(prepared.run());
                     }
-                    tokio::select! {
+                    let result = tokio::select! {
                         biased;
                         () = pending_score.expired() => Err(LunaSamplerError::Superseded),
                         result = score => result.unwrap_or(Err(LunaSamplerError::Superseded)).map(super::sampler::SampledScore::accept),
+                    };
+                    // Stop at the usable score, before draining and committing history.
+                    responses_duration = sampling_started.map(|started| started.elapsed());
+                    if sampling_started.is_none() && decisions_comparison_enabled {
+                        super::metrics::record_decisions_comparison_outcome(
+                            metrics.as_deref(),
+                            "skipped",
+                            if matches!(result, Err(LunaSamplerError::Superseded)) {
+                                "superseded"
+                            } else {
+                                "preparation_failed"
+                            },
+                        );
                     }
+                    result
                 }
             };
             let output = match result {

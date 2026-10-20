@@ -1,5 +1,6 @@
 //! Decisions outcomes cannot affect the real baseline score/publication path.
 use super::*;
+use crate::async_scorer::conversation::ConversationBackend;
 use crate::async_scorer::decisions::DecisionsSampler;
 use codex_http_client::HttpClientBuilder;
 use pretty_assertions::assert_eq;
@@ -8,17 +9,22 @@ use pretty_assertions::assert_eq;
 async fn decisions_disagreement_failures_and_disabled_flag_preserve_baseline() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let trusted_skill_path = "/skills/example/SKILL.md";
-    for (case, enabled, status, choice, baseline, expected_risk) in [
+    let cases = [
         ("disabled", false, 200, "high", "low", 0.0),
         ("not_initialized", true, 200, "high", "low", 0.0),
         ("cannot_escalate", true, 200, "high", "low", 0.0),
         ("cannot_lower", true, 200, "low", "high", 1.0),
         ("candidate_failure", true, 403, "low", "low", 0.0),
         ("baseline_failure", true, 200, "low", "invalid", 1.0),
-    ] {
+    ];
+    for (mode, (case, enabled, status, choice, baseline, expected_risk)) in
+        ["snapshot", "conversation"]
+            .into_iter()
+            .flat_map(|mode| cases.map(|case| (mode, case)))
+    {
         let server = responses::start_mock_server().await;
         let fixture = GuardianFailureFixture::with_config(&format!(
-            "[features]\nguardianv2_decisions_comparison = {enabled}\n[features.guardianv2]\nasync_classifier_mode = \"snapshot\"\n"
+            "[features]\nguardianv2_decisions_comparison = {enabled}\n[features.guardianv2]\nasync_classifier_mode = \"{mode}\"\n"
         ))
         .await?;
         let test = &fixture.test;
@@ -108,7 +114,7 @@ async fn decisions_disagreement_failures_and_disabled_flag_preserve_baseline() -
         assert_eq!(
             score.scores,
             BTreeMap::from([("action_risk".into(), expected_risk)]),
-            "{case}"
+            "{mode}: {case}"
         );
         let published = score.clone();
         if enabled {
@@ -163,27 +169,32 @@ async fn decisions_disagreement_failures_and_disabled_flag_preserve_baseline() -
                         ("reason".into(), reason.into())
                     ]
                 )],
-                "{case}"
+                "{mode}: {case}"
             );
-            if case == "not_initialized" {
-                let comparisons = metrics.0.lock().unwrap().iter().filter(|sample| matches!(sample,
-                    RecordedMetric::Counter(name, _, _) if name == "codex.guardian_v2.decisions_comparison.comparison"))
-                    .cloned().collect::<Vec<_>>();
-                assert_eq!(
-                    comparisons,
-                    vec![RecordedMetric::Counter(
-                        "codex.guardian_v2.decisions_comparison.comparison".into(),
-                        1,
-                        vec![
-                            ("comparison".into(), "unavailable".into()),
-                            ("responses".into(), "low".into()),
-                            ("decisions".into(), "unavailable".into()),
-                        ],
-                    )]
-                );
-            }
+            let (comparison, responses, decisions) = match case {
+                "cannot_escalate" => ("disagree", "low", "high"),
+                "cannot_lower" => ("disagree", "high", "low"),
+                "baseline_failure" => ("unavailable", "unavailable", "low"),
+                _ => ("unavailable", "low", "unavailable"),
+            };
+            let comparisons = metrics.0.lock().unwrap().iter().filter(|sample| matches!(sample,
+                RecordedMetric::Counter(name, _, _) if name == "codex.guardian_v2.decisions_comparison.comparison"))
+                .cloned().collect::<Vec<_>>();
+            assert_eq!(
+                comparisons,
+                vec![RecordedMetric::Counter(
+                    "codex.guardian_v2.decisions_comparison.comparison".into(),
+                    1,
+                    vec![
+                        ("comparison".into(), comparison.into()),
+                        ("responses".into(), responses.into()),
+                        ("decisions".into(), decisions.into()),
+                    ],
+                )],
+                "{mode}: {case}"
+            );
         }
-        assert_eq!(cached_score(store), Some(published), "{case}");
+        assert_eq!(cached_score(store), Some(published), "{mode}: {case}");
         decisions_server.verify().await;
         assert_eq!(baseline_mock.requests().len(), 1);
     }
@@ -193,42 +204,80 @@ async fn decisions_disagreement_failures_and_disabled_flag_preserve_baseline() -
 #[tokio::test]
 async fn guardian_budget_rejects_both_backends_before_sending() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    // This test replaces the snapshot sampler to force the Responses budget failure.
-    let fixture = GuardianFailureFixture::with_config(
-        "[features.guardianv2]\nenabled = true\nasync_classifier_mode = \"snapshot\"\n",
-    )
-    .await?;
-    let server = responses::start_mock_server().await;
-    let store = fixture.test.codex.thread_extension_data();
-    let metrics = Arc::new(RecordingMetrics::default());
-    store.insert(GuardianV2ScoreProgress::new(Some(metrics.clone())));
-    let mut sampler_config = crate::async_scorer::sampler::tests::sampler_config(server.uri());
-    sampler_config.max_input_tokens = 256;
-    store.insert(LunaSampler::new(sampler_config));
-    store.insert(DecisionsSampler::new(
-        HttpClientBuilder::new().build_direct()?,
-        "synthetic-key".into(),
-        server.uri(),
-    )?);
-    fixture.score_tool(ToolName::plain("read_file")).await;
-    fixture.assert_fails_closed("elevated_risk").await?;
-    tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
-        loop {
-            if metrics.0.lock().unwrap().iter().any(|sample| matches!(sample,
-                RecordedMetric::Counter(name, _, _) if name == "codex.guardian_v2.decisions_comparison")) {
-                break;
-            }
-            tokio::task::yield_now().await;
+    for (mode, expected_reason) in [
+        ("snapshot", Some("input_too_large")),
+        ("conversation", Some("preparation_failed")),
+        ("conversation", None),
+    ] {
+        let enabled = expected_reason.is_some();
+        let fixture = GuardianFailureFixture::with_config(&format!(
+            "[features]\nguardianv2_decisions_comparison = {enabled}\n[features.guardianv2]\nenabled = true\nasync_classifier_mode = \"{mode}\"\n",
+        ))
+        .await?;
+        let server = responses::start_mock_server().await;
+        let store = fixture.test.codex.thread_extension_data();
+        let metrics = Arc::new(RecordingMetrics::default());
+        store.insert(GuardianV2ScoreProgress::new(Some(metrics.clone())));
+        // Both modes must use the replacement sampler to force the budget failure.
+        let mut sampler_config = crate::async_scorer::sampler::tests::sampler_config(server.uri());
+        sampler_config.max_input_tokens = 256;
+        store.insert(LunaSampler::new(sampler_config));
+        if mode == "conversation" {
+            store.insert(ConversationBackend::new(
+                store.get::<LunaSampler>().unwrap(),
+            ));
         }
-    }).await?;
-    assert!(server.received_requests().await.unwrap().is_empty());
-    assert!(metrics.0.lock().unwrap().contains(&RecordedMetric::Counter(
-        "codex.guardian_v2.decisions_comparison".into(),
-        1,
-        vec![
-            ("outcome".into(), "skipped".into()),
-            ("reason".into(), "input_too_large".into())
-        ],
-    )));
+        if enabled {
+            store.insert(DecisionsSampler::new(
+                HttpClientBuilder::new().build_direct()?,
+                "synthetic-key".into(),
+                server.uri(),
+            )?);
+        }
+        fixture.score_tool(ToolName::plain("read_file")).await;
+        fixture.assert_fails_closed("elevated_risk").await?;
+        tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
+            loop {
+                let completed = {
+                    let samples = metrics.0.lock().unwrap();
+                    samples.iter().any(|sample| matches!(sample,
+                        RecordedMetric::Counter(name, _, _) if name == CLASSIFICATION_METRIC))
+                        && (!enabled || samples.iter().any(|sample| matches!(sample,
+                            RecordedMetric::Counter(name, _, _) if name == "codex.guardian_v2.decisions_comparison")))
+                };
+                if completed {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        }).await?;
+        assert!(server.received_requests().await.unwrap().is_empty());
+        let samples = metrics.0.lock().unwrap();
+        let outcomes = samples
+            .iter()
+            .filter(|sample| {
+                matches!(sample,
+            RecordedMetric::Counter(name, _, _) if name == "codex.guardian_v2.decisions_comparison")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let expected = expected_reason
+            .into_iter()
+            .map(|reason| {
+                RecordedMetric::Counter(
+                    "codex.guardian_v2.decisions_comparison".into(),
+                    1,
+                    vec![
+                        ("outcome".into(), "skipped".into()),
+                        ("reason".into(), reason.into()),
+                    ],
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(outcomes, expected, "{mode}: enabled={enabled}");
+        assert!(!samples.iter().any(|sample| matches!(sample,
+            RecordedMetric::Histogram(name, _, _)
+                if name == "codex.guardian_v2.decisions_comparison.duration_ms")));
+    }
     Ok(())
 }

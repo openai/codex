@@ -1,6 +1,7 @@
 //! Bounded Decisions transport for the optional Guardian comparison classifier.
 //! Admission retains the newest requests and cancels the oldest unfinished request at capacity.
-//! Unsupported evidence is rejected intact; errors never contain credentials or wire bodies.
+//! Retained comparisons omit reasoning and compaction; other unsupported evidence is rejected intact.
+//! Errors never contain credentials or wire bodies.
 //! Evidence preserves message roles, content order, and boundaries.
 //! The caller records measurements after baseline publication; dropping its task aborts Decisions work.
 
@@ -145,6 +146,47 @@ impl DecisionsSampler {
             }
             Ok(body)
         });
+        self.spawn_request(body, started)
+    }
+
+    pub(super) fn start_conversation_comparison(
+        self: &Arc<Self>,
+        input: &[ResponseItemEnvelope],
+    ) -> DecisionsTask {
+        let started = Instant::now();
+        let body = (|| {
+            let [tools, instructions, evidence @ ..] = input else {
+                return Err(DecisionsError::UnsupportedEvidence);
+            };
+            if !matches!(
+                &tools.item,
+                ResponseItem::AdditionalTools { role, tools, .. }
+                    if role == "developer" && tools.is_empty()
+            ) {
+                return Err(DecisionsError::UnsupportedEvidence);
+            }
+            let ResponseItem::Message { role, content, .. } = &instructions.item else {
+                return Err(DecisionsError::UnsupportedEvidence);
+            };
+            let [rubric] = content.as_slice() else {
+                return Err(DecisionsError::UnsupportedEvidence);
+            };
+            if role != "developer" {
+                return Err(DecisionsError::UnsupportedEvidence);
+            }
+            request_body(
+                rubric,
+                evidence.iter().map(|item| &item.item).filter(|item| {
+                    !matches!(
+                        item,
+                        ResponseItem::Reasoning { .. }
+                            | ResponseItem::Compaction { .. }
+                            | ResponseItem::ContextCompaction { .. }
+                    )
+                }),
+                /*parent_compaction*/ None,
+            )
+        })();
         self.spawn_request(body, started)
     }
 
