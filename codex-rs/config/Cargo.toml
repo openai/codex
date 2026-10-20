@@ -63,6 +63,7 @@ windows-sys = { workspace = true, features = [
     "Win32_System_Com",
     "Win32_UI_Shell",
 ] }
+winreg = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

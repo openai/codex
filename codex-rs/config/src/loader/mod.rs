@@ -814,6 +814,16 @@ fn windows_codex_system_dir() -> PathBuf {
 
 #[cfg(windows)]
 fn windows_system_requirements_toml_file() -> io::Result<AbsolutePathBuf> {
+    if let Ok(path) = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(
+            r"SOFTWARE\Policies\OpenAI\Codex",
+            winreg::enums::KEY_READ | winreg::enums::KEY_WOW64_64KEY,
+        )
+        .and_then(|key| key.get_value::<std::ffi::OsString, _>("RequirementsPath"))
+    {
+        return AbsolutePathBuf::from_absolute_path_checked(path);
+    }
+
     let requirements_toml_file = windows_codex_system_dir().join("requirements.toml");
     AbsolutePathBuf::try_from(requirements_toml_file)
 }
@@ -2006,24 +2016,13 @@ foo = "xyzzy"
 
     #[cfg(windows)]
     #[test]
-    fn windows_system_requirements_toml_file_uses_expected_suffix() {
+    fn windows_codex_system_dir_uses_expected_suffix() {
         let expected = windows_program_data_dir_from_known_folder()
             .unwrap_or_else(|_| PathBuf::from(DEFAULT_PROGRAM_DATA_DIR_WINDOWS))
             .join("OpenAI")
-            .join("Codex")
-            .join("requirements.toml");
-        assert_eq!(
-            windows_system_requirements_toml_file()
-                .expect("requirements.toml path")
-                .as_path(),
-            expected.as_path()
-        );
-        assert!(
-            windows_system_requirements_toml_file()
-                .expect("requirements.toml path")
-                .as_path()
-                .ends_with(Path::new("OpenAI").join("Codex").join("requirements.toml"))
-        );
+            .join("Codex");
+        assert_eq!(windows_codex_system_dir(), expected);
+        assert!(windows_codex_system_dir().ends_with(Path::new("OpenAI").join("Codex")));
     }
 
     #[cfg(windows)]
