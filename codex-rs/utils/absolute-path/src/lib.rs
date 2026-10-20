@@ -477,10 +477,17 @@ mod tests {
 
     #[test]
     fn from_absolute_path_checked_rejects_relative_path() {
-        let err = AbsolutePathBuf::from_absolute_path_checked("relative/path")
-            .expect_err("relative path should fail");
+        for path in [
+            "",
+            "relative/path",
+            r"C:requirements.toml",
+            r"\requirements.toml",
+        ] {
+            let err = AbsolutePathBuf::from_absolute_path_checked(path)
+                .expect_err("relative path should fail");
 
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        }
     }
 
     #[test]
