@@ -43,6 +43,18 @@ pub enum WaitOutcome {
 }
 
 impl WaitOutcome {
+    /// How long a completed result waited for retrieval. Zero if it was delivered immediately,
+    /// or `None` if this wait did not retrieve a completed result.
+    pub fn result_buffered_for(&self) -> Option<Duration> {
+        match self {
+            Self::LiveCell(RuntimeResponse::Result {
+                result_buffered_for,
+                ..
+            }) => Some(*result_buffered_for),
+            Self::LiveCell(_) | Self::MissingCell(_) => None,
+        }
+    }
+
     /// Returns timing for this wait or termination request, when supplied by its host.
     pub fn code_mode_host_duration(&self) -> Option<Duration> {
         match self {
@@ -113,6 +125,9 @@ pub enum RuntimeResponse {
         cell_id: CellId,
         content_items: Vec<FunctionCallOutputContentItem>,
         error_text: Option<String>,
+        /// Time between completion and retrieval when the result was buffered.
+        #[serde(default, skip_serializing_if = "Duration::is_zero")]
+        result_buffered_for: Duration,
         #[serde(skip_serializing_if = "Option::is_none")]
         code_mode_host_duration: Option<Duration>,
     },

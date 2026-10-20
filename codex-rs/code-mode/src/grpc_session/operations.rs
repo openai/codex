@@ -331,7 +331,7 @@ impl SessionInner {
         drop(watcher);
         cancellation.disarm();
         self.prune_wait_slots();
-        let outcome = conversion::wait_outcome(response?.into_inner())?;
+        let outcome = conversion::wait_outcome(response?)?;
         self.validate_wait_cell(&expected_cell_id, outcome).await
     }
 
@@ -370,8 +370,7 @@ impl SessionInner {
                 cell_id: cell_id.as_str().to_string(),
             })),
         )
-        .await?
-        .into_inner();
+        .await?;
         let outcome = conversion::wait_outcome(response)?;
         self.validate_wait_cell(&cell_id, outcome).await
     }

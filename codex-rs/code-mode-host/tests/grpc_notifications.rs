@@ -113,6 +113,7 @@ fn text_response(
         content_items: vec![FunctionCallOutputContentItem::InputText {
             text: value.to_string(),
         }],
+        result_buffered_for: Duration::ZERO,
         error_text: None,
     }
 }
@@ -247,6 +248,7 @@ async fn completed_waits_drain_pending_notifications_before_returning() -> Resul
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "done".to_string(),
             }],
+            result_buffered_for: actual.result_buffered_for().unwrap(),
             error_text: None,
         })
     );

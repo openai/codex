@@ -401,6 +401,7 @@ async fn remote_session_persists_values_forwards_delegates_and_controls_cells() 
             code_mode_host_duration: actual.code_mode_host_duration(),
             cell_id: cell_id("1"),
             content_items: Vec::new(),
+            result_buffered_for: Duration::ZERO,
             error_text: None,
         }
     );
@@ -431,6 +432,7 @@ text(result.value);
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "output".to_string(),
             }],
+            result_buffered_for: Duration::ZERO,
             error_text: None,
         }
     );
@@ -698,6 +700,7 @@ return;
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "hello".to_string(),
             }],
+            result_buffered_for: Duration::ZERO,
             error_text: None,
         })
     );
@@ -741,6 +744,7 @@ async fn oversized_execute_request_does_not_close_the_shared_host() {
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "still alive".to_string(),
             }],
+            result_buffered_for: Duration::ZERO,
             error_text: None,
         }
     );
@@ -791,6 +795,7 @@ try {{
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "argument rejected".to_string(),
             }],
+            result_buffered_for: Duration::ZERO,
             error_text: None,
         }
     );
@@ -820,6 +825,7 @@ try {
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "result rejected".to_string(),
             }],
+            result_buffered_for: Duration::ZERO,
             error_text: None,
         }
     );
@@ -838,6 +844,7 @@ try {
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "still alive".to_string(),
             }],
+            result_buffered_for: Duration::ZERO,
             error_text: None,
         }
     );
@@ -884,6 +891,7 @@ async fn oversized_initial_response_does_not_close_the_shared_host() {
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "still alive".to_string(),
             }],
+            result_buffered_for: Duration::ZERO,
             error_text: None,
         }
     );
@@ -1075,6 +1083,7 @@ async fn child_process_loss_cleans_up_and_rebuilds_the_shared_host() {
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "replacement".to_string(),
             }],
+            result_buffered_for: Duration::ZERO,
             error_text: None,
         }
     );

@@ -66,6 +66,8 @@ pub(crate) enum CellEvent {
     Completed {
         content_items: Vec<OutputItem>,
         error_text: Option<String>,
+        /// Time the completed result spent waiting for an observer.
+        result_buffered_for: Duration,
     },
     Terminated {
         content_items: Vec<OutputItem>,

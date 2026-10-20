@@ -137,6 +137,7 @@ fn runtime_response_decodes_mixed_content_items() {
                     audio_url: "data:audio/wav;base64,AA==".to_string(),
                 },
             ],
+            result_buffered_for: Duration::ZERO,
             error_text: Some("warning".to_string()),
         })
     );
@@ -158,7 +159,7 @@ fn wait_outcome_preserves_missing_cell_state() {
     };
 
     assert_eq!(
-        wait_outcome(response),
+        wait_outcome(tonic::Response::new(response)),
         Ok(WaitOutcome::MissingCell(RuntimeResponse::Terminated {
             code_mode_host_duration: Some(Duration::ZERO),
             cell_id: CellId::new("missing".to_string()),
@@ -204,7 +205,7 @@ fn invalid_output_enums_and_missing_oneofs_are_rejected() {
     };
 
     assert!(runtime_response(invalid_image).is_err());
-    assert!(wait_outcome(grpc::WaitResponse { state: None }).is_err());
+    assert!(wait_outcome(tonic::Response::new(grpc::WaitResponse { state: None })).is_err());
 }
 
 /// Zero is a valid measurement, and decoding must not round nanoseconds to
@@ -227,10 +228,38 @@ fn host_timing_preserves_zero_and_nanosecond_precision() {
         };
         assert_eq!(runtime_response(outcome.clone()).as_ref(), Ok(&expected));
         assert_eq!(
-            wait_outcome(grpc::WaitResponse {
+            wait_outcome(tonic::Response::new(grpc::WaitResponse {
                 state: Some(grpc::wait_response::State::LiveCell(outcome)),
-            }),
+            })),
             Ok(WaitOutcome::LiveCell(expected))
+        );
+    }
+}
+
+#[test]
+fn completed_wait_reads_optional_buffered_duration_from_response_metadata() {
+    for (metadata, expected_ns) in [(None, 0), (Some("0"), 0), (Some("42"), 42)] {
+        let mut response = tonic::Response::new(grpc::WaitResponse {
+            state: Some(grpc::wait_response::State::LiveCell(
+                grpc::ExecutionOutcome {
+                    cell_id: "cell".to_string(),
+                    outcome: Some(grpc::execution_outcome::Outcome::Completed(
+                        grpc::ExecutionCompleted::default(),
+                    )),
+                    ..Default::default()
+                },
+            )),
+        });
+        if let Some(value) = metadata {
+            response.metadata_mut().insert(
+                grpc::RESULT_BUFFERED_FOR_NS_METADATA,
+                value.parse().unwrap(),
+            );
+        }
+        let wait = wait_outcome(response).unwrap();
+        assert_eq!(
+            wait.result_buffered_for(),
+            Some(Duration::from_nanos(expected_ns))
         );
     }
 }

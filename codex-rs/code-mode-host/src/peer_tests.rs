@@ -48,6 +48,7 @@ async fn start_cell_reports_when_initial_response_is_enqueued() {
             code_mode_host_duration: None,
             cell_id: cell_id.clone(),
             content_items: Vec::new(),
+            result_buffered_for: Duration::ZERO,
             error_text: None,
         })
         .expect("initial response receiver");

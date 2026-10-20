@@ -87,6 +87,21 @@ impl CodeModeToolCallGuard {
             "code-mode host operation completed"
         );
     }
+
+    pub(super) fn record_cell_timing(
+        &self,
+        cell_id: &codex_code_mode::CellId,
+        timing: codex_extension_api::CodeModeCellTiming,
+    ) {
+        for observer in self.extensions.tool_lifecycle_contributors() {
+            observer.on_code_mode_cell_timing(
+                &self.thread_id,
+                &self.call_id,
+                cell_id.as_str(),
+                timing,
+            );
+        }
+    }
 }
 
 impl Drop for CodeModeToolCallGuard {

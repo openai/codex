@@ -315,6 +315,7 @@ async fn run_cell<H: CellHost>(
                     .await;
                     let event = CellEvent::Completed {
                         content_items: std::mem::take(&mut content_items),
+                        result_buffered_for: std::time::Duration::ZERO,
                         error_text: Some("exec runtime ended unexpectedly".to_string()),
                     };
                     let rejected_event = match host
@@ -471,6 +472,7 @@ async fn run_cell<H: CellHost>(
                         .await;
                         let event = CellEvent::Completed {
                             content_items: std::mem::take(&mut content_items),
+                            result_buffered_for: std::time::Duration::ZERO,
                             error_text,
                         };
                         let rejected_event = match host

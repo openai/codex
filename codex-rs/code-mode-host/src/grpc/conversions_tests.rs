@@ -69,7 +69,7 @@ fn rejects_missing_names_unknown_tool_kinds_and_invalid_json_schemas() {
 
 #[test]
 fn maps_text_image_audio_and_terminal_error_without_losing_details() {
-    let outcome = execution_outcome(RuntimeResponse::Result {
+    let response = wait_response(WaitOutcome::LiveCell(RuntimeResponse::Result {
         code_mode_host_duration: Some(Duration::from_nanos(/*nanos*/ 123_456_789)),
         cell_id: CellId::new("cell".to_string()),
         content_items: vec![
@@ -84,12 +84,22 @@ fn maps_text_image_audio_and_terminal_error_without_losing_details() {
                 audio_url: "data:audio/wav;base64,YQ==".to_string(),
             },
         ],
+        result_buffered_for: Duration::from_nanos(42),
         error_text: Some("failed".to_string()),
-    });
+    }))
+    .unwrap();
 
     assert_eq!(
-        outcome,
-        Ok(proto::ExecutionOutcome {
+        response
+            .metadata()
+            .get(proto::RESULT_BUFFERED_FOR_NS_METADATA)
+            .unwrap(),
+        "42"
+    );
+    let state = response.into_inner().state.expect("wait outcome");
+    assert_eq!(
+        state,
+        proto::wait_response::State::LiveCell(proto::ExecutionOutcome {
             code_mode_host_duration_ns: 123_456_789,
             cell_id: "cell".to_string(),
             content_items: vec![
@@ -119,6 +129,28 @@ fn maps_text_image_audio_and_terminal_error_without_losing_details() {
     );
 }
 
+#[test]
+fn wait_metadata_distinguishes_an_unbuffered_result_from_no_result() {
+    let result = RuntimeResponse::Result {
+        cell_id: CellId::new("cell".to_string()),
+        content_items: Vec::new(),
+        error_text: None,
+        result_buffered_for: Duration::ZERO,
+        code_mode_host_duration: Some(Duration::ZERO),
+    };
+    for (outcome, expected) in [
+        (WaitOutcome::LiveCell(result.clone()), Some("0")),
+        (WaitOutcome::MissingCell(result), None),
+    ] {
+        let response = wait_response(outcome).unwrap();
+        let buffered = response
+            .metadata()
+            .get(proto::RESULT_BUFFERED_FOR_NS_METADATA)
+            .map(|value| value.to_str().unwrap());
+        assert_eq!(buffered, expected);
+    }
+}
+
 /// Encoding must not turn a missing request measurement into measured zero,
 /// including when no live cell remains to supply output.
 #[test]
@@ -136,6 +168,9 @@ fn grpc_encoding_rejects_untimed_runtime_output() {
         WaitOutcome::LiveCell(response.clone()),
         WaitOutcome::MissingCell(response),
     ] {
-        assert_eq!(wait_response(outcome), Err(MissingCodeModeHostDuration));
+        assert_eq!(
+            wait_response(outcome).unwrap_err(),
+            MissingCodeModeHostDuration
+        );
     }
 }

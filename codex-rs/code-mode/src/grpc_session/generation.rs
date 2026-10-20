@@ -103,11 +103,13 @@ fn public_runtime_response(generation: u64, response: RuntimeResponse) -> Runtim
         RuntimeResponse::Result {
             cell_id,
             content_items,
+            result_buffered_for,
             error_text,
             code_mode_host_duration,
         } => RuntimeResponse::Result {
             cell_id: public_cell_id(generation, &cell_id),
             content_items,
+            result_buffered_for,
             error_text,
             code_mode_host_duration,
         },

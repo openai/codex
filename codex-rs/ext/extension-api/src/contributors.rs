@@ -48,6 +48,7 @@ pub use thread_lifecycle::ThreadReadyInput;
 pub use thread_lifecycle::ThreadResumeInput;
 pub use thread_lifecycle::ThreadStartInput;
 pub use thread_lifecycle::ThreadStopInput;
+pub use tool_lifecycle::CodeModeCellTiming;
 pub use tool_lifecycle::CommandStartInput;
 pub use tool_lifecycle::McpToolContext;
 pub use tool_lifecycle::McpToolResultInput;
@@ -439,6 +440,18 @@ pub trait ToolLifecycleContributor: Send + Sync {
     /// Observe handler or remote host duration as defined by `ToolTimingBoundary`.
     /// Handler timing includes cancellation. Observers must return promptly.
     fn on_tool_timing(&self, _input: ToolTimingInput<'_>) {}
+
+    /// Observe the exec that yielded a cell and the wait that collected its terminal result
+    /// or found the cell unavailable.
+    /// `call_id` identifies that dispatch. `cell_id` stays the same across waits.
+    fn on_code_mode_cell_timing(
+        &self,
+        _thread_id: &str,
+        _call_id: &str,
+        _cell_id: &str,
+        _timing: CodeModeCellTiming,
+    ) {
+    }
 }
 
 /// Owns the complete approval decision, including whether to consult a reviewer.

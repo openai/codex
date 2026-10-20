@@ -78,11 +78,13 @@ pub(super) fn public_runtime_response(
         RuntimeResponse::Result {
             cell_id,
             content_items,
+            result_buffered_for,
             error_text,
             code_mode_host_duration,
         } => RuntimeResponse::Result {
             cell_id: public_cell_id_from_protocol(generation, &cell_id),
             content_items,
+            result_buffered_for,
             error_text,
             code_mode_host_duration,
         },

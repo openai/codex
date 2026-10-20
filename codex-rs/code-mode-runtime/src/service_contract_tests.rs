@@ -220,21 +220,23 @@ async fn yielded_cells_retain_their_own_delegate_until_closed() {
     delegate_a.release_tool();
     assert_eq!(next_event(&mut events_a).await, DelegateEvent::ToolStarted);
     delegate_a.release_tool();
+    let actual = service
+        .wait(
+            WaitRequest {
+                cell_id: cell_id("1"),
+                yield_time_ms: 60_000,
+            },
+            /*preempt*/ None,
+        )
+        .await
+        .unwrap();
     assert_eq!(
-        service
-            .wait(
-                WaitRequest {
-                    cell_id: cell_id("1"),
-                    yield_time_ms: 60_000,
-                },
-                /*preempt*/ None,
-            )
-            .await
-            .unwrap(),
+        actual,
         WaitOutcome::LiveCell(RuntimeResponse::Result {
             code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: Vec::new(),
+            result_buffered_for: actual.result_buffered_for().unwrap(),
             error_text: None
         })
     );
@@ -288,23 +290,25 @@ async fn yields_and_resumes() {
             }],
         }
     );
+    let actual = service
+        .wait(
+            WaitRequest {
+                cell_id: cell_id("1"),
+                yield_time_ms: 60_000,
+            },
+            /*preempt*/ None,
+        )
+        .await
+        .unwrap();
     assert_eq!(
-        service
-            .wait(
-                WaitRequest {
-                    cell_id: cell_id("1"),
-                    yield_time_ms: 60_000,
-                },
-                /*preempt*/ None,
-            )
-            .await
-            .unwrap(),
+        actual,
         WaitOutcome::LiveCell(RuntimeResponse::Result {
             code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "after".to_string(),
             }],
+            result_buffered_for: actual.result_buffered_for().unwrap(),
             error_text: None,
         })
     );
@@ -356,6 +360,7 @@ text("after");
                 content_items: vec![FunctionCallOutputContentItem::InputText {
                     text: "after".to_string(),
                 }],
+                result_buffered_for: Duration::ZERO,
                 error_text: None,
             }
         ))
@@ -413,14 +418,18 @@ async fn observed_natural_completion_wins_over_termination() {
     })
     .await
     .unwrap();
+    let actual = service.terminate(cell_id("1")).await.unwrap();
+    let result_buffered_for = actual.result_buffered_for().unwrap();
+    assert!(!result_buffered_for.is_zero());
     assert_eq!(
-        service.terminate(cell_id("1")).await.unwrap(),
+        actual,
         WaitOutcome::LiveCell(RuntimeResponse::Result {
             code_mode_host_duration: None,
             cell_id: cell_id("1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "done".to_string(),
             }],
+            result_buffered_for,
             error_text: None,
         })
     );
@@ -645,6 +654,7 @@ async fn natural_completion_cleans_up_callbacks_before_responding() {
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "done".to_string(),
             }],
+            result_buffered_for: Duration::ZERO,
             error_text: None,
         }
     );

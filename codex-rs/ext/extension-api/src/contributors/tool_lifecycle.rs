@@ -227,6 +227,18 @@ pub enum ToolTimingBoundary {
     HostOperation,
 }
 
+/// Lifecycle of work that continues after a code-mode `exec` yields.
+#[derive(Clone, Copy, Debug)]
+pub enum CodeModeCellTiming {
+    ExecYielded,
+    WaitFinished {
+        /// Time the finished result was buffered before this wait retrieved it.
+        result_buffered_for: std::time::Duration,
+    },
+    /// The runtime reported that the cell is missing or closed; its completion time is unknown.
+    CellUnavailable,
+}
+
 /// A measured tool interval. Handler observations also cover cancellation;
 /// host-operation observations are available only when the host reports a duration.
 /// Observers must not block.

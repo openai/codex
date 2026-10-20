@@ -33,6 +33,7 @@ fn code_mode_host_duration_survives_runtime_and_stdio_serialization() {
         RuntimeResponse::Result {
             cell_id: CellId::new("completed-cell".to_string()),
             content_items,
+            result_buffered_for: Duration::ZERO,
             error_text: Some("execution failed".to_string()),
             code_mode_host_duration: None,
         },

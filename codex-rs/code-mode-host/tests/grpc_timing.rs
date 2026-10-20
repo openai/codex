@@ -288,6 +288,7 @@ async fn observation_timing_excludes_previous_requests_and_background_time() -> 
         assert_eq!(
             missing,
             WaitOutcome::MissingCell(RuntimeResponse::Result {
+                result_buffered_for: Duration::ZERO,
                 error_text: Some(format!("exec cell {cell_id} not found")),
                 cell_id,
                 content_items: Vec::new(),

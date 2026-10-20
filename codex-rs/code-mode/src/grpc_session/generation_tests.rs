@@ -177,6 +177,7 @@ async fn reconnected_execution_maps_started_and_initial_response_ids() {
         content_items: vec![FunctionCallOutputContentItem::InputText {
             text: "result".to_string(),
         }],
+        result_buffered_for: Duration::ZERO,
         error_text: None,
     };
     let started = StartedCell::from_future(wire_id, async move {
@@ -199,6 +200,7 @@ async fn reconnected_execution_maps_started_and_initial_response_ids() {
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "result".to_string(),
             }],
+            result_buffered_for: Duration::ZERO,
             error_text: None,
         })
     );
