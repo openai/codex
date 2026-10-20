@@ -51,18 +51,7 @@ pub(crate) struct CloudPluginGeneration {
 }
 
 impl CloudPluginGeneration {
-    pub(crate) fn new(mcp_resources: Option<McpResourceClient>) -> Self {
-        let auth_cache_key = mcp_resources
-            .as_ref()
-            .map(|client| client.auth_cache_key_for_server(CODEX_APPS_MCP_SERVER_NAME));
-        Self {
-            auth_cache_key,
-            mcp_resources,
-            catalog: None,
-        }
-    }
-
-    pub(crate) fn is_current(&self) -> bool {
+    pub(crate) fn is_auth_current(&self) -> bool {
         self.auth_cache_key
             == self
                 .mcp_resources
@@ -104,10 +93,11 @@ impl PluginContributorState {
     pub(crate) fn cloud_catalog(&self) -> Option<&PluginCatalog> {
         self.cloud_generation
             .as_ref()
-            .filter(|generation| generation.is_current())
+            .filter(|generation| generation.is_auth_current())
             .and_then(|generation| generation.catalog.as_ref())
     }
 
+    /// Establishes the auth scope and returns the key used by that generation.
     pub(crate) fn prepare_cloud_generation(
         &mut self,
         mcp_resources: Option<McpResourceClient>,
@@ -120,7 +110,11 @@ impl PluginContributorState {
             .as_ref()
             .is_none_or(|generation| generation.auth_cache_key != auth_cache_key)
         {
-            self.cloud_generation = Some(CloudPluginGeneration::new(mcp_resources));
+            self.cloud_generation = Some(CloudPluginGeneration {
+                auth_cache_key: auth_cache_key.clone(),
+                mcp_resources,
+                catalog: None,
+            });
         }
         auth_cache_key
     }
@@ -136,7 +130,7 @@ impl PluginContributorState {
             .cloud_generation
             .as_mut()
             .filter(|generation| generation.auth_cache_key.as_ref() == auth_cache_key)
-            .filter(|generation| generation.is_current())
+            .filter(|generation| generation.is_auth_current())
         else {
             return false;
         };

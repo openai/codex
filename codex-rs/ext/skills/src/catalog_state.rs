@@ -3,7 +3,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
@@ -32,10 +31,39 @@ pub(crate) struct SkillCatalogState {
     // DiscoveryV2.
     pub(crate) executor_v2_cache: Option<CachedExecutorV2Catalog>,
     // Shared by both discovery modes.
-    pub(crate) cloud_cache: Option<Arc<CloudSkillGeneration>>,
+    pub(crate) cloud_generation: Option<Arc<CloudSkillGeneration>>,
+    pub(crate) cloud_resources: CloudResourceCache,
 }
 
-/// Keeps cloud metadata and contents within one published auth scope and Apps availability state.
+impl SkillCatalogState {
+    /// Reuses the auth scope or replaces it, clearing contents from the previous scope.
+    pub(crate) fn prepare_cloud_generation(
+        &mut self,
+        mcp_resources: Option<&McpResourceClient>,
+    ) -> Arc<CloudSkillGeneration> {
+        let auth_cache_key = mcp_resources
+            .map(|client| client.auth_cache_key_for_server(codex_mcp::CODEX_APPS_MCP_SERVER_NAME));
+        if let Some(generation) = self
+            .cloud_generation
+            .as_ref()
+            .filter(|generation| generation.auth_cache_key == auth_cache_key)
+        {
+            return Arc::clone(generation);
+        }
+
+        let generation = Arc::new(CloudSkillGeneration {
+            auth_cache_key,
+            resource_cache_key: None,
+            mcp_resources: mcp_resources.cloned(),
+            catalog: None,
+        });
+        self.cloud_generation = Some(Arc::clone(&generation));
+        self.cloud_resources = CloudResourceCache::default();
+        generation
+    }
+}
+
+/// Keeps cloud metadata within one published auth scope and Apps availability state.
 /// Warning-free discovery is reused until the Apps resource generation changes.
 /// A published refresh replaces the Arc so late reads cannot populate its successor.
 pub(crate) struct CloudSkillGeneration {
@@ -43,7 +71,6 @@ pub(crate) struct CloudSkillGeneration {
     pub(crate) resource_cache_key: Option<McpResourceServerCacheKey>,
     pub(crate) mcp_resources: Option<McpResourceClient>,
     pub(crate) catalog: Option<SkillCatalog>,
-    pub(crate) resources: Mutex<CloudResourceCache>,
 }
 
 impl CloudSkillGeneration {
@@ -53,7 +80,7 @@ impl CloudSkillGeneration {
             .and_then(|client| client.server_cache_key(codex_mcp::CODEX_APPS_MCP_SERVER_NAME))
     }
 
-    pub(crate) fn is_current(&self) -> bool {
+    pub(crate) fn is_auth_current(&self) -> bool {
         self.auth_cache_key
             == self.mcp_resources.as_ref().map(|client| {
                 client.auth_cache_key_for_server(codex_mcp::CODEX_APPS_MCP_SERVER_NAME)

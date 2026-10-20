@@ -33,7 +33,12 @@ impl SkillProvider for Provider {
                 self.entered.notify_one();
                 self.resume.notified().await;
             }
-            if let Some(catalog) = self.next_catalog.lock().unwrap().take() {
+            if let Some(catalog) = self
+                .next_catalog
+                .lock()
+                .expect("test provider catalog mutex should not be poisoned")
+                .take()
+            {
                 return Ok(catalog);
             }
             let is_partial = self.partial_list.swap(false, Ordering::SeqCst);
@@ -128,14 +133,22 @@ async fn frozen_cloud_catalog_and_reads_ignore_live_mcp_changes() {
         .to_string()
         .as_bytes(),
     )
-    .unwrap();
+    .expect("frozen cloud skill fixture should be valid");
     let providers = SkillProviders::new().with_cloud_provider(Arc::new(provider));
     state
         .refresh_cloud_catalog(&providers, query(Some(client())))
         .await
-        .unwrap();
-    let catalog = state.available_cloud_catalog().unwrap();
-    let generation = state.cloud_cache(/*mcp_resources*/ None);
+        .expect("cloud catalog refresh should succeed");
+    let catalog = state
+        .available_cloud_catalog()
+        .expect("cloud catalog should be available after refresh");
+    let generation = state
+        .catalog_state
+        .lock()
+        .expect("catalog state mutex should not be poisoned")
+        .cloud_generation
+        .clone()
+        .expect("initial refresh should publish a cloud generation");
     for mcp_resources in [Some(client()), None, Some(client())] {
         let request = SkillReadRequest {
             package: SkillPackageId("skill://demo/work".into()),
@@ -143,7 +156,10 @@ async fn frozen_cloud_catalog_and_reads_ignore_live_mcp_changes() {
             ..request(mcp_resources.clone())
         };
         assert_eq!(
-            state.read_skill(&providers, request).await.unwrap(),
+            state
+                .read_skill(&providers, request)
+                .await
+                .expect("cloud skill read should succeed"),
             SkillReadResult {
                 resource: SkillResourceId::new("skill://demo/work/SKILL.md"),
                 contents: "Frozen contents".into(),
@@ -152,11 +168,17 @@ async fn frozen_cloud_catalog_and_reads_ignore_live_mcp_changes() {
         state
             .refresh_cloud_catalog(&providers, query(mcp_resources))
             .await
-            .unwrap();
+            .expect("cloud catalog refresh should succeed");
         assert_eq!(state.available_cloud_catalog(), Some(catalog.clone()));
         assert!(Arc::ptr_eq(
             &generation,
-            &state.cloud_cache(/*mcp_resources*/ None)
+            state
+                .catalog_state
+                .lock()
+                .expect("catalog state mutex should not be poisoned")
+                .cloud_generation
+                .as_ref()
+                .expect("frozen cloud generation should remain available")
         ));
     }
 }
@@ -176,7 +198,7 @@ async fn late_read_cannot_return_or_populate_a_replaced_cache() {
             state
                 .refresh_cloud_catalog(&providers, query(replacement.clone()))
                 .await
-                .unwrap();
+                .expect("cloud catalog refresh should succeed");
             provider.resume.notify_one();
         });
         assert!(late.is_err());
@@ -184,7 +206,7 @@ async fn late_read_cannot_return_or_populate_a_replaced_cache() {
             state
                 .read_skill(&providers, request(replacement))
                 .await
-                .unwrap()
+                .expect("cloud skill read should succeed")
                 .contents,
             "contents 1"
         );
@@ -201,7 +223,11 @@ async fn late_discovery_cannot_publish_into_a_new_generation() {
         state.refresh_cloud_catalog(&providers, query(Some(client()))),
         async {
             provider.entered.notified().await;
-            state.cloud_cache(Some(&client()));
+            state
+                .catalog_state
+                .lock()
+                .expect("catalog state mutex should not be poisoned")
+                .prepare_cloud_generation(Some(&client()));
             provider.resume.notify_one();
         }
     );
@@ -210,10 +236,10 @@ async fn late_discovery_cannot_publish_into_a_new_generation() {
         state
             .catalog_state
             .lock()
-            .unwrap()
-            .cloud_cache
+            .expect("catalog state mutex should not be poisoned")
+            .cloud_generation
             .as_ref()
-            .unwrap()
+            .expect("replacement cloud generation should exist")
             .catalog
             .is_none()
     );
@@ -229,9 +255,11 @@ async fn partial_cloud_catalog_without_warnings_is_refreshed_next_turn() {
     state
         .refresh_cloud_catalog(&providers, query(client.clone()))
         .await
-        .unwrap();
+        .expect("cloud catalog refresh should succeed");
     assert_eq!(
-        state.available_cloud_catalog().unwrap(),
+        state
+            .available_cloud_catalog()
+            .expect("cloud catalog should be available after refresh"),
         SkillCatalog {
             is_partial: true,
             ..Default::default()
@@ -240,9 +268,11 @@ async fn partial_cloud_catalog_without_warnings_is_refreshed_next_turn() {
     state
         .refresh_cloud_catalog(&providers, query(client))
         .await
-        .unwrap();
+        .expect("cloud catalog refresh should succeed");
     assert_eq!(
-        state.available_cloud_catalog().unwrap(),
+        state
+            .available_cloud_catalog()
+            .expect("cloud catalog should be available after refresh"),
         SkillCatalog {
             is_partial: false,
             warnings: vec!["account catalog".into()],
@@ -273,19 +303,33 @@ async fn cloud_refresh_preserves_complete_catalogs_only_within_the_same_auth_sco
                 let providers = SkillProviders::new().with_cloud_provider(provider.clone());
                 let original_client = client();
                 let mut previous = catalog("previous", previous_partial);
-                *provider.next_catalog.lock().unwrap() = Some(previous.clone());
+                *provider
+                    .next_catalog
+                    .lock()
+                    .expect("test provider catalog mutex should not be poisoned") =
+                    Some(previous.clone());
                 state
                     .refresh_cloud_catalog(&providers, query(Some(original_client.clone())))
                     .await
-                    .unwrap();
-                let generation = state.cloud_cache(Some(&original_client));
+                    .expect("cloud catalog refresh should succeed");
+                let generation = state
+                    .catalog_state
+                    .lock()
+                    .expect("catalog state mutex should not be poisoned")
+                    .cloud_generation
+                    .clone()
+                    .expect("initial refresh should publish a cloud generation");
                 let contents = state
                     .read_skill(&providers, request(Some(original_client.clone())))
                     .await
-                    .unwrap();
+                    .expect("cloud skill read should succeed");
 
                 let incoming = catalog("incoming", incoming_partial);
-                *provider.next_catalog.lock().unwrap() = Some(incoming.clone());
+                *provider
+                    .next_catalog
+                    .lock()
+                    .expect("test provider catalog mutex should not be poisoned") =
+                    Some(incoming.clone());
                 let current_client = if changed_auth {
                     client()
                 } else {
@@ -294,10 +338,14 @@ async fn cloud_refresh_preserves_complete_catalogs_only_within_the_same_auth_sco
                 state
                     .refresh_cloud_catalog(&providers, query(Some(current_client.clone())))
                     .await
-                    .unwrap();
+                    .expect("cloud catalog refresh should succeed");
                 let retained = !changed_auth && !previous_partial && incoming_partial;
                 assert_eq!(
-                    generation.catalog.as_ref().unwrap().is_partial,
+                    generation
+                        .catalog
+                        .as_ref()
+                        .expect("published generation should contain a catalog")
+                        .is_partial,
                     previous_partial
                 );
                 if retained {
@@ -309,13 +357,19 @@ async fn cloud_refresh_preserves_complete_catalogs_only_within_the_same_auth_sco
                 );
                 assert!(!Arc::ptr_eq(
                     &generation,
-                    &state.cloud_cache(Some(&current_client))
+                    state
+                        .catalog_state
+                        .lock()
+                        .expect("catalog state mutex should not be poisoned")
+                        .cloud_generation
+                        .as_ref()
+                        .expect("refresh should publish a cloud generation")
                 ));
                 assert_eq!(
                     state
                         .read_skill(&providers, request(Some(current_client)))
                         .await
-                        .unwrap()
+                        .expect("cloud skill read should succeed")
                         .contents,
                     if retained {
                         contents.contents
