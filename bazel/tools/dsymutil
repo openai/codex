@@ -1,0 +1,3 @@
+#!/bin/sh
+# rustc invokes dsymutil by name; the C toolchain supplies its hermetic path.
+exec "${LLVM_DSYMUTIL:?missing hermetic dsymutil}" "$@"

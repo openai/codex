@@ -35,6 +35,7 @@ runs:
       run: |
         python3 .github/scripts/run_bazel_with_buildbuddy.py build \
           ${{ runner.os == 'Windows' && '--config=ci-windows-msvc' || '' }} \
+          ${{ runner.os == 'macOS' && '--config=ci-macos --remote_download_toplevel --build_metadata=VISIBILITY=PRIVATE' || '' }} \
           "--platforms=@rules_rs//rs/platforms:$TARGET" \
           "--//codex-rs:runtime_package_build_mode=$BUILD_MODE" \
           "//codex-rs:runtime_package_$BUNDLE"
