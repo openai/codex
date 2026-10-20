@@ -149,7 +149,8 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
     mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
-            body_contains(request, FIRST_TASK) && !has_function_call_output(request, "first-call")
+            body_contains(request, FIRST_TASK)
+                && body_contains(request, r#"\"agent_name\":\"/root/first\""#)
         },
         sse(vec![
             ev_response_created("first-worker-response"),
@@ -175,7 +176,10 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
     .await;
     mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| has_function_call_output(request, "first-call"),
+        |request: &wiremock::Request| {
+            has_function_call_output(request, "first-call")
+                && body_contains(request, r#"\"agent_name\":\"/root\""#)
+        },
         sse(vec![
             ev_response_created("first-followup-response"),
             ev_assistant_message("first-followup-message", "spawned"),

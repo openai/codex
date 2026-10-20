@@ -314,7 +314,7 @@ pub struct MultiAgentV2ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent_developer_instructions: Option<String>,
     /// Preserve the parent's model-visible history on full forks and append child instructions.
-    /// Defaults to false. Legacy compaction without a reusable context baseline still rebuilds.
+    /// Defaults to true. Legacy compaction without a reusable context baseline still rebuilds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preserve_fork_prefix: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

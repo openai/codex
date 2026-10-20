@@ -175,7 +175,10 @@ async fn partial_answers_survive_forked_child_requests(
         .with_extensions(Arc::new(extensions.build()))
         .with_config(move |config| {
             configure_scenario_catalog(config);
-            config.multi_agent_v2.preserve_fork_prefix = preserve_fork_prefix;
+            // Exercise the default for preserved forks and the explicit filtering opt-out.
+            if !preserve_fork_prefix {
+                config.multi_agent_v2.preserve_fork_prefix = false;
+            }
             config.multi_agent_v2.non_code_mode_only = !code_mode;
             if code_mode {
                 config
