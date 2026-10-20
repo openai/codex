@@ -1,4 +1,4 @@
-//! Exercises staging ownership across processes and reclamation of abandoned checkouts.
+//! Exercises staging ownership across processes and age-based recovery of legacy checkouts.
 
 use super::*;
 use anyhow::Result;
@@ -46,8 +46,8 @@ fn cleanup_preserves_live_process_and_reclaims_its_abandoned_checkout() -> Resul
     let active = fs::read_dir(&staging_root)?.next().unwrap()?.path();
     let payload = active.join("checkout/payload");
 
-    // Cleanup must preserve a checkout owned by another process.
-    remove_stale_staging_dirs(home.path())?;
+    // Age must never override the lifetime lock, even across processes.
+    remove_stale_staging_dirs(home.path(), SystemTime::now() + LEGACY_ADD_MAX_AGE)?;
     assert_eq!(fs::read_to_string(&payload)?, "in-flight clone");
     let concurrent = MarketplaceStagingDir::new(home.path())?;
     fs::create_dir_all(concurrent.path())?;
@@ -68,24 +68,48 @@ fn cleanup_preserves_live_process_and_reclaims_its_abandoned_checkout() -> Resul
 }
 
 #[test]
-fn cleanup_reclaims_unpublished_and_preserves_unrelated_entries() -> Result<()> {
+fn cleanup_reclaims_unpublished_and_aged_legacy_clones() -> Result<()> {
     let home = tempfile::tempdir()?;
     let staging_root = home.path().join(".staging");
+    let legacy_add = staging_root.join("marketplace-add-old");
+    let legacy_upgrade = staging_root.join("marketplace-upgrade-old");
     let unrelated = staging_root.join("unrelated");
     let foreign = staging_root.join("marketplace-other-os-active");
     let unpublished = staging_root.join(format!(
         "{}unpublished",
         MarketplaceStagingDir::directory_prefix()
     ));
-    for path in [&unrelated, &foreign, &unpublished] {
+    for path in [
+        &legacy_add,
+        &legacy_upgrade,
+        &unrelated,
+        &foreign,
+        &unpublished,
+    ] {
         fs::create_dir_all(path)?;
     }
+    fs::write(legacy_add.join("payload"), "old add")?;
+    fs::write(legacy_upgrade.join("payload"), "old upgrade")?;
     let unrelated_file =
         staging_root.join(format!("{}file", MarketplaceStagingDir::directory_prefix()));
     fs::write(&unrelated_file, "keep")?;
 
-    remove_stale_staging_dirs(home.path())?;
+    let now = SystemTime::now();
+    remove_stale_staging_dirs(home.path(), now)?;
     assert!(!unpublished.exists());
+    assert!(legacy_add.exists());
+    assert!(legacy_upgrade.exists());
+    remove_stale_staging_dirs(
+        home.path(),
+        now + LEGACY_UPGRADE_MAX_AGE + Duration::from_secs(1),
+    )?;
+    assert!(!legacy_upgrade.exists());
+    assert!(legacy_add.exists());
+    remove_stale_staging_dirs(
+        home.path(),
+        now + LEGACY_ADD_MAX_AGE + Duration::from_secs(1),
+    )?;
+    assert!(!legacy_add.exists());
     assert!(unrelated.exists());
     assert!(foreign.exists());
     assert_eq!(fs::read_to_string(unrelated_file)?, "keep");
@@ -105,6 +129,8 @@ fn cleanup_does_not_follow_symlinks() -> Result<()> {
         MarketplaceStagingDir::directory_prefix()
     ));
     std::os::unix::fs::symlink(outside.path(), &alias)?;
+    let legacy_alias = staging_root.join("marketplace-upgrade-link");
+    std::os::unix::fs::symlink(outside.path(), &legacy_alias)?;
     let invalid_owner =
         staging_root.join(format!("{}link", MarketplaceStagingDir::directory_prefix()));
     fs::create_dir_all(&invalid_owner)?;
@@ -113,9 +139,10 @@ fn cleanup_does_not_follow_symlinks() -> Result<()> {
         invalid_owner.join(OWNER_LOCK),
     )?;
 
-    remove_stale_staging_dirs(home.path())?;
+    remove_stale_staging_dirs(home.path(), SystemTime::now() + LEGACY_ADD_MAX_AGE)?;
     assert_eq!(fs::read_to_string(outside.path().join("payload"))?, "keep");
     assert!(alias.is_symlink());
+    assert!(legacy_alias.is_symlink());
     assert!(invalid_owner.exists());
     Ok(())
 }

@@ -2,6 +2,7 @@
 //! A coordination lock protects publication of each checkout's lifetime lock. Checkouts
 //! live below their owner directory so Git and activation cannot replace the lock file.
 //! Cleanup claims a limited batch under coordination, then deletes it outside that lock.
+//! Legacy directories use age thresholds because older binaries publish no owner lock.
 
 use codex_utils_path::symlink_metadata_if_exists;
 use std::fs;
@@ -9,9 +10,16 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::SystemTime;
 use tempfile::TempDir;
 use tracing::warn;
 
+const LEGACY_ADD_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+// Upgrades have a 30-second timeout per Git command; leave ample room for all phases.
+const LEGACY_UPGRADE_MAX_AGE: Duration = Duration::from_secs(10 * 60);
+const LEGACY_ADD_PREFIX: &str = "marketplace-add-";
+const LEGACY_UPGRADE_PREFIX: &str = "marketplace-upgrade-";
 const MAX_CLEANUP_DIRECTORIES: usize = 4;
 const COORDINATION_LOCK: &str = ".staging.lock";
 const CLEANUP_LOCK: &str = ".staging-cleanup.lock";
@@ -62,7 +70,7 @@ impl MarketplaceStagingDir {
 }
 
 pub(crate) fn cleanup_marketplace_staging(install_root: &Path) {
-    if let Err(err) = remove_stale_staging_dirs(install_root) {
+    if let Err(err) = remove_stale_staging_dirs(install_root, SystemTime::now()) {
         warn!("failed to clean up marketplace staging directories: {err}");
     }
 }
@@ -84,7 +92,7 @@ fn try_lock(lock: File) -> io::Result<Option<File>> {
     }
 }
 
-fn remove_stale_staging_dirs(install_root: &Path) -> io::Result<()> {
+fn remove_stale_staging_dirs(install_root: &Path, now: SystemTime) -> io::Result<()> {
     let staging_root = MarketplaceStagingDir::staging_root(install_root);
     let Some(metadata) = symlink_metadata_if_exists(&staging_root)? else {
         return Ok(());
@@ -105,7 +113,7 @@ fn remove_stale_staging_dirs(install_root: &Path) -> io::Result<()> {
         let entry = entry?;
         let path = entry.path();
         // Continue past an unreadable entry so one failure cannot prevent reclamation.
-        match is_abandoned_staging_dir(&entry, &prefix) {
+        match is_abandoned_staging_dir(&entry, &prefix, now) {
             Ok(true) => abandoned.push(path),
             Ok(false) => {}
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
@@ -130,7 +138,11 @@ fn remove_stale_staging_dirs(install_root: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn is_abandoned_staging_dir(entry: &fs::DirEntry, prefix: &str) -> io::Result<bool> {
+fn is_abandoned_staging_dir(
+    entry: &fs::DirEntry,
+    prefix: &str,
+    now: SystemTime,
+) -> io::Result<bool> {
     if !entry.file_type()?.is_dir() {
         return Ok(false);
     }
@@ -139,7 +151,19 @@ fn is_abandoned_staging_dir(entry: &fs::DirEntry, prefix: &str) -> io::Result<bo
         return Ok(false);
     };
     if !name.starts_with(prefix) {
-        return Ok(false);
+        // Older binaries did not publish ownership. Leave recent directories
+        // alone so an upgrade can coexist with their in-flight clones.
+        let max_age = if name.starts_with(LEGACY_ADD_PREFIX) {
+            LEGACY_ADD_MAX_AGE
+        } else if name.starts_with(LEGACY_UPGRADE_PREFIX) {
+            LEGACY_UPGRADE_MAX_AGE
+        } else {
+            return Ok(false);
+        };
+        return Ok(now
+            .duration_since(entry.metadata()?.modified()?)
+            .unwrap_or_default()
+            >= max_age);
     }
     let owner_lock = entry.path().join(OWNER_LOCK);
     let Some(metadata) = symlink_metadata_if_exists(&owner_lock)? else {
