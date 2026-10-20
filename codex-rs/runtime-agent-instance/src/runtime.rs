@@ -1,5 +1,7 @@
 //! A pending registration keeps its key and retry ID; a registered runtime signs v1 assertions.
 
+use crate::AgentHost;
+use crate::AuthenticatedActor;
 use crate::RuntimeRegistrationRequest;
 use crate::RuntimeRegistrationResponse;
 use base64::Engine;
@@ -48,17 +50,39 @@ impl RuntimeRegistration {
             signing_key: Arc::new(signing_key),
         })
     }
+
+    pub(crate) fn finish(&self, info: RuntimeRegistrationResponse) -> RuntimeAgentInstance {
+        RuntimeAgentInstance {
+            id: info.runtime_agent_instance_id,
+            actor: AuthenticatedActor { info: info.actor },
+            host: AgentHost {
+                id: info.agent_host_id,
+                authorization: self.request.agent_host_auth.clone(),
+            },
+            signing_key: self.signing_key.clone(),
+        }
+    }
 }
 
 /// A server-registered identity and its memory-only signer, shared for this runtime's lifetime.
 pub struct RuntimeAgentInstance {
-    pub(crate) info: RuntimeRegistrationResponse,
-    pub(crate) signing_key: Arc<SigningKey>,
+    id: String,
+    pub(crate) actor: AuthenticatedActor,
+    host: AgentHost,
+    signing_key: Arc<SigningKey>,
 }
 
 impl RuntimeAgentInstance {
-    pub fn info(&self) -> &RuntimeRegistrationResponse {
-        &self.info
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn actor(&self) -> &AuthenticatedActor {
+        &self.actor
+    }
+
+    pub fn host(&self) -> &AgentHost {
+        &self.host
     }
 
     /// Make a fresh assertion for each request attempt or connection handshake.
@@ -72,7 +96,7 @@ impl RuntimeAgentInstance {
         let payload = URL_SAFE_NO_PAD.encode(
             json!({
                 "version": 1,
-                "runtime_agent_instance": self.info.runtime_agent_instance_id,
+                "runtime_agent_instance": self.id,
                 "iat": issued_at,
                 "id": Uuid::new_v4(),
             })
@@ -93,10 +117,7 @@ impl RuntimeAgentInstance {
 impl fmt::Debug for RuntimeAgentInstance {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RuntimeAgentInstance")
-            .field(
-                "runtime_agent_instance_id",
-                &self.info.runtime_agent_instance_id,
-            )
+            .field("runtime_agent_instance_id", &self.id)
             .finish_non_exhaustive()
     }
 }

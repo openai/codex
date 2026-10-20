@@ -3,6 +3,7 @@
 use super::*;
 use crate::AgentHostAuthorization;
 use crate::AuthenticatedActorAuthorization;
+use crate::RuntimeAgentInstance;
 use crate::RuntimeRegistrationMetadata;
 use crate::RuntimeRole;
 use base64::Engine;
@@ -77,9 +78,11 @@ async fn registration_retries_keep_the_key_and_sign_fresh_assertions() {
         .await;
     let pending = pending();
     let client = client(&server);
-    let runtime = client.register(&pending).await.unwrap();
-    let retry = client.register(&pending).await.unwrap();
-    assert_eq!(runtime.info(), retry.info());
+    let info = client.register(&pending).await.unwrap();
+    let retry_info = client.register(&pending).await.unwrap();
+    assert_eq!(info, retry_info);
+    let runtime = pending.finish(info);
+    let retry = pending.finish(retry_info);
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].body, requests[1].body);

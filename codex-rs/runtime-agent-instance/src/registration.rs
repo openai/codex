@@ -1,7 +1,7 @@
 //! Direct composite bootstrap. Credentials are sent only in the body, never through redirects.
 
-use crate::RuntimeAgentInstance;
 use crate::RuntimeRegistration;
+use crate::RuntimeRegistrationResponse;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::HttpError;
@@ -52,7 +52,7 @@ impl RuntimeRegistrationClient {
     pub async fn register(
         &self,
         registration: &RuntimeRegistration,
-    ) -> Result<RuntimeAgentInstance, RegistrationError> {
+    ) -> Result<RuntimeRegistrationResponse, RegistrationError> {
         let body = serde_json::to_vec(&registration.request)
             .map_err(|_| RegistrationError::InvalidRequest)?;
         if body.len() > MAX_BODY_BYTES {
@@ -96,15 +96,12 @@ impl RuntimeRegistrationClient {
         if info.runtime_agent_instance_id.is_empty() || info.agent_host_id.is_empty() {
             return Err(RegistrationError::InvalidResponse);
         }
-        Ok(RuntimeAgentInstance {
-            info,
-            signing_key: registration.signing_key.clone(),
-        })
+        Ok(info)
     }
 }
 
 /// Errors intentionally omit raw transport details and server messages, which can contain secrets.
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum RegistrationError {
     #[error(
         "runtime registration requires a secure endpoint without credentials or query parameters"
