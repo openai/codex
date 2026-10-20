@@ -2318,7 +2318,9 @@ fn decode_utf16(
     }
 
     let units: Vec<u16> = input
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|chunk| decode_unit([chunk[0], chunk[1]]))
         .collect();
 

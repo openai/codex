@@ -325,7 +325,7 @@ toolchains.toolchain(
     edition = "2024",
     extra_exec_rustc_flags = MSVC_RUSTC_FLAGS,
     extra_rustc_flags = MSVC_RUSTC_FLAGS,
-    version = "1.95.0",
+    version = "1.99.1",
 )
 use_repo(toolchains, "default_rust_toolchains")
 

@@ -186,9 +186,9 @@ jobs:
           python-version: "3.12"
 
       - name: Set up Rust toolchain for Cargo smoke
-        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
         with:
-          toolchain: "1.95.0"
+          toolchain: "1.99.1"
 
       - name: Build Bazel V8 release pair
         env:
@@ -354,9 +354,9 @@ jobs:
           architecture: x64
 
       - name: Set up Codex Rust toolchain for Cargo smoke
-        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
         with:
-          toolchain: "1.95.0"
+          toolchain: "1.99.1"
           targets: ${{ matrix.target }}
 
       - name: Install rusty_v8 Rust toolchain
@@ -446,7 +446,7 @@ jobs:
             cd codex-rs
             RUSTY_V8_ARCHIVE="${GITHUB_WORKSPACE}/${archive}" \
             RUSTY_V8_SRC_BINDING_PATH="${GITHUB_WORKSPACE}/${binding}" \
-            cargo +1.95.0 test -p codex-v8-poc --target "${TARGET}" --features sandbox --no-run
+            cargo +1.99.1 test -p codex-v8-poc --target "${TARGET}" --features sandbox --no-run
           )
 
       - name: Upload staged artifacts

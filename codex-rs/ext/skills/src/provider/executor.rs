@@ -328,10 +328,10 @@ async fn read_bounded_text(
     let mut stream = file_system
         .read_file_stream(path)
         .await
-        .map_err(&read_error)?;
+        .map_err(read_error)?;
     let mut contents = Vec::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(&read_error)?;
+        let chunk = chunk.map_err(read_error)?;
         if contents.len().saturating_add(chunk.len()) > MAX_SKILL_RESOURCE_CONTENT_BYTES {
             return Err(SkillProviderError::new(format!(
                 "executor skill resource {resource} exceeds {MAX_SKILL_RESOURCE_CONTENT_BYTES} bytes"

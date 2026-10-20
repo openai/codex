@@ -216,7 +216,7 @@ struct Palette {
 impl Palette {
     fn from_rgba(rgba: &[u8]) -> Self {
         let mut used = [false; PALETTE_COLOR_COUNT];
-        for pixel in rgba.chunks_exact(4) {
+        for pixel in rgba.as_chunks::<4>().0 {
             if pixel[3] < TRANSPARENT_ALPHA_THRESHOLD {
                 continue;
             }

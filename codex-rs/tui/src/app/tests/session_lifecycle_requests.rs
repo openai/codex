@@ -1909,7 +1909,7 @@ async fn older_external_server_starts_without_unsupported_dynamic_tools_or_histo
 
     let starts = recorded_params(&requests, "thread/start");
     assert_eq!(starts.len(), 6);
-    for attempts in starts.chunks_exact(3) {
+    for attempts in starts.as_chunks::<3>().0 {
         assert_eq!(attempts[0]["dynamicTools"][0]["type"], "namespace");
         assert_eq!(attempts[0]["historyMode"], "paginated");
         assert_eq!(attempts[1]["dynamicTools"], serde_json::Value::Null);

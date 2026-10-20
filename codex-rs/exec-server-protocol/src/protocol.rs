@@ -236,7 +236,7 @@ impl EnvironmentInfo {
             if let Some(path) = std::env::var_os(name)
                 .filter(|path| !path.is_empty())
                 .filter(|path| cfg!(unix) || std::path::Path::new(path).is_absolute())
-                .and_then(&normalize_temp_path)
+                .and_then(normalize_temp_path)
                 && !temporary_directories.contains(&path)
             {
                 temporary_directories.push(path);

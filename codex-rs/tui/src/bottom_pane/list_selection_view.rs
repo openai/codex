@@ -1119,7 +1119,7 @@ impl ListSelectionView {
             None
         }
         .or_else(|| self.footer_note.clone());
-        let mut lines = note.map(&wrap).unwrap_or_default();
+        let mut lines = note.map(wrap).unwrap_or_default();
         if self.reserve_result_rows && show_selected_description {
             let height = self
                 .items

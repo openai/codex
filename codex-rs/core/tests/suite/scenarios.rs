@@ -2918,7 +2918,7 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
     )
     .await?;
     assert_eq!(compaction_events.len(), if over_budget { 4 } else { 2 });
-    for pair in compaction_events.chunks_exact(2) {
+    for pair in compaction_events.as_chunks::<2>().0 {
         assert_eq!((pair[0].0, pair[1].0), ("started", "completed"));
         assert_eq!(pair[0].1, pair[1].1);
     }
