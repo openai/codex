@@ -169,6 +169,8 @@ pub enum ToolCallKind {
     ExecCommand,
     WriteStdin,
     ApplyPatch,
+    /// Resolved backend identity from an MCP runtime invocation. The callable
+    /// namespace/name may differ and remain in the summary and raw invocation.
     Mcp {
         server: String,
         tool: String,

@@ -54,12 +54,15 @@ impl TraceReducer {
         };
 
         let payload = self.read_payload_json(invocation_payload)?;
-        let request = parse_dispatch_terminal_request(payload).with_context(|| {
+        let Some(request) = parse_dispatch_terminal_request(payload).with_context(|| {
             format!(
                 "parse terminal invocation payload {} as dispatch payload",
                 invocation_payload.raw_payload_id
             )
-        })?;
+        })?
+        else {
+            return Ok(None);
+        };
         self.insert_terminal_operation(TerminalOperationStart {
             seq,
             wall_time_unix_ms,
@@ -387,8 +390,14 @@ fn parse_protocol_terminal_request(
     }
 }
 
-fn parse_dispatch_terminal_request(value: JsonValue) -> Result<ParsedTerminalRequest> {
+fn parse_dispatch_terminal_request(value: JsonValue) -> Result<Option<ParsedTerminalRequest>> {
     let payload: DispatchedToolTraceRequestPayload = serde_json::from_value(value)?;
+    // Recorded kinds are name-based. Only the built-in write_stdin owns terminal
+    // sessions; core records its default namespace as None. Namespaced aliases
+    // must wait for runtime classification, even if their arguments look native.
+    if payload.tool_namespace.is_some() {
+        return Ok(None);
+    }
     if payload.tool_name != "write_stdin" {
         bail!(
             "dispatch terminal request is for {}, not write_stdin",
@@ -410,14 +419,14 @@ fn parse_dispatch_terminal_request(value: JsonValue) -> Result<ParsedTerminalReq
     let terminal_id = terminal_id_from_json(&args.session_id)
         .context("write_stdin dispatch payload omitted session_id")?;
 
-    Ok(ParsedTerminalRequest {
+    Ok(Some(ParsedTerminalRequest {
         terminal_id: Some(terminal_id),
         request: TerminalRequest::WriteStdin {
             stdin: args.chars,
             yield_time_ms: args.yield_time_ms,
             max_output_tokens: args.max_output_tokens,
         },
-    })
+    }))
 }
 
 fn parse_terminal_response_payload(
@@ -565,6 +574,7 @@ struct ExecCommandEndPayload {
 #[derive(Deserialize)]
 struct DispatchedToolTraceRequestPayload {
     tool_name: String,
+    tool_namespace: Option<String>,
     payload: DispatchedToolPayload,
 }
 
