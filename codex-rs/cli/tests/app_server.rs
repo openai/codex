@@ -133,6 +133,64 @@ fn app_server_emits_json_info_events() -> Result<()> {
 }
 
 #[test]
+fn app_server_keeps_sqlite_logs_in_overridden_sqlite_home() -> Result<()> {
+    let home = TempDir::new()?;
+    let sqlite_home = TempDir::new()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        "[features]\nplugins = false\n",
+    )?;
+
+    codex_command(home.path())?
+        .env("CODEX_SQLITE_HOME", sqlite_home.path())
+        .env(
+            "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
+            home.path().join("managed_config.toml"),
+        )
+        .arg("app-server")
+        .write_stdin("")
+        .assert()
+        .success();
+
+    assert!(sqlite_home.path().join("state_5.sqlite").is_file());
+    assert!(std::fs::metadata(sqlite_home.path().join("logs_2.sqlite"))?.len() > 0);
+    assert!(!home.path().join("logs_2.sqlite").exists());
+    assert!(!home.path().join("log/logs_2.sqlite").exists());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn app_server_preserves_the_existing_sqlite_logs_symlink() -> Result<()> {
+    let home = TempDir::new()?;
+    let external_logs = TempDir::new()?;
+    let target = external_logs.path().join("logs_2.sqlite");
+    let link = home.path().join("logs_2.sqlite");
+    std::os::unix::fs::symlink(&target, &link)?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        "[features]\nplugins = false\n",
+    )?;
+
+    codex_command(home.path())?
+        .env_remove("CODEX_SQLITE_HOME")
+        .env(
+            "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
+            home.path().join("managed_config.toml"),
+        )
+        .arg("app-server")
+        .write_stdin("")
+        .assert()
+        .success();
+
+    assert_eq!(std::fs::read_link(&link)?, target);
+    assert!(std::fs::metadata(&target)?.len() > 0);
+    assert!(home.path().join("state_5.sqlite").is_file());
+    assert!(!home.path().join("log/logs_2.sqlite").exists());
+    Ok(())
+}
+
+#[test]
 fn print_startup_config_preserves_project_login_restrictions() -> Result<()> {
     let home = TempDir::new()?;
     let project = TempDir::new()?;

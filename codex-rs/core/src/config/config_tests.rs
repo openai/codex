@@ -6130,8 +6130,83 @@ async fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Re
     )
     .await?;
 
-    assert_eq!(config.sqlite.home(), codex_home.path());
+    assert_eq!(
+        (
+            config.sqlite.home(),
+            config.sqlite.logs_db_path(),
+            &config.log_dir
+        ),
+        (
+            codex_home.path(),
+            codex_home.path().join("logs_2.sqlite"),
+            &codex_home.path().join("log"),
+        ),
+    );
+    assert_eq!(config.configured_log_dir(), None);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn log_dir_routes_logs_without_moving_state() -> std::io::Result<()> {
+    let home = TempDir::new()?;
+    let diagnostics = home.path().join("diagnostics").abs();
+    std::fs::write(
+        home.path().join(CONFIG_TOML_FILE),
+        format!("log_dir = {:?}\n", diagnostics.as_path()),
+    )?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .build()
+        .await?;
+    assert_eq!(
+        (
+            config.sqlite.home(),
+            config.sqlite.logs_db_path().parent(),
+            config.log_dir.as_path(),
+            config.configured_log_dir()
+        ),
+        (
+            home.path(),
+            Some(diagnostics.as_path()),
+            diagnostics.as_path(),
+            Some(diagnostics.as_path())
+        ),
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_sqlite_home_preserves_configured_log_dir() -> std::io::Result<()> {
+    let home = TempDir::new()?;
+    let diagnostics = home.path().join("diagnostics");
+    let state = home.path().join("managed-state");
+    for (user_config, requirements) in [
+        (
+            format!("log_dir = {diagnostics:?}\n"),
+            format!("sqlite_home = {state:?}"),
+        ),
+        (
+            String::new(),
+            format!("sqlite_home = {state:?}\nlog_dir = {diagnostics:?}"),
+        ),
+    ] {
+        std::fs::write(home.path().join(CONFIG_TOML_FILE), user_config)?;
+        let config = load_with_enterprise_requirement(&home, requirements).await?;
+        assert_eq!(
+            (
+                config.sqlite.logs_db_path().parent(),
+                config.log_dir.as_path(),
+                config.configured_log_dir(),
+            ),
+            (
+                Some(state.as_path()),
+                diagnostics.as_path(),
+                Some(diagnostics.as_path()),
+            ),
+        );
+    }
     Ok(())
 }
 
@@ -13518,6 +13593,8 @@ async fn load_with_enterprise_requirement(
 #[tokio::test]
 async fn exact_requirements_apply_to_runtime_config() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
+    let unused_diagnostics = codex_home.path().join("unused-diagnostics");
+    std::fs::write(&unused_diagnostics, "not a directory")?;
     let catalog_path = codex_home.path().join("required-models.json");
     let mut catalog = bundled_models_response()
         .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
@@ -13528,13 +13605,16 @@ async fn exact_requirements_apply_to_runtime_config() -> std::io::Result<()> {
     )?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
-        r#"
+        format!(
+            r#"
+log_dir = {unused_diagnostics:?}
 check_for_update_on_startup = true
 allow_login_shell = true
 
 [feedback]
 enabled = true
-"#,
+"#
+        ),
     )?;
 
     let required_sqlite_home = codex_home.path().join("required-state");
@@ -13558,6 +13638,16 @@ enabled = false
 
     assert_eq!(config.sqlite.home(), required_sqlite_home.as_path());
     assert_eq!(config.log_dir, required_log_dir);
+    assert_eq!(
+        (
+            config.sqlite.logs_db_path().parent(),
+            config.configured_log_dir(),
+        ),
+        (
+            Some(required_sqlite_home.as_path()),
+            Some(required_log_dir.as_path())
+        ),
+    );
     assert_eq!(config.model_catalog, Some(catalog));
     assert!(!config.check_for_update_on_startup);
     assert!(!config.permissions.allow_login_shell);

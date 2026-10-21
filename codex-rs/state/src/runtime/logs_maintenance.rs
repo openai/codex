@@ -1,4 +1,4 @@
-//! Prune diagnostic logs in the background immediately, then on a timer.
+//! Prune current and legacy diagnostic logs immediately, then on a timer.
 //! SQLite keeps freed pages for reuse.
 
 use super::StateRuntime;
@@ -29,25 +29,40 @@ impl StateRuntime {
                 if runtime.logs_pool.is_closed() {
                     break;
                 }
-                if let Err(err) = prune_by_age_and_size(
-                    &runtime.logs_pool,
-                    Utc::now().timestamp(),
-                    LOG_DATABASE_BUDGET_BYTES,
-                )
-                .await
+                // Older versions write logs in sqlite_home. Keep the same retention policy
+                // there until those logs expire. Do not create a missing legacy database.
+                let legacy_pool = match runtime.sqlite.open_legacy_logs_for_cleanup().await {
+                    Ok(pool) => pool,
+                    Err(err) => {
+                        tracing::warn!("failed to open legacy diagnostic logs for cleanup: {err}");
+                        None
+                    }
+                };
+                for pool in std::iter::once(runtime.logs_pool.as_ref()).chain(legacy_pool.as_ref())
                 {
-                    tracing::warn!("failed to prune diagnostic logs: {err}");
-                }
-                if first_sweep {
-                    first_sweep = false;
-                    // Preserve the startup checkpoint without waiting for readers or writers.
-                    if let Err(err) = sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
-                        .execute(runtime.logs_pool.as_ref())
-                        .await
+                    if let Err(err) = prune_by_age_and_size(
+                        pool,
+                        Utc::now().timestamp(),
+                        LOG_DATABASE_BUDGET_BYTES,
+                    )
+                    .await
                     {
-                        tracing::warn!("failed to checkpoint diagnostic logs: {err}");
+                        tracing::warn!("failed to prune diagnostic logs: {err}");
+                    }
+                    if first_sweep {
+                        // Preserve the startup checkpoint without waiting for readers or writers.
+                        if let Err(err) = sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
+                            .execute(pool)
+                            .await
+                        {
+                            tracing::warn!("failed to checkpoint diagnostic logs: {err}");
+                        }
                     }
                 }
+                if let Some(pool) = legacy_pool {
+                    pool.close().await;
+                }
+                first_sweep = false;
             }
         });
     }

@@ -995,7 +995,9 @@ pub struct Config {
     /// Resolved configuration shared by all Codex SQLite databases.
     pub sqlite: codex_state::SqliteConfig,
 
-    /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
+    /// Directory for log files (defaults to `$CODEX_HOME/log`).
+    /// SQLite logs use this directory only when `log_dir` is explicitly configured
+    /// and no managed `sqlite_home` requirement applies.
     pub log_dir: PathBuf,
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
@@ -1626,6 +1628,21 @@ async fn config_toml_from_layers(layers: &ConfigLayerStack) -> std::io::Result<C
 impl Config {
     pub fn sqlite_config(&self) -> &codex_state::SqliteConfig {
         &self.sqlite
+    }
+
+    /// Returns `log_dir` when explicitly set by configuration or managed requirements.
+    pub fn configured_log_dir(&self) -> Option<&Path> {
+        let configured = self
+            .config_layer_stack
+            .effective_config()
+            .as_table()
+            .is_some_and(|table| table.contains_key("log_dir"))
+            || self
+                .config_layer_stack
+                .requirements_toml()
+                .log_dir
+                .is_some();
+        configured.then_some(self.log_dir.as_path())
     }
 
     /// Resolves the configured, reviewer-catalog, or bundled Guardian policy.
@@ -4241,6 +4258,11 @@ impl Config {
             .cloned()
             .or(sqlite_home_env)
             .unwrap_or_else(|| codex_home.clone());
+        let mut sqlite = codex_state::SqliteConfig::from_sqlite_home(sqlite_home);
+        let requirements = config_layer_stack.requirements_toml();
+        if cfg.log_dir.is_some() && requirements.sqlite_home.is_none() {
+            sqlite = sqlite.with_local_logs_home(log_dir.clone());
+        }
         let original_permission_profile = permission_profile.clone();
         apply_requirement_constrained_value(
             "approval_policy",
@@ -4538,7 +4560,7 @@ impl Config {
             memories: memories_config,
             agent_interrupt_message_enabled,
             codex_home,
-            sqlite: codex_state::SqliteConfig::from_sqlite_home(sqlite_home),
+            sqlite,
             log_dir,
             config_layer_stack,
             application_network_policy: Default::default(),

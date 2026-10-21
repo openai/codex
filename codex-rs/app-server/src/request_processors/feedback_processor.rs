@@ -8,6 +8,7 @@ use codex_connectors::ConnectorDirectoryCacheKey;
 use codex_connectors::connector_runtime_cache_path;
 use codex_feedback::CODEX_APP_DIRECTORY_CACHE_ATTACHMENT_FILENAME;
 use codex_feedback::CODEX_APPS_TOOLS_CACHE_ATTACHMENT_FILENAME;
+use codex_feedback::FeedbackAttachment;
 use codex_feedback::FeedbackSnapshot;
 #[cfg(target_os = "windows")]
 use codex_feedback::WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME;
@@ -190,14 +191,22 @@ impl FeedbackRequestProcessor {
                 feedback_index = Some(index);
             }
             extra_attachments.extend(failures.attachment);
-            let (snapshot, sqlite_feedback_logs) = collect_feedback_logs(
+            let (snapshot, sqlite_feedback_logs, legacy_logs) = collect_feedback_logs(
                 &self.feedback,
                 self.log_db.as_ref(),
                 state_db_ctx.as_ref(),
+                &self.config,
                 snapshot,
                 &feedback_thread_ids,
             )
             .await;
+            if let Some(buffer) = legacy_logs {
+                extra_attachments.push(FeedbackAttachment {
+                    filename: "codex-logs-legacy.log".to_string(),
+                    content_type: Some("text/plain".to_string()),
+                    buffer,
+                });
+            }
             (snapshot, sqlite_feedback_logs, state_db_ctx)
         } else {
             (snapshot, None, None)
@@ -548,13 +557,15 @@ async fn collect_feedback_logs(
     feedback: &CodexFeedback,
     log_db: Option<&LogDbLayer>,
     state_db: Option<&StateDbHandle>,
+    config: &Config,
     mut snapshot: FeedbackSnapshot,
     thread_ids: &[ThreadId],
-) -> (FeedbackSnapshot, Option<Vec<u8>>) {
+) -> (FeedbackSnapshot, Option<Vec<u8>>, Option<Vec<u8>>) {
     if let Some(log_db) = log_db {
         log_db.flush().await;
     }
     let mut sqlite_logs = None;
+    let mut legacy_logs = None;
     if let Some(state_db) = state_db
         && !thread_ids.is_empty()
     {
@@ -576,6 +587,21 @@ async fn collect_feedback_logs(
                 );
             }
         }
+        // Earlier versions stored logs in sqlite_home/logs_2.sqlite.
+        // Keep this temporary read path so feedback can include logs from before the directory change.
+        // Read the old database when log_dir is unset or the current query returns no logs.
+        if config.configured_log_dir().is_none() || sqlite_logs.is_none() {
+            match state_db
+                .query_legacy_feedback_logs_for_threads(&thread_id_refs)
+                .await
+            {
+                Ok(logs) if logs.is_empty() => {}
+                Ok(logs) => legacy_logs = Some(logs),
+                Err(err) => {
+                    tracing::warn!("failed to query legacy feedback logs from sqlite: {err}")
+                }
+            }
+        }
     }
     if log_db.is_some_and(LogDbLayer::has_write_failure) {
         sqlite_logs = None;
@@ -583,7 +609,7 @@ async fn collect_feedback_logs(
 
     // new logs might arrive to the buffer while collecting metadata e.g. if log db flush fails
     snapshot.refresh_logs(feedback);
-    (snapshot, sqlite_logs)
+    (snapshot, sqlite_logs, legacy_logs)
 }
 
 #[cfg(test)]

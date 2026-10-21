@@ -28,9 +28,8 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_features::Feature;
 use codex_state::LogQuery;
-use codex_state::SqliteConfig;
 use codex_state::StateRuntime;
-use codex_utils_absolute_path::test_support::PathExt;
+use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_wine_exec;
@@ -145,7 +144,7 @@ async fn submission_metadata_reaches_persisted_and_feedback_logs() -> Result<()>
     .await??;
 
     let state = StateRuntime::init(
-        SqliteConfig::new_for_testing(codex_home.path().abs()),
+        load_default_config_for_test(&codex_home).await.sqlite,
         "mock_provider".into(),
     )
     .await?;
@@ -368,7 +367,7 @@ supports_websockets = false
         .send_response(RequestId::String(barrier.into()), json!({}))
         .await?;
     let state = StateRuntime::init(
-        SqliteConfig::new_for_testing(codex_home.path().abs()),
+        load_default_config_for_test(&codex_home).await.sqlite,
         "mock_provider".into(),
     )
     .await?;
@@ -580,7 +579,7 @@ async fn sqlite_log_metrics_exports_do_not_create_log_cycles() -> Result<()> {
         }
 
         let state = codex_state::StateRuntime::init(
-            codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+            load_default_config_for_test(&codex_home).await.sqlite,
             "test-provider".to_string(),
         )
         .await?;

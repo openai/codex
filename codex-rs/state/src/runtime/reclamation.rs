@@ -1,4 +1,5 @@
 //! Reclaims unused SQLite pages in opted-in databases, reducing batches after stalled passes.
+//! Current and legacy log directories each retain their own maintenance lock.
 //! NFS on Linux skips opening a maintenance connection.
 use crate::RuntimeDbPath;
 use crate::SqliteConfig;
@@ -8,8 +9,10 @@ use sqlx::Connection;
 use sqlx::SqliteConnection;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqliteSynchronous;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -42,30 +45,18 @@ impl SqliteReclamationWorker {
             // Declared first so completion is signaled after all worker resources drop.
             let _finish = finish;
             let mut scheduled = sqlite
-                .runtime_db_paths()
+                .reclamation_db_paths()
                 .into_iter()
-                .filter_map(|db| {
-                    if db.background_reclamation {
-                        Some((db, Instant::now(), ReclamationState::default()))
-                    } else {
-                        None
-                    }
-                })
+                .map(|db| (db, Instant::now(), ReclamationState::default()))
                 .collect::<Vec<_>>();
-            let mut owner = None;
+            let mut owners = BTreeMap::new();
             let mut delay = IDLE_INTERVAL;
             loop {
                 tokio::select! {
                     _ = receiver.changed() => break,
                     _ = tokio::time::sleep(delay) => {}
                 }
-                if owner.is_none() {
-                    owner = try_ownership(sqlite.home()).await.ok().flatten();
-                }
-                if owner.is_none() {
-                    continue;
-                }
-                delay = visit(&sqlite, &mut scheduled, &receiver).await;
+                delay = visit(&sqlite, &mut scheduled, &mut owners, &receiver).await;
             }
         });
 
@@ -82,6 +73,7 @@ impl SqliteReclamationWorker {
 async fn visit(
     sqlite: &SqliteConfig,
     scheduled: &mut [(RuntimeDbPath, Instant, ReclamationState)],
+    owners: &mut BTreeMap<PathBuf, File>,
     shutdown: &watch::Receiver<()>,
 ) -> Duration {
     for (db, due, state) in &mut *scheduled {
@@ -91,6 +83,18 @@ async fn visit(
         }
         if *due > started {
             continue;
+        }
+        let Some(home) = db.path.parent() else {
+            continue;
+        };
+        if let std::collections::btree_map::Entry::Vacant(entry) = owners.entry(home.to_path_buf())
+        {
+            if let Ok(Some(owner)) = try_ownership(home).await {
+                entry.insert(owner);
+            } else {
+                *due = started + IDLE_INTERVAL;
+                continue;
+            }
         }
         let result = reclaim(
             sqlite,
@@ -214,8 +218,14 @@ async fn reclaim(
     options: impl Into<ReclamationOptions>,
     shutdown: &watch::Receiver<()>,
 ) -> anyhow::Result<ReclamationPass> {
-    // do not perform autovacuum and cleanup on NFS as it creates a lot of load and contention on IO
-    if sqlite.is_nfs().await? {
+    // Check the selected logs directory. An administrator can also select NFS.
+    let logs = path == sqlite.logs_db_path();
+    let is_nfs = if logs {
+        sqlite.logs_are_on_nfs().await?
+    } else {
+        sqlite.is_nfs().await?
+    };
+    if is_nfs {
         return Ok(ReclamationPass {
             pages: 0,
             outcome: PassOutcome::Idle,

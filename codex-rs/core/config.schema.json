@@ -7894,7 +7894,7 @@
           "$ref": "#/definitions/AbsolutePathBuf"
         }
       ],
-      "description": "Directory where Codex writes log files. Setting this value explicitly also enables the TUI text log in this directory. Defaults to `$CODEX_HOME/log`."
+      "description": "Directory for log files. Setting this value explicitly also routes the SQLite logs database here and enables the TUI text log in this directory. When unset, log files use `$CODEX_HOME/log` and SQLite logs use `sqlite_home`. Existing SQLite logs in `sqlite_home` are not migrated automatically. A managed `sqlite_home` requirement keeps SQLite logs in that required directory."
     },
     "marketplaces": {
       "additionalProperties": {

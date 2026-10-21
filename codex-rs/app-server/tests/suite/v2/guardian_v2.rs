@@ -1756,7 +1756,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         && !late_root_restriction
     {
         let state_db = StateRuntime::init(
-            codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+            load_default_config_for_test(&codex_home).await.sqlite,
             "mock_provider".to_owned(),
         )
         .await?;

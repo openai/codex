@@ -1004,6 +1004,10 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
     });
     log_db_layer.flush().await;
 
+    let logs_path = test.config.sqlite.home().join("logs_2.sqlite");
+    assert_eq!(db.sqlite().logs_db_path(), logs_path);
+    assert!(logs_path.is_file());
+
     let mut found = None;
     for _ in 0..80 {
         let query = codex_state::LogQuery {

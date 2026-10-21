@@ -5,6 +5,88 @@ use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn reclaims_current_and_legacy_logs_with_independent_directory_locks() -> anyhow::Result<()> {
+    let directory = unique_temp_dir();
+    tokio::fs::create_dir_all(&directory).await?;
+    let legacy = SqliteConfig::new_for_testing(directory.as_path().abs());
+    let sqlite = legacy.clone().with_local_logs_home(directory.join("log"));
+    let mut pools = Vec::new();
+    let mut sizes = Vec::new();
+    for config in [&sqlite, &legacy] {
+        let pool = config
+            .open_logs_db(&runtime_logs_migrator(), /*telemetry_override*/ None)
+            .await?;
+        sqlx::query(
+            "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i < 4096) \
+             INSERT INTO logs(ts,ts_nanos,level,target,feedback_log_body) \
+             SELECT unixepoch(),0,'INFO','fixture',printf('%032768d',i) FROM n",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query("DELETE FROM logs WHERE id%4 != 0")
+            .execute(&pool)
+            .await?;
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&pool)
+            .await?;
+        sizes.push(tokio::fs::metadata(config.logs_db_path()).await?.len());
+        pools.push(pool);
+    }
+    let rows = "SELECT id, feedback_log_body FROM logs ORDER BY id";
+    let expected: Vec<(i64, String)> = sqlx::query_as(rows).fetch_all(&pools[0]).await?;
+    let mut scheduled = sqlite
+        .reclamation_db_paths()
+        .into_iter()
+        .map(|db| (db, Instant::now(), ReclamationState::default()))
+        .collect::<Vec<_>>();
+    let mut owners = BTreeMap::new();
+    let (_shutdown, receiver) = watch::channel(());
+
+    // A legacy process owns its directory. Current logs must still be reclaimed.
+    let legacy_owner = try_ownership(legacy.home()).await?.unwrap();
+    for (index, config) in [&sqlite, &legacy].into_iter().enumerate() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                for (_, due, _) in &mut scheduled {
+                    *due = Instant::now();
+                }
+                visit(&sqlite, &mut scheduled, &mut owners, &receiver).await;
+                if config.logs_are_on_nfs().await.unwrap()
+                    || tokio::fs::metadata(config.logs_db_path())
+                        .await
+                        .unwrap()
+                        .len()
+                        < sizes[index]
+                {
+                    break;
+                }
+            }
+        })
+        .await?;
+        if index == 0 {
+            assert_eq!(
+                tokio::fs::metadata(legacy.logs_db_path()).await?.len(),
+                sizes[1]
+            );
+            legacy_owner.unlock()?;
+        }
+    }
+    for pool in pools {
+        assert_eq!(
+            sqlx::query_as::<_, (i64, String)>(rows)
+                .fetch_all(&pool)
+                .await?,
+            expected
+        );
+        pool.close().await;
+    }
+    drop(owners);
+    drop(legacy_owner);
+    tokio::fs::remove_dir_all(directory).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn interrupted_reclamation_releases_writer_and_resumes_without_data_loss()
 -> anyhow::Result<()> {
     let sqlite = SqliteConfig::new_for_testing(unique_temp_dir().abs());

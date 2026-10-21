@@ -54,7 +54,7 @@ async fn runtime_opens_recover_or_report_corruption_by_database_policy() -> anyh
         let home = root.join(spec.label);
         tokio::fs::create_dir_all(&home).await?;
         let sqlite = SqliteConfig::new_for_testing(home.as_path().abs());
-        let path = spec.path(&home);
+        let path = spec.path(&sqlite);
         let fixture = path.with_extension("fixture");
         let pool = sqlx::SqlitePool::connect_with(
             sqlx::sqlite::SqliteConnectOptions::new()

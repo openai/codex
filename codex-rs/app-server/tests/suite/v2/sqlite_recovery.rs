@@ -14,69 +14,86 @@ use tokio::time::timeout;
 
 #[tokio::test]
 async fn startup_reports_shared_and_fallback_recovery() -> Result<()> {
-    let home = TempDir::new()?;
-    let sqlite = SqliteConfig::new_for_testing(home.path().canonicalize()?.as_path().abs());
-    let runtime = StateRuntime::init(sqlite.clone(), "openai".to_string()).await?;
-    runtime.close().await;
-    let logs_path = sqlite.logs_db_path();
-    let pool = sqlite.open_read_write_pool(&logs_path).await?;
-    // The schema and migrations remain readable; opening the database alone succeeds.
-    sqlx::raw_sql(
-        "CREATE TABLE sample(value INTEGER);
-         INSERT INTO sample VALUES (NULL);
-         PRAGMA writable_schema=ON;
-         UPDATE sqlite_schema SET sql='CREATE TABLE sample(value INTEGER NOT NULL)' WHERE name='sample';
-         PRAGMA writable_schema=OFF;",
-    )
-    .execute(&pool)
-    .await?;
-    pool.close().await;
-
-    // Logs recover inside the pool opener; the unreadable goals header forces
-    // the outer startup fallback and a retry after that first recovery.
-    tokio::fs::write(sqlite.goals_db_path(), b"damaged goals database").await?;
-
-    let read_timeout = Duration::from_secs(/*secs*/ 30);
-    let mut server = TestAppServer::builder()
-        .with_codex_home(sqlite.home())
-        .build_initialized_with_timeout(read_timeout)
-        .await?;
-    let warning: ConfigWarningNotification =
-        timeout(read_timeout, server.read_notification("configWarning")).await??;
-    assert_eq!(warning.summary, "Codex rebuilt its local database");
-    let details = warning.details.expect("recovery details");
-    assert!(details.contains("Some database-only metadata may be unavailable"));
-    let backups = std::fs::read_dir(sqlite.home().join("db-backups"))?
-        .collect::<std::io::Result<Vec<_>>>()?;
-    assert_eq!(backups.len(), 2);
-    for backup in &backups {
-        assert!(details.contains(&backup.path().display().to_string()));
-    }
-    assert!(details.contains(&sqlite.logs_db_path().display().to_string()));
-    assert!(details.contains(&sqlite.goals_db_path().display().to_string()));
-    let backup_dir = backups
-        .iter()
-        .map(std::fs::DirEntry::path)
-        .find(|path| {
-            path.join(logs_path.file_name().expect("log filename"))
-                .exists()
-        })
-        .expect("preserved logs database");
-    let backup_pool = sqlite
-        .open_read_only_pool(
-            &backup_dir.join(logs_path.file_name().expect("log filename")),
-            /*busy_timeout*/ None,
+    for log_dir_is_configured in [false, true] {
+        let home = TempDir::new()?;
+        if log_dir_is_configured {
+            std::fs::write(
+                home.path().join("config.toml"),
+                format!("log_dir = {:?}\n", home.path().join("log")),
+            )?;
+        }
+        let sqlite = core_test_support::load_default_config_for_test(&home)
+            .await
+            .sqlite;
+        let runtime = StateRuntime::init(sqlite.clone(), "openai".to_string()).await?;
+        runtime.close().await;
+        let logs_path = sqlite.logs_db_path();
+        let pool = sqlite.open_read_write_pool(&logs_path).await?;
+        // The schema and migrations remain readable; opening the database alone succeeds.
+        sqlx::raw_sql(
+            "CREATE TABLE sample(value INTEGER);
+             INSERT INTO sample VALUES (NULL);
+             PRAGMA writable_schema=ON;
+             UPDATE sqlite_schema SET sql='CREATE TABLE sample(value INTEGER NOT NULL)' WHERE name='sample';
+             PRAGMA writable_schema=OFF;",
         )
+        .execute(&pool)
         .await?;
-    assert_eq!(
-        sqlx::query_scalar::<_, Option<i64>>("SELECT value FROM sample")
-            .fetch_all(&backup_pool)
-            .await?,
-        vec![None]
-    );
-    backup_pool.close().await;
-    server.start_thread(ThreadStartParams::default()).await?;
-    timeout(read_timeout, server.shutdown_gracefully()).await??;
+        pool.close().await;
+
+        // Logs recover inside the pool opener; the unreadable goals header forces
+        // the outer startup fallback and a retry after that first recovery.
+        tokio::fs::write(sqlite.goals_db_path(), b"damaged goals database").await?;
+
+        let read_timeout = Duration::from_secs(/*secs*/ 30);
+        let mut server = TestAppServer::builder()
+            .with_codex_home(sqlite.home())
+            .build_initialized_with_timeout(read_timeout)
+            .await?;
+        let warning: ConfigWarningNotification =
+            timeout(read_timeout, server.read_notification("configWarning")).await??;
+        assert_eq!(warning.summary, "Codex rebuilt its local database");
+        let details = warning.details.expect("recovery details");
+        assert!(details.contains("Some database-only metadata may be unavailable"));
+        let mut backups = std::fs::read_dir(sqlite.home().join("db-backups"))?
+            .collect::<std::io::Result<Vec<_>>>()?;
+        let logs_home = logs_path.parent().expect("logs directory");
+        if logs_home != sqlite.home() {
+            backups.extend(
+                std::fs::read_dir(logs_home.join("db-backups"))?
+                    .collect::<std::io::Result<Vec<_>>>()?,
+            );
+        }
+        assert_eq!(backups.len(), 2);
+        for backup in &backups {
+            assert!(details.contains(&backup.path().display().to_string()));
+        }
+        assert!(details.contains(&sqlite.logs_db_path().display().to_string()));
+        assert!(details.contains(&sqlite.goals_db_path().display().to_string()));
+        let backup_dir = backups
+            .iter()
+            .map(std::fs::DirEntry::path)
+            .find(|path| {
+                path.join(logs_path.file_name().expect("log filename"))
+                    .exists()
+            })
+            .expect("preserved logs database");
+        let backup_pool = sqlite
+            .open_read_only_pool(
+                &backup_dir.join(logs_path.file_name().expect("log filename")),
+                /*busy_timeout*/ None,
+            )
+            .await?;
+        assert_eq!(
+            sqlx::query_scalar::<_, Option<i64>>("SELECT value FROM sample")
+                .fetch_all(&backup_pool)
+                .await?,
+            vec![None]
+        );
+        backup_pool.close().await;
+        server.start_thread(ThreadStartParams::default()).await?;
+        timeout(read_timeout, server.shutdown_gracefully()).await??;
+    }
     Ok(())
 }
 

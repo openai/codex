@@ -98,8 +98,6 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
 
     use app_test_support::MockResponsesConfig;
     use codex_app_server_protocol::ClientNotification;
-    use codex_state::SqliteConfig;
-    use codex_utils_absolute_path::test_support::PathExt;
     use tokio::io::AsyncReadExt;
     use tokio_rustls::TlsAcceptor;
     use tokio_rustls::rustls;
@@ -189,9 +187,13 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
     }));
 
     let models = wiremock::MockServer::start().await;
-    MockResponsesConfig::new(&models.uri()).write(home.path())?;
+    MockResponsesConfig::new(&models.uri())
+        .with_root_config(&format!("log_dir = {:?}", home.path().join("log")))
+        .write(home.path())?;
     let thread_id = codex_protocol::ThreadId::new();
-    let sqlite = SqliteConfig::new_for_testing(home.path().abs());
+    let sqlite = core_test_support::load_default_config_for_test(&home)
+        .await
+        .sqlite;
     let state =
         codex_state::StateRuntime::init(sqlite.clone(), "mock_provider".to_string()).await?;
     let review = json!({
@@ -228,6 +230,19 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
             .await?;
     }
     state.close().await;
+    let legacy_path = home.path().join("logs_2.sqlite");
+    std::fs::copy(sqlite.logs_db_path(), &legacy_path)?;
+    let legacy_pool = sqlite.open_read_write_pool(&legacy_path).await?;
+    let legacy_timestamp = chrono::Utc::now();
+    sqlx::query(
+        "INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, thread_id)
+         VALUES (?, 0, 'INFO', 'test', 'legacy history', ?)",
+    )
+    .bind(legacy_timestamp.timestamp())
+    .bind(thread_id.to_string())
+    .execute(&legacy_pool)
+    .await?;
+    legacy_pool.close().await;
     // This new process can recover review context only from SQLite.
     let mut app_server = TestAppServer::builder()
         .with_codex_home(home.path())
@@ -242,7 +257,7 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
         .await?;
     let pool = sqlite.open_read_write_pool(&sqlite.logs_db_path()).await?;
     // This old history exists only in SQLite, as if it had already left the memory ring.
-    sqlx::query("INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, thread_id) VALUES (1, 0, 'INFO', 'test', 'sqlite-only-history', ?)")
+    sqlx::query("INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, thread_id) VALUES (unixepoch(), 0, 'INFO', 'test', 'sqlite-only-history', ?)")
         .bind(thread_id.to_string()).execute(&pool).await?;
     sqlx::query("CREATE TRIGGER fail_log_insert BEFORE INSERT ON logs BEGIN SELECT RAISE(ABORT, 'synthetic-secret'); END")
         .execute(&pool).await?;
@@ -317,8 +332,18 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
         if phase == Phase::WithoutLogs {
             assert!(!attachments.contains_key("auto-review-failures.jsonl"));
             assert!(!attachments.contains_key("codex-logs.log"));
+            assert!(!attachments.contains_key("codex-logs-legacy.log"));
             continue;
         }
+        assert_eq!(
+            attachments.get("codex-logs-legacy.log"),
+            (phase == Phase::Corrupt)
+                .then(|| format!(
+                    "{}  INFO legacy history\n",
+                    legacy_timestamp.format("%Y-%m-%dT%H:%M:%S.000000Z")
+                ))
+                .as_ref(),
+        );
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&attachments["auto-review-failures.jsonl"])?,
             review,

@@ -223,7 +223,7 @@ fn doctor_reports_failed_database_paths() -> Result<()> {
     let sqlite_home = toml::Value::String(sqlite_home.display().to_string());
     std::fs::write(
         &config_file,
-        format!("sqlite_home = {sqlite_home}\n{config}"),
+        format!("sqlite_home = {sqlite_home}\nlog_dir = {sqlite_home}\n{config}"),
     )?;
 
     for (snapshot_name, failed_paths) in [
@@ -317,7 +317,7 @@ fn doctor_redacts_failed_database_paths_in_json() -> Result<()> {
     let sqlite_home = toml::Value::String(sqlite_home.display().to_string());
     std::fs::write(
         &config_file,
-        format!("sqlite_home = {sqlite_home}\n{config}"),
+        format!("sqlite_home = {sqlite_home}\nlog_dir = {sqlite_home}\n{config}"),
     )?;
     std::fs::write(sqlite.logs_db_path(), "not a SQLite database")?;
 

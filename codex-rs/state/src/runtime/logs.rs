@@ -305,6 +305,33 @@ WHERE id IN (
         &self,
         thread_ids: &[&str],
     ) -> anyhow::Result<Vec<u8>> {
+        Self::query_feedback_logs_from_pool(self.logs_pool.as_ref(), thread_ids).await
+    }
+
+    /// Read logs from the previous directory without creating or migrating its database.
+    pub async fn query_legacy_feedback_logs_for_threads(
+        &self,
+        thread_ids: &[&str],
+    ) -> anyhow::Result<Vec<u8>> {
+        let Some(path) = self.sqlite.legacy_logs_db_path() else {
+            return Ok(Vec::new());
+        };
+        if thread_ids.is_empty() || !tokio::fs::try_exists(&path).await? {
+            return Ok(Vec::new());
+        }
+        let pool = self
+            .sqlite
+            .open_read_only_pool(&path, /*busy_timeout*/ None)
+            .await?;
+        let result = Self::query_feedback_logs_from_pool(&pool, thread_ids).await;
+        pool.close().await;
+        result
+    }
+
+    async fn query_feedback_logs_from_pool(
+        pool: &SqlitePool,
+        thread_ids: &[&str],
+    ) -> anyhow::Result<Vec<u8>> {
         if thread_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -376,7 +403,7 @@ WHERE cumulative_estimated_bytes <=
         builder.push(" ORDER BY ts DESC, ts_nanos DESC, id DESC");
         let rows = builder
             .build_query_as::<FeedbackLogRow>()
-            .fetch_all(self.logs_pool.as_ref())
+            .fetch_all(pool)
             .await?;
 
         let mut lines = Vec::new();

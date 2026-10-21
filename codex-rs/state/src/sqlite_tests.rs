@@ -8,6 +8,89 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqliteJournalMode;
 use sqlx::sqlite::SqlitePoolOptions;
 
+#[tokio::test]
+async fn configured_log_directory_is_initialized_on_use_and_retries_after_failure()
+-> anyhow::Result<()> {
+    let sqlite_home = crate::runtime::test_support::unique_temp_dir();
+    tokio::fs::create_dir_all(&sqlite_home).await?;
+    let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
+        let _ = std::fs::remove_dir_all(sqlite_home);
+    });
+    let logs_home = sqlite_home.join("logs");
+    tokio::fs::write(&logs_home, "not a directory").await?;
+    let sqlite = SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    let fallback_logs_path = sqlite.logs_db_path();
+    let sqlite = sqlite.with_local_logs_home(logs_home.clone());
+
+    // Opening unrelated state must not require the configured logs directory.
+    let pool = sqlite.open_read_write_pool(&sqlite.state_db_path()).await?;
+    pool.close().await;
+    assert!(
+        crate::StateRuntime::init(sqlite.clone(), "openai".to_string())
+            .await
+            .is_err()
+    );
+    assert!(!fallback_logs_path.exists());
+
+    // A failed initialization must remain retryable without replacing the config.
+    tokio::fs::remove_file(&logs_home).await?;
+    let runtime = crate::StateRuntime::init(sqlite.clone(), "openai".to_string()).await?;
+    assert!(sqlite.logs_db_path().is_file());
+    assert!(!fallback_logs_path.exists());
+    runtime.close().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn configured_log_directory_lock_is_shared_by_reader_and_writer_config_clones()
+-> anyhow::Result<()> {
+    let sqlite_home = crate::runtime::test_support::unique_temp_dir();
+    let logs_home = sqlite_home.join("logs");
+    tokio::fs::create_dir_all(&logs_home).await?;
+    let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
+        let _ = std::fs::remove_dir_all(sqlite_home);
+    });
+    let initial = SqliteConfig::new_for_testing(logs_home.as_path().abs());
+    let logs_path = initial.logs_db_path();
+    initial
+        .open_read_write_pool(&logs_path)
+        .await?
+        .close()
+        .await;
+
+    for read_only in [false, true] {
+        let sqlite = SqliteConfig::new_for_testing(sqlite_home.as_path().abs())
+            .with_local_logs_home(logs_home.clone());
+        let clone = sqlite.clone();
+        let cleanup_lock = std::fs::File::open(&logs_home)?;
+        cleanup_lock.try_lock()?;
+        cleanup_lock.unlock()?;
+
+        let pool = if read_only {
+            sqlite
+                .open_read_only_pool(&logs_path, /*busy_timeout*/ None)
+                .await?
+        } else {
+            sqlite.open_read_write_pool(&logs_path).await?
+        };
+        assert!(matches!(
+            cleanup_lock.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        drop(sqlite);
+        assert!(matches!(
+            cleanup_lock.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+
+        pool.close().await;
+        drop(clone);
+        cleanup_lock.try_lock()?;
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn sqlite_home_filesystem_probe_is_shared_by_clones_until_config_replacement()
