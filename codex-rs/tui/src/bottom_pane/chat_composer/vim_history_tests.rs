@@ -15,7 +15,6 @@ use super::super::ChatComposer;
 use super::super::InputResult;
 use super::super::LARGE_PASTE_CHAR_THRESHOLD;
 use super::super::PasteBurst;
-use super::super::draft_state::PromptPrefix;
 use super::super::tests::new_test_composer;
 use super::super::tests::snapshot_composer_state_with_width;
 use crate::keymap::RuntimeKeymap;
@@ -160,19 +159,16 @@ fn recovered_answers_undo_as_one_vim_edit() {
         ctrl_r(&mut composer);
         assert_eq!(composer.draft_snapshot(), after);
     }
-    for command in ["!echo", "/diff", "/review "] {
+    for command in ["!echo", "/diff"] {
         let mut composer = vim_composer(command);
-        composer.move_cursor_to_end();
-        composer.sync_popups();
         let before = composer.draft_snapshot();
         composer.append_recovered_drafts("answer");
         assert_eq!(composer.current_text(), format!("\\{command}\n\nanswer"));
-        assert!(composer.draft.textarea.text_elements().is_empty());
         keys(&mut composer, "u");
         assert_eq!(composer.draft_snapshot(), before);
     }
     let mut composer = vim_composer("echo");
-    composer.draft.prompt_prefix = PromptPrefix::Shell;
+    composer.draft.is_bash_mode = true;
     let before = composer.draft_snapshot();
     composer.append_recovered_drafts("answer");
     assert_eq!(composer.current_text(), "\\!echo\n\nanswer");
@@ -676,7 +672,7 @@ fn vim_replace_backspace_restores_characters_in_new_slash_element() {
             composer.set_vim_enabled(/*enabled*/ true);
             composer.draft.textarea.set_cursor(/*pos*/ 0);
             keys(composer, "R/diff");
-            assert_eq!(composer.draft.textarea.element_payloads(), vec!["diff"]);
+            assert_eq!(composer.draft.textarea.element_payloads(), vec!["/diff"]);
             for expected in [("/dife tail", 4), ("/dide tail", 3)] {
                 let _ = composer.handle_key_event(KeyEvent::from(KeyCode::Backspace));
                 assert_eq!(
@@ -690,30 +686,13 @@ fn vim_replace_backspace_restores_characters_in_new_slash_element() {
 
 #[test]
 fn vim_replace_delete_backward_restores_characters_hidden_by_prompt_prefixes() {
-    for (original, replacement, delete_backward, repeat) in [
-        (
-            "abcde tail",
-            "R/diff",
-            KeyEvent::from(KeyCode::Backspace),
-            5,
-        ),
-        (
-            "ébc",
-            "R!",
-            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL),
-            1,
-        ),
-    ] {
-        let mut composer = vim_composer(original);
-        keys(&mut composer, replacement);
-        for _ in 0..repeat {
-            let _ = composer.handle_key_event(delete_backward);
-        }
-        assert_eq!(
-            (composer.current_text(), composer.current_cursor()),
-            (original.to_owned(), 0)
-        );
-    }
+    let mut composer = vim_composer("ébc");
+    keys(&mut composer, "R!");
+    let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+    assert_eq!(
+        (composer.current_text(), composer.current_cursor()),
+        ("ébc".to_owned(), 0)
+    );
 }
 
 #[test]

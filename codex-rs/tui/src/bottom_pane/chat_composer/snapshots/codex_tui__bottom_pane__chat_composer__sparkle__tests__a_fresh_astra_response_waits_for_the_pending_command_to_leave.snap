@@ -7,7 +7,7 @@ command during startup:
 › /status      show current session configuration and token usage
   /statusline  configure which items appear in the status line
 
-/ status
+› /status
 
                                                              100% context left
 

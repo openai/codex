@@ -24,7 +24,6 @@ use super::ActivePopup;
 use super::ChatComposer;
 use super::InputResult;
 use super::QueuedInputAction;
-use super::draft_state::PromptPrefix;
 use super::parent_owned_command_is_allowed;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -245,17 +244,13 @@ impl ChatComposer {
         }
         if key_event.code == KeyCode::Esc {
             // Always dismiss the popup without changing the draft.
-            let text = self.current_text();
-            let first_line = text.lines().next().unwrap_or("");
+            let first_line = self.draft.textarea.text().lines().next().unwrap_or("");
             self.popups.dismissed_command_token =
                 command_popup_filter_text(first_line, /*cursor*/ 0);
             self.popups.active = ActivePopup::None;
             return (InputResult::None, true);
         }
         self.footer.mode = reset_mode_after_activity(self.footer.mode);
-        let current_text = self.current_text();
-        let current_cursor = self.current_cursor();
-        let first_line = current_text.lines().next().unwrap_or("");
         let ActivePopup::Command(popup) = &mut self.popups.active else {
             unreachable!();
         };
@@ -289,8 +284,11 @@ impl ChatComposer {
             } => {
                 // Ensure popup filtering/selection reflects the latest composer text
                 // before applying completion.
-                let filter_text = command_popup_filter_text(first_line, current_cursor)
-                    .unwrap_or_else(|| first_line.to_owned());
+                let text = self.draft.textarea.text();
+                let first_line = text.lines().next().unwrap_or("").to_owned();
+                let cursor = self.draft.textarea.cursor();
+                let filter_text = command_popup_filter_text(&first_line, cursor)
+                    .unwrap_or_else(|| first_line.clone());
                 popup.on_composer_text_change(filter_text);
                 let has_visible_items = !popup.filtered_items().is_empty();
                 let selected_item = popup.selected_item();
@@ -301,7 +299,7 @@ impl ChatComposer {
                     {
                         self.stage_selected_slash_command_history(&selected_cmd);
                         self.draft.textarea.set_text_clearing_elements("");
-                        self.draft.prompt_prefix = PromptPrefix::None;
+                        self.draft.is_bash_mode = false;
                         return (InputResult::Command(*cmd), true);
                     }
 
@@ -314,9 +312,11 @@ impl ChatComposer {
                     }
 
                     if let Some(completed_text) =
-                        selected_command_completion(first_line, &selected_cmd)
+                        selected_command_completion(&first_line, &selected_cmd)
                     {
-                        self.set_canonical_text_clearing_elements(completed_text);
+                        self.draft
+                            .textarea
+                            .set_text_clearing_elements(&completed_text);
                         if !self.draft.textarea.text().is_empty() {
                             self.draft
                                 .textarea
@@ -340,8 +340,11 @@ impl ChatComposer {
             } => {
                 // Treat "/" as accepting the highlighted command as text completion
                 // while the slash-command popup is active.
-                let filter_text = command_popup_filter_text(first_line, current_cursor)
-                    .unwrap_or_else(|| first_line.to_owned());
+                let text = self.draft.textarea.text();
+                let first_line = text.lines().next().unwrap_or("").to_owned();
+                let cursor = self.draft.textarea.cursor();
+                let filter_text = command_popup_filter_text(&first_line, cursor)
+                    .unwrap_or_else(|| first_line.clone());
                 popup.on_composer_text_change(filter_text);
                 if let Some(selected_cmd) = popup.selected_item() {
                     if self
@@ -353,9 +356,12 @@ impl ChatComposer {
                     }
 
                     if let Some(completed_text) =
-                        selected_command_completion(first_line, &selected_cmd)
+                        selected_command_completion(&first_line, &selected_cmd)
                     {
-                        self.set_canonical_text_clearing_elements(completed_text);
+                        self.draft
+                            .textarea
+                            .set_text_clearing_elements(&completed_text);
+                        self.draft.is_bash_mode = false;
                     }
                     if !self.draft.textarea.text().is_empty() {
                         self.draft
@@ -374,10 +380,11 @@ impl ChatComposer {
                 if let Some(sel) = popup.selected_item() {
                     if self.blocks_direct_input {
                         let command_is_allowed = match &sel {
-                            CommandItem::Builtin(cmd) => parse_slash_name(&current_text)
-                                .is_some_and(|(_, args, _)| {
-                                    parent_owned_command_is_allowed(*cmd, args)
-                                }),
+                            CommandItem::Builtin(cmd) => {
+                                parse_slash_name(self.draft.textarea.text()).is_some_and(
+                                    |(_, args, _)| parent_owned_command_is_allowed(*cmd, args),
+                                )
+                            }
                             CommandItem::ServiceTier(_) => false,
                         };
                         if !command_is_allowed {
@@ -397,7 +404,7 @@ impl ChatComposer {
                     if !matches!(sel, CommandItem::Builtin(cmd) if cmd.requires_dispatch_validation())
                     {
                         self.draft.textarea.set_text_clearing_elements("");
-                        self.draft.prompt_prefix = PromptPrefix::None;
+                        self.draft.is_bash_mode = false;
                     }
                     return (
                         match sel {
@@ -427,9 +434,9 @@ impl ChatComposer {
             return false;
         }
 
-        let text = self.current_text();
+        let text = self.draft.textarea.text();
         let first_line_end = text.find('\n').unwrap_or(text.len());
-        let cursor = self.current_cursor();
+        let cursor = self.draft.textarea.cursor();
         if cursor > first_line_end || !text.starts_with('/') || !text.is_char_boundary(cursor) {
             return false;
         }
@@ -458,8 +465,6 @@ impl ChatComposer {
             format!("{selected_command_text} ")
         };
 
-        let prefix_len = self.draft.prompt_prefix.len();
-        let internal_replace_end = replace_end.saturating_sub(prefix_len);
         let ranges_to_unmark = self
             .draft
             .textarea
@@ -467,8 +472,7 @@ impl ChatComposer {
             .into_iter()
             .filter_map(|element| {
                 let range = element.byte_range.start..element.byte_range.end;
-                (range.start < internal_replace_end && internal_replace_end < range.end)
-                    .then_some(range)
+                (range.start < replace_end && replace_end < range.end).then_some(range)
             })
             .collect::<Vec<_>>();
         for range in ranges_to_unmark {
@@ -476,8 +480,8 @@ impl ChatComposer {
         }
         self.draft
             .textarea
-            .replace_range(0..internal_replace_end, &replacement[prefix_len..]);
-        self.draft.prompt_prefix = PromptPrefix::Slash;
+            .replace_range(0..replace_end, &replacement);
+        self.draft.is_bash_mode = false;
         self.draft
             .textarea
             .set_cursor(self.draft.textarea.text().len());
@@ -486,27 +490,41 @@ impl ChatComposer {
 
     /// Keep slash command elements aligned with the current first line.
     pub(super) fn sync_slash_command_elements(&mut self) {
-        self.unmark_slash_command_element();
         if !self.slash_commands_enabled() {
             return;
         }
-        let canonical_text = self.current_text();
-        let first_line_end = canonical_text.find('\n').unwrap_or(canonical_text.len());
-        let first_line = &canonical_text[..first_line_end];
-        let cursor = self.current_cursor();
-        let prefix_len = self.draft.prompt_prefix.len();
-        let desired_range = self
-            .slash_input()
-            .command_element_range(first_line, cursor)
-            .map(|range| 0..range.end.saturating_sub(prefix_len));
-        if let Some(range) = desired_range {
-            self.draft.slash_command_element_id = self.draft.textarea.add_element_range(range);
+        let text = self.draft.textarea.text();
+        let first_line_end = text.find('\n').unwrap_or(text.len());
+        let first_line = &text[..first_line_end];
+        let cursor = self.draft.textarea.cursor();
+        let desired_range = self.slash_input().command_element_range(first_line, cursor);
+        // Slash commands are only valid at byte 0 of the first line.
+        // Any slash-shaped element not matching the current desired prefix is stale.
+        let mut has_desired = false;
+        let mut stale_ranges = Vec::new();
+        for elem in self.draft.textarea.text_elements() {
+            let Some(payload) = elem.placeholder(text) else {
+                continue;
+            };
+            if payload.strip_prefix('/').is_none() {
+                continue;
+            }
+            let range = elem.byte_range.start..elem.byte_range.end;
+            if desired_range.as_ref() == Some(&range) {
+                has_desired = true;
+            } else {
+                stale_ranges.push(range);
+            }
         }
-    }
 
-    pub(super) fn unmark_slash_command_element(&mut self) {
-        if let Some(id) = self.draft.slash_command_element_id.take() {
-            self.draft.textarea.remove_element(id);
+        for range in stale_ranges {
+            self.draft.textarea.remove_element_range(range);
+        }
+
+        if let Some(range) = desired_range
+            && !has_desired
+        {
+            self.draft.textarea.add_element_range(range);
         }
     }
 }
@@ -620,8 +638,8 @@ mod tests {
 
     fn composer_with_text_at_cursor(text: &str, cursor: usize) -> ChatComposer {
         let mut composer = test_composer();
-        composer.set_text_content(text.to_string(), Vec::new(), Vec::new());
-        composer.set_current_cursor(cursor);
+        composer.draft.textarea.set_text_clearing_elements(text);
+        composer.draft.textarea.set_cursor(cursor);
         composer.sync_popups();
         composer
     }
@@ -634,8 +652,8 @@ mod tests {
     fn unavailable_side_conversation_command_still_opens_popup() {
         let mut composer = test_composer();
         composer.set_side_conversation_active(/*active*/ true);
-        composer.set_text_content("/arch".to_string(), Vec::new(), Vec::new());
-        composer.set_current_cursor(/*cursor*/ 5);
+        composer.draft.textarea.set_text_clearing_elements("/arch");
+        composer.draft.textarea.set_cursor(/*pos*/ 5);
         composer.sync_popups();
 
         assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
@@ -645,12 +663,12 @@ mod tests {
     fn side_conversation_tab_completes_available_match_after_unavailable_rows() {
         let mut composer = test_composer();
         composer.set_side_conversation_active(/*active*/ true);
-        composer.set_text_content("/a".to_string(), Vec::new(), Vec::new());
-        composer.set_current_cursor(/*cursor*/ 2);
+        composer.draft.textarea.set_text_clearing_elements("/a");
+        composer.draft.textarea.set_cursor(/*pos*/ 2);
         composer.sync_popups();
 
         assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
-        assert_eq!(composer.current_text(), "/agents ");
+        assert_eq!(composer.draft.textarea.text(), "/agents ");
     }
 
     #[test]
@@ -658,12 +676,12 @@ mod tests {
         let mut composer = test_composer();
         composer.set_side_conversation_active(/*active*/ true);
         composer.set_task_running(/*running*/ true);
-        composer.set_text_content("/arch".to_string(), Vec::new(), Vec::new());
-        composer.set_current_cursor(/*cursor*/ 5);
+        composer.draft.textarea.set_text_clearing_elements("/arch");
+        composer.draft.textarea.set_cursor(/*pos*/ 5);
         composer.sync_popups();
 
         assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
-        assert_eq!(composer.current_text(), "/arch");
+        assert_eq!(composer.draft.textarea.text(), "/arch");
     }
 
     #[test]
@@ -671,8 +689,11 @@ mod tests {
         let mut composer = test_composer();
         composer.set_side_conversation_active(/*active*/ true);
         composer.set_task_running(/*running*/ true);
-        composer.set_text_content("/agents".to_string(), Vec::new(), Vec::new());
-        composer.set_current_cursor(/*cursor*/ 7);
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("/agents");
+        composer.draft.textarea.set_cursor(/*pos*/ 7);
         composer.sync_popups();
 
         assert_eq!(
@@ -692,12 +713,12 @@ mod tests {
         let mut composer = test_composer();
         composer.set_side_conversation_active(/*active*/ true);
         composer.set_disable_paste_burst(/*disabled*/ true);
-        composer.set_text_content("/new".to_string(), Vec::new(), Vec::new());
-        composer.set_current_cursor(/*cursor*/ 4);
+        composer.draft.textarea.set_text_clearing_elements("/new");
+        composer.draft.textarea.set_cursor(/*pos*/ 4);
         composer.sync_popups();
 
         assert_eq!(press(&mut composer, KeyCode::Char('/')), InputResult::None);
-        assert_eq!(composer.current_text(), "/new/");
+        assert_eq!(composer.draft.textarea.text(), "/new/");
     }
 
     #[test]
@@ -708,7 +729,7 @@ mod tests {
         assert_eq!(press(&mut composer, KeyCode::Esc), InputResult::None);
 
         assert!(!composer.popup_active());
-        assert_eq!(composer.current_text(), "/rev");
+        assert_eq!(composer.draft.textarea.text(), "/rev");
     }
 
     #[test]
@@ -718,15 +739,15 @@ mod tests {
 
         let mut composer = composer_with_draft_tail("/re", draft);
         assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
-        assert_eq!(composer.current_text(), expected_text);
-        assert_eq!(composer.current_cursor(), expected_text.len());
+        assert_eq!(composer.draft.textarea.text(), expected_text);
+        assert_eq!(composer.draft.textarea.cursor(), expected_text.len());
 
         let mut composer = composer_with_draft_tail("/re", draft);
         assert_eq!(
             press(&mut composer, KeyCode::Enter),
             InputResult::CommandWithArgs(SlashCommand::Review, draft.to_string(), Vec::new())
         );
-        assert_eq!(composer.current_text(), expected_text);
+        assert_eq!(composer.draft.textarea.text(), expected_text);
     }
 
     #[test]
@@ -737,21 +758,21 @@ mod tests {
         );
 
         assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
-        assert_eq!(composer.current_text(), "/status ");
-        assert_eq!(composer.current_cursor(), "/status ".len());
+        assert_eq!(composer.draft.textarea.text(), "/status ");
+        assert_eq!(composer.draft.textarea.cursor(), "/status ".len());
     }
 
     #[test]
     fn slash_completion_does_not_turn_command_suffix_into_args() {
         let mut composer = composer_with_text_at_cursor("/review", "/re".len());
         assert_eq!(press(&mut composer, KeyCode::Tab), InputResult::None);
-        assert_eq!(composer.current_text(), "/review ");
+        assert_eq!(composer.draft.textarea.text(), "/review ");
 
         let mut composer = composer_with_text_at_cursor("/review", "/re".len());
         assert_eq!(
             press(&mut composer, KeyCode::Enter),
             InputResult::Command(SlashCommand::Review)
         );
-        assert_eq!(composer.current_text(), "/review ");
+        assert_eq!(composer.draft.textarea.text(), "/review ");
     }
 }

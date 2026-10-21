@@ -2,6 +2,6 @@
 source: tui/src/chatwidget/tests/slash_commands.rs
 expression: "render_bottom_popup(&chat, 80)"
 ---
-/ ultra
+› /ultra
 
   GPT-5.5 default · /tmp/project

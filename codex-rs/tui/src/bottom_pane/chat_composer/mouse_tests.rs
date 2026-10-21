@@ -88,27 +88,25 @@ fn recovery_keeps_unselected_text_after_a_held_replace_key() {
 
 #[test]
 fn backspace_deletes_a_body_selection_before_an_absorbed_prefix() {
-    for prefix in ["!", "/"] {
-        let (mut composer, _rx) = new_test_composer();
-        composer.insert_str(&format!("{prefix}review text"));
-        let area = Rect::new(
-            /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 4,
-        );
-        composer.render(area, &mut Buffer::empty(area));
-        let (x, y) = composer.cursor_pos(area).unwrap();
-        for (kind, column) in [
-            (Down(Left), x),
-            (MouseEventKind::Drag(Left), x - "review text".len() as u16),
-            (Up(Left), x - "review text".len() as u16),
-        ] {
-            mouse(&mut composer, area, kind, column, y);
-        }
-
-        composer.handle_key_event(KeyCode::Backspace.into());
-
-        assert_eq!(composer.current_text(), prefix);
-        assert_eq!(composer.draft.textarea.mouse_selection_range(), None);
+    let (mut composer, _rx) = new_test_composer();
+    composer.insert_str("!review text");
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 4,
+    );
+    composer.render(area, &mut Buffer::empty(area));
+    let (x, y) = composer.cursor_pos(area).unwrap();
+    for (kind, column) in [
+        (Down(Left), x),
+        (MouseEventKind::Drag(Left), x - "review text".len() as u16),
+        (Up(Left), x - "review text".len() as u16),
+    ] {
+        mouse(&mut composer, area, kind, column, y);
     }
+
+    composer.handle_key_event(KeyCode::Backspace.into());
+
+    assert_eq!(composer.current_text(), "!");
+    assert_eq!(composer.draft.textarea.mouse_selection_range(), None);
 }
 
 #[test]

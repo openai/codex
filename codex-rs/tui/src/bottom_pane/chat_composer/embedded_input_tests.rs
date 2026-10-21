@@ -18,13 +18,6 @@ fn plain_text_composer_keeps_command_prefixes_literal() {
     ] {
         composer.handle_key_event(KeyEvent::new(KeyCode::Char(prefix), modifiers));
         composer.handle_paste("keep this literal".into());
-        if prefix == '/' {
-            let area = Rect::new(0, 0, /*width*/ 40, /*height*/ 4);
-            let mut buffer = Buffer::empty(area);
-            composer.render(area, &mut buffer);
-            assert_eq!(buffer[(0, 1)].symbol(), "›");
-            assert_eq!(buffer[(2, 1)].symbol(), "/");
-        }
         assert_eq!(
             composer.handle_key_event(KeyCode::Tab.into()).0,
             InputResult::Submitted {

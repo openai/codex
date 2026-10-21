@@ -28,7 +28,7 @@ impl ChatComposer {
         if let Some(elements_before) = elements_before {
             self.reconcile_deleted_elements(elements_before);
         }
-        self.sync_prompt_prefix_from_text();
+        self.sync_bash_mode_from_text();
         self.sync_popups();
         if started_vim_edit {
             self.finish_vim_edit();
@@ -48,7 +48,7 @@ impl ChatComposer {
             FlushResult::Typed(ch) if self.draft.textarea.is_vim_replace_mode() => {
                 textarea.set_cursor(snapshot.cursor);
                 if let Some(selection) = self.draft.textarea.mouse_selection_range() {
-                    let offset = self.draft.prompt_prefix.len();
+                    let offset = usize::from(self.draft.is_bash_mode);
                     textarea.replace_range(
                         selection.start + offset..selection.end + offset,
                         &ch.to_string(),

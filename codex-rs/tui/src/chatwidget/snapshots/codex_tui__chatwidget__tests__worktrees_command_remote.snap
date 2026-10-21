@@ -3,6 +3,6 @@ source: tui/src/chatwidget/tests/slash_commands.rs
 assertion_line: 3091
 expression: popup
 ---
-/ work
+› /work
 
   GPT-5.6-Sol default · /tmp/project

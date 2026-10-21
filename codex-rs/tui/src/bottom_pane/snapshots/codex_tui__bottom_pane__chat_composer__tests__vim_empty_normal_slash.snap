@@ -8,6 +8,6 @@ expression: terminal.backend()
 "                  commands                                  "
 "  /ide            include current selection, open files, and"
 "                                                            "
-"/                                                           "
+"› /                                                         "
 "                                                            "
 "                           100% context left | Vim: Insert  "

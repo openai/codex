@@ -5,7 +5,7 @@ expression: terminal.backend()
 ---
 "› /diff  show git diff (including untracked files)                                                  "
 "                                                                                                    "
-"/ dide tail                                                                                         "
+"› /dide tail                                                                                        "
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "

@@ -8,33 +8,10 @@ use crate::bottom_pane::paste_burst::PasteBurst;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum PromptPrefix {
-    #[default]
-    None,
-    Shell,
-    Slash,
-}
-
-impl PromptPrefix {
-    pub(super) fn text(self) -> &'static str {
-        match self {
-            Self::None => "",
-            Self::Shell => "!",
-            Self::Slash => "/",
-        }
-    }
-
-    pub(super) fn len(self) -> usize {
-        self.text().len()
-    }
-}
-
 pub(super) struct DraftState {
     pub(super) textarea: TextArea,
     pub(super) textarea_state: RefCell<TextAreaState>,
-    pub(super) prompt_prefix: PromptPrefix,
-    pub(super) slash_command_element_id: Option<u64>,
+    pub(super) is_bash_mode: bool,
     pub(super) pending_pastes: Vec<(String, String)>,
     pub(super) input_enabled: bool,
     pub(super) input_disabled_placeholder: Option<String>,
@@ -49,8 +26,7 @@ impl DraftState {
         Self {
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
-            prompt_prefix: PromptPrefix::None,
-            slash_command_element_id: None,
+            is_bash_mode: false,
             pending_pastes: Vec::new(),
             input_enabled: true,
             input_disabled_placeholder: None,

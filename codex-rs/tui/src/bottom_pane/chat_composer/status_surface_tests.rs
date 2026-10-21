@@ -392,7 +392,7 @@ fn slash_popup_preserves_footer_and_selection_style() {
         } = composer.layout_with_options(area, ComposerRenderOptions::default());
         assert_eq!(popup.bottom(), surface.y);
         assert_eq!(surface.bottom(), footer.y);
-        assert_eq!(composer.cursor_pos(area), Some((3, textarea.y)));
+        assert_eq!(composer.cursor_pos(area), Some((4, textarea.y)));
         let footer_text: String = (0..width).map(|x| buf[(x, height - 1)].symbol()).collect();
         assert!(footer_text.contains("model · high · fast"));
         if !clipped && width == 80 {

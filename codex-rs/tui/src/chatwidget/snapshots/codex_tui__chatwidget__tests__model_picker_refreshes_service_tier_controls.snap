@@ -2,6 +2,6 @@
 source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: "render_bottom_popup(&chat, 80)"
 ---
-/ fast
+› /fast
 
   gpt-5.4 default · /tmp/project

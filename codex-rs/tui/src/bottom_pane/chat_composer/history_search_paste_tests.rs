@@ -118,22 +118,6 @@ fn history_search_empty_paste_preserves_selected_match() {
 }
 
 #[test]
-fn history_search_highlights_absorbed_prompt_prefix_match() {
-    let mut composer = composer_with_history();
-    composer
-        .history
-        .record_local_submission(HistoryEntry::new("/review changes".to_string()));
-    composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
-    composer.handle_paste("/review".to_string());
-
-    assert_eq!(composer.current_text(), "/review changes");
-    assert_eq!(composer.history_search_highlight_ranges(), vec![0..6]);
-
-    let terminal = render_composer(&composer, /*width*/ 70);
-    insta::assert_snapshot!("history_search_absorbed_slash", terminal.backend());
-}
-
-#[test]
 fn history_search_paste_shows_separators_and_matches_original_query() {
     let mut composer = composer_with_history();
     for entry in ["foobarbaz", "foo↵bar⇥baz"] {
@@ -224,7 +208,7 @@ fn history_search_paste_uses_full_sanitized_text() {
         composer.handle_paste(pasted);
 
         assert_eq!(composer.history_search.as_ref().unwrap().query, query);
-        assert_eq!(composer.current_text(), query);
+        assert_eq!(composer.draft.textarea.text(), query);
         assert!(composer.attachments.local_image_paths().is_empty());
         assert!(composer.draft.pending_pastes.is_empty());
         assert!(composer.current_text_elements().is_empty());

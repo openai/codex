@@ -1,9 +1,0 @@
----
-source: tui/src/bottom_pane/chat_composer/history_search_paste_tests.rs
-expression: terminal.backend()
----
-"                                                                      "
-"/ review changes                                                      "
-"                                                                      "
-"                                                                      "
-"  reverse-i-search: /review  enter accept · esc cancel                "

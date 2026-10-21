@@ -5,7 +5,6 @@
 //! Recovery commands must occupy one line and be visible before the submit key expands pastes.
 //! Offline draft edits also consume the Astra sparkle opportunity before rendering.
 
-use super::draft_state::PromptPrefix;
 use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -18,10 +17,12 @@ impl ChatComposer {
     /// Preserve Enter inside a paste burst without attempting submission.
     pub(crate) fn handle_paste_enter(&mut self, now: Instant) -> bool {
         let in_slash_context = self.slash_commands_enabled()
-            && self.draft.prompt_prefix != PromptPrefix::Shell
+            && !self.draft.is_bash_mode
             && (matches!(self.popups.active, ActivePopup::Command(_))
                 || self
-                    .current_text()
+                    .draft
+                    .textarea
+                    .text()
                     .lines()
                     .next()
                     .unwrap_or("")
@@ -82,10 +83,10 @@ impl ChatComposer {
             && self.submit_keys.is_pressed(key)
         {
             let input = self.slash_input();
-            let text = self.current_text();
+            let text = self.draft.textarea.text();
             let command = input
-                .bare_command(&text)
-                .or_else(|| input.inline_command(&text).map(|command| command.command))
+                .bare_command(text)
+                .or_else(|| input.inline_command(text).map(|command| command.command))
                 .filter(|_| text.trim().lines().count() == 1);
             if matches!(command, Some(SlashCommandItem::Builtin(command))
                 if command == SlashCommand::Warnings

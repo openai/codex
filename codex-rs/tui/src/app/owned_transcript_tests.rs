@@ -1586,10 +1586,9 @@ async fn fullscreen_composer_mouse_copy_and_input_ownership() -> Result<()> {
     // A fresh composer click takes ownership away from the transcript selection.
     app.handle_owned_transcript_event(&mut tui, &mut server, &mouse(Down(Left), x, y))?;
     assert!(!app.transcript_view.has_active_interaction());
-    app.chat_widget.apply_external_edit("/model".into());
+    app.chat_widget.apply_external_edit("/".into());
     assert!(!app.chat_widget.no_modal_or_popup_active());
-    let event = mouse(Down(Left), x, y);
-    assert!(app.handle_owned_transcript_event(&mut tui, &mut server, &event)?);
+    assert!(app.handle_owned_transcript_event(&mut tui, &mut server, &mouse(Down(Left), x, y))?);
     app.handle_owned_transcript_event(&mut tui, &mut server, &mouse(Drag(Left), x + 1, y))?;
     assert!(app.chat_widget.no_modal_or_popup_active());
     app.chat_widget.open_feature_enable_prompt(Feature::Collab);

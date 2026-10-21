@@ -120,12 +120,6 @@ async fn unavailable_thread_routes_local_and_recovery_commands() -> Result<()> {
                 TuiEvent::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)),
             )
             .await?;
-            app.handle_tui_event(
-                &mut tui,
-                &mut session,
-                TuiEvent::Key(KeyCode::Backspace.into()),
-            )
-            .await?;
             app.chat_widget
                 .restore_user_message_to_composer(draft.into());
             app.handle_tui_event(&mut tui, &mut session, TuiEvent::Key(KeyCode::Enter.into()))

@@ -1,11 +1,11 @@
 ---
 source: tui/src/bottom_pane/chat_composer/footer_state_tests.rs
-assertion_line: 100
+assertion_line: 231
 expression: "frames.join(\"\\n\\n\")"
 ---
 60x8, cursor Some((10, 6))
 
-/
+› /
 
 
 
@@ -15,7 +15,7 @@ expression: "frames.join(\"\\n\\n\")"
 
 24x8, cursor Some((10, 6))
 
-/
+› /
 
 
 
@@ -25,4 +25,4 @@ expression: "frames.join(\"\\n\\n\")"
 
 12x3, cursor None
 
-/
+› /

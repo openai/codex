@@ -60,7 +60,8 @@ fn text(buffer: &Buffer) -> String {
 #[test]
 fn retained_command_suggestions_yield_paint_and_cursor_to_find() {
     let mut composer = composer();
-    composer.insert_str("/");
+    composer.draft.textarea.insert_str("/");
+    composer.sync_popups();
     let original = render(&composer, /*footer*/ None);
     let footer = TranscriptFooter {
         text: vec![
@@ -90,8 +91,7 @@ fn retained_command_suggestions_yield_paint_and_cursor_to_find() {
                 .then_some((footer_area.x + 8, footer_area.y))
         );
         assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
-        assert_eq!(composer.current_text(), "/");
-        assert!(composer.draft.textarea.is_empty());
+        assert_eq!(composer.draft.textarea.text(), "/");
         frames.push(format!(
             "{width}x{height}, cursor {cursor:?}\n{}",
             text(&buffer)

@@ -1684,13 +1684,6 @@ impl TextArea {
             .map(|element| element.id)
     }
 
-    pub(crate) fn element_range(&self, id: u64) -> Option<Range<usize>> {
-        self.elements
-            .iter()
-            .find(|element| element.id == id)
-            .map(|element| element.range.clone())
-    }
-
     /// Renames a single text element in-place, keeping it atomic.
     ///
     /// Use this when the element payload is an identifier (e.g. a placeholder) that must be
@@ -1808,10 +1801,6 @@ impl TextArea {
         self.elements
             .retain(|elem| elem.range.start != start || elem.range.end != end);
         len_before != self.elements.len()
-    }
-
-    pub(crate) fn remove_element(&mut self, id: u64) {
-        self.elements.retain(|element| element.id != id);
     }
 
     fn next_element_id(&mut self) -> u64 {

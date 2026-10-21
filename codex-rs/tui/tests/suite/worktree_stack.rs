@@ -181,7 +181,7 @@ fn submit(terminal: &mut PtyCodex, input: &str) -> Result<()> {
     // Send one paste event so slashes in arguments cannot accept a completion
     // while earlier characters are still buffered by paste-burst detection.
     terminal.write_input(format!("\x1b[200~{input}\x1b[201~").as_bytes())?;
-    terminal.wait_for_screen(&input.replacen('/', "/ ", 1))?;
+    terminal.wait_for_screen(input)?;
     // Thread startup can keep the composer in queue mode after the history is visible.
     let deadline = Instant::now() + Duration::from_secs(/*secs*/ 30);
     while terminal.screen_contains("tab to queue message") {
