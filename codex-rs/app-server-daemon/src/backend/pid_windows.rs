@@ -38,14 +38,33 @@ impl PidBackend {
             .context("failed to acknowledge updater startup")
     }
 
+    // Keep pruning excluded until successor startup and any ownership rollback finish.
+    #[allow(clippy::await_holding_invalid_type)]
     pub(crate) async fn replace_current_updater(&self) -> Result<()> {
+        // Retry busy pruning instead of waiting on the logging worker. Keep it paused
+        // before open_stderr_log() truncates the shared log and throughout startup.
+        let mut pruning_enabled = super::super::stderr_log::PRUNING_ENABLED
+            .try_lock()
+            .context("stderr pruning is busy; retry updater handoff")?;
         let record = PidRecord {
             pid: std::process::id(),
             process_start_time: read_process_start_time(std::process::id()).await?,
             process_identity: None,
             executable_identity: None,
         };
-        self.start_inner(Some(record)).await?;
+        *pruning_enabled = false;
+        let result = self.start_inner(Some(record.clone())).await;
+        // Resume only after ownership is restored. Failed cleanup may leave the
+        // successor alive, and successful handoff leaves it in charge of retention.
+        if result.is_err()
+            && matches!(
+                self.read_pid_file_state().await,
+                Ok(PidFileState::Running(previous)) if previous == record
+            )
+        {
+            *pruning_enabled = true;
+        }
+        result?;
         Ok(())
     }
 

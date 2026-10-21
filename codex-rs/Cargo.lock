@@ -2077,6 +2077,7 @@ dependencies = [
  "clap",
  "codex-agent-extension",
  "codex-analytics",
+ "codex-app-server-daemon",
  "codex-app-server-protocol",
  "codex-app-server-transport",
  "codex-arg0",
@@ -2233,6 +2234,8 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
  "windows-sys 0.61.2",
 ]
 

@@ -1,6 +1,7 @@
 //! Owns scheduled and manual installs, daemon restarts, and updater replacement.
 
 use std::collections::VecDeque;
+use std::io::Write;
 use std::path::Path;
 #[cfg(unix)]
 use std::process::Command as StdCommand;
@@ -79,13 +80,15 @@ pub(crate) async fn run(
     http_client_factory: HttpClientFactory,
     restore_release: Option<String>,
 ) -> Result<()> {
+    let daemon = Daemon::from_environment()?;
+    crate::backend::stderr_log::start(daemon.update_pid_file.with_extension("stderr.log"));
     let http = RouteAwareClientPool::new_without_request_logging(
         http_client_factory,
         ClientRouteClass::Other,
     );
     run_with_http(
         &http,
-        &Daemon::from_environment()?,
+        &daemon,
         &current_updater_identity().await?,
         restore_release,
     )
@@ -228,7 +231,7 @@ async fn run_with_http(
                             if listener.is_none() {
                                 return Err(err);
                             }
-                            eprintln!("warning: failed to refresh managed updater: {err:#}");
+                            let _ = crate::stderr_writer().write_all(format!("warning: failed to refresh managed updater: {err:#}\n").as_bytes());
                             next_check = Instant::now() + Duration::from_secs(30);
                         }
                     }

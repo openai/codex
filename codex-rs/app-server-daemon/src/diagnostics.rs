@@ -100,7 +100,7 @@ fn emit(payload: Payload<impl Serialize>) {
         process_pid: std::process::id(),
         payload,
     };
-    let Ok(record) = serde_json::to_string(&record) else {
+    let Ok(mut record) = serde_json::to_string(&record) else {
         return;
     };
     if tracing::dispatcher::has_been_set() {
@@ -114,7 +114,8 @@ fn emit(payload: Payload<impl Serialize>) {
         // The detached updater has redirected stderr and no tracing subscriber.
         // A TUI can own a live terminal before installing its subscriber.
         // Never let a log write failure interrupt the lifecycle operation.
-        let _ = writeln!(std::io::stderr().lock(), "{record}");
+        record.push('\n');
+        let _ = crate::stderr_writer().write_all(record.as_bytes());
     }
 }
 
