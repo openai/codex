@@ -51,6 +51,7 @@ use std::sync::Arc;
 
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use rustls::ClientConfig;
+use rustls::RootCertStore;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::pem::SectionKind;
@@ -244,7 +245,22 @@ fn build_rustls_client_config(
     bundle: Option<&ConfiguredCaBundle>,
 ) -> Result<Arc<ClientConfig>, BuildCustomCaTransportError> {
     ensure_rustls_crypto_provider();
+    Ok(Arc::new(
+        ClientConfig::builder()
+            .with_root_certificates(build_rustls_root_store(bundle)?)
+            .with_no_client_auth(),
+    ))
+}
 
+#[cfg(windows)]
+pub(crate) fn build_rustls_root_store_with_custom_ca()
+-> Result<RootCertStore, BuildCustomCaTransportError> {
+    build_rustls_root_store(ProcessEnv.configured_ca_bundle().as_ref())
+}
+
+fn build_rustls_root_store(
+    bundle: Option<&ConfiguredCaBundle>,
+) -> Result<RootCertStore, BuildCustomCaTransportError> {
     // Start from the platform roots so websocket callers keep the same baseline trust behavior
     // they would get from tungstenite's default rustls connector, then layer in the Codex custom
     // CA bundle on top when configured.
@@ -271,11 +287,7 @@ fn build_rustls_client_config(
         }
     }
 
-    Ok(Arc::new(
-        ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth(),
-    ))
+    Ok(root_store)
 }
 
 /// Builds a reqwest client using an injected environment source and reqwest builder.

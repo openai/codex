@@ -265,7 +265,8 @@ impl HttpClientFactory {
     /// WebSocket schemes are resolved through their HTTP equivalents so platform PAC and system
     /// proxy APIs apply the same policy to `ws`/`wss` and `http`/`https` destinations. When system
     /// resolution is unavailable, explicit environment settings are resolved before falling back
-    /// to a direct route.
+    /// to a direct route. Ordered PAC candidates are collapsed to one route on Windows and macOS;
+    /// later proxy or `DIRECT` candidates are not retried after a connection failure.
     pub fn resolve_proxy_route(&self, request_url: &str) -> OutboundProxyRoute {
         resolve_proxy_route(
             &ProcessEnv,
@@ -320,21 +321,6 @@ impl HttpClientFactory {
         }
         cached_system_proxy_decision(&request_url)
             .map(|decision| route_from_system_decision(&ProcessEnv, env_proxy_kind, decision))
-    }
-
-    /// Builds a reqwest client for a concrete outbound route.
-    pub(crate) fn build_reqwest_client(
-        &self,
-        builder: reqwest::ClientBuilder,
-        request_url: &str,
-        route_class: ClientRouteClass,
-    ) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
-        build_reqwest_client_for_route(
-            builder,
-            request_url,
-            route_class,
-            self.outbound_proxy_policy,
-        )
     }
 }
 
@@ -457,29 +443,17 @@ impl From<BuildRouteAwareHttpClientError> for io::Error {
     }
 }
 
-/// Builds a reqwest client with conservative route selection and shared CA handling.
-///
-/// Unavailable platform resolution falls back to environment proxies and then direct. Errors after
-/// a route is selected are returned without trying another route. Ordered PAC candidates are
-/// currently collapsed to one route on both Windows and macOS; later proxy or `DIRECT` candidates
-/// are not retried after a connection failure.
-fn build_reqwest_client_for_route(
+/// Builds a reqwest client with the resolved route and shared CA handling.
+pub(crate) fn build_reqwest_client_for_route(
     builder: reqwest::ClientBuilder,
-    request_url: &str,
     route_class: ClientRouteClass,
-    outbound_proxy_policy: OutboundProxyPolicy,
+    route: &OutboundProxyRoute,
 ) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
-    let builder = configure_proxy_for_route(
-        &ProcessEnv,
-        builder,
-        request_url,
-        route_class,
-        outbound_proxy_policy,
-        resolve_system_proxy,
-    )?;
+    let builder = configure_builder_for_resolved_route(builder, route_class, route)?;
     build_reqwest_client_with_custom_ca(builder).map_err(Into::into)
 }
 
+#[cfg(test)]
 fn configure_proxy_for_route(
     env: &dyn EnvSource,
     builder: reqwest::ClientBuilder,

@@ -4,6 +4,11 @@
 //! HTTPS proxies that require authentication tokens bound to their TLS connection
 //! are not supported because curl does not own that connection.
 
+mod pipe;
+
+pub(crate) use pipe::ProxyPipe;
+pub(crate) use pipe::pipe_for;
+
 use std::io;
 use std::io::Cursor;
 use std::net::Ipv4Addr;
@@ -34,6 +39,7 @@ use tokio::task::JoinSet;
 use tokio_rustls::TlsConnector;
 use url::Host;
 
+use crate::OutboundProxyRoute;
 use crate::build_rustls_client_config_with_custom_ca;
 
 /// Reads and writes a TCP or TLS connection to the proxy.
@@ -73,13 +79,13 @@ pub enum WindowsProxyTls {
     Custom(Arc<ClientConfig>),
 }
 
-/// Opens a new connection to the selected proxy and authenticates a CONNECT tunnel.
-/// Call only after the proxy rejects a CONNECT request with 407.
-pub async fn connect_windows_proxy(
-    proxy_url: &str,
-    target: &Url,
-    proxy_tls: WindowsProxyTls,
-) -> io::Result<impl AsyncRead + AsyncWrite + Unpin + Send + use<>> {
+pub(crate) fn can_authenticate_route(target: &str, route: &OutboundProxyRoute) -> bool {
+    matches!(route, OutboundProxyRoute::Proxy { url, .. }
+        if Url::parse(target).is_ok_and(|target| target.scheme() == "https")
+            && parse_proxy_url(url).is_ok())
+}
+
+fn parse_proxy_url(proxy_url: &str) -> io::Result<Url> {
     let proxy = Url::parse(proxy_url).map_err(|_| invalid_proxy())?;
     if !matches!(proxy.scheme(), "http" | "https")
         || !proxy.username().is_empty()
@@ -87,6 +93,17 @@ pub async fn connect_windows_proxy(
     {
         return Err(invalid_proxy());
     }
+    Ok(proxy)
+}
+
+/// Opens a new connection to the selected proxy and authenticates a CONNECT tunnel.
+/// Call only after the proxy rejects a CONNECT request with 407.
+pub async fn connect_windows_proxy(
+    proxy_url: &str,
+    target: &Url,
+    proxy_tls: WindowsProxyTls,
+) -> io::Result<impl AsyncRead + AsyncWrite + Unpin + Send + use<>> {
+    let proxy = parse_proxy_url(proxy_url)?;
     let proxy_host = proxy.host_str().ok_or_else(invalid_proxy)?;
     let target_host = target.host_str().ok_or_else(invalid_proxy)?;
     let target_port = target.port_or_known_default().ok_or_else(invalid_proxy)?;

@@ -141,10 +141,12 @@ async fn retries_a_native_tls_failure_after_another_request_caches_rustls() {
 
     let error = pool
         .retry_with_rustls(
-            &destination,
             &route,
             selected_tls_backend,
             Some(&replay),
+            #[cfg(windows)]
+            /*proxy_pipe*/
+            None,
             error,
             /*timeout_deadline*/ None,
         )

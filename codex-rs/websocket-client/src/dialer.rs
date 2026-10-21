@@ -6,7 +6,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_http_client::OutboundProxyRoute;
+#[cfg(windows)]
+use codex_http_client::WindowsProxyTls;
 use codex_http_client::build_rustls_client_config_with_custom_ca;
+#[cfg(windows)]
+use codex_http_client::connect_windows_proxy;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use rustls::ClientConfig;
@@ -26,6 +30,8 @@ use tokio_tungstenite::tungstenite::handshake::client::Request;
 use tokio_tungstenite::tungstenite::handshake::client::Response;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::proxy::ProxyConfig;
+#[cfg(windows)]
+use tokio_tungstenite::tungstenite::proxy::ProxyScheme;
 
 use crate::AsyncIo;
 use crate::ConnectionInner;
@@ -60,6 +66,21 @@ pub(crate) async fn connect(
             url,
             no_proxy: None,
         } => Some(url),
+        // Use the explicit CONNECT path so it can retry a proxy 407.
+        #[cfg(windows)]
+        OutboundProxyRoute::Proxy {
+            url,
+            no_proxy: Some(_),
+        } if matches!(
+            (ProxyConfig::from_env(request.uri()), ProxyConfig::parse(&url)),
+            (Ok(Some(selected)), Ok(route))
+                if selected.scheme == ProxyScheme::Http
+                    && selected.auth.is_none()
+                    && selected == route
+        ) =>
+        {
+            Some(url)
+        }
         OutboundProxyRoute::Proxy {
             url,
             no_proxy: Some(_),
@@ -120,7 +141,31 @@ pub(crate) async fn connect(
             } else {
                 Box::new(stream)
             };
-            connect_via_proxy(stream, &proxy.config, host, port).await?
+            match connect_via_proxy(stream, &proxy.config, host, port).await {
+                Ok(stream) => stream,
+                #[cfg(windows)]
+                Err(WebSocketError::Url(UrlError::ProxyConnect(message)))
+                    if proxy.config.scheme == ProxyScheme::Http
+                        && proxy.config.auth.is_none()
+                        && message == "HTTP CONNECT failed with status 407" =>
+                {
+                    // Reconnect so curl can authenticate the proxy tunnel.
+                    let target = url::Url::parse(&request.uri().to_string())
+                        .map_err(|_| WebSocketError::Url(UrlError::UnsupportedUrlScheme))?;
+                    Box::new(
+                        connect_windows_proxy(
+                            &url,
+                            &target,
+                            tls_config
+                                .clone()
+                                .map_or(WindowsProxyTls::Default, WindowsProxyTls::Custom),
+                        )
+                        .await
+                        .map_err(WebSocketError::Io)?,
+                    )
+                }
+                Err(error) => return Err(error),
+            }
         }
     };
 
