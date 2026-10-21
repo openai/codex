@@ -402,6 +402,7 @@ impl Classification {
                         thread: Arc::clone(&thread),
                         metrics: metrics.clone(),
                         pending_score: pending_score.clone(),
+                        sampled_at,
                     };
                     let mut sampling_started = None;
                     if let Some(prepared) = reservation.prepare(request).await {

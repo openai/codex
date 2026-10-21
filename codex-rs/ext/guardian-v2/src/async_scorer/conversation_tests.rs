@@ -66,6 +66,7 @@ async fn pending_request(
             ready,
             metrics: None,
             pending_score,
+            sampled_at: std::time::SystemTime::now(),
             sampling: LunaSamplingRequest {
                 instructions,
                 input: Vec::new(),
@@ -513,6 +514,222 @@ async fn prepared_reviews_recheck_expiry_authorization_and_stopped_generations()
             .iter()
             .all(|request| request.method.as_str() != "POST")
     );
+    fixture.test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preflight_skips_only_after_score_and_history_are_superseded() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    for (retain_newer, publish_newer, risk) in [
+        (true, false, 0.0),
+        (false, true, 0.0),
+        (true, true, 0.0),
+        (true, true, 1.0),
+    ] {
+        let fixture = GuardianFailureFixture::with_config(
+            "[features.guardianv2]\nasync_classifier_mode = 'conversation'",
+        )
+        .await?;
+        let store = fixture.test.codex.thread_extension_data();
+        let mut cached = cached_score(store).unwrap();
+        cached.scores.insert("action_risk".to_owned(), risk);
+        set_cached_score(store, cached);
+        let server = responses::start_mock_server().await;
+        let mut events = vec![responses::sse(vec![
+            responses::ev_output_text_delta("low"),
+            ev_assistant_message("newer", if retain_newer { "low" } else { "lowhigh" }),
+            ev_completed("newer"),
+        ])];
+        if !(retain_newer && publish_newer) {
+            events.push(responses::sse(vec![
+                ev_assistant_message("older", "low"),
+                ev_completed("older"),
+            ]));
+        }
+        let mock = responses::mount_sse_sequence(&server, events).await;
+        let backend =
+            ConversationBackend::new(Arc::new(LunaSampler::new(sampler_config(server.uri()))));
+        let (request, older_score) = pending_request(&fixture, "older").await?;
+        let older = backend
+            .reserve(|| 0)
+            .1
+            .unwrap()
+            .prepare(request)
+            .await
+            .unwrap();
+        let (request, newer_score) = pending_request(&fixture, "newer").await?;
+        let authorization = request.authorization.clone();
+        backend
+            .reserve(|| 1)
+            .1
+            .unwrap()
+            .prepare(request)
+            .await
+            .unwrap()
+            .run()
+            .await;
+        assert_eq!(newer_score.await??, "low");
+        let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+        if publish_newer {
+            seed_cached_score(&progress, store, /*index*/ 1, authorization);
+        }
+        let before = progress.inspect(/*call_id*/ None);
+        let approval_before = cached_approval(
+            &fixture.registry,
+            store,
+            r#"{"tool":"mcp_tool_call","server":"node_repl"}"#,
+            /*metrics*/ None,
+        )
+        .await;
+        assert_eq!(
+            approval_before,
+            if risk == 0.0 {
+                Some(ReviewDecision::Approved)
+            } else {
+                None
+            }
+        );
+        older.run().await;
+        if retain_newer && publish_newer {
+            assert!(matches!(
+                older_score.await?,
+                Err(LunaSamplerError::Superseded)
+            ));
+            assert_eq!(mock.requests().len(), 1);
+        } else {
+            assert_eq!(older_score.await??, "low");
+            let requests = mock.requests();
+            assert_eq!(requests.len(), 2);
+            assert!(requests[1].input().iter().all(|item| item["id"] != "newer"));
+        }
+        // Skipping inference must not publish an approval, age coverage, or fail closed.
+        assert_eq!(progress.inspect(/*call_id*/ None), before);
+        assert_eq!(
+            cached_approval(
+                &fixture.registry,
+                store,
+                r#"{"tool":"mcp_tool_call","server":"node_repl"}"#,
+                /*metrics*/ None
+            )
+            .await,
+            approval_before
+        );
+        fixture.test.codex.shutdown_and_wait().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delayed_classification_skips_after_newer_score_and_history_complete() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let fixture = GuardianFailureFixture::with_config(
+        "[features.guardianv2]\nasync_classifier_mode = 'conversation'",
+    )
+    .await?;
+    let server = responses::start_mock_server().await;
+    let mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_output_text_delta("low"),
+            ev_assistant_message("newer", "low"),
+            ev_completed("newer"),
+        ]),
+    )
+    .await;
+    let store = fixture.test.codex.thread_extension_data();
+    store.insert(LunaSampler::new(sampler_config(server.uri())));
+    store.insert(ConversationBackend::new(
+        store.get::<LunaSampler>().unwrap(),
+    ));
+    let backend = store.get::<ConversationBackend>().unwrap();
+    // Leave two slots for real classifications. The newer request releases its slot
+    // only after committing history, so admission below provides a completion barrier.
+    let held = (0..14)
+        .map(|_| backend.reserve(|| 0).1.unwrap())
+        .collect::<Vec<_>>();
+    let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+    let mut updates = progress.updates.subscribe();
+    let metrics = store.get::<RecordingMetrics>().unwrap();
+    let turn_store = ExtensionData::new("turn-1");
+    let tool_name = ToolName::plain("read_file");
+    let payload = ToolPayload::Function {
+        arguments: r#"{"path":"README.md"}"#.to_owned(),
+    };
+    let history = fixture.test.codex.conversation_history_snapshot().await;
+    let observe = |call_id, permissions| {
+        fixture.registry.tool_lifecycle_contributors()[0].on_tool_start(ToolStartInput {
+            permissions,
+            session_store: &fixture.session_store,
+            thread_store: store,
+            turn_store: &turn_store,
+            turn_id: "turn-1",
+            root_turn_id: None,
+            call_id,
+            originating_item_id: None,
+            tool_name: &tool_name,
+            mcp_tool: None,
+            payload: &payload,
+            conversation_history: Arc::clone(&history),
+            source: ToolCallSource::Direct,
+        })
+    };
+    let (entered, waiting) = tokio::sync::oneshot::channel();
+    let (release, delayed) = tokio::sync::oneshot::channel();
+    let older = observe(
+        "older",
+        Box::pin(async {
+            entered.send(()).unwrap();
+            delayed.await.unwrap();
+            Some(Default::default())
+        }),
+    );
+    tokio::pin!(older);
+    tokio::select! {
+        result = waiting => result?,
+        () = &mut older => panic!("older observation must wait for permissions"),
+    }
+    observe("newer", Box::pin(async { Some(Default::default()) })).await;
+    tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
+        while cached_score(store)
+            .and_then(|score| score.call_id)
+            .as_deref()
+            != Some("newer")
+        {
+            updates.changed().await.unwrap();
+        }
+        loop {
+            match backend.reserve(|| 0).1 {
+                Ok(completed) => break drop(completed),
+                Err(LunaSamplerError::QueueFull) => tokio::task::yield_now().await,
+                Err(error) => panic!("unexpected admission failure: {error}"),
+            }
+        }
+    })
+    .await?;
+    let score_before = cached_score(store);
+    let progress_before = progress.inspect(/*call_id*/ None);
+    release.send(()).unwrap();
+    older.await;
+    // Wait for the real Classification::run task to finish its superseded path.
+    tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
+        loop {
+            let finished = metrics.0.lock().unwrap().iter().any(|metric| {
+                matches!(metric, RecordedMetric::Counter(name, _, tags)
+                    if name == CLASSIFICATION_METRIC
+                        && tags.iter().any(|(key, value)| key == "outcome" && value == "superseded"))
+            });
+            if finished {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert_eq!(mock.requests().len(), 1);
+    assert_eq!(cached_score(store), score_before);
+    assert_eq!(progress.inspect(/*call_id*/ None), progress_before);
+    drop(held);
     fixture.test.codex.shutdown_and_wait().await?;
     Ok(())
 }

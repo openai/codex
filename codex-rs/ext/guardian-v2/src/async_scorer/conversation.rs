@@ -8,10 +8,12 @@
 //! Each request owns its fork; failed or cancelled requests leave committed history intact.
 //! Host-only instruction delivery metadata is committed with its completed input messages.
 //! Expired classifications release their transport without committing partial history.
+//! Execution preflight skips work superseded in both score and history before sampling starts.
 
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Weak;
+use std::time::SystemTime;
 
 use codex_context_fragments::RenderedFragment;
 use codex_core::CodexThread;
@@ -65,6 +67,7 @@ pub(super) struct ConversationRequest {
     pub(super) ready: oneshot::Sender<Result<SampledScore, LunaSamplerError>>,
     pub(super) metrics: Option<Arc<dyn ExtensionMetrics>>,
     pub(super) pending_score: PendingScore,
+    pub(super) sampled_at: SystemTime,
 }
 
 /// Owns an admitted history fork and its permit until execution completes or it is dropped.
@@ -78,6 +81,7 @@ pub(super) struct PreparedConversation {
     ready: oneshot::Sender<Result<SampledScore, LunaSamplerError>>,
     metrics: Option<Arc<dyn ExtensionMetrics>>,
     pending_score: PendingScore,
+    sampled_at: SystemTime,
 }
 
 // Authorization covers model settings; local config changes replace the backend.
@@ -201,6 +205,7 @@ impl Reservation {
             ready: request.ready,
             metrics: request.metrics,
             pending_score: request.pending_score,
+            sampled_at: request.sampled_at,
         })
     }
 }
@@ -209,9 +214,25 @@ impl PreparedConversation {
     /// Publishes the first score, then drains and commits only valid completed history.
     pub(super) async fn run(mut self) {
         // A caller can retain prepared input while authorization or admission expires.
-        if self.reservation.generation.strong_count() == 0
-            || !self.key.authorization.is_current(&self.thread).await
+        let authorization_is_current = self.key.authorization.is_current(&self.thread).await;
+        let history_superseded = self
+            .reservation
+            .history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|history| history.index > self.reservation.index);
+        // Keep requests that can still contribute either a score or retained history.
+        if !authorization_is_current
+            || self.reservation.generation.strong_count() == 0
             || self.pending_score.is_expired()
+            || (history_superseded
+                && self
+                    .pending_score
+                    .progress
+                    .inspect(/*call_id*/ None)
+                    .sampled_at
+                    .is_some_and(|sampled_at| sampled_at > self.sampled_at))
         {
             let _ = self.ready.send(Err(LunaSamplerError::Superseded));
             return;
