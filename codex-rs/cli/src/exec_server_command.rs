@@ -431,7 +431,7 @@ async fn load_exec_server_remote_auth_provider(
         validate_api_key_remote_host(base_url)?;
     }
 
-    if auth_manager.is_workload_identity_selected() {
+    if auth.is_chatgpt_auth() || auth_manager.is_workload_identity_selected() {
         Ok(codex_model_provider::auth_provider_from_auth_manager(
             auth_manager,
             &auth,

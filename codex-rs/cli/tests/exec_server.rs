@@ -2,6 +2,9 @@
 #[path = "exec_server/pid_namespace_tests.rs"]
 mod pid_namespace_tests;
 
+#[path = "exec_server/auth_refresh_tests.rs"]
+mod auth_refresh_tests;
+
 use std::collections::HashMap;
 #[cfg(unix)]
 use std::io::BufRead as _;

@@ -56,6 +56,13 @@ pub trait AuthProvider: Send + Sync {
         Box::pin(async { self.to_auth_headers() })
     }
 
+    /// Refreshes credentials after an explicit HTTP 401. Returns whether the caller
+    /// may retry with new credentials. Callers must bound retries and pass the headers
+    /// of the rejected request so concurrent failures can reuse an earlier refresh.
+    fn refresh_after_unauthorized(&self, _rejected_headers: HeaderMap) -> AuthRefreshFuture<'_> {
+        Box::pin(async { false })
+    }
+
     /// Applies auth to a complete outbound request and returns the request to send.
     ///
     /// The input `request` is moved into this method. Implementations may mutate
@@ -81,6 +88,8 @@ pub type AuthProviderFuture<'a> =
 
 pub type AuthHeadersFuture<'a> =
     Pin<Box<dyn Future<Output = Result<HeaderMap, AuthError>> + Send + 'a>>;
+
+pub type AuthRefreshFuture<'a> = Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
 
 /// Shared auth handle passed through API clients.
 pub type SharedAuthProvider = Arc<dyn AuthProvider>;

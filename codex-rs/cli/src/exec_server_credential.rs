@@ -121,6 +121,18 @@ impl AuthProvider for ExecutorCredentialProvider {
         headers.insert(AUTHORIZATION, authorization);
         Ok(())
     }
+
+    fn refresh_after_unauthorized(
+        &self,
+        rejected_headers: HeaderMap,
+    ) -> codex_api::AuthRefreshFuture<'_> {
+        Box::pin(async move {
+            // The parent owns refresh; only retry if it already supplied a valid replacement.
+            self.resolve_auth_headers().await.is_ok_and(|headers| {
+                headers.get(AUTHORIZATION) != rejected_headers.get(AUTHORIZATION)
+            })
+        })
+    }
 }
 
 enum CredentialState {

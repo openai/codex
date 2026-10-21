@@ -54,19 +54,24 @@ async fn waits_for_initial_rotation_replaces_token_and_eof_clears_auth() {
     assert_eq!(headers[AUTHORIZATION], "Bearer first-scoped-token");
     assert!(headers[AUTHORIZATION].is_sensitive());
     assert!(!format!("{provider:?} {headers:?}").contains("first-scoped-token"));
+    assert!(!provider.refresh_after_unauthorized(headers.clone()).await);
 
     writer
         .write_all(&frame("env-a", "rotated-scoped-token", expires))
         .expect("rotate");
     next_update(&mut updates).await;
+    // A request sent before the parent update can retry with the replacement.
+    assert!(provider.refresh_after_unauthorized(headers).await);
     let headers = provider.resolve_auth_headers().await.expect("headers");
     assert_eq!(headers.len(), 1);
     assert_eq!(headers[AUTHORIZATION], "Bearer rotated-scoped-token");
     assert!(headers[AUTHORIZATION].is_sensitive());
+    assert!(!provider.refresh_after_unauthorized(headers.clone()).await);
 
     drop(writer);
     pipe.parent_closed.await.expect("reader must monitor EOF");
     assert!(provider.resolve_auth_headers().await.is_err());
+    assert!(!provider.refresh_after_unauthorized(headers).await);
     assert_eq!(provider.check_pipe_failure(), Ok(()));
 }
 
@@ -113,6 +118,12 @@ async fn malformed_rotations_latch_failure_and_clear_existing_credential() {
             .await
             .expect_err("reject auth");
         assert_eq!(pipe.provider.check_pipe_failure(), Err(error));
+        assert!(
+            !pipe
+                .provider
+                .refresh_after_unauthorized(HeaderMap::new())
+                .await
+        );
         assert!(!auth_error.to_string().contains("do-not-log"));
         assert!(!auth_error.to_string().contains("initial-scoped-token"));
         let _ = writer.write_all(&frame("env-a", "later-scoped-token", expires));
@@ -158,6 +169,7 @@ async fn expiry_is_checked_again_on_every_request() {
         Err(CredentialError::Expired)
     );
     assert!(provider.resolve_auth_headers().await.is_err());
+    assert!(!provider.refresh_after_unauthorized(HeaderMap::new()).await);
     updates.send_replace(CredentialState::Active {
         token: HeaderValue::from_static("new-scoped-token"),
         expires_at: expired + 60,
