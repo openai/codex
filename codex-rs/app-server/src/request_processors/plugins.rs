@@ -2394,6 +2394,7 @@ fn remote_plugin_catalog_error_type(err: &RemotePluginCatalogError) -> &'static 
         RemotePluginCatalogError::ArchiveTooLarge { .. } => "remote_catalog_archive_too_large",
         RemotePluginCatalogError::MissingUploadEtag => "remote_catalog_missing_upload_etag",
         RemotePluginCatalogError::UnexpectedResponse(_) => "remote_catalog_unexpected_response",
+        RemotePluginCatalogError::InstalledPluginsFetchTimeout => "remote_catalog_timeout",
         RemotePluginCatalogError::CacheRemove(_) => "remote_catalog_cache_remove",
     }
 }
@@ -2463,6 +2464,7 @@ fn remote_plugin_catalog_error_to_jsonrpc(
         | RemotePluginCatalogError::ArchiveJoin(_)
         | RemotePluginCatalogError::MissingUploadEtag
         | RemotePluginCatalogError::UnexpectedResponse(_)
+        | RemotePluginCatalogError::InstalledPluginsFetchTimeout
         | RemotePluginCatalogError::CacheRemove(_) => internal_error(message),
     }
 }

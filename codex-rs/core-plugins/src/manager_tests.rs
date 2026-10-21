@@ -7744,6 +7744,85 @@ remote_plugin = true
     assert!(!linear_metadata.exists());
 }
 
+#[tokio::test]
+async fn failed_installed_plugin_pagination_preserves_inventory_and_releases_mutation_gate() {
+    let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        "[features]\nplugins = true\nremote_plugin = true\n",
+    );
+    write_cached_plugin(
+        codex_home.path(),
+        REMOTE_GLOBAL_MARKETPLACE_NAME,
+        "retained",
+    );
+    let server = MockServer::start().await;
+    // Both bundle sync and its metadata fallback must reject the incomplete inventory.
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "plugins": [],
+            "pagination": {"next_page_token": "next"},
+        })))
+        .expect(4)
+        .mount(&server)
+        .await;
+    let mut config = load_config(codex_home.path(), codex_home.path()).await;
+    config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+    let auth_manager = test_auth_manager(Some(AuthMode::Chatgpt));
+    let auth = auth_manager.auth_cached().expect("test ChatGPT auth");
+    let manager = Arc::new(test_plugins_manager_with_auth_manager(
+        codex_home.path().to_path_buf(),
+        Some(Product::Codex),
+        auth_manager,
+    ));
+    let previous_inventory = vec![remote_installed_plugin("retained")];
+    manager.write_remote_installed_plugins_cache(previous_inventory.clone());
+
+    manager.maybe_start_remote_installed_plugin_bundle_sync(
+        &config,
+        Some(auth),
+        /*on_effective_plugins_changed*/ None,
+    );
+    // Starting the sync acquires the gate synchronously, so this waits for its release.
+    let _guard = tokio::time::timeout(
+        Duration::from_secs(5),
+        manager.acquire_remote_installed_plugin_sync_guard(),
+    )
+    .await
+    .expect("failed pagination should promptly release the mutation gate")
+    .expect("mutation gate should remain available");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while manager
+            .remote_installed_plugins_cache_refresh_state
+            .read()
+            .expect("refresh state lock")
+            .in_flight
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("fallback metadata refresh should finish");
+
+    assert_eq!(
+        manager
+            .remote_installed_plugins_cache
+            .read()
+            .expect("installed cache lock")
+            .plugins
+            .clone(),
+        Some(previous_inventory),
+    );
+    assert!(
+        codex_home
+            .path()
+            .join("plugins/cache/openai-curated-remote/retained")
+            .exists()
+    );
+    server.verify().await;
+}
+
 #[test]
 fn reconciliation_fences_refresh_publication_and_recovers_after_cancellation() {
     let codex_home = TempDir::new().unwrap();

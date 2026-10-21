@@ -109,6 +109,10 @@ const OPENAI_CURATED_REMOTE_COLLECTION_KEY: &str = "vertical";
 const OAI_PRODUCT_SKU_HEADER: &str = "OAI-Product-Sku";
 pub(crate) const CODEX_PRODUCT_SKU: &str = "codex";
 const REMOTE_PLUGIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
+// Leave room within the 120-second mutation-gate wait even when successful pages keep arriving.
+const REMOTE_INSTALLED_PLUGINS_FETCH_TIMEOUT: Duration = Duration::from_secs(60);
+// Allow 20,000 installed plugins without unbounded cursor history.
+const MAX_REMOTE_INSTALLED_PLUGIN_PAGES: usize = 100;
 const RECOMMENDED_PLUGINS_TIMEOUT: Duration = Duration::from_secs(5);
 const REMOTE_PLUGIN_LIST_PAGE_LIMIT: u32 = 200;
 const MAX_RECOMMENDED_PLUGINS: usize = 50;
@@ -482,6 +486,9 @@ pub enum RemotePluginCatalogError {
     #[error("{0}")]
     UnexpectedResponse(String),
 
+    #[error("installed plugin inventory fetch exceeded its overall time limit")]
+    InstalledPluginsFetchTimeout,
+
     #[error("{0}")]
     CacheRemove(String),
 }
@@ -511,6 +518,7 @@ impl RemotePluginCatalogError {
             | Self::ArchiveTooLarge { .. }
             | Self::MissingUploadEtag
             | Self::UnexpectedResponse(_)
+            | Self::InstalledPluginsFetchTimeout
             | Self::CacheRemove(_) => None,
         }
     }
@@ -2177,24 +2185,38 @@ async fn fetch_installed_plugins(
     scope: RemoteInstalledPluginScope,
     include_download_urls: bool,
 ) -> Result<Vec<RemotePluginInstalledItem>, RemotePluginCatalogError> {
-    let mut plugins = Vec::new();
-    let mut page_token = None;
-    loop {
-        let response = get_remote_plugin_installed_page(
-            config,
-            auth,
-            scope,
-            page_token.as_deref(),
-            include_download_urls,
-        )
-        .await?;
-        plugins.extend(response.plugins);
-        let Some(next_page_token) = response.pagination.next_page_token else {
-            break;
-        };
-        page_token = Some(next_page_token);
-    }
-    Ok(plugins)
+    // Only a complete inventory is authoritative: every failure discards all fetched pages
+    // before callers can publish the snapshot or remove plugins absent from it.
+    tokio::time::timeout(REMOTE_INSTALLED_PLUGINS_FETCH_TIMEOUT, async {
+        let mut plugins = Vec::new();
+        let mut page_token = None;
+        let mut seen_tokens = HashSet::new();
+        for _ in 0..MAX_REMOTE_INSTALLED_PLUGIN_PAGES {
+            let response = get_remote_plugin_installed_page(
+                config,
+                auth,
+                scope,
+                page_token.as_deref(),
+                include_download_urls,
+            )
+            .await?;
+            plugins.extend(response.plugins);
+            let Some(next_page_token) = response.pagination.next_page_token else {
+                return Ok(plugins);
+            };
+            if !seen_tokens.insert(next_page_token.clone()) {
+                return Err(RemotePluginCatalogError::UnexpectedResponse(
+                    "installed plugin inventory pagination repeated a cursor".to_string(),
+                ));
+            }
+            page_token = Some(next_page_token);
+        }
+        Err(RemotePluginCatalogError::UnexpectedResponse(
+            "installed plugin inventory pagination exceeded its page limit".to_string(),
+        ))
+    })
+    .await
+    .map_err(|_| RemotePluginCatalogError::InstalledPluginsFetchTimeout)?
 }
 
 async fn get_remote_plugin_list_page(
@@ -2257,16 +2279,12 @@ async fn get_remote_plugin_installed_page(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let mut url = Url::parse(&format!("{base_url}/ps/plugins/installed"))
         .map_err(RemotePluginCatalogError::InvalidBaseUrl)?;
-    match scope {
-        RemoteInstalledPluginScope::All => {
-            url.query_pairs_mut()
-                .append_pair("limit", &REMOTE_PLUGIN_LIST_PAGE_LIMIT.to_string());
-        }
-        RemoteInstalledPluginScope::Single(scope) => {
-            url.query_pairs_mut()
-                .append_pair("scope", scope.api_value());
-        }
+    if let RemoteInstalledPluginScope::Single(scope) = scope {
+        url.query_pairs_mut()
+            .append_pair("scope", scope.api_value());
     }
+    url.query_pairs_mut()
+        .append_pair("limit", &REMOTE_PLUGIN_LIST_PAGE_LIMIT.to_string());
     if include_download_urls {
         url.query_pairs_mut()
             .append_pair("includeDownloadUrls", "true");

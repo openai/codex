@@ -163,6 +163,146 @@ async fn remote_installed_plugins_paginate_across_all_scopes_without_download_ur
 }
 
 #[tokio::test]
+async fn remote_installed_plugins_reject_cyclic_cursors() {
+    let server = MockServer::start().await;
+    for (cursor, next_cursor) in [
+        (None, "cursor-a"),
+        (Some("cursor-a"), "cursor-b"),
+        (Some("cursor-b"), "cursor-a"),
+    ] {
+        let mock = Mock::given(method("GET")).and(path("/backend-api/ps/plugins/installed"));
+        let mock = match cursor {
+            Some(cursor) => mock.and(query_param("pageToken", cursor)),
+            None => mock.and(query_param_is_missing("pageToken")),
+        };
+        mock.respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "plugins": [],
+            "pagination": {"next_page_token": next_cursor},
+        })))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    }
+    let (config, _) =
+        recording_remote_plugin_service_config(format!("{}/backend-api", server.uri()));
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    let error = fetch_remote_installed_plugins(&config, Some(&auth))
+        .await
+        .expect_err("a cursor cycle must not produce an installed inventory");
+
+    assert!(matches!(
+        error,
+        RemotePluginCatalogError::UnexpectedResponse(_)
+    ));
+}
+
+#[tokio::test]
+async fn remote_installed_plugins_require_a_complete_inventory_within_the_page_limit() {
+    for complete in [false, true] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/installed"))
+            .respond_with(move |request: &wiremock::Request| {
+                let page = request
+                    .url
+                    .query_pairs()
+                    .find(|(name, _)| name == "pageToken")
+                    .map_or(0, |(_, value)| value.parse::<usize>().unwrap());
+                let next_cursor = (!complete || page + 1 < MAX_REMOTE_INSTALLED_PLUGIN_PAGES)
+                    .then(|| (page + 1).to_string());
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "plugins": [],
+                    "pagination": {"next_page_token": next_cursor},
+                }))
+            })
+            .up_to_n_times(MAX_REMOTE_INSTALLED_PLUGIN_PAGES as u64)
+            .expect(MAX_REMOTE_INSTALLED_PLUGIN_PAGES as u64)
+            .mount(&server)
+            .await;
+        let (config, _) =
+            recording_remote_plugin_service_config(format!("{}/backend-api", server.uri()));
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+        let result = fetch_remote_installed_plugins(&config, Some(&auth)).await;
+
+        if complete {
+            assert_eq!(
+                result.expect("the last permitted page can complete the inventory"),
+                Vec::new()
+            );
+        } else {
+            assert!(matches!(
+                result,
+                Err(RemotePluginCatalogError::UnexpectedResponse(_))
+            ));
+        }
+    }
+}
+
+#[tokio::test]
+async fn remote_installed_plugins_timeout_cancels_a_late_page_after_successful_pages() {
+    let server = MockServer::start().await;
+    let request_started = Arc::new(tokio::sync::Notify::new());
+    let started = Arc::clone(&request_started);
+    let (release_response, released) = std::sync::mpsc::channel();
+    let released = std::sync::Mutex::new(released);
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .respond_with(move |request: &wiremock::Request| {
+            let page = request
+                .url
+                .query_pairs()
+                .find(|(name, _)| name == "pageToken")
+                .map_or(0, |(_, value)| value.parse::<usize>().unwrap());
+            started.notify_one();
+            // Wiremock serves requests on its own runtime. Dropping the sender also releases it.
+            let _ = released.lock().unwrap().recv();
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "plugins": [],
+                "pagination": {"next_page_token": (page + 1).to_string()},
+            }))
+        })
+        .up_to_n_times(3)
+        .expect(3)
+        .mount(&server)
+        .await;
+    let (config, _) =
+        recording_remote_plugin_service_config(format!("{}/backend-api", server.uri()));
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let fetch = fetch_remote_installed_plugins(&config, Some(&auth));
+    tokio::pin!(fetch);
+
+    // Each page stays below the individual request timeout, but together exceeds the fetch budget.
+    // Keep time running during socket I/O so Tokio cannot auto-advance past a response in flight.
+    for _ in 0..2 {
+        tokio::select! {
+            _ = request_started.notified() => {}
+            result = fetch.as_mut() => panic!("inventory fetch finished before its next page: {result:?}"),
+        }
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(21)).await;
+        tokio::time::resume();
+        release_response.send(()).unwrap();
+    }
+    tokio::select! {
+        _ = request_started.notified() => {}
+        result = fetch.as_mut() => panic!("inventory fetch finished before its late page: {result:?}"),
+    }
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(21)).await;
+    let result = fetch.await;
+    tokio::time::resume();
+    drop(release_response);
+
+    assert!(matches!(
+        result,
+        Err(RemotePluginCatalogError::InstalledPluginsFetchTimeout)
+    ));
+}
+
+#[tokio::test]
 async fn remote_catalog_cache_modes_control_refresh_and_persist_fetched_results() {
     let server = MockServer::start().await;
     let plugin = directory_plugin("plugin-gmail", "gmail");
