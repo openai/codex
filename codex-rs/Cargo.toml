@@ -125,6 +125,7 @@ members = [
     "utils/cargo-bin",
     "git-utils",
     "utils/cache",
+    "utils/critical-path",
     "utils/git-discovery",
     "utils/image",
     "utils/json-to-toml",

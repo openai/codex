@@ -1,0 +1,14 @@
+[package]
+name = "codex-utils-critical-path"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false
+
+[dev-dependencies]
+pretty_assertions.workspace = true
