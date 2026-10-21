@@ -10,6 +10,7 @@ use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -594,7 +595,19 @@ impl OpenAiModelsManager {
         {
             Ok(response) => response,
             Err(error) => {
-                if matches!(&self.catalog_source, CatalogSource::ExplicitProvider(_)) {
+                // A failed fetch is not an authoritative empty catalog. Keep the last
+                // successful snapshot (and its original freshness) unless access was
+                // explicitly rejected. Provider/auth identity checks still govern reuse.
+                let is_provider_catalog =
+                    matches!(&self.catalog_source, CatalogSource::ExplicitProvider(_));
+                let access_denied = matches!(error.http_status_code_value(), Some(401 | 403));
+                let credentials_rejected = matches!(
+                    error.details(),
+                    CodexErrorDetails::RefreshTokenFailed(_)
+                        | CodexErrorDetails::GatewayLoginRequired(_)
+                );
+
+                if is_provider_catalog && (access_denied || credentials_rejected) {
                     {
                         let mut current = self.remote_models.write().await;
                         if request_identity != self.endpoint_client.identity() {
@@ -724,7 +737,7 @@ impl OpenAiModelsManager {
         };
         {
             let current = self.remote_models.read().await;
-            // A failed fetch must not be replaced by stale cache data even if invalidation failed.
+            // An access rejection must not be replaced by stale cache data if invalidation failed.
             if current.fetched_at == DateTime::<Utc>::MIN_UTC
                 && current.identity.as_ref() == Some(&identity)
             {

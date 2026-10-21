@@ -14,6 +14,7 @@ use codex_model_provider_info::GatewayOAuthConfig;
 use codex_model_provider_info::GatewayOAuthDelivery;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
 use http::HeaderMap;
 use http::HeaderName;
@@ -39,7 +40,14 @@ pub(crate) async fn compose_auth(
             .get_ref()
             .and_then(|source| source.downcast_ref::<GatewayAuthError>())
         {
-            return CodexErr::InvalidRequest(login_error.to_string());
+            return match login_error {
+                GatewayAuthError::LoginRequired => {
+                    CodexErrorDetails::GatewayLoginRequired(login_error.to_string()).into()
+                }
+                GatewayAuthError::LoginInProgress => {
+                    CodexErr::InvalidRequest(login_error.to_string())
+                }
+            };
         }
         // Issuer errors may echo arbitrary credentials from configured URLs. Keep the
         // diagnostic safe and bounded, preserving retries for transient failures.
