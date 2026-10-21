@@ -43,6 +43,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadRealtimeClosedNotification;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
@@ -691,4 +692,113 @@ async fn voice_handoff_steering_active_turn_does_not_tag_next_text_turn() {
     let text_app = serde_json::to_value(events.last().expect("text app event"))
         .expect("serialize text app event");
     assert_eq!(text_app["event_params"]["voice_session_id"], json!(null));
+}
+
+#[tokio::test]
+async fn incomplete_turns_release_metadata_when_capacity_is_exceeded() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    let mut retained = Vec::new();
+    ingest_review_prerequisites(&mut reducer, &mut events).await;
+    events.clear();
+
+    // Simulate a full queue dropping completion/profile facts for many turns.
+    for index in 0..1_024 {
+        let config = sample_turn_resolved_config("thread-1", &format!("lost-{index}"));
+        retained.push(std::sync::Arc::downgrade(&config.turn_metadata));
+        if index % 2 == 0 {
+            // Tool completions can arrive before the surviving config fact.
+            reducer
+                .ingest(
+                    AnalyticsFact::Custom(CustomAnalyticsFact::ControlToolCall(
+                        ControlToolCallFact {
+                            thread_id: config.thread_id.clone(),
+                            turn_id: config.turn_id.clone(),
+                            turn_metadata: config.turn_metadata.clone(),
+                            call_id: format!("tool-{index}"),
+                            cell_id: None,
+                            tool_name: "view_image".to_string(),
+                            started_at_ms: 100,
+                            completed_at_ms: 200,
+                            status: ControlToolCallStatus::Completed,
+                        },
+                    )),
+                    &mut events,
+                )
+                .await;
+        }
+        reducer
+            .ingest(
+                AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(config))),
+                &mut events,
+            )
+            .await;
+    }
+    assert!(retained.first().unwrap().upgrade().is_none());
+    assert!(retained.last().unwrap().upgrade().is_some());
+    assert!(events.is_empty());
+
+    // Dropped history must not prevent a new, complete turn from being reported.
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut events,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ true,
+    )
+    .await;
+    events.clear();
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut events,
+        )
+        .await;
+    assert_eq!(
+        events
+            .iter()
+            .filter_map(|event| match event {
+                TrackEventRequest::TurnEvent(event) => Some(event.event_params.turn_id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec!["turn-2"]
+    );
+}
+
+#[tokio::test]
+async fn closing_thread_releases_incomplete_turns_without_affecting_other_threads() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    let closed = sample_turn_resolved_config("closed-thread", "closed-turn");
+    let live = sample_turn_resolved_config("live-thread", "live-turn");
+    let closed_metadata = std::sync::Arc::downgrade(&closed.turn_metadata);
+    let live_metadata = std::sync::Arc::downgrade(&live.turn_metadata);
+    for config in [closed, live] {
+        reducer
+            .ingest(
+                AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(config))),
+                &mut events,
+            )
+            .await;
+    }
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(ServerNotification::ThreadClosed(
+                ThreadClosedNotification {
+                    thread_id: "closed-thread".to_string(),
+                },
+            ))),
+            &mut events,
+        )
+        .await;
+    assert!(closed_metadata.upgrade().is_none());
+    assert!(live_metadata.upgrade().is_some());
+    assert!(events.is_empty());
 }

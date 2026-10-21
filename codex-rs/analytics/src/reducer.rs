@@ -204,10 +204,15 @@ pub(crate) fn valid_plugin_measurement_row(row: &PluginMeasurementRow) -> bool {
         })
 }
 
+// Match the fact queue capacity: analytics must not retain an unlimited number
+// of incomplete turns when lifecycle facts are dropped.
+const MAX_PENDING_TURNS: usize = 256;
+
 #[derive(Default)]
 pub(crate) struct AnalyticsReducer {
     requests: HashMap<(u64, RequestId), RequestState>,
     turns: HashMap<String, TurnState>,
+    turn_order: VecDeque<String>,
     connections: HashMap<u64, ConnectionState>,
     threads: HashMap<String, ThreadAnalyticsState>,
     tool_items_started_at_ms: HashMap<ToolItemKey, (u64, Option<ModelInvocationContext>)>,
@@ -552,6 +557,35 @@ impl TurnToolCounts {
 }
 
 impl AnalyticsReducer {
+    fn turn_state(&mut self, turn_id: String) -> &mut TurnState {
+        if !self.turns.contains_key(&turn_id) {
+            // Remove stale ordering entries before evicting the oldest retained turn.
+            // At capacity this may discard incomplete or pending background-tool analytics.
+            self.turn_order.retain(|id| self.turns.contains_key(id));
+            if self.turns.len() >= MAX_PENDING_TURNS
+                && let Some(oldest) = self.turn_order.pop_front()
+            {
+                self.discard_turn(&oldest);
+            }
+            self.turn_order.push_back(turn_id.clone());
+        }
+        self.turns.entry(turn_id).or_default()
+    }
+
+    fn discard_turn(&mut self, turn_id: &str) {
+        self.turns.remove(turn_id);
+        self.tool_items_started_at_ms
+            .retain(|key, _| key.turn_id != turn_id);
+        self.tool_response_states
+            .retain(|(_, pending_turn_id), _| pending_turn_id != turn_id);
+        self.pending_reviews
+            .retain(|_, review| review.turn_id != turn_id);
+        self.item_review_summaries
+            .retain(|key, _| key.turn_id != turn_id);
+        self.pending_mcp_tool_elicitations
+            .retain(|(key, _)| key.turn_id != turn_id);
+    }
+
     pub(crate) async fn ingest(&mut self, input: AnalyticsFact, out: &mut Vec<TrackEventRequest>) {
         match input {
             AnalyticsFact::Initialize {
@@ -1002,7 +1036,7 @@ impl AnalyticsReducer {
                         output_audio_item_count: None,
                     },
                 });
-                let counts = &mut self.turns.entry(turn_id.clone()).or_default().tool_counts;
+                let counts = &mut self.turn_state(turn_id.clone()).tool_counts;
                 counts.total += 1;
                 counts.dynamic_tool_call += 1;
                 self.record_tool_event(
@@ -1081,11 +1115,7 @@ impl AnalyticsReducer {
                 success: status == ControlToolCallStatus::Completed,
             },
         });
-        self.turns
-            .entry(turn_id.clone())
-            .or_default()
-            .tool_counts
-            .total += 1;
+        self.turn_state(turn_id.clone()).tool_counts.total += 1;
         self.record_tool_event(
             &thread_id,
             &turn_id,
@@ -1334,7 +1364,7 @@ impl AnalyticsReducer {
         let turn_id = input.turn_id.clone();
         let thread_id = input.thread_id.clone();
         let num_input_images = input.num_input_images;
-        let turn_state = self.turns.entry(turn_id.clone()).or_default();
+        let turn_state = self.turn_state(turn_id.clone());
         turn_state.thread_id = Some(thread_id);
         turn_state.num_input_images = Some(num_input_images);
         // Keep the first received plugin inventory, including unknown or empty,
@@ -1353,7 +1383,7 @@ impl AnalyticsReducer {
         out: &mut Vec<TrackEventRequest>,
     ) {
         let turn_id = input.turn_id.clone();
-        let turn_state = self.turns.entry(turn_id.clone()).or_default();
+        let turn_state = self.turn_state(turn_id.clone());
         turn_state.thread_id = Some(input.thread_id);
         turn_state.token_usage = Some(input.token_usage);
         self.maybe_emit_turn_event(&turn_id, out).await;
@@ -1365,7 +1395,7 @@ impl AnalyticsReducer {
         out: &mut Vec<TrackEventRequest>,
     ) {
         let TurnProfileFact { turn_id, profile } = input;
-        let turn_state = self.turns.entry(turn_id.clone()).or_default();
+        let turn_state = self.turn_state(turn_id.clone());
         turn_state.profile = Some(profile);
         self.maybe_emit_turn_event(&turn_id, out).await;
     }
@@ -1376,13 +1406,13 @@ impl AnalyticsReducer {
             thread_id,
             error,
         } = input;
-        let turn_state = self.turns.entry(turn_id).or_default();
+        let turn_state = self.turn_state(turn_id);
         turn_state.thread_id.get_or_insert(thread_id);
         turn_state.codex_error = Some(error);
     }
 
     fn ingest_image_preparation(&mut self, input: ImagePreparationFact) {
-        let turn_state = self.turns.entry(input.turn_id).or_default();
+        let turn_state = self.turn_state(input.turn_id);
         turn_state.image_preparations.push(input.metadata);
     }
 
@@ -1427,7 +1457,7 @@ impl AnalyticsReducer {
                     scope,
                 } => {
                     if matches!(invocation.invocation_type, InvocationType::Implicit) {
-                        let turn_state = self.turns.entry(tracking.turn_id.clone()).or_default();
+                        let turn_state = self.turn_state(tracking.turn_id.clone());
                         if !turn_state.resource_skill_invocations.insert(id.clone()) {
                             continue;
                         }
@@ -1663,7 +1693,7 @@ impl AnalyticsReducer {
                 else {
                     return;
                 };
-                let turn_state = self.turns.entry(turn_id.clone()).or_default();
+                let turn_state = self.turn_state(turn_id.clone());
                 turn_state.connection_id = Some(connection_id);
                 turn_state.thread_id = Some(pending_request.thread_id);
                 turn_state.num_input_images = Some(pending_request.num_input_images);
@@ -1682,7 +1712,7 @@ impl AnalyticsReducer {
                     return;
                 };
                 let turn_id = pending_request.turn_id;
-                let turn_state = self.turns.entry(turn_id.clone()).or_default();
+                let turn_state = self.turn_state(turn_id.clone());
                 let earliest_requested_at_ms = turn_state
                     .explicit_client_interrupt_requested_at_ms
                     .get_or_insert(pending_request.requested_at_ms);
@@ -1728,6 +1758,7 @@ impl AnalyticsReducer {
                 let Some(started_at_ms) = option_i64_to_u64(Some(params.started_at_ms)) else {
                     return;
                 };
+                self.turn_state(params.turn_id.clone()).thread_id = Some(params.thread_id.clone());
                 self.pending_reviews.insert(
                     request_id.clone(),
                     PendingReviewState {
@@ -1761,6 +1792,7 @@ impl AnalyticsReducer {
                 let Some(started_at_ms) = option_i64_to_u64(Some(params.started_at_ms)) else {
                     return;
                 };
+                self.turn_state(params.turn_id.clone()).thread_id = Some(params.thread_id.clone());
                 self.pending_reviews.insert(
                     request_id.clone(),
                     PendingReviewState {
@@ -1800,6 +1832,7 @@ impl AnalyticsReducer {
                 let Some(started_at_ms) = option_i64_to_u64(Some(params.started_at_ms)) else {
                     return;
                 };
+                self.turn_state(params.turn_id.clone()).thread_id = Some(params.thread_id.clone());
                 self.pending_reviews.insert(
                     request_id.clone(),
                     PendingReviewState {
@@ -2024,6 +2057,9 @@ impl AnalyticsReducer {
                     ThreadItem::CommandExecution { model_context, .. } => model_context.clone(),
                     _ => None,
                 };
+                self.turn_state(notification.turn_id.clone())
+                    .thread_id
+                    .get_or_insert(notification.thread_id.clone());
                 self.tool_items_started_at_ms
                     .entry(ToolItemKey {
                         thread_id: notification.thread_id,
@@ -2162,6 +2198,17 @@ impl AnalyticsReducer {
                         true
                     }
                 });
+                let closed_turns: Vec<_> = self
+                    .turns
+                    .iter()
+                    .filter(|(_, turn)| turn.thread_id.as_deref() == Some(&notification.thread_id))
+                    .map(|(turn_id, _)| turn_id.clone())
+                    .collect();
+                for turn_id in closed_turns {
+                    self.discard_turn(&turn_id);
+                }
+                self.pending_reviews
+                    .retain(|_, review| review.thread_id != notification.thread_id);
                 self.code_mode_cells.remove(&notification.thread_id);
                 self.pending_mcp_tool_elicitations
                     .retain(|(key, _)| key.thread_id != notification.thread_id);
@@ -2184,14 +2231,18 @@ impl AnalyticsReducer {
             }
             ServerNotification::TurnStarted(notification) => {
                 let voice_session_id = {
-                    let thread = self.threads.entry(notification.thread_id).or_default();
+                    let thread = self
+                        .threads
+                        .entry(notification.thread_id.clone())
+                        .or_default();
                     thread.active_turn_id = Some(notification.turn.id.clone());
                     thread
                         .pending_voice_handoffs
                         .pop_front()
                         .unwrap_or_else(|| thread.active_voice_session_id())
                 };
-                let turn_state = self.turns.entry(notification.turn.id).or_default();
+                let turn_state = self.turn_state(notification.turn.id);
+                turn_state.thread_id = Some(notification.thread_id);
                 turn_state.voice_session_id = voice_session_id;
                 turn_state.started_at = notification
                     .turn
@@ -2199,7 +2250,7 @@ impl AnalyticsReducer {
                     .and_then(|started_at| u64::try_from(started_at).ok());
             }
             ServerNotification::TurnDiffUpdated(notification) => {
-                let turn_state = self.turns.entry(notification.turn_id.clone()).or_default();
+                let turn_state = self.turn_state(notification.turn_id.clone());
                 turn_state.thread_id = Some(notification.thread_id);
                 turn_state.latest_diff = Some(notification.diff);
             }
@@ -2210,7 +2261,8 @@ impl AnalyticsReducer {
                     thread.active_turn_id = None;
                 }
                 self.flush_pending_tool_events(&notification.thread_id, &notification.turn.id, out);
-                let turn_state = self.turns.entry(notification.turn.id.clone()).or_default();
+                let turn_state = self.turn_state(notification.turn.id.clone());
+                turn_state.thread_id = Some(notification.thread_id);
                 turn_state.completed = Some(CompletedTurnState {
                     status: analytics_turn_status(notification.turn.status),
                     turn_error: notification
@@ -2382,11 +2434,8 @@ impl AnalyticsReducer {
             return;
         };
         session.session_id.clone_from(&realtime_session_id);
-        if let Some(turn_id) = &thread.active_turn_id {
-            self.turns
-                .entry(turn_id.clone())
-                .or_default()
-                .voice_session_id = realtime_session_id;
+        if let Some(turn_id) = thread.active_turn_id.clone() {
+            self.turn_state(turn_id).voice_session_id = realtime_session_id;
         }
     }
 
@@ -2404,11 +2453,8 @@ impl AnalyticsReducer {
             started_at,
             closed_at: None,
         });
-        if let Some(turn_id) = &thread.active_turn_id {
-            self.turns
-                .entry(turn_id.clone())
-                .or_default()
-                .voice_session_id = realtime_session_id;
+        if let Some(turn_id) = thread.active_turn_id.clone() {
+            self.turn_state(turn_id).voice_session_id = realtime_session_id;
         }
     }
 
