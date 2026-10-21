@@ -62,7 +62,7 @@ fn mcp_namespace_descriptions_preserve_complete_metadata() {
     };
     assert_eq!(namespace.description, full_description);
     assert_eq!(
-        handler.tool_info.namespace_description,
+        handler.tool_info().namespace_description,
         Some(full_description)
     );
 }

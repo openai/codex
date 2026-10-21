@@ -154,6 +154,7 @@ pub(crate) fn build_tool_router(
         apps_enabled,
         &mcp.config().mcp_server_catalog,
         model_info.supports_search_tool,
+        session.services.mcp_manager.shared_definitions(),
         &mut registry,
     );
     apply_mcp_tool_exposure_policy(
