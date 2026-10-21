@@ -39,6 +39,24 @@ foo = "bar"
 }
 
 #[test]
+fn app_server_preserves_config_overrides_across_subcommand() -> Result<()> {
+    let home = TempDir::new()?;
+    codex_command(home.path())?
+        .args([
+            "-c",
+            "missing-equals",
+            "app-server",
+            "--print-startup-config",
+            "-c",
+            "model=example",
+        ])
+        .assert()
+        .failure()
+        .stdout(contains("Invalid override (missing '='): missing-equals"));
+    Ok(())
+}
+
+#[test]
 fn agents_accept_interactive_configuration_overrides() -> Result<()> {
     let codex_home = TempDir::new()?;
 
