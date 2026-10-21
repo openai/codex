@@ -797,12 +797,13 @@ impl OutgoingMessageSender {
             }
             return;
         }
-        for connection_id in connection_ids {
+        let messages = std::iter::repeat_n(outgoing_message, connection_ids.len());
+        for (connection_id, message) in connection_ids.iter().zip(messages) {
             if let Err(err) = self
                 .sender
                 .send(OutgoingEnvelope::ToConnection {
                     connection_id: *connection_id,
-                    message: outgoing_message.clone(),
+                    message,
                     write_complete_tx: None,
                 })
                 .await
@@ -1365,41 +1366,66 @@ mod tests {
         }
     }
 
+    /// Empty target lists broadcast; explicit targets preserve order, payload, and one timestamp.
     #[tokio::test]
     async fn send_server_notification_to_connections_reuses_timestamp() {
-        let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(2);
-        let outgoing =
-            OutgoingMessageSender::new(tx, codex_analytics::AnalyticsEventsClient::disabled());
+        for connection_ids in [
+            vec![],
+            vec![ConnectionId(1)],
+            vec![ConnectionId(1), ConnectionId(2)],
+        ] {
+            let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(2);
+            let outgoing =
+                OutgoingMessageSender::new(tx, codex_analytics::AnalyticsEventsClient::disabled());
+            let notification = ServerNotification::ConfigWarning(ConfigWarningNotification {
+                summary: "test".to_string(),
+                details: None,
+                path: None,
+                range: None,
+            });
+            let expected = serde_json::to_value(&notification).expect("serialize notification");
 
-        outgoing
-            .send_server_notification_to_connections(
-                &[ConnectionId(1), ConnectionId(2)],
-                ServerNotification::ConfigWarning(ConfigWarningNotification {
-                    summary: "test".to_string(),
-                    details: None,
-                    path: None,
-                    range: None,
-                }),
-            )
-            .await;
+            outgoing
+                .send_server_notification_to_connections(&connection_ids, notification)
+                .await;
 
-        let timestamps = [
-            rx.recv()
-                .await
-                .expect("first connection should receive notification"),
-            rx.recv()
-                .await
-                .expect("second connection should receive notification"),
-        ]
-        .map(|envelope| match envelope {
-            OutgoingEnvelope::ToConnection {
-                message: OutgoingMessage::AppServerNotification(envelope),
-                ..
-            } => envelope.emitted_at_ms,
-            _ => panic!("expected targeted server notification"),
-        });
-
-        assert_eq!(timestamps[0], timestamps[1]);
+            let mut timestamps = Vec::new();
+            for index in 0..connection_ids.len().max(1) {
+                let message = match rx.try_recv().expect("notification should be queued") {
+                    OutgoingEnvelope::Broadcast { message } => {
+                        assert!(connection_ids.is_empty());
+                        message
+                    }
+                    OutgoingEnvelope::ToConnection {
+                        connection_id,
+                        message,
+                        write_complete_tx,
+                    } => {
+                        assert_eq!(connection_id, connection_ids[index]);
+                        assert!(write_complete_tx.is_none());
+                        message
+                    }
+                };
+                let OutgoingMessage::AppServerNotification(envelope) = message else {
+                    panic!("expected server notification");
+                };
+                assert_eq!(
+                    serde_json::to_value(&envelope.notification).unwrap(),
+                    expected
+                );
+                timestamps.push(
+                    envelope
+                        .emitted_at_ms
+                        .expect("notification has a timestamp"),
+                );
+            }
+            assert!(
+                timestamps
+                    .iter()
+                    .all(|timestamp| *timestamp == timestamps[0])
+            );
+            assert!(rx.try_recv().is_err());
+        }
     }
 
     #[tokio::test]

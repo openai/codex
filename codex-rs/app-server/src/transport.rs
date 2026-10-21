@@ -230,11 +230,12 @@ pub(crate) async fn route_outgoing_envelope(
                 })
                 .collect();
 
-            for connection_id in target_connections {
+            let messages = std::iter::repeat_n(message, target_connections.len());
+            for (connection_id, message) in target_connections.into_iter().zip(messages) {
                 let _ = send_message_to_connection(
                     connections,
                     connection_id,
-                    message.clone(),
+                    message,
                     /*write_complete_tx*/ None,
                 )
                 .await;

@@ -415,6 +415,56 @@ async fn command_execution_request_approval_keeps_additional_permissions_with_ca
     );
 }
 
+/// Broadcasts preserve their payload for eligible recipients and skip every other connection.
+/// The empty eligible set must not accidentally send to an uninitialized or opted-out client.
+#[tokio::test]
+async fn broadcast_only_reaches_eligible_connections() {
+    for eligible_count in 0..=2 {
+        let notification = thread_realtime_started_notification();
+        let method = notification.to_string();
+        let message = app_server_notification(notification);
+        let expected = serde_json::to_value(&message).expect("serialize notification");
+        let mut connections = HashMap::new();
+        let mut receivers = Vec::new();
+        let configs = [
+            (false, true, HashSet::new()),
+            (true, false, HashSet::new()),
+            (true, true, HashSet::from([method])),
+        ]
+        .into_iter()
+        .chain((0..eligible_count).map(|_| (true, true, HashSet::new())));
+        for (index, (initialized, experimental_api, opted_out_methods)) in configs.enumerate() {
+            let (writer_tx, writer_rx) = mpsc::channel(1);
+            connections.insert(
+                ConnectionId(index as u64),
+                OutboundConnectionState::new(
+                    writer_tx,
+                    Arc::new(AtomicBool::new(initialized)),
+                    Arc::new(AtomicBool::new(experimental_api)),
+                    Arc::new(RwLock::new(opted_out_methods)),
+                    /*disconnect_sender*/ None,
+                ),
+            );
+            receivers.push(writer_rx);
+        }
+
+        route_outgoing_envelope(&mut connections, OutgoingEnvelope::Broadcast { message }).await;
+
+        for (index, mut receiver) in receivers.into_iter().enumerate() {
+            if index < 3 {
+                assert!(receiver.try_recv().is_err());
+            } else {
+                let queued = receiver
+                    .try_recv()
+                    .expect("eligible client receives notification");
+                assert_eq!(serde_json::to_value(&queued.message).unwrap(), expected);
+                assert!(queued.write_complete_tx.is_none());
+                assert!(receiver.try_recv().is_err());
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn broadcast_does_not_block_on_slow_connection() {
     let fast_connection_id = ConnectionId(1);
