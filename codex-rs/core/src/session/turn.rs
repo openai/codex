@@ -394,7 +394,6 @@ pub(crate) async fn run_turn(
     {
         return Ok(None);
     }
-
     // Only speculate after hooks accept the turn, using its finalized tools and permissions.
     {
         let mut state = sess.state.lock().await;

@@ -26,8 +26,7 @@ pub(crate) struct StepSettings {
     pub(crate) collaboration_mode: CollaborationMode,
     /// `None` follows the pinned model's default.
     pub(crate) reasoning_summary: Option<ReasoningSummary>,
-    /// Normalized requested tier. Startup retains initial-model filtering;
-    /// resolution filters the effective tier against the pinned model.
+    /// Normalized requested tier; resolution filters it against the pinned model.
     pub(crate) service_tier: Option<String>,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,

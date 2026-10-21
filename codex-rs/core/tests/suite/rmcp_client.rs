@@ -2101,6 +2101,15 @@ async fn interrupt_during_mcp_startup_preserves_user_input_in_history(
             )
         })
         .expect("an interrupted turn should retain its submitted user prompt");
+    assert!(
+        history.items[..user_prompt_index]
+            .iter()
+            .any(|item| matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(applied))
+                    if applied.thread_id == Some(fixture.session_configured.thread_id)
+            ))
+    );
     let RolloutItem::ResponseItem(envelope) = &history.items[user_prompt_index] else {
         unreachable!("found the user prompt");
     };

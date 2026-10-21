@@ -663,6 +663,25 @@ async fn warm_plugins_and_skills_for_session_init(
 }
 
 impl Session {
+    pub(super) async fn effective_thread_config_snapshot(
+        &self,
+        configuration: &SessionConfiguration,
+        environments: Vec<TurnEnvironmentSelection>,
+    ) -> ThreadConfigSnapshot {
+        let mut snapshot = configuration.thread_config_snapshot(environments);
+        let model_info = Box::pin(configuration.step_settings.resolve_model_info(
+            self.services.models_manager.as_ref(),
+            &configuration.model_info_overrides,
+        ))
+        .await;
+        snapshot.service_tier = get_service_tier(
+            snapshot.service_tier.take(),
+            &configuration.original_config_do_not_use.features,
+            &model_info,
+        );
+        snapshot
+    }
+
     /// Returns the concrete identity for this thread.
     pub(crate) fn thread_id(&self) -> ThreadId {
         self.thread_id
@@ -1879,8 +1898,12 @@ impl Session {
                 *guard = Arc::downgrade(&sess);
             }
             // Dispatch the SessionConfiguredEvent first and then report any errors.
-            let thread_config =
-                session_configuration.thread_config_snapshot(turn_environments.selections());
+            let thread_config = sess
+                .effective_thread_config_snapshot(
+                    &session_configuration,
+                    turn_environments.selections(),
+                )
+                .await;
             let events = std::iter::once(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
                 msg: EventMsg::SessionConfigured(SessionConfiguredEvent {

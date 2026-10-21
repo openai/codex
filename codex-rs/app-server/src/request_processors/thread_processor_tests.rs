@@ -759,7 +759,11 @@ mod thread_processor_behavior_tests {
         };
 
         assert_eq!(
-            collect_resume_override_mismatches(&request, &config_snapshot),
+            collect_resume_override_mismatches(
+                &request,
+                &config_snapshot,
+                /* selected_service_tier */ Some("flex"),
+            ),
             vec!["service_tier requested=Some(\"priority\") active=Some(\"flex\")".to_string()]
         );
     }

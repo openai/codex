@@ -9486,7 +9486,7 @@ async fn override_turn_context_sends_thread_settings_update() {
         app.enqueue_primary_thread_session(started.session, started.turns)
             .await
             .expect("primary thread should be registered");
-        let service_tier = ServiceTier::Fast.request_value().to_string();
+        let service_tier = ServiceTier::Fast.request_value();
         let collaboration_mode = CollaborationMode {
             mode: ModeKind::Plan,
             settings: Settings {
@@ -9506,7 +9506,7 @@ async fn override_turn_context_sends_thread_settings_update() {
             Some("gpt-5.4".to_string()),
             Some(Some(ReasoningEffortConfig::High)),
             /*summary*/ None,
-            Some(Some(service_tier.clone())),
+            Some(Some(service_tier.to_string())),
             Some(collaboration_mode.clone()),
         );
 
@@ -9532,8 +9532,8 @@ async fn override_turn_context_sends_thread_settings_update() {
             Some(ReasoningEffortConfig::High)
         );
         assert_eq!(
-            notification.thread_settings.service_tier,
-            Some(service_tier.clone())
+            notification.thread_settings.service_tier.as_deref(),
+            Some(service_tier)
         );
         assert_eq!(
             notification.thread_settings.approval_policy,
@@ -9580,7 +9580,7 @@ async fn override_turn_context_sends_thread_settings_update() {
             updated_mode.settings.reasoning_effort,
             collaboration_mode.settings.reasoning_effort
         );
-        assert_eq!(updated_session.service_tier, Some(service_tier));
+        assert_eq!(updated_session.service_tier.as_deref(), Some(service_tier));
         assert_eq!(updated_session.approval_policy, AskForApproval::OnRequest);
         assert_eq!(
             updated_session.approvals_reviewer,

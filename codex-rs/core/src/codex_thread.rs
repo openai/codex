@@ -961,6 +961,10 @@ impl CodexThread {
         self.session.thread_config_snapshot().await
     }
 
+    pub async fn resume_config_snapshot(&self) -> (ThreadConfigSnapshot, Option<String>) {
+        self.session.resume_config_snapshot().await
+    }
+
     /// Returns the active turn's reviewer, including live updates, or the thread default.
     pub async fn approvals_reviewer_for_turn(&self, turn_id: &str) -> ApprovalsReviewer {
         if let Some((turn, settings, _, _)) = self

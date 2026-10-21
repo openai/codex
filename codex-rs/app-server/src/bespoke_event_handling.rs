@@ -1246,8 +1246,10 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ThreadRolledBack(_) | EventMsg::ThreadQueueChanged(_) => {}
         EventMsg::ThreadSettingsApplied(_) => {
-            let thread_settings =
-                thread_settings_from_config_snapshot(&conversation.config_snapshot().await);
+            let (mut config_snapshot, selected_service_tier) =
+                conversation.resume_config_snapshot().await;
+            config_snapshot.service_tier = selected_service_tier;
+            let thread_settings = thread_settings_from_config_snapshot(&config_snapshot);
             let changed = {
                 let mut state = thread_state.lock().await;
                 state.note_thread_settings(thread_settings.clone())

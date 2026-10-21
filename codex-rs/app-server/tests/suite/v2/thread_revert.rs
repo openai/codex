@@ -37,6 +37,7 @@ use codex_app_server_protocol::UserInput;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
@@ -45,6 +46,7 @@ use codex_rollout::RolloutItem;
 use codex_rollout::read_session_meta_line;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::load_default_config_for_test;
+use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -418,9 +420,14 @@ async fn thread_revert_preserves_fork_cutoff_after_cold_resume() -> Result<()> {
 
 #[tokio::test]
 async fn thread_revert_replaces_paginated_history_before_turn() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let server = responses::start_mock_server().await;
+    let response_mock =
+        responses::mount_sse_sequence(&server, vec![responses::sse_completed("done"); 4]).await;
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    MockResponsesConfig::new(&server.uri())
+        .with_model("gpt-5.5")
+        .enable_feature(Feature::FastMode)
+        .write(codex_home.path())?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build()
@@ -430,6 +437,8 @@ async fn thread_revert_replaces_paginated_history_before_turn() -> Result<()> {
     let ThreadStartResponse { thread, .. } = mcp
         .start_thread(ThreadStartParams {
             history_mode: Some(ThreadHistoryMode::Paginated),
+            service_tier: Some(Some("priority".to_string())),
+            personality: Some(Personality::Friendly),
             ..Default::default()
         })
         .await?;
@@ -443,6 +452,8 @@ async fn thread_revert_replaces_paginated_history_before_turn() -> Result<()> {
                     text: text.to_string(),
                     text_elements: Vec::new(),
                 }],
+                model: (text == "second").then_some("gpt-daybreak-blue-latest".to_string()),
+                personality: (text == "second").then_some(Personality::None),
                 ..Default::default()
             })
             .await?;
@@ -565,21 +576,25 @@ async fn thread_revert_replaces_paginated_history_before_turn() -> Result<()> {
                 text: "third".to_string(),
                 text_elements: Vec::new(),
             }],
+            model: Some("gpt-5.5".to_string()),
             ..Default::default()
         })
         .await?;
-    let requests = server.received_requests().await.expect("response requests");
-    let model_input = requests
-        .iter()
-        .rev()
-        .find(|request| request.url.path().ends_with("/responses"))
-        .expect("third turn response request")
-        .body_json::<serde_json::Value>()?["input"]
-        .clone();
+    let body = response_mock
+        .last_request()
+        .expect("third turn request")
+        .body_json();
+    assert_eq!(body["service_tier"], "priority");
+    assert!(
+        !body["instructions"]
+            .as_str()
+            .is_some_and(|instructions| { instructions.contains("# Personality") })
+    );
+    let model_input = body["input"].clone();
     let model_input = serde_json::to_string(&model_input)?;
-    assert!(model_input.contains("first"));
-    assert!(!model_input.contains("second"));
-    assert!(model_input.contains("third"));
+    assert!(model_input.contains(r#""text":"first""#));
+    assert!(!model_input.contains(r#""text":"second""#));
+    assert!(model_input.contains(r#""text":"third""#));
     assert_eq!(
         turn_ids_from_cursor(
             &mut mcp,

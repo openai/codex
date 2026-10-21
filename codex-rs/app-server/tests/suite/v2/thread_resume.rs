@@ -505,7 +505,9 @@ async fn thread_resume_rejects_unmaterialized_thread(
 async fn thread_resume_with_empty_path_uses_running_thread_id() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    mock_responses_config(&server.uri()).write(codex_home.path())?;
+    mock_responses_config(&server.uri())
+        .enable_feature(Feature::FastMode)
+        .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -514,7 +516,8 @@ async fn thread_resume_with_empty_path_uses_running_thread_id() -> Result<()> {
 
     let start_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
-            model: Some("gpt-5.4".to_string()),
+            model: Some("gpt-daybreak-blue-latest".to_string()),
+            service_tier: Some(Some("priority".to_string())),
             ..Default::default()
         })
         .await?;
@@ -547,6 +550,7 @@ async fn thread_resume_with_empty_path_uses_running_thread_id() -> Result<()> {
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id.clone(),
             path: Some(PathBuf::new()),
+            service_tier: Some(Some("priority".to_string())),
             exclude_turns: true,
             ..Default::default()
         })
@@ -584,6 +588,27 @@ async fn thread_resume_with_empty_path_uses_running_thread_id() -> Result<()> {
         serde_json::Value::Array(initialization),
         json!(["new", "new"])
     );
+
+    timeout(DEFAULT_READ_TIMEOUT, mcp.shutdown_gracefully()).await??;
+    mock_responses_config(&server.uri())
+        .enable_feature(Feature::FastMode)
+        .with_root_config("service_tier = \"flex\"")
+        .write(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let resumed: ThreadResumeResponse = mcp
+        .request(|request_id| ClientRequest::ThreadResume {
+            request_id,
+            params: ThreadResumeParams {
+                thread_id: thread.id,
+                ..Default::default()
+            },
+        })
+        .await?;
+    // The startup selection still wins over the new global flex tier, but remains ineffective.
+    assert_eq!(resumed.service_tier, None);
     Ok(())
 }
 
@@ -818,7 +843,9 @@ async fn thread_resume_restores_startup_and_updated_runtime_workspace_roots() ->
 
 #[tokio::test]
 async fn cold_resume_workspace_roots_honor_owned_snapshot_and_caller_overrides() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let server = responses::start_mock_server().await;
+    let response_mock =
+        responses::mount_sse_sequence(&server, vec![responses::sse_completed("done"); 3]).await;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
         .with_sandbox_mode("workspace-write")
@@ -849,7 +876,7 @@ sandbox = "unelevated"
     let owned: ThreadSettingsAppliedEvent = serde_json::from_value(json!({
         "thread_id": thread_id,
         "thread_settings": {
-            "model": "gpt-5.4",
+            "model": "gpt-5.5",
             "model_provider_id": "mock_provider",
             "cwd": saved_cwd,
             "runtime_workspace_roots": [saved_cwd, new_cwd, extra_root],
@@ -859,14 +886,21 @@ sandbox = "unelevated"
                 .materialize_project_roots_with_workspace_roots(
                     &[saved_cwd.clone(), new_cwd.clone(), extra_root.clone()]
                 ),
-            "collaboration_mode": { "mode": "default", "settings": { "model": "gpt-5.4" } },
+            "service_tier": "flex",
+            "reasoning_summary": "concise",
+            "personality": "friendly",
+            "collaboration_mode": { "mode": "default", "settings": { "model": "gpt-5.5" } },
         },
     }))?;
     let mut foreign = owned.clone();
     foreign.thread_id = Some(ThreadId::new());
     foreign.thread_settings.runtime_workspace_roots = Some(vec![extra_root.clone()]);
     foreign.thread_settings.permission_profile = PermissionProfile::Disabled;
-    for settings in [owned, foreign] {
+    foreign.thread_settings.service_tier = Some("default".to_string());
+    let mut ownerless = owned.clone();
+    ownerless.thread_id = None;
+    ownerless.thread_settings.service_tier = Some("priority".to_string());
+    for settings in [owned, ownerless.clone(), foreign] {
         append_rollout_item_to_path(
             &path,
             &RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(settings)),
@@ -874,7 +908,7 @@ sandbox = "unelevated"
         .await?;
     }
     // Every iteration is a cold resume; the final one must retain the preceding explicit clear.
-    for (cwd_override, roots_override, expected_cwd, expected_roots) in [
+    for (index, (cwd_override, roots_override, expected_cwd, expected_roots)) in [
         (
             Some(&new_cwd),
             None,
@@ -889,7 +923,10 @@ sandbox = "unelevated"
         ),
         (None, Some(Vec::new()), &saved_cwd, Vec::new()),
         (None, None, &saved_cwd, Vec::new()),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let mut mcp = TestAppServer::builder()
             .with_codex_home(codex_home.path())
             .without_auto_env()
@@ -901,6 +938,14 @@ sandbox = "unelevated"
                 thread_id: thread_id.clone(),
                 cwd: cwd_override.map(|cwd| cwd.to_string_lossy().into_owned()),
                 runtime_workspace_roots: roots_override,
+                service_tier: (index == 2).then_some(Some("priority".to_string())),
+                personality: (index == 2).then_some(Personality::None),
+                config: (index == 1).then(|| {
+                    std::collections::HashMap::from([
+                        ("model_reasoning_summary".to_string(), json!("detailed")),
+                        ("personality".to_string(), json!("none")),
+                    ])
+                }),
                 ..Default::default()
             })
             .await?;
@@ -910,6 +955,26 @@ sandbox = "unelevated"
             (resumed.cwd, resumed.runtime_workspace_roots),
             (expected_cwd.clone(), expected_roots.clone())
         );
+        if index < 3 {
+            mcp.start_turn_and_wait_for_completion(TurnStartParams {
+                thread_id: thread_id.clone(),
+                ..Default::default()
+            })
+            .await?;
+            let request = response_mock.last_request().expect("response request");
+            assert_eq!(
+                (
+                    request.body_json()["service_tier"].as_str(),
+                    request.body_json()["reasoning"]["summary"].as_str(),
+                    request.body_contains_text("# Personality"),
+                ),
+                [
+                    (Some("flex"), Some("concise"), true),
+                    (Some("priority"), Some("detailed"), false),
+                    (Some("priority"), Some("detailed"), false),
+                ][index]
+            );
+        }
 
         // Inspect persistence before shutdown or another resume can hide a missing checkpoint.
         let expected_thread_id = ThreadId::from_string(&thread_id)?;
@@ -941,6 +1006,13 @@ sandbox = "unelevated"
             );
         }
         timeout(DEFAULT_READ_TIMEOUT, mcp.shutdown_gracefully()).await??;
+        if index == 0 {
+            append_rollout_item_to_path(
+                &path,
+                &RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(ownerless.clone())),
+            )
+            .await?;
+        }
     }
     Ok(())
 }
@@ -2617,6 +2689,7 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
             "approval_policy": "never",
             "approvals_reviewer": "user",
             "permission_profile": PermissionProfile::read_only(),
+            "service_tier": "flex",
             "collaboration_mode": { "mode": "default", "settings": { "model": "gpt-5.4" } },
         },
     }))?;
@@ -2637,8 +2710,12 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    let ThreadResumeResponse { thread, cwd, .. } =
-        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
+    let ThreadResumeResponse {
+        thread,
+        cwd,
+        service_tier,
+        ..
+    } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
 
     assert_eq!(thread.id, conversation_id);
     assert_eq!(thread.preview, preview);
@@ -2650,7 +2727,7 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
     assert_eq!(thread.source, SessionSource::Cli);
     assert_eq!(thread.git_info, None);
     assert_eq!(thread.status, ThreadStatus::Idle);
-
+    assert_eq!(service_tier.as_deref(), Some("flex"));
     assert_eq!(
         thread.turns.len(),
         1,

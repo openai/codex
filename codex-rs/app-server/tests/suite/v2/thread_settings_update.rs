@@ -235,7 +235,13 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
     write_models_cache(codex_home.path()).await?;
-    let (model_id, service_tier_id) = service_tier_model_and_tier_id()?;
+    let (_, service_tier_id) = service_tier_model_and_tier_id()?;
+    let model_id = all_model_presets()
+        .iter()
+        .find(|preset| preset.service_tiers.is_empty())
+        .context("bundled model catalog should include a model without service tiers")?
+        .id
+        .clone();
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -265,8 +271,6 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
         "settings-only update should not start a model request"
     );
 
-    start_text_turn(&mut mcp, thread.id.clone()).await?;
-
     let updated = read_thread_settings_updated(&mut mcp).await?;
     assert_eq!(updated.thread_id, thread.id);
     assert_eq!(updated.thread_settings.model, model_id);
@@ -274,6 +278,8 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
         updated.thread_settings.service_tier.as_deref(),
         Some(service_tier_id.as_str())
     );
+
+    start_text_turn(&mut mcp, thread.id.clone()).await?;
 
     timeout(
         DEFAULT_TIMEOUT,
@@ -345,10 +351,9 @@ async fn thread_settings_update_emits_notification_and_updates_future_turns() ->
     assert!(
         request_bodies.iter().any(|body| {
             body.get("model").and_then(Value::as_str) == Some(model_id.as_str())
-                && body.get("service_tier").and_then(Value::as_str)
-                    == Some(service_tier_id.as_str())
+                && body.get("service_tier").is_none()
         }),
-        "future turn did not use updated model/service tier: {request_bodies:#?}"
+        "future turn did not omit the unsupported service tier: {request_bodies:#?}"
     );
     Ok(())
 }
