@@ -472,9 +472,10 @@ impl AnalyticsEventsClient {
         tracking: &GuardianReviewTrackContext,
         result: GuardianReviewAnalyticsResult,
         completed_at_ms: u64,
+        elapsed: Duration,
     ) {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::GuardianReview(
-            Box::new(tracking.event_params(result, completed_at_ms)),
+            Box::new(tracking.event_params(result, completed_at_ms, elapsed)),
         )));
     }
 

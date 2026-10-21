@@ -179,7 +179,7 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
             };
             let completed_at_ms = codex_analytics::now_unix_millis();
             let cached_approval = matches!(outcome, GuardianReviewOutcome::CachedApproval);
-            let completed = report.complete(
+            let (completed, elapsed) = report.complete(
                 outcome,
                 self.model,
                 self.require_guardian,
@@ -195,6 +195,7 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
                 self.analytics,
                 completed.analytics,
                 completed_at_ms,
+                elapsed,
             );
             if let Some(message) = completed.warning {
                 self.host

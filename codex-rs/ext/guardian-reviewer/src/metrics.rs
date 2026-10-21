@@ -26,7 +26,7 @@ pub(crate) fn emit_guardian_review_metrics(
     result: &GuardianReviewAnalyticsResult,
     approval_request_source: GuardianApprovalRequestSource,
     reviewed_action: &GuardianReviewedAction,
-    completion_latency_ms: u64,
+    elapsed: Duration,
 ) {
     let tags = guardian_review_metric_tags(result, approval_request_source, reviewed_action);
     let tag_refs: Vec<(&str, &str)> = tags
@@ -52,11 +52,7 @@ pub(crate) fn emit_guardian_review_metrics(
         /*inc*/ 1,
         &counter_tag_refs,
     );
-    session_telemetry.record_duration(
-        GUARDIAN_REVIEW_DURATION_METRIC,
-        Duration::from_millis(completion_latency_ms),
-        &tag_refs,
-    );
+    session_telemetry.record_duration(GUARDIAN_REVIEW_DURATION_METRIC, elapsed, &tag_refs);
 
     // Cached approvals may cancel an in-flight review: retain its attempt count,
     // but use the final review status to distinguish recovery from async release.
@@ -452,7 +448,7 @@ mod tests {
             &result,
             GuardianApprovalRequestSource::DelegatedSubagent,
             &reviewed_action,
-            /*completion_latency_ms*/ 456,
+            Duration::from_millis(456),
         );
 
         let snapshot = session_telemetry

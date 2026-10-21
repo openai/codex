@@ -1,5 +1,5 @@
 use std::sync::LazyLock;
-use std::time::Instant;
+use std::time::Duration;
 
 use crate::facts::AppInvocation;
 use crate::facts::ArtifactOperation;
@@ -448,7 +448,6 @@ pub struct GuardianReviewTrackContext {
     reviewed_action: GuardianReviewedAction,
     review_timeout_ms: u64,
     pub started_at_ms: u64,
-    started_instant: Instant,
 }
 
 impl GuardianReviewTrackContext {
@@ -470,7 +469,6 @@ impl GuardianReviewTrackContext {
             reviewed_action,
             review_timeout_ms,
             started_at_ms: now_unix_millis(),
-            started_instant: Instant::now(),
         }
     }
 
@@ -478,7 +476,9 @@ impl GuardianReviewTrackContext {
         &self,
         result: GuardianReviewAnalyticsResult,
         completed_at_ms: u64,
+        elapsed: Duration,
     ) -> GuardianReviewEventParams {
+        let completion_latency_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
         GuardianReviewEventParams {
             guardian_context_mode: result.guardian_context_mode,
             thread_id: self.thread_id.clone(),
@@ -509,7 +509,7 @@ impl GuardianReviewTrackContext {
             // TODO(rhan-oai): plumb nested Guardian review session tool-call counts.
             tool_call_count: None,
             time_to_first_token_ms: result.time_to_first_token_ms,
-            completion_latency_ms: Some(self.started_instant.elapsed().as_millis() as u64),
+            completion_latency_ms: Some(completion_latency_ms),
             started_at: self.started_at_ms / 1_000,
             completed_at: Some(completed_at_ms / 1_000),
             input_tokens: result.token_usage.as_ref().map(|usage| usage.input_tokens),
