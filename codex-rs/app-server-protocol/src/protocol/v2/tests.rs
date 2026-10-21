@@ -5453,3 +5453,32 @@ fn tool_request_user_input_params_default_legacy_missing_is_blocking_to_true() {
         }
     );
 }
+
+/// Native path spelling survives serialization so the receiving host can validate it.
+#[test]
+fn feedback_paths_preserve_native_wire_spelling_before_host_validation() {
+    for path in [
+        "/tmp/feedback.zip",
+        r"C:\Users\test\feedback.zip",
+        r"\\server\share\feedback.zip",
+        "relative.zip",
+    ] {
+        let request: FeedbackSaveParams = serde_json::from_value(json!({
+            "classification": "bug", "savePath": path
+        }))
+        .expect("wire paths remain uninterpreted");
+        assert_eq!(request.save_path.as_str(), path);
+        assert_eq!(
+            serde_json::to_value(&request).expect("serialize request")["savePath"],
+            path
+        );
+        let response: FeedbackSaveResponse = serde_json::from_value(json!({
+            "threadId": "synthetic", "savedPath": path, "promptHash": null
+        }))
+        .expect("wire response");
+        assert_eq!(
+            serde_json::to_value(response).expect("serialize response")["savedPath"],
+            path
+        );
+    }
+}

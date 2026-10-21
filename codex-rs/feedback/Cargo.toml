@@ -26,6 +26,7 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+zip = { workspace = true }
 
 [dev-dependencies]
 log = { workspace = true }

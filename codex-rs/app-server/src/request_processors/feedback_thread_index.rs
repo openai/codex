@@ -14,7 +14,7 @@ const MAX_LISTED_OMISSIONS: usize = 64;
 
 #[derive(Serialize)]
 pub(super) struct FeedbackThreadIndex {
-    rollout_archive_filename: &'static str,
+    pub(super) rollout_archive_filename: Option<&'static str>,
     pub threads: Vec<FeedbackThread>,
     retained_failure_thread_ids: Vec<ThreadId>,
     omitted_thread_ids: Vec<ThreadId>,
@@ -58,7 +58,7 @@ impl FeedbackThreadIndex {
             .take(MAX_LISTED_OMISSIONS)
             .collect::<Vec<_>>();
         Self {
-            rollout_archive_filename: "rollouts.tar.gz",
+            rollout_archive_filename: Some("rollouts.tar.gz"),
             threads: thread_ids
                 .into_iter()
                 .map(|thread_id| FeedbackThread {

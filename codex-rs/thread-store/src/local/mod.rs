@@ -339,6 +339,26 @@ impl LocalThreadStore {
         live_writer::rollout_path(self, thread_id).await
     }
 
+    /// Select only materialized rollout inputs without creating a file for untouched threads.
+    pub(crate) async fn feedback_rollout_path(
+        &self,
+        thread_id: ThreadId,
+    ) -> ThreadStoreResult<Option<PathBuf>> {
+        let (recorder, _, _) = live_writer::live_writer_parts(self, thread_id).await?;
+        if recorder
+            .unpersisted_session_meta()
+            .await
+            .map_err(|error| ThreadStoreError::Internal {
+                message: error.to_string(),
+            })?
+            .is_some()
+        {
+            return Ok(None);
+        }
+        // Keep the path even if a materialized file was deleted: collection must report that error.
+        Ok(Some(recorder.rollout_path().to_path_buf()))
+    }
+
     pub(super) async fn ensure_live_recorder_absent(
         &self,
         thread_id: ThreadId,

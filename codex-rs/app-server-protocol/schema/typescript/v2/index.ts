@@ -163,6 +163,8 @@ export type { ExternalAgentDetectedConnectorSource } from "./ExternalAgentDetect
 export type { ExternalAgentImportedConnectorCandidate } from "./ExternalAgentImportedConnectorCandidate";
 export type { ExternalAgentImportedConnectorSource } from "./ExternalAgentImportedConnectorSource";
 export type { FeedbackRequirements } from "./FeedbackRequirements";
+export type { FeedbackSaveParams } from "./FeedbackSaveParams";
+export type { FeedbackSaveResponse } from "./FeedbackSaveResponse";
 export type { FeedbackUploadParams } from "./FeedbackUploadParams";
 export type { FeedbackUploadResponse } from "./FeedbackUploadResponse";
 export type { FileChangeApprovalDecision } from "./FileChangeApprovalDecision";

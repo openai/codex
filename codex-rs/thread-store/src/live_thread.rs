@@ -411,6 +411,18 @@ impl LiveThread {
             .map(Some)
     }
 
+    /// Selects a local feedback input only after its writer has materialized it.
+    pub async fn feedback_rollout_path(&self) -> ThreadStoreResult<Option<PathBuf>> {
+        let Some(local_store) = self
+            .thread_store
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()
+        else {
+            return Ok(None);
+        };
+        local_store.feedback_rollout_path(self.thread_id).await
+    }
+
     async fn flush_pending_metadata_update(&self) -> ThreadStoreResult<()> {
         let update = self.metadata_sync.lock().await.take_pending_update();
         self.apply_pending_metadata_update(update, PersistContext::Standard)

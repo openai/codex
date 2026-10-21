@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "LegacyAppPathString": {
+      "type": "string"
+    }
+  },
+  "properties": {
+    "classification": {
+      "type": "string"
+    },
+    "extraLogFiles": {
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "includeLogs": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "savePath": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/LegacyAppPathString"
+        }
+      ],
+      "description": "Absolute, previously unused ZIP path on the app-server host. The caller owns this file, including after a disconnected RPC."
+    },
+    "tags": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "threadId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "classification",
+    "savePath"
+  ],
+  "title": "FeedbackSaveParams",
+  "type": "object"
+}

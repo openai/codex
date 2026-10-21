@@ -31,6 +31,7 @@ use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::registry::LookupSpan;
 
+mod archive;
 mod daemon_logs;
 pub use daemon_logs::daemon_log_attachments;
 pub(crate) mod feedback_diagnostics;
@@ -650,6 +651,46 @@ impl FeedbackSnapshot {
             Instant::now() + UPLOAD_TIMEOUT,
         )
         .await
+    }
+
+    /// Atomically saves the consent-selected report and attachments without uploading.
+    /// Existing paths are rejected and failures never publish a partial archive.
+    pub fn save_feedback(&self, options: FeedbackUploadOptions<'_>, path: &Path) -> Result<()> {
+        let report = serde_json::to_vec(&self.feedback_event(
+            options.classification,
+            options.reason,
+            options.tags,
+            options.session_source.as_ref(),
+        ))?;
+        anyhow::ensure!(
+            report.len() <= MAX_EVENT_BYTES,
+            "feedback event exceeds the size limit"
+        );
+        let logs = options
+            .include_logs
+            .then(|| self.log_attachment(options.logs_override));
+        let diagnostics = self
+            .feedback_diagnostics_attachment_text(options.include_logs)
+            .map(|text| FeedbackAttachment {
+                buffer: text.into_bytes(),
+                filename: FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME.to_string(),
+                content_type: Some("text/plain".to_string()),
+            });
+        archive::save(
+            path,
+            &report,
+            logs.into_iter()
+                .chain(options.extra_attachments)
+                .chain(diagnostics)
+                .map(archive::Input::Owned)
+                .chain(
+                    options
+                        .extra_attachment_paths
+                        .iter()
+                        .map(archive::Input::Path),
+                ),
+            archive::Limits::default(),
+        )
     }
 
     async fn upload_feedback_with_dsn(
@@ -1863,3 +1904,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod save_rollout_tests;

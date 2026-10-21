@@ -1,6 +1,8 @@
 use super::feedback_thread_index::FeedbackThreadIndex;
 use super::*;
 use crate::error_code::OVERLOADED_ERROR_CODE;
+use codex_app_server_protocol::FeedbackSaveParams;
+use codex_app_server_protocol::FeedbackSaveResponse;
 use codex_connectors::ConnectorDirectoryCacheContext;
 use codex_connectors::ConnectorDirectoryCacheKey;
 use codex_connectors::connector_runtime_cache_path;
@@ -11,8 +13,11 @@ use codex_feedback::FeedbackSnapshot;
 use codex_feedback::WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME;
 use codex_feedback::guardian_review_failures;
 use codex_rollout::RolloutRecorder;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
 use sha2::Digest;
 use sha2::Sha256;
+use std::path::Path;
 use tokio::sync::Semaphore;
 
 #[derive(Clone)]
@@ -50,20 +55,46 @@ impl FeedbackRequestProcessor {
         &self,
         params: FeedbackUploadParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.upload_feedback_response(params)
-            .await
-            .map(|response| Some(response.into()))
-    }
-
-    async fn upload_feedback_response(
-        &self,
-        params: FeedbackUploadParams,
-    ) -> Result<FeedbackUploadResponse, JSONRPCErrorError> {
         if !self.config.feedback_enabled {
             return Err(invalid_request(
                 "sending feedback is disabled by configuration",
             ));
         }
+        self.feedback_response(params, /*save_path*/ None)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn feedback_save(
+        &self,
+        params: FeedbackSaveParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        if !Path::new(params.save_path.as_str()).is_absolute() {
+            return Err(invalid_request(
+                "feedback savePath must be an absolute host path",
+            ));
+        }
+        let save_path = AbsolutePathBuf::try_from(params.save_path)
+            .map_err(|error| invalid_request(format!("invalid feedback savePath: {error}")))?;
+        let saved_path = LegacyAppPathString::from_abs_path(&save_path);
+        let response = self
+            .feedback_response(params.feedback, Some(save_path))
+            .await?;
+        Ok(Some(
+            FeedbackSaveResponse {
+                saved_path,
+                thread_id: response.thread_id,
+                prompt_hash: response.prompt_hash,
+            }
+            .into(),
+        ))
+    }
+
+    async fn feedback_response(
+        &self,
+        params: FeedbackUploadParams,
+        save_path: Option<AbsolutePathBuf>,
+    ) -> Result<FeedbackUploadResponse, JSONRPCErrorError> {
         let permit = self
             .uploads
             .clone()
@@ -98,8 +129,8 @@ impl FeedbackRequestProcessor {
         let auth = self.auth_manager.auth_cached();
         let turn_metadata = if let Some(conversation_id) = conversation_id
             && let Some(rollout_path) = self
-                .resolve_rollout_path(conversation_id, self.state_db.as_ref())
-                .await
+                .resolve_rollout_path(conversation_id, self.state_db.as_ref(), save_path.as_ref())
+                .await?
         {
             feedback_turn_metadata_from_rollout(
                 &rollout_path,
@@ -183,8 +214,12 @@ impl FeedbackRequestProcessor {
                 .flat_map(|index| &mut index.threads)
             {
                 if let Some(rollout_path) = self
-                    .resolve_rollout_path(thread.thread_id, state_db_ctx.as_ref())
-                    .await
+                    .resolve_rollout_path(
+                        thread.thread_id,
+                        state_db_ctx.as_ref(),
+                        save_path.as_ref(),
+                    )
+                    .await?
                     && seen_attachment_paths.insert(rollout_path.clone())
                 {
                     thread.rollout_filename = codex_rollout::plain_rollout_path(&rollout_path)
@@ -208,7 +243,10 @@ impl FeedbackRequestProcessor {
                     });
                 }
             }
-            if let Some(index) = feedback_index {
+            if let Some(mut index) = feedback_index {
+                if save_path.is_some() {
+                    index.rollout_archive_filename = None;
+                }
                 match index.attachment() {
                     Ok(attachment) => extra_attachments.insert(0, attachment),
                     Err(err) => warn!("failed to serialize feedback thread index: {err}"),
@@ -271,6 +309,11 @@ impl FeedbackRequestProcessor {
         let runtime_handle = tokio::runtime::Handle::current();
         let codex_home = self.config.codex_home.clone();
 
+        let operation = if save_path.is_some() {
+            "save"
+        } else {
+            "upload"
+        };
         let upload_result = tokio::task::spawn_blocking(move || {
             // Cancelling the RPC waiter must not release a still-running upload's slot.
             let _permit = permit;
@@ -279,19 +322,22 @@ impl FeedbackRequestProcessor {
                     .extend(codex_feedback::daemon_log_attachments(codex_home.as_path()));
             }
             let tags = (!upload_tags.is_empty()).then_some(&upload_tags);
-            runtime_handle.block_on(snapshot.upload_feedback(
-                FeedbackUploadOptions {
-                    classification: &classification,
-                    reason: reason.as_deref(),
-                    tags,
-                    include_logs,
-                    extra_attachments,
-                    extra_attachment_paths: &attachment_paths,
-                    session_source: Some(session_source),
-                    logs_override: sqlite_feedback_logs,
-                },
-                &http_client_factory,
-            ))
+            let options = FeedbackUploadOptions {
+                classification: &classification,
+                reason: reason.as_deref(),
+                tags,
+                include_logs,
+                extra_attachments,
+                extra_attachment_paths: &attachment_paths,
+                session_source: Some(session_source),
+                logs_override: sqlite_feedback_logs,
+            };
+            match save_path {
+                Some(path) => snapshot.save_feedback(options, path.as_path()),
+                None => {
+                    runtime_handle.block_on(snapshot.upload_feedback(options, &http_client_factory))
+                }
+            }
         })
         .await;
 
@@ -299,13 +345,13 @@ impl FeedbackRequestProcessor {
             Ok(result) => result,
             Err(join_err) => {
                 return Err(internal_error(format!(
-                    "failed to upload feedback: {join_err}"
+                    "failed to {operation} feedback: {join_err}"
                 )));
             }
         };
 
         upload_result
-            .map_err(|err| internal_error(format!("failed to upload feedback: {err:#}")))?;
+            .map_err(|err| internal_error(format!("failed to {operation} feedback: {err:#}")))?;
         Ok(FeedbackUploadResponse {
             thread_id,
             prompt_hash,
@@ -316,21 +362,31 @@ impl FeedbackRequestProcessor {
         &self,
         conversation_id: ThreadId,
         state_db_ctx: Option<&StateDbHandle>,
-    ) -> Option<PathBuf> {
-        if let Ok(conversation) = self.thread_manager.get_thread(conversation_id).await
-            && let Some(rollout_path) = conversation.rollout_path()
-        {
-            return Some(rollout_path);
+        save_path: Option<&AbsolutePathBuf>,
+    ) -> Result<Option<PathBuf>, JSONRPCErrorError> {
+        if let Ok(conversation) = self.thread_manager.get_thread(conversation_id).await {
+            if save_path.is_some() {
+                // Explicit extraLogFiles are collected separately and remain strict, even
+                // when they name this same not-yet-materialized automatic rollout.
+                return conversation.feedback_rollout_path().await.map_err(|error| {
+                    internal_error(format!("failed to select feedback rollout: {error}"))
+                });
+            }
+            if let Some(rollout_path) = conversation.rollout_path() {
+                return Ok(Some(rollout_path));
+            }
         }
 
-        let state_db_ctx = state_db_ctx?;
-        state_db_ctx
+        let Some(state_db_ctx) = state_db_ctx else {
+            return Ok(None);
+        };
+        Ok(state_db_ctx
             .find_rollout_path_by_id(conversation_id, /*archived_only*/ None)
             .await
             .unwrap_or_else(|err| {
                 warn!("failed to resolve rollout path for thread_id={conversation_id}: {err}");
                 None
-            })
+            }))
     }
 }
 

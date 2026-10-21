@@ -1756,7 +1756,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "When `false`, disables the feedback flow across Codex product surfaces.",
+          "description": "When `false`, disables feedback uploads and background Guardian review retention. Explicit local exports remain available.",
           "type": "boolean"
         }
       },

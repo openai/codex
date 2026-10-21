@@ -443,3 +443,26 @@ async fn startup_tool_policy_controls_additional_permission_parameters(
     fixture.codex.shutdown_and_wait().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn feedback_rollout_selection_survives_writer_shutdown() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let fixture = test_codex().build_with_auto_env(&server).await?;
+    let thread_id = fixture.session_configured.thread_id;
+    assert_eq!(fixture.codex.feedback_rollout_path().await?, None);
+    fixture
+        .thread_store
+        .persist_thread(thread_id, codex_thread_store::PersistContext::Standard)
+        .await?;
+    let path = fixture.codex.rollout_path().expect("local rollout");
+    fixture.codex.shutdown_and_wait().await?;
+    let expected = std::fs::read(&path)?;
+    assert_eq!(
+        fixture.codex.feedback_rollout_path().await?,
+        Some(path.clone())
+    );
+    assert_eq!(std::fs::read(&path)?, expected);
+    std::fs::remove_file(&path)?;
+    assert_eq!(fixture.codex.feedback_rollout_path().await?, Some(path));
+    Ok(())
+}

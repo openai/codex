@@ -881,6 +881,18 @@ impl CodexThread {
         self.rollout_path.clone()
     }
 
+    /// Selects a local feedback rollout without materializing an untouched thread.
+    pub async fn feedback_rollout_path(&self) -> ThreadStoreResult<Option<PathBuf>> {
+        match self.session.live_thread() {
+            Some(thread) => thread.feedback_rollout_path().await.or_else(|error| {
+                // Shutdown can close or remove the writer before its thread leaves the manager.
+                // Retain the captured input; the archive reader still rejects missing files.
+                self.rollout_path().map(Some).ok_or(error)
+            }),
+            None => Ok(None),
+        }
+    }
+
     /// Returns startup metadata without the one-time initial message replay.
     pub fn startup_metadata(&self) -> &ThreadStartupMetadata {
         &self.startup_metadata

@@ -2395,6 +2395,30 @@
           "type": "object"
         },
         {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "feedback/save"
+              ],
+              "title": "Feedback/saveRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/FeedbackSaveParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Feedback/saveRequest",
+          "type": "object"
+        },
+        {
           "description": "Execute a standalone command (argv vector) under the server's sandbox.",
           "properties": {
             "id": {
@@ -11805,6 +11829,85 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "FeedbackSaveParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "classification": {
+            "type": "string"
+          },
+          "extraLogFiles": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "includeLogs": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "savePath": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/LegacyAppPathString"
+              }
+            ],
+            "description": "Absolute, previously unused ZIP path on the app-server host. The caller owns this file, including after a disconnected RPC."
+          },
+          "tags": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "classification",
+          "savePath"
+        ],
+        "title": "FeedbackSaveParams",
+        "type": "object"
+      },
+      "FeedbackSaveResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "promptHash": {
+            "description": "Same prompt hash as feedback/upload; null when prompt metadata is absent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "savedPath": {
+            "$ref": "#/definitions/v2/LegacyAppPathString"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "savedPath",
+          "threadId"
+        ],
+        "title": "FeedbackSaveResponse",
         "type": "object"
       },
       "FeedbackUploadParams": {
