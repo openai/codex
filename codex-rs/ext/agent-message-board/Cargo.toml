@@ -7,30 +7,20 @@ version.workspace = true
 [lib]
 name = "codex_agent_message_board_extension"
 path = "src/lib.rs"
+test = false
 doctest = false
 
 [lints]
 workspace = true
 
 [dependencies]
-base64 = { workspace = true }
-caseless = { workspace = true }
-chrono = { workspace = true, features = ["serde"] }
 codex-extension-api = { workspace = true }
+codex-message-board = { workspace = true }
 codex-protocol = { workspace = true }
-codex-state = { workspace = true }
 codex-tools = { workspace = true }
 futures = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
-sqlx = { workspace = true }
-tokio = { workspace = true, features = ["fs", "rt", "sync"] }
-tracing = { workspace = true }
-uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
-codex-attachment-store = { workspace = true }
-codex-utils-output-truncation = { workspace = true }
-pretty_assertions = { workspace = true }
-tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+codex-state = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread"] }

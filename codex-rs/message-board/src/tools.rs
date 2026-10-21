@@ -60,7 +60,7 @@ pub fn message_board_tools(
     )
 }
 
-pub(crate) fn message_board_tools_with_descriptions(
+pub fn message_board_tools_with_descriptions(
     board: Arc<dyn AgentMessageBoard>,
     caller: ThreadId,
     caller_path: AgentPath,

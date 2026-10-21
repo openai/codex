@@ -1,6 +1,6 @@
 //! Bridges the board extension to the selected controller, clock and active-turn services.
 //!
-//! The extension owns storage and tools. This adapter never starts or restores
+//! The shared board library owns storage; the extension owns tools. This adapter never starts or restores
 //! recipients and never queues a notification for an idle agent.
 
 use crate::CodexThread;
@@ -13,17 +13,17 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_agent_message_board_client::AccessToken;
 use codex_agent_message_board_client::RemoteAgentMessageBoard;
-use codex_agent_message_board_extension::AgentMessageBoard;
-use codex_agent_message_board_extension::InMemoryMessageBoards;
-use codex_agent_message_board_extension::LocalAgentMessageBoard;
-use codex_agent_message_board_extension::LocalBoardConnection;
-use codex_agent_message_board_extension::MessageBoardHost;
-use codex_agent_message_board_extension::NotificationDelivery;
-use codex_agent_message_board_extension::PostPreview;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadStartInput;
 use codex_features::Feature;
 use codex_http_client::ClientRouteClass;
+use codex_message_board::AgentMessageBoard;
+use codex_message_board::InMemoryMessageBoards;
+use codex_message_board::LocalAgentMessageBoard;
+use codex_message_board::LocalBoardConnection;
+use codex_message_board::MessageBoardHost;
+use codex_message_board::NotificationDelivery;
+use codex_message_board::PostPreview;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;

@@ -39,7 +39,6 @@ use crate::tasks::interrupted_turn_history_marker;
 use crate::thread_startup_metadata::ThreadStartupMetadata;
 use codex_agent_graph_store::AgentGraphStore;
 use codex_agent_graph_store::LocalAgentGraphStore;
-use codex_agent_message_board_extension::LocalAgentMessageBoard;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
@@ -66,6 +65,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use codex_login::default_client::originator;
+use codex_message_board::LocalAgentMessageBoard;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
@@ -973,7 +973,7 @@ impl ThreadManager {
     pub(crate) async fn get_thread_for_board(
         &self,
         thread_id: ThreadId,
-        connection: &codex_agent_message_board_extension::LocalBoardConnection,
+        connection: &codex_message_board::LocalBoardConnection,
     ) -> CodexResult<Arc<CodexThread>> {
         self.state
             .threads
@@ -983,7 +983,7 @@ impl ThreadManager {
             .filter(|thread| {
                 thread
                     .thread_extension_data()
-                    .get::<codex_agent_message_board_extension::LocalBoardConnection>()
+                    .get::<codex_message_board::LocalBoardConnection>()
                     .is_some_and(|other| connection.same_board(&other))
             })
             .cloned()

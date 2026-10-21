@@ -1,7 +1,7 @@
 //! Operator-only setup for local experiments; no administrative agent tools.
 
-use codex_agent_message_board_extension::LocalBoardSetup;
-use codex_agent_message_board_extension::configure_local_board;
+use codex_message_board::LocalBoardSetup;
+use codex_message_board::configure_local_board;
 use codex_protocol::SessionId;
 use codex_state::SqliteConfig;
 use std::path::PathBuf;

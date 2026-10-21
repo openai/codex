@@ -126,7 +126,7 @@
 //codex-rs/exec:exec-all-test-windows-cross	331
 //codex-rs/exec:exec-event_processor_with_json_output-test-windows-cross	1
 //codex-rs/exec:exec-unit-tests	47
-//codex-rs/ext/agent-message-board:agent-message-board-local_board-test-windows-cross	46
+//codex-rs/message-board:message-board-local_board-test-windows-cross	46
 //codex-rs/ext/agent-message-board:agent-message-board-unit-tests	30
 //codex-rs/ext/agent:agent-agent_service-test-windows-cross	3
 //codex-rs/ext/agent:agent-unit-tests	1

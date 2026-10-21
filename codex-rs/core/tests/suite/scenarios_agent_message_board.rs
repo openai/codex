@@ -1,9 +1,9 @@
 //! Exercises board tools through the runtime, including resume and active-only notices.
 
 use anyhow::Context;
-use codex_agent_message_board_extension::PostMetadata;
 use codex_core::TurnInputRequest;
 use codex_features::Feature;
+use codex_message_board::PostMetadata;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -934,11 +934,11 @@ async fn board_clock_failure_does_not_fall_back_or_create_a_channel() -> anyhow:
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_instances_share_board_with_fixed_access() -> anyhow::Result<()> {
-    use codex_agent_message_board_extension::LocalBoard;
     use codex_extension_api::ExtensionRegistryBuilder;
     use codex_extension_api::IsolatedSessionExtensions;
     use codex_extension_api::SessionIsolation;
     use codex_extension_api::ToolName;
+    use codex_message_board::LocalBoard;
     use codex_protocol::protocol::InternalSessionSource;
     use codex_protocol::protocol::SessionSource;
     use codex_state::SqliteConfig;

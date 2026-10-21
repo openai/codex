@@ -2,15 +2,15 @@
 
 use chrono::DateTime;
 use chrono::Utc;
-use codex_agent_message_board_extension::ChannelQuery;
-use codex_agent_message_board_extension::CreateChannelRequest;
-use codex_agent_message_board_extension::PostPreview;
-use codex_agent_message_board_extension::PostQuery;
-use codex_agent_message_board_extension::PostRequest;
-use codex_agent_message_board_extension::ReadPostRequest;
-use codex_agent_message_board_extension::ReadThreadRequest;
-use codex_agent_message_board_extension::SubscriptionRequest;
-use codex_agent_message_board_extension::ThreadQuery;
+use codex_message_board::ChannelQuery;
+use codex_message_board::CreateChannelRequest;
+use codex_message_board::PostPreview;
+use codex_message_board::PostQuery;
+use codex_message_board::PostRequest;
+use codex_message_board::ReadPostRequest;
+use codex_message_board::ReadThreadRequest;
+use codex_message_board::SubscriptionRequest;
+use codex_message_board::ThreadQuery;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use serde::Deserialize;

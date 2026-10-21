@@ -1,4 +1,4 @@
-//! Backend-computed permissions and denials exposed by the board tools.
+//! Backend-computed permissions and denials shared by board consumers.
 
 use codex_protocol::error::CodexErr;
 use codex_tools::FunctionCallError;

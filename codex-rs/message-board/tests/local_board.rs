@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 
 use chrono::DateTime;
 use chrono::Utc;
-use codex_agent_message_board_extension::*;
+use codex_message_board::*;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;

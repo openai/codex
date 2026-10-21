@@ -4,9 +4,6 @@
 //! and emit a warning; a disabled factory does not open storage.
 //! Tool namespaces follow the host's configuration at runtime startup.
 
-use crate::AgentMessageBoard;
-use crate::LocalBoardConnection;
-use crate::tools::message_board_tools_with_descriptions;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
@@ -15,6 +12,9 @@ use codex_extension_api::ExtensionWarning;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolContributor;
+use codex_message_board::AgentMessageBoard;
+use codex_message_board::LocalBoardConnection;
+use codex_message_board::message_board_tools_with_descriptions;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;

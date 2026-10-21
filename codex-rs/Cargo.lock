@@ -1939,9 +1939,9 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
- "codex-agent-message-board-extension",
  "codex-extension-api",
  "codex-http-client",
+ "codex-message-board",
  "codex-protocol",
  "eventsource-stream",
  "futures",
@@ -1960,24 +1960,14 @@ dependencies = [
 name = "codex-agent-message-board-extension"
 version = "0.0.0"
 dependencies = [
- "base64 0.22.1",
- "caseless",
- "chrono",
- "codex-attachment-store",
  "codex-extension-api",
+ "codex-message-board",
  "codex-protocol",
  "codex-state",
  "codex-tools",
- "codex-utils-output-truncation",
  "futures",
- "pretty_assertions",
- "serde",
  "serde_json",
- "sqlx",
- "tempfile",
  "tokio",
- "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -2980,6 +2970,7 @@ dependencies = [
  "codex-mcp",
  "codex-mcp-extension",
  "codex-memories-read",
+ "codex-message-board",
  "codex-model-provider",
  "codex-model-provider-info",
  "codex-models-manager",
@@ -4061,6 +4052,29 @@ dependencies = [
  "insta",
  "pretty_assertions",
  "unicode-width 0.2.1",
+]
+
+[[package]]
+name = "codex-message-board"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "caseless",
+ "chrono",
+ "codex-attachment-store",
+ "codex-protocol",
+ "codex-state",
+ "codex-tools",
+ "codex-utils-output-truncation",
+ "futures",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

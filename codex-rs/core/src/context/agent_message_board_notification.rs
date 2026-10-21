@@ -1,7 +1,7 @@
 //! Attributed discussion notices with bounded previews.
 
 use super::ContextualUserFragment;
-use codex_agent_message_board_extension::PostPreview;
+use codex_message_board::PostPreview;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::input_text;
