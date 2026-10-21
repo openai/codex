@@ -996,6 +996,15 @@ impl UnifiedExecProcessManager {
         } = self
             .prepare_process_handles(process_id, &locked_process)
             .await?;
+        context
+            .session
+            .services
+            .rollout_thread_trace
+            .record_stdin_target(
+                &context.step_context.turn.sub_id,
+                &context.call_id,
+                &call_id,
+            );
         let remote_exited =
             process.has_exited() && output.drain_policy == OutputDrainPolicy::WaitForOutputClosure;
         // A write racing with remote exit still collects the final output.

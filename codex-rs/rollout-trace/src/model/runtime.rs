@@ -215,7 +215,7 @@ pub enum ToolCallSummary {
     },
 }
 
-/// Reusable terminal process/session returned by the runtime.
+/// One terminal process lifetime, including its command and subsequent polls.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TerminalSession {
     pub terminal_id: TerminalId,
@@ -230,7 +230,7 @@ pub struct TerminalSession {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TerminalOperation {
     pub operation_id: TerminalOperationId,
-    /// Runtime terminal/process ID. `None` is legal only while the operation that creates it is starting.
+    /// Reduced session identity, distinct from the recyclable runtime process ID.
     pub terminal_id: Option<TerminalId>,
     pub tool_call_id: ToolCallId,
     pub kind: TerminalOperationKind,

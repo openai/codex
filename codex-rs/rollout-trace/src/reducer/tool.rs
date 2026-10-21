@@ -101,9 +101,8 @@ impl TraceReducer {
 
         self.thread_mut(&thread_id)?;
 
-        // Some terminal-like tools, notably write_stdin, do not emit a richer
-        // runtime begin event. For those tools the canonical invocation is the
-        // only place to recover the terminal/session join key.
+        // write_stdin has no protocol runtime-begin event, so its request comes
+        // from the canonical invocation. Runtime resolution can refine its session link.
         let terminal_operation_id = self.start_terminal_operation_from_invocation(
             seq,
             wall_time_unix_ms,

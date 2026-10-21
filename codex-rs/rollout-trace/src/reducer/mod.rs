@@ -57,6 +57,8 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
         bundle_dir: bundle_dir.to_path_buf(),
         next_conversation_item_ordinal: 1,
         next_terminal_operation_ordinal: 1,
+        terminal_ids_by_process: BTreeMap::new(),
+        process_ids_by_terminal: BTreeMap::new(),
         thread_conversation_snapshots: BTreeMap::new(),
         pending_compaction_replacement_item_ids: BTreeMap::new(),
         code_cell_ids_by_runtime: BTreeMap::new(),
@@ -90,6 +92,10 @@ struct TraceReducer {
     bundle_dir: PathBuf,
     next_conversation_item_ordinal: u64,
     next_terminal_operation_ordinal: u64,
+    /// Latest session for each thread-local runtime handle; each exec replaces it.
+    terminal_ids_by_process: BTreeMap<(String, String), String>,
+    /// Retains the begin/end consistency check when a handle is later reused.
+    process_ids_by_terminal: BTreeMap<String, String>,
     /// Last model-visible conversation snapshot per thread.
     ///
     /// Requests and responses both advance this sequence because both are
@@ -266,6 +272,12 @@ impl TraceReducer {
                 mcp_call_id,
             } => {
                 self.assign_mcp_tool_call_correlation(tool_call_id, mcp_call_id)?;
+            }
+            RawTraceEventPayload::StdinTargetResolved {
+                tool_call_id,
+                exec_tool_call_id,
+            } => {
+                self.resolve_stdin_target(&tool_call_id, &exec_tool_call_id)?;
             }
             RawTraceEventPayload::ToolCallRuntimeStarted {
                 tool_call_id,

@@ -18,8 +18,11 @@ use crate::raw_event::RawTraceEventPayload;
 use crate::reducer::test_support::create_started_writer;
 use crate::reducer::test_support::generic_summary;
 use crate::reducer::test_support::message;
+use crate::reducer::test_support::start_thread;
 use crate::reducer::test_support::start_turn;
+use crate::reducer::test_support::start_turn_for_thread;
 use crate::reducer::test_support::trace_context;
+use crate::reducer::test_support::trace_context_for_thread;
 use crate::replay_bundle;
 use crate::writer::TraceWriter;
 
@@ -157,7 +160,7 @@ fn exec_tool_reduces_to_terminal_operation_and_session() -> anyhow::Result<()> {
         rollout.terminal_operations[&operation_id],
         TerminalOperation {
             operation_id: operation_id.clone(),
-            terminal_id: Some("pty-1".to_string()),
+            terminal_id: Some("terminal_session:terminal_operation:1".to_string()),
             tool_call_id: "tool-1".to_string(),
             kind: TerminalOperationKind::ExecCommand,
             execution: ExecutionWindow {
@@ -193,9 +196,9 @@ fn exec_tool_reduces_to_terminal_operation_and_session() -> anyhow::Result<()> {
         },
     );
     assert_eq!(
-        rollout.terminal_sessions["pty-1"],
+        rollout.terminal_sessions["terminal_session:terminal_operation:1"],
         TerminalSession {
-            terminal_id: "pty-1".to_string(),
+            terminal_id: "terminal_session:terminal_operation:1".to_string(),
             thread_id: "thread-root".to_string(),
             created_by_operation_id: operation_id.clone(),
             operation_ids: vec![operation_id],
@@ -213,90 +216,113 @@ fn exec_tool_reduces_to_terminal_operation_and_session() -> anyhow::Result<()> {
 }
 
 #[test]
-fn write_stdin_operation_reuses_existing_terminal_session() -> anyhow::Result<()> {
+fn reused_process_ids_keep_sessions_and_stdin_joins_distinct() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;
     start_turn(&writer, "turn-1")?;
+    start_thread(&writer, "child", "/root/child")?;
+    start_turn_for_thread(&writer, "child", "child-turn")?;
+    let mut reused_stdin = None;
 
-    let startup_payload = writer.write_json_payload(
-        RawPayloadKind::ToolRuntimeEvent,
-        &json!({
-            "call_id": "tool-start",
-            "process_id": "pty-1",
-            "turn_id": "turn-1",
-            "command": ["bash"],
-            "cwd": "/repo"
-        }),
-    )?;
-    writer.append_with_context(
-        trace_context("turn-1"),
-        RawTraceEventPayload::ToolCallStarted {
-            tool_call_id: "tool-start".to_string(),
-            model_visible_call_id: None,
-            code_mode_runtime_tool_id: None,
-            requester: crate::raw_event::RawToolCallRequester::Model,
-            kind: ToolCallKind::ExecCommand,
-            summary: generic_summary("exec_command"),
-            invocation_payload: None,
-        },
-    )?;
-    writer.append_with_context(
-        trace_context("turn-1"),
-        RawTraceEventPayload::ToolCallRuntimeStarted {
-            tool_call_id: "tool-start".to_string(),
-            runtime_payload: startup_payload,
-        },
-    )?;
-
-    let stdin_payload = writer.write_json_payload(
-        RawPayloadKind::ToolRuntimeEvent,
-        &json!({
-            "call_id": "tool-stdin",
-            "process_id": "pty-1",
-            "turn_id": "turn-1",
-            "command": ["bash"],
-            "cwd": "/repo",
-            "interaction_input": "echo hi\n"
-        }),
-    )?;
-    let _stdin_start = writer.append_with_context(
-        trace_context("turn-1"),
-        RawTraceEventPayload::ToolCallStarted {
-            tool_call_id: "tool-stdin".to_string(),
-            model_visible_call_id: None,
-            code_mode_runtime_tool_id: None,
-            requester: crate::raw_event::RawToolCallRequester::Model,
-            kind: ToolCallKind::WriteStdin,
-            summary: generic_summary("write_stdin"),
-            invocation_payload: None,
-        },
-    )?;
-    let stdin_runtime_start = writer.append_with_context(
-        trace_context("turn-1"),
-        RawTraceEventPayload::ToolCallRuntimeStarted {
-            tool_call_id: "tool-stdin".to_string(),
-            runtime_payload: stdin_payload,
-        },
-    )?;
+    // Real rollouts reuse process IDs both across threads and after an exec
+    // finishes. Polls must stay with the corresponding exec, not the last
+    // occurrence of the process number anywhere in the rollout.
+    for (index, (thread, turn, kind)) in [
+        ("thread-root", "turn-1", ToolCallKind::ExecCommand),
+        ("child", "child-turn", ToolCallKind::ExecCommand),
+        ("thread-root", "turn-1", ToolCallKind::WriteStdin),
+        ("child", "child-turn", ToolCallKind::WriteStdin),
+        ("thread-root", "turn-1", ToolCallKind::ExecCommand),
+        ("thread-root", "turn-1", ToolCallKind::WriteStdin),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index == 4 {
+            let response = writer.write_json_payload(
+                RawPayloadKind::ToolRuntimeEvent,
+                &json!({"process_id": "123", "exit_code": 0}),
+            )?;
+            writer.append_with_context(
+                trace_context("turn-1"),
+                RawTraceEventPayload::ToolCallRuntimeEnded {
+                    tool_call_id: "tool-0".to_string(),
+                    status: ExecutionStatus::Completed,
+                    runtime_payload: response,
+                },
+            )?;
+        }
+        let tool_call_id = format!("tool-{index}");
+        writer.append_with_context(
+            trace_context_for_thread(thread, turn),
+            RawTraceEventPayload::ToolCallStarted {
+                tool_call_id: tool_call_id.clone(),
+                model_visible_call_id: None,
+                code_mode_runtime_tool_id: None,
+                requester: crate::raw_event::RawToolCallRequester::Model,
+                kind,
+                summary: generic_summary("terminal"),
+                invocation_payload: None,
+            },
+        )?;
+        let request = writer.write_json_payload(
+            RawPayloadKind::ToolRuntimeEvent,
+            &json!({
+                "process_id": "123",
+                "command": ["bash"],
+                "cwd": "/repo",
+                "interaction_input": (index == 5).then_some("echo hi\n"),
+            }),
+        )?;
+        let request_id = request.raw_payload_id.clone();
+        let runtime_start = writer.append_with_context(
+            trace_context_for_thread(thread, turn),
+            RawTraceEventPayload::ToolCallRuntimeStarted {
+                tool_call_id,
+                runtime_payload: request,
+            },
+        )?;
+        if index == 5 {
+            reused_stdin = Some((runtime_start, request_id));
+        }
+    }
 
     let rollout = replay_bundle(temp.path())?;
-    let startup_operation_id = "terminal_operation:1".to_string();
-    let stdin_operation_id = "terminal_operation:2".to_string();
-
+    let groups = rollout
+        .terminal_sessions
+        .values()
+        .map(|session| {
+            let calls = session
+                .operation_ids
+                .iter()
+                .map(|id| {
+                    let operation = &rollout.terminal_operations[id];
+                    assert_eq!(operation.terminal_id.as_ref(), Some(&session.terminal_id));
+                    operation.tool_call_id.as_str()
+                })
+                .collect::<Vec<_>>();
+            (session.thread_id.as_str(), calls)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
-        rollout.terminal_sessions["pty-1"].operation_ids,
-        vec![startup_operation_id, stdin_operation_id.clone()],
+        groups,
+        vec![
+            ("thread-root", vec!["tool-0", "tool-2"]),
+            ("child", vec!["tool-1", "tool-3"]),
+            ("thread-root", vec!["tool-4", "tool-5"]),
+        ],
     );
+    let (runtime_start, request_id) = reused_stdin.unwrap();
     assert_eq!(
-        rollout.terminal_operations[&stdin_operation_id],
+        rollout.terminal_operations["terminal_operation:6"],
         TerminalOperation {
-            operation_id: stdin_operation_id.clone(),
-            terminal_id: Some("pty-1".to_string()),
-            tool_call_id: "tool-stdin".to_string(),
+            operation_id: "terminal_operation:6".to_string(),
+            terminal_id: Some("terminal_session:terminal_operation:5".to_string()),
+            tool_call_id: "tool-5".to_string(),
             kind: TerminalOperationKind::WriteStdin,
             execution: ExecutionWindow {
-                started_at_unix_ms: stdin_runtime_start.wall_time_unix_ms,
-                started_seq: stdin_runtime_start.seq,
+                started_at_unix_ms: runtime_start.wall_time_unix_ms,
+                started_seq: runtime_start.seq,
                 ended_at_unix_ms: None,
                 ended_seq: None,
                 status: ExecutionStatus::Running,
@@ -308,10 +334,39 @@ fn write_stdin_operation_reuses_existing_terminal_session() -> anyhow::Result<()
             },
             result: None,
             model_observations: Vec::new(),
-            raw_payload_ids: vec!["raw_payload:2".to_string()],
+            raw_payload_ids: vec![request_id],
         },
     );
 
+    // Stdin started while tool-0 owned the handle, but dispatch was delayed
+    // until tool-4 replaced it. Only its session membership should change.
+    writer.append_with_context(
+        trace_context("turn-1"),
+        RawTraceEventPayload::StdinTargetResolved {
+            tool_call_id: "tool-2".to_string(),
+            exec_tool_call_id: "tool-4".to_string(),
+        },
+    )?;
+    let mut expected = rollout;
+    let previous = "terminal_session:terminal_operation:1";
+    let resolved = "terminal_session:terminal_operation:5";
+    expected
+        .terminal_sessions
+        .get_mut(previous)
+        .unwrap()
+        .operation_ids = vec!["terminal_operation:1".to_string()];
+    expected
+        .terminal_sessions
+        .get_mut(resolved)
+        .unwrap()
+        .operation_ids
+        .push("terminal_operation:3".to_string());
+    expected
+        .terminal_operations
+        .get_mut("terminal_operation:3")
+        .unwrap()
+        .terminal_id = Some(resolved.to_string());
+    assert_eq!(replay_bundle(temp.path())?, expected);
     Ok(())
 }
 
@@ -389,7 +444,7 @@ fn dispatch_write_stdin_payload_reduces_to_terminal_operation() -> anyhow::Resul
         rollout.terminal_operations[&operation_id],
         TerminalOperation {
             operation_id: operation_id.clone(),
-            terminal_id: Some("123".to_string()),
+            terminal_id: Some("terminal_session:terminal_operation:1".to_string()),
             tool_call_id: "tool-stdin".to_string(),
             kind: TerminalOperationKind::WriteStdin,
             execution: ExecutionWindow {
@@ -417,9 +472,9 @@ fn dispatch_write_stdin_payload_reduces_to_terminal_operation() -> anyhow::Resul
         },
     );
     assert_eq!(
-        rollout.terminal_sessions["123"],
+        rollout.terminal_sessions["terminal_session:terminal_operation:1"],
         TerminalSession {
-            terminal_id: "123".to_string(),
+            terminal_id: "terminal_session:terminal_operation:1".to_string(),
             thread_id: "thread-root".to_string(),
             created_by_operation_id: operation_id.clone(),
             operation_ids: vec![operation_id],

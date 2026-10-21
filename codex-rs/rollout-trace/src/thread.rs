@@ -247,6 +247,25 @@ impl ThreadTraceContext {
         context.append_with_context_best_effort(codex_turn_id.into(), payload);
     }
 
+    /// Records the exec actually selected by stdin, since its process handle can be reused.
+    pub fn record_stdin_target(
+        &self,
+        codex_turn_id: &str,
+        tool_call_id: &str,
+        exec_tool_call_id: &str,
+    ) {
+        let ThreadTraceContextState::Enabled(context) = &self.state else {
+            return;
+        };
+        context.append_with_context_best_effort(
+            codex_turn_id.to_string(),
+            RawTraceEventPayload::StdinTargetResolved {
+                tool_call_id: tool_call_id.to_string(),
+                exec_tool_call_id: exec_tool_call_id.to_string(),
+            },
+        );
+    }
+
     /// Emits the v2 child-to-parent completion message as an explicit graph edge.
     ///
     /// The notification is runtime delivery from a completed child turn into

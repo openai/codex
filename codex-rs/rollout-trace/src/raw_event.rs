@@ -144,6 +144,11 @@ pub enum RawTraceEventPayload {
         tool_call_id: ToolCallId,
         mcp_call_id: McpCallId,
     },
+    /// Exec selected by the runtime after resolving a recyclable process handle.
+    StdinTargetResolved {
+        tool_call_id: ToolCallId,
+        exec_tool_call_id: ToolCallId,
+    },
     ToolCallRuntimeStarted {
         tool_call_id: ToolCallId,
         /// Runtime/protocol observation for how Codex began executing the tool.
@@ -243,6 +248,7 @@ impl RawTraceEventPayload {
             | RawTraceEventPayload::CompactionRequestFailed { .. }
             | RawTraceEventPayload::CodeCellStarted { .. }
             | RawTraceEventPayload::McpToolCallCorrelationAssigned { .. }
+            | RawTraceEventPayload::StdinTargetResolved { .. }
             | RawTraceEventPayload::AgentResultObserved {
                 carried_payload: None,
                 ..
