@@ -425,6 +425,35 @@ impl Session {
             self.mark_mcp_runtime_dirty();
         }
         self.refresh_mcp_if_dirty().await;
+        // Prewarm and other context-only captures must not start cloud discovery.
+        let is_active_regular_turn = {
+            let active_turn = self.active_turn.lock().await;
+            active_turn
+                .as_ref()
+                .and_then(|turn| turn.task.as_ref())
+                .is_some_and(|task| {
+                    task.kind == TaskKind::Regular
+                        && task.turn_context.sub_id == turn_context.sub_id
+                })
+        };
+        if is_active_regular_turn {
+            // Refresh cloud catalogs without holding the MCP permit or active-turn lock.
+            for contributor in self.services.extensions.turn_lifecycle_contributors() {
+                if contributor
+                    .refresh_catalog_for_step(codex_extension_api::CatalogRefreshInput {
+                        turn_id: &turn_context.sub_id,
+                        session_store: &self.services.session_extension_data,
+                        thread_store: &self.services.thread_extension_data,
+                        turn_store: turn_context.extension_data.as_ref(),
+                    })
+                    .await
+                {
+                    // Preserve MCP updates if a later refresh is cancelled.
+                    self.mark_mcp_runtime_dirty();
+                }
+            }
+            self.refresh_mcp_if_dirty().await;
+        }
         let required_servers = required_servers
             .iter()
             .chain(&recovered_oauth_servers)

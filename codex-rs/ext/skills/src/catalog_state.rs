@@ -1,5 +1,6 @@
 //! Reusable provider catalog caches and Cloud resource contents.
 //! Provider catalogs remain unfiltered until step preparation applies policy.
+//! Cloud discovery publishes only into its current auth and resource generation.
 
 use std::collections::HashMap;
 use std::sync::Arc;

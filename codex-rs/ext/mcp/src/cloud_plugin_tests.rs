@@ -1,4 +1,4 @@
-//! Tests cloud plugin lifecycle, tool calls, scheduling, and plugin policy.
+//! Tests per-turn cloud plugin discovery, auth recovery, tool calls, and plugin policy.
 
 use super::*;
 use crate::PluginProvider;
@@ -245,6 +245,100 @@ async fn account_change_clears_hosted_plugins_before_waiting_for_executor() -> a
     Ok(())
 }
 
+#[tokio::test]
+async fn cloud_refresh_serializes_waiters_and_retries() {
+    let new_catalog = PluginCatalog::default();
+    for (reply, cancelled) in [
+        (Ok(cloud_catalog()), false),
+        (Err("discovery failed".to_string()), false),
+        (Ok(cloud_catalog()), true),
+    ] {
+        let succeeded = reply.is_ok() && !cancelled;
+        let expected_catalog = if succeeded {
+            cloud_catalog()
+        } else {
+            new_catalog.clone()
+        };
+        let provider = Arc::new(CloudProvider::default());
+        provider.set_reply(reply);
+        let contributor = PluginContributor {
+            providers: PluginProviders::new(Arc::new(ExecutorPluginProvider::new(Arc::new(
+                EnvironmentManager::default_for_tests(),
+            ))))
+            .with_cloud_provider(provider.clone()),
+        };
+        let session = ExtensionData::new("session");
+        let thread = ExtensionData::new("thread");
+        let turn = ExtensionData::new("turn");
+        let prewarm_turn = ExtensionData::new("prewarm");
+        let input = CatalogRefreshInput {
+            turn_id: "turn",
+            session_store: &session,
+            thread_store: &thread,
+            turn_store: &turn,
+        };
+        let state = thread.get_or_init(PluginsThreadState::default);
+        state.contributor_state().plugins_enabled = true;
+
+        // A delayed prewarm waits without superseding the real turn's request.
+        provider.pause_discovery.store(true, Ordering::SeqCst);
+        let mut turn_start = contributor.refresh_catalog_for_step(input);
+        assert!(futures::poll!(&mut turn_start).is_pending());
+        let prewarm_input = CatalogRefreshInput {
+            turn_id: "prewarm",
+            turn_store: &prewarm_turn,
+            ..input
+        };
+        let mut prewarm = contributor.refresh_catalog_for_step(prewarm_input);
+        assert!(futures::poll!(&mut prewarm).is_pending());
+        let mut cancelled_waiter = contributor.refresh_catalog_for_step(prewarm_input);
+        assert!(futures::poll!(&mut cancelled_waiter).is_pending());
+        drop(cancelled_waiter);
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+
+        provider.set_reply(Ok(new_catalog.clone()));
+        if cancelled {
+            drop(turn_start);
+        } else {
+            provider.resume_discovery.notify_one();
+            assert_eq!(turn_start.await, succeeded);
+        }
+        // Reuse a successful refresh; failure/cancellation releases the gate for retry.
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), prewarm)
+                .await
+                .expect("waiting discovery should complete after its predecessor stops"),
+            !succeeded,
+        );
+        assert_eq!(state.cloud_catalog(), Some(expected_catalog.clone()));
+        assert!(!contributor.refresh_catalog_for_step(prewarm_input).await);
+        assert_eq!(
+            provider.calls.load(Ordering::SeqCst),
+            1 + usize::from(!succeeded),
+        );
+
+        // Retained catalogs do not need MCP rebuilding after failed retries.
+        prewarm_turn.remove::<LatestCloudPluginAuth>();
+        provider.set_reply(Err("discovery failed".to_string()));
+        let previous_calls = provider.calls.load(Ordering::SeqCst);
+        for _ in 0..2 {
+            assert!(!contributor.refresh_catalog_for_step(prewarm_input).await);
+            assert_eq!(state.cloud_catalog(), Some(expected_catalog.clone()));
+        }
+        assert_eq!(provider.calls.load(Ordering::SeqCst), previous_calls + 2);
+
+        // Clearing an old auth scope still requires rebuilding, even on failure.
+        session.insert(McpResourceClient::new(Arc::new(
+            codex_mcp::McpRuntime::empty(/*prefix_mcp_tool_names*/ false),
+        )));
+        assert!(contributor.refresh_catalog_for_step(prewarm_input).await);
+        assert_eq!(state.cloud_catalog(), None);
+        assert!(!contributor.refresh_catalog_for_step(prewarm_input).await);
+        provider.set_reply(Ok(new_catalog.clone()));
+        assert!(contributor.refresh_catalog_for_step(prewarm_input).await);
+    }
+}
+
 struct CloudProvider {
     reply: Mutex<Result<PluginCatalog, String>>,
     calls: AtomicUsize,
@@ -380,6 +474,8 @@ fn cloud_catalog_refreshes_per_turn_and_invalidates_on_auth_change() -> anyhow::
 }
 
 async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+
     let server = responses::start_mock_server().await;
     // Each account has a fixed inventory; only the auth switch changes the server's tools.
     let apps_tools = Arc::new(Mutex::new(vec![app_tool("calendar", "list_events")]));
@@ -564,6 +660,7 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
         ),
     ] {
         let previous_discoveries = provider.calls.load(Ordering::SeqCst);
+        let retry_discovery = reply.is_err() || turn == "in-flight-auth-change";
         if let Some(account) = new_account {
             // Do not manually refresh MCP: the auth transition must pick up this new inventory.
             *apps_tools
@@ -651,19 +748,21 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
                             /*chatgpt_plan_type*/ None,
                         )?;
                         test.thread_manager.auth_manager().reload().await;
+                        // Auth must be published while cloud discovery remains paused.
                         while resources
                             .auth_cache_key_for_server(codex_mcp::CODEX_APPS_MCP_SERVER_NAME)
                             == previous_auth
                         {
                             tokio::task::yield_now().await;
                         }
+                        provider.set_reply(Err("new-scope discovery failed".to_string()));
                         provider.resume_discovery.notify_one();
                         anyhow::Ok(())
                     }
                 )
             })
             .await??;
-            // The old request must not republish its catalog after credentials change.
+            // Refresh under the new auth without retaining the old catalog.
             let state = test
                 .codex
                 .thread_extension_data()
@@ -740,7 +839,7 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
         );
         assert_eq!(
             provider.calls.load(Ordering::SeqCst),
-            previous_discoveries + 1,
+            previous_discoveries + 1 + if retry_discovery { requests.len() } else { 0 },
             "turn {turn}"
         );
     }

@@ -33,6 +33,15 @@ pub struct TurnStartInput<'a> {
     pub turn_store: &'a ExtensionData,
 }
 
+/// Inputs for refreshing catalogs before a model step.
+#[derive(Clone, Copy)]
+pub struct CatalogRefreshInput<'a> {
+    pub turn_id: &'a str,
+    pub session_store: &'a ExtensionData,
+    pub thread_store: &'a ExtensionData,
+    pub turn_store: &'a ExtensionData,
+}
+
 /// Input supplied when the host completes a turn.
 pub struct TurnStopInput<'a> {
     /// Store scoped to the host session runtime.

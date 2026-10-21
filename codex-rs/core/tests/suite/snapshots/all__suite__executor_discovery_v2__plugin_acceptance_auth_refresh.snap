@@ -1,0 +1,30 @@
+---
+source: core/tests/suite/executor_discovery_v2.rs
+expression: "context_snapshot::format_context_snapshot(\"Mid-turn auth refresh preserves skill context and executor access. Revoking the plugin removes cloud skill instructions and denies executor reads.\",\n&bodies.iter().map(context_snapshot::SnapshotEntry::body).collect::<Vec<_>>(),\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: Mid-turn auth refresh preserves skill context and executor access. Revoking the plugin removes cloud skill instructions and denies executor reads.
+
+## Window 1
+-- request 1 (request) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[4]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <APPS_INSTRUCTIONS>
+    [03] <PLUGINS_INSTRUCTIONS>
+    [04] <SKILLS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Inspect the accepted plugin skill.
+-- request 2 (request) --
+04:function_call/skills.read:{"package":"skill://inert-sentinel@market/inert-sentinel"}
+05:function_call_output:{"contents":"# Sentinel instructions from the captured executor","installations":[{"environment_id":"rem...ill://inert-sentinel@market/inert-sentinel/SKILL.md"} [hash=4b2e6fc42721d90a]
+-- request 3 (request) --
+06:function_call/skills.read:{"package":"skill://inert-sentinel@market/inert-sentinel"}
+07:function_call_output:{"contents":"# Sentinel instructions from the captured executor","installations":[{"environment_id":"rem...ill://inert-sentinel@market/inert-sentinel/SKILL.md"} [hash=4b2e6fc42721d90a]
+08:message/developer:
+    <SKILLS_INSTRUCTIONS>
+-- request 4 (request) --
+09:function_call/skills.read:{"package":"skill://inert-sentinel@market/inert-sentinel"}
+10:function_call_output:skill package is not available

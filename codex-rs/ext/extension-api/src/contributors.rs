@@ -61,6 +61,7 @@ pub use tool_lifecycle::ToolTimingBoundary;
 pub use tool_lifecycle::ToolTimingInput;
 pub use turn_input::TurnInputContext;
 pub use turn_input::TurnInputEnvironment;
+pub use turn_lifecycle::CatalogRefreshInput;
 pub use turn_lifecycle::TurnAbortInput;
 pub use turn_lifecycle::TurnErrorInput;
 pub use turn_lifecycle::TurnStartInput;
@@ -234,6 +235,14 @@ pub trait TurnLifecycleContributor: Send + Sync {
             let _self = self;
             let _input = input;
         })
+    }
+
+    /// Refreshes catalogs before a step; returns true when MCP needs rebuilding.
+    fn refresh_catalog_for_step<'a>(
+        &'a self,
+        _input: CatalogRefreshInput<'a>,
+    ) -> ExtensionFuture<'a, bool> {
+        Box::pin(async { false })
     }
 
     /// Observes a completed item without changing it or delaying streamed deltas.

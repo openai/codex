@@ -1,4 +1,4 @@
-//! Cloud catalog reuse, refresh, and auth-scoped retention through real Core turns.
+//! Cloud catalog reuse, refresh retries, and auth-scoped retention through real Core turns.
 
 use super::*;
 use codex_extension_api::ThreadLifecycleContributor;
@@ -91,6 +91,8 @@ impl ThreadLifecycleContributor<Config> for SessionResources {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() -> Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+
     let server = responses::start_mock_server().await;
     let apps = AppsTestServer::mount(&server).await?;
     let calendar = ("calendar", 1);
@@ -130,6 +132,7 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
         });
     let test = builder.build_with_auto_env(&server).await?;
     let mut last_available_skill = calendar;
+    // Retry turn-start failures before each model step.
     for (turn, next_reply, expected_skill, new_account, expected_lists, expected_reads) in [
         ("discovered", Ok(Some(calendar)), Some(calendar), None, 1, 1),
         (
@@ -153,7 +156,7 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
             Err(()),
             Some(updated_calendar),
             None,
-            1,
+            3,
             0,
         ),
         ("removed", Ok(None), None, None, 1, 0),
@@ -171,7 +174,7 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
             Err(()),
             None,
             Some("account-b"),
-            1,
+            3,
             0,
         ),
         (
@@ -187,7 +190,7 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
             Err(()),
             Some(gmail),
             None,
-            1,
+            3,
             0,
         ),
         (

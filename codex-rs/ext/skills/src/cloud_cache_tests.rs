@@ -1,4 +1,4 @@
-//! Regression tests for cloud cache generation isolation and late completion.
+//! Tests cloud cache isolation, refresh retries, and late completion.
 
 use super::*;
 use crate::catalog::SkillCatalogEntry;
@@ -8,7 +8,13 @@ use crate::provider::SkillProvider;
 use crate::provider::SkillProviderFuture;
 use crate::provider::SkillReadContext;
 use crate::provider::SkillSearchRequest;
+use codex_extension_api::CatalogRefreshInput;
+use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionEventSink;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ExtensionWarning;
 use codex_mcp::McpRuntime;
+use codex_protocol::protocol::Event;
 use pretty_assertions::assert_eq;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
@@ -18,6 +24,8 @@ use tokio::sync::Notify;
 #[derive(Default)]
 struct Provider {
     reads: AtomicUsize,
+    lists: AtomicUsize,
+    fail_list: AtomicBool,
     partial_list: AtomicBool,
     next_catalog: Mutex<Option<SkillCatalog>>,
     pause_read: AtomicBool,
@@ -29,16 +37,21 @@ struct Provider {
 impl SkillProvider for Provider {
     fn list(&self, _query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
         Box::pin(async move {
+            self.lists.fetch_add(1, Ordering::SeqCst);
+            let fail = self.fail_list.swap(false, Ordering::SeqCst);
+            let catalog = self
+                .next_catalog
+                .lock()
+                .expect("test provider catalog mutex should not be poisoned")
+                .take();
             if self.pause_list.swap(false, Ordering::SeqCst) {
                 self.entered.notify_one();
                 self.resume.notified().await;
             }
-            if let Some(catalog) = self
-                .next_catalog
-                .lock()
-                .expect("test provider catalog mutex should not be poisoned")
-                .take()
-            {
+            if fail {
+                return Err(SkillProviderError::new("discovery failed"));
+            }
+            if let Some(catalog) = catalog {
                 return Ok(catalog);
             }
             let is_partial = self.partial_list.swap(false, Ordering::SeqCst);
@@ -135,10 +148,18 @@ async fn frozen_cloud_catalog_and_reads_ignore_live_mcp_changes() {
     )
     .expect("frozen cloud skill fixture should be valid");
     let providers = SkillProviders::new().with_cloud_provider(Arc::new(provider));
+    let turn_store = ExtensionData::new("turn");
     state
-        .refresh_cloud_catalog(&providers, query(Some(client())))
+        .refresh_cloud_catalog(&providers, query(Some(client())), &turn_store)
         .await
         .expect("cloud catalog refresh should succeed");
+    assert!(
+        turn_store
+            .get::<LatestCloudSkillsAuth>()
+            .expect("successful discovery should record its auth scope")
+            .0
+            .is_none()
+    );
     let catalog = state
         .available_cloud_catalog()
         .expect("cloud catalog should be available after refresh");
@@ -166,7 +187,7 @@ async fn frozen_cloud_catalog_and_reads_ignore_live_mcp_changes() {
             }
         );
         state
-            .refresh_cloud_catalog(&providers, query(mcp_resources))
+            .refresh_cloud_catalog(&providers, query(mcp_resources), &turn_store)
             .await
             .expect("cloud catalog refresh should succeed");
         assert_eq!(state.available_cloud_catalog(), Some(catalog.clone()));
@@ -184,6 +205,150 @@ async fn frozen_cloud_catalog_and_reads_ignore_live_mcp_changes() {
 }
 
 #[tokio::test]
+async fn step_cloud_refresh_serializes_waiters_and_retries() {
+    #[derive(Default)]
+    struct WarningCounter(AtomicUsize);
+
+    impl ExtensionEventSink for WarningCounter {
+        fn emit(&self, _event: Event) {}
+
+        fn emit_warning(&self, _warning: ExtensionWarning) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let cloud = Arc::new(Provider::default());
+    let providers = SkillProviders::new().with_cloud_provider(cloud.clone());
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    thread_store.insert(state());
+    let thread_state = thread_store
+        .get::<SkillsThreadState>()
+        .expect("skills thread state should be initialized");
+    let turn_store = ExtensionData::new("turn");
+    let config = thread_state.config();
+    let warnings = Arc::new(WarningCounter::default());
+    let mut builder = ExtensionRegistryBuilder::with_event_sink(warnings.clone());
+    crate::install_with_providers(&mut builder, providers, move |_: &()| config.clone());
+    let registry = builder.build();
+    let contributor = registry
+        .turn_lifecycle_contributors()
+        .iter()
+        .find(|contributor| contributor.requires_mcp_runtime(&thread_store))
+        .expect("cloud skills contributor should be registered");
+    let refresh_input = CatalogRefreshInput {
+        turn_id: "turn",
+        session_store: &session_store,
+        thread_store: &thread_store,
+        turn_store: &turn_store,
+    };
+
+    // Retry every failure, but warn only once during the turn.
+    for expected_calls in 1..=3 {
+        cloud.fail_list.store(true, Ordering::SeqCst);
+        assert!(!contributor.refresh_catalog_for_step(refresh_input).await);
+        assert_eq!(thread_state.available_cloud_catalog(), None);
+        assert_eq!(cloud.lists.load(Ordering::SeqCst), expected_calls);
+        assert_eq!(warnings.0.load(Ordering::SeqCst), 1);
+    }
+    cloud.pause_list.store(true, Ordering::SeqCst);
+    let mut cancelled = contributor.refresh_catalog_for_step(refresh_input);
+    assert!(futures::poll!(&mut cancelled).is_pending());
+    drop(cancelled);
+    *cloud
+        .next_catalog
+        .lock()
+        .expect("test provider catalog mutex should not be poisoned") =
+        Some(SkillCatalog::default());
+    assert!(!contributor.refresh_catalog_for_step(refresh_input).await);
+    assert!(!contributor.refresh_catalog_for_step(refresh_input).await);
+    assert_eq!(cloud.lists.load(Ordering::SeqCst), 5);
+
+    // Waiting callers reuse success, but retry a failed or cancelled discovery.
+    for (fails, cancelled) in [(false, false), (true, false), (false, true)] {
+        session_store.insert(SkillsSessionState {
+            mcp_resources: Some(client()),
+            extension_metrics: None,
+        });
+        let previous_calls = cloud.lists.load(Ordering::SeqCst);
+        let prewarm_store = ExtensionData::new("prewarm");
+        let first_catalog = SkillCatalog {
+            warnings: vec!["catalog warning".into()],
+            ..Default::default()
+        };
+        *cloud
+            .next_catalog
+            .lock()
+            .expect("test provider catalog mutex should not be poisoned") =
+            Some(first_catalog.clone());
+        cloud.fail_list.store(fails, Ordering::SeqCst);
+        cloud.pause_list.store(true, Ordering::SeqCst);
+        let mut turn_start = contributor.refresh_catalog_for_step(refresh_input);
+        assert!(futures::poll!(&mut turn_start).is_pending());
+        let prewarm_input = CatalogRefreshInput {
+            turn_id: "prewarm",
+            turn_store: &prewarm_store,
+            ..refresh_input
+        };
+        let mut prewarm = contributor.refresh_catalog_for_step(prewarm_input);
+        assert!(futures::poll!(&mut prewarm).is_pending());
+        let mut cancelled_waiter = contributor.refresh_catalog_for_step(prewarm_input);
+        assert!(futures::poll!(&mut cancelled_waiter).is_pending());
+        drop(cancelled_waiter);
+        assert_eq!(cloud.lists.load(Ordering::SeqCst), previous_calls + 1);
+        *cloud
+            .next_catalog
+            .lock()
+            .expect("test provider catalog mutex should not be poisoned") =
+            Some(SkillCatalog::default());
+        if cancelled {
+            drop(turn_start);
+        } else {
+            cloud.resume.notify_one();
+            assert!(!turn_start.await);
+        }
+        assert!(
+            !tokio::time::timeout(std::time::Duration::from_secs(5), prewarm)
+                .await
+                .expect("waiting discovery should complete after its predecessor stops")
+        );
+        assert_eq!(
+            thread_state.available_cloud_catalog(),
+            Some(if fails || cancelled {
+                SkillCatalog::default()
+            } else {
+                first_catalog
+            })
+        );
+        assert!(!contributor.refresh_catalog_for_step(prewarm_input).await);
+        assert!(!contributor.refresh_catalog_for_step(refresh_input).await);
+        assert_eq!(
+            cloud.lists.load(Ordering::SeqCst),
+            previous_calls + 1 + usize::from(fails || cancelled)
+        );
+        assert_eq!(warnings.0.load(Ordering::SeqCst), 1);
+    }
+
+    // A fresh turn may warn again while discovery remains unavailable.
+    session_store.insert(SkillsSessionState {
+        mcp_resources: Some(client()),
+        extension_metrics: None,
+    });
+    cloud.fail_list.store(true, Ordering::SeqCst);
+    let next_turn = ExtensionData::new("next turn");
+    assert!(
+        !contributor
+            .refresh_catalog_for_step(CatalogRefreshInput {
+                turn_id: "next turn",
+                turn_store: &next_turn,
+                ..refresh_input
+            })
+            .await
+    );
+    assert_eq!(warnings.0.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn late_read_cannot_return_or_populate_a_replaced_cache() {
     for replacement in [Some(client()), None] {
         let state = state();
@@ -196,7 +361,11 @@ async fn late_read_cannot_return_or_populate_a_replaced_cache() {
         let (late, ()) = tokio::join!(state.read_skill(&providers, request(original)), async {
             provider.entered.notified().await;
             state
-                .refresh_cloud_catalog(&providers, query(replacement.clone()))
+                .refresh_cloud_catalog(
+                    &providers,
+                    query(replacement.clone()),
+                    &ExtensionData::new("turn"),
+                )
                 .await
                 .expect("cloud catalog refresh should succeed");
             provider.resume.notify_one();
@@ -219,8 +388,9 @@ async fn late_discovery_cannot_publish_into_a_new_generation() {
     let provider = Arc::new(Provider::default());
     let providers = SkillProviders::new().with_cloud_provider(provider.clone());
     provider.pause_list.store(true, Ordering::SeqCst);
+    let turn_store = ExtensionData::new("turn");
     let (late, ()) = tokio::join!(
-        state.refresh_cloud_catalog(&providers, query(Some(client()))),
+        state.refresh_cloud_catalog(&providers, query(Some(client())), &turn_store),
         async {
             provider.entered.notified().await;
             state
@@ -231,7 +401,8 @@ async fn late_discovery_cannot_publish_into_a_new_generation() {
             provider.resume.notify_one();
         }
     );
-    assert!(late.is_err());
+    late.expect("superseded discovery should be discarded without an error");
+    assert!(turn_store.get::<LatestCloudSkillsAuth>().is_none());
     assert!(
         state
             .catalog_state
@@ -250,12 +421,19 @@ async fn partial_cloud_catalog_without_warnings_is_refreshed_next_turn() {
     let state = state();
     let provider = Arc::new(Provider::default());
     provider.partial_list.store(true, Ordering::SeqCst);
-    let providers = SkillProviders::new().with_cloud_provider(provider);
+    let providers = SkillProviders::new().with_cloud_provider(provider.clone());
     let client = Some(client());
+    let turn_store = ExtensionData::new("turn");
     state
-        .refresh_cloud_catalog(&providers, query(client.clone()))
+        .refresh_cloud_catalog(&providers, query(client.clone()), &turn_store)
         .await
         .expect("cloud catalog refresh should succeed");
+    // Reuse partial catalogs for the rest of the turn.
+    state
+        .refresh_cloud_catalog(&providers, query(client.clone()), &turn_store)
+        .await
+        .expect("cloud catalog refresh should succeed");
+    assert_eq!(provider.lists.load(Ordering::SeqCst), 1);
     assert_eq!(
         state
             .available_cloud_catalog()
@@ -266,7 +444,11 @@ async fn partial_cloud_catalog_without_warnings_is_refreshed_next_turn() {
         }
     );
     state
-        .refresh_cloud_catalog(&providers, query(client))
+        .refresh_cloud_catalog(
+            &providers,
+            query(client.clone()),
+            &ExtensionData::new("next turn"),
+        )
         .await
         .expect("cloud catalog refresh should succeed");
     assert_eq!(
@@ -279,6 +461,22 @@ async fn partial_cloud_catalog_without_warnings_is_refreshed_next_turn() {
             ..Default::default()
         }
     );
+    // Retry failures even when the previous catalog remains available.
+    let retry_turn = ExtensionData::new("retry turn");
+    provider.fail_list.store(true, Ordering::SeqCst);
+    assert!(
+        state
+            .refresh_cloud_catalog(&providers, query(client.clone()), &retry_turn)
+            .await
+            .is_err()
+    );
+    assert!(state.available_cloud_catalog().is_some());
+    assert!(retry_turn.get::<LatestCloudSkillsAuth>().is_none());
+    state
+        .refresh_cloud_catalog(&providers, query(client), &retry_turn)
+        .await
+        .expect("cloud catalog refresh should succeed");
+    assert_eq!(provider.lists.load(Ordering::SeqCst), 4);
 }
 
 #[tokio::test]
@@ -309,7 +507,11 @@ async fn cloud_refresh_preserves_complete_catalogs_only_within_the_same_auth_sco
                     .expect("test provider catalog mutex should not be poisoned") =
                     Some(previous.clone());
                 state
-                    .refresh_cloud_catalog(&providers, query(Some(original_client.clone())))
+                    .refresh_cloud_catalog(
+                        &providers,
+                        query(Some(original_client.clone())),
+                        &ExtensionData::new("turn"),
+                    )
                     .await
                     .expect("cloud catalog refresh should succeed");
                 let generation = state
@@ -336,7 +538,11 @@ async fn cloud_refresh_preserves_complete_catalogs_only_within_the_same_auth_sco
                     original_client
                 };
                 state
-                    .refresh_cloud_catalog(&providers, query(Some(current_client.clone())))
+                    .refresh_cloud_catalog(
+                        &providers,
+                        query(Some(current_client.clone())),
+                        &ExtensionData::new("next turn"),
+                    )
                     .await
                     .expect("cloud catalog refresh should succeed");
                 let retained = !changed_auth && !previous_partial && incoming_partial;

@@ -1,4 +1,4 @@
-//! Turn-start MCP reconciliation and cooperative discovery cancellation regressions.
+//! Turn-start MCP reconciliation, discovery cancellation, and prewarm refresh boundaries.
 
 use super::*;
 use codex_mcp::McpResourceClient;
@@ -37,6 +37,13 @@ impl codex_extension_api::TurnLifecycleContributor for Recorder {
             std::future::pending::<()>().await;
         })
     }
+
+    fn refresh_catalog_for_step<'a>(
+        &'a self,
+        _input: codex_extension_api::CatalogRefreshInput<'a>,
+    ) -> codex_extension_api::ExtensionFuture<'a, bool> {
+        panic!("prewarm must not start cloud discovery");
+    }
 }
 
 #[tokio::test]
@@ -48,12 +55,18 @@ async fn turn_start_refreshes_dirty_mcp_reuses_clean_runtime_and_cancels_discove
         keys: Default::default(),
         discovered: Default::default(),
     });
-    let initial_key = recorder.client.cache_key();
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
     builder.turn_lifecycle_contributor(recorder.clone());
     session.services.extensions = Arc::new(builder.build());
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
+    let prewarm = session
+        .new_startup_prewarm_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
+        .await;
+    session
+        .mcp_runtime_for_step(&prewarm, &[], &[], &HashSet::new())
+        .await;
+    let initial_key = recorder.client.cache_key();
 
     for turn in 0..4 {
         recorder
@@ -97,6 +110,10 @@ async fn turn_start_refreshes_dirty_mcp_reuses_clean_runtime_and_cancels_discove
                         .unwrap_or_else(std::sync::PoisonError::into_inner)[turn],
                 "a clean refresh must reuse the published MCP runtime"
             );
+            // Prewarm must also skip discovery while a regular turn is active.
+            session
+                .mcp_runtime_for_step(&prewarm, &[], &[], &HashSet::new())
+                .await;
         }
         let (cancellation_token, done) = {
             let active_turn = session.active_turn.lock().await;

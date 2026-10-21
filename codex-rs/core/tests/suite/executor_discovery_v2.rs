@@ -1,10 +1,17 @@
-//! Verifies V2 discovery gating, turn integration, and cache behavior.
+//! Verifies V2 discovery, plugin acceptance across auth changes, and cache behavior.
 
 use anyhow::Context;
 use anyhow::Result;
 use codex_core::config::Config;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_core_plugins::ExecutorPluginProvider;
+use codex_core_plugins::PluginCatalog;
+use codex_core_plugins::PluginCatalogEntry;
 use codex_core_plugins::PluginIdentity;
+use codex_core_plugins::PluginListQuery;
+use codex_core_plugins::PluginProvider;
+use codex_core_plugins::PluginProviderFuture;
+use codex_core_plugins::PluginSourceLocation;
 use codex_exec_server::DiscoverV2CapabilitiesResponse;
 use codex_exec_server::ExecutorCapabilityDiscoveryV2Cache;
 use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
@@ -17,10 +24,33 @@ use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
 use codex_extension_api::SelectedPluginSnapshot;
+use codex_extension_api::ToolFinishInput;
+use codex_extension_api::ToolLifecycleContributor;
+use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
 use codex_features::Feature;
+use codex_login::CodexAuth;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::McpResourceClient;
+use codex_mcp_extension::PluginProviders;
+use codex_mcp_extension::install_plugin_providers;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
+use codex_skills_extension::ExecutorSkillProvider;
+use codex_skills_extension::SkillProviders;
+use codex_skills_extension::SkillsExtensionConfig;
+use codex_skills_extension::catalog::SkillAuthority;
+use codex_skills_extension::catalog::SkillCatalog;
+use codex_skills_extension::catalog::SkillCatalogEntry;
+use codex_skills_extension::catalog::SkillPackageId;
+use codex_skills_extension::catalog::SkillResourceId;
+use codex_skills_extension::catalog::SkillSourceKind;
+use codex_skills_extension::install_with_providers;
+use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::apps_enabled_builder;
+use core_test_support::context_snapshot;
+use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
@@ -30,10 +60,14 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::task::AbortOnDropHandle;
@@ -156,6 +190,7 @@ impl ContextContributor for DiscoveryRecorder {
 
 struct Executor {
     url: String,
+    inventory: Arc<Mutex<Option<Value>>>,
     requests: Arc<Mutex<Vec<Value>>>,
     _task: AbortOnDropHandle<Result<()>>,
 }
@@ -172,6 +207,8 @@ impl Executor {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("ws://{}", listener.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
+        let inventory = Arc::new(Mutex::new(None::<Value>));
+        let served_inventory = Arc::clone(&inventory);
         let recorded = Arc::clone(&requests);
         let discovery_attempts = Arc::new(AtomicUsize::new(0));
         let http = codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)?
@@ -180,6 +217,7 @@ impl Executor {
             let mut connections = tokio::task::JoinSet::new();
             while let Ok((stream, _)) = listener.accept().await {
                 let recorded = Arc::clone(&recorded);
+                let inventory = Arc::clone(&served_inventory);
                 let discovery_attempts = Arc::clone(&discovery_attempts);
                 let http = Arc::clone(&http);
                 connections.spawn(async move {
@@ -234,7 +272,7 @@ impl Executor {
                                 "roots": request["params"]["roots"].as_array().context("V1 roots")?
                                     .iter().map(|root| json!({"id":root["id"],"path":root["path"]})).collect::<Vec<_>>()
                             })),
-                            Some("capabilities/discoverV2") => Some(json!({
+                            Some("capabilities/discoverV2") => Some(inventory.lock().await.clone().unwrap_or_else(|| json!({
                                 "plugins":[{"id":"inert-sentinel@market","displayName":"inert-sentinel","remotePluginId":null,
                                     "version":"1","root":"file:///inert-sentinel",
                                     "files":{"manifest":{"path":"file:///inert-sentinel/.codex-plugin/plugin.json",
@@ -246,7 +284,7 @@ impl Executor {
                                     "shortDescription":null,"path":"file:///inert-sentinel/SKILL.md",
                                     "discoveryRoot":{"id":"codex-home-skills","path":"file:///"},"metadata":null}],
                                 "warnings":[]
-                            })),
+                            }))),
                             Some("fs/open") if request["params"]["path"] == "file:///inert-sentinel/SKILL.md" => Some(json!({"handleId": request["params"]["handleId"]})),
                             Some("fs/readBlock") => Some(json!(codex_exec_server::FsReadBlockResponse {
                                 chunk: b"# Sentinel instructions from the captured executor".to_vec().into(),
@@ -270,6 +308,7 @@ impl Executor {
         });
         Ok(Self {
             url,
+            inventory,
             requests,
             _task: AbortOnDropHandle::new(task),
         })
@@ -934,5 +973,226 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
     assert!(!Arc::ptr_eq(&other, &reloaded));
     assert_eq!(other.as_ref(), reloaded.as_ref());
 
+    Ok(())
+}
+
+struct Cloud {
+    available: AtomicBool,
+    ready: mpsc::UnboundedSender<(Arc<McpResourceClient>, oneshot::Sender<()>)>,
+}
+
+impl PluginProvider for Cloud {
+    fn list(&self, _query: PluginListQuery) -> PluginProviderFuture<'_, PluginCatalog> {
+        Box::pin(async move {
+            Ok(PluginCatalog {
+                entries: if !self.available.load(Ordering::SeqCst) {
+                    Vec::new()
+                } else {
+                    vec![PluginCatalogEntry {
+                        id: PluginIdentity::Remote {
+                            remote_plugin_id: "plugin_demo".into(),
+                        },
+                        enabled: true,
+                        display_name: "Demo".into(),
+                        version: "1".into(),
+                        mcp_servers: Default::default(),
+                        connector_ids: Vec::new(),
+                        locations: vec![PluginSourceLocation::Cloud {
+                            resource_uri: "plugin://plugin_demo".into(),
+                            bundle_uri: None,
+                        }],
+                    }]
+                },
+                ..Default::default()
+            })
+        })
+    }
+}
+
+impl ToolLifecycleContributor for Cloud {
+    fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            let (resume, wait) = oneshot::channel();
+            let client = input
+                .session_store
+                .get::<McpResourceClient>()
+                .expect("MCP resource client should be installed");
+            self.ready.send((client, resume)).expect("step observer");
+            wait.await.expect("resume after auth rotation");
+        })
+    }
+}
+
+/// Auth refresh updates plugin acceptance before merging skills and capturing the next step.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let executor = Executor::start(/*supports_v2*/ true, DiscoveryFailure::None).await?;
+    *executor.inventory.lock().await = Some(json!({
+        "plugins":[{"id":"inert-sentinel@market","displayName":"inert-sentinel","remotePluginId":"plugin_demo",
+            "version":"1","root":"file:///inert-sentinel",
+            "files":{"manifest":{"path":"file:///inert-sentinel/.codex-plugin/plugin.json",
+                "contents":"{\"name\":\"inert-sentinel\"}"},"mcpConfig":null,"appsConfig":null},
+            "skills":[{"name":"inert-sentinel","description":"Executor skill used by the acquisition test",
+                "shortDescription":null,"path":"file:///inert-sentinel/SKILL.md",
+                "discoveryRoot":{"id":"codex-home-skills","path":"file:///"},"metadata":null}]}],
+        "skills":[],"warnings":[]
+    }));
+    let server = responses::start_mock_server().await;
+    let apps = AppsTestServer::mount(&server).await?;
+    let (ready, mut steps) = mpsc::unbounded_channel();
+    let cloud = Arc::new(Cloud {
+        available: AtomicBool::new(true),
+        ready,
+    });
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.tool_lifecycle_contributor(cloud.clone());
+    let manager = Arc::new(codex_exec_server::EnvironmentManager::default_for_tests());
+    install_plugin_providers(
+        &mut extensions,
+        PluginProviders::new(Arc::new(ExecutorPluginProvider::new(manager.clone())))
+            .with_cloud_provider(cloud.clone()),
+    );
+    install_with_providers(
+        &mut extensions,
+        SkillProviders::new()
+            // Keep listing the skill after its owning plugin disappears.
+            .with_cloud_provider(Arc::new(super::skills_extension::CatalogSkillProvider {
+                catalog: SkillCatalog {
+                    entries: vec![
+                        SkillCatalogEntry::new(
+                            SkillPackageId("skill://plugin_demo/demo".into()),
+                            SkillAuthority::new(SkillSourceKind::Cloud, CODEX_APPS_MCP_SERVER_NAME),
+                            "inert-sentinel",
+                            "Accepted plugin skill",
+                            SkillResourceId::new("skill://plugin_demo/demo/SKILL.md"),
+                        )
+                        .with_remote_plugin_id(Some("plugin_demo".into())),
+                    ],
+                    ..Default::default()
+                },
+            }))
+            .with_executor_provider(Arc::new(
+                ExecutorSkillProvider::new_with_restriction_product(
+                    manager, /*restriction_product*/ None,
+                ),
+            )),
+        |_config: &Config| SkillsExtensionConfig {
+            include_instructions: true,
+            max_context_tokens: None,
+            bundled_skills_enabled: false,
+            cloud_skill_enabled: true,
+            shadow_selection_enabled: false,
+        },
+    );
+    // Rotate auth, revoke the owning plugin, then reuse the revoked state.
+    let cases = [
+        ("initial", true),
+        ("rotated", true),
+        ("removed", false),
+        ("removed", false),
+    ];
+    let model_responses = (0..cases.len())
+        .map(|step| {
+            let mut events = vec![responses::ev_response_created(&format!("response-{step}"))];
+            if step + 1 < cases.len() {
+                events.push(responses::ev_function_call_with_namespace(
+                    &format!("read-{step}"),
+                    "skills",
+                    "read",
+                    r#"{"package":"skill://inert-sentinel@market/inert-sentinel"}"#,
+                ));
+            }
+            events.push(responses::ev_completed(&format!("response-{step}")));
+            responses::sse(events)
+        })
+        .collect::<Vec<_>>();
+    let model = responses::mount_sse_sequence(&server, model_responses).await;
+    let test = apps_enabled_builder(apps.chatgpt_base_url)
+        .with_exec_server_url(executor.url.clone())
+        .with_auth(CodexAuth::from_external_chatgpt_tokens(
+            "header.e30.initial",
+            "account",
+            /*chatgpt_plan_type*/ None,
+        )?)
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(move |config| {
+            config.cloud_skill_enabled = true;
+            config.features.enable(Feature::Plugins).unwrap();
+            config
+                .features
+                .enable(Feature::ExecutorCapabilityDiscoveryV2)
+                .unwrap();
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let rotate = async {
+        for (index, &(revision, available)) in cases.iter().enumerate().skip(1) {
+            let (client, resume) = tokio::time::timeout(Duration::from_secs(15), steps.recv())
+                .await?
+                .expect("tool completion");
+            cloud.available.store(available, Ordering::SeqCst);
+            let previous = client.auth_cache_key_for_server(CODEX_APPS_MCP_SERVER_NAME);
+            if revision != cases[index - 1].0 {
+                codex_login::auth::login_with_chatgpt_auth_tokens(
+                    test.codex_home_path(),
+                    &format!("header.e30.{revision}"),
+                    "account",
+                    /*chatgpt_plan_type*/ None,
+                )?;
+                test.thread_manager.auth_manager().reload().await;
+                tokio::time::timeout(Duration::from_secs(15), async {
+                    while client.auth_cache_key_for_server(CODEX_APPS_MCP_SERVER_NAME) == previous {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await?;
+            }
+            resume.send(()).expect("resume next model step");
+        }
+        anyhow::Ok(())
+    };
+    tokio::try_join!(
+        test.submit_turn("Inspect the accepted plugin skill."),
+        rotate
+    )?;
+    let requests = model.requests();
+    assert_eq!(requests.len(), cases.len());
+    for (request, (_, available)) in requests.iter().zip(cases) {
+        let instructions = request.message_input_texts("developer");
+        let skills = instructions
+            .iter()
+            .rfind(|text| text.starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG))
+            .expect("latest skill instructions");
+        assert_eq!(skills.contains("Accepted plugin skill"), available);
+    }
+    let mut bodies = requests
+        .iter()
+        .map(responses::ResponsesRequest::body_json)
+        .collect::<Vec<_>>();
+    // Normalize JSON ordering for the request-history snapshot.
+    for body in &mut bodies {
+        for item in body["input"].as_array_mut().unwrap() {
+            if item["type"] == "function_call_output"
+                && let Ok(mut output) =
+                    serde_json::from_str::<Value>(item["output"].as_str().unwrap())
+            {
+                output.sort_all_objects();
+                item["output"] = Value::String(output.to_string());
+            }
+        }
+    }
+    insta::assert_snapshot!(
+        "plugin_acceptance_auth_refresh",
+        context_snapshot::format_context_snapshot(
+            "Mid-turn auth refresh preserves skill context and executor access. Revoking the plugin removes cloud skill instructions and denies executor reads.",
+            &bodies
+                .iter()
+                .map(context_snapshot::SnapshotEntry::body)
+                .collect::<Vec<_>>(),
+            &ContextSnapshotOptions::default().rewrite_known_segments(),
+        )
+    );
     Ok(())
 }

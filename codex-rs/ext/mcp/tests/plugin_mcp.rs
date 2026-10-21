@@ -910,7 +910,14 @@ async fn run_cloud_plugin_projection_scenarios() -> anyhow::Result<()> {
         );
         assert_eq!(
             cloud.calls.load(Ordering::SeqCst),
-            usize::from(cloud_enabled),
+            if !cloud_enabled {
+                0
+            } else if cloud_available {
+                1
+            } else {
+                // Failed turn-start discovery retries before each model step.
+                1 + requests.len()
+            },
             "{case}"
         );
         let state = test
