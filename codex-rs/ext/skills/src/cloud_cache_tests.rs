@@ -19,6 +19,7 @@ use pretty_assertions::assert_eq;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tokio::sync::Notify;
 
 #[derive(Default)]
@@ -204,7 +205,7 @@ async fn frozen_cloud_catalog_and_reads_ignore_live_mcp_changes() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn step_cloud_refresh_serializes_waiters_and_retries() {
     #[derive(Default)]
     struct WarningCounter(AtomicUsize);
@@ -243,13 +244,16 @@ async fn step_cloud_refresh_serializes_waiters_and_retries() {
         turn_store: &turn_store,
     };
 
-    // Retry every failure, but warn only once during the turn.
-    for expected_calls in 1..=3 {
+    for (index, delay) in [30, 60, 120, 240, 300, 300].into_iter().enumerate() {
         cloud.fail_list.store(true, Ordering::SeqCst);
         assert!(!contributor.refresh_catalog_for_step(refresh_input).await);
         assert_eq!(thread_state.available_cloud_catalog(), None);
-        assert_eq!(cloud.lists.load(Ordering::SeqCst), expected_calls);
+        assert_eq!(cloud.lists.load(Ordering::SeqCst), index + 1);
         assert_eq!(warnings.0.load(Ordering::SeqCst), 1);
+        tokio::time::advance(Duration::from_secs(delay - 1)).await;
+        assert!(!contributor.refresh_catalog_for_step(refresh_input).await);
+        assert_eq!(cloud.lists.load(Ordering::SeqCst), index + 1);
+        tokio::time::advance(Duration::from_secs(1)).await;
     }
     cloud.pause_list.store(true, Ordering::SeqCst);
     let mut cancelled = contributor.refresh_catalog_for_step(refresh_input);
@@ -262,9 +266,9 @@ async fn step_cloud_refresh_serializes_waiters_and_retries() {
         Some(SkillCatalog::default());
     assert!(!contributor.refresh_catalog_for_step(refresh_input).await);
     assert!(!contributor.refresh_catalog_for_step(refresh_input).await);
-    assert_eq!(cloud.lists.load(Ordering::SeqCst), 5);
+    assert_eq!(cloud.lists.load(Ordering::SeqCst), 8);
 
-    // Waiting callers reuse success, but retry a failed or cancelled discovery.
+    // Waiting callers reuse success and share failures' cooldowns; cancellation allows retry.
     for (fails, cancelled) in [(false, false), (true, false), (false, true)] {
         session_store.insert(SkillsSessionState {
             mcp_resources: Some(client()),
@@ -312,6 +316,12 @@ async fn step_cloud_refresh_serializes_waiters_and_retries() {
                 .await
                 .expect("waiting discovery should complete after its predecessor stops")
         );
+        if fails {
+            assert_eq!(thread_state.available_cloud_catalog(), None);
+            assert_eq!(cloud.lists.load(Ordering::SeqCst), previous_calls + 1);
+            tokio::time::advance(Duration::from_secs(30)).await;
+            assert!(!contributor.refresh_catalog_for_step(prewarm_input).await);
+        }
         assert_eq!(
             thread_state.available_cloud_catalog(),
             Some(if fails || cancelled {
@@ -329,22 +339,40 @@ async fn step_cloud_refresh_serializes_waiters_and_retries() {
         assert_eq!(warnings.0.load(Ordering::SeqCst), 1);
     }
 
-    // A fresh turn may warn again while discovery remains unavailable.
+    // New turns share the thread's cooldown and failure progression.
     session_store.insert(SkillsSessionState {
         mcp_resources: Some(client()),
         extension_metrics: None,
     });
-    cloud.fail_list.store(true, Ordering::SeqCst);
     let next_turn = ExtensionData::new("next turn");
-    assert!(
-        !contributor
-            .refresh_catalog_for_step(CatalogRefreshInput {
-                turn_id: "next turn",
-                turn_store: &next_turn,
-                ..refresh_input
-            })
-            .await
-    );
+    let previous_calls = cloud.lists.load(Ordering::SeqCst);
+    for turn_store in [&turn_store, &next_turn] {
+        cloud.fail_list.store(true, Ordering::SeqCst);
+        assert!(
+            !contributor
+                .refresh_catalog_for_step(CatalogRefreshInput {
+                    turn_store,
+                    ..refresh_input
+                })
+                .await
+        );
+        assert_eq!(cloud.lists.load(Ordering::SeqCst), previous_calls + 1);
+    }
+    assert_eq!(warnings.0.load(Ordering::SeqCst), 1);
+    let next_input = CatalogRefreshInput {
+        turn_id: "next turn",
+        turn_store: &next_turn,
+        ..refresh_input
+    };
+    tokio::time::advance(Duration::from_secs(30)).await;
+    assert!(!contributor.refresh_catalog_for_step(next_input).await);
+    assert_eq!(cloud.lists.load(Ordering::SeqCst), previous_calls + 2);
+    tokio::time::advance(Duration::from_secs(59)).await;
+    assert!(!contributor.refresh_catalog_for_step(refresh_input).await);
+    assert_eq!(cloud.lists.load(Ordering::SeqCst), previous_calls + 2);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(!contributor.refresh_catalog_for_step(next_input).await);
+    assert_eq!(cloud.lists.load(Ordering::SeqCst), previous_calls + 3);
     assert_eq!(warnings.0.load(Ordering::SeqCst), 2);
 }
 
@@ -416,7 +444,7 @@ async fn late_discovery_cannot_publish_into_a_new_generation() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn partial_cloud_catalog_without_warnings_is_refreshed_next_turn() {
     let state = state();
     let provider = Arc::new(Provider::default());
@@ -472,6 +500,7 @@ async fn partial_cloud_catalog_without_warnings_is_refreshed_next_turn() {
     );
     assert!(state.available_cloud_catalog().is_some());
     assert!(retry_turn.get::<LatestCloudSkillsAuth>().is_none());
+    tokio::time::advance(Duration::from_secs(30)).await;
     state
         .refresh_cloud_catalog(&providers, query(client), &retry_turn)
         .await

@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use tokio::sync::Mutex as AsyncMutex;
 
 use codex_exec_server::EnvironmentAccessKey;
+use codex_extension_api::CatalogRefreshBackoff;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionMetrics;
 use codex_mcp::McpResourceClient;
@@ -97,6 +98,7 @@ impl SkillsThreadState {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             catalogs.cloud_generation = None;
+            catalogs.cloud_retry = None;
             catalogs.cloud_resources = CloudResourceCache::default();
         }
         *previous = config;
@@ -263,7 +265,7 @@ impl SkillsThreadState {
             .and_then(|cache| cache.catalog.clone())
     }
 
-    /// Reuses successful discovery within a turn; retries failures next step.
+    /// Reuses discovery within a turn; backs off failures.
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "cloud discovery must remain serialized through fetching and catalog publication"
@@ -304,8 +306,13 @@ impl SkillsThreadState {
             {
                 return Ok(());
             }
-            turn_store.remove::<LatestCloudSkillsAuth>();
             let resource_cache_key = cache.current_resource_cache_key();
+            if catalogs.cloud_retry.as_ref().is_some_and(|retry| {
+                retry.is_pending(cache.auth_cache_key.as_ref(), resource_cache_key.as_ref())
+            }) {
+                return Ok(());
+            }
+            turn_store.remove::<LatestCloudSkillsAuth>();
             if cache.is_auth_current()
                 && cache.catalog.as_ref().is_some_and(|catalog| {
                     (waited && *refresh_succeeded)
@@ -313,10 +320,11 @@ impl SkillsThreadState {
                 })
                 && cache.resource_cache_key == resource_cache_key
             {
+                catalogs.cloud_retry = None;
                 turn_store.insert(LatestCloudSkillsAuth(cache.auth_cache_key.clone()));
                 return Ok(());
             }
-            // A failed or cancelled refresh must leave waiting callers able to retry.
+            // Waiting callers must not reuse a failed or cancelled refresh.
             *refresh_succeeded = false;
             (cache, resource_cache_key)
         };
@@ -338,7 +346,18 @@ impl SkillsThreadState {
             // Ignore superseded results, including errors.
             return Ok(());
         }
-        let mut catalog = result?;
+        let mut catalog = match result {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                catalogs.cloud_retry = Some(CatalogRefreshBackoff::after_failure(
+                    cache.auth_cache_key.clone(),
+                    resource_cache_key,
+                    catalogs.cloud_retry.as_ref(),
+                ));
+                return Err(error);
+            }
+        };
+        catalogs.cloud_retry = None;
         if catalog.is_partial
             && let Some(previous) = cache
                 .catalog

@@ -40,6 +40,6 @@ codex-login = { workspace = true }
 futures = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tokio-util = { workspace = true, features = ["rt"] }
 wiremock = { workspace = true }

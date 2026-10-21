@@ -132,7 +132,7 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
         });
     let test = builder.build_with_auto_env(&server).await?;
     let mut last_available_skill = calendar;
-    // Retry turn-start failures before each model step.
+    // Back off failures across steps and turns; reconnects allow immediate recovery.
     for (turn, next_reply, expected_skill, new_account, expected_lists, expected_reads) in [
         ("discovered", Ok(Some(calendar)), Some(calendar), None, 1, 1),
         (
@@ -156,7 +156,7 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
             Err(()),
             Some(updated_calendar),
             None,
-            3,
+            1,
             0,
         ),
         ("removed", Ok(None), None, None, 1, 0),
@@ -174,9 +174,10 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
             Err(()),
             None,
             Some("account-b"),
-            3,
+            1,
             0,
         ),
+        ("new-account-cooldown", Ok(Some(gmail)), None, None, 0, 0),
         (
             "new-account-discovered",
             Ok(Some(gmail)),
@@ -190,7 +191,7 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
             Err(()),
             Some(gmail),
             None,
-            3,
+            1,
             0,
         ),
         (
@@ -207,7 +208,13 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
         *provider.reply.lock().expect("cloud reply lock") = next_reply;
         let previous_connection_scope = if matches!(
             turn,
-            "refreshed" | "same-account-failure" | "restored" | "connection-replaced-failure"
+            "refreshed"
+                | "same-account-failure"
+                | "removed"
+                | "restored"
+                | "new-account-discovered"
+                | "connection-replaced-failure"
+                | "replacement-connection-discovered"
         ) {
             let client = resources
                 .0

@@ -6,6 +6,7 @@ use crate::plugin_contributor::PluginContributor;
 use codex_core::config::Config;
 use codex_core_plugins::PluginCatalog;
 use codex_core_plugins::PluginIdentity;
+use codex_extension_api::CatalogRefreshBackoff;
 use codex_extension_api::CatalogRefreshInput;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
@@ -52,49 +53,60 @@ impl PluginContributor {
             mcp_resources: input.session_store.get::<McpResourceClient>(),
             snapshots: Vec::new(),
         };
-        let (auth_cache_key, catalog_cleared) = {
-            let mut state = state.contributor_state();
-            if !state.plugins_enabled {
-                return false;
-            }
-            let auth = query
-                .mcp_resources
-                .as_ref()
-                .map(|client| client.auth_cache_key_for_server(CODEX_APPS_MCP_SERVER_NAME));
-            if ((waited && *refresh_succeeded)
-                || input
-                    .turn_store
-                    .get::<LatestCloudPluginAuth>()
-                    .is_some_and(|previous| previous.0 == auth))
-                && state
+        let (auth_cache_key, resource_cache_key, catalog_cleared) =
+            {
+                let mut state = state.contributor_state();
+                if !state.plugins_enabled {
+                    return false;
+                }
+                let auth = query
+                    .mcp_resources
+                    .as_ref()
+                    .map(|client| client.auth_cache_key_for_server(CODEX_APPS_MCP_SERVER_NAME));
+                let resource_cache_key = query
+                    .mcp_resources
+                    .as_ref()
+                    .and_then(|client| client.server_cache_key(CODEX_APPS_MCP_SERVER_NAME));
+                if ((waited && *refresh_succeeded)
+                    || input
+                        .turn_store
+                        .get::<LatestCloudPluginAuth>()
+                        .is_some_and(|previous| previous.0 == auth))
+                    && state
+                        .cloud_generation
+                        .as_ref()
+                        .is_some_and(|generation| generation.auth_cache_key == auth)
+                    && state.cloud_catalog().is_some()
+                {
+                    input.turn_store.insert(LatestCloudPluginAuth(auth));
+                    return false;
+                }
+                if state.cloud_retry.as_ref().is_some_and(|retry| {
+                    retry.is_pending(auth.as_ref(), resource_cache_key.as_ref())
+                }) {
+                    return false;
+                }
+                // Waiting callers must not reuse a failed or cancelled refresh.
+                *refresh_succeeded = false;
+                input.turn_store.remove::<LatestCloudPluginAuth>();
+                let previous_catalog_auth = state
                     .cloud_generation
                     .as_ref()
-                    .is_some_and(|generation| generation.auth_cache_key == auth)
-                && state.cloud_catalog().is_some()
-            {
-                input.turn_store.insert(LatestCloudPluginAuth(auth));
-                return false;
-            }
-            // A failed or cancelled refresh must leave waiting callers able to retry.
-            *refresh_succeeded = false;
-            input.turn_store.remove::<LatestCloudPluginAuth>();
-            let previous_catalog_auth = state
-                .cloud_generation
-                .as_ref()
-                .filter(|generation| generation.catalog.is_some())
-                .map(|generation| generation.auth_cache_key.clone());
-            let auth_cache_key =
-                state.prepare_cloud_generation(query.mcp_resources.as_deref().cloned());
-            let catalog_cleared =
-                previous_catalog_auth.is_some_and(|previous| previous != auth_cache_key);
-            (auth_cache_key, catalog_cleared)
-        };
+                    .filter(|generation| generation.catalog.is_some())
+                    .map(|generation| generation.auth_cache_key.clone());
+                let auth_cache_key =
+                    state.prepare_cloud_generation(query.mcp_resources.as_deref().cloned());
+                let catalog_cleared =
+                    previous_catalog_auth.is_some_and(|previous| previous != auth_cache_key);
+                (auth_cache_key, resource_cache_key, catalog_cleared)
+            };
         let result = provider.list(query).await;
         let mut state = state.contributor_state();
         let catalog_published = match result {
             Ok(catalog) => {
                 let published = state.publish_cloud_catalog(auth_cache_key.as_ref(), catalog);
                 if published {
+                    state.cloud_retry = None;
                     input
                         .turn_store
                         .insert(LatestCloudPluginAuth(auth_cache_key));
@@ -105,6 +117,15 @@ impl PluginContributor {
                 published
             }
             Err(_) => {
+                if state.cloud_generation.as_ref().is_some_and(|generation| {
+                    generation.auth_cache_key == auth_cache_key && generation.is_auth_current()
+                }) {
+                    state.cloud_retry = Some(CatalogRefreshBackoff::after_failure(
+                        auth_cache_key,
+                        resource_cache_key,
+                        state.cloud_retry.as_ref(),
+                    ));
+                }
                 tracing::warn!("cloud plugin discovery failed");
                 false
             }
@@ -140,9 +161,13 @@ impl ConfigContributor<Config> for PluginContributor {
         let plugins_enabled = new_config.features.enabled(Feature::Plugins);
         let state = thread_store.get_or_init(PluginsThreadState::default);
         let mut state = state.contributor_state();
+        if state.plugins_enabled != plugins_enabled {
+            state.cloud_retry = None;
+        }
         state.plugins_enabled = plugins_enabled;
         if self.providers.cloud.is_none() || !plugins_enabled {
             state.cloud_generation = None;
+            state.cloud_retry = None;
         }
     }
 }

@@ -130,6 +130,7 @@ async fn disabling_plugins_clears_cloud_catalog_and_skips_discovery() -> anyhow:
             true,
             Err("discovery unavailable".to_string()),
         ),
+        ("failed-plugins-off", false, Ok(cloud_catalog())),
         ("re-enabled", true, Ok(cloud_catalog())),
     ] {
         let expected_catalog = if plugins_enabled {
@@ -245,7 +246,7 @@ async fn account_change_clears_hosted_plugins_before_waiting_for_executor() -> a
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn cloud_refresh_serializes_waiters_and_retries() {
     let new_catalog = PluginCatalog::default();
     for (reply, cancelled) in [
@@ -303,13 +304,19 @@ async fn cloud_refresh_serializes_waiters_and_retries() {
             provider.resume_discovery.notify_one();
             assert_eq!(turn_start.await, succeeded);
         }
-        // Reuse a successful refresh; failure/cancellation releases the gate for retry.
+        // Waiting turns share failure cooldowns; cancellation still allows immediate retry.
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(5), prewarm)
                 .await
                 .expect("waiting discovery should complete after its predecessor stops"),
-            !succeeded,
+            cancelled,
         );
+        if !succeeded && !cancelled {
+            assert_eq!(state.cloud_catalog(), None);
+            assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+            tokio::time::advance(Duration::from_secs(30)).await;
+            assert!(contributor.refresh_catalog_for_step(prewarm_input).await);
+        }
         assert_eq!(state.cloud_catalog(), Some(expected_catalog.clone()));
         assert!(!contributor.refresh_catalog_for_step(prewarm_input).await);
         assert_eq!(
@@ -325,7 +332,7 @@ async fn cloud_refresh_serializes_waiters_and_retries() {
             assert!(!contributor.refresh_catalog_for_step(prewarm_input).await);
             assert_eq!(state.cloud_catalog(), Some(expected_catalog.clone()));
         }
-        assert_eq!(provider.calls.load(Ordering::SeqCst), previous_calls + 2);
+        assert_eq!(provider.calls.load(Ordering::SeqCst), previous_calls + 1);
 
         // Clearing an old auth scope still requires rebuilding, even on failure.
         session.insert(McpResourceClient::new(Arc::new(
@@ -335,6 +342,7 @@ async fn cloud_refresh_serializes_waiters_and_retries() {
         assert_eq!(state.cloud_catalog(), None);
         assert!(!contributor.refresh_catalog_for_step(prewarm_input).await);
         provider.set_reply(Ok(new_catalog.clone()));
+        tokio::time::advance(Duration::from_secs(30)).await;
         assert!(contributor.refresh_catalog_for_step(prewarm_input).await);
     }
 }
@@ -660,7 +668,7 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
         ),
     ] {
         let previous_discoveries = provider.calls.load(Ordering::SeqCst);
-        let retry_discovery = reply.is_err() || turn == "in-flight-auth-change";
+        let retry_discovery = turn == "in-flight-auth-change";
         if let Some(account) = new_account {
             // Do not manually refresh MCP: the auth transition must pick up this new inventory.
             *apps_tools
@@ -699,6 +707,15 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
             })
             .await?;
             assert_eq!(provider.calls.load(Ordering::SeqCst), previous_discoveries);
+        }
+        if matches!(
+            turn,
+            "complete-with-warning-disables-plugin" | "new-account-partial"
+        ) {
+            // Reconnecting permits recovery before the thread's cooldown expires.
+            test.codex
+                .submit(codex_protocol::protocol::Op::RefreshMcpServers)
+                .await?;
         }
         provider.set_reply(reply);
         let previous_calls = recorded_apps_tool_calls(&server).await.len();
