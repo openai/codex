@@ -48,6 +48,7 @@ members = [
     "core-plugin-common",
     "core-plugins",
     "diagnostics",
+    "direct-tool-timing",
     "guardian-context",
     "hooks",
     "history",
@@ -299,6 +300,7 @@ codex-utils-audio = { path = "utils/audio" }
 codex-utils-cache = { path = "utils/cache" }
 codex-utils-cargo-bin = { path = "utils/cargo-bin" }
 codex-utils-cli = { path = "utils/cli" }
+codex-utils-critical-path = { path = "utils/critical-path" }
 codex-utils-elapsed = { path = "utils/elapsed" }
 codex-utils-fuzzy-match = { path = "utils/fuzzy-match" }
 codex-utils-git-discovery = { path = "utils/git-discovery" }
