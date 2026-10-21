@@ -3117,6 +3117,8 @@ ZDOTDIR = "{}"
 #[test_case("escalated")]
 #[test_case("disabled")]
 #[test_case("failed")]
+#[test_case("managed_disabled")]
+#[test_case("managed_failed")]
 #[test_case("heredoc")]
 #[test_case("enabled")]
 #[test_case("flat_feature")]
@@ -3133,6 +3135,10 @@ ZDOTDIR = "{}"
 async fn brokered_shell_snapshot_fallback(mode: &'static str) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let snapshot_disabled = matches!(mode, "disabled" | "managed_disabled");
+    let snapshot_failed = matches!(mode, "failed" | "managed_failed");
+    let snapshot_unavailable = snapshot_disabled || snapshot_failed;
+
     const REAL_GITHUB_TOKEN: &str =
         "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     const REAL_CUSTOM_TOKEN: &str = "custom_abcdefghijklmnopqrstuvwx";
@@ -3144,6 +3150,7 @@ async fn brokered_shell_snapshot_fallback(mode: &'static str) -> Result<()> {
     let startup_path = startup_dir.path().join("startup.sh");
     let observed_path = startup_dir.path().join("startup-credentials");
     let observed_path_arg = shlex::try_join([observed_path.to_string_lossy().as_ref()])?;
+    let outside_path = startup_dir.path().join("outside-write");
     fs::write(
         &startup_path,
         if mode == "escalated" {
@@ -3163,6 +3170,7 @@ async fn brokered_shell_snapshot_fallback(mode: &'static str) -> Result<()> {
     )?;
 
     let features = match mode {
+        "managed_disabled" | "managed_failed" => "",
         "flat_feature"
         | "flat_profile_transition"
         | "flat_disabled_proxy"
@@ -3181,6 +3189,20 @@ async fn brokered_shell_snapshot_fallback(mode: &'static str) -> Result<()> {
     };
     let network_enabled = !matches!(mode, "flat_no_proxy" | "flat_policy_without_proxy");
     let cloud_config_bundle = match mode {
+        "disabled" | "failed" | "managed_disabled" | "managed_failed" => {
+            let feature_requirements = if mode.starts_with("managed_") {
+                format!(
+                    "[features]\ncredential_masking = true\nshell_snapshot = {}\n",
+                    !snapshot_disabled,
+                )
+            } else {
+                String::new()
+            };
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
+                "{feature_requirements}\n[experimental_network]\nenabled = true\nallow_local_binding = true\n\
+                 [experimental_network.domains]\n\"credential-masking-denied.invalid\" = \"deny\"\n"
+            ))
+        }
         "flat_no_proxy" | "flat_profile_transition" => {
             CloudConfigBundleFixture::loader_with_enterprise_requirement("")
         }
@@ -3214,7 +3236,7 @@ GH_TOKEN = "{REAL_GITHUB_TOKEN}"
             startup_path.display()
         ),
     )?;
-    if mode == "failed" {
+    if snapshot_failed {
         fs::write(home.path().join("shell_snapshots"), "not a directory")?;
     }
     if mode == "escalated" {
@@ -3244,7 +3266,7 @@ GH_TOKEN = "{REAL_GITHUB_TOKEN}"
                     .enable(Feature::ShellSnapshotV2)
                     .expect("test config should allow executor-owned shell snapshots");
             }
-            if mode == "disabled" {
+            if snapshot_disabled {
                 config.features.disable(Feature::ShellSnapshot)
             } else {
                 config.features.enable(Feature::ShellSnapshot)
@@ -3328,7 +3350,14 @@ GH_TOKEN = "{REAL_GITHUB_TOKEN}"
     }
 
     let call_id = "escalated-brokered-shell-startup";
-    let command = if mode == "heredoc" {
+    let command = if snapshot_unavailable {
+        let outside_path_arg = shlex::try_join([outside_path.to_string_lossy().as_ref()])?;
+        format!(
+            "corp_login && printf '%s\\n' \"${{CODEX_NETWORK_PROXY_CREDENTIAL_BROKER_ACTIVE-}}\" && \
+             test -n \"$HTTP_PROXY\" && printf 'proxy-active\\n' && \
+             if (printf escaped > {outside_path_arg}) 2>/dev/null; then exit 1; else printf 'sandbox-denied\\n'; fi"
+        )
+    } else if mode == "heredoc" {
         let snapshot_dir = test.home.path().join("shell_snapshots");
         let snapshot_dir = shlex::try_join([snapshot_dir.to_string_lossy().as_ref()])?;
         format!(
@@ -3351,21 +3380,32 @@ GH_TOKEN = "{REAL_GITHUB_TOKEN}"
             SandboxPermissions::UseDefault
         },
     )?;
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-escalated-broker-startup-1"),
-                event,
-                ev_completed("resp-escalated-broker-startup-1"),
-            ]),
-            sse(vec![
-                ev_assistant_message("msg-escalated-broker-startup", "done"),
-                ev_completed("resp-escalated-broker-startup-2"),
-            ]),
-        ],
-    )
-    .await;
+    let mut response_events = vec![
+        sse(vec![
+            ev_response_created("resp-escalated-broker-startup-1"),
+            event,
+            ev_completed("resp-escalated-broker-startup-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-escalated-broker-startup", "done"),
+            ev_completed("resp-escalated-broker-startup-2"),
+        ]),
+    ];
+    if snapshot_unavailable {
+        response_events.insert(1, sse(vec![
+            ev_response_created("resp-brokered-network-denial"),
+            shell_event(
+                "brokered-network-denial",
+                "python3 -c \"import os, urllib.request; \
+                 urllib.request.build_opener(urllib.request.ProxyHandler({'http': os.environ['HTTP_PROXY']}))\
+                 .open('http://credential-masking-denied.invalid', timeout=2)\"",
+                /*timeout_ms*/ 5_000,
+                SandboxPermissions::UseDefault,
+            )?,
+            ev_completed("resp-brokered-network-denial"),
+        ]));
+    }
+    let responses = mount_sse_sequence(&server, response_events).await;
 
     submit_turn_preserving_active_permission_profile(
         &test,
@@ -3373,16 +3413,40 @@ GH_TOKEN = "{REAL_GITHUB_TOKEN}"
         approval_policy,
     )
     .await?;
+    if snapshot_unavailable {
+        let warning = wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::Warning(_) | EventMsg::TurnComplete(_))
+        })
+        .await;
+        let EventMsg::Warning(warning) = warning else {
+            panic!("expected credential masking fallback warning, got {warning:?}");
+        };
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(warning.message, @r"Credential masking is unavailable because a protected shell snapshot could not be created. This command will run with unmasked credentials.");
+        }
+    }
     wait_for_completion_without_approval(&test).await;
 
     let output = responses.requests()[1].function_call_output(call_id);
-    if matches!(mode, "disabled" | "failed") {
-        let output = output.to_string();
-        assert!(
-            output.contains("credential brokerage could not create a protected shell snapshot")
+    if snapshot_unavailable {
+        assert!(test.session_configured.network_proxy.is_some());
+        assert_eq!(
+            parse_result(&output),
+            CommandResult {
+                exit_code: Some(0),
+                stdout: format!("west\n{REAL_GITHUB_TOKEN}\n\nproxy-active\nsandbox-denied\n"),
+            },
         );
-        assert!(!output.contains(REAL_GITHUB_TOKEN));
-        if mode == "failed" {
+        assert!(
+            !outside_path.exists(),
+            "fallback bypassed the filesystem sandbox"
+        );
+        let denied_output = responses.requests()[2]
+            .function_call_output_text("brokered-network-denial")
+            .context("expected managed network denial")?;
+        assert!(denied_output.contains("credential-masking-denied.invalid"));
+        assert!(denied_output.contains("domain is explicitly denied by policy"));
+        if snapshot_failed {
             fs::remove_file(test.home.path().join("shell_snapshots"))?;
             let mut first_snapshot_paths = None;
             for call_id in ["brokered-startup-retry", "brokered-startup-reuse"] {

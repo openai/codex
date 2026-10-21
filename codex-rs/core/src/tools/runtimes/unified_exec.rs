@@ -551,17 +551,17 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                 .as_ref()
                 .is_some_and(|snapshot| snapshot.exists());
         if brokered_shell_snapshot_missing && let Some(network) = managed_network {
-            if cfg!(unix)
-                && matches!(
-                    shell.shell_type,
-                    ShellType::Bash | ShellType::Zsh | ShellType::Sh
-                )
-            {
-                return Err(ToolError::Rejected(
-                    "credential brokerage could not create a protected shell snapshot".to_string(),
-                ));
-            }
             network.restore_and_disable_brokered_credentials(&mut env, &mut command);
+            let message = "Credential masking is unavailable because a protected shell snapshot could not be created. This command will run with unmasked credentials.";
+            tracing::warn!("{message}");
+            ctx.session
+                .send_event(
+                    ctx.step_context.turn.as_ref(),
+                    EventMsg::Warning(WarningEvent {
+                        message: message.to_string(),
+                    }),
+                )
+                .await;
         }
         if let Some(metrics) = snapshot_metrics
             && let Some(wait) = snapshot_wait
