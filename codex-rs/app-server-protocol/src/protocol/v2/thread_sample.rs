@@ -12,7 +12,8 @@ use serde::Serialize;
 #[ts(export_to = "v2/")]
 pub struct ThreadSampleParams {
     pub thread_id: String,
-    /// The loaded source's latest completed turn. Stale or active sources are rejected.
+    /// The loaded source's latest completed, failed, or interrupted turn.
+    /// Stale or active sources are rejected.
     pub expected_turn_id: String,
     pub prompt: String,
     /// Applied only when the provider and model support cache-preserving reasoning-effort updates.

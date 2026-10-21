@@ -140,7 +140,11 @@ impl SampleTask {
             ThreadHistoryMode::Legacy => build_legacy_api_turns_from_rollout_items(&history.items)
                 .last()
                 .is_some_and(|turn| {
-                    turn.id == params.expected_turn_id && turn.status == TurnStatus::Completed
+                    turn.id == params.expected_turn_id
+                        && matches!(
+                            turn.status,
+                            TurnStatus::Completed | TurnStatus::Failed | TurnStatus::Interrupted
+                        )
                 }),
             ThreadHistoryMode::Paginated => store
                 .list_turns(ListTurnsParams {
@@ -157,12 +161,17 @@ impl SampleTask {
                 .first()
                 .is_some_and(|turn| {
                     turn.turn_id == params.expected_turn_id
-                        && turn.status == StoredTurnStatus::Completed
+                        && matches!(
+                            turn.status,
+                            StoredTurnStatus::Completed
+                                | StoredTurnStatus::Failed
+                                | StoredTurnStatus::Interrupted
+                        )
                 }),
         };
         if !matches_source {
             return Err(invalid_request(
-                "sample source turn is no longer the latest completed turn",
+                "sample source turn must be the latest finished turn",
             ));
         }
         let (mut options, settings) = Box::pin(async {

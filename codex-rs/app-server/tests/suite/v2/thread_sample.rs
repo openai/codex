@@ -8,6 +8,7 @@ use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::HooksListParams;
 use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
@@ -16,7 +17,12 @@ use codex_app_server_protocol::ThreadSampleCancelResponse;
 use codex_app_server_protocol::ThreadSampleParams;
 use codex_app_server_protocol::ThreadSampleResponse;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnInterruptParams;
+use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_core::config::ConfigBuilder;
 use codex_core::test_support::construct_model_info_offline;
@@ -38,6 +44,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use test_case::test_case;
+use test_case::test_matrix;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 use wiremock::ResponseTemplate;
@@ -161,31 +168,39 @@ async fn prediction_fork(client: &mut TestAppServer, parent: &str) -> Result<Str
     Ok(fork.thread.id)
 }
 
-#[test_case(ThreadHistoryMode::Legacy; "legacy")]
-#[test_case(ThreadHistoryMode::Paginated; "paginated")]
+#[test_matrix(
+    [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated],
+    [TurnStatus::Completed, TurnStatus::Failed, TurnStatus::Interrupted]
+)]
 #[tokio::test]
 async fn sample_preserves_context_and_keeps_source_unchanged(
     history_mode: ThreadHistoryMode,
+    parent_status: TurnStatus,
 ) -> Result<()> {
     let server = responses::start_mock_server().await;
+    let compact_parent =
+        history_mode == ThreadHistoryMode::Paginated && parent_status == TurnStatus::Completed;
     let mut parent_responses = vec![responses::sse(vec![
         responses::ev_reasoning_item(
             "parent-reasoning",
             &["Check the release."],
             &["Keep the existing context."],
         ),
-        responses::ev_assistant_message("answer", "Done"),
-        responses::ev_completed_with_tokens(
-            "parent",
-            /*total_tokens*/
-            if history_mode == ThreadHistoryMode::Paginated {
-                330_000
-            } else {
-                100
-            },
-        ),
+        if parent_status == TurnStatus::Interrupted {
+            responses::ev_function_call("parent-call", "parent_tool", "{}")
+        } else {
+            responses::ev_assistant_message("answer", "Done")
+        },
+        if parent_status == TurnStatus::Failed {
+            json!({"type":"response.failed","response":{"id":"parent","error":{"code":"insufficient_quota","message":"quota exceeded"}}})
+        } else {
+            responses::ev_completed_with_tokens(
+                "parent",
+                /*total_tokens*/ if compact_parent { 330_000 } else { 100 },
+            )
+        },
     ])];
-    if history_mode == ThreadHistoryMode::Paginated {
+    if compact_parent {
         parent_responses.push(responses::sse(vec![
             json!({"type":"response.output_item.done","item":{
                 "type":"compaction", "encrypted_content":"sample-test-compacted-parent",
@@ -223,18 +238,14 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
                 ("model_auto_compact_token_limit".to_string(), json!(200_000)),
                 (
                     "model_post_turn_compact_threshold_percent".to_string(),
-                    json!(if history_mode == ThreadHistoryMode::Paginated {
-                        75
-                    } else {
-                        0
-                    }),
+                    json!(if compact_parent { 75 } else { 0 }),
                 ),
             ])),
             ..Default::default()
         })
         .await?;
-    let completed = client
-        .start_turn_and_wait_for_completion(TurnStartParams {
+    let start_id = client
+        .send_turn_start_request(TurnStartParams {
             thread_id: parent.thread.id.clone(),
             input: input("Initial turn"),
             turn_trigger: Some("parent-trigger".to_string()),
@@ -253,6 +264,35 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
             ..Default::default()
         })
         .await?;
+    let started: TurnStartResponse = timeout(WAIT, client.read_response(start_id)).await??;
+    if parent_status == TurnStatus::Interrupted {
+        assert!(matches!(
+            timeout(WAIT, client.read_stream_until_request_message()).await??,
+            ServerRequest::DynamicToolCall { .. }
+        ));
+        let sample_id = client
+            .send_raw_request(
+                "thread/sample",
+                Some(json!({"threadId": parent.thread.id, "expectedTurnId": started.turn.id, "prompt": "Predict"})),
+            )
+            .await?;
+        let error = timeout(
+            WAIT,
+            client.read_stream_until_error_message(RequestId::Integer(sample_id)),
+        )
+        .await??;
+        assert_eq!(error.error.message, "sample source must be idle");
+        let interrupt_id = client
+            .send_turn_interrupt_request(TurnInterruptParams {
+                thread_id: parent.thread.id.clone(),
+                turn_id: started.turn.id,
+            })
+            .await?;
+        let _: TurnInterruptResponse = timeout(WAIT, client.read_response(interrupt_id)).await??;
+    }
+    let completed: TurnCompletedNotification =
+        timeout(WAIT, client.read_notification("turn/completed")).await??;
+    assert_eq!(completed.turn.status, parent_status);
     let path = parent.thread.path.as_ref().expect("persistent source path");
     let before = std::fs::read(path)?;
     client.clear_message_buffer();
@@ -304,7 +344,7 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
     }
     let requests = mock.requests();
     assert_eq!(requests.len(), sample_index + 3);
-    if history_mode == ThreadHistoryMode::Legacy {
+    if history_mode == ThreadHistoryMode::Legacy && parent_status == TurnStatus::Completed {
         insta::assert_snapshot!(
             "sample_inherits_parent_context",
             context_snapshot::format_request_history_snapshot(
@@ -314,7 +354,7 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
             )
         );
     }
-    if history_mode == ThreadHistoryMode::Paginated {
+    if compact_parent {
         assert_eq!(
             requests[sample_index].inputs_of_type("compaction")[0]["encrypted_content"],
             "sample-test-compacted-parent",
@@ -919,7 +959,7 @@ async fn sample_rejects_invalid_sources_and_prompts() -> Result<()> {
             parent.clone(),
             "stale".to_string(),
             "Predict".to_string(),
-            "latest completed turn",
+            "latest finished turn",
         ),
         (parent.clone(), turn.clone(), String::new(), "prompt"),
         (
