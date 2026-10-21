@@ -35,12 +35,16 @@ fn rejects_paths_with_ambiguous_segments_or_encodings() {
         "/openai/openai/%",
         "/openai/openai/%2",
         "/openai/openai/%zz",
+        "/openai/openai/file;parameter",
+        "/openai/openai/file%3bparameter",
+        "/openai/openai/file%3Bparameter",
     ];
 
     assert_eq!(
         paths.map(is_safe_for_authorization),
         [
-            false, false, false, false, false, false, false, false, false, false, false
+            false, false, false, false, false, false, false, false, false, false, false, false,
+            false, false
         ]
     );
 }

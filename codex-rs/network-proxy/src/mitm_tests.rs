@@ -31,6 +31,7 @@ fn github_write_hook() -> crate::mitm_hook::MitmHookConfig {
         actions: crate::mitm_hook::MitmHookActionsConfig {
             strip_request_headers: vec!["authorization".to_string()],
             inject_request_headers: vec![crate::mitm_hook::InjectedHeaderConfig {
+                placeholder: None,
                 name: "authorization".to_string(),
                 secret_env_var: Some("CODEX_GITHUB_TOKEN".to_string()),
                 secret_file: None,
@@ -200,6 +201,7 @@ async fn mitm_policy_allows_matching_hooked_write_in_full_mode() {
     let secret_file = NamedTempFile::new().unwrap();
     std::fs::write(secret_file.path(), "ghp-secret\n").unwrap();
     let mut hook = github_write_hook();
+    hook.actions.inject_request_headers[0].placeholder = Some("guest".into());
     hook.actions.inject_request_headers[0].secret_env_var = None;
     hook.actions.inject_request_headers[0].secret_file =
         Some(secret_file.path().display().to_string());
@@ -221,6 +223,7 @@ async fn mitm_policy_allows_matching_hooked_write_in_full_mode() {
         .method(Method::POST)
         .uri("/repos/openai/codex/issues")
         .header(HOST, "api.github.com")
+        .header("authorization", "guest")
         .body(Body::empty())
         .unwrap();
 
@@ -492,10 +495,11 @@ async fn mitm_policy_blocks_matching_hooked_write_in_limited_mode() {
 }
 
 #[tokio::test]
-async fn mitm_policy_blocks_hook_miss_for_hooked_host_and_records_telemetry_in_full_mode() {
+async fn mitm_policy_records_hook_denials_in_full_mode() {
     let secret_file = NamedTempFile::new().unwrap();
     std::fs::write(secret_file.path(), "ghp-secret\n").unwrap();
     let mut hook = github_write_hook();
+    hook.actions.inject_request_headers[0].placeholder = Some("guest".into());
     hook.actions.inject_request_headers[0].secret_env_var = None;
     hook.actions.inject_request_headers[0].secret_file =
         Some(secret_file.path().display().to_string());
@@ -507,70 +511,79 @@ async fn mitm_policy_blocks_hook_miss_for_hooked_host_and_records_telemetry_in_f
     };
     network.set_allowed_domains(vec!["api.github.com".to_string()]);
     let app_state = Arc::new(network_proxy_state_for_policy(network));
-    let ctx = policy_ctx(
-        app_state.clone(),
-        NetworkMode::Full,
-        "api.github.com",
-        /*target_port*/ 443,
-    );
-    let req = Request::builder()
-        .method(Method::GET)
-        .uri("/repos/openai/codex/issues?token=secret")
-        .header(HOST, "api.github.com")
-        .header("authorization", "Bearer user-supplied")
-        .body(Body::empty())
-        .unwrap();
+    for (method, scheme, port, values) in [
+        (Method::GET, Scheme::HTTPS, 443, &["guest"][..]),
+        (Method::POST, Scheme::HTTPS, 443, &[]),
+        (Method::POST, Scheme::HTTPS, 443, &["wrong"]),
+        (Method::POST, Scheme::HTTPS, 443, &["guest", "guest"]),
+        (Method::POST, Scheme::HTTP, 80, &["guest"]),
+        (Method::POST, Scheme::HTTPS, 8443, &["guest"]),
+    ] {
+        let mut ctx = policy_ctx(app_state.clone(), NetworkMode::Full, "api.github.com", port);
+        ctx.scheme = scheme;
+        let mut req = Request::builder()
+            .method(method.as_str())
+            .uri("/repos/openai/codex/issues?token=secret")
+            .header(HOST, "api.github.com");
+        for value in values {
+            req = req.header("authorization", *value);
+        }
+        let req = req.body(Body::empty()).unwrap();
+        let response = mitm_blocking_response(&req, &ctx).await.unwrap().unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.headers()["x-proxy-error"], "blocked-by-mitm-hook");
 
-    let response = mitm_blocking_response(&req, &ctx)
-        .await
-        .unwrap()
-        .expect("hook miss should be blocked");
-
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    assert_eq!(
-        response.headers().get("x-proxy-error").unwrap(),
-        "blocked-by-mitm-hook"
-    );
-
-    let blocked = app_state.drain_blocked().await.unwrap();
-    assert_eq!(blocked.len(), 1);
-    assert_eq!(blocked[0].reason, REASON_MITM_HOOK_DENIED);
-    assert_eq!(blocked[0].method.as_deref(), Some("GET"));
-    assert_eq!(blocked[0].host, "api.github.com");
-    assert_eq!(blocked[0].port, Some(443));
+        let blocked = app_state.drain_blocked().await.unwrap();
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].reason, REASON_MITM_HOOK_DENIED);
+        assert_eq!(blocked[0].method.as_deref(), Some(method.as_str()));
+        assert_eq!(blocked[0].host, "api.github.com");
+        assert_eq!(blocked[0].port, Some(port));
+    }
 }
 
 #[test]
-fn apply_mitm_hook_actions_replaces_authorization_header() {
+fn request_credentials_apply_hook_after_brokerage() {
+    let app_state = network_proxy_state_for_policy(NetworkProxyConfig {
+        credential_broker: true,
+        mitm: true,
+        ..NetworkProxyConfig::default()
+    });
+    let mut env = HashMap::from([("GH_TOKEN".to_string(), "ghp-real".to_string())]);
+    app_state.virtualize_child_credentials(&mut env);
+    assert_ne!(env["GH_TOKEN"], "ghp-real");
+    let placeholder = HeaderValue::from_str(&format!("Bearer {}", env["GH_TOKEN"])).unwrap();
     let mut headers = HeaderMap::new();
-    headers.append(
-        HeaderName::from_static("authorization"),
-        HeaderValue::from_static("Bearer user-supplied"),
+    headers.insert("authorization", placeholder.clone());
+    headers.insert("x-request-id", HeaderValue::from_static("req_123"));
+    let destination = "https://api.github.com/";
+    let mut expected = headers.clone();
+    let mut brokered = headers.clone();
+    apply_request_credentials(
+        &mut brokered,
+        /*actions*/ None,
+        &app_state,
+        destination,
     );
-    headers.append(
-        HeaderName::from_static("x-request-id"),
-        HeaderValue::from_static("req_123"),
-    );
+    expected.insert("authorization", HeaderValue::from_static("Bearer ghp-real"));
+    assert_eq!(brokered, expected);
 
+    let mut secret = HeaderValue::from_static("Bearer secret-token");
+    secret.set_sensitive(true);
     let actions = crate::mitm_hook::MitmHookActions {
         strip_request_headers: vec![HeaderName::from_static("authorization")],
         inject_request_headers: vec![crate::mitm_hook::ResolvedInjectedHeader {
+            placeholder: Some(placeholder),
             name: HeaderName::from_static("authorization"),
-            value: HeaderValue::from_static("Bearer secret-token"),
+            value: secret.clone(),
             source: crate::mitm_hook::SecretSource::File(
                 AbsolutePathBuf::try_from("/tmp/github-token").unwrap(),
             ),
         }],
     };
 
-    apply_mitm_hook_actions(&mut headers, Some(&actions));
-
-    assert_eq!(
-        headers.get("authorization"),
-        Some(&HeaderValue::from_static("Bearer secret-token"))
-    );
-    assert_eq!(
-        headers.get("x-request-id"),
-        Some(&HeaderValue::from_static("req_123"))
-    );
+    expected.insert("authorization", secret);
+    apply_request_credentials(&mut headers, Some(&actions), &app_state, destination);
+    assert_eq!(headers, expected);
+    assert!(headers["authorization"].is_sensitive());
 }

@@ -1534,9 +1534,12 @@ strip_request_headers = ["authorization"]
                         unix_sockets: None,
                         allow_local_binding: None,
                         mitm: Some(NetworkMitmToml {
+                            version: None,
                             hooks: Some(IndexMap::from([(
                                 "github_write".to_string(),
                                 NetworkMitmHookToml {
+                                    schemes: Vec::new(),
+                                    ports: Vec::new(),
                                     host: "api.github.com".to_string(),
                                     methods: vec!["POST".to_string(), "PUT".to_string()],
                                     path_prefixes: vec!["/repos/openai/".to_string()],
@@ -1615,9 +1618,12 @@ fn permissions_profile_network_to_proxy_config_preserves_mitm_hooks() {
     let network = NetworkToml {
         mode: Some(NetworkMode::Full),
         mitm: Some(NetworkMitmToml {
+            version: None,
             hooks: Some(IndexMap::from([(
                 "github_write".to_string(),
                 NetworkMitmHookToml {
+                    schemes: Vec::new(),
+                    ports: Vec::new(),
                     host: "api.github.com".to_string(),
                     methods: vec!["POST".to_string()],
                     path_prefixes: vec!["/repos/openai/".to_string()],

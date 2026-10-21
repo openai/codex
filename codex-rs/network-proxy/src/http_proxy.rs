@@ -936,8 +936,16 @@ async fn http_plain_proxy(
         };
     // Evaluate the original Authorization header before replacing brokered dummy credentials.
     // Otherwise an unhooked provider alias can receive the real credential without hook policy.
+    let origin = crate::mitm_hook::MitmHookOrigin {
+        scheme: req
+            .uri()
+            .scheme()
+            .cloned()
+            .unwrap_or(rama_http::uri::Scheme::HTTP),
+        port,
+    };
     match app_state
-        .evaluate_mitm_hook_request(&host, &req, &credential_destinations)
+        .evaluate_mitm_hook_request(&host, &req, &origin, &credential_destinations)
         .await
     {
         Ok(HookEvaluation::HookedHostNoMatch) => {

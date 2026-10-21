@@ -78,6 +78,20 @@ struct MitmPolicyContext {
 }
 
 impl MitmPolicyContext {
+    fn placeholders_match(&self, req: &Request, actions: &MitmHookActions) -> bool {
+        actions.inject_request_headers.iter().all(|header| {
+            header.placeholder.as_ref().is_none_or(|placeholder| {
+                self.scheme == Scheme::HTTPS
+                    && self.target_port == 443
+                    && req
+                        .headers()
+                        .get_all(&header.name)
+                        .iter()
+                        .eq(std::iter::once(placeholder))
+            })
+        })
+    }
+
     fn credential_destination(&self, req: &Request) -> String {
         let authority = authority_header_value(&self.target_host, self.target_port, &self.scheme);
         let path = path_and_query(req.uri());
@@ -279,11 +293,12 @@ async fn forward_request(req: Request, request_ctx: &MitmRequestContext) -> Resu
         .authority(authority.as_str())
         .path_and_query(path.as_str())
         .build()?;
-    request_ctx
-        .policy
-        .app_state
-        .inject_request_credentials(&credential_destination, &mut parts.headers);
-    apply_mitm_hook_actions(&mut parts.headers, hook_actions.as_ref());
+    apply_request_credentials(
+        &mut parts.headers,
+        hook_actions.as_ref(),
+        request_ctx.policy.app_state.as_ref(),
+        &credential_destination,
+    );
     parts
         .headers
         .insert(HOST, HeaderValue::from_str(&authority)?);
@@ -432,12 +447,18 @@ async fn evaluate_mitm_policy(
         .evaluate_mitm_hook_request(
             &policy.target_host,
             req,
+            &crate::mitm_hook::MitmHookOrigin {
+                scheme: policy.scheme.clone(),
+                port: policy.target_port,
+            },
             &[policy.credential_destination(req)],
         )
         .await?
     {
-        HookEvaluation::Matched { actions } => Some(actions),
-        HookEvaluation::HookedHostNoMatch => {
+        HookEvaluation::Matched { actions } if policy.placeholders_match(req, &actions) => {
+            Some(actions)
+        }
+        HookEvaluation::Matched { .. } | HookEvaluation::HookedHostNoMatch => {
             let _ = policy
                 .app_state
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
@@ -493,11 +514,16 @@ async fn evaluate_mitm_policy(
     Ok(MitmPolicyDecision::Allow { hook_actions })
 }
 
-fn apply_mitm_hook_actions(headers: &mut HeaderMap, actions: Option<&MitmHookActions>) {
+fn apply_request_credentials(
+    headers: &mut HeaderMap,
+    actions: Option<&MitmHookActions>,
+    app_state: &NetworkProxyState,
+    credential_destination: &str,
+) {
+    app_state.inject_request_credentials(credential_destination, headers);
     let Some(actions) = actions else {
         return;
     };
-
     for header_name in &actions.strip_request_headers {
         headers.remove(header_name);
     }

@@ -312,7 +312,7 @@ impl ConfigLayerStack {
         let model_provider_requirements = Some(crate::model_provider_requirements::to_config(
             &requirements_toml,
         )?);
-        Ok(Self {
+        let stack = Self {
             cloud_config_binding: None,
             mcp_ema_cancellation: crate::McpEmaCancellation::default(),
             model_provider_requirements,
@@ -322,7 +322,31 @@ impl ConfigLayerStack {
             ignore_user_and_project_exec_policy_rules: false,
             startup_warnings: None,
             is_projectless: false,
-        })
+        };
+        stack.validate_project_mitm_profiles()?;
+        Ok(stack)
+    }
+
+    /// Recheck project provenance after combining layer snapshots as well as on initial load.
+    pub fn validate_project_mitm_profiles(&self) -> std::io::Result<()> {
+        crate::loader::validate_project_mitm_profiles(
+            self.layers_low_to_high()
+                .map(|layer| (&layer.name, &layer.config)),
+            self.requirements_toml
+                .permissions
+                .iter()
+                .flat_map(|permissions| permissions.profiles.iter())
+                .map(|(name, profile)| {
+                    (
+                        name.clone(),
+                        profile.extends.clone(),
+                        profile
+                            .network
+                            .as_ref()
+                            .is_some_and(|network| network.mitm.is_some()),
+                    )
+                }),
+        )
     }
 
     pub fn with_user_and_project_exec_policy_rules_ignored(

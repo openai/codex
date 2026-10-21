@@ -18,7 +18,7 @@ fn is_safe_segment_for_authorization(segment: &str) -> bool {
                 decoded_dots += 1;
                 index += 1;
             }
-            b'\\' => return false,
+            b'\\' | b';' => return false,
             b'%' => {
                 let Some(high) = bytes
                     .get(index + 1)
@@ -34,7 +34,7 @@ fn is_safe_segment_for_authorization(segment: &str) -> bool {
                 };
                 let decoded = high << 4 | low;
                 match decoded {
-                    b'%' | b'/' | b'\\' => return false,
+                    b'%' | b'/' | b'\\' | b';' => return false,
                     b'.' => decoded_dots += 1,
                     _ => has_non_dot = true,
                 }

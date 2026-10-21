@@ -83,6 +83,10 @@ strip_request_headers = ["authorization"]
 
 ### 2) Run the proxy
 
+In a Codex permission profile, set `version = 2` on `[permissions.<profile>.network.mitm]`
+before using scoped hooks or credential substitution. Older clients reject this table key,
+so rolling back cannot silently enable unconditional header injection.
+
 The proxy can also run without a full Codex permissions profile. Put the network policy in a
 standalone JSON file:
 
@@ -269,3 +273,13 @@ what it can reasonably guarantee.
 - DNS rebinding is hard to fully prevent without pinning the resolved IP(s) all the way down to the
   transport layer. If your threat model includes hostile DNS, enforce network egress at a lower
   layer too (e.g., firewall / VPC / corporate proxy policies).
+
+### Native origin and exact secret substitution
+
+MITM hook `match.schemes` and `match.ports` constrain the trusted tunnel origin;
+empty lists preserve existing behavior. An injected header can set `placeholder`
+to require one exact whole-header value before substitution. Missing, mismatched,
+or duplicate values fail closed. This form requires HTTPS port 443 and cannot
+modify routing or framing headers. Secret sources remain trusted host references;
+resolved values are marked sensitive in diagnostics and file sources are bounded
+to 64 KiB. Ambiguous semicolon paths cannot authorize scoped credentials.

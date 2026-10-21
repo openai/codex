@@ -202,6 +202,38 @@ pub(super) async fn load_local_config_layers_with_overrides(
 
     append_legacy_config_layers(&mut config_layers, loaded_managed, &codex_home)?;
 
+    // Local config reads preserve raw executor paths. Only the profile ancestry and
+    // presence of MITM rules are needed here, before schema-specific path resolution.
+    let mut managed_profiles = TomlValue::Table(Default::default());
+    for layer in &requirements.layers {
+        if let Some(permissions) = layer.toml.get("permissions") {
+            merge_toml_values(&mut managed_profiles, permissions);
+        }
+    }
+    super::validate_project_mitm_profiles(
+        config_layers
+            .iter()
+            .map(|layer| (&layer.source, &layer.toml)),
+        managed_profiles
+            .as_table()
+            .into_iter()
+            .flatten()
+            .filter(|(name, _)| name.as_str() != "filesystem")
+            .map(|(name, profile)| {
+                (
+                    name.clone(),
+                    profile
+                        .get("extends")
+                        .and_then(TomlValue::as_str)
+                        .map(str::to_owned),
+                    profile
+                        .get("network")
+                        .and_then(|network| network.get("mitm"))
+                        .is_some(),
+                )
+            }),
+    )?;
+
     Ok(LocalConfigLayers {
         config: LocalTomlLayerStack {
             layers: config_layers,

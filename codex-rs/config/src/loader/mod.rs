@@ -1171,6 +1171,154 @@ fn project_layer_entry(
     entry.with_hooks_config_folder_override(hooks_config_folder_override)
 }
 
+// A project strip-only policy can only narrow broker access when no trusted hook gates it.
+// Use a separate action schema so future credential operations cannot enter this exception.
+fn self_contained_project_strip_policy(mitm: &TomlValue) -> bool {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct StripAction {
+        strip_request_headers: Vec<String>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct StripPolicy {
+        #[serde(default)]
+        actions: std::collections::BTreeMap<String, StripAction>,
+        #[serde(default)]
+        hooks: std::collections::BTreeMap<String, crate::permissions_toml::NetworkMitmHookToml>,
+    }
+
+    let Ok(policy) = mitm.clone().try_into::<StripPolicy>() else {
+        return false;
+    };
+    policy.actions.values().all(|action| {
+        !action.strip_request_headers.is_empty()
+            && action
+                .strip_request_headers
+                .iter()
+                .all(|name| !name.is_empty())
+    }) && policy.hooks.values().all(|hook| {
+        hook.schemes.is_empty()
+            && hook.ports.is_empty()
+            && hook.body.is_none()
+            && !hook.action.is_empty()
+            && hook
+                .action
+                .iter()
+                .all(|name| policy.actions.contains_key(name))
+    })
+}
+
+// A trusted repository can configure its sandbox, but cannot bind host credentials to a
+// new destination. Compare the actual layer merge with the same inputs minus project layers.
+pub(crate) fn validate_project_mitm_profiles<'a>(
+    layers: impl Iterator<Item = (&'a ConfigLayerSource, &'a TomlValue)>,
+    managed: impl Iterator<Item = (String, Option<String>, bool)>,
+) -> io::Result<()> {
+    let layers: Vec<_> = layers
+        .filter_map(|(source, config)| Some((source, config.get("permissions")?)))
+        .collect();
+    if !layers
+        .iter()
+        .any(|(source, _)| matches!(source, ConfigLayerSource::Project { .. }))
+    {
+        return Ok(());
+    }
+
+    let mut trusted = TomlValue::Table(Default::default());
+    let mut effective = trusted.clone();
+    for (source, permissions) in layers {
+        let overlay = TomlValue::Table(toml::map::Map::from_iter([(
+            "permissions".to_string(),
+            permissions.clone(),
+        )]));
+        if !matches!(source, ConfigLayerSource::Project { .. }) {
+            merge_toml_values(&mut trusted, &overlay);
+        }
+        merge_toml_values(&mut effective, &overlay);
+    }
+
+    let trusted = trusted.get("permissions").and_then(TomlValue::as_table);
+    let effective = effective.get("permissions").and_then(TomlValue::as_table);
+    let managed = managed.collect::<Vec<_>>();
+    let trusted_mitm = trusted.into_iter().flatten().any(|(_, profile)| {
+        profile
+            .get("network")
+            .and_then(|network| network.get("mitm"))
+            .is_some()
+    });
+    let has_trusted_mitm = trusted_mitm || managed.iter().any(|(_, _, has_mitm)| *has_mitm);
+    let profile_names = trusted
+        .into_iter()
+        .chain(effective)
+        .flat_map(|profiles| profiles.keys())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut credential_profiles = Vec::new();
+    let mut trusted_parents = std::collections::BTreeMap::new();
+    let mut effective_parents = std::collections::BTreeMap::new();
+    for name in profile_names {
+        let original = trusted.and_then(|profiles| profiles.get(name));
+        let merged = effective.and_then(|profiles| profiles.get(name));
+        let original_mitm = original.and_then(|profile| profile.get("network")?.get("mitm"));
+        let merged_mitm = merged.and_then(|profile| profile.get("network")?.get("mitm"));
+        let original_hooks = original_mitm.and_then(|mitm| mitm.get("hooks")?.as_table());
+        let merged_hooks = merged_mitm.and_then(|mitm| mitm.get("hooks")?.as_table());
+        let changed = original_mitm != merged_mitm
+            || original_hooks
+                .into_iter()
+                .flat_map(|hooks| hooks.keys())
+                .ne(merged_hooks.into_iter().flat_map(|hooks| hooks.keys()));
+        if changed
+            && (has_trusted_mitm || !merged_mitm.is_some_and(self_contained_project_strip_policy))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("project configuration cannot change permissions.{name}.network.mitm"),
+            ));
+        }
+        if original_mitm.is_some() {
+            credential_profiles.push(name.clone());
+        }
+        trusted_parents.insert(
+            name.clone(),
+            original.and_then(|profile| profile.get("extends")).cloned(),
+        );
+        effective_parents.insert(
+            name.clone(),
+            merged.and_then(|profile| profile.get("extends")).cloned(),
+        );
+    }
+    // Managed profiles can inherit configured parents. Their own definitions take
+    // precedence, and Core separately rejects colliding managed and configured names.
+    for (name, parent, has_mitm) in managed {
+        if has_mitm {
+            credential_profiles.push(name.clone());
+        }
+        let parent = parent.map(TomlValue::String);
+        trusted_parents.insert(name.clone(), parent.clone());
+        effective_parents.insert(name, parent);
+    }
+    let mut visited = std::collections::BTreeSet::new();
+    while let Some(name) = credential_profiles.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        let trusted_parent = trusted_parents.get(&name).and_then(Option::as_ref);
+        let effective_parent = effective_parents.get(&name).and_then(Option::as_ref);
+        if trusted_parent != effective_parent {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("project configuration cannot change inheritance of MITM profile {name}"),
+            ));
+        }
+        if let Some(parent) = trusted_parent.and_then(TomlValue::as_str) {
+            credential_profiles.push(parent.to_string());
+        }
+    }
+    Ok(())
+}
+
 fn sanitize_project_config(
     config: &mut TomlValue,
     credential_broker: CredentialBrokerProjectState,

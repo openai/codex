@@ -1051,12 +1051,13 @@ impl NetworkProxyState {
         &self,
         host: &str,
         req: &rama_http::Request,
+        origin: &crate::mitm_hook::MitmHookOrigin,
         credential_destinations: &[String],
     ) -> Result<HookEvaluation> {
         self.reload_if_needed().await?;
         let hooked_hosts = {
             let guard = self.state.read().await;
-            match evaluate_mitm_hooks(&guard.mitm_hooks, host, req) {
+            match evaluate_mitm_hooks(&guard.mitm_hooks, host, req, origin) {
                 HookEvaluation::NoHooksForHost if !guard.mitm_hooks.is_empty() => {
                     guard.mitm_hooks.keys().cloned().collect::<Vec<_>>()
                 }
