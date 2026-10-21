@@ -31,7 +31,12 @@ zstd = { workspace = true }
 system-configuration = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+curl = { version = "0.4.50", features = ["static-curl", "ntlm"] }
 rustls-platform-verifier = "0.7.0"
+socket2 = "0.6"
+tokio = { workspace = true, features = ["io-util", "net"] }
+tokio-rustls = { workspace = true }
+url = { workspace = true }
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Networking_WinHttp",

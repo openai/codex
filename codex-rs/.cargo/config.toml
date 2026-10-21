@@ -1,3 +1,10 @@
+[env]
+# curl-sys enables its NTLM sources but does not set the flag required by libcurl 8.21.
+CFLAGS_aarch64_pc_windows_gnullvm = "-DCURL_ENABLE_NTLM"
+CFLAGS_aarch64_pc_windows_msvc = "-DCURL_ENABLE_NTLM"
+CFLAGS_x86_64_pc_windows_gnullvm = "-DCURL_ENABLE_NTLM"
+CFLAGS_x86_64_pc_windows_msvc = "-DCURL_ENABLE_NTLM"
+
 [target.'cfg(all(windows, target_env = "msvc"))']
 rustflags = ["-C", "link-arg=/STACK:8388608", "-C", "target-feature=+crt-static"]
 
