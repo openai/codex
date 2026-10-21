@@ -7,6 +7,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use codex_config::McpEmaTokenEndpointAuthMethod;
 use codex_exec_server::HttpClient;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
@@ -19,8 +20,8 @@ use tracing::instrument::WithSubscriber;
 use crate::EmaCredentialLease;
 use crate::ema_auth_policy::advertised_capability;
 use crate::ema_auth_policy::ema_reauthentication_required;
+use crate::ema_auth_policy::resolve_ema_client_auth;
 use crate::ema_auth_policy::validate_ema_oauth_endpoint;
-use crate::ema_auth_policy::validate_ema_public_client_auth;
 use crate::ema_claims::ID_JAG_TOKEN_TYPE;
 use crate::ema_exchange::TOKEN_EXCHANGE_GRANT_TYPE;
 use crate::http_client_adapter::StreamableHttpRedirectMode;
@@ -29,10 +30,13 @@ use crate::oauth::StoredOAuthTokens;
 use crate::oauth::stored_oidc_identity;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::utils::build_default_headers;
+use rmcp::transport::auth::enterprise::EmaClientAuthentication;
 
 pub struct EmaIdpIdentityRequest<'a> {
     pub issuer: &'a str,
     pub client_id: &'a str,
+    pub client_secret: Option<&'a str>,
+    pub token_endpoint_auth_method: Option<McpEmaTokenEndpointAuthMethod>,
     pub credentials: EmaCredentialLease,
     pub http_client: Arc<dyn HttpClient>,
     pub redirect_mode: StreamableHttpRedirectMode,
@@ -43,6 +47,7 @@ pub struct EmaIdpIdentity<L = EmaCredentialLease> {
     pub(crate) token_endpoint: String,
     pub(crate) refresh_token: String,
     pub(crate) credentials: L,
+    pub(crate) client_authentication: EmaClientAuthentication,
 }
 
 impl<L> EmaIdpIdentity<L> {
@@ -53,6 +58,7 @@ impl<L> EmaIdpIdentity<L> {
             token_endpoint: self.token_endpoint,
             refresh_token: self.refresh_token,
             credentials: map(self.credentials),
+            client_authentication: self.client_authentication,
         }
     }
 }
@@ -64,7 +70,7 @@ impl<L> EmaIdpIdentity<L> {
 /// ID-token claims corroborate that record; this does not verify a JWT signature or
 /// authenticate an expired ID token. Only the refresh token is exchanged with the IdP.
 pub async fn resolve_ema_account_idp_identity<L: Send>(
-    issuer: &str,
+    idp: &codex_config::McpServerIdpOAuthConfig,
     client_id: &str,
     id_token: &str,
     refresh_token: String,
@@ -77,12 +83,25 @@ pub async fn resolve_ema_account_idp_identity<L: Send>(
             "Codex account has no refresh token; sign in again",
         ));
     }
+    if idp.client_secret.is_some() && client_id != idp.client_id {
+        bail!("enterprise IdP client secret does not belong to the account OAuth client");
+    }
+    let issuer = &idp.issuer;
+    let client_secret = idp.client_secret.as_ref().map(|secret| secret.as_str());
     crate::ema_claims::oidc_identity(id_token, issuer, client_id)?;
-    let token_endpoint = resolve_ema_idp_token_endpoint(issuer, http_client, redirect_mode).await?;
+    let (token_endpoint, client_authentication) = resolve_ema_idp_token_endpoint(
+        issuer,
+        client_secret,
+        idp.token_endpoint_auth_method,
+        http_client,
+        redirect_mode,
+    )
+    .await?;
     Ok(EmaIdpIdentity {
         token_endpoint,
         refresh_token,
         credentials,
+        client_authentication,
     })
 }
 
@@ -112,7 +131,13 @@ pub fn stored_ema_identity_is_usable(
 pub(crate) async fn resolve_ema_idp_authorization_manager(
     issuer: &str,
     http_client: Arc<dyn OAuthHttpClient>,
-) -> Result<(AuthorizationManager, AuthorizationMetadata)> {
+    client_secret: Option<&str>,
+    token_endpoint_auth_method: Option<McpEmaTokenEndpointAuthMethod>,
+) -> Result<(
+    AuthorizationManager,
+    AuthorizationMetadata,
+    EmaClientAuthentication,
+)> {
     validate_ema_oauth_endpoint(issuer, "enterprise IdP issuer")?;
     let mut manager = AuthorizationManager::new_with_oauth_http_client(issuer, http_client)
         .await
@@ -130,13 +155,16 @@ pub(crate) async fn resolve_ema_idp_authorization_manager(
         bail!("enterprise IdP authorization metadata issuer does not match configuration");
     }
     validate_ema_oauth_endpoint(&metadata.token_endpoint, "enterprise IdP token endpoint")?;
-    validate_ema_public_client_auth(
+
+    let authentication = resolve_ema_client_auth(
         metadata
             .additional_fields
             .get("token_endpoint_auth_methods_supported"),
+        client_secret,
+        token_endpoint_auth_method,
         "enterprise IdP",
     )?;
-    Ok((manager, metadata))
+    Ok((manager, metadata, authentication))
 }
 
 /// Resolve a stored refresh-token subject against the configured enterprise IdP metadata.
@@ -161,9 +189,14 @@ async fn resolve_ema_idp_identity_in<K: KeyringStore + Clone + 'static>(
         bail!("stored enterprise IdP credentials do not match the configured issuer and client");
     }
     stored_oidc_identity(credentials)?;
-    let token_endpoint =
-        resolve_ema_idp_token_endpoint(request.issuer, request.http_client, request.redirect_mode)
-            .await?;
+    let (token_endpoint, client_authentication) = resolve_ema_idp_token_endpoint(
+        request.issuer,
+        request.client_secret,
+        request.token_endpoint_auth_method,
+        request.http_client,
+        request.redirect_mode,
+    )
+    .await?;
     let credentials = request.credentials;
     let credential_lock = RefreshCredentialLock::acquire_for_server(
         &credentials.credentials.credentials().server_name,
@@ -193,6 +226,7 @@ async fn resolve_ema_idp_identity_in<K: KeyringStore + Clone + 'static>(
             token_endpoint,
             refresh_token: refresh_token.secret().to_string(),
             credentials,
+            client_authentication,
         })
     })
     .await
@@ -201,9 +235,11 @@ async fn resolve_ema_idp_identity_in<K: KeyringStore + Clone + 'static>(
 
 async fn resolve_ema_idp_token_endpoint(
     issuer: &str,
+    client_secret: Option<&str>,
+    token_endpoint_auth_method: Option<McpEmaTokenEndpointAuthMethod>,
     http_client: Arc<dyn HttpClient>,
     redirect_mode: StreamableHttpRedirectMode,
-) -> Result<String> {
+) -> Result<(String, EmaClientAuthentication)> {
     let client = OAuthHttpClientAdapter::new_with_redirect_mode(
         http_client,
         build_default_headers(/*http_headers*/ None, /*env_http_headers*/ None)?,
@@ -211,7 +247,13 @@ async fn resolve_ema_idp_token_endpoint(
         /*has_configured_headers*/ false,
         redirect_mode,
     )?;
-    let (_, metadata) = resolve_ema_idp_authorization_manager(issuer, Arc::new(client)).await?;
+    let (_, metadata, authentication) = resolve_ema_idp_authorization_manager(
+        issuer,
+        Arc::new(client),
+        client_secret,
+        token_endpoint_auth_method,
+    )
+    .await?;
     for (name, expected) in [
         (
             "identity_chaining_requested_token_types_supported",
@@ -227,7 +269,7 @@ async fn resolve_ema_idp_token_endpoint(
             );
         }
     }
-    Ok(metadata.token_endpoint)
+    Ok((metadata.token_endpoint, authentication))
 }
 
 #[cfg(test)]

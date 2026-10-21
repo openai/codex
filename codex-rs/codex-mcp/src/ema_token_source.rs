@@ -181,7 +181,7 @@ impl EnterpriseTokenSource {
                     let tokens = grant.tokens();
                     // Metadata discovery must not block ordinary account refresh.
                     let identity = resolve_ema_account_idp_identity(
-                        &idp.issuer,
+                        idp,
                         client_id,
                         &tokens.id_token.raw_jwt,
                         tokens.refresh_token.clone(),
@@ -218,6 +218,8 @@ impl EnterpriseTokenSource {
                     resolve_ema_idp_identity(EmaIdpIdentityRequest {
                         issuer: &idp.issuer,
                         client_id,
+                        client_secret: idp.client_secret.as_ref().map(|secret| secret.as_str()),
+                        token_endpoint_auth_method: idp.token_endpoint_auth_method,
                         credentials: snapshot.acquire_current_ema_credentials().await?,
                         http_client: Arc::clone(&self.http_client),
                         redirect_mode: StreamableHttpRedirectMode::Legacy,
@@ -233,6 +235,8 @@ impl EnterpriseTokenSource {
                 resource: self.registration.resource(),
                 scopes: self.registration.scopes(),
                 mcp_client_id: self.registration.client_id(),
+                mcp_client_secret: self.registration.client_secret(),
+                token_endpoint_auth_method: self.registration.token_endpoint_auth_method(),
                 expected_authorization_server_issuer: self
                     .registration
                     .authorization_server_issuer(),

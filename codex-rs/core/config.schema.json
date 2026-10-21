@@ -2492,6 +2492,14 @@
       },
       "type": "object"
     },
+    "McpEmaTokenEndpointAuthMethod": {
+      "description": "Token endpoint authentication selected by a confidential EMA client registration.",
+      "enum": [
+        "client_secret_basic",
+        "client_secret_post"
+      ],
+      "type": "string"
+    },
     "McpEnterpriseManagedAuthConfig": {
       "additionalProperties": false,
       "properties": {
@@ -2561,12 +2569,24 @@
       "additionalProperties": false,
       "properties": {
         "client_id": {
-          "description": "Public OAuth client registered with that enterprise IdP.",
+          "description": "OAuth client registered with that enterprise IdP.",
+          "type": "string"
+        },
+        "client_secret": {
+          "description": "Provisioned client secret for confidential IdP login and token exchange. Omitted for a public client.",
           "type": "string"
         },
         "issuer": {
           "description": "Issuer used for enterprise OAuth discovery and identity validation.",
           "type": "string"
+        },
+        "token_endpoint_auth_method": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/McpEmaTokenEndpointAuthMethod"
+            }
+          ],
+          "description": "Registered EMA client authentication method. Defaults to client_secret_basic when a secret is configured; requires a client secret."
         }
       },
       "required": [
@@ -2600,6 +2620,14 @@
         "client_secret": {
           "description": "OAuth client secret used for token exchange with a pre-registered client.",
           "type": "string"
+        },
+        "token_endpoint_auth_method": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/McpEmaTokenEndpointAuthMethod"
+            }
+          ],
+          "description": "Registered EMA client authentication method. Defaults to client_secret_basic when a secret is configured; requires a client secret."
         }
       },
       "type": "object"

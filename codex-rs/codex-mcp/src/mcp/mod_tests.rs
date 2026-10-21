@@ -186,6 +186,8 @@ fn ema_catalog_allows_only_configured_servers_without_widening_policy() {
     let mut config = test_mcp_config(PathBuf::new());
     let idp = codex_config::McpServerIdpOAuthConfig {
         issuer: "https://idp.example".into(),
+        client_secret: None,
+        token_endpoint_auth_method: None,
         client_id: "enterprise-client".into(),
     };
     let deny_all = codex_protocol::mcp_policy::EnvironmentMcpPolicy {

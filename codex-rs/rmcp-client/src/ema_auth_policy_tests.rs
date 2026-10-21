@@ -44,7 +44,29 @@ fn public_clients_require_an_explicitly_advertised_auth_method() {
         (Some(json!("none")), false),
     ] {
         assert_eq!(
-            validate_ema_public_client_auth(advertised.as_ref(), "IdP").is_ok(),
+            resolve_ema_client_auth(
+                advertised.as_ref(),
+                /*client_secret*/ None,
+                /*token_endpoint_auth_method*/ None,
+                "IdP"
+            )
+            .is_ok(),
+            valid
+        );
+    }
+    use McpEmaTokenEndpointAuthMethod::ClientSecretPost;
+    for (advertised, registered, valid) in [
+        (None, None, true),
+        (None, Some(ClientSecretPost), false),
+        (
+            Some(json!(["client_secret_basic"])),
+            Some(ClientSecretPost),
+            false,
+        ),
+        (Some(json!(["client_secret_post"])), None, false),
+    ] {
+        assert_eq!(
+            resolve_ema_client_auth(advertised.as_ref(), Some("secret"), registered, "IdP").is_ok(),
             valid
         );
     }

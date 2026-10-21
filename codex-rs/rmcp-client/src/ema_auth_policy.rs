@@ -4,6 +4,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use codex_config::McpEmaTokenEndpointAuthMethod;
 use serde_json::Value;
 use url::Host;
 use url::Url;
@@ -163,10 +164,48 @@ pub(crate) fn ema_reauthentication_required(message: &'static str) -> anyhow::Er
     anyhow::Error::new(EmaAuthFailure::ReauthenticationRequired).context(message)
 }
 
-pub(crate) fn validate_ema_public_client_auth(
+pub(crate) fn resolve_ema_client_auth(
     advertised_methods: Option<&Value>,
+    client_secret: Option<&str>,
+    token_endpoint_auth_method: Option<McpEmaTokenEndpointAuthMethod>,
     issuer_description: &str,
-) -> Result<()> {
+) -> Result<rmcp::transport::auth::enterprise::EmaClientAuthentication> {
+    use oauth2::ClientSecret;
+    use rmcp::transport::auth::enterprise::EmaClientAuthentication;
+
+    if let Some(secret) = client_secret {
+        if secret.trim().is_empty() {
+            bail!("{issuer_description} client secret must not be empty");
+        }
+        let registered_method = token_endpoint_auth_method.unwrap_or_default();
+        // RFC 8414 defaults absent server capabilities to Basic. Capabilities
+        // validate the registration; they do not select its authentication method.
+        let supported = match advertised_methods {
+            None => registered_method == McpEmaTokenEndpointAuthMethod::ClientSecretBasic,
+            Some(methods) => methods.as_array().is_some_and(|methods| {
+                methods
+                    .iter()
+                    .any(|method| method.as_str() == Some(registered_method.as_str()))
+            }),
+        };
+        if !supported {
+            bail!(
+                "{issuer_description} does not support the registered token endpoint authentication method"
+            );
+        }
+        let secret = ClientSecret::new(secret.to_owned());
+        return Ok(match registered_method {
+            McpEmaTokenEndpointAuthMethod::ClientSecretBasic => {
+                EmaClientAuthentication::ClientSecretBasic(secret)
+            }
+            McpEmaTokenEndpointAuthMethod::ClientSecretPost => {
+                EmaClientAuthentication::ClientSecretPost(secret)
+            }
+        });
+    }
+    if token_endpoint_auth_method.is_some() {
+        bail!("{issuer_description} token endpoint authentication method requires a client secret");
+    }
     let advertised_methods = advertised_methods.ok_or_else(|| {
         anyhow!(
             "{issuer_description} does not explicitly advertise public-client token endpoint authentication"
@@ -178,7 +217,7 @@ pub(crate) fn validate_ema_public_client_auth(
     if !methods.iter().any(|method| method.as_str() == Some("none")) {
         bail!("{issuer_description} does not support public-client token endpoint authentication");
     }
-    Ok(())
+    Ok(EmaClientAuthentication::None)
 }
 
 pub(crate) fn validate_ema_oauth_endpoint(endpoint: &str, description: &str) -> Result<()> {

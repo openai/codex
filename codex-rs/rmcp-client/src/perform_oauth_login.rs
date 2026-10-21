@@ -9,6 +9,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use codex_config::McpEmaTokenEndpointAuthMethod;
 use codex_config::McpServerOAuthConfig;
 use codex_exec_server::HttpClient;
 use codex_otel::auth_storage::AuthStorageOriginator;
@@ -609,8 +610,17 @@ impl OauthLoginFlow {
             )?);
         let registered_authorization = if oauth_client_id.is_some() {
             Some(
-                resolve_authorization_manager(server_url, Arc::clone(&oauth_http_client), purpose)
-                    .await?,
+                resolve_authorization_manager(
+                    server_url,
+                    Arc::clone(&oauth_http_client),
+                    purpose,
+                    credentials
+                        .client_secret
+                        .as_ref()
+                        .map(|secret| secret.secret().as_str()),
+                    oauth_config.and_then(|config| config.token_endpoint_auth_method),
+                )
+                .await?,
             )
         } else {
             None
@@ -865,9 +875,17 @@ async fn resolve_authorization_manager(
     server_url: &str,
     http_client: Arc<dyn OAuthHttpClient>,
     purpose: OAuthLoginPurpose,
+    client_secret: Option<&str>,
+    token_endpoint_auth_method: Option<McpEmaTokenEndpointAuthMethod>,
 ) -> Result<(AuthorizationManager, AuthorizationMetadata)> {
     if matches!(purpose, OAuthLoginPurpose::EnterpriseIdp) {
-        return resolve_enterprise_authorization_manager(server_url, http_client).await;
+        return resolve_enterprise_authorization_manager(
+            server_url,
+            http_client,
+            client_secret,
+            token_endpoint_auth_method,
+        )
+        .await;
     }
     let mut auth_manager =
         AuthorizationManager::new_with_oauth_http_client(server_url, http_client).await?;
@@ -1182,6 +1200,8 @@ mod tests {
                     &format!("{base_url}/mcp"),
                 )),
                 OAuthLoginPurpose::Mcp,
+                /*client_secret*/ None,
+                /*token_endpoint_auth_method*/ None,
             )
             .await
             .expect("resolve pre-registered OAuth metadata");
@@ -1292,6 +1312,8 @@ mod tests {
                     &format!("{issuer}/mcp"),
                 )),
                 OAuthLoginPurpose::Mcp,
+                /*client_secret*/ None,
+                /*token_endpoint_auth_method*/ None,
             )
             .await
             .expect("resolve issuer-aware authorization metadata");

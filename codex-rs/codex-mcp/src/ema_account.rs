@@ -1,5 +1,5 @@
 //! Account-grant eligibility and registration-specific sign-in requirements.
-//! The MCP service owns this state across threads; it retains no credentials.
+//! The MCP service owns this state across threads; it retains registration policy but no user tokens.
 
 use std::sync::Mutex;
 
@@ -66,6 +66,9 @@ impl EmaState {
 pub(crate) fn account_grant_is_usable(tokens: &TokenData, idp: &McpServerIdpOAuthConfig) -> bool {
     tokens.oauth_provenance.as_ref().is_some_and(|provenance| {
         provenance.issuer == idp.issuer
+            // A provisioned secret belongs to the configured client, not another
+            // primary login client at the same IdP. Use dedicated login in that case.
+            && (idp.client_secret.is_none() || provenance.client_id == idp.client_id)
             && tokens
                 .login_owner_id
                 .as_ref()

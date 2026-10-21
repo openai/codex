@@ -9,6 +9,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use codex_config::McpEmaTokenEndpointAuthMethod;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::HttpClient;
@@ -225,6 +226,8 @@ pub async fn perform_enterprise_oauth_login_return_url(
         &["openid".to_string(), "offline_access".to_string()],
         Some(&codex_config::McpServerOAuthConfig {
             client_id: Some(request.client_id.to_string()),
+            client_secret: request.client_secret.map(Into::into),
+            token_endpoint_auth_method: request.token_endpoint_auth_method,
             ..Default::default()
         }),
         OAuthLoginPurpose::EnterpriseIdp,
@@ -332,12 +335,24 @@ fn validate_enterprise_credentials(stored: &StoredOAuthTokens) -> Result<()> {
 pub(crate) async fn resolve_enterprise_authorization_manager(
     issuer: &str,
     http_client: Arc<dyn OAuthHttpClient>,
+    client_secret: Option<&str>,
+    token_endpoint_auth_method: Option<McpEmaTokenEndpointAuthMethod>,
 ) -> Result<(AuthorizationManager, AuthorizationMetadata)> {
-    let (manager, metadata) = resolve_ema_idp_authorization_manager(
+    let (manager, mut metadata, _) = resolve_ema_idp_authorization_manager(
         issuer,
         Arc::new(EnterpriseOAuthHttpClient(http_client)),
+        client_secret,
+        token_endpoint_auth_method,
     )
     .await?;
+    if client_secret.is_some() {
+        // The SDK chooses Basic when both methods are advertised. Its login client
+        // must use the validated registration method, just like the EMA exchanges.
+        metadata.additional_fields.insert(
+            "token_endpoint_auth_methods_supported".to_owned(),
+            serde_json::json!([token_endpoint_auth_method.unwrap_or_default().as_str()]),
+        );
+    }
     validate_authorization_server_endpoints(&metadata)?;
     validate_ema_oauth_endpoint(
         &metadata.authorization_endpoint,
@@ -399,6 +414,8 @@ pub struct EnterpriseOAuthLoginRequest<'a> {
     pub credential_name: &'a str,
     pub issuer: &'a str,
     pub client_id: &'a str,
+    pub client_secret: Option<&'a str>,
+    pub token_endpoint_auth_method: Option<McpEmaTokenEndpointAuthMethod>,
     pub keyring_backend_kind: AuthKeyringBackendKind,
     pub callback_port: Option<u16>,
     pub callback_url: Option<&'a str>,

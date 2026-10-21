@@ -31,6 +31,8 @@ fn request<'a>(resource: &'a str, issuer: Option<&'a str>) -> EmaAuthTokenExchan
         OutboundProxyPolicy::ReqwestDefault,
     )));
     EmaAuthTokenExchangeRequest {
+        mcp_client_secret: None,
+        token_endpoint_auth_method: None,
         server_url: resource,
         resource: Some(resource),
         scopes: &[],
@@ -208,8 +210,12 @@ async fn modern_challenge_confines_metadata_redirects() -> Result<()> {
         .mount(&authorization)
         .await;
     let exchange = request(&resource, Some(&issuer));
-    let (metadata, actual_resource) =
-        discover_ema_authorization_metadata(EmaDiscoveryRequest::from(&exchange)).await?;
+    let (metadata, actual_resource, _) = discover_ema_authorization_metadata(
+        EmaDiscoveryRequest::from(&exchange),
+        /*client_secret*/ None,
+        /*token_endpoint_auth_method*/ None,
+    )
+    .await?;
     assert_eq!(
         (metadata.issuer, metadata.token_endpoint, actual_resource),
         (
@@ -227,10 +233,14 @@ async fn modern_challenge_confines_metadata_redirects() -> Result<()> {
         .with_priority(1)
         .mount(&authorization)
         .await;
-    let error = discover_ema_authorization_metadata(EmaDiscoveryRequest::from(&exchange))
-        .await
-        .err()
-        .context("cross-origin redirect must fail")?;
+    let error = discover_ema_authorization_metadata(
+        EmaDiscoveryRequest::from(&exchange),
+        /*client_secret*/ None,
+        /*token_endpoint_auth_method*/ None,
+    )
+    .await
+    .err()
+    .context("cross-origin redirect must fail")?;
     assert!(error.to_string().contains("cross-origin redirect"));
     assert!(
         attacker
@@ -447,6 +457,7 @@ async fn rejected_grants_preserve_their_source_and_release_the_credential_lease(
         exchange.idp_issuer = &idp;
         exchange.idp_identity = Box::pin(async {
             Ok(EmaIdpIdentity {
+                client_authentication: EmaClientAuthentication::None,
                 token_endpoint: format!("{idp}/token"),
                 refresh_token: "old-grant".to_string(),
                 credentials: crate::EmaCredentialLease { credentials },

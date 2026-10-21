@@ -151,6 +151,8 @@ async fn logout_invalidates_pending_login_across_processes() -> Result<()> {
     let starting_issuer = issuer.clone();
     let starting = tokio::spawn(async move {
         perform_enterprise_oauth_login_return_url(EnterpriseOAuthLoginRequest {
+            client_secret: None,
+            token_endpoint_auth_method: None,
             credential_name: CREDENTIAL_NAME,
             issuer: &starting_issuer,
             client_id: "enterprise-client",
@@ -183,7 +185,10 @@ async fn logout_invalidates_pending_login_across_processes() -> Result<()> {
     // The first logout has no grant to delete. The second deletes the fresh grant
     // from the previous iteration. Both must invalidate pending callbacks and staged grants.
     for _ in 0..2 {
-        let pending = login(&issuer, /*callback_url*/ None).await?;
+        let pending = login(
+            &issuer, /*callback_url*/ None, /*auth_method*/ None,
+        )
+        .await?;
         let staged = complete_login(&issuer).await?;
         let output = tokio::process::Command::new(std::env::current_exe()?)
             .args(["--exact", TEST, "--nocapture"])
@@ -271,7 +276,13 @@ async fn logout_invalidates_pending_login_across_processes() -> Result<()> {
         .expect("persistent generation");
     fs::write(&generation_path, b"incomplete write")?;
     assert!(stale.commit_if(|| async { Some(()) }).await.is_err());
-    assert!(login(&issuer, /*callback_url*/ None).await.is_err());
+    assert!(
+        login(
+            &issuer, /*callback_url*/ None, /*auth_method*/ None
+        )
+        .await
+        .is_err()
+    );
 
     // A lost marker never revives a pre-logout attempt or a pre-reset generation.
     fs::remove_file(&generation_path)?;

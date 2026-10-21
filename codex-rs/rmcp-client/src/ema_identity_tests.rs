@@ -66,6 +66,8 @@ fn request<'a>(
     credentials: &'a StoredOAuthCredentialSnapshot,
 ) -> EmaIdpIdentityRequest<'a> {
     EmaIdpIdentityRequest {
+        client_secret: None,
+        token_endpoint_auth_method: None,
         issuer,
         client_id: "idp-client",
         credentials: EmaCredentialLease {
@@ -146,9 +148,15 @@ async fn enterprise_discovery_shares_idp_checks_but_keeps_login_endpoint_policy(
             /*has_configured_headers*/ false,
             StreamableHttpRedirectMode::Legacy,
         )?);
-        let shared = resolve_ema_idp_authorization_manager(&issuer, client.clone()).await;
+        let shared = resolve_ema_idp_authorization_manager(
+            &issuer,
+            client.clone(),
+            /*client_secret*/ None,
+            /*token_endpoint_auth_method*/ None,
+        )
+        .await;
         let login = crate::enterprise_oauth_login::resolve_enterprise_authorization_manager(
-            &issuer, client,
+            &issuer, client, /*client_secret*/ None, /*token_endpoint_auth_method*/ None,
         )
         .await;
         assert_eq!(

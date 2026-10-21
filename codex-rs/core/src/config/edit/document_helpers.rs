@@ -169,6 +169,9 @@ fn serialize_mcp_server_table(config: &McpServerConfig) -> anyhow::Result<TomlTa
         if let Some(client_secret) = &oauth.client_secret {
             oauth_table["client_secret"] = value(client_secret.as_str());
         }
+        if let Some(method) = oauth.token_endpoint_auth_method {
+            oauth_table["token_endpoint_auth_method"] = value(method.as_str());
+        }
         if let Some(callback_url) = &oauth.callback_url {
             oauth_table["callback_url"] = value(callback_url.clone());
         }

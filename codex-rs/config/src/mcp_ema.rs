@@ -14,19 +14,46 @@ use sha2::Digest;
 use sha2::Sha256;
 
 use codex_features::Feature;
+use codex_utils_redacted_string::RedactedString;
 
 use crate::ConfigLayerSource;
 use crate::ConfigLayerStack;
 use crate::McpServerConfig;
 use crate::McpServerTransportConfig;
 
+/// Token endpoint authentication selected by a confidential EMA client registration.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum McpEmaTokenEndpointAuthMethod {
+    #[default]
+    ClientSecretBasic,
+    ClientSecretPost,
+}
+
+impl McpEmaTokenEndpointAuthMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ClientSecretBasic => "client_secret_basic",
+            Self::ClientSecretPost => "client_secret_post",
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct McpServerIdpOAuthConfig {
     /// Issuer used for enterprise OAuth discovery and identity validation.
     pub issuer: String,
-    /// Public OAuth client registered with that enterprise IdP.
+    /// OAuth client registered with that enterprise IdP.
     pub client_id: String,
+    /// Provisioned client secret for confidential IdP login and token exchange.
+    /// Omitted for a public client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<RedactedString>,
+    /// Registered EMA client authentication method. Defaults to client_secret_basic
+    /// when a secret is configured; requires a client secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_endpoint_auth_method: Option<McpEmaTokenEndpointAuthMethod>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
@@ -44,6 +71,8 @@ pub struct McpEmaRegistration {
     server_url: String,
     resource: Option<String>,
     client_id: Option<String>,
+    client_secret: Option<RedactedString>,
+    token_endpoint_auth_method: Option<McpEmaTokenEndpointAuthMethod>,
     authorization_server_issuer: Option<String>,
     scopes: Vec<String>,
 }
@@ -63,6 +92,14 @@ impl McpEmaRegistration {
 
     pub fn client_id(&self) -> Option<&str> {
         self.client_id.as_deref()
+    }
+
+    pub fn client_secret(&self) -> Option<&str> {
+        self.client_secret.as_ref().map(|secret| secret.as_str())
+    }
+
+    pub fn token_endpoint_auth_method(&self) -> Option<McpEmaTokenEndpointAuthMethod> {
+        self.token_endpoint_auth_method
     }
 
     pub fn authorization_server_issuer(&self) -> Option<&str> {
@@ -118,7 +155,29 @@ impl McpEnterpriseManagedAuthConfig {
     ) -> io::Result<Option<Self>> {
         validate_ema_auth_sources(stack, servers)?;
         validate_xaa_opt_in_source(stack, xaa_enabled)?;
-        Self::from_config_layers(stack, fallback)
+        let profile = Self::from_config_layers(stack, fallback)?;
+        if let Some(profile) = &profile {
+            if profile
+                .idp
+                .client_secret
+                .as_ref()
+                .is_some_and(|secret| secret.trim().is_empty())
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "enterprise IdP client_secret must not be empty",
+                ));
+            }
+            if profile.idp.token_endpoint_auth_method.is_some()
+                && profile.idp.client_secret.is_none()
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "enterprise IdP token_endpoint_auth_method requires client_secret",
+                ));
+            }
+        }
+        Ok(profile)
     }
 
     /// Selects one complete trusted registration rather than merging issuer/client pairs.
@@ -196,6 +255,8 @@ impl McpServerConfig {
             server_url: url.clone(),
             resource: self.oauth_resource.clone(),
             client_id: oauth.client_id.clone(),
+            client_secret: oauth.client_secret.clone(),
+            token_endpoint_auth_method: oauth.token_endpoint_auth_method,
             authorization_server_issuer: oauth.authorization_server_issuer.clone(),
             scopes: self.scopes.clone().unwrap_or_default(),
         });
@@ -207,8 +268,18 @@ impl McpServerConfig {
         if !self.is_local_environment() {
             return Err("ema_auth requires a host-owned MCP connection");
         }
-        if self.oauth_client_secret().is_some() {
-            return Err("ema_auth cannot be combined with oauth.client_secret");
+        if let Some(secret) = self.oauth_client_secret() {
+            if secret.trim().is_empty() {
+                return Err("ema_auth oauth.client_secret must not be empty");
+            }
+            if self.oauth.as_ref().is_none_or(|oauth| {
+                oauth
+                    .authorization_server_issuer
+                    .as_ref()
+                    .is_none_or(|issuer| issuer.trim().is_empty())
+            }) {
+                return Err("confidential ema_auth requires oauth.authorization_server_issuer");
+            }
         }
         let McpServerTransportConfig::StreamableHttp {
             bearer_token_env_var,

@@ -226,6 +226,8 @@ fn plugin_host_root_is_retained_in_catalog_identity() {
 fn ema_policy_survives_rebuilds_and_rebinds_materialized_servers() {
     let idp = McpServerIdpOAuthConfig {
         issuer: "https://idp.example".to_string(),
+        client_secret: None,
+        token_endpoint_auth_method: None,
         client_id: "enterprise-client".to_string(),
     };
     let mut builder = ResolvedMcpCatalog::builder();

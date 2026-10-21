@@ -57,6 +57,8 @@ fn ema_profiles_and_auth_modes_preserve_non_project_authority() {
     let expected = McpEnterpriseManagedAuthConfig {
         idp: McpServerIdpOAuthConfig {
             issuer: "https://idp.example".into(),
+            client_secret: None,
+            token_endpoint_auth_method: None,
             client_id: "enterprise".into(),
         },
     };
@@ -225,6 +227,8 @@ fn ema_credential_names_bind_user_workspace_issuer_and_client() {
                     let scope = McpEmaAuthScope::new(user.into(), workspace.into()).unwrap();
                     let idp = McpServerIdpOAuthConfig {
                         issuer: issuer.into(),
+                        client_secret: None,
+                        token_endpoint_auth_method: None,
                         client_id: client.into(),
                     };
                     assert!(names.insert(idp.credential_name(&scope)));
@@ -243,6 +247,8 @@ fn ema_credential_names_bind_user_workspace_issuer_and_client() {
     let scope = McpEmaAuthScope::new(identifiers[0].into(), identifiers[1].into()).unwrap();
     let name = McpServerIdpOAuthConfig {
         issuer: identifiers[2].into(),
+        client_secret: None,
+        token_endpoint_auth_method: None,
         client_id: identifiers[3].into(),
     }
     .credential_name(&scope);
@@ -273,4 +279,49 @@ fn ema_rejects_alternate_credentials_and_executor_custody() {
     let server: McpServerConfig =
         toml::from_str("url='https://resource.example'\nauth='ema_auth'\nhttp_headers={}").unwrap();
     assert_eq!(server.validate_ema_auth_transport(), Ok(()));
+}
+
+#[test]
+fn confidential_ema_registration_binds_secrets_to_trusted_issuers() {
+    let (system, _, project) = local_sources("ema-confidential");
+    let trusted = "[mcp_enterprise_managed_auth.idp]\nissuer='https://idp.example'\nclient_id='idp'\nclient_secret='idp-secret'\ntoken_endpoint_auth_method='client_secret_post'\n[mcp_servers.enterprise]\nurl='https://resource.example'\nauth='ema_auth'\noauth={client_id='client', client_secret='resource-secret', token_endpoint_auth_method='client_secret_basic', authorization_server_issuer='https://as.example'}";
+    assert!(valid_ema_layers(vec![(system.clone(), trusted)]));
+    let layers = stack(vec![
+        (system.clone(), trusted),
+        (
+            project.clone(),
+            "[mcp_enterprise_managed_auth.idp]\nclient_secret='project-secret'",
+        ),
+    ]);
+    let profile =
+        McpEnterpriseManagedAuthConfig::from_config_layers(&layers, /*fallback*/ None)
+            .unwrap()
+            .unwrap();
+    assert_eq!(profile.idp.client_secret, Some("idp-secret".into()));
+
+    for invalid in [
+        trusted.replace("idp-secret", " "),
+        trusted.replace("client_secret='idp-secret'\n", ""),
+    ] {
+        assert!(
+            McpEnterpriseManagedAuthConfig::resolve(
+                &stack(vec![(system.clone(), &invalid)]),
+                /*fallback*/ None,
+                &Default::default(),
+                /*xaa_enabled*/ false,
+            )
+            .is_err()
+        );
+    }
+
+    for override_config in [
+        "[mcp_servers.enterprise.oauth]\nauthorization_server_issuer='https://attacker.example'",
+        "[mcp_servers.enterprise.oauth]\nclient_secret='project-secret'",
+        "[mcp_servers.enterprise.oauth]\ntoken_endpoint_auth_method='client_secret_post'",
+    ] {
+        assert!(!valid_ema_layers(vec![
+            (system.clone(), trusted),
+            (project.clone(), override_config)
+        ]));
+    }
 }

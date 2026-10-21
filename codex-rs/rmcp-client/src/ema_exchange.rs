@@ -7,6 +7,7 @@ use anyhow::Result;
 use codex_exec_server::HttpClient;
 use oauth2::RefreshToken;
 use rmcp::transport::auth::enterprise::EmaAuthorizationServer;
+use rmcp::transport::auth::enterprise::EmaClientAuthentication;
 use rmcp::transport::auth::enterprise::EmaError;
 use rmcp::transport::auth::enterprise::EmaExchangeRequest;
 use rmcp::transport::auth::enterprise::EmaExchangeStage;
@@ -52,6 +53,8 @@ pub(crate) struct EmaIdJagExchangeRequest<'a> {
     pub idp_token_endpoint: &'a str,
     pub idp_issuer: &'a str,
     pub idp_client_id: &'a str,
+    pub idp_client_authentication: EmaClientAuthentication,
+    pub resource_client_authentication: EmaClientAuthentication,
     pub refresh_token: String,
     pub idp_http_client: Arc<dyn HttpClient>,
     pub resource_http_client: Arc<dyn HttpClient>,
@@ -78,19 +81,21 @@ pub(crate) async fn exchange_id_jag<L: Send, R: Send>(
         StreamableHttpRedirectMode::Legacy,
     )?;
     let refresh_token = RefreshToken::new(request.refresh_token);
-    // Discovery has already verified both public-client registrations. The SDK owns
+    // Discovery has already verified each registration's authentication method. The SDK owns
     // token validation and the two exchanges; Codex retains routing and credential policy.
     let assertion = EmaExchangeRequest::new(
         EmaAuthorizationServer::new(
             request.idp_issuer,
             request.idp_token_endpoint,
             request.idp_client_id,
-        ),
+        )
+        .with_client_authentication(request.idp_client_authentication),
         EmaAuthorizationServer::new(
             request.authorization_server_issuer,
             request.authorization_server_token_endpoint,
             request.mcp_client_id,
-        ),
+        )
+        .with_client_authentication(request.resource_client_authentication),
         request.resource,
         &refresh_token,
     )

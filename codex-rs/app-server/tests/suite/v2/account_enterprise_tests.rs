@@ -252,7 +252,7 @@ async fn enterprise_login_attempt_lifecycle() -> Result<()> {
             "issuer": format!("{origin}/as"), "token_endpoint": format!("{origin}/as/token"),
             "grant_types_supported": ["urn:ietf:params:oauth:grant-type:jwt-bearer"],
             "authorization_grant_profiles_supported": ["urn:ietf:params:oauth:grant-profile:id-jag"],
-            "token_endpoint_auth_methods_supported": ["none"],
+            "token_endpoint_auth_methods_supported": ["none", "client_secret_basic", "client_secret_post"],
         })))
         .mount(&server)
         .await;
@@ -283,11 +283,11 @@ async fn enterprise_login_attempt_lifecycle() -> Result<()> {
         .respond_with(move |request: &wiremock::Request| {
             let fields = url::form_urlencoded::parse(&request.body).into_owned().collect::<HashMap<_, _>>();
             // EMA section 5: the resource AS gets the ID-JAG, never the IdP credential.
-            assert!(request.headers.get("authorization").is_none());
+            let expected = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode("mcp-client:resource-secret"));
+            assert_eq!(request.headers.get("authorization").unwrap().to_str().unwrap(), expected);
             assert_eq!(serde_json::to_value(fields).unwrap(), json!({
                 "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
                 "assertion": expected_jag,
-                "client_id": "mcp-client",
             }));
             if let Some((path, auth)) = account_refresh.lock().unwrap().pop_front() {
                 // Another process refreshes the account while the resource exchange runs.
@@ -322,9 +322,10 @@ async fn enterprise_login_attempt_lifecycle() -> Result<()> {
             "grant-type%3Atoken-exchange",
         ))
         .respond_with(move |request: &wiremock::Request| {
-            let fields = url::form_urlencoded::parse(&request.body)
+            let mut fields = url::form_urlencoded::parse(&request.body)
                 .into_owned()
                 .collect::<HashMap<_, _>>();
+            fields.remove("client_secret");
             let subject = fields.get("subject_token").map(String::as_str);
             assert!(matches!(
                 subject,
@@ -379,7 +380,7 @@ async fn enterprise_login_attempt_lifecycle() -> Result<()> {
         "issuer": issuer,
         "authorization_endpoint": format!("{issuer}/authorize"),
         "token_endpoint": format!("{issuer}/token"),
-        "token_endpoint_auth_methods_supported": ["none"],
+        "token_endpoint_auth_methods_supported": ["none", "client_secret_basic", "client_secret_post"],
     });
     Mock::given(method("GET"))
         .and(path("/.well-known/oauth-authorization-server/idp"))
@@ -427,12 +428,14 @@ analytics = {{ enabled = false }}"#
             r#"[mcp_enterprise_managed_auth.idp]
 issuer = "{issuer}"
 client_id = "idp-client"
+client_secret = "idp-secret"
+token_endpoint_auth_method = "client_secret_post"
 
 [mcp_servers.enterprise]
 url = "{resource}"
 auth = "ema_auth"
 scopes = ["files.read"]
-oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as" }}
+oauth = {{ client_id = "mcp-client", client_secret = "resource-secret", token_endpoint_auth_method = "client_secret_basic", authorization_server_issuer = "{origin}/as" }}
 
 [mcp_servers.ordinary]
 url = "{resource}"
@@ -442,7 +445,7 @@ http_headers = {{ Authorization = "Bearer ordinary-access" }}
 url = "{origin}/mcp"
 enabled = false
 auth = "ema_auth"
-oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as" }}"#
+oauth = {{ client_id = "mcp-client", client_secret = "resource-secret", token_endpoint_auth_method = "client_secret_basic", authorization_server_issuer = "{origin}/as" }}"#
         ))
         .write(home.path())?;
     write_chatgpt_auth(
@@ -544,6 +547,8 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
     );
     let idp = McpServerIdpOAuthConfig {
         issuer: issuer.clone(),
+        client_secret: None,
+        token_endpoint_auth_method: None,
         client_id: "idp-client".into(),
     };
     let initial_scope = McpEmaAuthScope::new("enterprise-user".into(), WORKSPACE_ID_INITIAL.into())
@@ -574,6 +579,16 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
             .plan_type("business"),
         AuthCredentialsStoreMode::File,
     )?;
+    // Same issuer, different client: the dedicated confidential grant must win.
+    let auth_path = home.path().join("auth.json");
+    let mut account_auth: Value = serde_json::from_slice(&std::fs::read(&auth_path)?)?;
+    account_auth["tokens"]["oauth_provenance"] =
+        json!({"issuer":issuer,"client_id":"account-client"});
+    account_auth["tokens"]["id_token"] = json!(format!("{}.{}.signature",
+        URL_SAFE_NO_PAD.encode(r#"{"alg":"ES256"}"#),
+        URL_SAFE_NO_PAD.encode(json!({"iss":issuer,"aud":"account-client","sub":"enterprise-user","exp":now + 3600,
+            "https://api.openai.com/auth":{"chatgpt_user_id":"enterprise-user","chatgpt_account_id":WORKSPACE_ID_REFRESHED,"chatgpt_plan_type":"business"}}).to_string())));
+    std::fs::write(&auth_path, serde_json::to_vec(&account_auth)?)?;
     let browser = HttpClientBuilder::new()
         .without_request_logging()
         .without_redirects()
@@ -777,7 +792,7 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
             statuses.iter().find(|status| status["name"] == "ordinary"),
         );
     }
-    std::fs::write(config_path, saved_config)?;
+    std::fs::write(&config_path, &saved_config)?;
     let handshakes = server.received_requests().await.context("MCP handshakes")?;
     let enterprise_discovery = handshakes
         .iter()
@@ -845,6 +860,19 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
     assert_eq!(
         resource_exchanges.load(std::sync::atomic::Ordering::SeqCst),
         3
+    );
+
+    // Login and both renewals used the dedicated IdP registration, even though
+    // the primary account belongs to a different client at the same issuer.
+    assert!(
+        idp_server
+            .received_requests()
+            .await
+            .context("IdP requests")?
+            .iter()
+            .filter(|request| request.url.path() == "/idp/token")
+            .all(|request| url::form_urlencoded::parse(&request.body)
+                .any(|(name, value)| name == "client_secret" && value == "idp-secret"))
     );
 
     // Replacing the enterprise grant fences old threads, including cached bearers.
@@ -1000,6 +1028,16 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
         enterprise_completion(&mut client).await?,
         json!({"name":"enterprise","threadId":thread_id,"loginId":recovery["loginId"],"success":true})
     );
+
+    // Switch the IdP registration to public for the account-grant recovery checks.
+    // The earlier dedicated login, startup, and renewal used separate IdP/AS secrets.
+    let mut config: toml::Value = toml::from_str(&saved_config)?;
+    let idp_config = config["mcp_enterprise_managed_auth"]["idp"]
+        .as_table_mut()
+        .context("IdP config")?;
+    idp_config.remove("client_secret");
+    idp_config.remove("token_endpoint_auth_method");
+    std::fs::write(&config_path, toml::to_string(&config)?)?;
 
     // An eligible account login uses its own OAuth client, without a second sign-in.
     let auth_path = home.path().join("auth.json");
@@ -1307,10 +1345,11 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
         );
     }
 
+    // Use the thread admitted after switching the IdP registration to public.
     let stalled = enterprise_rpc(
         &client,
         "mcpServer/oauth/login",
-        json!({"name":"enterprise","threadId":thread_id}),
+        json!({"name":"enterprise","threadId":recovered["thread"]["id"]}),
     )
     .await?;
     let mut unfinished = tokio::net::TcpStream::connect(("127.0.0.1", callback_port)).await?;
@@ -1364,7 +1403,7 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
     .await??;
     assert_eq!(
         login_completion.context("enterprise login completion")?,
-        json!({"name":"enterprise","threadId":thread_id,"loginId":stalled["loginId"],"success":false,"error":"Enterprise sign-in failed."})
+        json!({"name":"enterprise","threadId":recovered["thread"]["id"],"loginId":stalled["loginId"],"success":false,"error":"Enterprise sign-in failed."})
     );
     assert_eq!(
         resource_exchanges.load(std::sync::atomic::Ordering::SeqCst),
@@ -1729,6 +1768,8 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
         );
         let idp = McpServerIdpOAuthConfig {
             issuer: issuer.clone(),
+            client_secret: None,
+            token_endpoint_auth_method: None,
             client_id: "idp-client".into(),
         };
         let scope =
