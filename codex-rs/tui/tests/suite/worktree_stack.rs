@@ -73,7 +73,7 @@ async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Resul
     // Title generation can include the user prompt and race the actual user turn.
     let _title = responses::mount_sse_once_match(
         &server,
-        body_string_contains(r#"\"thread_source\":\"system\""#),
+        body_string_contains(r#"\"thread_source\":\"thread_title\""#),
         responses::sse(vec![
             responses::ev_assistant_message("title", r#"{"title":"Stack transition test"}"#),
             responses::ev_completed("title-response"),
@@ -109,6 +109,7 @@ async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Resul
     )?;
     terminal.wait_for_startup()?;
     terminal.wait_for_screen("STACK_SAVED_HISTORY")?;
+    terminal.wait_for_screen("Worked for")?;
     terminal.wait_for_screen("Ask Codex to do anything")?;
 
     // Starting and closing a side conversation both rebuild the displayed chat widget.
@@ -139,13 +140,11 @@ async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Resul
     terminal.wait_for_screen("Continue current conversation")?;
     terminal.write_input(b"1")?;
     let forked = wait_for_owned_worktrees(&mut terminal, &worktrees, &root, /*count*/ 1)?;
-    let fork_bucket = forked[0].root.parent().expect("bucket");
+    // The header changes before the queued history replay has finished attaching.
+    // Wait for the transition acknowledgement before submitting another command.
     terminal.wait_for_screen(&format!(
-        "/{}/",
-        fork_bucket
-            .file_name()
-            .expect("forked worktree bucket name")
-            .to_string_lossy()
+        "Working directory changed to: {}",
+        forked[0].root.display()
     ))?;
     terminal.ensure_running()?;
 
@@ -170,23 +169,29 @@ async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Resul
         worktrees.owner(&forked[0].root)? != worktrees.owner(&second.root)?,
         "new worktree reused the forked thread owner"
     );
-    let second_bucket = second.root.parent().expect("bucket");
     terminal.wait_for_screen(&format!(
-        "/{}/",
-        second_bucket
-            .file_name()
-            .expect("new worktree bucket name")
-            .to_string_lossy()
+        "Working directory changed to: {}",
+        second.root.display()
     ))?;
     terminal.ensure_running()?;
     Ok(())
 }
 
 fn submit(terminal: &mut PtyCodex, input: &str) -> Result<()> {
-    terminal.write_input(input.as_bytes())?;
+    // Send one paste event so slashes in arguments cannot accept a completion
+    // while earlier characters are still buffered by paste-burst detection.
+    terminal.write_input(format!("\x1b[200~{input}\x1b[201~").as_bytes())?;
     terminal.wait_for_screen(&input.replacen('/', "/ ", 1))?;
-    // Bulk PTY writes resemble a paste; wait out the Enter suppression window.
-    std::thread::sleep(Duration::from_millis(/*millis*/ 250));
+    // Thread startup can keep the composer in queue mode after the history is visible.
+    let deadline = Instant::now() + Duration::from_secs(/*secs*/ 30);
+    while terminal.screen_contains("tab to queue message") {
+        ensure!(
+            Instant::now() < deadline,
+            "composer remained busy before {input:?}"
+        );
+        terminal.read_output(Duration::from_millis(/*millis*/ 50))?;
+        terminal.ensure_running()?;
+    }
     terminal.write_input(b"\r")?;
     Ok(())
 }

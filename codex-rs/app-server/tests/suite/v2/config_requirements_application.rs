@@ -28,14 +28,14 @@ async fn read_requirements(server: &mut TestAppServer) -> Result<Value> {
 async fn application_network_defaults_and_null_base_url_are_exposed() -> Result<()> {
     for (contents, application) in [
         ("", Value::Null),
-        ("[application]", json!({"network": null})),
+        ("[application]", json!({"network": null, "storage": null})),
         (
             "[application.network]",
-            json!({"network": {"enabled": true, "domains": {}}}),
+            json!({"network": {"enabled": true, "domains": {}}, "storage": null}),
         ),
         (
             "[application.network]\nenabled = false",
-            json!({"network": {"enabled": false, "domains": {}}}),
+            json!({"network": {"enabled": false, "domains": {}}, "storage": null}),
         ),
     ] {
         let home = TempDir::new()?;
@@ -88,7 +88,7 @@ chatgpt_base_url = "https://managed.example.com/backend-api/"
             &wire["requirements"]["chatgptBaseUrl"]
         ),
         (
-            &json!({"network": {"enabled": true, "domains": {"gov.example.com": "allow", "github.com": "deny"}}}),
+            &json!({"network": {"enabled": true, "domains": {"gov.example.com": "allow", "github.com": "deny"}}, "storage": null}),
             &json!({"github.com": "allow"}),
             &json!("https://managed.example.com/backend-api/")
         ),

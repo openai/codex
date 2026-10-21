@@ -280,7 +280,7 @@ async fn login_and_workspace_switch_notify_after_routing_is_ready_then_logout_cl
             requirements["requirements"]["application"],
             json!({"network": {
                 "enabled": false, "domains": {format!("{account}.example"): "allow"}
-            }})
+            }, "storage": null})
         );
     }
     let request = server.send_logout_account_request().await?;

@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 #[serde(deny_unknown_fields)]
 pub struct ApplicationRequirementsToml {
     pub network: Option<ApplicationNetworkRequirementsToml>,
+    // Keep optional storage paths out of config-loading futures' inline state.
+    pub storage: Option<Box<crate::ApplicationStorageRequirementsToml>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

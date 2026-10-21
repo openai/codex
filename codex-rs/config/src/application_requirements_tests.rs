@@ -56,6 +56,7 @@ fn application_network_defaults_to_enabled_and_denies_unlisted_domains() {
     assert_eq!(
         requirements.application,
         Some(ApplicationRequirementsToml {
+            storage: None,
             network: Some(ApplicationNetworkRequirementsToml {
                 enabled: true,
                 domains: BTreeMap::new(),

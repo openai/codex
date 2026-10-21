@@ -357,7 +357,8 @@ async fn shutdown_grace_child() {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .expect("install shutdown handler");
     tokio::fs::write(&ready, "").await.expect("ready marker");
-    let _ = tokio::time::timeout(Duration::from_secs(8), async {
+    // Outlive the parent's stop deadline so this watchdog cannot look like a forced stop.
+    let _ = tokio::time::timeout(Duration::from_secs(/*secs*/ 30), async {
         #[cfg(unix)]
         terminate.recv().await;
         #[cfg(windows)]
@@ -433,11 +434,11 @@ async fn shutdown_grace_handles_process_exit() {
             pid_file,
             /*restore_release*/ None,
         );
-        let result = tokio::time::timeout(
-            Duration::from_secs(3),
-            backend.stop_with_grace(grace_seconds),
-        )
-        .await;
+        // Cover the backend's full stop budget, plus scheduling headroom on busy runners.
+        let stop_timeout =
+            super::STOP_FORCE_TIMEOUT + Duration::from_secs(u64::from(grace_seconds) + 5);
+        let result =
+            tokio::time::timeout(stop_timeout, backend.stop_with_grace(grace_seconds)).await;
         let still_running = backend
             .record_is_active(&record)
             .await

@@ -34,6 +34,7 @@ export type { AppToolSummary } from "./AppToolSummary";
 export type { AppToolsConfig } from "./AppToolsConfig";
 export type { ApplicationNetworkRequirements } from "./ApplicationNetworkRequirements";
 export type { ApplicationRequirements } from "./ApplicationRequirements";
+export type { ApplicationStorageRequirements } from "./ApplicationStorageRequirements";
 export type { ApprovalsReviewer } from "./ApprovalsReviewer";
 export type { AppsConfig } from "./AppsConfig";
 export type { AppsDefaultConfig } from "./AppsDefaultConfig";

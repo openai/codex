@@ -416,16 +416,17 @@ async fn custom_permission_selection_scenario() -> Result<()> {
     }))?]).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
     while events.try_recv().is_ok() {}
-    let side = server
-        .fork_side_thread(
+    let side = Box::pin(
+        server.fork_side_thread(
             &app.local_settings,
             app.config.clone(),
             thread_id,
             app.agents_overview
                 .requested_permission_profiles
                 .get(&thread_id),
-        )
-        .await?;
+        ),
+    )
+    .await?;
     assert_eq!(
         (
             side.session.permission_profile,
@@ -440,11 +441,11 @@ async fn custom_permission_selection_scenario() -> Result<()> {
     // Both the accepted request and its confirmed descendant remain server-owned.
     for _ in 0..2 {
         let previous_thread_id = app.chat_widget.thread_id();
-        app.handle_event(
+        Box::pin(app.handle_event(
             &mut tui,
             &mut server,
             AppEvent::ForkCurrentSession { name: None },
-        )
+        ))
         .await?;
         assert_ne!(app.chat_widget.thread_id(), previous_thread_id);
         assert_eq!(
