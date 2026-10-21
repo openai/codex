@@ -22,14 +22,12 @@ use codex_login::CodexAuth;
 use codex_rmcp_client::EmaAuthFailure;
 use codex_rmcp_client::EmaAuthenticatedHttpClient;
 use codex_rmcp_client::EmaRequestAuthority;
-use codex_rmcp_client::EmaTokenSource;
 use codex_rmcp_client::McpOAuthRefreshMode;
 use codex_rmcp_client::McpProtocolMode;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StoredOAuthCredentialSnapshot;
 use codex_rmcp_client::StreamableHttpBearerToken;
 use codex_rmcp_client::StreamableHttpRedirectMode;
-use codex_rmcp_client::stored_ema_identity_is_usable;
 use codex_rmcp_client::stored_oauth_credential_snapshot;
 use futures::future::BoxFuture;
 use tokio_util::sync::CancellationToken;
@@ -169,9 +167,9 @@ impl EmaAuth {
             cancellation: self.config.mcp_ema_cancellation.token(),
         });
         let url = registration.server_url().to_owned();
-        let source =
+        let mut source =
             EnterpriseTokenSource::new(registration, Arc::clone(self), exchange_client).await?;
-        let token = source.access_token().await?;
+        let token = source.initial_access_token().await?;
         let http_client = Arc::new(EmaAuthenticatedHttpClient::new(
             http_client,
             source,
@@ -204,24 +202,18 @@ pub(crate) async fn stored_ema_credentials(
 ) -> Result<Option<StoredOAuthCredentialSnapshot>> {
     let name = idp.credential_name(scope);
     let idp = idp.clone();
+    let originator = codex_otel::auth_storage::AuthStorageOriginator::current();
     tokio::task::spawn_blocking(move || {
-        tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {
-            stored_oauth_credential_snapshot(
-                &name,
-                &idp.issuer,
-                OAuthCredentialsStoreMode::Keyring,
-                keyring_backend,
-            )
-            .map(|snapshot| {
-                snapshot.filter(|snapshot| {
-                    stored_ema_identity_is_usable(
-                        snapshot.credentials(),
-                        &idp.issuer,
-                        &idp.client_id,
-                    )
-                })
+        originator.sync_scope(|| {
+            tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {
+                stored_oauth_credential_snapshot(
+                    &name,
+                    &idp.issuer,
+                    OAuthCredentialsStoreMode::Keyring,
+                    keyring_backend,
+                )
+                .map_err(|_| anyhow!("failed to read enterprise credentials"))
             })
-            .map_err(|_| anyhow!("failed to read enterprise credentials"))
         })
     })
     .await

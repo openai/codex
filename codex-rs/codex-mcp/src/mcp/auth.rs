@@ -200,6 +200,8 @@ pub async fn compute_auth_statuses<'a, I>(
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
     auth: Option<&CodexAuth>,
+    auth_manager: Option<&std::sync::Arc<codex_login::AuthManager>>,
+    ema_state: &crate::EmaState,
     runtime_context: &McpRuntimeContext,
 ) -> HashMap<String, McpAuthStatusEntry>
 where
@@ -221,6 +223,8 @@ where
                 store_mode,
                 keyring_backend_kind,
                 auth,
+                auth_manager,
+                ema_state,
                 &runtime_context,
                 redirect_mode,
             )
@@ -243,12 +247,15 @@ where
     join_all(futures).await.into_iter().collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn compute_auth_status(
     server_name: &str,
     config: &McpServerConfig,
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
     auth: Option<&CodexAuth>,
+    auth_manager: Option<&std::sync::Arc<codex_login::AuthManager>>,
+    ema_state: &crate::EmaState,
     runtime_context: &McpRuntimeContext,
     redirect_mode: StreamableHttpRedirectMode,
 ) -> Result<McpAuthState> {
@@ -265,21 +272,49 @@ async fn compute_auth_status(
         let Some(scope) = crate::ema_auth_scope(auth) else {
             return Ok(McpAuthState::LoggedOut(McpLoginRequirement::Login));
         };
+        if matches!(auth, Some(CodexAuth::Chatgpt(_)))
+            && auth
+                .and_then(|auth| auth.get_token_data().ok())
+                .is_none_or(|tokens| tokens.login_owner_id.as_ref().is_none_or(String::is_empty))
+        {
+            return Ok(McpAuthState::LoggedOut(McpLoginRequirement::Login));
+        }
+        let account_usable = match auth_manager {
+            Some(manager) => match manager.lease_account_oauth_grant().await? {
+                Some(lease) => {
+                    crate::ema_account::account_grant_is_usable(lease.tokens(), registration.idp())
+                        && !ema_state.requires_sign_in(registration, lease.tokens())
+                }
+                None => false,
+            },
+            None => auth.is_some_and(|auth| ema_state.account_is_usable(auth, registration)),
+        };
+        if account_usable {
+            return Ok(McpAuthState::BearerToken);
+        }
         return Ok(
-            if crate::ema_auth::stored_ema_credentials(
+            match crate::ema_auth::stored_ema_credentials(
                 registration.idp(),
                 &scope,
                 keyring_backend_kind,
             )
             .await?
-            .is_some()
             {
-                McpAuthState::OAuth
-            } else {
-                McpAuthState::LoggedOut(McpLoginRequirement::Login)
+                Some(snapshot)
+                    if codex_rmcp_client::stored_ema_identity_is_usable(
+                        snapshot.credentials(),
+                        &registration.idp().issuer,
+                        &registration.idp().client_id,
+                    ) =>
+                {
+                    McpAuthState::OAuth
+                }
+                Some(_) => McpAuthState::LoggedOut(McpLoginRequirement::Reauthentication),
+                None => McpAuthState::LoggedOut(McpLoginRequirement::Login),
             },
         );
     }
+
     let has_runtime_auth = matches!(config.auth, McpServerAuth::ChatGpt)
         && auth.is_some_and(CodexAuth::uses_codex_backend)
         && matches!(

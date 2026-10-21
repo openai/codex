@@ -69,6 +69,8 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
+use codex_rmcp_client::EmaAuthFailure;
+use codex_rmcp_client::EmaTokenSourceError;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
 use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::McpOAuthRefreshMode;
@@ -678,6 +680,7 @@ pub(crate) enum StartupOutcomeError {
     Failed {
         error: String,
         is_authentication_required: bool,
+        is_ema_authentication_required: bool,
     },
 }
 
@@ -688,6 +691,7 @@ impl StartupOutcomeError {
             Self::Failed {
                 error,
                 is_authentication_required,
+                ..
             } => *is_authentication_required || error.contains("Auth required"),
         }
     }
@@ -699,6 +703,9 @@ impl From<anyhow::Error> for StartupOutcomeError {
         Self::Failed {
             error: format!("{error:#}"),
             is_authentication_required,
+            is_ema_authentication_required: is_authentication_required
+                && (error.downcast_ref::<EmaTokenSourceError>().is_some()
+                    || error.downcast_ref::<EmaAuthFailure>().is_some()),
         }
     }
 }

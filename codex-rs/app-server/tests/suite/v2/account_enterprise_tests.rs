@@ -320,7 +320,7 @@ async fn enterprise_login_attempt_lifecycle() -> Result<()> {
                 "token_type": "N_A", "resource": token_resource, "scope": "files.read",
             }))
         })
-        .with_priority(1)
+        .with_priority(2)
         .mount(&idp_server)
         .await;
     Mock::given(method("GET"))
@@ -659,6 +659,7 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
         assert_eq!(status, &selected_status["data"][0]);
         assert!(!status["tools"]["calendar_list_events"].is_null());
         if name == "enterprise" {
+            assert_eq!(status["authStatus"], "oAuth");
             assert_eq!(status["toolListMeta"], catalog_meta);
         }
     }
@@ -842,6 +843,73 @@ oauth = {{ client_id = "mcp-client", authorization_server_issuer = "{origin}/as"
     assert_eq!(
         result.context("account read blocked ordinary MCP")??,
         ordinary_result
+    );
+
+    // Rejected and missing grants need sign-in; administrator configuration errors do not.
+    let reauthentication =
+        Some(codex_app_server_protocol::McpServerStartupFailureReason::ReauthenticationRequired);
+    for (error, reason) in [
+        (Some("invalid_client"), None),
+        (Some("insufficient_user_authentication"), reauthentication),
+        (Some("invalid_grant"), reauthentication),
+        (None, reauthentication),
+    ] {
+        if let Some(error) = error {
+            Mock::given(method("POST"))
+                .and(path("/idp/token"))
+                .and(wiremock::matchers::body_string_contains(
+                    "grant-type%3Atoken-exchange",
+                ))
+                .respond_with(ResponseTemplate::new(400).set_body_json(json!({"error": error})))
+                .with_priority(1)
+                .up_to_n_times(1)
+                .expect(1)
+                .mount(&idp_server)
+                .await;
+        }
+        let rejected = enterprise_rpc(&client, "thread/start", json!({})).await?;
+        let rejected_id = rejected["thread"]["id"].as_str().context("thread ID")?;
+        let failure = timeout(DEFAULT_READ_TIMEOUT, async {
+            loop {
+                if let InProcessServerEvent::ServerNotification(notification) =
+                    client.next_event().await.context("startup notification")?
+                    && let ServerNotification::McpServerStatusUpdated(notification) = *notification
+                    && notification.thread_id.as_deref() == Some(rejected_id)
+                    && notification.name == "enterprise"
+                    && notification.status
+                        == codex_app_server_protocol::McpServerStartupState::Failed
+                {
+                    return anyhow::Ok(notification);
+                }
+            }
+        })
+        .await??;
+        assert_eq!(failure.failure_reason, reason, "{error:?}: {failure:?}");
+        if reason.is_some() {
+            let status = enterprise_rpc(
+                &client,
+                "mcpServerStatus/list",
+                json!({"threadId": rejected_id, "serverName": "enterprise"}),
+            )
+            .await?;
+            assert_eq!(status["data"][0]["authStatus"], "notLoggedIn");
+        }
+    }
+
+    let recovery = enterprise_rpc(
+        &client,
+        "mcpServer/oauth/login",
+        json!({"name":"enterprise","threadId":thread_id}),
+    )
+    .await?;
+    browser
+        .get(enterprise_callback(&recovery, &issuer, callback_port)?)
+        .header(http::header::CONNECTION, "close")
+        .send()
+        .await?;
+    assert_eq!(
+        enterprise_completion(&mut client).await?,
+        json!({"name":"enterprise","threadId":thread_id,"loginId":recovery["loginId"],"success":true})
     );
 
     let stalled = enterprise_rpc(

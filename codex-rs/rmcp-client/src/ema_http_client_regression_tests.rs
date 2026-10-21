@@ -237,15 +237,26 @@ async fn credential_failures_are_classified_before_dispatch() -> anyhow::Result<
             })
             .context("resource authorization failed without invalidating the enterprise identity"),
             anyhow::anyhow!("temporary network failure"),
+            anyhow::Error::new(crate::EmaTokenSourceError::unexpected(
+                crate::EmaCredentialKind::Account,
+            )),
         ] {
             let (client, source, params, mut requests) = controlled_fixture();
             *client.cached_token() = None;
             *source.renewal_error.lock().unwrap() = Some(error);
             assert!(matches!(
-                mode.start(client, params).await?,
+                mode.start(Arc::clone(&client), params.clone()).await?,
                 Err(ExecServerError::HttpRequest(_))
             ));
             assert!(requests.try_recv().is_err());
+            let retry = mode.start(client, params);
+            let request = requests
+                .recv()
+                .await
+                .expect("retry after transient failure");
+            assert_eq!(bearer(&request), "Bearer renewed-2");
+            request.response.send(/*t*/ 200).expect("complete retry");
+            assert_eq!(retry.await??.status, 200);
         }
     }
     Ok(())

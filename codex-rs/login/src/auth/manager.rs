@@ -4,6 +4,7 @@ mod workspace_routing;
 mod account_grant;
 pub use account_grant::AccountOAuthGrant;
 pub use account_grant::AccountOAuthGrantLease;
+pub use account_grant::AccountOAuthGrantRevision;
 use account_grant::same_account_grant;
 use account_grant::same_account_login;
 

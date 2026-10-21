@@ -25,10 +25,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[tokio::test]
-async fn status_snapshot_only_downgrades_oauth_authentication_failures() {
+async fn status_snapshot_only_downgrades_oauth_and_ema_authentication_failures() {
     let auth_failure = StartupOutcomeError::Failed {
         error: "OAuth refresh token was rejected".to_string(),
         is_authentication_required: true,
+        is_ema_authentication_required: false,
     };
     let mut manager = McpConnectionSet::empty(/*prefix_mcp_tool_names*/ true);
     let mut auth_status_entries = HashMap::new();
@@ -45,7 +46,19 @@ async fn status_snapshot_only_downgrades_oauth_authentication_failures() {
             Some(StartupOutcomeError::Failed {
                 error: "provider temporarily unavailable".to_string(),
                 is_authentication_required: false,
+                is_ema_authentication_required: false,
             }),
+        ),
+        (
+            "ema-failed",
+            McpAuthState::BearerToken,
+            Some(auth_failure.clone()),
+        ),
+        ("ema-ready", McpAuthState::BearerToken, None),
+        (
+            "ema-provider-error",
+            McpAuthState::BearerToken,
+            Some(anyhow::anyhow!("provider temporarily unavailable").into()),
         ),
         ("bearer", McpAuthState::BearerToken, Some(auth_failure)),
     ] {
@@ -57,7 +70,12 @@ async fn status_snapshot_only_downgrades_oauth_authentication_failures() {
         auth_status_entries.insert(
             name.to_string(),
             McpAuthStatusEntry {
-                config: None,
+                config: name.starts_with("ema-").then(|| {
+                    serde_json::from_value(serde_json::json!({
+                        "url": "https://example.com/mcp", "auth": "ema_auth",
+                    }))
+                    .expect("EMA config")
+                }),
                 auth_state,
             },
         );
@@ -78,6 +96,9 @@ async fn status_snapshot_only_downgrades_oauth_authentication_failures() {
             ("oauth-failed".to_string(), McpAuthStatus::NotLoggedIn),
             ("oauth-ready".to_string(), McpAuthStatus::OAuth),
             ("oauth-provider-error".to_string(), McpAuthStatus::OAuth),
+            ("ema-failed".to_string(), McpAuthStatus::NotLoggedIn),
+            ("ema-ready".to_string(), McpAuthStatus::BearerToken),
+            ("ema-provider-error".to_string(), McpAuthStatus::BearerToken),
             ("bearer".to_string(), McpAuthStatus::BearerToken),
         ]),
     );
@@ -90,6 +111,7 @@ pub(crate) fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         requires_read_only_mcp_tools: false,
         codex_home,
         mcp_enterprise_managed_auth: None,
+        ema_state: Default::default(),
         mcp_ema_cancellation: codex_config::McpEmaCancellation::default(),
         xaa_enabled: false,
         mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode::default(),

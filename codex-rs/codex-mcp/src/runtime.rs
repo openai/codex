@@ -128,6 +128,7 @@ struct PublishedMcpRuntime {
     config: Option<Arc<McpConfig>>,
     auth: Option<CodexAuth>,
     auth_token: Option<String>,
+    auth_manager: Option<Arc<AuthManager>>,
     auth_generation: Arc<()>,
     plugins_available: bool,
     ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
@@ -238,6 +239,7 @@ impl McpRuntime {
                 config: None,
                 auth: None,
                 auth_token: None,
+                auth_manager: None,
                 auth_generation: Arc::new(()),
                 plugins_available: false,
                 ready_selected_capability_roots: Vec::new(),
@@ -376,6 +378,7 @@ impl McpRuntime {
         let (publish, publication_gate) = McpPublicationGate::pending();
         let config = Arc::clone(&input.config);
         let auth = input.auth.clone();
+        let auth_manager = input.auth_manager.clone();
         let auth_token = auth.as_ref().and_then(|auth| auth.get_token().ok());
         let auth_generation = if current.auth_matches(auth.as_ref()) {
             Arc::clone(&current.auth_generation)
@@ -415,6 +418,7 @@ impl McpRuntime {
             config: Some(config),
             auth,
             auth_token,
+            auth_manager,
             auth_generation,
             plugins_available,
             ready_selected_capability_roots,
@@ -1119,6 +1123,7 @@ mod tests {
             config: Some(Arc::new(config)),
             auth: None,
             auth_token: None,
+            auth_manager: None,
             auth_generation: Arc::new(()),
             plugins_available: false,
             ready_selected_capability_roots: Vec::new(),
@@ -1193,6 +1198,7 @@ mod tests {
             ))),
             auth: None,
             auth_token: None,
+            auth_manager: None,
             auth_generation: Arc::new(()),
             plugins_available: false,
             ready_selected_capability_roots: Vec::new(),

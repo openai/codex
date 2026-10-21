@@ -59,6 +59,13 @@ pub(super) fn mcp_startup_failure_reason(
     if !error.is_authentication_required() {
         return None;
     }
+    if let StartupOutcomeError::Failed {
+        is_ema_authentication_required: true,
+        ..
+    } = error
+    {
+        return Some(McpStartupFailureReason::ReauthenticationRequired);
+    }
     match auth_state {
         Some(
             McpAuthState::LoggedOut(McpLoginRequirement::Reauthentication) | McpAuthState::OAuth,

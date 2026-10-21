@@ -693,7 +693,8 @@ async fn run_list(config: &Config, list_args: ListArgs) -> Result<()> {
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await?;
     let auth = auth_manager.auth().await;
     let mcp_servers = mcp_manager.configured_servers(config).await;
-    let effective_mcp_servers = mcp_manager.effective_servers(config, auth.as_ref()).await;
+    let runtime_config = mcp_manager.runtime_config(config).await;
+    let effective_mcp_servers = codex_mcp::effective_mcp_servers(&runtime_config, auth.as_ref());
 
     let mut entries: Vec<_> = mcp_servers.iter().collect();
     entries.sort_by_key(|(name, _)| *name);
@@ -710,6 +711,8 @@ async fn run_list(config: &Config, list_args: ListArgs) -> Result<()> {
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
         auth.as_ref(),
+        Some(&auth_manager),
+        &runtime_config.ema_state,
         &runtime_context,
     )
     .await;

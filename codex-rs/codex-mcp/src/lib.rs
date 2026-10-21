@@ -119,6 +119,7 @@ pub(crate) mod elicitation;
 mod ema_account;
 mod ema_auth;
 mod ema_token_source;
+pub use ema_account::EmaState;
 mod event_stream;
 mod executor_environment_http_client;
 pub(crate) mod mcp;

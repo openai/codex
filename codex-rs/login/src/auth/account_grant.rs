@@ -2,6 +2,8 @@
 //! exchange; callers must recheck ownership before publishing its result. Storage reads
 //! observe other processes at these boundaries, not continuously.
 
+use sha2::Digest;
+use sha2::Sha256;
 use std::fmt;
 use std::io;
 use std::sync::Arc;
@@ -16,6 +18,38 @@ pub struct AccountOAuthGrant {
     pub(super) manager: Arc<AuthManager>,
     pub(super) tokens: TokenData,
     pub(super) login_generation: u64,
+}
+
+/// Identity of a refresh grant, excluding access and ID token rotation.
+/// This opaque digest compares revisions; it does not authorize a destination.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AccountOAuthGrantRevision([u8; 32]);
+
+impl From<&TokenData> for AccountOAuthGrantRevision {
+    fn from(tokens: &TokenData) -> Self {
+        let mut hash = Sha256::new();
+        let provenance = tokens.oauth_provenance.as_ref();
+        for value in [
+            tokens.login_owner_id.as_deref(),
+            tokens.account_id.as_deref(),
+            tokens.id_token.chatgpt_user_id.as_deref(),
+            provenance.map(|provenance| provenance.issuer.as_str()),
+            provenance.map(|provenance| provenance.client_id.as_str()),
+            Some(tokens.refresh_token.as_str()),
+        ] {
+            let value = value.unwrap_or_default();
+            hash.update(value.len().to_be_bytes());
+            hash.update(value.as_bytes());
+        }
+        Self(hash.finalize().into())
+    }
+}
+
+impl fmt::Debug for AccountOAuthGrantRevision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AccountOAuthGrantRevision")
+            .finish_non_exhaustive()
+    }
 }
 
 /// Keeps ordinary refresh from rotating the account token during an IdP exchange.
@@ -57,7 +91,9 @@ impl AccountOAuthGrant {
 
     /// Compare credential revisions without exposing the refresh token to state holders.
     pub fn same_credential(&self, other: &Self) -> bool {
-        self.tokens == other.tokens
+        self.login_generation == other.login_generation
+            && AccountOAuthGrantRevision::from(&self.tokens)
+                == AccountOAuthGrantRevision::from(&other.tokens)
     }
 
     pub(super) fn owner_is_current(&self) -> bool {
@@ -73,14 +109,19 @@ impl AccountOAuthGrant {
                 .is_some_and(|tokens| same_account_grant(&self.tokens, &tokens))
     }
 
-    /// Check after asynchronous work, before accepting a token or publishing a connection.
+    /// Read the still-current grant after asynchronous work. Consumers must validate
+    /// the latest ID token's eligibility before accepting an exchange result.
     /// A storage failure is an error, never proof that the saved grant is still valid.
-    pub async fn check_current(&self) -> io::Result<bool> {
+    pub async fn current_tokens(&self) -> io::Result<Option<TokenData>> {
         if !self.owner_is_current() {
-            return Ok(false);
+            return Ok(None);
         }
         let stored = self.manager.read_account_grant_tokens().await?;
-        Ok(self.owner_is_current() && stored.as_ref().is_some_and(|tokens| self.tokens == *tokens))
+        Ok(stored.filter(|tokens| {
+            self.owner_is_current()
+                && AccountOAuthGrantRevision::from(&self.tokens)
+                    == AccountOAuthGrantRevision::from(tokens)
+        }))
     }
 }
 
