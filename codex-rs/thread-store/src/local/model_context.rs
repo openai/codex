@@ -155,7 +155,7 @@ pub(super) async fn load_for_fork(
             let lineage = lineage.truncate_at(history_base).await?;
             scan_model_context_from_lineage(lineage, session_meta).await
         }
-        None => Ok(vec![RolloutItem::SessionMeta(session_meta)]),
+        None => Ok(vec![RolloutItem::SessionMeta(Box::new(session_meta))]),
     }
 }
 
@@ -212,6 +212,6 @@ fn scan_model_context_from_lineage_blocking(
     }
 
     let mut items = scan.finish();
-    items.insert(0, RolloutItem::SessionMeta(session_meta));
+    items.insert(0, RolloutItem::SessionMeta(Box::new(session_meta)));
     Ok(items)
 }

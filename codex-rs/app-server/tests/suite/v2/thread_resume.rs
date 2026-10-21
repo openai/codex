@@ -195,7 +195,7 @@ async fn thread_resume_paginated_model_context_preserves_original_metadata() -> 
     }))?;
     append_rollout_item_to_path(
         &path,
-        &RolloutItem::Compacted(CompactedItem {
+        &RolloutItem::Compacted(Box::new(CompactedItem {
             message: "compacted history".to_string(),
             replacement_history: Some(Vec::new()),
             retained_context: None,
@@ -208,7 +208,7 @@ async fn thread_resume_paginated_model_context_preserves_original_metadata() -> 
             compaction_response_id: None,
             latest_token_usage_record: None,
             resume_metadata: None,
-        }),
+        })),
     )
     .await?;
     append_rollout_item_to_path(
@@ -2158,7 +2158,7 @@ async fn unloaded_thread_goal_mutations_respect_parent_ownership() -> Result<()>
         // must take precedence, just as it does when the thread resumes.
         let mut meta = read_session_meta_line(&path).await?;
         meta.meta.multi_agent_version = version;
-        append_rollout_item_to_path(&path, &RolloutItem::SessionMeta(meta)).await?;
+        append_rollout_item_to_path(&path, &RolloutItem::SessionMeta(Box::new(meta))).await?;
 
         for (method, params) in [
             (
@@ -6487,8 +6487,11 @@ async fn setup_rollout_fixture(codex_home: &Path, server_uri: &str) -> Result<Ro
     let rollout_file_path = rollout_path(codex_home, filename_ts, &conversation_id);
     let mut session_meta = read_session_meta_line(&rollout_file_path).await?;
     session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V1);
-    append_rollout_item_to_path(&rollout_file_path, &RolloutItem::SessionMeta(session_meta))
-        .await?;
+    append_rollout_item_to_path(
+        &rollout_file_path,
+        &RolloutItem::SessionMeta(Box::new(session_meta)),
+    )
+    .await?;
     set_rollout_mtime(rollout_file_path.as_path(), expected_updated_at_rfc3339)?;
     Ok(RolloutFixture {
         conversation_id,

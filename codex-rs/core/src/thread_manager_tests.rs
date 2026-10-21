@@ -2022,7 +2022,7 @@ async fn selected_capability_roots_round_trip_through_fork() {
     }];
     let inherited = manager
         .start_thread(StartThreadOptions {
-            initial_history: InitialHistory::Forked(vec![RolloutItem::SessionMeta(
+            initial_history: InitialHistory::Forked(vec![RolloutItem::SessionMeta(Box::new(
                 SessionMetaLine {
                     meta: SessionMeta {
                         selected_capability_roots: selected_roots.clone(),
@@ -2030,7 +2030,7 @@ async fn selected_capability_roots_round_trip_through_fork() {
                     },
                     git: None,
                 },
-            )]),
+            ))]),
             environments: Some(Vec::new()),
             ..StartThreadOptions::new(config)
         })
@@ -2117,7 +2117,7 @@ async fn selected_capability_roots_respect_startup_precedence_and_isolation() {
         }
         let child = manager
             .start_thread(StartThreadOptions {
-                initial_history: InitialHistory::Forked(vec![RolloutItem::SessionMeta(
+                initial_history: InitialHistory::Forked(vec![RolloutItem::SessionMeta(Box::new(
                     SessionMetaLine {
                         meta: SessionMeta {
                             selected_capability_roots: vec![root("saved")],
@@ -2125,7 +2125,7 @@ async fn selected_capability_roots_respect_startup_precedence_and_isolation() {
                         },
                         git: None,
                     },
-                )]),
+                ))]),
                 inherited_environments: Some(parent_environments.clone()),
                 thread_extension_init,
                 ..StartThreadOptions::new(config.clone())

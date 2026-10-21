@@ -1569,7 +1569,7 @@ fn write_rollout_with_end(
     let mut lines = vec![RolloutLine {
         timestamp: "2026-07-16T00:00:00.000Z".to_string(),
         ordinal: Some(initial_ordinal),
-        item: RolloutItem::SessionMeta(SessionMetaLine {
+        item: RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
                 session_id: thread_id.into(),
                 id: thread_id,
@@ -1578,7 +1578,7 @@ fn write_rollout_with_end(
                 ..SessionMeta::default()
             },
             git: None,
-        }),
+        })),
     }];
     for offset in 1..next_ordinal {
         let ordinal = initial_ordinal

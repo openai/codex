@@ -119,10 +119,10 @@ fn write_rollout_with_fork(
         model_provider: Some("test-provider".to_string()),
         ..SessionMeta::default()
     };
-    let items = std::iter::once(RolloutItem::SessionMeta(SessionMetaLine {
+    let items = std::iter::once(RolloutItem::SessionMeta(Box::new(SessionMetaLine {
         meta: metadata,
         git: None,
-    }))
+    })))
     .chain(items);
     for item in items {
         let line = RolloutLine {
@@ -245,7 +245,7 @@ fn started(turn_id: &str) -> RolloutItem {
 }
 
 fn compacted(replacement_history: Vec<ResponseItem>) -> RolloutItem {
-    RolloutItem::Compacted(CompactedItem {
+    RolloutItem::Compacted(Box::new(CompactedItem {
         message: "checkpoint".to_string(),
         replacement_history: Some(replacement_history.into_iter().map(Into::into).collect()),
         retained_context: None,
@@ -258,7 +258,7 @@ fn compacted(replacement_history: Vec<ResponseItem>) -> RolloutItem {
         compaction_response_id: None,
         latest_token_usage_record: None,
         resume_metadata: None,
-    })
+    }))
 }
 
 fn completed(turn_id: &str) -> RolloutItem {
@@ -2077,10 +2077,10 @@ async fn migration_drops_copied_user_fork_metadata_without_creating_a_history_ba
         SessionSource::Cli,
         Some(parent_id),
         vec![
-            RolloutItem::SessionMeta(SessionMetaLine {
+            RolloutItem::SessionMeta(Box::new(SessionMetaLine {
                 meta: copied_metadata,
                 git: None,
-            }),
+            })),
             copied_response,
             user_message("child question"),
             agent_message("child answer"),
@@ -2142,7 +2142,7 @@ async fn migration_compacts_subagent_prefix_and_does_not_project_it() {
         thread_id,
         SessionSource::SubAgent(SubAgentSource::Other("test".to_string())),
         vec![
-            RolloutItem::Compacted(CompactedItem {
+            RolloutItem::Compacted(Box::new(CompactedItem {
                 message: "superseded checkpoint".repeat(1024),
                 replacement_history: Some(Vec::new()),
                 retained_context: None,
@@ -2155,8 +2155,8 @@ async fn migration_compacts_subagent_prefix_and_does_not_project_it() {
                 compaction_response_id: None,
                 latest_token_usage_record: None,
                 resume_metadata: None,
-            }),
-            RolloutItem::Compacted(CompactedItem {
+            })),
+            RolloutItem::Compacted(Box::new(CompactedItem {
                 message: "latest checkpoint".to_string(),
                 replacement_history: Some(vec![
                     ResponseItem::Message {
@@ -2182,7 +2182,7 @@ async fn migration_compacts_subagent_prefix_and_does_not_project_it() {
                 compaction_response_id: None,
                 latest_token_usage_record: None,
                 resume_metadata: None,
-            }),
+            })),
             started("child-turn"),
             RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("child-turn".to_string()),

@@ -34,7 +34,7 @@ async fn empty_archived_reads_without_sqlite_preserve_source_and_file_time()
     let line = RolloutLine {
         timestamp: timestamp.to_string(),
         ordinal: None,
-        item: RolloutItem::SessionMeta(SessionMetaLine {
+        item: RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
                 id: thread_id,
                 session_id: thread_id.into(),
@@ -43,7 +43,7 @@ async fn empty_archived_reads_without_sqlite_preserve_source_and_file_time()
                 ..SessionMeta::default()
             },
             git: None,
-        }),
+        })),
     };
     fs::write(&path, format!("{}\n", serde_json::to_string(&line)?))?;
     fs::OpenOptions::new()

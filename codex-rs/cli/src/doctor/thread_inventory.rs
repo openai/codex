@@ -1332,20 +1332,22 @@ mod tests {
             let rollout_line = RolloutLine {
                 timestamp: timestamp.to_string(),
                 ordinal: None,
-                item: RolloutItem::SessionMeta(codex_protocol::protocol::SessionMetaLine {
-                    meta: codex_protocol::protocol::SessionMeta {
-                        session_id: parsed_thread_id.into(),
-                        id: parsed_thread_id,
-                        timestamp: timestamp.to_string(),
-                        cwd: self.codex_home.path().to_path_buf(),
-                        originator: "test".to_string(),
-                        cli_version: "test".to_string(),
-                        source: SessionSource::Cli,
-                        model_provider: Some("test-provider".to_string()),
-                        ..Default::default()
+                item: RolloutItem::SessionMeta(Box::new(
+                    codex_protocol::protocol::SessionMetaLine {
+                        meta: codex_protocol::protocol::SessionMeta {
+                            session_id: parsed_thread_id.into(),
+                            id: parsed_thread_id,
+                            timestamp: timestamp.to_string(),
+                            cwd: self.codex_home.path().to_path_buf(),
+                            originator: "test".to_string(),
+                            cli_version: "test".to_string(),
+                            source: SessionSource::Cli,
+                            model_provider: Some("test-provider".to_string()),
+                            ..Default::default()
+                        },
+                        git: None,
                     },
-                    git: None,
-                }),
+                )),
             };
             let contents = serde_json::to_string(&rollout_line).expect("rollout line");
             std::fs::write(&path, format!("{contents}\n")).expect("rollout file");

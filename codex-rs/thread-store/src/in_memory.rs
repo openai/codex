@@ -617,10 +617,10 @@ impl InMemoryThreadStore {
             .histories
             .entry(params.thread_id)
             .or_default()
-            .push(RolloutItem::SessionMeta(SessionMetaLine {
+            .push(RolloutItem::SessionMeta(Box::new(SessionMetaLine {
                 meta: session_meta,
                 git: None,
-            }));
+            })));
         state.created_threads.insert(params.thread_id, params);
         Ok(())
     }

@@ -324,7 +324,7 @@ async fn assert_copied_fork_persists_inherited_history(history_mode: ThreadHisto
     let source_meta = codex_rollout::read_session_meta_line(source_path.as_path())
         .await
         .expect("read source session metadata");
-    let mut supplied_history = vec![RolloutItem::SessionMeta(source_meta)];
+    let mut supplied_history = vec![RolloutItem::SessionMeta(Box::new(source_meta))];
     supplied_history.extend(source_items.iter().cloned());
     let NewThread {
         thread: forked_thread,

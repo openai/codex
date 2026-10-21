@@ -48,13 +48,13 @@ async fn selected_capability_roots_survive_environment_reselection(
     }];
     let mut thread_extension_init = ExtensionDataInit::new();
     let initial_history = if from_history {
-        InitialHistory::Forked(vec![RolloutItem::SessionMeta(SessionMetaLine {
+        InitialHistory::Forked(vec![RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
                 selected_capability_roots: roots.clone(),
                 ..SessionMeta::default()
             },
             git: None,
-        })])
+        }))])
     } else {
         thread_extension_init.insert(roots.clone());
         InitialHistory::New

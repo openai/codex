@@ -47,10 +47,10 @@ fn write_rollout(home: &Path, thread_id: ThreadId, history_mode: ThreadHistoryMo
         ..SessionMeta::default()
     };
     for (ordinal, item) in [
-        RolloutItem::SessionMeta(SessionMetaLine {
+        RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: metadata,
             git: None,
-        }),
+        })),
         RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
             message: "question".to_string(),
             ..UserMessageEvent::default()

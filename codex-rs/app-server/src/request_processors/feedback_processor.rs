@@ -742,7 +742,7 @@ mod tests {
         let mut lines = vec![RolloutLine {
             timestamp: "2026-07-24T00:00:00Z".to_string(),
             ordinal: None,
-            item: RolloutItem::SessionMeta(SessionMetaLine {
+            item: RolloutItem::SessionMeta(Box::new(SessionMetaLine {
                 meta: codex_protocol::protocol::SessionMeta {
                     cwd: tempdir.path().to_path_buf(),
                     base_instructions: Some(codex_protocol::models::BaseInstructions {
@@ -752,7 +752,7 @@ mod tests {
                     ..Default::default()
                 },
                 git: None,
-            }),
+            })),
         }];
         lines.extend(turns.iter().map(|(turn_id, model, effort)| {
             RolloutLine {

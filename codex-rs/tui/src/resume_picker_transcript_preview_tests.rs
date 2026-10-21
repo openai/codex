@@ -73,7 +73,7 @@ fn legacy_transcript_preview_scans_tail_across_compaction() {
         vec![
             rollout_user_message("older user"),
             rollout_agent_message("older assistant"),
-            RolloutItem::Compacted(CompactedItem {
+            RolloutItem::Compacted(Box::new(CompactedItem {
                 message: String::from("summary that is not transcript text"),
                 replacement_history: None,
                 retained_context: None,
@@ -86,7 +86,7 @@ fn legacy_transcript_preview_scans_tail_across_compaction() {
                 compaction_response_id: None,
                 latest_token_usage_record: None,
                 resume_metadata: None,
-            }),
+            })),
             rollout_user_message("recent user"),
             rollout_agent_message("commentary one\ncommentary two"),
             rollout_agent_message("final one\n\n final two "),
@@ -209,7 +209,7 @@ fn legacy_transcript_preview_falls_back_for_oversized_hidden_record() {
         &path,
         vec![
             rollout_user_message("older user"),
-            RolloutItem::Compacted(CompactedItem {
+            RolloutItem::Compacted(Box::new(CompactedItem {
                 message: "x".repeat(MAX_LEGACY_TRANSCRIPT_PREVIEW_SCAN_BYTES),
                 replacement_history: None,
                 retained_context: None,
@@ -222,7 +222,7 @@ fn legacy_transcript_preview_falls_back_for_oversized_hidden_record() {
                 compaction_response_id: None,
                 latest_token_usage_record: None,
                 resume_metadata: None,
-            }),
+            })),
             rollout_agent_message("recent assistant"),
         ],
     );
@@ -241,7 +241,7 @@ fn legacy_transcript_preview_falls_back_for_oversized_hidden_record() {
 fn legacy_transcript_preview_falls_back_when_scan_budget_is_exhausted() {
     let temp_dir = tempdir().expect("tempdir");
     let path = temp_dir.path().join("rollout.jsonl");
-    let compacted = RolloutItem::Compacted(CompactedItem {
+    let compacted = RolloutItem::Compacted(Box::new(CompactedItem {
         message: "x".repeat(MAX_LEGACY_TRANSCRIPT_PREVIEW_SCAN_BYTES / 8),
         replacement_history: None,
         retained_context: None,
@@ -254,7 +254,7 @@ fn legacy_transcript_preview_falls_back_when_scan_budget_is_exhausted() {
         compaction_response_id: None,
         latest_token_usage_record: None,
         resume_metadata: None,
-    });
+    }));
     let mut items = vec![rollout_user_message("older user")];
     items.extend(std::iter::repeat_n(compacted, 9));
     items.push(rollout_agent_message("recent assistant"));

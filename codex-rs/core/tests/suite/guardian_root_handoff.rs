@@ -274,7 +274,7 @@ pub(crate) async fn handoff_scenario() -> Result<Vec<ResponsesRequest>> {
         "message":"Root checkpoint.", "replacement_history":[], "retained_context":history.retained_context(),
     }))?;
     test.codex
-        .append_rollout_items(&[RolloutItem::Compacted(checkpoint)])
+        .append_rollout_items(&[RolloutItem::Compacted(Box::new(checkpoint))])
         .await?;
     test.codex.flush_rollout().await?;
     let rollout = test

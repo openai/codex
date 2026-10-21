@@ -179,12 +179,14 @@ async fn guardian_revalidates_owning_session_before_allow(
         test.codex = super::guardian_checkpoint_migration::resume(
             &test,
             &test.codex,
-            vec![RolloutItem::Compacted(serde_json::from_value(json!({
-                "message": "old checkpoint",
-                "replacement_history": [{
-                    "type": "compaction", "id": "old", "encrypted_content": "unknown producer"
-                }]
-            }))?)],
+            vec![RolloutItem::Compacted(Box::new(serde_json::from_value(
+                json!({
+                    "message": "old checkpoint",
+                    "replacement_history": [{
+                        "type": "compaction", "id": "old", "encrypted_content": "unknown producer"
+                    }]
+                }),
+            )?))],
         )
         .await?;
     }

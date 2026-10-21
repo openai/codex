@@ -277,7 +277,7 @@ fn write_rollout_under(
     let initial_ordinal = history_base.map_or(0, |base| base.end_ordinal_exclusive);
     let mut lines = vec![rollout_line(
         initial_ordinal,
-        RolloutItem::SessionMeta(SessionMetaLine {
+        RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
                 session_id: thread_id.into(),
                 id: thread_id,
@@ -286,7 +286,7 @@ fn write_rollout_under(
                 ..SessionMeta::default()
             },
             git: None,
-        }),
+        })),
     )];
     for offset in 1..next_ordinal {
         let ordinal = initial_ordinal

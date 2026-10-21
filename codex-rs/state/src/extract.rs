@@ -365,7 +365,7 @@ mod tests {
         let mut metadata =
             ThreadMetadataBuilder::new(thread_id, PathBuf::new(), Utc::now(), source.clone())
                 .build("test-provider");
-        let session_meta = RolloutItem::SessionMeta(SessionMetaLine {
+        let session_meta = RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
                 session_id: thread_id.into(),
                 id: thread_id,
@@ -373,7 +373,7 @@ mod tests {
                 ..Default::default()
             },
             git: None,
-        });
+        }));
         apply_rollout_item(&mut metadata, &session_meta, "test-provider");
         let mut expected = metadata.clone();
         expected.title = super::GUARDIAN_THREAD_TITLE.to_string();
@@ -525,7 +525,7 @@ mod tests {
 
         apply_rollout_item(
             &mut metadata,
-            &RolloutItem::SessionMeta(SessionMetaLine {
+            &RolloutItem::SessionMeta(Box::new(SessionMetaLine {
                 meta: SessionMeta {
                     creator_user_id: None,
                     creator_account_id: None,
@@ -558,7 +558,7 @@ mod tests {
                     context_window: None,
                 },
                 git: None,
-            }),
+            })),
             "test-provider",
         );
         apply_rollout_item(
@@ -775,7 +775,7 @@ mod tests {
 
         apply_rollout_item(
             &mut metadata,
-            &RolloutItem::SessionMeta(SessionMetaLine {
+            &RolloutItem::SessionMeta(Box::new(SessionMetaLine {
                 meta: SessionMeta {
                     creator_user_id: None,
                     creator_account_id: None,
@@ -806,7 +806,7 @@ mod tests {
                     context_window: None,
                 },
                 git: None,
-            }),
+            })),
             "test-provider",
         );
 

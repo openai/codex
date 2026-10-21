@@ -4416,7 +4416,7 @@ impl Session {
         }
         let world_state_item = WorldStateItem::full(world_state_baseline.into_object());
         let rollout_items = [
-            RolloutItem::Compacted(compacted_item),
+            RolloutItem::Compacted(Box::new(compacted_item)),
             RolloutItem::WorldState(world_state_item),
             RolloutItem::TurnContext(reference_context_item),
             // The frozen turn context must not override current settings in persisted metadata.

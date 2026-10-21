@@ -111,7 +111,7 @@ async fn recovery_without_a_snapshot_keeps_each_threads_originator() -> Result<(
         let thread = fixture
             .thread_manager
             .start_thread(StartThreadOptions {
-                initial_history: InitialHistory::Forked(vec![RolloutItem::SessionMeta(
+                initial_history: InitialHistory::Forked(vec![RolloutItem::SessionMeta(Box::new(
                     SessionMetaLine {
                         meta: SessionMeta {
                             originator: originator.into(),
@@ -119,7 +119,7 @@ async fn recovery_without_a_snapshot_keeps_each_threads_originator() -> Result<(
                         },
                         git: None,
                     },
-                )]),
+                ))]),
                 environments: Some(
                     fixture
                         .codex

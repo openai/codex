@@ -801,7 +801,7 @@ async fn run_guardian_subagent_review(
         test.codex = super::guardian_checkpoint_migration::resume(
             &test,
             &test.codex,
-            vec![RolloutItem::Compacted(checkpoint)],
+            vec![RolloutItem::Compacted(Box::new(checkpoint))],
         )
         .await?;
         assert_eq!(
@@ -1678,7 +1678,7 @@ async fn run_guardian_subagent_review(
                 ));
             }
             checkpoint.replacement_history = Some(replacement_history);
-            root.append_rollout_items(&[RolloutItem::Compacted(checkpoint)])
+            root.append_rollout_items(&[RolloutItem::Compacted(Box::new(checkpoint))])
                 .await?;
             root.shutdown_and_wait().await?;
             test.thread_manager.remove_thread(&root_thread_id).await;

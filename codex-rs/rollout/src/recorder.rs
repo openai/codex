@@ -2039,7 +2039,7 @@ async fn write_session_meta(
         git: git_info,
     };
 
-    let rollout_item = RolloutItem::SessionMeta(session_meta_line);
+    let rollout_item = RolloutItem::SessionMeta(Box::new(session_meta_line));
     if let Some(writer) = writer.as_mut() {
         let ordinal = ordinal_state.current()?;
         writer.write_rollout_item(&rollout_item, ordinal).await?;

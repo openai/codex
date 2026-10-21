@@ -185,7 +185,7 @@ async fn metadata_updates_share_ownership_and_resume_compressed_rollouts() -> Te
     expected.git = None;
     assert_eq!(
         json!(items.last()),
-        json!(Some(RolloutItem::SessionMeta(expected.clone())))
+        json!(Some(RolloutItem::SessionMeta(Box::new(expected.clone()))))
     );
 
     age(&path)?;
@@ -214,7 +214,7 @@ async fn metadata_updates_share_ownership_and_resume_compressed_rollouts() -> Te
     let (items, _, _) = RolloutRecorder::load_rollout_items(&path).await?;
     assert_eq!(
         json!(items.last()),
-        json!(Some(RolloutItem::SessionMeta(expected)))
+        json!(Some(RolloutItem::SessionMeta(Box::new(expected))))
     );
     Ok(())
 }

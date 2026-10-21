@@ -33,7 +33,7 @@ fn write_rollout_with_source_and_provider(
     let line = RolloutLine {
         timestamp: timestamp.clone(),
         ordinal: None,
-        item: RolloutItem::SessionMeta(SessionMetaLine {
+        item: RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
                 creator_user_id: None,
                 creator_account_id: None,
@@ -64,7 +64,7 @@ fn write_rollout_with_source_and_provider(
                 context_window: None,
             },
             git: None,
-        }),
+        })),
     };
     let body = serde_json::to_string(&line).map_err(std::io::Error::other)?;
     std::fs::write(path, format!("{body}\n"))

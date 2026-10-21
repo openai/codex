@@ -1678,8 +1678,11 @@ async fn thread_list_reports_loaded_subagent_direct_input_capability() -> Result
     let parent_rollout_path = rollout_path(codex_home.path(), "2025-02-01T09-00-00", &cli_id);
     let mut parent_meta = read_session_meta_line(&parent_rollout_path).await?;
     parent_meta.meta.multi_agent_version = Some(MultiAgentVersion::V2);
-    append_rollout_item_to_path(&parent_rollout_path, &RolloutItem::SessionMeta(parent_meta))
-        .await?;
+    append_rollout_item_to_path(
+        &parent_rollout_path,
+        &RolloutItem::SessionMeta(Box::new(parent_meta)),
+    )
+    .await?;
     // Legacy children resume before the root restores the V2 registry from persisted spawn edges.
     let mut expected = vec![(cli_id.clone(), None, false)];
     let mut threads_to_resume = vec![(cli_id.clone(), SessionSource::Cli, Some(true))];
@@ -1736,7 +1739,8 @@ async fn thread_list_reports_loaded_subagent_direct_input_capability() -> Result
         let source = SessionSource::from(session_meta.meta.source.clone());
         if let Some(version) = version {
             session_meta.meta.multi_agent_version = Some(version);
-            append_rollout_item_to_path(&path, &RolloutItem::SessionMeta(session_meta)).await?;
+            append_rollout_item_to_path(&path, &RolloutItem::SessionMeta(Box::new(session_meta)))
+                .await?;
         }
         if should_resume {
             let resume = (thread_id.clone(), source, capability);

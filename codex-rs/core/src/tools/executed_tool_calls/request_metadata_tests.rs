@@ -967,13 +967,13 @@ fn tool_call_completeness_survives_waits_without_changing_deltas() {
 fn paginated_history_allows_fresh_origins_but_rejects_known_ids() {
     for origin in ["fresh-exec", "old-exec"] {
         let history = InitialHistory::Forked(vec![
-            RolloutItem::SessionMeta(SessionMetaLine {
+            RolloutItem::SessionMeta(Box::new(SessionMetaLine {
                 meta: SessionMeta {
                     history_mode: ThreadHistoryMode::Paginated,
                     ..SessionMeta::default()
                 },
                 git: None,
-            }),
+            })),
             RolloutItem::ResponseItem(exec_input("old-exec").into()),
             RolloutItem::ResponseItem(exec_output("old-exec").into()),
         ]);

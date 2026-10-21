@@ -210,7 +210,7 @@ fn ignores_legacy_abort_without_turn_id_and_context_only_records() {
             duration_ms: None,
         },
     )));
-    let compacted = project(RolloutItem::Compacted(CompactedItem {
+    let compacted = project(RolloutItem::Compacted(Box::new(CompactedItem {
         message: String::new(),
         replacement_history: None,
         retained_context: None,
@@ -223,7 +223,7 @@ fn ignores_legacy_abort_without_turn_id_and_context_only_records() {
         compaction_response_id: None,
         latest_token_usage_record: None,
         resume_metadata: None,
-    }));
+    })));
     let security_risk = project(RolloutItem::SecurityRiskScore(SecurityRiskScore {
         scores: BTreeMap::from([("action_risk".to_string(), 0.92)]),
         call_id: None,

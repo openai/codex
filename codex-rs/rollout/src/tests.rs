@@ -1591,7 +1591,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
     let meta_line = RolloutLine {
         timestamp: ts.to_string(),
         ordinal: None,
-        item: RolloutItem::SessionMeta(SessionMetaLine {
+        item: RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
                 creator_user_id: None,
                 creator_account_id: None,
@@ -1622,7 +1622,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 context_window: None,
             },
             git: None,
-        }),
+        })),
     };
     writeln!(file, "{}", serde_json::to_string(&meta_line)?)?;
 

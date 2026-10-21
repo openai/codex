@@ -48,7 +48,7 @@ fn test_config(codex_home: &Path) -> RolloutConfig {
 }
 
 fn paginated_session_meta_item(thread_id: ThreadId, cwd: &Path) -> RolloutItem {
-    RolloutItem::SessionMeta(SessionMetaLine {
+    RolloutItem::SessionMeta(Box::new(SessionMetaLine {
         meta: SessionMeta {
             session_id: thread_id.into(),
             id: thread_id,
@@ -61,7 +61,7 @@ fn paginated_session_meta_item(thread_id: ThreadId, cwd: &Path) -> RolloutItem {
             ..SessionMeta::default()
         },
         git: None,
-    })
+    }))
 }
 
 fn agent_message_item(message: &str) -> RolloutItem {
@@ -248,7 +248,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
         RolloutLine {
             timestamp: "2026-01-27T12:34:56Z".to_string(),
             ordinal: None,
-            item: RolloutItem::SessionMeta(session_meta_line),
+            item: RolloutItem::SessionMeta(Box::new(session_meta_line)),
         },
         RolloutLine {
             timestamp: "2026-01-27T12:34:57Z".to_string(),

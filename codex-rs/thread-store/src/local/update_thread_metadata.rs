@@ -921,7 +921,7 @@ async fn update_rollout_metadata(
     };
     patch(&mut metadata);
     recorder
-        .record_canonical_items(&[RolloutItem::SessionMeta(metadata)])
+        .record_canonical_items(&[RolloutItem::SessionMeta(Box::new(metadata))])
         .await
         .map_err(io_error)?;
     recorder.flush().await.map_err(io_error)?;
@@ -1314,7 +1314,7 @@ mod tests {
         let (mut expected, _, _) = RolloutRecorder::load_rollout_items(&path).await?;
         let mut metadata = read_session_meta_line(&path).await?;
         metadata.meta.memory_mode = Some("disabled".into());
-        expected.push(RolloutItem::SessionMeta(metadata));
+        expected.push(RolloutItem::SessionMeta(Box::new(metadata)));
 
         let mut shutdown = Box::pin(store.shutdown_thread(thread_id));
         update_rollout_metadata(&store, thread_id, &path, &writer_lock, |meta| {

@@ -592,7 +592,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                 RolloutLine {
                     timestamp: "2026-01-27T12:00:00Z".to_string(),
                     ordinal: None,
-                    item: RolloutItem::SessionMeta(session_meta_line),
+                    item: RolloutItem::SessionMeta(Box::new(session_meta_line)),
                 },
                 RolloutLine {
                     timestamp: "2026-01-27T12:00:01Z".to_string(),

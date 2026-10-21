@@ -2806,7 +2806,7 @@ mod tests {
             metadata.created_at,
             SessionSource::Cli,
         );
-        let items = vec![RolloutItem::SessionMeta(SessionMetaLine {
+        let items = vec![RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
                 creator_user_id: None,
                 creator_account_id: None,
@@ -2837,7 +2837,7 @@ mod tests {
                 context_window: None,
             },
             git: None,
-        })];
+        }))];
 
         runtime
             .apply_rollout_items(
@@ -2880,7 +2880,7 @@ mod tests {
             metadata.created_at,
             SessionSource::Cli,
         );
-        let items = vec![RolloutItem::SessionMeta(SessionMetaLine {
+        let items = vec![RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
                 creator_user_id: None,
                 creator_account_id: None,
@@ -2918,7 +2918,7 @@ mod tests {
                         .expect("valid git remote URL"),
                 ),
             }),
-        })];
+        }))];
 
         runtime
             .apply_rollout_items(
