@@ -338,7 +338,7 @@ impl TraceReducer {
             RawTraceEventPayload::CodeCellInitialResponse {
                 runtime_cell_id,
                 status,
-                ..
+                response_payload,
             } => {
                 let thread_id = self.code_cell_event_thread_id(
                     event.thread_id,
@@ -357,12 +357,13 @@ impl TraceReducer {
                     code_cell_id,
                     runtime_cell_id,
                     status,
+                    response_payload,
                 )?;
             }
             RawTraceEventPayload::CodeCellEnded {
                 runtime_cell_id,
                 status,
-                ..
+                response_payload,
             } => {
                 let thread_id = self.code_cell_event_thread_id(
                     event.thread_id,
@@ -380,6 +381,7 @@ impl TraceReducer {
                     event.wall_time_unix_ms,
                     code_cell_id,
                     status,
+                    response_payload,
                 )?;
             }
             RawTraceEventPayload::CompactionRequestStarted {

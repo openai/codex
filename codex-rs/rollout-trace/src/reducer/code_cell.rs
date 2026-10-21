@@ -72,9 +72,11 @@ pub(super) enum PendingCodeCellLifecycleEventKind {
     InitialResponse {
         runtime_cell_id: String,
         status: CodeCellRuntimeStatus,
+        response_payload: Option<RawPayloadRef>,
     },
     Ended {
         status: CodeCellRuntimeStatus,
+        response_payload: Option<RawPayloadRef>,
     },
 }
 
@@ -192,6 +194,9 @@ impl TraceReducer {
                 runtime_status: CodeCellRuntimeStatus::Starting,
                 initial_response_at_unix_ms: None,
                 initial_response_seq: None,
+                initial_response_status: None,
+                raw_initial_response_payload_id: None,
+                raw_result_payload_id: None,
                 yielded_at_unix_ms: None,
                 yielded_seq: None,
                 source_js: started.source_js,
@@ -239,6 +244,7 @@ impl TraceReducer {
         code_cell_id: CodeCellId,
         runtime_cell_id: String,
         status: CodeCellRuntimeStatus,
+        response_payload: Option<RawPayloadRef>,
     ) -> Result<()> {
         if !self.rollout.code_cells.contains_key(&code_cell_id) {
             if self.pending_code_cell_starts.contains_key(&code_cell_id) {
@@ -250,6 +256,7 @@ impl TraceReducer {
                         kind: PendingCodeCellLifecycleEventKind::InitialResponse {
                             runtime_cell_id,
                             status,
+                            response_payload,
                         },
                     },
                 );
@@ -263,6 +270,7 @@ impl TraceReducer {
             code_cell_id,
             runtime_cell_id,
             status,
+            response_payload,
         )
     }
 
@@ -273,15 +281,18 @@ impl TraceReducer {
         code_cell_id: CodeCellId,
         runtime_cell_id: String,
         status: CodeCellRuntimeStatus,
+        response_payload: Option<RawPayloadRef>,
     ) -> Result<()> {
         let Some(cell) = self.rollout.code_cells.get_mut(&code_cell_id) else {
             bail!("code cell initial response referenced unknown cell {code_cell_id}");
         };
 
         cell.runtime_cell_id = Some(runtime_cell_id);
-        if cell.initial_response_at_unix_ms.is_none() {
+        if cell.initial_response_status.is_none() {
             cell.initial_response_at_unix_ms = Some(wall_time_unix_ms);
             cell.initial_response_seq = Some(seq);
+            cell.initial_response_status = Some(status.clone());
+            cell.raw_initial_response_payload_id = response_payload.map(|p| p.raw_payload_id);
         }
         if status == CodeCellRuntimeStatus::Yielded {
             cell.yielded_at_unix_ms = Some(wall_time_unix_ms);
@@ -303,6 +314,7 @@ impl TraceReducer {
         wall_time_unix_ms: i64,
         code_cell_id: CodeCellId,
         status: CodeCellRuntimeStatus,
+        response_payload: Option<RawPayloadRef>,
     ) -> Result<()> {
         if !self.rollout.code_cells.contains_key(&code_cell_id) {
             if self.pending_code_cell_starts.contains_key(&code_cell_id) {
@@ -311,14 +323,23 @@ impl TraceReducer {
                     PendingCodeCellLifecycleEvent {
                         seq,
                         wall_time_unix_ms,
-                        kind: PendingCodeCellLifecycleEventKind::Ended { status },
+                        kind: PendingCodeCellLifecycleEventKind::Ended {
+                            status,
+                            response_payload,
+                        },
                     },
                 );
                 return Ok(());
             }
             bail!("code cell end referenced unknown cell {code_cell_id}");
         }
-        self.end_code_cell(seq, wall_time_unix_ms, code_cell_id, status)
+        self.end_code_cell(
+            seq,
+            wall_time_unix_ms,
+            code_cell_id,
+            status,
+            response_payload,
+        )
     }
 
     fn end_code_cell(
@@ -327,6 +348,7 @@ impl TraceReducer {
         wall_time_unix_ms: i64,
         code_cell_id: CodeCellId,
         status: CodeCellRuntimeStatus,
+        response_payload: Option<RawPayloadRef>,
     ) -> Result<()> {
         let Some(cell) = self.rollout.code_cells.get_mut(&code_cell_id) else {
             bail!("code cell end referenced unknown cell {code_cell_id}");
@@ -336,6 +358,7 @@ impl TraceReducer {
             cell.initial_response_at_unix_ms = Some(wall_time_unix_ms);
             cell.initial_response_seq = Some(seq);
         }
+        cell.raw_result_payload_id = response_payload.map(|p| p.raw_payload_id);
         cell.execution.ended_at_unix_ms = Some(wall_time_unix_ms);
         cell.execution.ended_seq = Some(seq);
         cell.execution.status = execution_status_for_code_cell(&status);
@@ -376,7 +399,13 @@ impl TraceReducer {
             .collect();
 
         for code_cell_id in code_cell_ids {
-            self.end_code_cell(seq, wall_time_unix_ms, code_cell_id, runtime_status.clone())?;
+            self.end_code_cell(
+                seq,
+                wall_time_unix_ms,
+                code_cell_id,
+                runtime_status.clone(),
+                /*response_payload*/ None,
+            )?;
         }
         Ok(())
     }
@@ -403,18 +432,24 @@ impl TraceReducer {
                 PendingCodeCellLifecycleEventKind::InitialResponse {
                     runtime_cell_id,
                     status,
+                    response_payload,
                 } => self.record_code_cell_initial_response(
                     event.seq,
                     event.wall_time_unix_ms,
                     code_cell_id.to_string(),
                     runtime_cell_id,
                     status,
+                    response_payload,
                 )?,
-                PendingCodeCellLifecycleEventKind::Ended { status } => self.end_code_cell(
+                PendingCodeCellLifecycleEventKind::Ended {
+                    status,
+                    response_payload,
+                } => self.end_code_cell(
                     event.seq,
                     event.wall_time_unix_ms,
                     code_cell_id.to_string(),
                     status,
+                    response_payload,
                 )?,
             }
         }

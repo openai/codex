@@ -67,12 +67,20 @@ fn code_cell_lifecycle_links_nested_tools_waits_and_outputs() -> anyhow::Result<
         upstream_request_id: None,
         response_payload: response,
     })?;
+    let initial_response = writer.write_json_payload(
+        RawPayloadKind::ToolResult,
+        &json!({"response": "initial caller result"}),
+    )?;
+    let final_response = writer.write_json_payload(
+        RawPayloadKind::ToolResult,
+        &json!({"response": "later runtime result"}),
+    )?;
     writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::CodeCellInitialResponse {
             runtime_cell_id: "1".to_string(),
             status: CodeCellRuntimeStatus::Yielded,
-            response_payload: None,
+            response_payload: Some(initial_response.clone()),
         },
     )?;
     writer.append_with_context(
@@ -156,7 +164,7 @@ fn code_cell_lifecycle_links_nested_tools_waits_and_outputs() -> anyhow::Result<
         RawTraceEventPayload::CodeCellEnded {
             runtime_cell_id: "1".to_string(),
             status: CodeCellRuntimeStatus::Completed,
-            response_payload: None,
+            response_payload: Some(final_response.clone()),
         },
     )?;
 
@@ -168,6 +176,18 @@ fn code_cell_lifecycle_links_nested_tools_waits_and_outputs() -> anyhow::Result<
         .last()
         .expect("exec output item");
 
+    assert_eq!(
+        (
+            &cell.initial_response_status,
+            &cell.raw_initial_response_payload_id,
+            &cell.raw_result_payload_id,
+        ),
+        (
+            &Some(CodeCellRuntimeStatus::Yielded),
+            &Some(initial_response.raw_payload_id),
+            &Some(final_response.raw_payload_id),
+        )
+    );
     assert_eq!(cell.thread_id, "thread-root");
     assert_eq!(cell.runtime_status, CodeCellRuntimeStatus::Completed);
     assert_eq!(cell.execution.status, ExecutionStatus::Completed);
@@ -217,12 +237,20 @@ fn fast_code_cell_lifecycle_waits_for_source_item() -> anyhow::Result<()> {
             source_js: "not valid js".to_string(),
         },
     )?;
+    let initial_response = writer.write_json_payload(
+        RawPayloadKind::ToolResult,
+        &json!({"response": "initial caller result"}),
+    )?;
+    let final_response = writer.write_json_payload(
+        RawPayloadKind::ToolResult,
+        &json!({"response": "later runtime result"}),
+    )?;
     writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::CodeCellInitialResponse {
             runtime_cell_id: "1".to_string(),
             status: CodeCellRuntimeStatus::Failed,
-            response_payload: None,
+            response_payload: Some(initial_response.clone()),
         },
     )?;
     writer.append_with_context(
@@ -230,7 +258,7 @@ fn fast_code_cell_lifecycle_waits_for_source_item() -> anyhow::Result<()> {
         RawTraceEventPayload::CodeCellEnded {
             runtime_cell_id: "1".to_string(),
             status: CodeCellRuntimeStatus::Failed,
-            response_payload: None,
+            response_payload: Some(final_response.clone()),
         },
     )?;
     let response = writer.write_json_payload(
@@ -256,6 +284,18 @@ fn fast_code_cell_lifecycle_waits_for_source_item() -> anyhow::Result<()> {
     let code_cell_id = test_reduced_code_cell_id("call-code");
     let cell = &rollout.code_cells[&code_cell_id];
 
+    assert_eq!(
+        (
+            &cell.initial_response_status,
+            &cell.raw_initial_response_payload_id,
+            &cell.raw_result_payload_id,
+        ),
+        (
+            &Some(CodeCellRuntimeStatus::Failed),
+            &Some(initial_response.raw_payload_id),
+            &Some(final_response.raw_payload_id),
+        )
+    );
     assert_eq!(cell.thread_id, "thread-root");
     assert_eq!(cell.runtime_status, CodeCellRuntimeStatus::Failed);
     assert_eq!(cell.execution.status, ExecutionStatus::Failed);
