@@ -794,6 +794,10 @@ async fn malformed_handshakes_preserve_active_streams_and_admission_recovers() -
             next_relay_frame(&mut harness_websocket),
         )
         .await??;
+        if authorization == "timeout-authorization-secret" {
+            // Diagnostic inspection does not poll the harness socket for pings.
+            tokio::time::pause();
+        }
         assert_eq!(reset.stream_id, stream_id);
         assert_eq!(reset.validate()?, RelayFrameBodyKind::Reset);
     }
@@ -816,6 +820,8 @@ async fn malformed_handshakes_preserve_active_streams_and_admission_recovers() -
             })
     }));
 
+    // Keep the close handshake and its timeout on a running clock.
+    tokio::time::resume();
     harness_websocket.close(None).await?;
     assert_eq!(
         timeout(Duration::from_secs(1), environment_task).await??,
