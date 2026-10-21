@@ -2569,6 +2569,7 @@ dependencies = [
  "insta",
  "jsonwebtoken",
  "libc",
+ "libsqlite3-sys",
  "os_info",
  "owo-colors",
  "predicates",

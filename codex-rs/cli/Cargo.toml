@@ -87,11 +87,13 @@ crossterm = { workspace = true, features = ["event-stream"] }
 futures = { workspace = true }
 http = { workspace = true }
 libc = { workspace = true }
+libsqlite3-sys = { workspace = true }
 os_info = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sqlx = { workspace = true }
 supports-color = { workspace = true }
 sys-locale = { workspace = true }
 tempfile = { workspace = true }
@@ -137,7 +139,6 @@ jsonwebtoken = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 sha2 = { workspace = true }
-sqlx = { workspace = true }
 tar = { workspace = true }
 tokio-tungstenite = { workspace = true }
 vt100 = { workspace = true }
