@@ -4,6 +4,7 @@ use crate::ConversationTranscriptEntry;
 use crate::PlannedAction;
 use crate::PreviousReviews;
 use crate::RenderedNodeReplEvidence;
+use crate::RetainedInstructionItem;
 use crate::TranscriptImages;
 use crate::TrustedSkills;
 use crate::TrustedTool;
@@ -20,7 +21,7 @@ pub enum ContextSection<T = ConversationTranscriptEntry> {
     ConversationTranscript { items: Vec<T> },
     RootConversation { items: Vec<String> },
     TrustedUserAnswers { items: Vec<String> },
-    RetainedUserInstructions { items: Vec<crate::Budgeted<String>> },
+    RetainedUserInstructions { items: Vec<RetainedInstructionItem> },
     SenderUserMessages { items: Vec<String> },
     PlannedAction(PlannedAction),
     PreviousReviews(PreviousReviews),

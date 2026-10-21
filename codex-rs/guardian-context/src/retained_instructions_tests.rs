@@ -155,7 +155,11 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
     let restored = serde_json::from_value(checkpoint).unwrap();
     assert_eq!(
         render_retained_instructions(&restored, retained_assistant_message)[0],
-        Budgeted::required(GuardianRootMessage::IncompleteAssistantContext.render())
+        RetainedInstructionItem {
+            content: GuardianRootMessage::IncompleteAssistantContext.render(),
+            kind: RetainedInstructionKind::HostNotice,
+            source: None,
+        }
     );
     context.record_assistant_message(
         RetainedUserMessage {
@@ -171,7 +175,11 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
     let rendered = render_retained_instructions(&context, retained_assistant_message);
     assert_eq!(
         rendered[0],
-        Budgeted::required(GuardianRootMessage::IncompleteAssistantContext.render())
+        RetainedInstructionItem {
+            content: GuardianRootMessage::IncompleteAssistantContext.render(),
+            kind: RetainedInstructionKind::HostNotice,
+            source: None,
+        }
     );
     assert!(
         rendered
