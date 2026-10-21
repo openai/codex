@@ -8,6 +8,7 @@
 //! Explicit connections can restrict writes; default handles retain legacy access.
 
 use self::connection::Access;
+use self::options::LocalBoardOptions;
 use crate::ChannelDescription;
 use crate::ChannelPermissions;
 use crate::ChannelSummary;
@@ -43,6 +44,7 @@ use uuid::Uuid;
 
 pub(crate) mod connection;
 mod lifecycle;
+pub(crate) mod options;
 mod paging;
 mod pool;
 mod queries;
@@ -73,14 +75,16 @@ struct StoredPost {
 impl LocalAgentMessageBoard {
     /// Reopens the same board for a root, child or resumed runtime. The shared
     /// SQLite configuration preserves the host's connection and journal policy.
+    /// The caller selects the storage namespace.
     pub async fn open(
         sqlite: &SqliteConfig,
+        options: &LocalBoardOptions,
         identity: SessionId,
         host: Arc<dyn MessageBoardHost>,
     ) -> Result<Self> {
         Ok(Self {
             identity,
-            pool: pool::open(sqlite).await?,
+            pool: pool::open(sqlite, options).await?,
             host,
             access: None,
         })
@@ -252,11 +256,11 @@ impl LocalAgentMessageBoard {
                 thread_id: root,
                 created_at: now,
             },
-            text: request.text.clone(),
+            text: request.text,
         };
         sqlx::query("INSERT INTO posts(board,id,channel,root,author,timestamp,body_search,payload,request_id,request) VALUES(?,?,?,?,?,?,?,?,?,?)")
             .bind(self.identity.to_string()).bind(id.to_string()).bind(channel).bind(root.to_string())
-            .bind(author.to_string()).bind(now.timestamp_micros()).bind(default_case_fold_str(&request.text))
+            .bind(author.to_string()).bind(now.timestamp_micros()).bind(default_case_fold_str(&post.text))
             .bind(serde_json::to_string(&post).map_err(storage_error)?).bind(request_id).bind(request_json)
             .execute(&mut *tx).await.map_err(storage_error)?;
         // Participation subscribes by default, without overriding an explicit opt-out.

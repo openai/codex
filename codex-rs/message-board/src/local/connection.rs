@@ -2,6 +2,7 @@
 //! independent of the board's storage or the agent's tree identity.
 
 use super::LocalAgentMessageBoard;
+use super::options::LocalBoardOptions;
 use crate::MessageBoardHost;
 use crate::PermissionDenied;
 use codex_protocol::AgentPath;
@@ -19,11 +20,21 @@ use std::sync::OnceLock;
 pub struct LocalBoard {
     sqlite: SqliteConfig,
     identity: SessionId,
+    options: LocalBoardOptions,
 }
 
 impl LocalBoard {
     pub fn new(sqlite: SqliteConfig, identity: SessionId) -> Self {
-        Self { sqlite, identity }
+        Self {
+            sqlite,
+            identity,
+            options: LocalBoardOptions::default(),
+        }
+    }
+
+    pub fn with_options(mut self, options: LocalBoardOptions) -> Self {
+        self.options = options;
+        self
     }
 
     pub fn read_only(&self) -> LocalBoardConnection {
@@ -77,8 +88,13 @@ impl LocalBoardConnection {
     }
 
     pub async fn open(&self, host: Arc<dyn MessageBoardHost>) -> Result<LocalAgentMessageBoard> {
-        let mut board =
-            LocalAgentMessageBoard::open(&self.board.sqlite, self.identity(), host).await?;
+        let mut board = LocalAgentMessageBoard::open(
+            &self.board.sqlite,
+            &self.board.options,
+            self.identity(),
+            host,
+        )
+        .await?;
         // Pool initialization canonicalizes the directory before opening SQLite.
         let options = board.pool.connect_options();
         let database = options.get_filename();

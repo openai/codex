@@ -1,6 +1,7 @@
 //! Owns the local database schema and pool registry shared by runtime handles and setup.
 //! Initialization and deletion recovery share the registry lock to exclude stale pools.
 
+use super::options::LocalBoardOptions;
 use super::storage_error;
 use codex_protocol::error::Result;
 use codex_state::SqliteConfig;
@@ -12,8 +13,6 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Weak;
 use tokio::sync::Mutex;
-
-pub(super) const DATABASE_FILE: &str = "agent_message_board_1.sqlite";
 
 // Weak entries let the last board handle release its pool. Initialization and
 // recovery share one lock so concurrent starts cannot open duplicate or stale pools.
@@ -53,11 +52,13 @@ CREATE TABLE IF NOT EXISTS subscription_opt_outs (
     clippy::await_holding_invalid_type,
     reason = "serialize shared pool initialization"
 )]
-pub(super) async fn open(sqlite: &SqliteConfig) -> Result<Arc<SqlitePool>> {
+pub(super) async fn open(
+    sqlite: &SqliteConfig,
+    options: &LocalBoardOptions,
+) -> Result<Arc<SqlitePool>> {
+    let filename = options.database_file()?;
     tokio::fs::create_dir_all(sqlite.home()).await?;
-    let path = tokio::fs::canonicalize(sqlite.home())
-        .await?
-        .join(DATABASE_FILE);
+    let path = tokio::fs::canonicalize(sqlite.home()).await?.join(filename);
     let mut pools = POOLS.lock().await;
     pools.retain(|_, pool| pool.strong_count() > 0);
     let pool = if let Some(pool) = pools

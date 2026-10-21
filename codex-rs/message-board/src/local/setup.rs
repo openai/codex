@@ -2,6 +2,7 @@
 
 use super::insert_channel;
 use super::invalid;
+use super::options::LocalBoardOptions;
 use super::storage_error;
 use super::validate_channel;
 use crate::ChannelDescription;
@@ -43,6 +44,7 @@ pub struct LocalBoardSetup {
 /// safe to retry; replacing it or initializing an already-used board is rejected.
 pub async fn configure_local_board(
     sqlite: &SqliteConfig,
+    options: &LocalBoardOptions,
     board: SessionId,
     setup: LocalBoardSetup,
 ) -> Result<()> {
@@ -56,7 +58,7 @@ pub async fn configure_local_board(
     for name in template.channels.keys() {
         validate_channel(name)?;
     }
-    let pool = super::pool::open(sqlite).await?;
+    let pool = super::pool::open(sqlite, options).await?;
     let mut tx = pool
         .begin_with("BEGIN IMMEDIATE")
         .await

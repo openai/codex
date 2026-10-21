@@ -91,6 +91,7 @@ impl MessageBoardHost for Host {
 async fn opening_board_preserves_posts_when_corruption_has_no_startup_recovery() {
     let dir = tempfile::tempdir().unwrap();
     let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
+    let options = LocalBoardOptions::default();
     let root = ThreadId::new();
     let host = Arc::new(Host {
         clock: AtomicI64::default(),
@@ -131,7 +132,7 @@ async fn opening_board_preserves_posts_when_corruption_has_no_startup_recovery()
     pool.close().await;
 
     let tree = SessionId::from(root);
-    let board = LocalAgentMessageBoard::open(&sqlite, tree, host.clone())
+    let board = LocalAgentMessageBoard::open(&sqlite, &options, tree, host.clone())
         .await
         .unwrap();
     let request = PostRequest {
@@ -142,7 +143,7 @@ async fn opening_board_preserves_posts_when_corruption_has_no_startup_recovery()
     };
     let metadata = board.post(root, request.clone()).await.unwrap();
     drop(board);
-    let resumed = LocalAgentMessageBoard::open(&sqlite, tree, host)
+    let resumed = LocalAgentMessageBoard::open(&sqlite, &options, tree, host)
         .await
         .unwrap();
     assert_eq!(resumed.post(root, request).await.unwrap(), metadata);
@@ -152,6 +153,7 @@ async fn opening_board_preserves_posts_when_corruption_has_no_startup_recovery()
 async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
     let dir = tempfile::tempdir().unwrap();
     let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
+    let options = LocalBoardOptions::default();
     let root = ThreadId::new();
     let child = ThreadId::new();
     let child_path = AgentPath::root().join("worker").unwrap();
@@ -164,7 +166,7 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
         notifications: Mutex::default(),
     });
     let tree = SessionId::from(root);
-    let first = LocalAgentMessageBoard::open(&sqlite, tree, host.clone())
+    let first = LocalAgentMessageBoard::open(&sqlite, &options, tree, host.clone())
         .await
         .unwrap();
     first
@@ -186,7 +188,7 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
         // The creator receives this through its channel subscription.
         agents_to_notify: vec![AgentPath::root()],
     };
-    let second = LocalAgentMessageBoard::open(&sqlite, tree, host.clone())
+    let second = LocalAgentMessageBoard::open(&sqlite, &options, tree, host.clone())
         .await
         .unwrap();
     let (metadata, duplicate) = tokio::join!(
@@ -213,7 +215,7 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
         .unwrap();
     legacy_pool.close().await;
 
-    let resumed = LocalAgentMessageBoard::open(&sqlite, tree, host.clone())
+    let resumed = LocalAgentMessageBoard::open(&sqlite, &options, tree, host.clone())
         .await
         .unwrap();
     assert_eq!(resumed.post(root, request).await.unwrap(), metadata);
@@ -337,7 +339,7 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
         .await
         .unwrap();
     drop(resumed);
-    let resumed = LocalAgentMessageBoard::open(&sqlite, tree, host.clone())
+    let resumed = LocalAgentMessageBoard::open(&sqlite, &options, tree, host.clone())
         .await
         .unwrap();
     resumed
@@ -418,7 +420,7 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
         .unwrap();
     assert_eq!(*host.notifications.lock().unwrap(), vec![(root, reply)]);
 
-    let other = LocalAgentMessageBoard::open(&sqlite, SessionId::new(), host.clone())
+    let other = LocalAgentMessageBoard::open(&sqlite, &options, SessionId::new(), host.clone())
         .await
         .unwrap();
     assert!(
@@ -434,7 +436,7 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
             .await
             .is_err()
     );
-    LocalAgentMessageBoard::delete_boards(&sqlite, &[tree])
+    LocalAgentMessageBoard::delete_boards(&sqlite, &options, &[tree])
         .await
         .unwrap();
     let pool = sqlite
@@ -519,7 +521,7 @@ impl Backend {
     ) -> Arc<dyn AgentMessageBoard> {
         match self {
             Self::Local => Arc::new(
-                LocalAgentMessageBoard::open(sqlite, identity, host)
+                LocalAgentMessageBoard::open(sqlite, &LocalBoardOptions::default(), identity, host)
                     .await
                     .unwrap(),
             ),
@@ -1427,6 +1429,7 @@ fn channel_descriptions_validate_construction_and_serialization() {
 async fn channel_descriptions_migrate_legacy_storage_and_survive_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
+    let options = LocalBoardOptions::default();
     let root = ThreadId::new();
     let host = Arc::new(Host {
         clock: AtomicI64::default(),
@@ -1449,7 +1452,7 @@ async fn channel_descriptions_migrate_legacy_storage_and_survive_reopen() {
     .await
     .unwrap();
     pool.close().await;
-    let board = LocalAgentMessageBoard::open(&sqlite, root.into(), host.clone())
+    let board = LocalAgentMessageBoard::open(&sqlite, &options, root.into(), host.clone())
         .await
         .unwrap();
     let legacy = ChannelSummary {
@@ -1478,7 +1481,7 @@ async fn channel_descriptions_migrate_legacy_storage_and_survive_reopen() {
         .await
         .unwrap();
     drop(board);
-    let reopened = LocalAgentMessageBoard::open(&sqlite, root.into(), host)
+    let reopened = LocalAgentMessageBoard::open(&sqlite, &options, root.into(), host)
         .await
         .unwrap();
     let listed = reopened
@@ -1506,6 +1509,9 @@ async fn local_board_setup_survives_reopen() -> Result<()> {
     use serde_json::json;
     let dir = tempfile::tempdir()?;
     let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
+    let options = LocalBoardOptions {
+        storage_namespace: "setup_test".into(),
+    };
     let root = ThreadId::new();
     let host = Arc::new(Host {
         clock: AtomicI64::default(),
@@ -1516,11 +1522,23 @@ async fn local_board_setup_survives_reopen() -> Result<()> {
         notifications: Mutex::default(),
     });
     let setup = json!({"timestamp":"2026-09-18T12:00:00Z","template":{"version":1,"channels":{"policy":{"description":"Shared policies"}}}});
-    configure_local_board(&sqlite, root.into(), serde_json::from_value(setup.clone())?).await?;
-    configure_local_board(&sqlite, root.into(), serde_json::from_value(setup.clone())?).await?;
-    let board = LocalAgentMessageBoard::open(&sqlite, root.into(), host.clone()).await?;
+    configure_local_board(
+        &sqlite,
+        &options,
+        root.into(),
+        serde_json::from_value(setup.clone())?,
+    )
+    .await?;
+    configure_local_board(
+        &sqlite,
+        &options,
+        root.into(),
+        serde_json::from_value(setup.clone())?,
+    )
+    .await?;
+    let board = LocalAgentMessageBoard::open(&sqlite, &options, root.into(), host.clone()).await?;
     drop(board);
-    let board = LocalAgentMessageBoard::open(&sqlite, root.into(), host.clone()).await?;
+    let board = LocalAgentMessageBoard::open(&sqlite, &options, root.into(), host.clone()).await?;
     let query = ChannelQuery {
         query: None,
         direction: SortDirection::NewestFirst,
@@ -1537,9 +1555,14 @@ async fn local_board_setup_survives_reopen() -> Result<()> {
     let mut changed = setup.clone();
     changed["template"]["channels"]["policy"]["description"] = json!("Changed");
     assert!(
-        configure_local_board(&sqlite, root.into(), serde_json::from_value(changed)?)
-            .await
-            .is_err()
+        configure_local_board(
+            &sqlite,
+            &options,
+            root.into(),
+            serde_json::from_value(changed)?
+        )
+        .await
+        .is_err()
     );
     board
         .create_channel(
@@ -1551,7 +1574,13 @@ async fn local_board_setup_survives_reopen() -> Result<()> {
             },
         )
         .await?;
-    configure_local_board(&sqlite, root.into(), serde_json::from_value(setup.clone())?).await?;
+    configure_local_board(
+        &sqlite,
+        &options,
+        root.into(),
+        serde_json::from_value(setup.clone())?,
+    )
+    .await?;
     assert_eq!(
         board
             .list_channels(root, query)
@@ -1561,11 +1590,111 @@ async fn local_board_setup_survives_reopen() -> Result<()> {
             .len(),
         2
     );
-    LocalAgentMessageBoard::delete_boards(&sqlite, &[root.into()]).await?;
+    LocalAgentMessageBoard::delete_boards(&sqlite, &options, &[root.into()]).await?;
     assert!(
-        configure_local_board(&sqlite, root.into(), serde_json::from_value(setup)?)
-            .await
-            .is_err()
+        configure_local_board(
+            &sqlite,
+            &options,
+            root.into(),
+            serde_json::from_value(setup)?
+        )
+        .await
+        .is_err()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
+    let root = ThreadId::new();
+    let child = ThreadId::new();
+    let child_path = AgentPath::root().join("worker").unwrap();
+    let host = Arc::new(Host {
+        clock: AtomicI64::default(),
+        agent_path_calls: AtomicUsize::default(),
+        members: [(root, AgentPath::root()), (child, child_path)].into(),
+        active: AtomicBool::new(true),
+        fail_notifications: AtomicBool::new(false),
+        notifications: Mutex::default(),
+    });
+    for storage_namespace in ["queue", "goals"] {
+        // Opening a board must not modify another runtime database.
+        let runtime_database = sqlite
+            .open_read_write_pool(&dir.path().join(format!("{storage_namespace}_1.sqlite")))
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE runtime_data (value TEXT NOT NULL)")
+            .execute(&runtime_database)
+            .await
+            .unwrap();
+        let identity = SessionId::new();
+        let options = LocalBoardOptions {
+            storage_namespace: storage_namespace.into(),
+        };
+        let descriptor = LocalBoard::new(sqlite.clone(), identity).with_options(options);
+        let writer = descriptor.read_write().open(host.clone()).await?;
+        let seed = PostRequest {
+            request_id: "seed".into(),
+            destination: PostDestination::NewChannel("records".into()),
+            text: "Saved evidence".into(),
+            agents_to_notify: Vec::new(),
+        };
+        let metadata = writer.post(root, seed.clone()).await?;
+        let read = ReadPostRequest {
+            message_id: metadata.message_id,
+            offset_chars: 0,
+            limit_chars: NonZeroU32::MAX,
+        };
+        let legacy = LocalAgentMessageBoard::open(
+            &sqlite,
+            &LocalBoardOptions::default(),
+            identity,
+            host.clone(),
+        )
+        .await?;
+        assert!(legacy.read_post(root, read.clone()).await.is_err());
+        let legacy_metadata = legacy.post(root, seed.clone()).await?;
+        // Release the writer before reopening its saved posts.
+        drop(writer);
+        let reopened = descriptor.read_write().open(host.clone()).await?;
+        assert_eq!(
+            reopened.read_post(child, read).await?,
+            PostContent {
+                metadata,
+                text: seed.text.clone(),
+                n_chars: seed.text.chars().count(),
+                next_offset_chars: seed.text.chars().count(),
+            }
+        );
+        assert_eq!(
+            legacy
+                .read_post(
+                    root,
+                    ReadPostRequest {
+                        message_id: legacy_metadata.message_id,
+                        offset_chars: 0,
+                        limit_chars: NonZeroU32::MAX,
+                    },
+                )
+                .await?,
+            PostContent {
+                metadata: legacy_metadata,
+                text: seed.text.clone(),
+                n_chars: seed.text.chars().count(),
+                next_offset_chars: seed.text.chars().count(),
+            }
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+            )
+            .fetch_all(&runtime_database)
+            .await
+            .unwrap(),
+            vec!["runtime_data".to_owned()]
+        );
+    }
     Ok(())
 }

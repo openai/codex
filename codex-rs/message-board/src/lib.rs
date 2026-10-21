@@ -34,6 +34,7 @@ pub use in_memory::InMemoryMessageBoards;
 pub use local::LocalAgentMessageBoard;
 pub use local::connection::LocalBoard;
 pub use local::connection::LocalBoardConnection;
+pub use local::options::LocalBoardOptions;
 pub use local::setup::LocalBoardSetup;
 pub use local::setup::configure_local_board;
 pub use permissions::BoardPermissions;

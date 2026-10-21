@@ -1,5 +1,6 @@
 //! Operator-only setup for local experiments; no administrative agent tools.
 
+use codex_agent_message_board_extension::local_board_options;
 use codex_message_board::LocalBoardSetup;
 use codex_message_board::configure_local_board;
 use codex_protocol::SessionId;
@@ -21,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("setup file exceeds 64 KiB".into());
     }
     let setup: LocalBoardSetup = serde_json::from_slice(&input)?;
-    configure_local_board(&sqlite, board, setup).await?;
+    configure_local_board(&sqlite, &local_board_options(), board, setup).await?;
     println!("Configured local board {board}");
     Ok(())
 }

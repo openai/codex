@@ -6,7 +6,7 @@
 
 use super::LocalAgentMessageBoard;
 use super::invalid;
-use super::pool::DATABASE_FILE;
+use super::options::LocalBoardOptions;
 use super::pool::POOLS;
 use super::pool::SCHEMA;
 use super::storage_error;
@@ -27,14 +27,17 @@ impl LocalAgentMessageBoard {
         clippy::await_holding_invalid_type,
         reason = "recovery excludes new handles until replacement deletion tombstones are saved"
     )]
-    pub async fn delete_boards(sqlite: &SqliteConfig, roots: &[SessionId]) -> Result<()> {
-        let path = sqlite.home().join(DATABASE_FILE);
+    pub async fn delete_boards(
+        sqlite: &SqliteConfig,
+        options: &LocalBoardOptions,
+        roots: &[SessionId],
+    ) -> Result<()> {
+        let filename = options.database_file()?;
+        let path = sqlite.home().join(&filename);
         if roots.is_empty() || !tokio::fs::try_exists(&path).await? {
             return Ok(());
         }
-        let path = tokio::fs::canonicalize(sqlite.home())
-            .await?
-            .join(DATABASE_FILE);
+        let path = tokio::fs::canonicalize(sqlite.home()).await?.join(filename);
         let mut pools = POOLS.lock().await;
         let pool = match sqlite.open_read_write_pool(&path).await {
             Ok(pool) => pool,

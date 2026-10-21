@@ -39,6 +39,7 @@ use crate::tasks::interrupted_turn_history_marker;
 use crate::thread_startup_metadata::ThreadStartupMetadata;
 use codex_agent_graph_store::AgentGraphStore;
 use codex_agent_graph_store::LocalAgentGraphStore;
+use codex_agent_message_board_extension::local_board_options;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
@@ -501,13 +502,19 @@ pub fn thread_store_from_config(
                         let sqlite = sqlite.clone();
                         Box::pin(async move {
                             let boards = thread_ids.into_iter().map(Into::into).collect::<Vec<_>>();
-                            LocalAgentMessageBoard::delete_boards(&sqlite, &boards)
-                                .await
-                                .map_err(|err| ThreadStoreError::Internal {
+                            LocalAgentMessageBoard::delete_boards(
+                                &sqlite,
+                                &local_board_options(),
+                                &boards,
+                            )
+                            .await
+                            .map_err(|err| {
+                                ThreadStoreError::Internal {
                                     message: format!(
                                         "failed to delete agent message boards: {err}"
                                     ),
-                                })
+                                }
+                            })
                         })
                     }),
             );

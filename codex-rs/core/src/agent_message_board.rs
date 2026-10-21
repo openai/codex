@@ -13,6 +13,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_agent_message_board_client::AccessToken;
 use codex_agent_message_board_client::RemoteAgentMessageBoard;
+use codex_agent_message_board_extension::local_board_options;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadStartInput;
 use codex_features::Feature;
@@ -110,7 +111,13 @@ pub fn install_agent_message_board(
                     Arc::new(in_memory_boards.open(tree, host).await)
                 } else {
                     Arc::new(
-                        LocalAgentMessageBoard::open(config.sqlite_config(), tree, host).await?,
+                        LocalAgentMessageBoard::open(
+                            config.sqlite_config(),
+                            &local_board_options(),
+                            tree,
+                            host,
+                        )
+                        .await?,
                     )
                 };
                 Ok(Some(board))

@@ -34,9 +34,10 @@ impl MessageBoardHost for UnusedHost {
 async fn concurrent_handles_share_and_release_the_pool() {
     let dir = tempfile::tempdir().unwrap();
     let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
+    let options = LocalBoardOptions::default();
     let (first, second) = tokio::join!(
-        LocalAgentMessageBoard::open(&sqlite, SessionId::new(), Arc::new(UnusedHost)),
-        LocalAgentMessageBoard::open(&sqlite, SessionId::new(), Arc::new(UnusedHost)),
+        LocalAgentMessageBoard::open(&sqlite, &options, SessionId::new(), Arc::new(UnusedHost)),
+        LocalAgentMessageBoard::open(&sqlite, &options, SessionId::new(), Arc::new(UnusedHost)),
     );
     let first = first.unwrap();
     let second = second.unwrap();
@@ -47,9 +48,10 @@ async fn concurrent_handles_share_and_release_the_pool() {
     drop(second);
     assert!(original.upgrade().is_none());
 
-    let reopened = LocalAgentMessageBoard::open(&sqlite, SessionId::new(), Arc::new(UnusedHost))
-        .await
-        .unwrap();
+    let reopened =
+        LocalAgentMessageBoard::open(&sqlite, &options, SessionId::new(), Arc::new(UnusedHost))
+            .await
+            .unwrap();
     assert_ne!(original.as_ptr(), Arc::as_ptr(&reopened.pool));
     reopened.pool.close().await;
 }
