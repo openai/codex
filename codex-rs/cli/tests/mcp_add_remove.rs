@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::Result;
 use codex_config::types::McpServerTransportConfig;
+use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::load_global_mcp_servers;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
@@ -479,16 +481,20 @@ async fn add_persists_issuer_bound_callback_before_starting_oauth() -> Result<()
         "authorization_response_iss_parameter_supported": true,
     });
     let concurrent_codex_home = codex_home.path().to_path_buf();
+    let concurrent_servers = BTreeMap::from([(
+        "concurrent".to_string(),
+        toml::from_str("command = \"echo\"\nargs = [\"concurrent\"]")?,
+    )]);
     let concurrent_add = std::sync::Once::new();
     Mock::given(method("GET"))
         .and(path("/.well-known/oauth-authorization-server/mcp"))
         .respond_with(move |_: &wiremock::Request| {
             concurrent_add.call_once(|| {
-                codex_command(&concurrent_codex_home)
-                    .expect("create concurrent MCP add command")
-                    .args(["mcp", "add", "concurrent", "--", "echo", "concurrent"])
-                    .assert()
-                    .success();
+                // Edit during discovery without starting another CLI inside the HTTP timeout.
+                ConfigEditsBuilder::new(&concurrent_codex_home)
+                    .replace_mcp_servers(&concurrent_servers)
+                    .apply_blocking()
+                    .expect("persist concurrent MCP server during discovery");
             });
             ResponseTemplate::new(200).set_body_json(metadata.clone())
         })
@@ -507,10 +513,10 @@ async fn add_persists_issuer_bound_callback_before_starting_oauth() -> Result<()
     ]);
     let output = tokio::task::spawn_blocking(move || add_cmd.output()).await??;
 
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8(output.stdout)?.contains("OAuth callback URL: http://127.0.0.1/callback")
-    );
+    assert_cmd::assert::Assert::new(output)
+        .failure()
+        .stdout(contains("OAuth callback URL: http://127.0.0.1/callback"))
+        .stderr(contains("OAuth authorization endpoint must be a valid URL"));
     let servers = load_global_mcp_servers(codex_home.path()).await?;
     assert!(servers.contains_key("concurrent"));
     assert_eq!(
