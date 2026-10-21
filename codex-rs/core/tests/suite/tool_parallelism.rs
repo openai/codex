@@ -159,14 +159,16 @@ async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
     let mut builder = test_codex().with_model("gpt-5.4");
     let test = builder.build(&server).await?;
 
-    let shell_args = json!({
-        "cmd": "sleep 0.25",
-        // Avoid user-specific shell startup cost (e.g. zsh profile scripts) in timing assertions.
-        "login": false,
-        "yield_time_ms": 1_000,
-    });
-    let args_one = serde_json::to_string(&shell_args)?;
-    let args_two = serde_json::to_string(&shell_args)?;
+    let shell_args = |call_id: &str| {
+        json!({
+            "cmd": format!(": > {call_id}.started; while [ ! -f release ]; do sleep 0.01; done; echo {call_id}"),
+            "login": false,
+            "yield_time_ms": 30_000,
+        })
+        .to_string()
+    };
+    let args_one = shell_args("call-1");
+    let args_two = shell_args("call-2");
 
     let first_response = sse(vec![
         json!({"type": "response.created", "response": {"id": "resp-1"}}),
@@ -178,10 +180,32 @@ async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    mount_sse_sequence(&server, vec![first_response, second_response]).await;
+    let responses = mount_sse_sequence(&server, vec![first_response, second_response]).await;
 
-    let duration = run_turn_and_measure(&test, "run exec_command twice").await?;
-    assert_parallel_duration(duration);
+    let release_commands = async {
+        let overlap = tokio::time::timeout(Duration::from_secs(5), async {
+            while !test.cwd.path().join("call-1.started").exists()
+                || !test.cwd.path().join("call-2.started").exists()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        fs::write(test.cwd.path().join("release"), "")?;
+        overlap.map_err(|_| anyhow::anyhow!("shell commands did not overlap"))
+    };
+    let (turn_result, overlap_result) =
+        tokio::join!(run_turn(&test, "run exec_command twice"), release_commands);
+    overlap_result?;
+    turn_result?;
+
+    for call_id in ["call-1", "call-2"] {
+        let output = responses
+            .function_call_output_text(call_id)
+            .expect("missing exec output");
+        assert!(output.contains("Process exited with code 0"), "{output}");
+        assert!(output.contains(&format!("Output:\n{call_id}")), "{output}");
+    }
 
     Ok(())
 }
