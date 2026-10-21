@@ -6234,7 +6234,7 @@ async fn model_request_post_hook_orders_tool_dispatch(
             .single_request()
             .custom_tool_call_output_content_and_success("call")
             .context("aborted custom tool output")?;
-        assert_eq!(output.as_deref(), Some("aborted by user before dispatch"));
+        assert_eq!(output.as_deref(), Some("aborted before dispatch"));
     } else {
         fs::write(release, "")?;
         wait_for_event(&test.codex, |event| {

@@ -350,7 +350,7 @@ pub(crate) async fn handle_output_item_done(
             let cancellation_token = ctx.cancellation_token.child_token();
             let runtime = ctx.tool_runtime.clone();
             // handle_tool_call dispatches immediately, not when its future is polled.
-            // With a synchronous post-model hook, dispatch only when the turn drains tools.
+            // Defer for post-model hooks or to cancel buffered calls during mailbox drains.
             let tool_future: InFlightFuture<'static> = if ctx.defer_tool_dispatch {
                 Box::pin(async move {
                     if cancellation_token.is_cancelled() {

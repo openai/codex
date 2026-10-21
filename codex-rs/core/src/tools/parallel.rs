@@ -375,7 +375,7 @@ impl ToolCallRuntime {
 
     fn abort_message(call: &ToolCall, elapsed_secs: Option<f32>) -> String {
         let Some(secs) = elapsed_secs else {
-            return "aborted by user before dispatch".to_string();
+            return "aborted before dispatch".to_string();
         };
         if call.tool_name.is_default_namespace() && call.tool_name.name == "exec_command" {
             format!("Wall time: {secs:.1} seconds\naborted by user")
