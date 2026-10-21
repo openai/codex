@@ -1,0 +1,98 @@
+---
+source: core/tests/suite/scenarios_mcp_ema.rs
+assertion_line: 257
+expression: "context_snapshot::format_request_history_snapshot(\"Enterprise access disappears after revocation. Prior calls remain in history and ordinary tools still work.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: Enterprise access disappears after revocation. Prior calls remain in history and ordinary tools still work.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-6-astra"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"effort":"low"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+  tools (14; hash=c23674e45d0ff686):
+    - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
+    - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
+    - function/list_mcp_resources: Lists resources provided by MCP servers. Resources allow servers to share data that provides cont...; args=[cursor, server]; hash=6792edaff13561bd
+    - function/list_mcp_resource_templates: Lists resource templates provided by MCP servers. Parameterized resource templates allow servers ...; args=[cursor, server]; hash=60f17c90ef7a4ebb
+    - function/read_mcp_resource: Read a specific resource from an MCP server given the server name and resource URI.; args=[server, uri]; hash=24246896b39008ae
+    - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
+    - function/request_user_input_async: Ask the user one or more questions during ongoing work. Use this tool only to request missing inf...; args=[questions]; hash=d6d74f33db330162
+    - namespace/clock: Tools for reading and waiting on time.; hash=a80435c7a3a3943f
+      - function/curr_time
+      - function/sleep
+    - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e
+    - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+      - function/followup_task
+      - function/interrupt_agent
+      - function/list_agents
+      - function/send_message
+      - function/spawn_agent
+      - function/wait_agent
+    - namespace/mcp__enterprise: Tools in the mcp__enterprise namespace.; hash=b12dd185b8ee8c88
+      - function/calendar_create_event
+      - function/calendar_extract_text
+      - function/calendar_list_events
+    - namespace/mcp__ordinary: Tools in the mcp__ordinary namespace.; hash=101b30f5cdc3cae0
+      - function/calendar_create_event
+      - function/calendar_extract_text
+      - function/calendar_list_events
+    - web_search; hash=f103e327c6870a46
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+02:message/developer:
+    <MULTI_AGENT_ROLE>
+03:message/developer:
+    <MULTI_AGENT_MODE>
+04:message/user:
+    <ENVIRONMENT_CONTEXT>
+05:message/user:
+    List my work events.
+-- request 2 (turn) --
+06:function_call/mcp__enterprise.calendar_list_events:{}
+07:function_call_output:Wall time: <DURATION> seconds
+    Output:
+    {"_codex_apps":null}
+
+## Window 2 (after request 2)
+Settings: relative to window 1
+  tools (13; hash=75ef17d8adc1b3db):
+    - removed namespace/mcp__enterprise
+-- request 3 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+02:message/developer:
+    <MULTI_AGENT_ROLE>
+03:message/developer:
+    <MULTI_AGENT_MODE>
+04:message/user:
+    <ENVIRONMENT_CONTEXT>
+05:message/user:
+    List my work events.
+06:function_call/mcp__enterprise.calendar_list_events:{}
+07:function_call_output:Wall time: <DURATION> seconds
+    Output:
+    {"_codex_apps":null}
+08:message/assistant:
+    Here are your work events.
+09:message/user:
+    List my other calendar events.
+-- request 4 (turn) --
+10:function_call/mcp__ordinary.calendar_list_events:{}
+11:function_call_output:Wall time: <DURATION> seconds
+    Output:
+    {"_codex_apps":null}
