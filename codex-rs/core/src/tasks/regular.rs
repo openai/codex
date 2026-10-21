@@ -75,7 +75,6 @@ impl SessionTask for RegularTask {
             if preparation.is_err() {
                 return SessionStartupPrewarmResolution::Cancelled;
             }
-            sess.set_server_reasoning_included(/*included*/ false).await;
             sess.consume_startup_prewarm_for_regular_turn(&cancellation_token)
                 .await
         }

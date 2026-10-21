@@ -2722,6 +2722,8 @@ async fn try_run_sampling_request(
     let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
     let mut response_completed = false;
     let mut request_token_usage = None;
+    sess.set_server_reasoning_included(step_context.settings.model_info.use_responses_lite)
+        .await;
     let mut stream = match client_session
         .stream(
             prompt,

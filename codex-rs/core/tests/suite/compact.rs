@@ -5480,17 +5480,11 @@ async fn auto_compact_body_after_prefix_still_caps_at_context_window() {
     );
 }
 
-#[test_case::test_case(false; "counts_encrypted_reasoning_before_last_user")]
-#[test_case::test_case(true; "compacts_after_reasoning_header_clears")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn auto_compact_accounts_for_encrypted_reasoning(first_response_includes_reasoning: bool) {
+async fn auto_compact_accounts_for_encrypted_reasoning() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
-
-    let first_user = "COUNT_PRE_LAST_REASONING";
-    let second_user = "TRIGGER_COMPACT_AT_LIMIT";
-    let third_user = "AFTER_REMOTE_COMPACT";
 
     let pre_last_reasoning_content = "a".repeat(2_400);
     let post_last_reasoning_content = "b".repeat(4_000);
@@ -5503,84 +5497,60 @@ async fn auto_compact_accounts_for_encrypted_reasoning(first_response_includes_r
         ev_reasoning_item("post-reasoning", &["post"], &[&post_last_reasoning_content]),
         ev_completed_with_tokens("r2", /*total_tokens*/ 80),
     ]);
-    let compact_turn = remote_v2_compaction_response();
     let third_turn = sse(vec![
+        ev_assistant_message("m3", THIRD_USER_MSG),
+        ev_completed_with_tokens("r3", /*total_tokens*/ 81),
+    ]);
+    let compact_turn = remote_v2_compaction_response();
+    let fourth_turn = sse(vec![
         ev_assistant_message("m4", FINAL_REPLY),
         ev_completed_with_tokens("r4", /*total_tokens*/ 1),
     ]);
 
-    let request_log = mount_response_sequence(
+    let request_log = mount_sse_sequence(
         &server,
         vec![
-            // Turn 1: reasoning before last user (should count).
-            if first_response_includes_reasoning {
-                sse_response(first_turn).insert_header("X-Reasoning-Included", "true")
-            } else {
-                sse_response(first_turn)
-            },
-            // Turn 2: reasoning after last user should be ignored; no header is returned.
-            sse_response(second_turn),
-            // Turn 3: compact the prior conversation before sampling.
-            sse_response(compact_turn),
-            // Turn 3: next user turn after remote compaction.
-            sse_response(third_turn),
+            first_turn,
+            second_turn,
+            third_turn,
+            compact_turn,
+            fourth_turn,
         ],
     )
     .await;
 
-    let codex = test_codex()
+    let test = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
-            set_test_compact_prompt(config);
-            config.model_auto_compact_token_limit = Some(300);
+        .with_model_info_override("gpt-5.5", |model| {
+            model.use_responses_lite = true;
         })
-        .build(&server)
+        .with_config(|config| {
+            config.model = Some("gpt-5.5".to_string());
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(81);
+        })
+        .build_with_auto_env(&server)
         .await
-        .expect("build codex")
-        .codex;
+        .expect("build codex");
 
-    for (idx, user) in [first_user, second_user, third_user]
-        .into_iter()
-        .enumerate()
-    {
-        codex
-            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-                text: user.into(),
-                text_elements: Vec::new(),
-            }]))
-            .await
-            .expect("start user turn");
-        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-        if idx < 2 {
-            assert!(
-                request_log
-                    .requests()
-                    .iter()
-                    .all(|request| request.inputs_of_type("compaction_trigger").is_empty()),
-                "remote compaction should not run before the next user turn"
-            );
-        }
+    for user in [
+        "FIRST_REASONING",
+        "SECOND_REASONING",
+        "BELOW_COMPACT_LIMIT",
+        "AT_COMPACT_LIMIT",
+    ] {
+        test.submit_text_turn(user).await.expect("submit user turn");
     }
 
     let requests = request_log.requests();
+    // Responses Lite includes retained reasoning in its usage without a header.
+    // 80 must remain below the limit; 81 must trigger compaction before turn 4.
     assert_eq!(
-        requests.len(),
-        4,
-        "conversation should include three user turns and remote compaction"
-    );
-    assert_eq!(requests[2].path(), "/v1/responses");
-    assert_eq!(requests[2].inputs_of_type("compaction_trigger").len(), 1);
-    assert!(requests[3].inputs_of_type("compaction_trigger").is_empty());
-    let second_request_body = requests[1].body_json().to_string();
-    assert!(
-        !second_request_body.contains(REMOTE_V2_SUMMARY),
-        "second turn should not include compacted history"
-    );
-    let third_request_body = requests[3].body_json().to_string();
-    assert!(
-        third_request_body.contains(REMOTE_V2_SUMMARY),
-        "third turn should include compaction summary item"
+        requests
+            .iter()
+            .map(|request| request.inputs_of_type("compaction_trigger").len())
+            .collect::<Vec<_>>(),
+        vec![0, 0, 0, 1, 0],
     );
 }
 

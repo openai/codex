@@ -5249,6 +5249,8 @@ impl Session {
             }
 
             state.set_token_info(Some(info));
+            // The local estimate already includes every retained reasoning item.
+            state.set_server_reasoning_included(/*included*/ true);
         }
         self.set_auto_compact_window_estimated_prefill_for_scope(
             turn_context,
