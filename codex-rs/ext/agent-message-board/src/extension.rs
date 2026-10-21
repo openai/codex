@@ -14,7 +14,8 @@ use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolContributor;
 use codex_message_board::AgentMessageBoard;
 use codex_message_board::LocalBoardConnection;
-use codex_message_board::message_board_tools_with_descriptions;
+use codex_message_board::MessageBoardTool;
+use codex_message_board::message_board_tools;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
@@ -125,7 +126,8 @@ impl<C> BoardExtension<C> {
         thread_store
             .get::<Binding>()
             .map_or_else(Vec::new, |binding| {
-                message_board_tools_with_descriptions(
+                message_board_tools(
+                    &MessageBoardTool::DISCUSSION,
                     binding.board.clone(),
                     binding.caller,
                     binding.path.clone(),

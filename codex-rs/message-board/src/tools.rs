@@ -1,8 +1,10 @@
 //! Model tools over a caller-bound board. Results stay valid, bounded JSON.
 
 mod arguments;
+pub(crate) mod selection;
 mod spec;
 
+use self::selection::MessageBoardTool;
 use crate::AgentMessageBoard;
 use crate::ChannelQuery;
 use crate::CreateChannelRequest;
@@ -40,27 +42,12 @@ use std::sync::Arc;
 // Includes JSON escaping and metadata; applies equally to direct and Code Mode calls.
 const MAX_RESPONSE_BYTES: usize = 8_000;
 
-/// Creates tools without registering or enabling the extension.
+/// Creates only the selected tools, in the supplied order, without registering them.
 /// The caller and its path must come from the host's authoritative tree metadata.
-/// Namespace metadata must match the host's other multi-agent tools.
+/// Namespace metadata must match the consumer's other tools. Optional model-catalog
+/// descriptions override the bundled descriptions without changing tool parameters.
 pub fn message_board_tools(
-    board: Arc<dyn AgentMessageBoard>,
-    caller: ThreadId,
-    caller_path: AgentPath,
-    namespace: Option<&str>,
-    namespace_description: &str,
-) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
-    message_board_tools_with_descriptions(
-        board,
-        caller,
-        caller_path,
-        namespace,
-        namespace_description,
-        /*tool_messages*/ None,
-    )
-}
-
-pub fn message_board_tools_with_descriptions(
+    tools: &[MessageBoardTool],
     board: Arc<dyn AgentMessageBoard>,
     caller: ThreadId,
     caller_path: AgentPath,
@@ -68,9 +55,11 @@ pub fn message_board_tools_with_descriptions(
     namespace_description: &str,
     tool_messages: Option<&MultiAgentToolMessages>,
 ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
-    spec::NAMES
-        .into_iter()
-        .map(|name| {
+    tools
+        .iter()
+        .copied()
+        .map(|tool| {
+            let name = tool.name();
             let tool_message = tool_messages.and_then(|tools| tools.by_name(name));
             if tool_message.is_some_and(|tool| tool.parameters.is_some()) {
                 tracing::warn!(
@@ -82,7 +71,7 @@ pub fn message_board_tools_with_descriptions(
                 board: board.clone(),
                 caller,
                 caller_path: caller_path.clone(),
-                name,
+                tool,
                 namespace: namespace.map(str::to_owned),
                 namespace_description: namespace_description.to_owned(),
                 description: tool_message.and_then(|tool| tool.description.clone()),
@@ -95,7 +84,7 @@ struct BoardTool {
     board: Arc<dyn AgentMessageBoard>,
     caller: ThreadId,
     caller_path: AgentPath,
-    name: &'static str,
+    tool: MessageBoardTool,
     namespace: Option<String>,
     namespace_description: String,
     description: Option<String>,
@@ -103,11 +92,11 @@ struct BoardTool {
 
 impl<'call> ToolExecutor<ToolCall<'call>> for BoardTool {
     fn tool_name(&self) -> ToolName {
-        ToolName::new(self.namespace.clone(), self.name)
+        ToolName::new(self.namespace.clone(), self.tool.name())
     }
     fn spec(&self) -> ToolSpec {
         spec::tool(
-            self.name,
+            self.tool,
             self.namespace.as_deref(),
             &self.namespace_description,
             self.description.as_deref(),
@@ -115,8 +104,12 @@ impl<'call> ToolExecutor<ToolCall<'call>> for BoardTool {
     }
     fn supports_parallel_tool_calls(&self) -> bool {
         matches!(
-            self.name,
-            "get_channels" | "list_threads" | "search_posts" | "read_thread" | "read_post"
+            self.tool,
+            MessageBoardTool::GetChannels
+                | MessageBoardTool::ListThreads
+                | MessageBoardTool::SearchPosts
+                | MessageBoardTool::ReadThread
+                | MessageBoardTool::ReadPost
         )
     }
 
@@ -174,8 +167,8 @@ impl BoardTool {
                 SortDirection::OldestFirst
             }
         };
-        match self.name {
-            "create_channel" => {
+        match self.tool {
+            MessageBoardTool::CreateChannel => {
                 let arguments::CreateChannel {
                     channel_name,
                     description,
@@ -206,7 +199,7 @@ impl BoardTool {
                         .await,
                 )
             }
-            "get_channels" => {
+            MessageBoardTool::GetChannels => {
                 let arguments::GetChannels {
                     query,
                     recent_first,
@@ -226,7 +219,7 @@ impl BoardTool {
                 })
                 .await
             }
-            "list_threads" => {
+            MessageBoardTool::ListThreads => {
                 let arguments::ListThreads {
                     channel_name,
                     sort,
@@ -251,7 +244,7 @@ impl BoardTool {
                 })
                 .await
             }
-            "search_posts" => {
+            MessageBoardTool::SearchPosts => {
                 let arguments::SearchPosts {
                     channel_name,
                     query,
@@ -282,7 +275,7 @@ impl BoardTool {
                 })
                 .await
             }
-            "read_thread" => {
+            MessageBoardTool::ReadThread => {
                 let arguments::ReadThread {
                     thread_id,
                     limit,
@@ -303,7 +296,7 @@ impl BoardTool {
                 })
                 .await
             }
-            "read_post" => {
+            MessageBoardTool::ReadPost => {
                 let arguments::ReadPost {
                     message_id,
                     offset_chars,
@@ -322,7 +315,7 @@ impl BoardTool {
                 })
                 .await
             }
-            "subscribe" | "unsubscribe" => {
+            MessageBoardTool::Subscribe | MessageBoardTool::Unsubscribe => {
                 let arguments::Subscription {
                     channel_name,
                     thread_id,
@@ -348,7 +341,7 @@ impl BoardTool {
                                     .map(|path| self.caller_path.resolve(&path))
                                     .transpose()
                                     .map_err(model_error)?,
-                                change: if self.name == "subscribe" {
+                                change: if self.tool == MessageBoardTool::Subscribe {
                                     SubscriptionChange::Subscribe
                                 } else {
                                     SubscriptionChange::Unsubscribe
@@ -358,7 +351,7 @@ impl BoardTool {
                         .await,
                 )
             }
-            "post" => {
+            MessageBoardTool::Post => {
                 let arguments::Post {
                     text,
                     channel_name,
@@ -404,7 +397,6 @@ impl BoardTool {
                         .await,
                 )
             }
-            _ => unreachable!("only registered message-board tools can be called"),
         }
     }
 
@@ -451,6 +443,7 @@ fn nonzero(value: u32) -> NonZeroU32 {
 fn model_error(error: impl std::fmt::Display) -> FunctionCallError {
     FunctionCallError::RespondToModel(error.to_string().chars().take(512).collect())
 }
+
 enum BoardToolError {
     Model(FunctionCallError),
     PermissionDenied(PermissionDenied),

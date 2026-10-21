@@ -41,7 +41,7 @@ pub use permissions::BoardPermissions;
 pub use permissions::ChannelPermissions;
 pub use permissions::PermissionDenied;
 pub use tools::message_board_tools;
-pub use tools::message_board_tools_with_descriptions;
+pub use tools::selection::MessageBoardTool;
 pub use types::ChannelPage;
 pub use types::ChannelSummary;
 pub use types::Page;

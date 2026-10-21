@@ -987,11 +987,13 @@ async fn check_tools_cover_channel_discussions_subscriptions_and_escaped_preview
     });
     let board = backend.open(&sqlite, root.into(), host.clone()).await;
     let tools = message_board_tools(
-        board,
+        &MessageBoardTool::DISCUSSION,
+        board.clone(),
         root,
         AgentPath::root(),
         Some("collaboration"),
         "Shared tools",
+        /*tool_messages*/ None,
     );
     let tool = |name: &str| {
         tools
@@ -1101,6 +1103,32 @@ async fn check_tools_cover_channel_discussions_subscriptions_and_escaped_preview
             last_message_id: Some(last_reply.message_id),
         }
     );
+    // Another consumer exposes just these readers over the same stored discussion.
+    let tools = message_board_tools(
+        &[MessageBoardTool::ReadThread, MessageBoardTool::ListThreads],
+        board,
+        root,
+        AgentPath::root(),
+        Some("collaboration"),
+        "Shared tools",
+        /*tool_messages*/ None,
+    );
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool.tool_name())
+            .collect::<Vec<_>>(),
+        vec![
+            ToolName::namespaced("collaboration", "read_thread"),
+            ToolName::namespaced("collaboration", "list_threads"),
+        ]
+    );
+    let tool = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool.tool_name() == ToolName::namespaced("collaboration", name))
+            .unwrap()
+    };
     for (name, args) in [
         ("list_threads", json!({"channel_name":"Workflow"})),
         ("read_thread", json!({"thread_id":last.thread_id})),
@@ -1193,11 +1221,13 @@ async fn check_tools_validate_arguments_deduplicate_calls_and_bound_unicode_resu
     });
     let board = backend.open(&sqlite, root.into(), host.clone()).await;
     let tools = message_board_tools(
+        &MessageBoardTool::DISCUSSION,
         board.clone(),
         root,
         AgentPath::root(),
         Some("collaboration"),
         "Shared tools",
+        /*tool_messages*/ None,
     );
     let call = board_tool_call;
     let tool = |name: &str| {
