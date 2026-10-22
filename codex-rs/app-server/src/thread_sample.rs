@@ -259,6 +259,7 @@ impl SampleTask {
                 turn_trigger: params.turn_trigger,
                 ..Default::default()
             })
+            .with_responses_metadata(params.responsesapi_client_metadata)
             .with_trace(trace);
             if !matches!(
                 fork.thread

@@ -6,6 +6,7 @@ use crate::TS;
 use codex_protocol::openai_models::ReasoningEffort;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +22,9 @@ pub struct ThreadSampleParams {
     pub effort: Option<ReasoningEffort>,
     #[ts(optional = nullable)]
     pub turn_trigger: Option<String>,
+    /// Optional metadata to enrich Codex's ResponsesAPI turn metadata.
+    #[ts(optional = nullable)]
+    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
     /// Disable MCP servers when the inherited window uses incremental tools on Responses Lite.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disable_mcp: bool,

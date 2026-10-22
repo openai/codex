@@ -40,6 +40,7 @@ use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -304,6 +305,13 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
             prompt: "Continue identically".to_string(),
             effort: Some(ReasoningEffort::Medium),
             turn_trigger: Some("composer_predictions".to_string()),
+            responsesapi_client_metadata: Some(HashMap::from([
+                (
+                    "generation_trigger".to_string(),
+                    "composer_prediction".to_string(),
+                ),
+                ("turn_trigger".to_string(), "client-supplied".to_string()),
+            ])),
             ..Default::default()
         },
     )
@@ -383,6 +391,19 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
             .expect("turn metadata"),
     )?;
     assert_eq!(metadata["turn_trigger"], "composer_predictions");
+    assert_eq!(metadata["generation_trigger"], "composer_prediction");
+    let body_metadata: Value = serde_json::from_str(
+        prediction.body_json()["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .expect("body turn metadata"),
+    )?;
+    assert_eq!(body_metadata, metadata);
+    let parent_metadata: Value = serde_json::from_str(
+        &requests[sample_index + 2]
+            .header("x-codex-turn-metadata")
+            .expect("parent turn metadata"),
+    )?;
+    assert!(parent_metadata.get("generation_trigger").is_none());
     Ok(())
 }
 
