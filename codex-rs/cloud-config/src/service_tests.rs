@@ -19,10 +19,12 @@ use codex_config::CloudRequirementsTomlBundle;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::ConfigBuilder;
 use codex_login::AuthKeyringBackendKind;
+use codex_login::CodexAuth;
 use codex_login::auth::AgentIdentityAuth;
 use codex_login::auth::AgentIdentityAuthRecord;
 use codex_login::auth::ExternalAuth;
 use codex_login::auth::ExternalAuthRefreshContext;
+use codex_protocol::account::PlanType;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::VecDeque;
@@ -1131,7 +1133,7 @@ async fn get_bundle_surfaces_auth_recovery_message() {
 }
 
 #[tokio::test]
-async fn get_bundle_refreshes_external_auth_after_unauthorized() {
+async fn external_auth_recovers_once_per_bundle_fetch() {
     let auth_home = tempdir().expect("tempdir");
     let auth_manager = Arc::new(
         AuthManager::new(
@@ -1175,7 +1177,7 @@ async fn get_bundle_refreshes_external_auth_after_unauthorized() {
     });
     let codex_home = tempdir().expect("tempdir");
     let service = CloudConfigBundleService::new(
-        auth_manager,
+        Arc::clone(&auth_manager),
         fetcher.clone(),
         codex_home.path().to_path_buf(),
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
@@ -1184,6 +1186,31 @@ async fn get_bundle_refreshes_external_auth_after_unauthorized() {
     assert_eq!(service.load_startup_bundle().await, Ok(Some(test_bundle())));
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);
     assert_eq!(external_auth.refresh_count.load(Ordering::SeqCst), 1);
+    let retried_fetcher = Arc::new(SequenceBundleClient::new(vec![
+        Err(BundleRequestError::Unauthorized {
+            status_code: Some(401),
+            message: "rejected".into(),
+        }),
+        Err(request_error()),
+        Err(BundleRequestError::Unauthorized {
+            status_code: Some(401),
+            message: "still rejected".into(),
+        }),
+        Ok(test_bundle()),
+    ]));
+    let retrying = CloudConfigBundleService::new(
+        Arc::clone(&auth_manager),
+        retried_fetcher.clone(),
+        codex_home.path().to_path_buf(),
+        CLOUD_CONFIG_BUNDLE_TIMEOUT,
+    )
+    .without_cache();
+    assert_eq!(
+        retrying.get_latest().await.unwrap_err().code(),
+        CloudConfigBundleLoadErrorCode::Auth
+    );
+    assert_eq!(retried_fetcher.request_count.load(Ordering::SeqCst), 3);
+    assert_eq!(external_auth.refresh_count.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]

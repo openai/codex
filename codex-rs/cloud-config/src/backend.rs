@@ -13,12 +13,13 @@ use std::future::Future;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RetryableFailureKind {
     Request { status_code: Option<u16> },
+    AuthRecovery { status_code: Option<u16> },
 }
 
 impl RetryableFailureKind {
     pub(crate) fn status_code(self) -> Option<u16> {
         match self {
-            Self::Request { status_code } => status_code,
+            Self::Request { status_code } | Self::AuthRecovery { status_code } => status_code,
         }
     }
 }
@@ -26,11 +27,32 @@ impl RetryableFailureKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum BundleRequestError {
     Policy(codex_http_client::NetworkPolicyDenied),
+    Fatal {
+        error: codex_config::CloudConfigBundleLoadError,
+        metric_reason: Option<&'static str>,
+    },
     Retryable(RetryableFailureKind),
     Unauthorized {
         status_code: Option<u16>,
         message: String,
     },
+}
+
+impl BundleRequestError {
+    pub(crate) fn auth_failure(
+        status_code: Option<u16>,
+        message: impl Into<String>,
+        metric_reason: Option<&'static str>,
+    ) -> Self {
+        Self::Fatal {
+            error: codex_config::CloudConfigBundleLoadError::new(
+                codex_config::CloudConfigBundleLoadErrorCode::Auth,
+                status_code,
+                message,
+            ),
+            metric_reason,
+        }
+    }
 }
 
 /// Retrieves one cloud config bundle from the backend.
@@ -66,28 +88,35 @@ impl BundleClient for BackendBundleClient {
             self.http_client_factory.clone(),
         );
 
-        let response = client
-            .get_config_bundle()
-            .await
-            .inspect_err(|err| {
-                tracing::warn!(error = %err, "Failed to fetch cloud config bundle");
-            })
-            .map_err(|err| {
-                if let codex_backend_client::RequestError::Policy(denied) = &err {
-                    return BundleRequestError::Policy(*denied);
-                }
-                let status_code = err.status().map(|status| status.as_u16());
-                if err.is_unauthorized() {
-                    BundleRequestError::Unauthorized {
-                        status_code,
-                        message: err.to_string(),
-                    }
-                } else {
-                    BundleRequestError::Retryable(RetryableFailureKind::Request { status_code })
-                }
-            })?;
+        fetch_bundle(&client).await
+    }
+}
 
-        Ok(bundle_from_response(response))
+pub(crate) async fn fetch_bundle(
+    client: &BackendClient,
+) -> Result<CloudConfigBundle, BundleRequestError> {
+    client
+        .get_config_bundle()
+        .await
+        .inspect_err(|err| {
+            tracing::warn!(error = %err, "Failed to fetch cloud config bundle");
+        })
+        .map(bundle_from_response)
+        .map_err(bundle_request_error)
+}
+
+fn bundle_request_error(error: codex_backend_client::RequestError) -> BundleRequestError {
+    if let codex_backend_client::RequestError::Policy(denied) = &error {
+        return BundleRequestError::Policy(*denied);
+    }
+    let status_code = error.status().map(|status| status.as_u16());
+    if error.is_unauthorized() {
+        BundleRequestError::Unauthorized {
+            status_code,
+            message: "Managed configuration sign-in is required".into(),
+        }
+    } else {
+        BundleRequestError::Retryable(RetryableFailureKind::Request { status_code })
     }
 }
 

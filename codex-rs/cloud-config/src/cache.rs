@@ -46,6 +46,12 @@ impl CloudConfigBundleCache {
         }
     }
 
+    pub(super) fn for_source(codex_home: AbsolutePathBuf, namespace: &str) -> Self {
+        Self {
+            path: codex_home.join(format!("managed-config-{namespace}.json")),
+        }
+    }
+
     pub(super) fn path(&self) -> &Path {
         &self.path
     }

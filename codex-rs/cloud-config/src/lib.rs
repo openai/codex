@@ -6,6 +6,8 @@
 mod backend;
 mod bundle_loader;
 mod cache;
+mod chatgpt;
+mod config_source;
 mod metrics;
 mod service;
 mod validation;

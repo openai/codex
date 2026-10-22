@@ -1,5 +1,6 @@
 use crate::backend::BackendBundleClient;
-use crate::backend::BundleClient;
+use crate::chatgpt::ChatGptSource;
+use crate::config_source::BundleSource;
 use crate::service::CLOUD_CONFIG_BUNDLE_TIMEOUT;
 use crate::service::CloudConfigBundleService;
 use codex_config::CloudConfigBundleLoader;
@@ -11,12 +12,12 @@ use std::sync::Arc;
 use tokio::task::AbortHandle;
 use tokio::task::JoinHandle;
 
-struct CloudConfigBundleLoaderLifetime<C> {
+struct CloudConfigBundleLoaderLifetime<C: BundleSource> {
     service: Arc<CloudConfigBundleService<C>>,
     refresh_task: AbortHandle,
 }
 
-impl<C> Drop for CloudConfigBundleLoaderLifetime<C> {
+impl<C: BundleSource> Drop for CloudConfigBundleLoaderLifetime<C> {
     fn drop(&mut self) {
         self.refresh_task.abort();
     }
@@ -45,7 +46,7 @@ pub(crate) fn cloud_config_bundle_loader_for_service<C>(
     service: CloudConfigBundleService<C>,
 ) -> (CloudConfigBundleLoader, JoinHandle<()>)
 where
-    C: BundleClient + 'static,
+    C: BundleSource + 'static,
 {
     let service = Arc::new(service);
     let background_service = Arc::clone(&service);
@@ -102,7 +103,7 @@ pub async fn cloud_config_bundle_loader_for_storage_without_cache(
 async fn cloud_config_bundle_service_for_storage(
     auth_config: AuthConfig,
     enable_codex_api_key_env: bool,
-) -> std::io::Result<CloudConfigBundleService<BackendBundleClient>> {
+) -> std::io::Result<CloudConfigBundleService<ChatGptSource<BackendBundleClient>>> {
     let auth_manager =
         AuthManager::shared_from_auth_config(auth_config.clone(), enable_codex_api_key_env).await?;
     Ok(CloudConfigBundleService::new(
