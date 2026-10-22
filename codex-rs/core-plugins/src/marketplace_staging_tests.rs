@@ -94,7 +94,10 @@ fn cleanup_reclaims_unpublished_and_aged_legacy_clones() -> Result<()> {
         staging_root.join(format!("{}file", MarketplaceStagingDir::directory_prefix()));
     fs::write(&unrelated_file, "keep")?;
 
-    let now = SystemTime::now();
+    // Base synthetic ages on the filesystem clock, which can differ from the wall clock.
+    let now = fs::metadata(&legacy_add)?
+        .modified()?
+        .max(fs::metadata(&legacy_upgrade)?.modified()?);
     for (age, expected_legacy_dirs) in [
         (Duration::ZERO, [true, true]),
         (

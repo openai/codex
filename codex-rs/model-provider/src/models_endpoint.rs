@@ -25,6 +25,7 @@ use codex_login::default_client::ClientRedirectPolicy;
 use codex_login::default_client::create_client_for_route_async;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_models_manager::ModelCatalogOriginator;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::ModelsEndpointFuture;
 use codex_models_manager::manager::ModelsEndpointResponse;
@@ -211,6 +212,25 @@ impl OpenAiModelsEndpoint {
 }
 
 impl ModelsEndpointClient for OpenAiModelsEndpoint {
+    fn for_originator(
+        &self,
+        originator: ModelCatalogOriginator,
+    ) -> Option<Arc<dyn ModelsEndpointClient>> {
+        let mut provider_info = self.provider_info.clone();
+        let headers = provider_info.http_headers.get_or_insert_default();
+        headers.retain(|name, _| !name.eq_ignore_ascii_case("originator"));
+        headers.insert("originator".to_string(), originator.as_str().into());
+        if let Some(headers) = &mut provider_info.env_http_headers {
+            headers.retain(|name, _| !name.eq_ignore_ascii_case("originator"));
+        }
+        Some(Arc::new(Self {
+            provider_info,
+            auth_manager: self.auth_manager.clone(),
+            gateway_auth_manager: self.gateway_auth_manager.clone(),
+            transport_builder: Arc::clone(&self.transport_builder),
+        }))
+    }
+
     fn supports_api_key_models(&self) -> bool {
         self.provider_info.model_catalog_url.is_some()
             || (self.provider_info.is_openai() && self.provider_info.base_url.is_none())
@@ -395,6 +415,10 @@ impl RequestTelemetry for ModelsRequestTelemetry {
 #[cfg(test)]
 #[path = "models_endpoint_timeout_tests.rs"]
 mod timeout_tests;
+
+#[cfg(test)]
+#[path = "models_originator_tests.rs"]
+mod originator_tests;
 
 #[cfg(test)]
 mod tests {
