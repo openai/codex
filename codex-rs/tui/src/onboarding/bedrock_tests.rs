@@ -83,7 +83,7 @@ fn render_visible_at(state: &BedrockState, area: Rect) -> String {
 }
 
 #[test]
-fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
+fn discovery_prioritizes_profiles_and_groups_other_sign_in_methods() {
     let discovering = BedrockState::discovering(RequestId::Integer(1));
     insta::assert_snapshot!(render_visible(&discovering), @r###"
     > Set up Amazon Bedrock
@@ -126,7 +126,6 @@ fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
                 BedrockMethod::Profile(0),
                 BedrockMethod::Environment,
                 BedrockMethod::OtherMethods,
-                BedrockMethod::ApiKey,
             ],
         ),
         (
@@ -143,17 +142,12 @@ fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
                 BedrockMethod::Profile(1),
                 BedrockMethod::Environment,
                 BedrockMethod::OtherMethods,
-                BedrockMethod::ApiKey,
             ],
         ),
         (
             Vec::new(),
             vec![environment],
-            vec![
-                BedrockMethod::Environment,
-                BedrockMethod::OtherMethods,
-                BedrockMethod::ApiKey,
-            ],
+            vec![BedrockMethod::Environment, BedrockMethod::OtherMethods],
         ),
         (
             Vec::new(),
@@ -186,7 +180,6 @@ fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
             BedrockMethod::Profile(0),
             BedrockMethod::Environment,
             BedrockMethod::OtherMethods,
-            BedrockMethod::ApiKey,
         ]
     );
     insta::assert_snapshot!(render_visible(&profile_and_bearer), @r###"
@@ -202,10 +195,8 @@ fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
          Use your existing Amazon Bedrock API key
 
       3. Other AWS sign-in methods
-         Use another profile, access keys, or environment variables
-
-      4. Bedrock API key
-         Enter a Bedrock API key
+         Use another profile, access keys, environment variables, or a
+    Bedrock API key
 
 
       Press enter to continue
@@ -218,6 +209,7 @@ fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
             BedrockMethod::ManualProfile,
             BedrockMethod::AccessKeys,
             BedrockMethod::EnvironmentInstructions,
+            BedrockMethod::ApiKey,
         ]
     );
     insta::assert_snapshot!(render_visible(&profile_and_bearer), @r"
@@ -233,6 +225,9 @@ fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
 
       3. Environment variables
          Configure AWS credentials in your environment, then return here
+
+      4. Bedrock API key
+         Enter a Bedrock API key
 
 
       Press enter to continue
@@ -253,10 +248,8 @@ fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
          Use your existing AWS credentials
 
       2. Other AWS sign-in methods
-         Use another profile, access keys, or environment variables
-
-      3. Bedrock API key
-         Enter a Bedrock API key
+         Use another profile, access keys, environment variables, or a
+    Bedrock API key
 
 
       Press enter to continue
@@ -288,10 +281,8 @@ fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
          us-west-2
 
       3. Other AWS sign-in methods
-         Use another profile, access keys, or environment variables
-
-      4. Bedrock API key
-         Enter a Bedrock API key
+         Use another profile, access keys, environment variables, or a
+    Bedrock API key
 
 
       Press enter to continue
@@ -313,8 +304,6 @@ fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
     > 1. Continue with detected credentials
 
       2. Other AWS sign-in methods
-
-      3. Bedrock API key
 
 
       Press enter to continue
@@ -365,7 +354,7 @@ fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
         .flat_map(|row| (area.left()..area.right()).map(move |column| (column, row)))
         .map(|position| buffer[position].symbol())
         .collect::<String>();
-    assert!(visible.contains("Bedrock API key"));
+    assert!(visible.contains("Other AWS sign-in methods"));
     assert!(visible.contains("Press enter to continue"));
     assert!(visible.contains("Press esc to go back"));
 

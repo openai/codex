@@ -153,25 +153,18 @@ impl BedrockState {
             if !self.environment_credentials.is_empty() {
                 methods.push(BedrockMethod::Environment);
             }
-            methods.extend([BedrockMethod::OtherMethods, BedrockMethod::ApiKey]);
+            methods.push(BedrockMethod::OtherMethods);
             return methods;
         }
         if detected && !self.environment_credentials.is_empty() {
-            return vec![
-                BedrockMethod::Environment,
-                BedrockMethod::OtherMethods,
-                BedrockMethod::ApiKey,
-            ];
+            return vec![BedrockMethod::Environment, BedrockMethod::OtherMethods];
         }
-        let mut methods = vec![
+        vec![
             BedrockMethod::ManualProfile,
             BedrockMethod::AccessKeys,
             BedrockMethod::EnvironmentInstructions,
-        ];
-        if detected {
-            methods.push(BedrockMethod::ApiKey);
-        }
-        methods
+            BedrockMethod::ApiKey,
+        ]
     }
 
     pub(super) fn is_text_entry_active(&self) -> bool {
@@ -635,7 +628,7 @@ impl BedrockState {
                     if matches!(self.view, BedrockView::EnvironmentInstructions) {
                         ""
                     } else {
-                        "Use another profile, access keys, or environment variables"
+                        "Use another profile, access keys, environment variables, or a Bedrock API key"
                     }
                     .to_string(),
                 ),
