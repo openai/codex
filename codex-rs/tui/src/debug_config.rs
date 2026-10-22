@@ -943,6 +943,7 @@ interrupt_message = false
         };
 
         let requirements_toml = ConfigRequirementsToml {
+            config_server: None,
             application: None,
             allowed_login_methods: None,
             allowed_chatgpt_workspaces: None,

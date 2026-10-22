@@ -2025,6 +2025,7 @@ impl Config {
             refreshed_layers.requirements_toml().clone(),
         )?
         .with_cloud_config_binding(refreshed_layers.cloud_config_binding().cloned())
+        .with_applied_config_server(refreshed_layers.applied_config_server().cloned())
         .with_user_and_project_exec_policy_rules_ignored(
             refreshed_layers.ignore_user_and_project_exec_policy_rules(),
         ))

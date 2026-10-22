@@ -168,6 +168,7 @@ async fn mcp_refresh_rejects_superseded_app_server_policy(
     let home = tempfile::tempdir()?;
     let policy = CloudConfigBundlePolicy::default();
     let mut snapshot = CloudConfigBundleSnapshot {
+        config_server: None,
         bundle: Ok(None),
         binding: None,
     };
@@ -215,6 +216,7 @@ async fn mcp_refresh_rejects_superseded_app_server_policy(
     policy.observe_remote_bundle(&replacement);
     if status == codex_config::CloudConfigBundleBindingStatus::Stale {
         policy.publish_snapshot(&mut CloudConfigBundleSnapshot {
+            config_server: None,
             bundle: Ok(Some(replacement)),
             binding: None,
         });

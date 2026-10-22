@@ -1611,3 +1611,62 @@ request_headers = [{ name = "x-old", value = "old" }]"#,
         assert_eq!(composed, expected_requirements(higher));
     }
 }
+
+#[test]
+fn higher_priority_config_server_replaces_previous_oauth_settings() {
+    let actual = crate::compose_requirements([
+        RequirementsLayerEntry::from_toml(
+            RequirementSource::SystemRequirementsToml {
+                file: AbsolutePathBuf::from_absolute_path(
+                    std::env::temp_dir().join("requirements.toml"),
+                )
+                .unwrap(),
+            },
+            r#"
+[config_server]
+base_url = "https://old.example/settings"
+[config_server.oauth]
+authorization_url = "https://login.old.example/authorize"
+token_url = "https://login.old.example/token"
+client_id = "old-client"
+scopes = ["policy.read"]
+"#,
+        ),
+        RequirementsLayerEntry::from_toml(
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
+            "[config_server]\nbase_url = 'https://new.example/settings'",
+        ),
+    ])
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        actual,
+        ConfigRequirementsWithSources {
+            config_server: Some(Sourced::new(
+                crate::ConfigServer {
+                    base_url: "https://new.example/settings".into(),
+                    oauth: None,
+                },
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
+            )),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn fetched_policy_cannot_change_config_server() {
+    let result = crate::compose_requirements([RequirementsLayerEntry::from_toml(
+        RequirementSource::EnterpriseManaged {
+            id: "remote".into(),
+            name: "Remote policy".into(),
+        },
+        "[config_server]\nbase_url = 'https://replacement.example/settings'",
+    )]);
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("only be configured in local managed requirements")
+    );
+}

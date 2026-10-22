@@ -23,6 +23,78 @@ use std::sync::RwLock;
 use tempfile::TempDir;
 
 #[tokio::test]
+async fn session_requires_managed_configuration_from_configured_service() -> Result<()> {
+    let server = start_mock_server().await;
+    let home = TempDir::new()?;
+    let requirements_path = home.path().join("requirements.toml");
+    let required_config_server = codex_config::ConfigServer {
+        base_url: "https://required.example/managed/settings".into(),
+        oauth: None,
+    };
+    std::fs::write(
+        &requirements_path,
+        format!(
+            "[config_server]\n{}",
+            toml::to_string(&required_config_server)?
+        ),
+    )?;
+    let policy = CloudConfigBundleFixture::enterprise_requirement(
+        "allowed_approval_policies = ['on-request']",
+    )
+    .into_loader();
+    for (loader, should_start) in [
+        (CloudConfigBundleLoader::default(), false),
+        (
+            policy
+                .clone()
+                .with_config_server(codex_config::ConfigServer {
+                    base_url: "https://other.example/managed/settings".into(),
+                    oauth: None,
+                }),
+            false,
+        ),
+        (policy.with_config_server(required_config_server), true),
+    ] {
+        let managed = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .loader_overrides(LoaderOverrides {
+                system_requirements_path: Some(requirements_path.clone()),
+                ..LoaderOverrides::without_managed_config_for_tests()
+            })
+            .cloud_config_bundle(loader)
+            .build()
+            .await?;
+        let mut builder = test_codex().with_config(move |config| {
+            config.config_layer_stack = managed.config_layer_stack;
+            config.permissions = managed.permissions;
+        });
+        match builder.build_with_auto_env(&server).await {
+            Ok(test) => {
+                assert!(
+                    should_start,
+                    "session started without required company policy"
+                );
+                assert_eq!(
+                    test.session_configured.approval_policy,
+                    AskForApproval::OnRequest
+                );
+            }
+            Err(error) => {
+                assert!(
+                    !should_start,
+                    "matching managed configuration should start a session: {error:#}"
+                );
+                assert!(
+                    format!("{error:#}")
+                        .contains("Required managed configuration has not been loaded")
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn managed_mxc_opt_out_blocks_preferred_and_explicit_selection() -> Result<()> {
     for mode in [None, Some("elevated"), Some("mxc")] {
         let home = TempDir::new()?;

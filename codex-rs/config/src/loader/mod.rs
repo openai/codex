@@ -207,10 +207,12 @@ pub async fn load_config_layers_state(
     let mut bundle_requirements_layers = Vec::new();
     let mut cloud_config_layers = Vec::new();
     let mut cloud_config_binding = None;
+    let mut applied_config_server = None;
 
     if !overrides.ignore_managed_requirements {
         let snapshot = cloud_config_bundle.get_snapshot().await;
         cloud_config_binding = snapshot.binding;
+        applied_config_server = snapshot.config_server;
         if let Some(bundle) = snapshot.bundle.map_err(io::Error::other)? {
             let cloud_config_base_dir = AbsolutePathBuf::from_absolute_path(codex_home)?;
             let bundle_layers = if strict_config {
@@ -500,6 +502,7 @@ pub async fn load_config_layers_state(
         config_requirements_toml.into_toml(),
     )?
     .with_cloud_config_binding(cloud_config_binding)
+    .with_applied_config_server(applied_config_server)
     .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules);
     config_layer_stack.is_projectless = is_projectless;
     startup_warnings.extend(ignored_config_warning(

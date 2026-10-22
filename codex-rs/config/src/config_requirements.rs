@@ -1033,6 +1033,8 @@ pub(crate) fn merge_app_requirements_descending(
 /// Base config deserialized from system `requirements.toml` or MDM.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
+    /// Required customer-hosted configuration server. Only local managed requirements may configure it.
+    pub config_server: Option<crate::ConfigServer>,
     pub allowed_login_methods: Option<Vec<ForcedLoginMethod>>,
     pub allowed_chatgpt_workspaces: Option<Vec<String>>,
     pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
@@ -1144,6 +1146,7 @@ impl<T> std::ops::Deref for Sourced<T> {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsWithSources {
+    pub config_server: Option<Sourced<crate::ConfigServer>>,
     pub allowed_login_methods: Option<Sourced<Vec<ForcedLoginMethod>>>,
     pub allowed_chatgpt_workspaces: Option<Sourced<Vec<String>>>,
     pub cli_auth_credentials_store: Option<Sourced<AuthCredentialsStoreMode>>,
@@ -1207,6 +1210,7 @@ impl ConfigRequirementsWithSources {
         // Destructure without `..` so adding fields to `ConfigRequirementsToml`
         // forces this merge logic to be updated.
         let ConfigRequirementsToml {
+            config_server: _,
             allowed_login_methods: _,
             allowed_chatgpt_workspaces: _,
             cli_auth_credentials_store: _,
@@ -1272,6 +1276,7 @@ impl ConfigRequirementsWithSources {
             other,
             source,
             {
+                config_server,
                 allowed_login_methods,
                 allowed_chatgpt_workspaces,
                 cli_auth_credentials_store,
@@ -1358,6 +1363,7 @@ impl ConfigRequirementsWithSources {
 
     pub fn into_toml(self) -> ConfigRequirementsToml {
         let ConfigRequirementsWithSources {
+            config_server,
             allowed_login_methods,
             allowed_chatgpt_workspaces,
             cli_auth_credentials_store,
@@ -1402,6 +1408,7 @@ impl ConfigRequirementsWithSources {
             guardian_extra_policy,
         } = self;
         ConfigRequirementsToml {
+            config_server: config_server.map(|sourced| sourced.value),
             allowed_login_methods: allowed_login_methods.map(|sourced| sourced.value),
             allowed_chatgpt_workspaces: allowed_chatgpt_workspaces.map(|sourced| sourced.value),
             cli_auth_credentials_store: cli_auth_credentials_store.map(|sourced| sourced.value),
@@ -1492,6 +1499,11 @@ impl From<SandboxMode> for SandboxModeRequirement {
 }
 
 impl ConfigRequirementsToml {
+    /// Whether local administration requires a remotely delivered managed bundle.
+    pub fn requires_remote_config(&self) -> bool {
+        self.config_server.is_some()
+    }
+
     pub fn apply_remote_sandbox_config(&mut self, hostname: Option<&str>) {
         let Some(remote_sandbox_config) = self.remote_sandbox_config.as_ref() else {
             return;
@@ -1509,7 +1521,8 @@ impl ConfigRequirementsToml {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.allowed_login_methods.is_none()
+        self.config_server.is_none()
+            && self.allowed_login_methods.is_none()
             && self.allowed_chatgpt_workspaces.is_none()
             && self.cli_auth_credentials_store.is_none()
             && self.chatgpt_base_url.is_none()
@@ -1752,6 +1765,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         // defaults also remain there because they are initialization values;
         // model-specific auto-review requirements are runtime constraints.
         let ConfigRequirementsWithSources {
+            config_server: _,
             allowed_login_methods,
             allowed_chatgpt_workspaces,
             cli_auth_credentials_store,
@@ -2305,6 +2319,7 @@ mod tests {
 
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
         let ConfigRequirementsToml {
+            config_server,
             allowed_login_methods,
             allowed_chatgpt_workspaces,
             cli_auth_credentials_store,
@@ -2350,6 +2365,8 @@ mod tests {
             guardian_extra_policy,
         } = toml;
         ConfigRequirementsWithSources {
+            config_server: config_server
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_login_methods: allowed_login_methods
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_chatgpt_workspaces: allowed_chatgpt_workspaces
@@ -2884,6 +2901,7 @@ mod tests {
         // Intentionally constructed without `..Default::default()` so adding a new field to
         // `ConfigRequirementsToml` forces this test to be updated.
         let other = ConfigRequirementsToml {
+            config_server: None,
             allowed_login_methods: Some(vec![ForcedLoginMethod::Chatgpt]),
             allowed_chatgpt_workspaces: Some(vec!["managed-workspace".to_string()]),
             cli_auth_credentials_store: Some(AuthCredentialsStoreMode::Keyring),
@@ -2934,6 +2952,7 @@ mod tests {
         assert_eq!(
             target,
             ConfigRequirementsWithSources {
+                config_server: None,
                 allowed_login_methods: Some(Sourced::new(
                     vec![ForcedLoginMethod::Chatgpt],
                     source.clone(),

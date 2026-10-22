@@ -50,6 +50,8 @@ impl Config {
             )?
             .with_user_layer_from(&self.config_layer_stack),
         };
+        // User refreshes retain the session's managed configuration.
+        layers.ensure_config_server_applied()?;
         let cfg: McpRefreshToml = layers
             .effective_config()
             .try_into()

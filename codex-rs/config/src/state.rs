@@ -249,6 +249,8 @@ pub struct ConfigLayerStack {
     cloud_config_binding: Option<crate::CloudConfigBundleBinding>,
     /// Runtime-only cancellation inherited by config snapshots and pending EMA startups.
     mcp_ema_cancellation: crate::McpEmaCancellation,
+    /// Identifies the service that supplied the loaded configuration, for comparison with the configured service.
+    applied_config_server: Option<std::sync::Arc<crate::ConfigServer>>,
     /// Cached TOML projection derived only from `requirements_toml`.
     /// Construction validates provider definitions and reports serialization errors,
     /// so `effective_config()` can replace complete entries without a fallible conversion.
@@ -282,6 +284,7 @@ impl PartialEq for ConfigLayerStack {
         let Self {
             cloud_config_binding: _,
             mcp_ema_cancellation: _,
+            applied_config_server,
             model_provider_requirements,
             layers,
             requirements,
@@ -290,7 +293,8 @@ impl PartialEq for ConfigLayerStack {
             startup_warnings,
             is_projectless,
         } = self;
-        model_provider_requirements == &other.model_provider_requirements
+        applied_config_server == &other.applied_config_server
+            && model_provider_requirements == &other.model_provider_requirements
             && layers == &other.layers
             && requirements == &other.requirements
             && requirements_toml == &other.requirements_toml
@@ -315,6 +319,7 @@ impl ConfigLayerStack {
         let stack = Self {
             cloud_config_binding: None,
             mcp_ema_cancellation: crate::McpEmaCancellation::default(),
+            applied_config_server: None,
             model_provider_requirements,
             layers,
             requirements,
@@ -380,6 +385,29 @@ impl ConfigLayerStack {
 
     pub fn mcp_ema_cancellation(&self) -> &crate::McpEmaCancellation {
         &self.mcp_ema_cancellation
+    }
+
+    pub fn with_applied_config_server(
+        mut self,
+        service_config: Option<crate::ConfigServer>,
+    ) -> Self {
+        self.applied_config_server = service_config.map(std::sync::Arc::new);
+        self
+    }
+
+    pub fn applied_config_server(&self) -> Option<&crate::ConfigServer> {
+        self.applied_config_server.as_deref()
+    }
+
+    /// Require configuration from the configured service before starting a session.
+    pub fn ensure_config_server_applied(&self) -> std::io::Result<()> {
+        if self.requirements_toml.config_server.as_ref() != self.applied_config_server() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Required managed configuration has not been loaded; authenticate and reload configuration before starting a session",
+            ));
+        }
+        Ok(())
     }
 
     /// Retains session layers while adopting current MCP, plugin, and feature restrictions.
@@ -514,6 +542,7 @@ impl ConfigLayerStack {
             layers,
             cloud_config_binding: self.cloud_config_binding.clone(),
             mcp_ema_cancellation: self.mcp_ema_cancellation.clone(),
+            applied_config_server: self.applied_config_server.clone(),
             model_provider_requirements: self.model_provider_requirements.clone(),
             requirements: self.requirements.clone(),
             requirements_toml: self.requirements_toml.clone(),
@@ -552,6 +581,7 @@ impl ConfigLayerStack {
             layers,
             cloud_config_binding: self.cloud_config_binding.clone(),
             mcp_ema_cancellation: self.mcp_ema_cancellation.clone(),
+            applied_config_server: self.applied_config_server.clone(),
             model_provider_requirements: self.model_provider_requirements.clone(),
             requirements: self.requirements.clone(),
             requirements_toml: self.requirements_toml.clone(),

@@ -332,6 +332,7 @@ async fn retired_policy_discards_staged_cache_and_retains_previous_payload() {
     let loader = codex_config::CloudConfigBundleLoader::new(async { Ok(None) })
         .with_ema_policy_snapshots(service.policy.clone(), || async {
             CloudConfigBundleSnapshot {
+                config_server: None,
                 bundle: Ok(None),
                 binding: None,
             }

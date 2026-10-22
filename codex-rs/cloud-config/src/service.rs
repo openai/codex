@@ -133,6 +133,7 @@ where
         self.latest_bundle
             .get_or_init(|| async {
                 let mut snapshot = CloudConfigBundleSnapshot {
+                    config_server: None,
                     bundle: self.load_startup_bundle_with_timeout().await,
                     binding: None,
                 };
@@ -579,6 +580,7 @@ where
         let mut latest = latest.lock().await;
         if result.is_ok() {
             *latest = CloudConfigBundleSnapshot {
+                config_server: None,
                 bundle: result,
                 binding: None,
             };

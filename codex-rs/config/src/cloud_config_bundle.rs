@@ -398,6 +398,7 @@ impl CloudConfigBundlePolicyChanges {
 pub struct CloudConfigBundleSnapshot {
     pub bundle: Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError>,
     pub binding: Option<CloudConfigBundleBinding>,
+    pub config_server: Option<crate::ConfigServer>,
 }
 
 type CloudConfigBundleSnapshotGetter =
@@ -408,6 +409,7 @@ pub struct CloudConfigBundleLoader {
     getter: Arc<CloudConfigBundleGetter>,
     snapshot_getter: Option<Arc<CloudConfigBundleSnapshotGetter>>,
     ema_policy: Option<CloudConfigBundlePolicy>,
+    config_server: Option<crate::ConfigServer>,
 }
 
 impl CloudConfigBundleLoader {
@@ -433,6 +435,7 @@ impl CloudConfigBundleLoader {
             getter: Arc::new(move || getter().boxed()),
             snapshot_getter: None,
             ema_policy: None,
+            config_server: None,
         }
     }
 
@@ -440,6 +443,7 @@ impl CloudConfigBundleLoader {
     pub fn from_snapshot(snapshot: CloudConfigBundleSnapshot) -> Self {
         let bundle = snapshot.bundle.clone();
         let mut loader = Self::from_getter(move || std::future::ready(bundle.clone()));
+        loader.config_server = snapshot.config_server.clone();
         loader.ema_policy = snapshot
             .binding
             .as_ref()
@@ -465,13 +469,27 @@ impl CloudConfigBundleLoader {
     }
 
     pub async fn get_snapshot(&self) -> CloudConfigBundleSnapshot {
-        match &self.snapshot_getter {
+        let mut snapshot = match &self.snapshot_getter {
             Some(getter) => getter().await,
             None => CloudConfigBundleSnapshot {
                 bundle: self.get().await,
                 binding: None,
+                config_server: None,
             },
+        };
+        if snapshot.bundle.is_ok() && self.config_server.is_some() {
+            snapshot.config_server = self.config_server.clone();
         }
+        snapshot
+    }
+
+    pub fn with_config_server(mut self, service_config: crate::ConfigServer) -> Self {
+        self.config_server = Some(service_config);
+        self
+    }
+
+    pub fn config_server(&self) -> Option<&crate::ConfigServer> {
+        self.config_server.as_ref()
     }
 
     pub fn ema_policy_changes(&self) -> Option<CloudConfigBundlePolicyChanges> {

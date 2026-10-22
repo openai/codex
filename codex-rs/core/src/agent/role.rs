@@ -259,6 +259,7 @@ mod role_overrides {
         )?
         .with_cloud_config_binding(config.config_layer_stack.cloud_config_binding().cloned())
         .with_mcp_ema_cancellation(config.config_layer_stack.mcp_ema_cancellation().clone())
+        .with_applied_config_server(config.config_layer_stack.applied_config_server().cloned())
         .with_user_and_project_exec_policy_rules_ignored(
             config
                 .config_layer_stack

@@ -305,6 +305,7 @@ http_headers = {{ Authorization = "Bearer ordinary-access" }}
             CloudConfigBundleFixture::enterprise_config(policy).into_bundle(),
         )),
         binding: None,
+        config_server: None,
     };
     delivered_policy.publish_snapshot(&mut snapshot);
     let test = test_codex()
@@ -648,6 +649,7 @@ http_headers = {{ Authorization = "Bearer ordinary-access" }}
             let mut snapshot = codex_config::CloudConfigBundleSnapshot {
                 bundle: Ok(Some(denied)),
                 binding: None,
+                config_server: None,
             };
             delivered_policy.publish_snapshot(&mut snapshot);
         }

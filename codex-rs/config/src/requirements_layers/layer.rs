@@ -101,6 +101,16 @@ impl ComposableRequirementsLayer {
                 .map(|base_dir| AbsolutePathBufGuard::new(base_dir.as_path()));
             let mut regular_toml = parse_layer_toml(&toml, &source)?;
 
+            if matches!(source, RequirementSource::EnterpriseManaged { .. })
+                && regular_toml.get("config_server").is_some()
+            {
+                return Err(RequirementsCompositionError::Parse {
+                    layer_source: source.clone(),
+                    message: "config_server may only be configured in local managed requirements"
+                        .into(),
+                });
+            }
+
             // These fields can only be set locally; ignore them before validating cloud policy.
             strip_cloud_auth_requirements(&source, &mut regular_toml);
 

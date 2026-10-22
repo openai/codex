@@ -2823,6 +2823,7 @@ dependencies = [
  "codex-features",
  "codex-file-system",
  "codex-git-utils",
+ "codex-http-client",
  "codex-model-provider-info",
  "codex-network-proxy",
  "codex-protocol",

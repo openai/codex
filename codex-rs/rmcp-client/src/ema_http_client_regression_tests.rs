@@ -410,6 +410,7 @@ async fn policy_suspension_requires_fresh_authority_without_cancelling_admitted_
     let mut snapshot = CloudConfigBundleSnapshot {
         bundle: Ok(None),
         binding: None,
+        config_server: None,
     };
     policy.publish_snapshot(&mut snapshot);
     Arc::get_mut(&mut client)
