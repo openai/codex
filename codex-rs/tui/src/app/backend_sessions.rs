@@ -7,6 +7,38 @@ use crate::backend_id::BackendId;
 use std::future::Future;
 use std::task::Poll;
 
+/// The initial conventional session and any additional sessions registered at launch.
+pub(crate) struct InitialBackendSessions {
+    initial: AppServerSession,
+    others: Vec<AppServerSession>,
+}
+
+impl InitialBackendSessions {
+    pub(crate) fn singleton(initial: AppServerSession) -> Self {
+        Self {
+            initial,
+            others: Vec::new(),
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "used by the under-development backend registration path"
+    )]
+    pub(crate) fn multiple(initial: AppServerSession, others: Vec<AppServerSession>) -> Self {
+        assert!(
+            others
+                .iter()
+                .all(|session| session.backend_id() != initial.backend_id())
+        );
+        Self { initial, others }
+    }
+
+    pub(super) fn into_parts(self) -> (AppServerSession, Vec<AppServerSession>) {
+        (self.initial, self.others)
+    }
+}
+
 struct SessionEntry {
     session: AppServerSession,
     listening: bool,
@@ -22,6 +54,14 @@ pub(super) struct BackendSessions {
 }
 
 impl BackendSessions {
+    pub(super) fn from_initial(initial: AppServerSession, others: Vec<AppServerSession>) -> Self {
+        let mut sessions = Self::new(initial);
+        for session in others {
+            sessions.insert(session);
+        }
+        sessions
+    }
+
     pub(super) fn new(session: AppServerSession) -> Self {
         let mut sessions = Self {
             entries: Vec::new(),

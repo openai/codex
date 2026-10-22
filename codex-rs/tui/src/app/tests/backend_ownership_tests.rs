@@ -255,9 +255,9 @@ async fn startup_rejects_foreign_resume_and_fork_before_requests() -> Result<()>
         let mut tui = crate::tui::test_support::make_test_tui()?;
         let result = super::startup_defaults_tests::run_startup_for_test(
             &mut tui,
-            server,
+            crate::app::backend_sessions::InitialBackendSessions::singleton(server),
             app.config.clone(),
-            bootstrap,
+            Some(bootstrap),
             selection,
             app.app_server_target.clone(),
         )

@@ -34,10 +34,7 @@ async fn backend_sessions_poll_three_sources_and_isolate_closed_or_paused_stream
         proxies.push(proxy);
     }
     let mut sessions = sessions.into_iter();
-    let mut backends = BackendSessions::new(sessions.next().unwrap());
-    for session in sessions {
-        backends.insert(session);
-    }
+    let mut backends = BackendSessions::from_initial(sessions.next().unwrap(), sessions.collect());
     let mut unpaused = HashSet::new();
     for _ in 0..2 {
         let (owner, event) =
@@ -54,7 +51,7 @@ async fn backend_sessions_poll_three_sources_and_isolate_closed_or_paused_stream
     .await?;
     assert_eq!(owner, owners[0]);
     assert_eq!(event.unwrap().backend_id, owner);
-    // Cancel a pending poll, then close only the selected transport.
+    // Cancel a pending poll, then close only the initial transport.
     assert!(
         backends
             .next_event(/*paused_backend*/ None)

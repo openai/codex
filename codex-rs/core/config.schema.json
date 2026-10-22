@@ -1264,6 +1264,9 @@
             "tui_app_server": {
               "type": "boolean"
             },
+            "tui_multi_backend": {
+              "type": "boolean"
+            },
             "ultrafast_mode": {
               "type": "boolean"
             },
@@ -7774,6 +7777,9 @@
           "type": "boolean"
         },
         "tui_app_server": {
+          "type": "boolean"
+        },
+        "tui_multi_backend": {
           "type": "boolean"
         },
         "ultrafast_mode": {
