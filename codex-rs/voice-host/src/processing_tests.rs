@@ -94,11 +94,13 @@ fn real_encoder_produces_twenty_millisecond_opus_packets() {
     for rate in [44_100, 48_000] {
         let mut processor = Processor::new(rate, /*output_rate*/ 48_000).unwrap();
         let mut packets = Vec::new();
+        let start = Instant::now();
         for block in 0..40 {
             let mut frame = Frame {
                 samples: [0.0; 256],
                 len: 256,
-                at: Instant::now(),
+                // Synthetic samples are contiguous even when the test thread is descheduled.
+                at: start + Duration::from_secs_f64(f64::from(block * 256) / f64::from(rate)),
                 generation: 2,
             };
             for (index, sample) in frame.samples.iter_mut().enumerate() {
