@@ -370,7 +370,7 @@ async fn forward_request(req: Request, request_ctx: &MitmRequestContext) -> Resu
 
     let mut upstream_req = Request::from_parts(parts, body);
     if let Some((signer, guest)) = signing {
-        let Ok(signed) = signer.sign(upstream_req, &guest) else {
+        let Ok(signed) = signer.sign(upstream_req, &guest).await else {
             return Ok(request_ctx.policy.deny_hook(&method, client).await);
         };
         upstream_req = signed;

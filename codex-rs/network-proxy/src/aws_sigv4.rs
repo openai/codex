@@ -14,6 +14,7 @@ use aws_sigv4::http_request::UriPathNormalizationMode;
 use aws_sigv4::http_request::sign;
 use aws_sigv4::sign::v4;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use rama_core::bytes::Bytes;
 use rama_core::extensions::ExtensionsMut;
 use rama_core::extensions::ExtensionsRef;
 use rama_http::Body;
@@ -28,6 +29,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest as _;
+use std::time::Duration;
 use std::time::SystemTime;
 
 /// A credential source in the trusted proxy process, never in the executor environment.
@@ -77,10 +79,15 @@ pub struct AwsSigV4Config {
     pub session_token: Option<ProxySecretSource>,
     #[serde(default = "https_port")]
     pub port: u16,
+    #[serde(default = "default_max_body_bytes")]
+    pub max_body_bytes: usize,
 }
 
 pub(crate) fn https_port() -> u16 {
     443
+}
+pub(crate) fn default_max_body_bytes() -> usize {
+    8 * 1024 * 1024
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -118,6 +125,10 @@ impl AwsSigV4Config {
             }
         }
         ensure!(self.port != 0, "invalid AWS signing port");
+        ensure!(
+            self.max_body_bytes <= 16 * 1024 * 1024,
+            "AWS signing body limit exceeds 16 MiB"
+        );
         self.access_key_id.validate()?;
         self.secret_access_key.validate()?;
         if let Some(token) = &self.session_token {
@@ -333,7 +344,7 @@ impl AwsSigV4Signer {
         }))
     }
 
-    pub(crate) fn sign(&self, req: Request, guest: &GuestSignature) -> Result<Request> {
+    pub(crate) async fn sign(&self, mut req: Request, guest: &GuestSignature) -> Result<Request> {
         ensure!(
             req.uri().scheme_str() == Some("https")
                 && req.uri().port_u16().unwrap_or(443) == self.config.port
@@ -341,6 +352,7 @@ impl AwsSigV4Signer {
             "AWS signing requires the configured HTTPS origin and supported framing"
         );
         let had_payload_hash = req.headers().contains_key("x-amz-content-sha256");
+        let mut permit = None;
         let (mut parts, body, payload_hash) = if guest.unsigned_payload {
             let (parts, body) = req.into_parts();
             ensure!(
@@ -357,14 +369,26 @@ impl AwsSigV4Signer {
             );
             (parts, body, "UNSIGNED-PAYLOAD".to_string())
         } else {
-            let (parts, body) = req.into_parts();
+            let (bytes, trailers) = if req.body().is_end_stream() {
+                (Bytes::new(), None)
+            } else {
+                permit = Some(crate::body_budget::reserve(&mut req).await?);
+                let body = std::mem::take(req.body_mut());
+                tokio::time::timeout(
+                    Duration::from_secs(30),
+                    crate::body_budget::collect_body(body, self.config.max_body_bytes),
+                )
+                .await
+                .map_err(|_| anyhow!("AWS signing body read timed out"))??
+            };
+            let (parts, _) = req.into_parts();
             ensure!(
-                body.is_end_stream()
-                    && crate::body_budget::content_length_matches(&parts.headers, /*size*/ 0),
-                "AWS signing requires an empty or explicitly unsigned payload"
+                trailers.is_none()
+                    && crate::body_budget::content_length_matches(&parts.headers, bytes.len()),
+                "AWS signing requires unambiguous payload framing"
             );
-            let digest = format!("{:x}", sha2::Sha256::digest([]));
-            (parts, Body::empty(), digest)
+            let digest = format!("{:x}", sha2::Sha256::digest(&bytes));
+            (parts, Body::from(bytes), digest)
         };
         if ["connection", "proxy-connection", "upgrade", "te"]
             .iter()
@@ -497,7 +521,12 @@ impl AwsSigV4Signer {
             );
             parts.headers.insert(header.name(), value);
         }
-        Ok(Request::from_parts(parts, body))
+        let req = Request::from_parts(parts, body);
+        Ok(if permit.is_some() {
+            crate::body_budget::retain(req)
+        } else {
+            req
+        })
     }
 }
 
