@@ -13,7 +13,7 @@ use tokio::task::JoinHandle;
 
 struct CloudConfigBundleLoaderLifetime<C> {
     service: Arc<CloudConfigBundleService<C>>,
-    refresh_task: JoinHandle<()>,
+    refresh_task: AbortHandle,
 }
 
 impl<C> Drop for CloudConfigBundleLoaderLifetime<C> {
@@ -43,7 +43,7 @@ pub fn cloud_config_bundle_loader(
 
 pub(crate) fn cloud_config_bundle_loader_for_service<C>(
     service: CloudConfigBundleService<C>,
-) -> (CloudConfigBundleLoader, AbortHandle)
+) -> (CloudConfigBundleLoader, JoinHandle<()>)
 where
     C: BundleClient + 'static,
 {
@@ -56,7 +56,7 @@ where
     let abort_handle = refresh_task.abort_handle();
     let lifetime = Arc::new(CloudConfigBundleLoaderLifetime {
         service,
-        refresh_task,
+        refresh_task: abort_handle,
     });
 
     let snapshot_lifetime = Arc::clone(&lifetime);
@@ -69,7 +69,7 @@ where
         let lifetime = Arc::clone(&snapshot_lifetime);
         async move { lifetime.service.get_latest_snapshot().await }
     });
-    (loader, abort_handle)
+    (loader, refresh_task)
 }
 
 pub async fn cloud_config_bundle_loader_for_storage(
