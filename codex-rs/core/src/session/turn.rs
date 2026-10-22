@@ -394,6 +394,18 @@ pub(crate) async fn run_turn(
     {
         return Ok(None);
     }
+
+    // Guardian can replace its submitted prompt with response items during finalization.
+    // Those skip UserInput telemetry above, so emit the saved prompt after acceptance.
+    if crate::guardian::is_basic_session_source(&turn_context.session_source)
+        && !user_input.is_empty()
+        && input
+            .iter()
+            .all(|item| matches!(item, TurnInput::ResponseItem(_)))
+    {
+        turn_context.session_telemetry.user_prompt(&user_input);
+    }
+
     // Only speculate after hooks accept the turn, using its finalized tools and permissions.
     {
         let mut state = sess.state.lock().await;
@@ -960,6 +972,10 @@ pub(crate) async fn run_hooks_and_record_inputs(
             blocked_input = true;
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
+            if let TurnInput::UserInput { content, .. } = input_item {
+                // Prompt telemetry can contain the full text, so emit it only after hooks accept it.
+                turn_context.session_telemetry.user_prompt(content);
+            }
             if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty()) {
                 accepted_user_input = true;
             }

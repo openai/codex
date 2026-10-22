@@ -425,9 +425,6 @@ async fn start_or_steer(
             session
                 .maybe_emit_model_warnings_for_turn(turn_context.as_ref())
                 .await;
-            if let SubmittedTurnInput::UserInput { content, .. } = &input {
-                turn_context.session_telemetry.user_prompt(content);
-            }
             let mut task_input = merge_additional_context_input(session, additional_context).await;
             if has_explicit_input {
                 task_input.push(
@@ -583,9 +580,6 @@ async fn start_if_idle(
     match kind {
         TurnStartKind::User => {
             session.clear_connector_selection().await;
-            if let SubmittedTurnInput::UserInput { content, .. } = &input {
-                turn_context.session_telemetry.user_prompt(content);
-            }
             task_input.push(
                 pending_turn_input(
                     session,
@@ -876,20 +870,14 @@ impl Session {
             .update_responsesapi_client_metadata(responsesapi_client_metadata);
 
         let input = match input {
-            SubmittedTurnInput::UserInput { content, client_id } => {
-                active_task
-                    .turn_context
-                    .session_telemetry
-                    .user_prompt(content);
-                TurnInput::UserInput {
-                    content: std::mem::take(content),
-                    client_id: client_id.clone(),
-                    metadata: super::UserInputMetadata {
-                        acceptance_order: Some(self.reserve_user_input_order().await),
-                        origin,
-                    },
-                }
-            }
+            SubmittedTurnInput::UserInput { content, client_id } => TurnInput::UserInput {
+                content: std::mem::take(content),
+                client_id: client_id.clone(),
+                metadata: super::UserInputMetadata {
+                    acceptance_order: Some(self.reserve_user_input_order().await),
+                    origin,
+                },
+            },
             input => {
                 pending_turn_input(self, input.clone(), sender_messages, active_turn_id, origin)
                     .await

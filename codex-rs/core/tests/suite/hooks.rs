@@ -83,6 +83,7 @@ use tempfile::TempDir;
 use tokio::sync::oneshot;
 use tokio::time::sleep;
 use tokio::time::timeout;
+use tracing_test::traced_test;
 
 const FIRST_CONTINUATION_PROMPT: &str = "Retry with exactly the phrase meow meow meow.";
 const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
@@ -2717,7 +2718,9 @@ async fn multiple_blocking_stop_hooks_persist_multiple_hook_prompt_fragments() -
     Ok(())
 }
 
+/// A blocked prompt keeps hook context but never reaches prompt telemetry, the rollout, or the model.
 #[tokio::test]
+#[traced_test]
 async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2737,11 +2740,40 @@ async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() 
             write_user_prompt_submit_hook(home, "blocked first prompt", BLOCKED_PROMPT_CONTEXT)
                 .expect("failed to write user prompt submit hook test fixture");
         })
-        .with_config(trust_discovered_hooks);
+        .with_config(|config| {
+            trust_discovered_hooks(config);
+            config.otel.log_user_prompt = true;
+        });
     let test = builder.build(&server).await?;
 
-    test.submit_turn("blocked first prompt").await?;
+    test.codex
+        .start_turn_if_idle(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "blocked first prompt".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     test.submit_turn("second prompt").await?;
+
+    logs_assert(|lines| {
+        let prompts: Vec<_> = lines
+            .iter()
+            .filter(|line| line.contains("codex.user_prompt") && line.contains(" prompt="))
+            .collect();
+        if prompts.len() == 1 && prompts[0].contains("prompt=second prompt") {
+            Ok(())
+        } else {
+            Err(format!(
+                "expected only the accepted prompt in telemetry: {prompts:?}"
+            ))
+        }
+    });
+    let rollout = fs::read_to_string(test.codex.rollout_path().expect("rollout path"))?;
+    assert!(!rollout.contains("blocked first prompt"));
+    assert!(rollout.contains("second prompt"));
 
     let request = response.single_request();
     assert!(
@@ -2792,7 +2824,9 @@ async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() 
     Ok(())
 }
 
+/// Queued input is logged exactly once after acceptance; a later blocked prompt cannot leak or strand it.
 #[tokio::test]
+#[traced_test]
 async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2838,6 +2872,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
         })
         .with_config(move |config| {
             trust_discovered_hooks(config);
+            config.otel.log_user_prompt = true;
         });
     let test = builder.build_with_streaming_server(&server).await?;
 
@@ -2885,6 +2920,26 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
     .await;
 
     assert_eq!(requests.len(), 2);
+
+    logs_assert(|lines| {
+        let prompts: Vec<_> = lines
+            .iter()
+            .filter(|line| line.contains("codex.user_prompt") && line.contains(" prompt="))
+            .collect();
+        if prompts.len() == 2
+            && prompts[0].contains("prompt=initial prompt")
+            && prompts[1].contains("prompt=accepted queued prompt")
+        {
+            Ok(())
+        } else {
+            Err(format!(
+                "expected only accepted prompts in telemetry: {prompts:?}"
+            ))
+        }
+    });
+    let rollout = fs::read_to_string(test.codex.rollout_path().expect("rollout path"))?;
+    assert!(!rollout.contains("blocked queued prompt"));
+    assert!(rollout.contains("accepted queued prompt"));
 
     let second_user_texts = request_message_input_texts(&requests[1], "user");
     assert!(

@@ -2145,6 +2145,7 @@ async fn guardian_denial_rejects_tool_call_with_rationale(
         })
         .with_config(move |config| {
             config.feedback_enabled = feedback_enabled;
+            config.otel.log_user_prompt = true;
             config.otel.log_guardian_assessments = log_assessments;
             config.otel.exporter = OtelExporterKind::OtlpGrpc {
                 endpoint: "http://127.0.0.1:1".to_string(),
@@ -2367,6 +2368,25 @@ async fn guardian_denial_rejects_tool_call_with_rationale(
             .expect("captured logs")
             .clone(),
     )?;
+    // Finalization converts the accepted review prompt into response items;
+    // it must still emit exactly one prompt event, even across inspection steps.
+    let guardian_thread_id = guardian_request.body_json()["client_metadata"]["thread_id"]
+        .as_str()
+        .expect("Guardian thread ID")
+        .to_owned();
+    let prompt_events: Vec<_> = logs
+        .lines()
+        .filter(|line| {
+            line.contains("codex.user_prompt")
+                && line.contains(" prompt=")
+                && line.contains(&format!("conversation.id={guardian_thread_id}"))
+        })
+        .collect();
+    assert_eq!(
+        prompt_events.len(),
+        1,
+        "Guardian prompt telemetry: {prompt_events:?}"
+    );
     let assessments: Vec<_> = logs
         .lines()
         .filter(|line| {
