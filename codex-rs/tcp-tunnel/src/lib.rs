@@ -46,6 +46,8 @@ use control::read_auth_token;
 use control::read_connect_headers;
 
 const PROXY_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+// Bound decoded QPACK fields before h3 constructs its capacity-limited HeaderMap.
+const MAX_FIELD_SECTION_SIZE: u64 = 64 * 1024;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -334,6 +336,7 @@ impl ProxyConnection {
                     }
                 };
                 let (connection, sender) = match h3::client::builder()
+                    .max_field_section_size(MAX_FIELD_SECTION_SIZE)
                     .enable_extended_connect(true)
                     .build(h3_quinn::Connection::new(quic.clone()))
                     .await

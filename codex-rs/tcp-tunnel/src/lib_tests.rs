@@ -207,6 +207,97 @@ async fn invalid_control_input_stops_credentials_without_exposing_secrets() -> R
 }
 
 #[tokio::test]
+async fn connect_rejects_qpack_expansion_and_keeps_connection_usable() -> Result<()> {
+    timeout(Duration::from_secs(15), async {
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["127.0.0.1".to_string()])?;
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let mut server_tls = rustls::ServerConfig::builder_with_provider(provider.clone())
+            .with_safe_default_protocol_versions()?
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![cert.der().clone()],
+                PrivatePkcs8KeyDer::from(signing_key.serialize_der()).into(),
+            )?;
+        server_tls.alpn_protocols = vec![b"h3".to_vec()];
+        let server_config = quinn::ServerConfig::with_crypto(Arc::new(
+            quinn::crypto::rustls::QuicServerConfig::try_from(server_tls)?,
+        ));
+        let endpoint = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse()?)?;
+        let address = endpoint.local_addr()?;
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(cert.der().clone())?;
+        let mut client_tls = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        client_tls.alpn_protocols = vec![b"h3".to_vec()];
+        let config = quinn::ClientConfig::new(Arc::new(
+            quinn::crypto::rustls::QuicClientConfig::try_from(client_tls)?,
+        ));
+
+        let (done_tx, done_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let quic = endpoint.accept().await.unwrap().await.unwrap();
+            let mut control = quic.open_uni().await.unwrap();
+            // HTTP/3 control stream with empty SETTINGS.
+            control.write_all(&[0x00, 0x04, 0x00]).await.unwrap();
+            for fields in [648_u32, 649, 32_768, 1] {
+                let (mut send, _recv) = quic.accept_bi().await.unwrap();
+                // Bypass the server library's enforcement of peer SETTINGS.
+                // HEADERS with a four-byte QUIC varint length, QPACK prefix,
+                // :status=200, then one-byte static references to a 101-byte field.
+                let mut response = vec![0x01];
+                response.extend_from_slice(&(0x8000_0000 | (fields + 3)).to_be_bytes());
+                response.extend_from_slice(&[0x00, 0x00, 0xd9]);
+                response.resize(response.len() + fields as usize, 0xfa);
+                send.write_all(&response).await.unwrap();
+                send.finish().unwrap();
+            }
+            let _ = done_rx.await;
+        });
+        let target = ProxyTarget {
+            host: address.ip().to_string(),
+            port: address.port(),
+            authority: "127.0.0.1:22".to_string(),
+        };
+        let ProxyConnection {
+            endpoint: _endpoint,
+            quic: _quic,
+            mut connection,
+            mut sender,
+        } = ProxyConnection::connect(&target, &config).await?;
+        let driver = tokio::spawn(async move { connection.wait_idle().await });
+        for oversized in [false, true, true, false] {
+            let request = http::Request::builder()
+                .method(http::Method::CONNECT)
+                .uri(http::Uri::builder().authority("127.0.0.1:22").build()?)
+                .body(())?;
+            let mut stream = sender.send_request(request).await?;
+            let result = stream.recv_response().await;
+            if oversized {
+                let error = result.expect_err("oversized response must be rejected");
+                assert!(matches!(
+                    error,
+                    h3::error::StreamError::HeaderTooBig {
+                        actual_size,
+                        max_size: 65_536,
+                        ..
+                    } if actual_size > 65_536
+                ));
+            } else {
+                assert_eq!(result?.status(), http::StatusCode::OK);
+            }
+        }
+        done_tx.send(()).unwrap();
+        server.await?;
+        driver.abort();
+        Ok(())
+    })
+    .await?
+}
+
+#[tokio::test]
 async fn transport_reconnect_keeps_listener_and_does_not_replay_old_tcp_streams() -> Result<()> {
     let CertifiedKey { cert, signing_key } =
         generate_simple_self_signed(vec!["127.0.0.1".to_string()])?;
