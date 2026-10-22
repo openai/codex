@@ -292,6 +292,7 @@ fn auto_auth_storage_load_falls_back_when_keyring_errors() -> anyhow::Result<()>
 
     let encrypted = auth_with_prefix("encrypted");
     seed_secrets_backend_with_auth(&mock_keyring, codex_home.path(), &encrypted)?;
+    assert_eq!(storage.load()?, Some(encrypted.clone()));
     mock_keyring.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));
 
     let expected = auth_with_prefix("fallback");
