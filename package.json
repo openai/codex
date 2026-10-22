@@ -11,7 +11,7 @@
     "prettier": "^3.5.3"
   },
   "resolutions": {
-    "@modelcontextprotocol/sdk": "1.26.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "braces": "^3.0.3",
     "esbuild": "0.28.1",
     "fast-uri": "3.1.1",
