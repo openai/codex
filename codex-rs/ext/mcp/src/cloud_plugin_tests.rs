@@ -8,6 +8,7 @@ use crate::PluginProviders;
 use crate::PluginsThreadState;
 use crate::install_plugin_providers;
 use anyhow::Context;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core_plugins::ExecutorPluginProvider;
 use codex_core_plugins::PluginCatalog;
 use codex_core_plugins::PluginCatalogEntry;
@@ -506,6 +507,7 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
     let provider = Arc::new(CloudProvider::default());
     let step_packages = Arc::new(StepPackages::default());
     let mut extensions = ExtensionRegistryBuilder::new();
+    crate::install(&mut extensions);
     extensions.prompt_contributor(step_packages.clone());
     install_plugin_providers(
         &mut extensions,
@@ -515,6 +517,13 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
         .with_cloud_provider(provider.clone()),
     );
     let mut builder = test_codex()
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::enterprise_config(
+                "[mcp_servers.codex_apps]\nurl = 'https://example.com/custom'",
+            )
+            .add_enterprise_requirement("[mcp_servers]")
+            .into_loader(),
+        )
         .with_exec_server_url("none")
         .with_extensions(Arc::new(extensions.build()))
         .with_auth(codex_login::CodexAuth::from_external_chatgpt_tokens(
@@ -537,6 +546,7 @@ async fn run_cloud_catalog_refresh_lifecycle() -> anyhow::Result<()> {
             config.chatgpt_base_url = apps_server.chatgpt_base_url;
         });
     let test = builder.build_with_auto_env(&server).await?;
+    assert!(!test.config.mcp_servers.get()[codex_mcp::CODEX_APPS_MCP_SERVER_NAME].enabled);
     let calendar = ("calendar", "list_events", "Cloud Demo");
     let gmail = ("gmail", "search_email", "Gmail Demo");
     for (turn, reply, expected_plugin, new_account, tool_call) in [

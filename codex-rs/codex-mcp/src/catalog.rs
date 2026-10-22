@@ -358,6 +358,7 @@ impl CatalogAction {
 pub struct McpCatalogBuilder {
     actions: Vec<CatalogAction>,
     disabled_server_names: BTreeSet<String>,
+    requirements_disabled_server_names: BTreeMap<String, RequirementSource>,
     ema_idp: Option<McpServerIdpOAuthConfig>,
 }
 
@@ -514,6 +515,7 @@ impl McpCatalogBuilder {
         }
 
         let mut disabled_server_names = self.disabled_server_names;
+        let mut requirements_disabled_server_names = self.requirements_disabled_server_names;
         let ema_idp = self.ema_idp;
         let servers = winners
             .into_iter()
@@ -529,12 +531,37 @@ impl McpCatalogBuilder {
                                 registration.config.auth,
                                 codex_config::McpServerAuth::EmaAuth
                             ));
-                    if !registration.config.enabled || disabled_server_names.contains(&name) {
-                        registration.config.enabled = false;
-                        if persist_disabled_name {
-                            // Preserve legacy disabled winners across later runtime overlays.
-                            disabled_server_names.insert(name.clone());
+                    if !registration.config.enabled && persist_disabled_name {
+                        match &registration.config.disabled_reason {
+                            Some(
+                                McpServerDisabledReason::Requirements { source }
+                                | McpServerDisabledReason::ExplicitAndRequirements { source },
+                            ) => {
+                                requirements_disabled_server_names
+                                    .insert(name.clone(), source.clone());
+                                if matches!(
+                                    registration.config.disabled_reason,
+                                    Some(McpServerDisabledReason::ExplicitAndRequirements { .. })
+                                ) {
+                                    disabled_server_names.insert(name.clone());
+                                }
+                            }
+                            Some(McpServerDisabledReason::Unknown) | None => {
+                                disabled_server_names.insert(name.clone());
+                            }
                         }
+                    }
+                    if disabled_server_names.contains(&name) {
+                        registration.config.enabled = false;
+                    }
+                    // Only trusted Apps may ignore a previous registration's requirements denial.
+                    // Retain it so a later custom replacement is still blocked.
+                    if !registration
+                        .source
+                        .is_host_owned_apps(&name, &registration.config)
+                        && let Some(source) = requirements_disabled_server_names.get(&name)
+                    {
+                        registration.config.disable_by_requirements(source.clone());
                     }
                     if matches!(
                         registration.config.auth,
@@ -564,6 +591,7 @@ impl McpCatalogBuilder {
         ResolvedMcpCatalog {
             actions: self.actions,
             disabled_server_names,
+            requirements_disabled_server_names,
             ema_idp,
             servers,
             conflicts,
@@ -603,6 +631,7 @@ impl ResolvedMcpServer {
 pub struct ResolvedMcpCatalog {
     actions: Vec<CatalogAction>,
     disabled_server_names: BTreeSet<String>,
+    requirements_disabled_server_names: BTreeMap<String, RequirementSource>,
     ema_idp: Option<McpServerIdpOAuthConfig>,
     servers: BTreeMap<String, ResolvedMcpServer>,
     conflicts: Vec<McpServerConflict>,
@@ -617,6 +646,7 @@ impl ResolvedMcpCatalog {
         McpCatalogBuilder {
             actions: self.actions.clone(),
             disabled_server_names: self.disabled_server_names.clone(),
+            requirements_disabled_server_names: self.requirements_disabled_server_names.clone(),
             ema_idp: self.ema_idp.clone(),
         }
     }
@@ -644,6 +674,8 @@ impl ResolvedMcpCatalog {
     /// Panics if a materialized server is missing from the catalog.
     pub fn with_materialized_servers(&self, servers: HashMap<String, McpServerConfig>) -> Self {
         let mut builder = McpCatalogBuilder {
+            disabled_server_names: self.disabled_server_names.clone(),
+            requirements_disabled_server_names: self.requirements_disabled_server_names.clone(),
             ema_idp: self.ema_idp.clone(),
             ..Default::default()
         };

@@ -10,6 +10,7 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::McpServerCommandMatcher;
+use codex_config::McpServerDisabledReason;
 use codex_config::McpServerIdentity;
 use codex_config::McpServerRequirement;
 use codex_config::McpServerValueMatcher;
@@ -5430,8 +5431,10 @@ fn filter_mcp_servers_by_allowlist_blocks_all_when_empty() {
         ("server-b".to_string(), http_mcp("https://example.com/b")),
     ]);
 
+    servers.get_mut("server-b").expect("server-b").enabled = false;
     let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
     let requirements = Sourced::new(BTreeMap::new(), source.clone());
+    filter_mcp_servers_by_requirements(&mut servers, Some(&requirements));
     filter_mcp_servers_by_requirements(&mut servers, Some(&requirements));
 
     let reason = Some(McpServerDisabledReason::Requirements { source });
@@ -5444,8 +5447,16 @@ fn filter_mcp_servers_by_allowlist_blocks_all_when_empty() {
             ))
             .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
         HashMap::from([
-            ("server-a".to_string(), (false, reason.clone())),
-            ("server-b".to_string(), (false, reason)),
+            ("server-a".to_string(), (false, reason)),
+            (
+                "server-b".to_string(),
+                (
+                    false,
+                    Some(McpServerDisabledReason::ExplicitAndRequirements {
+                        source: requirements.source.clone(),
+                    })
+                ),
+            ),
         ])
     );
 }

@@ -916,7 +916,10 @@ pub fn apply_http_headers_helper(
 ) -> Result<Arc<dyn HttpClient>, String> {
     if matches!(
         config.disabled_reason,
-        Some(McpServerDisabledReason::Requirements { .. })
+        Some(
+            McpServerDisabledReason::Requirements { .. }
+                | McpServerDisabledReason::ExplicitAndRequirements { .. }
+        )
     ) {
         return Err("the MCP server is disabled by managed requirements".to_string());
     }

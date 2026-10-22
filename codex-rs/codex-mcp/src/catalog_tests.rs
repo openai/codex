@@ -749,7 +749,15 @@ fn environment_policy_exempts_only_explicitly_host_owned_apps() {
             true,
         ),
     ] {
+        let custom = server("https://custom.example/mcp");
         let mut builder = ResolvedMcpCatalog::builder();
+        builder.register(McpServerRegistration::from_config(
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            custom.clone(),
+        ));
+        let denied = builder
+            .build_with_environment_authority(|_| McpEnvironmentAuthority::Restricted(&policy));
+        let mut builder = denied.to_builder();
         builder.register(registration);
         let catalog = builder
             .build_with_environment_authority(|_| McpEnvironmentAuthority::Restricted(&policy));
@@ -760,6 +768,19 @@ fn environment_policy_exempts_only_explicitly_host_owned_apps() {
                 .config()
                 .enabled,
             expected
+        );
+        let mut builder = catalog
+            .with_materialized_servers(catalog.configured_servers())
+            .to_builder();
+        builder.register(McpServerRegistration::from_extension(
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            "custom",
+            /*contribution_order*/ 1,
+            custom,
+        ));
+        assert_eq!(
+            builder.build().configured_servers(),
+            denied.configured_servers()
         );
     }
 }
