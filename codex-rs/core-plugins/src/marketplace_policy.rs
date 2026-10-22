@@ -583,6 +583,22 @@ fn primary_runtime_cache_dir() -> Option<PathBuf> {
 }
 
 fn git_hostname(url: &str) -> Option<String> {
+    // Url treats backslashes as HTTP(S) path separators, but Git/libcurl does not.
+    // A backslash anywhere in userinfo can therefore hide the host after the final @.
+    if let Some(authority_and_path) = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+    {
+        let authority = authority_and_path
+            .trim_start_matches('/')
+            .split(['/', '?', '#'])
+            .next()?;
+        if let Some((userinfo, _)) = authority.rsplit_once('@')
+            && userinfo.contains('\\')
+        {
+            return None;
+        }
+    }
     if let Ok(url) = Url::parse(url) {
         return url.host_str().map(str::to_ascii_lowercase);
     }

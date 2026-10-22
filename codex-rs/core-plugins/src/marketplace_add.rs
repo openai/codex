@@ -270,7 +270,6 @@ mod tests {
 
     #[test]
     fn denied_git_marketplace_does_not_clone_or_create_install_root() {
-        let codex_home = TempDir::new().expect("create Codex home");
         let requirements = requirements(
             r#"
 [marketplaces]
@@ -279,34 +278,50 @@ restrict_to_allowed_sources = true
 [marketplaces.allowed_sources.company]
 source = "git"
 url = "https://github.com/example/allowed.git"
+
+[marketplaces.allowed_sources.internal]
+source = "host_pattern"
+host_pattern = '^allowed\.test$'
 "#,
         );
-        let cloner_called = Cell::new(false);
+        for source in [
+            "https://github.com/example/blocked.git",
+            "https://127.0.0.1:18767/r.git",
+            "https://allowed.test@127.0.0.1:18767/r.git",
+            r"http://allowed.test\@127.0.0.1:18767/r.git",
+            r"https://allowed.test\@127.0.0.1:18767/r.git",
+            r"http://allowed.test\anything@127.0.0.1:18767/r.git",
+            r"https://allowed.test\name:password@127.0.0.1:18767/r.git",
+            r"https:///allowed.test\anything@127.0.0.1:18767/r.git",
+        ] {
+            let codex_home = TempDir::new().expect("create Codex home");
+            let cloner_called = Cell::new(false);
 
-        let err = add_marketplace_sync_with_cloner(
-            codex_home.path(),
-            &requirements,
-            MarketplaceAddRequest {
-                source: "https://github.com/example/blocked.git".to_string(),
-                ref_name: None,
-                sparse_paths: Vec::new(),
-            },
-            |_url, _ref_name, _sparse_paths, _destination| {
-                cloner_called.set(true);
-                Ok(())
-            },
-        )
-        .expect_err("blocked marketplace should fail");
+            let err = add_marketplace_sync_with_cloner(
+                codex_home.path(),
+                &requirements,
+                MarketplaceAddRequest {
+                    source: source.to_string(),
+                    ref_name: None,
+                    sparse_paths: Vec::new(),
+                },
+                |_url, _ref_name, _sparse_paths, _destination| {
+                    cloner_called.set(true);
+                    Ok(())
+                },
+            )
+            .expect_err("blocked marketplace should fail");
 
-        assert!(err.to_string().contains("is not allowed by requirements"));
-        assert!(!cloner_called.get());
-        assert!(!marketplace_install_root(codex_home.path()).exists());
-        assert!(
-            !codex_home
-                .path()
-                .join(codex_config::CONFIG_TOML_FILE)
-                .exists()
-        );
+            assert!(err.to_string().contains("is not allowed by requirements"));
+            assert!(!cloner_called.get(), "cloned denied source: {source}");
+            assert!(!marketplace_install_root(codex_home.path()).exists());
+            assert!(
+                !codex_home
+                    .path()
+                    .join(codex_config::CONFIG_TOML_FILE)
+                    .exists()
+            );
+        }
     }
 
     #[test]

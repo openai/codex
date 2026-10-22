@@ -164,7 +164,13 @@ ref = "ignored"
     );
 
     for source in [
+        "http://git.example.com/team/plugins.git",
         "https://git.example.com/team/plugins.git",
+        "https://user@git.example.com:8443/team/plugins.git",
+        "https://user%5Cname@git.example.com/team/plugins.git",
+        r"http://git.example.com/team\plugins.git",
+        r"https://git.example.com/team\@plugins.git",
+        r"https://git.example.com?repository=team\@plugins.git",
         "ssh://git@git.example.com/team/plugins.git",
         "git@git.example.com:team/plugins.git",
     ] {
