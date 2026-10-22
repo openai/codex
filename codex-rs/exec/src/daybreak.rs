@@ -73,7 +73,7 @@ pub(crate) async fn program_for_turn(
                 Some(Account::ApiKey { .. }) => {
                     features.enabled(Feature::ApiKeyCyberAccessPrograms)
                 }
-                Some(Account::AmazonBedrock { .. }) | None => false,
+                Some(Account::AmazonBedrock { .. } | Account::Gcp {}) | None => false,
             };
             return Ok(eligible.then_some(standard.into()));
         }
