@@ -1,7 +1,7 @@
 //! Opportunistic attachment may fall back; automatic startup requires a shared server.
 
-use super::*;
 use crate::legacy_core::config::ConfigBuilder;
+use crate::*;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 

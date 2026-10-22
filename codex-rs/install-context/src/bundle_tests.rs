@@ -1,6 +1,6 @@
 //! Ensure a provisioned CLI still discovers its outer package and install method.
 
-use super::*;
+use crate::*;
 use pretty_assertions::assert_eq;
 use std::fs;
 

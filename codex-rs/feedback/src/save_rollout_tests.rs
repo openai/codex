@@ -1,5 +1,5 @@
 //! Regression coverage for complete, bounded file selection during local saving.
-use super::*;
+use crate::*;
 use pretty_assertions::assert_eq;
 
 fn rollout_name() -> String {

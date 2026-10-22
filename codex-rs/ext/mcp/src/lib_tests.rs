@@ -54,3 +54,8 @@ async fn hosted_plugin_runtime_forwards_thread_originator() -> Result<(), Box<dy
 
     Ok(())
 }
+
+#[path = "event_stream_tests.rs"]
+mod event_stream_tests;
+#[path = "stream_manager_tests.rs"]
+mod stream_manager_tests;

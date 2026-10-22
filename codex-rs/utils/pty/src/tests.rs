@@ -1657,3 +1657,7 @@ async fn pipe_spawn_no_stdin_can_preserve_inherited_fds() -> anyhow::Result<()> 
 
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+#[path = "spawn_helper_tests.rs"]
+pub(crate) mod spawn_helper_tests;

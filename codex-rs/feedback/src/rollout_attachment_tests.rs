@@ -1,6 +1,6 @@
 //! Exercises lazy feedback attachment reads across rollout representations.
 
-use super::*;
+use crate::*;
 use pretty_assertions::assert_eq;
 
 const JSONL: &[u8] = b"{\"message\":\"old diagnostic\"}\n{\"message\":\"more details\"}\n";

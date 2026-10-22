@@ -1,6 +1,6 @@
 //! Checks that initialization releases the global lock and survives LRU eviction.
 
-use super::BlockingLruCache;
+use crate::BlockingLruCache;
 use std::num::NonZeroUsize;
 use std::sync::mpsc;
 use std::time::Duration;

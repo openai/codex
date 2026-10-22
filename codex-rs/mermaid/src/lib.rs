@@ -170,7 +170,3 @@ impl Graph {
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "families_tests.rs"]
-mod families_tests;

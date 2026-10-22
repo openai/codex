@@ -218,3 +218,6 @@ async fn append_entry_trims_history_to_soft_cap() {
     assert_eq!(pruned_len, long_entry_len);
     assert!(pruned_len <= soft_cap_bytes.max(long_entry_len));
 }
+
+#[path = "batch_tests.rs"]
+mod batch_tests;

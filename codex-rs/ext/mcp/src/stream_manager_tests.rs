@@ -16,11 +16,11 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::time::timeout;
 
+use super::event_stream_tests::Fixture;
+use super::event_stream_tests::StaticAuth;
+use super::event_stream_tests::WAIT;
 use crate::McpEventStreamManager;
 use crate::McpEventStreamUpdate;
-use crate::event_stream_tests::Fixture;
-use crate::event_stream_tests::StaticAuth;
-use crate::event_stream_tests::WAIT;
 
 async fn start_subscription(
     manager: &McpEventStreamManager,

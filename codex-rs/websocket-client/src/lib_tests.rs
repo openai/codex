@@ -32,3 +32,8 @@ fn rejects_non_loopback_websocket_destinations() {
         ));
     }
 }
+
+#[path = "cookie_tests.rs"]
+mod cookie_tests;
+#[path = "network_policy_tests.rs"]
+mod network_policy_tests;

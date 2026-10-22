@@ -36,7 +36,7 @@ async fn sqlite_transaction_completes_with_undrained_stderr(format: LogFormat) -
     let fmt = tracing_subscriber::fmt::layer()
         .with_writer(Mutex::new(writer))
         .with_span_events(stderr_span_events());
-    let filter = EnvFilter::new("off,codex_app_server::stderr_logging_tests=info");
+    let filter = EnvFilter::new("off,codex_app_server::tests::stderr_logging_tests=info");
     let fmt: StderrLogLayer = match format {
         LogFormat::Json => fmt.json().with_filter(filter).boxed(),
         LogFormat::Default => fmt.with_filter(filter).boxed(),

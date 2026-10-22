@@ -1,6 +1,6 @@
 //! Split readers keep their revocation wakeup and report denial even when writers fail first.
 
-use super::*;
+use crate::*;
 use codex_http_client::DestinationPolicy;
 use codex_http_client::NetworkPolicyController;
 use codex_http_client::OutboundProxyPolicy::ReqwestDefault;

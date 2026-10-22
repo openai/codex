@@ -1,7 +1,7 @@
 //! Exercises policy on AWS SDK HTTP and the SDK's credential selection.
 
-use super::AwsAuthError::Policy;
-use super::*;
+use crate::AwsAuthError::Policy;
+use crate::*;
 use aws_config::provider_config::ProviderConfig;
 use codex_http_client::DestinationPolicy;
 use codex_http_client::NetworkPolicyDenied::Revoked;
@@ -36,7 +36,7 @@ async fn real_imds_credentials_stop_after_policy_revocation() -> Result<(), Box<
         region: "us-east-1".into(),
         service: "bedrock".into(),
     };
-    let request = super::tests::test_request();
+    let request = crate::tests::test_request();
     let server = async {
         let mut credentials_sent = false;
         loop {
@@ -158,7 +158,7 @@ async fn allowlisted_static_keys_send_sigv4_and_denied_destination_sends_nothing
     .await?;
     let request = AwsRequestToSign {
         url: url.clone(),
-        ..super::tests::test_request()
+        ..crate::tests::test_request()
     };
     let signed = context.sign(request.clone()).await?;
     let client = codex_http_client::HttpClientBuilder::new().build_with_tls(
@@ -296,7 +296,7 @@ async fn sdk_credentials_preserve_profile_processes_and_environment_precedence()
             .args([
                 "--ignored",
                 "--exact",
-                "network_policy_tests::sdk_profile_probe",
+                "tests::network_policy_tests::sdk_profile_probe",
             ])
             .env("CODEX_AWS_PROFILE_PROBE_CASE", case)
             .env("AWS_CONFIG_FILE", config)
@@ -363,7 +363,7 @@ async fn sdk_default_credentials_keep_endpoint_modes_from_environment_and_profil
             .args([
                 "--ignored",
                 "--exact",
-                "network_policy_tests::sdk_profile_probe",
+                "tests::network_policy_tests::sdk_profile_probe",
             ])
             .env("CODEX_AWS_PROFILE_PROBE_CASE", case)
             .env("AWS_CONFIG_FILE", config)
@@ -437,7 +437,7 @@ fn sdk_profile_probe() -> Result<(), Box<dyn Error>> {
         } else {
             AwsAuthContext::load_profile(config, factory).await?
         };
-        let signed = context.sign(super::tests::test_request()).await;
+        let signed = context.sign(crate::tests::test_request()).await;
         if case.starts_with("endpoint-modes-") {
             assert!(
                 matches!(signed, Err(AwsAuthError::Credentials(_))),

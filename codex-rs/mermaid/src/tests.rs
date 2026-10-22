@@ -448,3 +448,6 @@ fn semantic_spans_distinguish_labels_from_matching_endpoint_glyphs() {
         assert_eq!(ports, vec![Role::Node, Role::Node]);
     }
 }
+
+#[path = "families_tests.rs"]
+mod families_tests;
