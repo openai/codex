@@ -964,6 +964,9 @@
             "guardian_node_repl_transcript_images": {
               "type": "boolean"
             },
+            "guardian_recorded_items": {
+              "type": "boolean"
+            },
             "guardian_reuse_parent_compaction": {
               "type": "boolean"
             },
@@ -7477,6 +7480,9 @@
           "type": "boolean"
         },
         "guardian_node_repl_transcript_images": {
+          "type": "boolean"
+        },
+        "guardian_recorded_items": {
           "type": "boolean"
         },
         "guardian_reuse_parent_compaction": {

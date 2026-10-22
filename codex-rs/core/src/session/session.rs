@@ -61,6 +61,9 @@ pub(crate) struct Session {
     pub(crate) thread_id: ThreadId,
     pub(crate) installation_id: String,
     pub(super) tx_event: Sender<Event>,
+    /// Installed by Guardian before its first review; forwards items and cancellation without
+    /// transferring ownership of the private session's event receiver.
+    pub(crate) parent_observer_event_tx: OnceLock<Sender<Event>>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
     pub(super) state: Mutex<SessionState>,
     /// Orders accepted settings commits and their persisted events with compaction checkpoints.
@@ -717,6 +720,7 @@ impl Session {
             request_kind,
         );
         ExecutionMetadata::from_settings(&step_context.settings).apply_to(&mut responses_metadata);
+        responses_metadata.guardian_recorded_items = self.parent_observer_event_tx.get().is_some();
         responses_metadata.tool_namespaces_info = if step_context
             .turn
             .config
@@ -1855,6 +1859,7 @@ impl Session {
                 thread_id,
                 installation_id,
                 tx_event: tx_event.clone(),
+                parent_observer_event_tx: OnceLock::new(),
                 agent_status,
                 state: Mutex::new(state),
                 thread_settings_persistence: Semaphore::new(/*permits*/ 1),

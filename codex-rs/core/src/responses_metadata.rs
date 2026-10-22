@@ -67,6 +67,7 @@ pub(crate) const WORKSPACES_KEY: &str = "workspaces";
 // when submitting a turn, but they must not override fields owned by core.
 const RESERVED_METADATA_KEYS: &[&str] = &[
     "guardian_credits_requested",
+    "guardian_recorded_items",
     MCP_ATTRIBUTION_CLIENT_METADATA_KEY,
     INSTALLATION_ID_KEY,
     X_CODEX_INSTALLATION_ID_HEADER,
@@ -108,6 +109,7 @@ const RESERVED_METADATA_KEYS: &[&str] = &[
 // These keys were previously valid user configuration. Accept existing configs while filtering
 // their values before constructing Core-owned request metadata.
 const BACKWARD_COMPATIBLE_RESERVED_METADATA_KEYS: &[&str] = &[
+    "guardian_recorded_items",
     WINDOW_NUMBER_KEY,
     FORKED_FROM_ORDINAL_EXCLUSIVE_KEY,
     ANALYTICS_ENABLED_KEY,
@@ -232,6 +234,8 @@ pub(crate) enum TurnToolSource {
 /// truth.
 #[derive(Clone, Debug)]
 pub struct CodexResponsesMetadata {
+    /// The private reviewer forwards recorded items through its parent's raw-event subscription.
+    pub(crate) guardian_recorded_items: bool,
     /// Guardian parent reference; projected only onto a Guardian request.
     pub(crate) parent_response_id: Option<String>,
     pub(crate) installation_id: String,
@@ -280,6 +284,7 @@ impl CodexResponsesMetadata {
     ) -> Self {
         Self {
             parent_response_id: None,
+            guardian_recorded_items: false,
             installation_id,
             session_id,
             thread_id,
@@ -420,6 +425,7 @@ impl CodexResponsesMetadata {
         let has_request_identity =
             request_kind.is_some_and(CodexResponsesRequestKind::has_thread_identity);
         CodexTurnMetadataPayload {
+            guardian_recorded_items: self.guardian_recorded_items.then_some(true),
             installation_id: has_request_identity.then_some(self.installation_id.as_str()),
             session_id: has_thread_identity.then_some(self.session_id.as_str()),
             thread_id: has_thread_identity.then_some(self.thread_id.as_str()),
@@ -546,6 +552,8 @@ fn non_empty_workspaces(
 
 #[derive(Serialize)]
 struct CodexTurnMetadataPayload<'a> {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    guardian_recorded_items: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     installation_id: Option<&'a str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

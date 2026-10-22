@@ -149,6 +149,8 @@ use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::PrivateSessionEvent;
+use codex_protocol::protocol::PrivateSessionEventPayload;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -2741,6 +2743,30 @@ impl Session {
     }
 
     async fn deliver_event_raw(&self, event: Event) {
+        if let Some(parent_tx) = self.parent_observer_event_tx.get() {
+            let forwarded = match &event.msg {
+                EventMsg::RawResponseItem(item) => {
+                    Some(PrivateSessionEventPayload::RecordedItem(item.clone()))
+                }
+                EventMsg::TurnAborted(aborted) => {
+                    Some(PrivateSessionEventPayload::TurnAborted(aborted.clone()))
+                }
+                _ => None,
+            };
+            if let Some(forwarded) = forwarded {
+                // Queue observer events before the private consumer can finish the review.
+                // They bypass the parent's history and retain the reviewer's identity.
+                let _ = parent_tx
+                    .send(Event {
+                        id: event.id.clone(),
+                        msg: EventMsg::PrivateSessionEvent(PrivateSessionEvent {
+                            thread_id: self.thread_id,
+                            event: forwarded,
+                        }),
+                    })
+                    .await;
+            }
+        }
         // Record the last known agent status.
         if let Some(status) = agent_status_from_event(&event.msg) {
             self.agent_status.send_replace(status);

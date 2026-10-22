@@ -5,6 +5,7 @@ use app_test_support::create_final_assistant_message_sse_response as assistant_r
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::GuardianWarningNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
@@ -191,6 +192,9 @@ async fn managed_reviewer_refreshes_global_instructions_before_reuse() -> Result
     let codex_home = TempDir::new()?;
     let instructions_path = codex_home.path().join("AGENTS.md");
     sync_config(server.uri())
+        .with_provider_name("OpenAI")
+        .enable_feature(Feature::ContentItemKinds)
+        .enable_feature(Feature::GuardianRecordedItems)
         .with_extra_config(&format!(
             "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_url}/mcp\"\ndefault_tools_approval_mode = \"prompt\""
         ))
@@ -202,8 +206,15 @@ async fn managed_reviewer_refreshes_global_instructions_before_reuse() -> Result
     let old_instructions = "Keep this project private.";
     let new_instructions = "Ask before sharing this project's source code.";
     std::fs::write(&instructions_path, old_instructions)?;
-    let parent = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let parent = app
+        .start_thread(ThreadStartParams {
+            experimental_raw_events: true,
+            ..Default::default()
+        })
+        .await?
+        .thread;
     let mut reviewer_ids = Vec::new();
+    let mut previous_recorded: Option<(String, Value)> = None;
     for (index, instructions) in [
         old_instructions,
         old_instructions,
@@ -234,6 +245,44 @@ async fn managed_reviewer_refreshes_global_instructions_before_reuse() -> Result
         assert_eq!(requests.len(), (index + 1) * 3);
         let review: Value = serde_json::from_slice(&requests[index * 3 + 1])?;
         assert!(review["input"].to_string().contains(instructions));
+        let turn_metadata: Value = serde_json::from_str(
+            review["client_metadata"]["x-codex-turn-metadata"]
+                .as_str()
+                .expect("turn metadata"),
+        )?;
+        assert_eq!(turn_metadata["guardian_recorded_items"], true);
+        if let Some((thread_id, item)) = &previous_recorded
+            && review["client_metadata"]["thread_id"] == thread_id.as_str()
+        {
+            let replayed = review["input"]
+                .as_array()
+                .expect("review input")
+                .iter()
+                .find(|replayed| replayed["content"] == item["content"])
+                .expect("previous Guardian reply is replayed");
+            assert_eq!(
+                replayed["internal_chat_message_metadata_passthrough"],
+                item["internal_chat_message_metadata_passthrough"],
+            );
+        }
+        // Private reviewer events arrive on the parent's subscription with the
+        // reviewer's identity and the metadata that its next request replays.
+        let (recorded, item) = loop {
+            let recorded: RawResponseItemCompletedNotification =
+                app.read_notification("rawResponseItem/completed").await?;
+            let item = serde_json::to_value(&recorded.item)?;
+            if recorded.thread_id != parent.id
+                && item["role"] == "assistant"
+                && item["content"][0]["text"] == ALLOW
+            {
+                break (recorded, item);
+            }
+        };
+        assert_eq!(
+            json!([recorded.thread_id, recorded.turn_id]),
+            json!([turn_metadata["thread_id"], turn_metadata["turn_id"]]),
+        );
+        previous_recorded = Some((recorded.thread_id, item));
         reviewer_ids.push(
             review["client_metadata"]["thread_id"]
                 .as_str()
@@ -250,11 +299,13 @@ async fn managed_reviewer_refreshes_global_instructions_before_reuse() -> Result
     Ok(())
 }
 
-#[test_case(ReviewEnding::Complete; "completed reviews")]
-#[test_case(ReviewEnding::Interrupt; "cancelled concurrent reviews")]
+#[test_case(ReviewEnding::Complete, true; "completed reviews")]
+#[test_case(ReviewEnding::Interrupt, true; "cancelled concurrent reviews")]
+#[test_case(ReviewEnding::Interrupt, false; "raw events without reviewer opt-in")]
 #[tokio::test]
 async fn managed_reviewers_reuse_fork_and_resume_after_parent_shutdown(
     ending: ReviewEnding,
+    recorded_items: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let (continue_parent, parent_gate) = oneshot::channel();
@@ -291,6 +342,7 @@ async fn managed_reviewers_reuse_fork_and_resume_after_parent_shutdown(
         "Keep this project private.",
     )?;
     sync_config(server.uri())
+        .with_features(&[(Feature::GuardianRecordedItems, recorded_items)].into())
         .with_extra_config(&format!(
             "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_url}/mcp\"\ndefault_tools_approval_mode = \"prompt\""
         ))
@@ -299,7 +351,13 @@ async fn managed_reviewers_reuse_fork_and_resume_after_parent_shutdown(
         .with_codex_home(codex_home.path())
         .build_initialized_with_timeout(TIMEOUT)
         .await?;
-    let parent = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let parent = app
+        .start_thread(ThreadStartParams {
+            experimental_raw_events: true,
+            ..Default::default()
+        })
+        .await?
+        .thread;
     let started: TurnStartResponse = app
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
@@ -413,8 +471,45 @@ async fn managed_reviewers_reuse_fork_and_resume_after_parent_shutdown(
         finish_first.send(()).expect("finish first review");
         finish_second.send(()).expect("finish second review");
     }
-    let completed: TurnCompletedNotification =
-        timeout(TIMEOUT, app.read_notification("turn/completed")).await??;
+    let mut parent_completed = None;
+    let mut interrupted_reviewers = std::collections::BTreeSet::new();
+    let expected_interruptions = match ending {
+        ReviewEnding::Interrupt if recorded_items => 2,
+        ReviewEnding::Complete | ReviewEnding::Interrupt => 0,
+    };
+    while parent_completed.is_none() || interrupted_reviewers.len() < expected_interruptions {
+        let completed: TurnCompletedNotification =
+            timeout(TIMEOUT, app.read_notification("turn/completed")).await??;
+        if completed.thread_id == parent.id {
+            parent_completed = Some(completed);
+        } else {
+            assert_eq!(completed.turn.status, TurnStatus::Interrupted);
+            interrupted_reviewers.insert((completed.thread_id, completed.turn.id));
+        }
+    }
+    assert_eq!(interrupted_reviewers.len(), expected_interruptions);
+    if matches!(ending, ReviewEnding::Interrupt) && recorded_items {
+        let mut expected = std::collections::BTreeSet::new();
+        for review in [&first, &second] {
+            let metadata: Value = serde_json::from_str(
+                review["client_metadata"]["x-codex-turn-metadata"]
+                    .as_str()
+                    .expect("turn metadata"),
+            )?;
+            expected.insert((
+                metadata["thread_id"]
+                    .as_str()
+                    .expect("reviewer thread ID")
+                    .to_owned(),
+                metadata["turn_id"]
+                    .as_str()
+                    .expect("reviewer turn ID")
+                    .to_owned(),
+            ));
+        }
+        assert_eq!(interrupted_reviewers, expected);
+    }
+    let completed = parent_completed.expect("parent completes independently of its reviewers");
     let expected_status = match ending {
         ReviewEnding::Complete => TurnStatus::Completed,
         ReviewEnding::Interrupt => TurnStatus::Interrupted,

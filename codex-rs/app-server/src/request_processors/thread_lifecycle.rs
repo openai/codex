@@ -349,7 +349,7 @@ pub(super) async fn ensure_listener_task_running(
                     };
                     if matches!(
                         &event.msg,
-                        EventMsg::RawResponseItem(_) | EventMsg::RawResponseCompleted(_)
+                        EventMsg::RawResponseItem(_) | EventMsg::RawResponseCompleted(_) | EventMsg::PrivateSessionEvent(_)
                     ) && !raw_events_enabled
                     {
                         continue;
