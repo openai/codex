@@ -78,6 +78,28 @@ struct MitmPolicyContext {
 }
 
 impl MitmPolicyContext {
+    async fn deny_hook(&self, method: &str, client: Option<String>) -> Response {
+        let _ = self
+            .app_state
+            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                host: self.target_host.clone(),
+                reason: REASON_MITM_HOOK_DENIED.to_string(),
+                client,
+                method: Some(method.to_string()),
+                mode: Some(self.mode),
+                protocol: self.scheme.to_string(),
+                decision: None,
+                source: None,
+                port: Some(self.target_port),
+            }))
+            .await;
+        warn!(
+            "MITM blocked by hook policy (host={}, method={method}, mode={:?})",
+            self.target_host, self.mode
+        );
+        blocked_text_response(REASON_MITM_HOOK_DENIED)
+    }
+
     fn placeholders_match(&self, req: &Request, actions: &MitmHookActions) -> bool {
         actions.inject_request_headers.iter().all(|header| {
             header.placeholder.as_ref().is_none_or(|placeholder| {
@@ -229,11 +251,8 @@ where
         .unwrap_or_default();
 
     let http_service = HttpServer::auto(executor).service(
-        (
-            (request_ctx.policy.scheme == Scheme::HTTPS)
-                .then(RemoveResponseHeaderLayer::hop_by_hop),
-            (request_ctx.policy.scheme == Scheme::HTTPS).then(RemoveRequestHeaderLayer::hop_by_hop),
-        )
+        (request_ctx.policy.scheme == Scheme::HTTPS)
+            .then(RemoveResponseHeaderLayer::hop_by_hop)
             .into_layer(service_fn({
                 let request_ctx = request_ctx.clone();
                 move |req| {
@@ -258,10 +277,19 @@ where
 }
 
 async fn handle_mitm_request(
-    req: Request,
+    mut req: Request,
     request_ctx: Arc<MitmRequestContext>,
 ) -> Result<Response, std::convert::Infallible> {
-    let response = match forward_request(req, &request_ctx).await {
+    crate::aws_sigv4::preserve_signing_headers(&mut req);
+    let response = match (request_ctx.policy.scheme == Scheme::HTTPS)
+        .then(RemoveRequestHeaderLayer::hop_by_hop)
+        .into_layer(service_fn(move |req| {
+            let request_ctx = request_ctx.clone();
+            async move { forward_request(req, &request_ctx).await }
+        }))
+        .serve(req)
+        .await
+    {
         Ok(resp) => resp,
         Err(err) => {
             warn!("MITM request handling failed: {err}");
@@ -278,6 +306,27 @@ async fn forward_request(req: Request, request_ctx: &MitmRequestContext) -> Resu
         MitmPolicyDecision::Block(response) => return Ok(response),
     };
 
+    // Select the credential from the guest's headers before injecting or stripping anything.
+    let mut signing = None;
+    let client = req
+        .extensions()
+        .get::<SocketInfo>()
+        .map(|info| info.peer_addr().to_string());
+    if let Some(signer) = hook_actions
+        .as_ref()
+        .and_then(|actions| actions.aws_sigv4.as_ref())
+    {
+        match signer.plan(&req) {
+            Ok(Some(guest)) => signing = Some((signer, guest)),
+            Ok(None) => {}
+            Err(_) => {
+                return Ok(request_ctx
+                    .policy
+                    .deny_hook(req.method().as_str(), client)
+                    .await);
+            }
+        }
+    }
     let target_host = request_ctx.policy.target_host.clone();
     let target_port = request_ctx.policy.target_port;
     let mitm = request_ctx.mitm.clone();
@@ -319,7 +368,13 @@ async fn forward_request(req: Request, request_ctx: &MitmRequestContext) -> Resu
         body
     };
 
-    let upstream_req = Request::from_parts(parts, body);
+    let mut upstream_req = Request::from_parts(parts, body);
+    if let Some((signer, guest)) = signing {
+        let Ok(signed) = signer.sign(upstream_req, &guest) else {
+            return Ok(request_ctx.policy.deny_hook(&method, client).await);
+        };
+        upstream_req = signed;
+    }
     let upstream_resp = if request_ctx.policy.scheme == Scheme::HTTP {
         crate::brokered_tunnel::forward_http_request(upstream_req, &request_ctx.upstream).await?
     } else {
@@ -459,27 +514,9 @@ async fn evaluate_mitm_policy(
             Some(actions)
         }
         HookEvaluation::Matched { .. } | HookEvaluation::HookedHostNoMatch => {
-            let _ = policy
-                .app_state
-                .record_blocked(BlockedRequest::new(BlockedRequestArgs {
-                    host: policy.target_host.clone(),
-                    reason: REASON_MITM_HOOK_DENIED.to_string(),
-                    client: client.clone(),
-                    method: Some(method.clone()),
-                    mode: Some(policy.mode),
-                    protocol: policy.scheme.to_string(),
-                    decision: None,
-                    source: None,
-                    port: Some(policy.target_port),
-                }))
-                .await;
-            warn!(
-                "MITM blocked by hook policy (host={}, method={method}, mode={:?})",
-                policy.target_host, policy.mode
-            );
-            return Ok(MitmPolicyDecision::Block(blocked_text_response(
-                REASON_MITM_HOOK_DENIED,
-            )));
+            return Ok(MitmPolicyDecision::Block(
+                policy.deny_hook(&method, client).await,
+            ));
         }
         HookEvaluation::NoHooksForHost => None,
     };

@@ -2,6 +2,8 @@
 
 mod attribution;
 mod authorization_path;
+mod aws_sigv4;
+mod body_budget;
 mod brokered_tunnel;
 mod certs;
 mod config;
@@ -37,6 +39,8 @@ mod windows_tcp_attribution;
 
 pub use attribution::PROXY_ATTRIBUTION_TOKEN_ENV_KEY;
 pub use attribution::write_attribution_frame;
+pub use aws_sigv4::AwsSigV4Config;
+pub use aws_sigv4::ProxySecretSource;
 pub use certs::CUSTOM_CA_ENV_KEYS;
 pub use certs::is_managed_mitm_ca_trust_bundle_path;
 pub use codex_utils_path_uri::Platform;

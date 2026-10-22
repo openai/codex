@@ -4229,6 +4229,8 @@ name = "codex-network-proxy"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-credential-types",
+ "aws-sigv4",
  "base64 0.22.1",
  "chrono",
  "clap",
