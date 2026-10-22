@@ -95,21 +95,29 @@ fn cleanup_reclaims_unpublished_and_aged_legacy_clones() -> Result<()> {
     fs::write(&unrelated_file, "keep")?;
 
     let now = SystemTime::now();
-    remove_stale_staging_dirs(home.path(), now)?;
-    assert!(!unpublished.exists());
-    assert!(legacy_add.exists());
-    assert!(legacy_upgrade.exists());
-    remove_stale_staging_dirs(
-        home.path(),
-        now + LEGACY_UPGRADE_MAX_AGE + Duration::from_secs(1),
-    )?;
-    assert!(!legacy_upgrade.exists());
-    assert!(legacy_add.exists());
-    remove_stale_staging_dirs(
-        home.path(),
-        now + LEGACY_ADD_MAX_AGE + Duration::from_secs(1),
-    )?;
-    assert!(!legacy_add.exists());
+    for (age, expected_legacy_dirs) in [
+        (Duration::ZERO, [true, true]),
+        (
+            LEGACY_UPGRADE_MAX_AGE + Duration::from_secs(1),
+            [true, false],
+        ),
+        (LEGACY_ADD_MAX_AGE + Duration::from_secs(1), [false, false]),
+    ] {
+        // A concurrent fork can retain the previous pass's locks until exec.
+        // Wait for both locks and explicitly release them before cleanup.
+        for name in [CLEANUP_LOCK, COORDINATION_LOCK] {
+            let lock = open_lock(&home.path().join(name))?;
+            lock.lock()?;
+            lock.unlock()?;
+        }
+        remove_stale_staging_dirs(home.path(), now + age)?;
+        assert!(!unpublished.exists());
+        assert_eq!(
+            [legacy_add.exists(), legacy_upgrade.exists()],
+            expected_legacy_dirs,
+            "legacy directories remaining after {age:?}"
+        );
+    }
     assert!(unrelated.exists());
     assert!(foreign.exists());
     assert_eq!(fs::read_to_string(unrelated_file)?, "keep");
