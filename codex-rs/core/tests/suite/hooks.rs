@@ -48,7 +48,6 @@ use codex_thread_store::InMemoryThreadStore;
 use core_test_support::TestTargetOs;
 use core_test_support::fs_wait;
 use core_test_support::hooks::trust_discovered_hooks;
-use core_test_support::managed_network_requirements_loader;
 use core_test_support::responses;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
@@ -3415,7 +3414,17 @@ allow_local_binding = true
             )
             .expect("failed to write permission request hook test fixture");
         })
-        .with_cloud_config_bundle(managed_network_requirements_loader())
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[experimental_network]
+enabled = true
+allow_local_binding = true
+allowed_domains = ["**.invalid"]
+review_domains = ["codex-network-test.invalid"]
+"#,
+            ),
+        )
         .with_config(move |config| {
             trust_discovered_hooks(config);
             config.approvals_reviewer = codex_config::types::ApprovalsReviewer::AutoReview;

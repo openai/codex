@@ -868,6 +868,7 @@ fn map_network_requirements_to_api(
                 })
                 .collect()
         }),
+        review_domains: network.review_domains,
         managed_allowed_domains_only: network.managed_allowed_domains_only,
         allowed_domains,
         denied_domains,

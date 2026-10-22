@@ -474,6 +474,10 @@ impl NetworkProxySpec {
             constraints.denied_domains = Some(managed_denied_domains);
             constraints.denylist_expansion_enabled = Some(denylist_expansion_enabled);
         }
+        if let Some(review_domains) = &requirements.review_domains {
+            config.review_domains =
+                Self::merge_domain_lists(review_domains.clone(), &config.review_domains);
+        }
         if requirements.unix_sockets.is_some() {
             let allow_unix_sockets = requirements
                 .unix_sockets

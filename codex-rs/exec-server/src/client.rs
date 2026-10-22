@@ -845,7 +845,29 @@ impl ExecServerClient {
     }
 
     pub async fn exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
+        self.ensure_network_review_capability(&params).await?;
         self.call(EXEC_METHOD, &params).await
+    }
+
+    async fn ensure_network_review_capability(
+        &self,
+        params: &ExecParams,
+    ) -> Result<(), ExecServerError> {
+        if params
+            .network_proxy
+            .as_ref()
+            .is_some_and(|launch| !launch.proxy.review_domains.is_empty())
+            && !self
+                .environment_info()
+                .await?
+                .capabilities
+                .network_proxy_review_domains
+        {
+            return Err(ExecServerError::Protocol(
+                "selected exec-server does not support managed network review domains".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     /// Returns shared cached executor metadata, fetching it lazily if initialization omitted it.
@@ -1107,6 +1129,7 @@ impl ExecServerClient {
         params: ExecParams,
         network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     ) -> Result<Session, ExecServerError> {
+        self.ensure_network_review_capability(&params).await?;
         let policy_decision_timeout_ms = params
             .network_proxy
             .as_ref()

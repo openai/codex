@@ -17,6 +17,9 @@ pub struct EnvironmentNetworkPolicy {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub requires_proxy: bool,
     pub domains: Option<NetworkDomainPermissions>,
+    /// Managed host selectors inherited by every execution in this environment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_domains: Vec<String>,
     pub unix_sockets: Option<NetworkUnixSocketPermissions>,
     pub allow_upstream_proxy: bool,
     pub dangerously_allow_all_unix_sockets: bool,
@@ -31,6 +34,7 @@ impl EnvironmentNetworkPolicy {
         Self {
             requires_proxy: config.enabled,
             domains: config.domains.clone(),
+            review_domains: config.review_domains.clone(),
             unix_sockets: config.unix_sockets.clone(),
             allow_upstream_proxy: config.allow_upstream_proxy,
             dangerously_allow_all_unix_sockets: config
@@ -43,6 +47,16 @@ impl EnvironmentNetworkPolicy {
 
     /// Applies attachment-owned traffic settings while preserving inherited denials and proxy setup.
     pub fn apply_to(&self, config: &mut NetworkProxyConfig) {
+        // Neither owner nor controller may remove the other's review selectors.
+        for pattern in &self.review_domains {
+            if !config
+                .review_domains
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(pattern))
+            {
+                config.review_domains.push(pattern.clone());
+            }
+        }
         // Use the owner's domain rules without dropping controller denials.
         let inherited_denials = config.denied_domains().unwrap_or_default();
         config.domains.clone_from(&self.domains);

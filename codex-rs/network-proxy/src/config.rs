@@ -146,6 +146,10 @@ pub struct NetworkProxyConfig {
     pub mode: NetworkMode,
     #[serde(default)]
     pub domains: Option<NetworkDomainPermissions>,
+    /// Managed host selectors routed through the existing approval flow before ordinary allows.
+    /// Direct proxy configuration cannot change these requirements-only selectors.
+    #[serde(skip)]
+    pub review_domains: Vec<String>,
     #[serde(default)]
     pub unix_sockets: Option<NetworkUnixSocketPermissions>,
     /// Omission is resolved for the selected sandbox; ordinary proxy execution defaults to false.
@@ -187,6 +191,7 @@ impl Default for NetworkProxyConfig {
             dangerously_allow_all_unix_sockets: None,
             mode: NetworkMode::default(),
             domains: None,
+            review_domains: Vec::new(),
             unix_sockets: None,
             allow_local_binding: None,
             mitm: false,
@@ -727,6 +732,7 @@ mod tests {
                 dangerously_allow_all_unix_sockets: None,
                 mode: NetworkMode::Full,
                 domains: None,
+                review_domains: Vec::new(),
                 unix_sockets: None,
                 allow_local_binding: None,
                 mitm: false,

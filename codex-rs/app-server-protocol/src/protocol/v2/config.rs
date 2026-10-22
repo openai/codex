@@ -725,6 +725,8 @@ pub struct NetworkRequirements {
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     /// Canonical network permission map for `experimental_network`.
     pub domains: Option<BTreeMap<String, NetworkDomainPermission>>,
+    /// Host patterns routed to network approval before ordinary allow rules.
+    pub review_domains: Option<Vec<String>>,
     /// When true, only managed allowlist entries are respected while managed
     /// network enforcement is active.
     pub managed_allowed_domains_only: Option<bool>,

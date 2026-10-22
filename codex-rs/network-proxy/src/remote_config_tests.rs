@@ -65,6 +65,7 @@ async fn round_trip_preserves_supported_effective_settings() {
             dangerously_allow_all_unix_sockets: Some(true),
             mode: NetworkMode::Limited,
             allow_local_binding: Some(true),
+            review_domains: vec!["review.example.com".to_string()],
             ..NetworkProxyConfig::default()
         };
         // Domain permissions serialize as a sorted map.

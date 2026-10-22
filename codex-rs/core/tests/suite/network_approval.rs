@@ -1166,7 +1166,7 @@ async fn user_network_approval_once_session_and_denial_semantics() -> Result<()>
     assert_eq!(approval.cwd, test.config.cwd.clone().into());
     assert_eq!(
         approval.reason.as_deref(),
-        Some("codex-network-test.invalid is not in the allowed_domains")
+        Some("Network access to codex-network-test.invalid requires approval")
     );
     test.codex
         .submit(Op::ExecApproval {

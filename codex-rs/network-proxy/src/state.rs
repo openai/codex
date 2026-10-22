@@ -92,6 +92,7 @@ pub fn build_config_state(
         .map_err(NetworkProxyConstraintError::into_anyhow)?;
     let deny_set = compile_denylist(&denied_domains)?;
     let allow_set = compile_allowlist(&allowed_domains)?;
+    let review_set = compile_allowlist(&config.review_domains)?;
     let mitm_hooks = compile_mitm_hooks(&config)?;
     let mitm = if config.mitm {
         Some(Arc::new(MitmState::new(MitmUpstreamConfig {
@@ -107,6 +108,7 @@ pub fn build_config_state(
         brokerage_created_default_allowlist,
         allow_set,
         deny_set,
+        review_set,
         mitm,
         mitm_hooks,
         constraints,

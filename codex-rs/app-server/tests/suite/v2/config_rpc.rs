@@ -37,6 +37,8 @@ use codex_app_server_protocol::ConfiguredHookHandler;
 use codex_app_server_protocol::ForcedChatgptWorkspaceIds;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::MergeStrategy;
+use codex_app_server_protocol::NetworkDomainPermission;
+use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ToolsV2;
@@ -103,6 +105,52 @@ async fn config_requirements_read_exposes_independent_speed_policy() -> Result<(
             ),
         );
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_requirements_read_includes_network_review_domains() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        r#"[experimental_network]
+enabled = true
+allowed_domains = ["**.example.com"]
+review_domains = ["review.example.com"]
+"#,
+    )?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+
+    let request_id = app_server.send_config_requirements_read_request().await?;
+    let response: ConfigRequirementsReadResponse = app_server.read_response(request_id).await?;
+    assert_eq!(
+        response
+            .requirements
+            .expect("managed requirements should be returned")
+            .network,
+        Some(NetworkRequirements {
+            enabled: Some(true),
+            http_port: None,
+            socks_port: None,
+            allow_upstream_proxy: None,
+            dangerously_allow_non_loopback_proxy: None,
+            dangerously_allow_all_unix_sockets: None,
+            domains: Some(BTreeMap::from([(
+                "**.example.com".to_string(),
+                NetworkDomainPermission::Allow,
+            )])),
+            review_domains: Some(vec!["review.example.com".to_string()]),
+            managed_allowed_domains_only: None,
+            allowed_domains: Some(vec!["**.example.com".to_string()]),
+            denied_domains: None,
+            unix_sockets: None,
+            allow_unix_sockets: None,
+            allow_local_binding: None,
+        }),
+    );
     Ok(())
 }
 

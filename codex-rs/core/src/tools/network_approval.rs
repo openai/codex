@@ -677,7 +677,7 @@ impl NetworkApprovalService {
         let target = Self::format_network_target(key.protocol, request.host.as_str(), key.port);
         let policy_denial_message =
             format!("Network access to \"{target}\" was blocked by policy.");
-        let prompt_reason = format!("{} is not in the allowed_domains", request.host);
+        let prompt_reason = format!("Network access to {} requires approval", request.host);
 
         let Some((turn_context, settings, active_environments, strict_auto_review)) = active_turn
         else {

@@ -16282,6 +16282,16 @@
               "null"
             ]
           },
+          "reviewDomains": {
+            "description": "Host patterns routed to network approval before ordinary allow rules.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "socksPort": {
             "format": "uint16",
             "minimum": 0.0,

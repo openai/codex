@@ -51,7 +51,7 @@ async fn unapproved_hosts_do_not_trigger_dns() {
 }
 
 #[tokio::test]
-async fn local_and_remote_approvals_recheck_dns_after_the_decider() -> Result<()> {
+async fn local_and_remote_approvals_preserve_review_precedence_and_recheck_dns() -> Result<()> {
     use crate::NetworkDecision;
     use crate::NetworkDecisionSource;
     use crate::NetworkPolicyDecider;
@@ -61,21 +61,33 @@ async fn local_and_remote_approvals_recheck_dns_after_the_decider() -> Result<()
     use crate::NetworkProxy;
     use crate::network_policy::evaluate_host_policy;
     use std::sync::Arc;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
+    use std::sync::Mutex;
 
     for remote in [false, true] {
-        let calls = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::new(Mutex::new(Vec::new()));
         let decider_calls = Arc::clone(&calls);
-        let decider: Arc<dyn NetworkPolicyDecider> = Arc::new(move |_request| {
-            decider_calls.fetch_add(1, Ordering::SeqCst);
-            async { NetworkDecision::Allow }
-        });
+        let decider: Arc<dyn NetworkPolicyDecider> =
+            Arc::new(move |request: NetworkPolicyRequest| {
+                decider_calls.lock().unwrap().push(request.host);
+                async { NetworkDecision::Allow }
+            });
         // Explicit controller false must survive an executor allowing local binding.
-        let config = NetworkProxyConfig {
+        let mut config = NetworkProxyConfig {
             allow_local_binding: Some(false),
+            review_domains: vec![
+                "8.8.8.8".to_string(),
+                "9.9.9.9".to_string(),
+                "host.review.invalid".to_string(),
+            ],
             ..NetworkProxyConfig::default()
         };
+        config.set_allowed_domains(vec![
+            "8.8.8.8".to_string(),
+            "1.1.1.1".to_string(),
+            "9.9.9.9".to_string(),
+            "**.review.invalid".to_string(),
+        ]);
+        config.set_denied_domains(vec!["9.9.9.9".to_string()]);
         let state = Arc::new(network_proxy_state_for_policy(config));
         let proxy = NetworkProxy::builder()
             .state(Arc::clone(&state))
@@ -93,7 +105,14 @@ async fn local_and_remote_approvals_recheck_dns_after_the_decider() -> Result<()
         let remote_decider = scoped
             .remote_policy_decider(/*allow_local_binding*/ true)
             .unwrap();
-        for host in ["does-not-resolve.invalid", "8.8.8.8"] {
+        for host in [
+            "does-not-resolve.invalid",
+            "8.8.8.8",
+            "host.review.invalid",
+            "ordinary.review.invalid",
+            "1.1.1.1",
+            "9.9.9.9",
+        ] {
             let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
                 protocol: NetworkProtocol::HttpsConnect,
                 host: host.to_string(),
@@ -114,15 +133,20 @@ async fn local_and_remote_approvals_recheck_dns_after_the_decider() -> Result<()
                     HostBlockReason::NotAllowedLocal.as_str(),
                     NetworkDecisionSource::BaselinePolicy,
                 )
+            } else if host == "9.9.9.9" {
+                NetworkDecision::deny_with_source(
+                    HostBlockReason::Denied.as_str(),
+                    NetworkDecisionSource::BaselinePolicy,
+                )
             } else {
                 NetworkDecision::Allow
             };
             assert_eq!(decision, expected);
         }
         assert_eq!(
-            calls.load(Ordering::SeqCst),
-            2,
-            "domain review precedes DNS"
+            *calls.lock().unwrap(),
+            vec!["does-not-resolve.invalid", "8.8.8.8", "host.review.invalid"],
+            "review selectors precede exact and wildcard allows; ordinary allows and denies skip the decider"
         );
     }
     Ok(())

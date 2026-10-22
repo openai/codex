@@ -181,6 +181,7 @@ pub struct ConfigState {
     pub(crate) brokerage_created_default_allowlist: bool,
     pub allow_set: DomainPatternSet,
     pub deny_set: DomainPatternSet,
+    pub review_set: DomainPatternSet,
     pub mitm: Option<Arc<MitmState>>,
     pub mitm_hooks: MitmHooksByHost,
     pub constraints: NetworkProxyConstraints,
@@ -816,11 +817,12 @@ impl NetworkProxyState {
             Ok(host) => host,
             Err(_) => return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed)),
         };
-        let (deny_set, allow_set, allow_local_binding, allowed_domains) = {
+        let (deny_set, review_set, allow_set, allow_local_binding, allowed_domains) = {
             let guard = self.state.read().await;
             let allowed_domains = guard.config.allowed_domains();
             (
                 guard.deny_set.clone(),
+                guard.review_set.clone(),
                 guard.allow_set.clone(),
                 // Keep explicit controller restrictions even if the executor launched with true.
                 allow_local_binding
@@ -836,13 +838,15 @@ impl NetworkProxyState {
         // Decision order matters:
         //  1) explicit deny always wins
         //  2) local/private networking is opt-in (defense-in-depth)
-        //  3) DNS requires an allowlist match or an approval
+        //  3) managed review selectors precede every ordinary allow rule
+        //  4) DNS requires an allowlist match or an approval
         if domains_match_host_or_unscoped(&deny_set, host_str) {
             return Ok(HostBlockDecision::Blocked(HostBlockReason::Denied));
         }
 
         let is_authorized = authorization == HostAuthorization::Approved
-            || domains_match_host_or_unscoped(&allow_set, host_str);
+            || (!domains_match_host_or_unscoped(&review_set, host_str)
+                && domains_match_host_or_unscoped(&allow_set, host_str));
         if !allow_local_binding {
             // If the intent is "prevent access to local/internal networks", we must not rely solely
             // on string checks like `localhost` / `127.0.0.1`. Attackers can use DNS rebinding or
@@ -1381,6 +1385,7 @@ pub(crate) fn network_proxy_state_for_policy(
         constraints: NetworkProxyConstraints::default(),
         deny_set: crate::policy::compile_denylist(&config.denied_domains().unwrap_or_default())
             .unwrap(),
+        review_set: crate::policy::compile_allowlist(&config.review_domains).unwrap(),
         mitm: None,
         mitm_hooks: crate::mitm_hook::compile_mitm_hooks(&config).unwrap(),
         config,

@@ -223,6 +223,7 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
             ("controller.example", NetworkDomainPermissionToml::Allow),
             ("blocked.example", NetworkDomainPermissionToml::Deny),
         ])),
+        review_domains: Some(vec!["controller-review.example".to_string()]),
         ..Default::default()
     };
     let profile = PermissionProfile::workspace_write();
@@ -249,7 +250,10 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
         &profile,
     )
     .expect("controller policy should be valid");
-    let mut owner = NetworkProxyConfig::default();
+    let mut owner = NetworkProxyConfig {
+        review_domains: vec!["owner-review.example".to_string()],
+        ..NetworkProxyConfig::default()
+    };
     owner.set_allowed_domains(vec!["owner.example".to_string()]);
     owner.set_denied_domains(vec!["owner-blocked.example".to_string()]);
     owner.set_allow_unix_sockets(vec![
@@ -312,6 +316,9 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
     owner.dangerously_allow_all_unix_sockets = Some(false);
     owner.allow_local_binding = Some(true);
     owner.enabled = true;
+    owner
+        .review_domains
+        .insert(0, "controller-review.example".to_string());
     assert_eq!(
         restricted.environment_policy(),
         EnvironmentNetworkPolicy::from_config(&owner, /*managed_allowed_domains_only*/ false)

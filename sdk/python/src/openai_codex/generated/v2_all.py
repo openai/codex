@@ -3001,6 +3001,13 @@ class NetworkRequirements(BaseModel):
             description="When true, only managed allowlist entries are respected while managed network enforcement is active.",
         ),
     ] = None
+    review_domains: Annotated[
+        list[str] | None,
+        Field(
+            alias="reviewDomains",
+            description="Host patterns routed to network approval before ordinary allow rules.",
+        ),
+    ] = None
     socks_port: Annotated[int | None, Field(alias="socksPort", ge=0)] = None
     unix_sockets: Annotated[
         dict[str, Any] | None,

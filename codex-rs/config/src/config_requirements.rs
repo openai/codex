@@ -432,6 +432,9 @@ pub struct NetworkRequirementsToml {
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub domains: Option<NetworkDomainPermissionsToml>,
+    /// Host patterns routed to the existing network approval flow before ordinary allow rules.
+    /// Explicit denials take precedence; approval caching, hooks, and reviewer routing still apply.
+    pub review_domains: Option<Vec<String>>,
     /// When true, only managed `allowed_domains` are respected while managed
     /// network enforcement is active. User allowlist entries are ignored.
     pub managed_allowed_domains_only: Option<bool>,
@@ -471,6 +474,7 @@ struct RawNetworkRequirementsToml {
     dangerously_allow_non_loopback_proxy: Option<bool>,
     dangerously_allow_all_unix_sockets: Option<bool>,
     domains: Option<NetworkDomainPermissionsToml>,
+    review_domains: Option<Vec<String>>,
     #[serde(default)]
     allowed_domains: Option<Vec<String>>,
     /// When true, only managed `allowed_domains` are respected while managed
@@ -499,6 +503,7 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
             domains,
+            review_domains,
             allowed_domains,
             managed_allowed_domains_only,
             denied_domains,
@@ -529,6 +534,7 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
             dangerously_allow_all_unix_sockets,
             domains: domains
                 .or_else(|| legacy_domain_permissions_from_lists(allowed_domains, denied_domains)),
+            review_domains,
             managed_allowed_domains_only,
             unix_sockets: unix_sockets
                 .or_else(|| legacy_unix_socket_permissions_from_list(allow_unix_sockets)),
@@ -580,6 +586,7 @@ pub struct NetworkConstraints {
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub domains: Option<NetworkDomainPermissionsToml>,
+    pub review_domains: Option<Vec<String>>,
     /// When true, only managed `allowed_domains` are respected while managed
     /// network enforcement is active. User allowlist entries are ignored.
     pub managed_allowed_domains_only: Option<bool>,
@@ -608,6 +615,7 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
             domains,
+            review_domains,
             managed_allowed_domains_only,
             unix_sockets,
             allow_local_binding,
@@ -621,6 +629,7 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
             domains,
+            review_domains,
             managed_allowed_domains_only,
             unix_sockets,
             allow_local_binding,
@@ -4567,6 +4576,7 @@ command = "python3 /enterprise/hooks/pre.py"
             allow_upstream_proxy = false
             dangerously_allow_all_unix_sockets = true
             allowed_domains = ["api.example.com", "*.openai.com"]
+            review_domains = ["review.example.com", "*.review.example.com"]
             managed_allowed_domains_only = true
             denied_domains = ["blocked.example.com"]
             allow_unix_sockets = ["/tmp/example.sock"]
@@ -4622,6 +4632,14 @@ command = "python3 /enterprise/hooks/pre.py"
             })
         );
         assert_eq!(sourced_network.value.allow_local_binding, Some(false));
+
+        assert_eq!(
+            sourced_network.value.review_domains,
+            Some(vec![
+                "review.example.com".to_string(),
+                "*.review.example.com".to_string()
+            ])
+        );
 
         Ok(())
     }

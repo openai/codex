@@ -153,6 +153,9 @@ pub struct EnvironmentCapabilities {
     /// Whether `exec` accepts instructions for launching an executor-local network proxy.
     #[serde(default)]
     network_proxy_launch: bool,
+    /// Whether executor proxies enforce managed review domains before ordinary allows.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub network_proxy_review_domains: bool,
     /// Whether the selected shell can mask executor environment credentials.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     credential_masking: bool,
@@ -314,6 +317,7 @@ impl EnvironmentInfo {
             temp_dir,
             capabilities: EnvironmentCapabilities {
                 network_proxy_launch: true,
+                network_proxy_review_domains: true,
                 credential_masking,
                 credential_masking_custom_providers: credential_masking,
                 capability_discovery_sandbox: true,
@@ -1539,6 +1543,7 @@ mod tests {
             capabilities,
             EnvironmentCapabilities {
                 network_proxy_launch: true,
+                network_proxy_review_domains: false,
                 credential_masking: false,
                 credential_masking_custom_providers: false,
                 capability_discovery_sandbox: true,
