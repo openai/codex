@@ -1,0 +1,21 @@
+---
+source: core/tests/suite/gcp.rs
+expression: "models.iter().map(|model|\n(&model.model, model.show_in_picker, model.is_default)).collect::<Vec<_>>()"
+---
+[
+    (
+        "gpt-6.1-sol",
+        true,
+        true,
+    ),
+    (
+        "gpt-6-astra",
+        true,
+        false,
+    ),
+    (
+        "gpt-6-luna",
+        true,
+        false,
+    ),
+]

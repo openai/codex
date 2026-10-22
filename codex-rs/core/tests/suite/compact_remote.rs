@@ -15,8 +15,10 @@ use codex_login::CodexAuth;
 use codex_login::auth::BedrockApiKeyAuth;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_5_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
+use codex_model_provider_info::GCP_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::AgentPath;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
@@ -50,6 +52,8 @@ use std::sync::Arc;
 use test_case::test_case;
 use tokio::time::Duration;
 use wiremock::ResponseTemplate;
+
+use super::client::ProviderAuthCommandFixture;
 
 #[path = "compact_remote_trimming.rs"]
 mod trimming;
@@ -534,18 +538,62 @@ async fn remote_compact_v2_records_usage_before_output_validation() -> Result<()
     Ok(())
 }
 
+enum CompactionProvider {
+    AmazonBedrock,
+    Gcp,
+}
+
+#[test_case(CompactionProvider::AmazonBedrock; "bedrock")]
+#[test_case(CompactionProvider::Gcp; "gcp")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn amazon_bedrock_automatic_compaction_uses_v2_responses_endpoint() -> Result<()> {
+async fn provider_automatic_compaction_uses_v2_responses_endpoint(
+    provider: CompactionProvider,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = TestCodexHarness::with_auto_env_builder(amazon_bedrock_test_codex().with_config(
-        |config| {
+    let server = responses::start_mock_server().await;
+    let auth_fixture;
+    let (builder, expected_model, expected_path, expected_auth) = match provider {
+        CompactionProvider::AmazonBedrock => (
+            amazon_bedrock_test_codex(),
+            AMAZON_BEDROCK_GPT_5_5_MODEL_ID,
+            "/v1/responses",
+            "Bearer bedrock-test-api-key",
+        ),
+        CompactionProvider::Gcp => {
+            auth_fixture = ProviderAuthCommandFixture::new(&["vertex-access-token"])?;
+            let mut provider = ModelProviderInfo::create_gcp_provider();
+            provider.base_url = Some(format!(
+                "{}/v1/projects/example-project/locations/global/publishers/openai/v1",
+                server.uri()
+            ));
+            provider.auth = Some(auth_fixture.auth());
+            (
+                test_codex()
+                    .with_model("gpt-6.1-sol")
+                    .with_config(move |config| {
+                        config.model_provider_id = GCP_PROVIDER_ID.to_string();
+                        config.model_provider = provider;
+                        config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
+                        config
+                            .features
+                            .enable(Feature::RemoteCompactionV2)
+                            .expect("test config should allow feature update");
+                    }),
+                "gpt-6.1-sol",
+                "/v1/projects/example-project/locations/global/publishers/openai/v1/responses",
+                "Bearer vertex-access-token",
+            )
+        }
+    };
+    let test = builder
+        .with_config(|config| {
             config.model_auto_compact_token_limit = Some(200);
-        },
-    ))
-    .await?;
+        })
+        .build_with_auto_env(&server)
+        .await?;
     let response_mock = responses::mount_sse_sequence(
-        harness.server(),
+        &server,
         vec![
             sse(vec![
                 responses::ev_assistant_message("message-1", "before automatic compaction"),
@@ -556,7 +604,7 @@ async fn amazon_bedrock_automatic_compaction_uses_v2_responses_endpoint() -> Res
                     "type": "response.output_item.done",
                     "item": {
                         "type": "compaction",
-                        "encrypted_content": "BEDROCK_AUTOMATIC_REMOTE_COMPACTED_SUMMARY",
+                        "encrypted_content": "PROVIDER_AUTOMATIC_REMOTE_COMPACTED_SUMMARY",
                     }
                 }),
                 responses::ev_completed("response-compact"),
@@ -569,44 +617,47 @@ async fn amazon_bedrock_automatic_compaction_uses_v2_responses_endpoint() -> Res
     )
     .await;
 
-    harness
-        .test()
-        .submit_turn("before automatic compact")
-        .await?;
-    harness
-        .test()
-        .submit_turn("after automatic compact")
-        .await?;
+    test.submit_turn("before automatic compact").await?;
+    test.submit_turn("after automatic compact").await?;
 
     let response_requests = response_mock.requests();
     assert_eq!(response_requests.len(), 3);
     assert!(
         response_requests
             .iter()
-            .all(|request| request.path() == "/v1/responses")
+            .all(|request| request.path() == expected_path)
     );
     let compact_request = &response_requests[1];
     assert_eq!(
         compact_request.header("authorization").as_deref(),
-        Some("Bearer bedrock-test-api-key")
+        Some(expected_auth)
     );
-    assert_eq!(
-        compact_request
-            .header("x-amzn-mantle-client-agent")
-            .as_deref(),
-        Some("codex")
-    );
-    assert_eq!(
-        compact_request.body_json()["model"],
-        AMAZON_BEDROCK_GPT_5_5_MODEL_ID
-    );
+    match provider {
+        CompactionProvider::AmazonBedrock => assert_eq!(
+            compact_request
+                .header("x-amzn-mantle-client-agent")
+                .as_deref(),
+            Some("codex")
+        ),
+        CompactionProvider::Gcp => {
+            for request in &response_requests {
+                assert_eq!(request.body_json()["reasoning"].get("summary"), None);
+                assert_eq!(
+                    request.header("x-openai-internal-codex-responses-lite"),
+                    None
+                );
+                assert!(request.inputs_of_type("additional_tools").is_empty());
+            }
+        }
+    }
+    assert_eq!(compact_request.body_json()["model"], expected_model);
     assert_eq!(
         compact_request.inputs_of_type("compaction_trigger").len(),
         1
     );
     assert!(response_requests[2].input().iter().any(|item| {
         item["type"] == "compaction"
-            && item["encrypted_content"] == "BEDROCK_AUTOMATIC_REMOTE_COMPACTED_SUMMARY"
+            && item["encrypted_content"] == "PROVIDER_AUTOMATIC_REMOTE_COMPACTED_SUMMARY"
     }));
 
     Ok(())

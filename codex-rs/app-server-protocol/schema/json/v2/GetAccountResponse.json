@@ -65,6 +65,23 @@
           ],
           "title": "AmazonBedrockAccount",
           "type": "object"
+        },
+        {
+          "description": "Google Cloud Vertex AI with externally managed credentials.",
+          "properties": {
+            "type": {
+              "enum": [
+                "gcp"
+              ],
+              "title": "GcpAccountType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "GcpAccount",
+          "type": "object"
         }
       ]
     },
