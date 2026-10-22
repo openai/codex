@@ -5,9 +5,13 @@ use crate::connection_manager::tests::create_ready_async_managed_client;
 use crate::mcp::auth::McpAuthStatusEntry;
 use crate::rmcp_client::StartupOutcomeError;
 use crate::server::McpCredentialPolicy;
+use anyhow::Context;
 use codex_config::Constrained;
 use codex_config::types::AppToolApproval;
 use codex_config::types::AuthKeyringBackendKind;
+use codex_exec_server_test_support::environment_manager_without_environments;
+use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
@@ -23,6 +27,100 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+
+#[tokio::test]
+async fn ema_auth_statuses_do_not_wait_for_account_refresh() -> anyhow::Result<()> {
+    let home = tempfile::tempdir()?;
+    // Account ID token for user/workspace, issued by idp.example to account-client.
+    let id_token = concat!(
+        "eyJhbGciOiJFUzI1NiJ9.",
+        "eyJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwic3ViIjoidXNlciIsImF1ZCI6ImFjY291bnQt",
+        "Y2xpZW50IiwiZXhwIjoxLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF91",
+        "c2VyX2lkIjoidXNlciIsImNoYXRncHRfYWNjb3VudF9pZCI6IndvcmtzcGFjZSJ9fQ",
+        ".signature",
+    );
+    std::fs::write(
+        home.path().join("auth.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "id_token": id_token,
+                "access_token": "account-access",
+                "refresh_token": "account-refresh",
+                "account_id": "workspace",
+                "login_owner_id": "completed-login",
+                "oauth_provenance": {
+                    "issuer": "https://idp.example",
+                    "client_id": "account-client"
+                }
+            },
+            "last_refresh": "2099-01-01T00:00:00Z"
+        }))?,
+    )?;
+    let manager = AuthManager::shared(
+        home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        codex_login::test_support::transport_default_auth_route_config(),
+    )
+    .await;
+    let auth = manager.auth_cached().context("account auth")?;
+    let lease = manager
+        .lease_account_oauth_grant()
+        .await?
+        .context("account grant")?;
+    let mut servers = HashMap::new();
+    for name in ["first", "second"] {
+        let mut server: McpServerConfig = serde_json::from_value(serde_json::json!({
+            "url": format!("https://resource.example/{name}"),
+            "auth": "ema_auth"
+        }))?;
+        server
+            .resolve_ema_registration(&codex_config::McpServerIdpOAuthConfig {
+                issuer: "https://idp.example".into(),
+                client_id: "enterprise-client".into(),
+            })
+            .map_err(anyhow::Error::msg)?;
+        servers.insert(
+            name.to_string(),
+            EffectiveMcpServer::from_host_config(server),
+        );
+    }
+    let runtime_context = McpRuntimeContext::new(
+        Arc::new(environment_manager_without_environments()),
+        home.path().to_path_buf(),
+    );
+    let statuses = tokio::time::timeout(
+        Duration::from_secs(5),
+        compute_auth_statuses(
+            servers.iter(),
+            OAuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+            Some(&auth),
+            Some(&manager),
+            &crate::EmaState::default(),
+            &runtime_context,
+        ),
+    )
+    .await
+    .context("MCP auth status waited for the held account lease")?;
+    assert_eq!(
+        statuses
+            .into_iter()
+            .map(|(name, entry)| (name, entry.auth_state))
+            .collect::<HashMap<_, _>>(),
+        HashMap::from([
+            ("first".to_string(), McpAuthState::BearerToken),
+            ("second".to_string(), McpAuthState::BearerToken),
+        ]),
+    );
+    drop(lease);
+    Ok(())
+}
 
 #[tokio::test]
 async fn status_snapshot_only_downgrades_oauth_and_ema_authentication_failures() {

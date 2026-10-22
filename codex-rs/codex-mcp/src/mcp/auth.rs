@@ -8,6 +8,7 @@ use codex_config::McpServerTransportConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::HttpClient;
+use codex_login::AccountOAuthGrant;
 use codex_login::CodexAuth;
 use codex_rmcp_client::McpAuthState;
 use codex_rmcp_client::McpLoginRequirement;
@@ -21,6 +22,7 @@ use codex_rmcp_client::discover_streamable_http_oauth;
 use codex_rmcp_client::resolve_mcp_oauth_callback_url;
 use futures::FutureExt;
 use futures::future::join_all;
+use tokio::sync::OnceCell;
 use tracing::warn;
 
 use crate::runtime::McpRuntimeContext;
@@ -207,7 +209,10 @@ pub async fn compute_auth_statuses<'a, I>(
 where
     I: IntoIterator<Item = (&'a String, &'a EffectiveMcpServer)>,
 {
+    // Share successful, missing, and failed reads without starting storage work for non-EMA servers.
+    let account_grant = OnceCell::new();
     let futures = servers.into_iter().map(|(name, server)| {
+        let account_grant = &account_grant;
         let name = name.clone();
         let redirect_mode = if server.is_agent_plugin() {
             StreamableHttpRedirectMode::AgentPluginV1
@@ -224,6 +229,7 @@ where
                 keyring_backend_kind,
                 auth,
                 auth_manager,
+                account_grant,
                 ema_state,
                 &runtime_context,
                 redirect_mode,
@@ -255,6 +261,7 @@ async fn compute_auth_status(
     keyring_backend_kind: AuthKeyringBackendKind,
     auth: Option<&CodexAuth>,
     auth_manager: Option<&std::sync::Arc<codex_login::AuthManager>>,
+    account_grant: &OnceCell<std::io::Result<Option<AccountOAuthGrant>>>,
     ema_state: &crate::EmaState,
     runtime_context: &McpRuntimeContext,
     redirect_mode: StreamableHttpRedirectMode,
@@ -280,10 +287,15 @@ async fn compute_auth_status(
             return Ok(McpAuthState::LoggedOut(McpLoginRequirement::Login));
         }
         let account_usable = match auth_manager {
-            Some(manager) => match manager.lease_account_oauth_grant().await? {
-                Some(lease) => {
-                    crate::ema_account::account_grant_is_usable(lease.tokens(), registration.idp())
-                        && !ema_state.requires_sign_in(registration, lease.tokens())
+            Some(manager) => match account_grant
+                .get_or_init(|| manager.account_oauth_grant())
+                .await
+                .as_ref()
+                .map_err(|error| anyhow::anyhow!("{error}"))?
+            {
+                Some(grant) => {
+                    crate::ema_account::account_grant_is_usable(grant.tokens(), registration.idp())
+                        && !ema_state.requires_sign_in(registration, grant.tokens())
                 }
                 None => false,
             },

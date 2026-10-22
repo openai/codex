@@ -2573,6 +2573,17 @@ impl AuthManager {
             .acquire_owned()
             .await
             .map_err(|_| std::io::Error::other("Account refresh coordination is unavailable."))?;
+        Ok(self
+            .account_oauth_grant()
+            .await?
+            .map(|grant| AccountOAuthGrantLease { grant, permit }))
+    }
+
+    /// Reads an owner-checked grant without waiting for or excluding account refresh.
+    /// Use this for inspection; lease the grant again before exchanging its refresh token.
+    pub async fn account_oauth_grant(
+        self: &Arc<Self>,
+    ) -> std::io::Result<Option<AccountOAuthGrant>> {
         let login_generation = self.auth_change_state_tx.borrow().login_generation;
         let Some(tokens) = self.read_account_grant_tokens().await? else {
             return Ok(None);
@@ -2585,7 +2596,7 @@ impl AuthManager {
         if !grant.owner_is_current() {
             return Ok(None);
         }
-        Ok(Some(AccountOAuthGrantLease { grant, permit }))
+        Ok(Some(grant))
     }
 
     /// Checks the persisted account owner without requiring an EMA-eligible account grant.
