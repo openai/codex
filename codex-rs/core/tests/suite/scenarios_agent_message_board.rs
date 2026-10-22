@@ -388,10 +388,15 @@ async fn board_is_shared_with_children_and_skips_idle_notices(
     Ok(())
 }
 
-#[test_case::test_case(false; "before_final")]
-#[test_case::test_case(true; "after_final")]
+#[test_case::test_case(false, "Finished."; "before_final")]
+#[test_case::test_case(true, "Finished."; "after_final")]
+#[test_case::test_case(false, ""; "before_empty_final")]
+#[test_case::test_case(true, ""; "after_empty_final")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn board_notifications_do_not_reopen_a_final_answer(after_final: bool) -> anyhow::Result<()> {
+async fn board_notifications_do_not_reopen_a_final_answer(
+    after_final: bool,
+    final_answer: &str,
+) -> anyhow::Result<()> {
     let response = |body| vec![StreamingSseChunk { gate: None, body }];
     let (release_final, final_gate) = oneshot::channel();
     let (release_child, child_gate) = oneshot::channel();
@@ -400,7 +405,7 @@ async fn board_notifications_do_not_reopen_a_final_answer(after_final: bool) -> 
         event
     };
     let started = final_phase(ev_message_item_added("root-final", ""));
-    let finished = final_phase(ev_assistant_message("root-final", "Finished."));
+    let finished = final_phase(ev_assistant_message("root-final", final_answer));
     let (before_gate, after_gate) = if after_final {
         // Starting an empty item confirms the answer was processed without adding mailbox work.
         (

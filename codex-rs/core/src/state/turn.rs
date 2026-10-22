@@ -40,9 +40,8 @@ pub(crate) struct ActiveTurn {
 /// State machine:
 /// - A turn starts in `CurrentTurn`, so queued child mail can join the next
 ///   model request for that turn.
-/// - After user-visible terminal output is recorded, we switch to `NextTurn`
-///   to leave late child mail queued instead of extending an already shown
-///   answer.
+/// - After a terminal answer is recorded, even an empty one, we switch to
+///   `NextTurn` to leave late child mail queued instead of extending the answer.
 /// - If the same task later gets explicit same-turn work again (a steered user
 ///   prompt or a tool call after an untagged preamble), we reopen `CurrentTurn`
 ///   so that pending child mail is drained into that follow-up request.
@@ -51,7 +50,7 @@ pub(crate) enum MailboxDeliveryPhase {
     /// Incoming mailbox messages can still be consumed by the current turn.
     #[default]
     CurrentTurn,
-    /// The current turn already emitted visible final answer text; mailbox
+    /// The current turn already emitted a terminal answer; mailbox
     /// messages should remain queued for a later turn.
     NextTurn,
 }

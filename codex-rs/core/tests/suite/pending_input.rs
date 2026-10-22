@@ -1152,19 +1152,22 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_commentary_message_ite
     server.shutdown().await;
 }
 
+#[test_case("first answer"; "visible_final")]
+#[test_case(""; "empty_final")]
+#[test_case(" \n\t"; "whitespace_final")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn queued_inter_agent_mail_does_not_restart_after_final_answer() {
+async fn queued_inter_agent_mail_does_not_restart_after_final_answer(final_answer: &str) {
     let first_chunks = vec![
         chunk(ev_response_created("resp-1")),
         chunk(ev_message_item_added("msg-1", "")),
-        chunk(ev_output_text_delta("first answer")),
+        chunk(ev_output_text_delta(final_answer)),
         chunk(json!({
             "type": "response.output_item.done",
             "item": {
                 "type": "message",
                 "role": "assistant",
                 "id": "msg-1",
-                "content": [{"type": "output_text", "text": "first answer"}],
+                "content": [{"type": "output_text", "text": final_answer}],
                 "phase": "final_answer",
             }
         })),

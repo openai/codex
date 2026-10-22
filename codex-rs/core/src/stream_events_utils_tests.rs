@@ -549,13 +549,20 @@ fn last_assistant_message_from_item_returns_none_for_plan_only_hidden_message() 
     );
 }
 
-#[test]
-fn completed_item_defers_mailbox_delivery_for_unknown_phase_messages() {
-    let item = assistant_output_text("final answer");
+#[test_case::test_case(Some(MessagePhase::FinalAnswer), "", true; "explicit_empty_final")]
+#[test_case::test_case(None, "final answer", true; "untagged_visible_answer")]
+#[test_case::test_case(None, "", false; "untagged_empty_message")]
+fn completed_item_defers_mailbox_delivery_for_final_answers(
+    phase: Option<MessagePhase>,
+    text: &str,
+    expected: bool,
+) {
+    let item = assistant_output_text_with_phase(text, phase);
 
-    assert!(completed_item_defers_mailbox_delivery_to_next_turn(
-        &item, /*plan_mode*/ false,
-    ));
+    assert_eq!(
+        completed_item_defers_mailbox_delivery_to_next_turn(&item, /*plan_mode*/ false),
+        expected
+    );
 }
 
 #[test_case::test_case(MessagePhase::Commentary; "commentary")]
