@@ -2110,6 +2110,101 @@ fn configured_provider_does_not_register_a_credential_inside_an_existing_dummy()
 }
 
 #[test]
+fn builtin_dummy_rejects_known_and_late_credential_collisions() {
+    for (custom_real, known_before_builtin) in [("mask", true), ("mask", false), ("pass", false)] {
+        let broker = broker_for(CredentialProviderConfig {
+            env: vec!["CUSTOM_TOKEN".to_string()],
+            patterns: if known_before_builtin {
+                vec!["^[a-z]{4}$".to_string(), "^ghp_[A-Za-z0-9]+$".to_string()]
+            } else {
+                vec!["^(?:pass|mask)$".to_string()]
+            },
+            url_prefix_from_env: Some("CUSTOM_HOST".to_string()),
+            ..CredentialProviderConfig::default()
+        });
+        if known_before_builtin {
+            let mut unbound =
+                HashMap::from([("CUSTOM_TOKEN".to_string(), custom_real.to_string())]);
+            broker.virtualize_child_env(&mut unbound);
+            assert!(broker.read_state().credentials.is_empty());
+        }
+        let github_real = "ghp_abcdefghijklmnopqrstuvwxyz1234567890";
+        let mut builtin_env = HashMap::from([("GH_TOKEN".to_string(), github_real.to_string())]);
+        broker.virtualize_child_env(&mut builtin_env);
+        let github_dummy = &builtin_env["GH_TOKEN"];
+        if known_before_builtin {
+            assert_eq!(github_dummy, github_real);
+            assert!(broker.read_state().credentials.is_empty());
+            continue;
+        }
+        assert!(github_dummy.starts_with("ghp_masked"));
+
+        // The earlier dummy is not carried, so environment containment cannot reject the overlap.
+        let mut late_env = HashMap::from([
+            ("CUSTOM_TOKEN".to_string(), custom_real.to_string()),
+            (
+                "CUSTOM_HOST".to_string(),
+                "api.provider.example".to_string(),
+            ),
+        ]);
+        broker.virtualize_child_env(&mut late_env);
+        assert_eq!(late_env["CUSTOM_TOKEN"], custom_real);
+        assert_eq!(broker.read_state().credentials.len(), 1);
+
+        let mut headers = HeaderMap::from_iter([(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {github_dummy}")).unwrap(),
+        )]);
+        broker.inject_request_headers("api.github.com", &mut headers);
+        assert_eq!(headers[AUTHORIZATION], format!("Bearer {github_real}"));
+        let mut restored = github_dummy.clone();
+        assert!(broker.restore_text(&mut restored));
+        assert_eq!(restored, github_real);
+
+        let mut headers =
+            HeaderMap::from_iter([(AUTHORIZATION, HeaderValue::from_static("Bearer mask"))]);
+        broker.inject_request_headers("https://api.provider.example/", &mut headers);
+        assert_eq!(headers[AUTHORIZATION], "Bearer mask");
+    }
+
+    let broker = broker_for(CredentialProviderConfig {
+        env: vec!["CUSTOM_TOKEN".to_string()],
+        patterns: vec!["mask[a-z]{2}".to_string()],
+        url_prefixes: vec!["https://custom.example".to_string()],
+        ..CredentialProviderConfig::default()
+    });
+    let github_real = "ghp_abcdefghijklmnopqrstuvwxyz1234567890";
+    let mut env = HashMap::from([
+        ("GH_TOKEN".to_string(), github_real.to_string()),
+        ("CUSTOM_ALIAS".to_string(), "masked".to_string()),
+    ]);
+    broker.virtualize_child_env(&mut env);
+    assert_eq!(env["GH_TOKEN"], github_real);
+    assert!(!env.contains_key("CUSTOM_TOKEN"));
+    assert!(
+        broker
+            .read_state()
+            .credentials
+            .iter()
+            .all(|credential| { credential.env_var == "CUSTOM_TOKEN" })
+    );
+    let alias_dummy = &env["CUSTOM_ALIAS"];
+    assert_ne!(alias_dummy, "masked");
+    let mut headers = HeaderMap::from_iter([(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {alias_dummy}")).unwrap(),
+    )]);
+    let original = headers.clone();
+    broker.inject_request_headers("https://unrelated.example/", &mut headers);
+    assert_eq!(headers, original);
+    broker.inject_request_headers("https://custom.example/", &mut headers);
+    assert_eq!(headers[AUTHORIZATION], "Bearer masked");
+    let mut restored = alias_dummy.clone();
+    assert!(broker.restore_text(&mut restored));
+    assert_eq!(restored, "masked");
+}
+
+#[test]
 fn configured_provider_reload_preserves_credentials_and_rejects_overlapping_sources() {
     let token = "provider_abcdefghijklmnopqrstuvwx";
     let provider = CredentialProviderConfig {

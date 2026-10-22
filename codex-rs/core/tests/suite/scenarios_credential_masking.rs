@@ -42,7 +42,7 @@ async fn remote_credential_masking_request_history(
         (
             "OPENAI_API_KEY",
             "sk-proj-executor-only-0000000000000000000000000000000000",
-            "sk-proj-",
+            "sk-proj-masked",
         )
     };
     const CALL_ID: &str = "print-credential";

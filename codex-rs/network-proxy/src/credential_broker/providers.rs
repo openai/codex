@@ -202,15 +202,13 @@ pub(super) fn translate_standard_request_header(
 }
 
 fn shaped_dummy_value(real_value: &str, prefix: &str, minimum_len: usize) -> String {
-    let target_len = real_value.len().max(minimum_len).max(prefix.len() + 16);
+    let mut dummy = format!("{prefix}masked");
+    // Keep over 128 bits of randomness after the visible marker.
+    let target_len = real_value.len().max(minimum_len).max(dummy.len() + 22);
+    dummy.reserve(target_len - dummy.len());
     let mut rng = rand::rng();
-    let mut dummy = String::with_capacity(target_len);
-    dummy.push_str(prefix);
-    for index in prefix.len()..target_len {
-        let character = match real_value.as_bytes().get(index).copied() {
-            Some(template) if !template.is_ascii_alphanumeric() => template,
-            _ => DUMMY_ALPHANUMERIC[rng.random_range(0..DUMMY_ALPHANUMERIC.len())],
-        };
+    for _ in dummy.len()..target_len {
+        let character = DUMMY_ALPHANUMERIC[rng.random_range(0..DUMMY_ALPHANUMERIC.len())];
         dummy.push(char::from(character));
     }
     dummy

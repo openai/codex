@@ -862,7 +862,7 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
                 .split_once('|')
                 .context("command should expose the child API key")?;
             if expect_masking {
-                assert!(child_api_key.starts_with("sk-proj-"));
+                assert!(child_api_key.starts_with("sk-proj-masked"));
                 assert_ne!(child_api_key, API_KEY);
                 assert!(!stdout.contains(API_KEY));
             } else {
