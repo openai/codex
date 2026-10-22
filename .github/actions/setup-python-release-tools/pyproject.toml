@@ -1,0 +1,13 @@
+[project]
+name = "codex-python-release-tools"
+version = "0.0.0"
+requires-python = ">=3.10"
+
+[dependency-groups]
+sdk = ["certifi>=2026.10.19", "packaging>=26.2", "twine>=7.0.0", "uv-build>=0.11.33,<0.12"]
+runtime = ["hatchling>=1.32.4"]
+
+[tool.uv]
+exclude-newer = "7 days"
+# Use a shorter waiting period for emergency CA trust updates.
+exclude-newer-package = { certifi = "2 days" }

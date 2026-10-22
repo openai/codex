@@ -32,6 +32,15 @@ jobs:
           ref: ${{ inputs.source_ref || github.sha }}
           persist-credentials: false
 
+      # A retry can rebuild an older release. Use the tool pins from this workflow.
+      - name: Checkout release build tools
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: release-tools
+          sparse-checkout: .github/actions/setup-python-release-tools
+          persist-credentials: false
+
       - name: Validate and resolve Python runtime release
         id: python_runtime
         shell: bash
@@ -72,14 +81,17 @@ jobs:
             exit 1
           fi
 
+      - name: Set up Python release tools
+        uses: ./release-tools/.github/actions/setup-python-release-tools
+        with:
+          group: runtime
+
       - name: Build musllinux Python runtime wheels
         env:
           RELEASE_TAG: ${{ steps.python_runtime.outputs.release_tag }}
         run: |
           set -euo pipefail
 
-          python3 -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
-          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
 
           while read -r target platform_tag; do
             stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${target}-${platform_tag}"
@@ -89,9 +101,10 @@ jobs:
               "dist/python-runtime-packages/codex-package-${target}.tar.gz" \
               --codex-version "$RELEASE_TAG" \
               --platform-tag "$platform_tag"
-            "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build \
+            uv build --offline --no-build-isolation --no-create-gitignore \
+              --python "${RUNNER_TEMP}/python-runtime-build-venv" \
               --wheel \
-              --outdir dist/python-runtime \
+              --out-dir dist/python-runtime \
               "$stage_dir"
           done <<'EOF'
           aarch64-unknown-linux-musl musllinux_1_1_aarch64

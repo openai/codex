@@ -31,10 +31,24 @@ jobs:
           ref: ${{ inputs.source_ref || github.sha }}
           persist-credentials: false
 
+      # A retry can rebuild an older release. Use the tool pins from this workflow.
+      - name: Checkout release build tools
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: release-tools
+          sparse-checkout: .github/actions/setup-python-release-tools
+          persist-credentials: false
+
       - name: Setup Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
+
+      - name: Set up Python release tools
+        uses: ./release-tools/.github/actions/setup-python-release-tools
+        with:
+          group: sdk
 
       - name: Build Python SDK package
         shell: bash
@@ -43,17 +57,16 @@ jobs:
           RUNTIME_VERSION: ${{ inputs.runtime_version }}
         run: |
           set -euo pipefail
-          python3 -m venv "${RUNNER_TEMP}/python-sdk-build-venv"
           build_python="${RUNNER_TEMP}/python-sdk-build-venv/bin/python"
-          "$build_python" -m pip install build twine packaging==26.2
           "$build_python" sdk/python/scripts/update_sdk_artifacts.py \
             stage-sdk "${RUNNER_TEMP}/openai-codex" \
             --sdk-version "$SDK_VERSION" \
             --codex-version "$RUNTIME_VERSION"
-          "$build_python" -m build \
+          uv build --offline --no-build-isolation --no-create-gitignore \
+            --force-pep517 --python "$build_python" \
             --wheel \
             --sdist \
-            --outdir dist/python-sdk \
+            --out-dir dist/python-sdk \
             "${RUNNER_TEMP}/openai-codex"
           "$build_python" -m twine check --strict dist/python-sdk/*
 

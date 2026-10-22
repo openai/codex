@@ -1,0 +1,22 @@
+name: Set up Python release tools
+description: Install the locked wheel build tools for a Python SDK or runtime release.
+inputs:
+  group:
+    description: Dependency group to install (sdk or runtime).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      with:
+        version: "0.13.5"
+        enable-cache: false
+
+    - shell: bash
+      env:
+        RELEASE_TOOLS_GROUP: ${{ inputs.group }}
+        UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/python-${{ inputs.group }}-build-venv
+      run: |
+        uv sync --project "$GITHUB_ACTION_PATH" --locked --only-group "$RELEASE_TOOLS_GROUP" \
+          --no-build --no-python-downloads
