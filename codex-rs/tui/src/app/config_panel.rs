@@ -4,6 +4,8 @@ use super::*;
 use crate::config_panel::ConfigPreference;
 use crate::config_panel::ConfigToggle;
 use crate::config_update::format_config_error;
+use crate::legacy_core::config::load_config_toml_with_layer_stack;
+use crate::local_settings::LocalSettings;
 
 impl App {
     pub(super) async fn save_config_preference(
@@ -34,8 +36,26 @@ impl App {
         } else {
             self.chat_widget.config_ref().cwd.to_path_buf()
         };
-        let resolved = match self.rebuild_config_for_cwd(config_cwd).await {
-            Ok(config) => crate::local_settings::LocalSettings::from(&config),
+        let resolved = match async {
+            let cwd = AbsolutePathBuf::relative_to_current_dir(&config_cwd)?;
+            let bootstrap = load_config_toml_with_layer_stack(
+                self.local_settings.codex_home.as_path(),
+                Some(&cwd),
+                self.cli_kv_overrides.clone(),
+                codex_config::ConfigLoadOptions {
+                    loader_overrides: self.loader_overrides.clone(),
+                    cloud_config_bundle: self.cloud_config_bundle.clone(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+            LocalSettings::from_bootstrap(&bootstrap, self.local_settings.codex_home.clone())
+                .map_err(std::io::Error::other)
+        }
+        .await
+        .wrap_err_with(|| format!("Failed to rebuild config for cwd {}", config_cwd.display()))
+        {
+            Ok(settings) => settings,
             Err(error) => {
                 self.chat_widget
                     .refresh_config_panel(

@@ -92,6 +92,8 @@ async fn config_toggle_save_uses_host_config_and_applies_live_while_offline() ->
     app.chat_widget = ChatWidget::new_with_app_event(init);
     app.local_settings.tui.auto_recap = true;
     app.chat_widget.local_settings.tui.auto_recap = true;
+    // Resolving execution settings would fail, but local preferences remain editable.
+    app.cli_kv_overrides = vec![("model_provider".into(), "missing-provider".into())];
 
     Box::pin(app.handle_event(
         &mut tui,
