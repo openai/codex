@@ -83,6 +83,8 @@ async fn ema_auth_statuses_do_not_wait_for_account_refresh() -> anyhow::Result<(
             .resolve_ema_registration(&codex_config::McpServerIdpOAuthConfig {
                 issuer: "https://idp.example".into(),
                 client_id: "enterprise-client".into(),
+                client_secret: None,
+                token_endpoint_auth_method: None,
             })
             .map_err(anyhow::Error::msg)?;
         servers.insert(
