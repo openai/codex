@@ -625,6 +625,7 @@ async fn check_acquisition(enabled: bool, supported: bool) -> Result<()> {
     selection.workspace_roots = vec![cwd.clone()];
     selection.config =
         codex_protocol::protocol::EnvironmentConfigState::Ready(codex_core::EnvironmentConfig {
+            environment_hooks: Default::default(),
             allow_login_shell: false,
             workspace_roots: selection.workspace_roots.clone(),
             permission_profile: codex_protocol::models::PermissionProfileSnapshot::legacy(

@@ -376,6 +376,7 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
         /*prefer_executor_snapshots*/ false,
     );
     let mut config = EnvironmentConfig {
+        environment_hooks: Default::default(),
         allow_login_shell: false,
         workspace_roots: Vec::new(),
         windows_sandbox_level: WindowsSandboxLevel::Disabled,

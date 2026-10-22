@@ -470,6 +470,7 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
             .await?;
         owner_workspace_roots.push(owner_workspace_root);
         child_environment.config = EnvironmentConfigState::Ready(EnvironmentConfig {
+            environment_hooks: Default::default(),
             allow_login_shell: test.config.permissions.allow_login_shell,
             workspace_roots: owner_workspace_roots,
             permission_profile: PermissionProfileSnapshot::legacy(child_permissions),

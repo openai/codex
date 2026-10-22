@@ -1388,6 +1388,7 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
         .expect("parent should have an environment");
     reviewer_environment.config =
         EnvironmentConfigState::Ready(codex_protocol::protocol::EnvironmentConfig {
+            environment_hooks: Default::default(),
             allow_login_shell: true,
             workspace_roots: reviewer_environment.workspace_roots.clone(),
             permission_profile: config.permissions.permission_profile_state().snapshot(),

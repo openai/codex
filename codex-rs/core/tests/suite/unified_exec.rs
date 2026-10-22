@@ -555,6 +555,7 @@ async fn exec_command_uses_installed_environment_shell_policy_with_explicit_over
         .environment_ready(
             &selection,
             EnvironmentConfig {
+                environment_hooks: Default::default(),
                 allow_login_shell: true,
                 workspace_roots: selection.workspace_roots.clone(),
                 permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),

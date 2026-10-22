@@ -182,6 +182,7 @@ impl SessionConfiguration {
 
     pub(super) fn inferred_environment_config(&self) -> EnvironmentConfig {
         EnvironmentConfig {
+            environment_hooks: Default::default(),
             allow_login_shell: self.allow_login_shell,
             workspace_roots: Vec::new(),
             permission_profile: self.permission_profile_state.snapshot(),

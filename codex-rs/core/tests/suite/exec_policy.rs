@@ -803,6 +803,7 @@ async fn environment_command_restrictions_override_saved_prefix_approvals() -> R
         .environment_ready(
             &selection,
             EnvironmentConfig {
+                environment_hooks: Default::default(),
                 allow_login_shell: true,
                 workspace_roots: selection.workspace_roots.clone(),
                 permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),
@@ -830,6 +831,7 @@ async fn environment_command_restrictions_override_saved_prefix_approvals() -> R
         .environment_ready(
             &selection,
             EnvironmentConfig {
+                environment_hooks: Default::default(),
                 allow_login_shell: true,
                 workspace_roots: selection.workspace_roots.clone(),
                 permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),
@@ -936,6 +938,7 @@ async fn environment_command_policy_changes_invalidate_session_approvals() -> Re
                 .environment_ready(
                     &selection,
                     EnvironmentConfig {
+                        environment_hooks: Default::default(),
                         allow_login_shell: true,
                         workspace_roots: selection.workspace_roots.clone(),
                         permission_profile: PermissionProfileSnapshot::legacy(

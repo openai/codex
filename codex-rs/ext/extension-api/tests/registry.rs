@@ -38,6 +38,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TurnEnvironmentRequest;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::WarningEvent;
 use codex_utils_path_uri::PathUri;
@@ -74,20 +75,24 @@ fn mcp_contribution_context_identifies_the_running_thread() {
 fn mcp_context_preserves_selected_executor_order_and_unavailability() {
     let config = ();
     let environments = vec![
-        TurnEnvironmentSelection {
-            environment_id: "starting-primary".to_owned(),
-            cwd: PathUri::parse("file:///workspace").expect("workspace URI"),
-            workspace_roots: Vec::new(),
-            selected_capability_roots: Default::default(),
-            config: EnvironmentConfigState::Pending,
-        },
-        TurnEnvironmentSelection {
-            environment_id: "ready-secondary".to_owned(),
-            cwd: PathUri::parse("file:///other").expect("workspace URI"),
-            workspace_roots: Vec::new(),
-            selected_capability_roots: Default::default(),
-            config: EnvironmentConfigState::FromThread,
-        },
+        TurnEnvironmentSelection::new(
+            TurnEnvironmentRequest {
+                environment_id: "starting-primary".to_owned(),
+                cwd: PathUri::parse("file:///workspace").expect("workspace URI"),
+                workspace_roots: Vec::new(),
+                config: EnvironmentConfigState::Pending,
+            },
+            &[],
+        ),
+        TurnEnvironmentSelection::new(
+            TurnEnvironmentRequest {
+                environment_id: "ready-secondary".to_owned(),
+                cwd: PathUri::parse("file:///other").expect("workspace URI"),
+                workspace_roots: Vec::new(),
+                config: EnvironmentConfigState::FromThread,
+            },
+            &[],
+        ),
     ];
     let context = McpServerContributionContext::global(&config);
     assert_eq!(context.selected_environments(), None);

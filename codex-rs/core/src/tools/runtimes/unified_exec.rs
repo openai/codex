@@ -783,6 +783,7 @@ mod tests {
                 cwd,
                 workspace_roots: Vec::new(),
                 config: EnvironmentConfigState::Ready(EnvironmentConfig {
+                    environment_hooks: Default::default(),
                     allow_login_shell: true,
                     workspace_roots: Vec::new(),
                     windows_sandbox_level: WindowsSandboxLevel::Disabled,

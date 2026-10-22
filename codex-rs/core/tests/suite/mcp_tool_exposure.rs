@@ -535,6 +535,7 @@ async fn root_reconciliation_reuses_pending_apps_startup() -> Result<()> {
         .environment_ready(
             &selection,
             EnvironmentConfig {
+                environment_hooks: Default::default(),
                 allow_login_shell: false,
                 workspace_roots: selection.workspace_roots.clone(),
                 permission_profile: PermissionProfileSnapshot::legacy(

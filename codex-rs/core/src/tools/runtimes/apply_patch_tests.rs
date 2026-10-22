@@ -28,6 +28,7 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
             cwd: PathUri::from_abs_path(&std::env::temp_dir().abs()),
             workspace_roots: Vec::new(),
             config: EnvironmentConfigState::Ready(EnvironmentConfig {
+                environment_hooks: Default::default(),
                 allow_login_shell: true,
                 workspace_roots: Vec::new(),
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,

@@ -271,6 +271,7 @@ async fn workspace_roots_allow_file_and_command_writes_in_secondary_root(
             .environment_ready(
                 &selection,
                 EnvironmentConfig {
+                    environment_hooks: Default::default(),
                     allow_login_shell: test.config.permissions.allow_login_shell,
                     workspace_roots: vec![selection.cwd.clone(), secondary_root.clone()],
                     permission_profile: PermissionProfileSnapshot::legacy(

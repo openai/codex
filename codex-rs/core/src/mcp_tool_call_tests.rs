@@ -1361,6 +1361,7 @@ async fn mcp_sandbox_cwd_uses_matching_server_environment_uri() -> anyhow::Resul
                 cwd: secondary_cwd.clone(),
                 workspace_roots: Vec::new(),
                 config: EnvironmentConfigState::Ready(EnvironmentConfig {
+                    environment_hooks: Default::default(),
                     allow_login_shell: true,
                     workspace_roots: Vec::new(),
                     windows_sandbox_level: turn_context.windows_sandbox_level,

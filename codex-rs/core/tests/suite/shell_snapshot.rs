@@ -766,6 +766,7 @@ async fn shell_snapshot_v2_guardian_uses_its_resolved_permissions_and_tools(
     .await;
     let mut requests = local_requests(test.config.cwd.clone());
     requests.environment_requests[0].config = EnvironmentConfigState::Ready(EnvironmentConfig {
+        environment_hooks: Default::default(),
         allow_login_shell: true,
         workspace_roots: requests.environment_requests[0].workspace_roots.clone(),
         permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),

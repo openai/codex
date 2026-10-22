@@ -190,6 +190,8 @@ pub fn has_full_access<'a>(
 /// Resolved configuration for a thread/environment attachment.
 #[derive(Clone, PartialEq)]
 pub struct EnvironmentConfig {
+    /// Hooks from this environment's effective managed requirements.
+    pub environment_hooks: crate::hooks::HookEventsToml,
     /// Whether shell tools may start login shells in this environment.
     pub allow_login_shell: bool,
     /// Effective workspace roots resolved for this environment attachment.
@@ -218,6 +220,7 @@ impl std::fmt::Debug for EnvironmentConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("EnvironmentConfig")
+            .field("environment_hooks", &self.environment_hooks.handler_count())
             .field("allow_login_shell", &self.allow_login_shell)
             .field("workspace_roots", &self.workspace_roots)
             .field("permission_profile", &self.permission_profile)

@@ -1740,6 +1740,7 @@ async fn guardian_session_is_reused_for_consecutive_tool_reviews_without_prewarm
     .await;
     let mut parent_environments = local_selections(test.config.cwd.clone());
     let parent_environment_config = EnvironmentConfig {
+        environment_hooks: Default::default(),
         allow_login_shell: test.config.permissions.allow_login_shell,
         workspace_roots: parent_environments.environments[0].workspace_roots.clone(),
         permission_profile: PermissionProfileSnapshot::legacy(

@@ -159,6 +159,7 @@ pub fn environment_config_for_selection(
         None => PermissionProfileSnapshot::legacy(profile),
     };
     EnvironmentConfig {
+        environment_hooks: Default::default(),
         allow_login_shell: permissions.allow_login_shell,
         workspace_roots: selection.workspace_roots.clone(),
         permission_profile,

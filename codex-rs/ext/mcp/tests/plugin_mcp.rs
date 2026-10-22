@@ -824,6 +824,7 @@ async fn run_cloud_plugin_projection_scenarios() -> anyhow::Result<()> {
                 .environment_ready(
                     &selection,
                     EnvironmentConfig {
+                        environment_hooks: Default::default(),
                         allow_login_shell: false,
                         workspace_roots: selection.workspace_roots.clone(),
                         permission_profile: PermissionProfileSnapshot::legacy(
