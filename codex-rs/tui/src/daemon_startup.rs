@@ -39,7 +39,7 @@ pub fn uses_wsl_drvfs(codex_home: &std::path::Path) -> bool {
         if unsafe { libc::fstatfs(directory.as_raw_fd(), stats.as_mut_ptr()) } != 0 {
             return false;
         }
-        unsafe { stats.assume_init() }.f_type as u64 == 0x0102_1997
+        unsafe { stats.assume_init() }.f_type == 0x0102_1997
     }
     #[cfg(not(target_os = "linux"))]
     {
