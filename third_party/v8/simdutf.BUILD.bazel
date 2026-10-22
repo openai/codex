@@ -1,0 +1,28 @@
+# Codex overlay for upstream simdutf source, not copied from V8's BUILD.
+# V8 builds Chromium's single-header vendored form; match its Version field
+# and review vendor changes on each upgrade (README.md#updating-source-dependencies).
+load("@@//third_party/v8:dependency_config.bzl", "RUSTY_V8_DEPENDENCY_COPTS", "RUSTY_V8_DEPENDENCY_DEPS")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "simdutf",
+    srcs = ["src/simdutf.cpp"],
+    hdrs = glob(["include/**/*.h"]),
+    copts = ["-std=c++20"] + RUSTY_V8_DEPENDENCY_COPTS,
+    features = ["-module_maps"],
+    include_prefix = "third_party/simdutf",
+    includes = [
+        "include",
+        "src",
+    ],
+    strip_include_prefix = "include",
+    textual_hdrs = glob(
+        [
+            "src/**/*.h",
+            "src/**/*.cpp",
+        ],
+        exclude = ["src/simdutf.cpp"],
+    ),
+    visibility = ["//visibility:public"],
+    deps = RUSTY_V8_DEPENDENCY_DEPS,
+)

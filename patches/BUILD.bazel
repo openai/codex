@@ -12,7 +12,6 @@ exports_files([
     "rules_rust_windows_execroot_separators.patch",
     "rules_rust_windows_msvc_direct_link_args.patch",
     "rules_rust_windows_process_wrapper_skip_temp_outputs.patch",
-    "rules_cc_rusty_v8_custom_libcxx.patch",
     "rules_foreign_cc_make_cppflags.patch",
     "rules_foreign_cc_make_xcompile.patch",
     "rules_foreign_cc_make_msvc_stdint.patch",

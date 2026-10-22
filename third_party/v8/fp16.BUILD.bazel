@@ -1,0 +1,12 @@
+# Codex overlay for the V8 DEPS revision. Mirrors :lib_fp16 in V8's
+# BUILD.bazel, exporting its headers at V8's expected include path.
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "fp16",
+    hdrs = glob(["include/**/*.h"]),
+    include_prefix = "third_party/fp16/src/include",
+    includes = ["include"],
+    strip_include_prefix = "include",
+    visibility = ["//visibility:public"],
+)

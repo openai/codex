@@ -1,0 +1,294 @@
+# Codex-owned build of the eight Abseil entry points V8 15.2.124.1 uses.
+# Sources are from their transitive closure in Abseil 20250814.1's BUILD files.
+# Share headers, but compile runtime objects only when a caller needs them.
+# Keep non-Cord strings below time/synchronization: Cord depends on both.
+load("@@//third_party/v8:dependency_config.bzl", "RUSTY_V8_DEPENDENCY_COPTS", "RUSTY_V8_DEPENDENCY_DEPS")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])  # Apache-2.0
+
+exports_files(["LICENSE"])
+
+config_setting(
+    name = "windows",
+    constraint_values = ["@platforms//os:windows"],
+)
+
+# Include the OS constraint so these settings refine :windows in selects.
+config_setting(
+    name = "windows_msvc",
+    constraint_values = ["@platforms//os:windows"],
+    flag_values = {"@bazel_tools//tools/cpp:compiler": "msvc-cl"},
+)
+
+config_setting(
+    name = "windows_clang_cl",
+    constraint_values = ["@platforms//os:windows"],
+    flag_values = {"@bazel_tools//tools/cpp:compiler": "clang-cl"},
+)
+
+config_setting(
+    name = "windows_lexan",
+    constraint_values = ["@platforms//os:windows"],
+    flag_values = {"@bazel_tools//tools/cpp:compiler": "lexan"},
+)
+
+cc_library(
+    name = "headers",
+    hdrs = glob(
+        ["absl/**/*.h"],
+        exclude = [
+            "absl/**/*_test*.h",
+            "absl/**/testdata/**",
+        ],
+    ),
+    # Abseil offers a supported control for this. GNU Windows needs the same
+    # C++11 TLS path as native Windows; avoid patching thread_identity.h.
+    defines = select({
+        ":windows": ["ABSL_FORCE_THREAD_IDENTITY_MODE=ABSL_THREAD_IDENTITY_MODE_USE_CPP11"],
+        "//conditions:default": [],
+    }),
+    features = ["-module_maps"],
+    includes = [
+        ".",
+        "absl/time/internal/cctz/include",
+    ],
+    linkopts = select({
+        ":windows_msvc": [
+            "advapi32.lib",
+            "dbghelp.lib",
+        ],
+        ":windows_clang_cl": [
+            "advapi32.lib",
+            "dbghelp.lib",
+        ],
+        ":windows_lexan": [
+            "advapi32.lib",
+            "dbghelp.lib",
+        ],
+        ":windows": [
+            "-ladvapi32",
+            "-ldbghelp",
+        ],
+        "//conditions:default": ["-pthread"],
+    }),
+    textual_hdrs = glob(["absl/**/*.inc"]),
+    visibility = ["//visibility:private"],
+    deps = RUSTY_V8_DEPENDENCY_DEPS,
+)
+
+cc_library(
+    name = "base",
+    srcs = [
+        "absl/base/internal/cycleclock.cc",
+        "absl/base/internal/low_level_alloc.cc",
+        "absl/base/internal/raw_logging.cc",
+        "absl/base/internal/spinlock.cc",
+        "absl/base/internal/spinlock_wait.cc",
+        "absl/base/internal/sysinfo.cc",
+        "absl/base/internal/thread_identity.cc",
+        "absl/base/internal/throw_delegate.cc",
+        "absl/base/internal/tracing.cc",
+        "absl/base/internal/unscaledcycleclock.cc",
+        "absl/base/log_severity.cc",
+        "absl/numeric/int128.cc",
+    ],
+    copts = RUSTY_V8_DEPENDENCY_COPTS,
+    features = ["-module_maps"],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":headers",
+    ],
+)
+
+cc_library(
+    name = "strings",
+    srcs = [
+        "absl/strings/ascii.cc",
+        "absl/strings/charconv.cc",
+        "absl/strings/escaping.cc",
+        "absl/strings/internal/charconv_bigint.cc",
+        "absl/strings/internal/charconv_parse.cc",
+        "absl/strings/internal/damerau_levenshtein_distance.cc",
+        "absl/strings/internal/escaping.cc",
+        "absl/strings/internal/memutil.cc",
+        "absl/strings/internal/ostringstream.cc",
+        "absl/strings/internal/str_format/arg.cc",
+        "absl/strings/internal/str_format/bind.cc",
+        "absl/strings/internal/str_format/extension.cc",
+        "absl/strings/internal/str_format/float_conversion.cc",
+        "absl/strings/internal/str_format/output.cc",
+        "absl/strings/internal/str_format/parser.cc",
+        "absl/strings/internal/stringify_sink.cc",
+        "absl/strings/internal/utf8.cc",
+        "absl/strings/match.cc",
+        "absl/strings/numbers.cc",
+        "absl/strings/str_cat.cc",
+        "absl/strings/str_replace.cc",
+        "absl/strings/str_split.cc",
+        "absl/strings/string_view.cc",
+        "absl/strings/substitute.cc",
+    ],
+    copts = RUSTY_V8_DEPENDENCY_COPTS,
+    features = ["-module_maps"],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":base",
+    ],
+)
+
+cc_library(
+    name = "time",
+    srcs = [
+        "absl/time/civil_time.cc",
+        "absl/time/clock.cc",
+        "absl/time/duration.cc",
+        "absl/time/format.cc",
+        "absl/time/internal/cctz/src/civil_time_detail.cc",
+        "absl/time/internal/cctz/src/time_zone_fixed.cc",
+        "absl/time/internal/cctz/src/time_zone_format.cc",
+        "absl/time/internal/cctz/src/time_zone_if.cc",
+        "absl/time/internal/cctz/src/time_zone_impl.cc",
+        "absl/time/internal/cctz/src/time_zone_info.cc",
+        "absl/time/internal/cctz/src/time_zone_libc.cc",
+        "absl/time/internal/cctz/src/time_zone_lookup.cc",
+        "absl/time/internal/cctz/src/time_zone_posix.cc",
+        "absl/time/internal/cctz/src/zone_info_source.cc",
+        "absl/time/time.cc",
+    ],
+    copts = RUSTY_V8_DEPENDENCY_COPTS,
+    features = ["-module_maps"],
+    deps = [
+        ":strings",
+    ],
+)
+
+cc_library(
+    name = "synchronization",
+    srcs = [
+        "absl/debugging/internal/address_is_readable.cc",
+        "absl/debugging/internal/decode_rust_punycode.cc",
+        "absl/debugging/internal/demangle.cc",
+        "absl/debugging/internal/demangle_rust.cc",
+        "absl/debugging/internal/elf_mem_image.cc",
+        "absl/debugging/internal/utf8_for_code_point.cc",
+        "absl/debugging/internal/vdso_support.cc",
+        "absl/debugging/stacktrace.cc",
+        "absl/debugging/symbolize.cc",
+        "absl/synchronization/barrier.cc",
+        "absl/synchronization/blocking_counter.cc",
+        "absl/synchronization/internal/create_thread_identity.cc",
+        "absl/synchronization/internal/futex_waiter.cc",
+        "absl/synchronization/internal/graphcycles.cc",
+        "absl/synchronization/internal/kernel_timeout.cc",
+        "absl/synchronization/internal/per_thread_sem.cc",
+        "absl/synchronization/internal/pthread_waiter.cc",
+        "absl/synchronization/internal/sem_waiter.cc",
+        "absl/synchronization/internal/stdcpp_waiter.cc",
+        "absl/synchronization/internal/waiter_base.cc",
+        "absl/synchronization/internal/win32_waiter.cc",
+        "absl/synchronization/mutex.cc",
+        "absl/synchronization/notification.cc",
+    ],
+    copts = RUSTY_V8_DEPENDENCY_COPTS,
+    features = ["-module_maps"],
+    deps = [
+        ":time",
+    ],
+)
+
+cc_library(
+    name = "cord",
+    srcs = [
+        "absl/crc/crc32c.cc",
+        "absl/crc/internal/cpu_detect.cc",
+        "absl/crc/internal/crc.cc",
+        "absl/crc/internal/crc_cord_state.cc",
+        "absl/crc/internal/crc_memcpy_fallback.cc",
+        "absl/crc/internal/crc_memcpy_x86_arm_combined.cc",
+        "absl/crc/internal/crc_non_temporal_memcpy.cc",
+        "absl/crc/internal/crc_x86_arm_combined.cc",
+        "absl/profiling/internal/exponential_biased.cc",
+        "absl/strings/cord.cc",
+        "absl/strings/cord_analysis.cc",
+        "absl/strings/internal/cord_internal.cc",
+        "absl/strings/internal/cord_rep_btree.cc",
+        "absl/strings/internal/cord_rep_btree_navigator.cc",
+        "absl/strings/internal/cord_rep_btree_reader.cc",
+        "absl/strings/internal/cord_rep_consume.cc",
+        "absl/strings/internal/cord_rep_crc.cc",
+        "absl/strings/internal/cordz_functions.cc",
+        "absl/strings/internal/cordz_handle.cc",
+        "absl/strings/internal/cordz_info.cc",
+    ],
+    copts = RUSTY_V8_DEPENDENCY_COPTS,
+    features = ["-module_maps"],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":strings",
+        ":synchronization",
+    ],
+)
+
+cc_library(
+    name = "hash_containers",
+    srcs = [
+        "absl/container/internal/hashtablez_sampler.cc",
+        "absl/container/internal/hashtablez_sampler_force_weak_definition.cc",
+        "absl/container/internal/raw_hash_set.cc",
+        "absl/hash/internal/city.cc",
+        "absl/hash/internal/hash.cc",
+    ],
+    copts = RUSTY_V8_DEPENDENCY_COPTS,
+    features = ["-module_maps"],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":cord",
+        ":synchronization",
+    ],
+)
+
+cc_library(
+    name = "btree",
+    deps = [":cord"],
+)
+
+alias(
+    name = "overload",
+    actual = ":headers",
+)
+
+alias(
+    name = "flat_hash_map",
+    actual = ":hash_containers",
+)
+
+alias(
+    name = "flat_hash_set",
+    actual = ":hash_containers",
+)
+
+alias(
+    name = "node_hash_map",
+    actual = ":hash_containers",
+)
+
+alias(
+    name = "node_hash_set",
+    actual = ":hash_containers",
+)
+
+# Compatibility for the engine graph further up the V8 build stack. The
+# individual V8 targets in this layer use the narrower entry points above.
+cc_library(
+    name = "abseil",
+    deps = [
+        ":btree",
+        ":flat_hash_map",
+        ":overload",
+        ":synchronization",
+        ":time",
+    ],
+)

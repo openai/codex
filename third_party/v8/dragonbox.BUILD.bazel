@@ -1,0 +1,11 @@
+# Codex overlay for the V8 DEPS revision. Mirrors :lib_dragonbox in V8's
+# BUILD.bazel, exporting the include path V8 expects from a separate repo.
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "dragonbox",
+    hdrs = ["include/dragonbox/dragonbox.h"],
+    include_prefix = "third_party/dragonbox/src/include",
+    strip_include_prefix = "include",
+    visibility = ["//visibility:public"],
+)

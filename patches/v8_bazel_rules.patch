@@ -332,10 +332,28 @@ diff --git a/orig/v8-15.2.124.1/BUILD.bazel b/mod/v8-15.2.124.1/BUILD.bazel
  )
 
  v8_library(
-@@ -4660,16 +4697,9 @@
+@@ -4625,9 +4662,9 @@
+     copts = ["-Wno-implicit-fallthrough"],
+     deps = [
+         ":llvm_libc_headers",
+-        "@abseil-cpp//absl/synchronization",
+-        "@abseil-cpp//absl/time",
+-        "@abseil-cpp//absl/functional:overload",
++        "@v8_abseil//:synchronization",
++        "@v8_abseil//:time",
++        "@v8_abseil//:overload",
      ],
  )
 
+@@ -4655,21 +4692,14 @@
+     deps = [
+         ":torque_base_headers",
+         ":v8_libbase",
+-        "@abseil-cpp//absl/container:node_hash_map",
+-        "@abseil-cpp//absl/container:node_hash_set",
+-    ],
+-)
+-
 -cc_library(
 -  name = "simdutf",
 -  srcs = ["third_party/simdutf/simdutf.cpp"],
@@ -346,6 +364,11 @@ diff --git a/orig/v8-15.2.124.1/BUILD.bazel b/mod/v8-15.2.124.1/BUILD.bazel
 -        "@v8//bazel/config:is_windows": ["/std:c++20"],
 -        "//conditions:default": [],
 -    }),
++        "@v8_abseil//:node_hash_map",
++        "@v8_abseil//:node_hash_set",
++    ],
++)
++
 +alias(
 +    name = "simdutf",
 +    actual = "@simdutf//:simdutf",
@@ -361,7 +384,7 @@ diff --git a/orig/v8-15.2.124.1/BUILD.bazel b/mod/v8-15.2.124.1/BUILD.bazel
      ],
      icu_srcs = [
          ":generated_regexp_special_case",
-@@ -4701,7 +4731,7 @@
+@@ -4701,14 +4731,14 @@
      ],
      deps = [
          ":lib_dragonbox",
@@ -370,6 +393,17 @@ diff --git a/orig/v8-15.2.124.1/BUILD.bazel b/mod/v8-15.2.124.1/BUILD.bazel
          ":lib_fp16",
          ":simdutf",
          ":v8_libbase",
+-        "@abseil-cpp//absl/container:btree",
+-        "@abseil-cpp//absl/container:flat_hash_map",
+-        "@abseil-cpp//absl/container:flat_hash_set",
+-        "@abseil-cpp//absl/functional:overload",
++        "@v8_abseil//:btree",
++        "@v8_abseil//:flat_hash_map",
++        "@v8_abseil//:flat_hash_set",
++        "@v8_abseil//:overload",
+         "@highway//:hwy",
+     ],
+ )
 @@ -4757,6 +4787,7 @@
  alias(
      name = "core_lib_icu",
@@ -384,6 +418,17 @@ diff --git a/orig/v8-15.2.124.1/BUILD.bazel b/mod/v8-15.2.124.1/BUILD.bazel
          ":v8_libbase",
 -        "//external:icu",
 +        "@icu//:icu",
+     ],
+ )
+
+@@ -4830,8 +4861,8 @@
+     }),
+     deps = [
+         "v8_libbase",
+-        "@abseil-cpp//absl/container:node_hash_map",
+-        "@abseil-cpp//absl/container:node_hash_set",
++        "@v8_abseil//:node_hash_map",
++        "@v8_abseil//:node_hash_set",
      ],
  )
 

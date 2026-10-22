@@ -151,14 +151,6 @@ bazel_dep(name = "rules_cc", version = "0.2.18")
 cc_configure = use_extension("@rules_cc//cc:extensions.bzl", "cc_configure_extension")
 use_repo(cc_configure, "local_config_cc")
 
-single_version_override(
-    module_name = "rules_cc",
-    patch_strip = 1,
-    patches = [
-        "//patches:rules_cc_rusty_v8_custom_libcxx.patch",
-    ],
-)
-
 bazel_dep(name = "rules_platform", version = "0.1.0")
 bazel_dep(name = "rules_pkg", version = "1.0.1")
 bazel_dep(name = "aws-lc", version = "5.1.0.bcr.1")
@@ -816,6 +808,8 @@ inject_repo(crate, "alsa_lib")
 ]
 
 bazel_dep(name = "v8", version = "15.2.124.1")
+bazel_dep(name = "rules_license", version = "1.0.0")
+
 archive_override(
     module_name = "v8",
     integrity = "sha256-aNN5G427qQbP/5o+NXONgXR8ZvS6mjf6mfAI6jtxyzI=",
@@ -828,6 +822,33 @@ archive_override(
     ],
     strip_prefix = "v8-15.2.124.1",
     urls = ["https://github.com/v8/v8/archive/refs/tags/15.2.124.1.tar.gz"],
+)
+
+# The dependency repos and their BUILD files belong to Codex. V8 only needs
+# its original apparent repo names to resolve to these same imports.
+v8_dependencies = use_extension("//third_party/v8:dependencies.bzl", "dependencies")
+use_repo(
+    v8_dependencies,
+    "v8_abseil",
+    "v8_dragonbox",
+    "v8_fast_float",
+    "v8_fp16",
+    "v8_highway",
+    "v8_icu",
+    "v8_simdutf",
+)
+
+v8_dependency_bridge = use_extension("@v8//:bazel/codex_deps.bzl", "codex_deps")
+
+inject_repo(
+    v8_dependency_bridge,
+    dragonbox = "v8_dragonbox",
+    fast_float = "v8_fast_float",
+    fp16 = "v8_fp16",
+    highway = "v8_highway",
+    icu = "v8_icu",
+    simdutf = "v8_simdutf",
+    v8_abseil = "v8_abseil",
 )
 
 http_archive(

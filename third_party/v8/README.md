@@ -32,8 +32,10 @@ Current pinned versions:
 Use this as the maintainer flow for a version bump:
 
 1. Bump the `v8` crate version and refresh `codex-rs/Cargo.lock`.
-2. Update the Bazel versioned inputs in `MODULE.bazel`, then refresh the
-   matching checksum manifest and generated checksums as described below.
+2. Update the Bazel versioned inputs in `MODULE.bazel` and the source pins
+   in `third_party/v8/dependencies.bzl` and `abseil_repository.bzl` using
+   [the source dependency update procedure](#updating-source-dependencies).
+   Then refresh the matching checksum manifest and generated checksums below.
 3. Publish a release-candidate PR and validate that `v8-canary` passes.
 4. If the canary is green, publish the release tag and release build.
 5. Independently verify the published Codex-built checksum manifests and record
@@ -135,3 +137,83 @@ under `rusty-v8-v<crate_version>`.
 
 Do not mix artifacts across crate versions. The archive and binding must match
 the exact resolved `v8` crate version in `codex-rs/Cargo.lock`.
+
+## Source dependency ownership
+
+The Darwin, Linux GNU/musl and Windows GNU source targets consume Codex-owned
+Abseil, Highway, simdutf, ICU, fast_float, dragonbox and fp16 repositories.
+`dependencies.bzl` declares the pinned imports; the `*.BUILD.bazel` overlays
+here declare the targets V8 uses. Abseil, Highway and simdutf apply their C++ runtime
+settings through `dependency_config.bzl`; ICU defines its settings in its own
+overlay.
+
+V8's module has a small dependency ingress. The root `MODULE.bazel` injects
+the seven Codex repositories there, so V8's `@highway`, `@icu`, etc. resolve to
+the same repositories Codex declares. The bridge has no fallback downloads.
+V8's BUILD patch still wires these targets into its generator and library graph.
+
+V8's private Abseil is built from the pinned 20250814.1 sources and uses
+`codex_v8_lts_20250814` for its supported inline-namespace option. Protobuf
+keeps the regular shared Abseil module and its `lts_20250814` namespace.
+Both can link into one binary without interposing functions built for different
+C++ runtimes. No V8 dependency needs a hook in shared `rules_cc` libraries.
+
+### Updating source dependencies
+
+These are reviewed with each V8 source upgrade. There is no source-pin
+autoupdater: the prebuilt checksum commands above and their CI check validate
+published archive/binding pairs, not these source revisions. Bazel verifies
+the declared download hashes and Git revisions; it does not choose them for us.
+
+Use the V8 tag in the root `MODULE.bazel` `archive_override(module_name = "v8")`
+(currently `15.2.124.1`) as the input. Read that tag's **unpatched** `DEPS`
+and `MODULE.bazel`; the fetched `@v8` MODULE has Codex's bridge applied.
+
+```bash
+v8_tag=15.2.124.1 # Replace with the V8 source tag selected for this upgrade.
+gh api "repos/v8/v8/contents/DEPS?ref=$v8_tag" \
+  -H 'Accept: application/vnd.github.raw+json' |
+  rg -n -A 2 "'third_party/(highway/src|icu|dragonbox/src|fp16/src|fast_float/src|simdutf)'"
+gh api "repos/v8/v8/contents/MODULE.bazel?ref=$v8_tag" \
+  -H 'Accept: application/vnd.github.raw+json' | rg 'bazel_dep\(name = "abseil-cpp"'
+```
+
+- `v8_highway`, `v8_icu`, `v8_dragonbox`, `v8_fp16`: copy the respective
+  DEPS commits. For Highway, use that commit in the archive URL and strip prefix.
+- `v8_fast_float`: use the DEPS commit. If selecting a release-tag archive,
+  verify the tag resolves to that commit, e.g.
+  `gh api repos/fastfloat/fast_float/git/ref/tags/v8.2.10 --jq '.object'`
+  (dereference annotated tags). Current v8.2.10 equals DEPS commit `34164f5`.
+- `v8_simdutf`: DEPS points at a Chromium vendoring repo, not the simdutf
+  source repo. Read the metadata at that DEPS commit:
+
+  ```bash
+  simdutf_chromium=f7356eed293f8208c40b3c1b344a50bd70971983 # from new DEPS
+  curl -fsSL "https://chromium.googlesource.com/chromium/src/third_party/simdutf/+/$simdutf_chromium/README.chromium?format=TEXT" |
+    base64 -d
+  ```
+
+  Match its `Version:` to the upstream release tag and inspect Chromium's
+  local changes before accepting the source form. Chromium vendors amalgamated
+  files; we build upstream `src/simdutf.cpp`. At the current pin it reports
+  7.7.0, but its `Revision: da645ece` predates the v7.7.0 tag. This is a
+  version match, not an assertion that the repositories' commits or bytes match.
+- `v8_abseil`: follow `abseil-cpp` in V8's unpatched MODULE, not its Chromium
+  DEPS vendor revision. Refresh `abseil_repository.bzl` release archive and
+  its guarded inline namespace together; the V8 namespace must stay private.
+
+For each `http_archive`/`download_and_extract` source, hash the exact new
+URL, not a different archive of the same commit:
+
+```bash
+source_url='https://github.com/google/highway/archive/2607d3b5b0113992fe84d3848859eae13b3b52c1.tar.gz'
+curl -fsSL "$source_url" | shasum -a 256
+# For an integrity= field (Abseil) instead:
+curl -fsSL "$source_url" | openssl dgst -sha256 -binary | openssl base64 -A
+```
+
+Record the hex digest in `sha256`, or prefix the base64 digest with `sha256-`
+for `integrity`. Review each matching BUILD overlay against its stated source,
+then build the V8 generator and source/archive targets on supported platforms.
+The regular V8 canary/release checks validate the resulting engine; they do not
+prove upstream-version equivalence for a substituted source.

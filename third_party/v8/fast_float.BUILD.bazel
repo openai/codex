@@ -1,0 +1,11 @@
+# Codex header-only overlay for the V8 DEPS revision; the include prefix
+# preserves V8's third_party checkout layout across the repository boundary.
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "fast_float",
+    hdrs = glob(["include/fast_float/*.h"]),
+    include_prefix = "third_party/fast_float/src/include",
+    strip_include_prefix = "include",
+    visibility = ["//visibility:public"],
+)

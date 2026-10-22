@@ -1,68 +1,17 @@
-# What: replace upstream V8 module dependency bootstrapping with repository
-# declarations and dependency setup that match this Bazel workspace.
-# Scope: upstream MODULE.bazel only; affects external repo resolution and Bazel
-# module wiring, not V8 source files.
+# What: remove Chromium's checkout-only toolchain bootstrapping and expose one
+# module-extension bridge for dependency imports owned by Codex.
+# Scope: V8 MODULE and the small ingress extension only. Versions, BUILD files,
+# and dependency build policy live in //third_party/v8.
 
 diff --git a/orig/v8-15.2.124.1/MODULE.bazel b/mod/v8-15.2.124.1/MODULE.bazel
 --- a/orig/v8-15.2.124.1/MODULE.bazel
 +++ b/mod/v8-15.2.124.1/MODULE.bazel
-@@ -8,12 +8,65 @@
+@@ -7,13 +7,13 @@
+ bazel_dep(name = "rules_cc", version = "0.2.17")
  bazel_dep(name = "rules_python", version = "1.7.0")
  bazel_dep(name = "platforms", version = "1.0.0")
- bazel_dep(name = "abseil-cpp", version = "20250814.1")
+-bazel_dep(name = "abseil-cpp", version = "20250814.1")
 -bazel_dep(name = "highway", version = "1.2.0")
-+bazel_dep(name = "rules_license", version = "0.0.4")
-+
-+git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
-+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-+
-+http_archive(
-+    name = "highway",
-+    patch_args = ["-p1"],
-+    patches = ["@v8//:bazel/highway.patch"],
-+    sha256 = "741d705781e0b3e406beda8f1f994fbae01321237ce8023a1ad90fbaf7940c25",
-+    strip_prefix = "highway-2607d3b5b0113992fe84d3848859eae13b3b52c1",
-+    urls = ["https://github.com/google/highway/archive/2607d3b5b0113992fe84d3848859eae13b3b52c1.tar.gz"],
-+)
-+
-+git_repository(
-+    name = "icu",
-+    build_file = "@@//third_party/v8:icu.BUILD.bazel",
-+    commit = "d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738",
-+    patch_cmds = ["find source -name BUILD.bazel | xargs rm"],
-+    patch_cmds_win = ["Get-ChildItem -Path source -File -Include BUILD.bazel -Recurse | Remove-Item"],
-+    remote = "https://chromium.googlesource.com/chromium/deps/icu.git",
-+)
-+
-+http_archive(
-+    name = "fast_float",
-+    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "fast_float",\n    hdrs = glob(["include/fast_float/*.h"]),\n    include_prefix = "third_party/fast_float/src/include",\n    strip_include_prefix = "include",\n    visibility = ["//visibility:public"],\n)\n',
-+    sha256 = "76f958dd97b1cf4d8862d1f0986a47d4bdfa8845252bae15ef0f40de3b95961f",
-+    strip_prefix = "fast_float-8.2.10",
-+    urls = ["https://github.com/fastfloat/fast_float/archive/refs/tags/v8.2.10.tar.gz"],
-+)
-+
-+http_archive(
-+    name = "simdutf",
-+    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "simdutf",\n    srcs = ["src/simdutf.cpp"],\n    hdrs = glob(["include/**/*.h"]),\n    textual_hdrs = glob(["src/**/*.h", "src/**/*.cpp"], exclude = ["src/simdutf.cpp"]),\n    copts = ["-std=c++20"],\n    include_prefix = "third_party/simdutf",\n    includes = ["include", "src"],\n    strip_include_prefix = "include",\n    visibility = ["//visibility:public"],\n)\n',
-+    sha256 = "0180de81a1dd48a87b8c0442ffa81734f3db91a7350914107a449935124e3c6f",
-+    strip_prefix = "simdutf-7.7.0",
-+    urls = ["https://github.com/simdutf/simdutf/archive/refs/tags/v7.7.0.tar.gz"],
-+)
-+
-+git_repository(
-+    name = "dragonbox",
-+    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "dragonbox",\n    hdrs = ["include/dragonbox/dragonbox.h"],\n    include_prefix = "third_party/dragonbox/src/include",\n    strip_include_prefix = "include",\n    visibility = ["//visibility:public"],\n)\n',
-+    commit = "beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44",
-+    remote = "https://chromium.googlesource.com/external/github.com/jk-jeon/dragonbox.git",
-+)
-+
-+git_repository(
-+    name = "fp16",
-+    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "fp16",\n    hdrs = glob(["include/**/*.h"]),\n    include_prefix = "third_party/fp16/src/include",\n    includes = ["include"],\n    strip_include_prefix = "include",\n    visibility = ["//visibility:public"],\n)\n',
-+    commit = "782eea126dc5c755827be751a099eb01826175cf",
-+    remote = "https://chromium.googlesource.com/external/github.com/Maratyszcza/FP16.git",
-+)
 
  pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
  pip.parse(
@@ -73,11 +22,10 @@ diff --git a/orig/v8-15.2.124.1/MODULE.bazel b/mod/v8-15.2.124.1/MODULE.bazel
      requirements_lock = "//:bazel/requirements.txt",
      extra_pip_args = [
          "--require-hashes",
-@@ -21,180 +74,3 @@
-     ],
+@@ -22,179 +22,15 @@
  )
  use_repo(pip, "v8_python_deps")
--
+
 -# Define the local LLVM toolchain repository
 -llvm_toolchain_repository = use_repo_rule("//bazel/toolchain:llvm_repository.bzl", "llvm_toolchain_repository")
 -
@@ -193,7 +141,18 @@ diff --git a/orig/v8-15.2.124.1/MODULE.bazel b/mod/v8-15.2.124.1/MODULE.bazel
 -    implementation = _impl,
 -    attrs = {},
 -    provides = [CcToolchainConfigInfo],
--)
++# Codex supplies the dependency repositories used by its V8 builds.
++codex_deps = use_extension("//:bazel/codex_deps.bzl", "codex_deps")
++use_repo(
++    codex_deps,
++    "v8_abseil",
++    "dragonbox",
++    "fast_float",
++    "fp16",
++    "highway",
++    "icu",
++    "simdutf",
+ )
 -""",
 -    build_file_content = """
 -load("@rules_cc//cc:defs.bzl", "cc_toolchain")
@@ -254,24 +213,19 @@ diff --git a/orig/v8-15.2.124.1/MODULE.bazel b/mod/v8-15.2.124.1/MODULE.bazel
 -    patches = ["//bazel/patches:highway_rules_cc.patch"],
 -    patch_strip = 1,
 -)
-diff --git a/orig/v8-15.2.124.1/bazel/highway.patch b/mod/v8-15.2.124.1/bazel/highway.patch
+
+diff --git a/orig/v8-15.2.124.1/bazel/codex_deps.bzl b/mod/v8-15.2.124.1/bazel/codex_deps.bzl
 new file mode 100644
 --- /dev/null
-+++ b/mod/v8-15.2.124.1/bazel/highway.patch
-@@ -0,0 +1,16 @@
-+diff --git a/BUILD b/BUILD
-+--- a/BUILD
-++++ b/BUILD
-+@@ -118,11 +118,7 @@
-+     ],
-+ })
++++ b/mod/v8-15.2.124.1/bazel/codex_deps.bzl
+@@ -0,0 +1,10 @@
++"""Dependency ingress for V8 when built by Codex.
 +
-+-DEFINES = select({
-+-    ":compiler_msvc": ["HWY_SHARED_DEFINE"],
-+-    ":compiler_clangcl": ["HWY_SHARED_DEFINE"],
-+-    "//conditions:default": [],
-+-})
-++DEFINES = []
++The root module injects the repositories; this extension declares no defaults
++that could silently select a different dependency from the one Codex builds.
++"""
 +
-+ # Unused on Bazel builds, where this is not defined/known; Copybara replaces
-+ # usages with an empty list.
++def _codex_deps_impl(module_ctx):
++    return module_ctx.extension_metadata(reproducible = True)
++
++codex_deps = module_extension(implementation = _codex_deps_impl)

@@ -1,0 +1,184 @@
+# Adapted from google/highway's BUILD at the V8 DEPS revision 2607d3b5:
+# https://github.com/google/highway/blob/2607d3b5b0113992fe84d3848859eae13b3b52c1/BUILD
+# Keep :hwy and its compiler configuration; omit upstream tests/other libraries.
+# Codex adds private V8 runtime settings, disables module maps and builds
+# statically (no upstream HWY_SHARED_DEFINE). See README.md for update checks.
+load("@@//third_party/v8:dependency_config.bzl", "RUSTY_V8_DEPENDENCY_COPTS", "RUSTY_V8_DEPENDENCY_DEPS")
+load("@bazel_skylib//lib:selects.bzl", "selects")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_license//rules:license.bzl", "license")
+
+package(
+    default_applicable_licenses = [":license"],
+    default_visibility = ["//visibility:public"],
+)
+
+license(
+    name = "license",
+    package_name = "highway",
+    license_kinds = ["@rules_license//licenses/generic:notice"],
+)
+
+# Dual-licensed Apache 2 and 3-clause BSD.
+licenses(["notice"])
+
+exports_files(["LICENSE"])
+
+# Detect compiler:
+config_setting(
+    name = "compiler_clang",
+    flag_values = {"@bazel_tools//tools/cpp:compiler": "clang"},
+)
+
+config_setting(
+    name = "compiler_clangcl",
+    flag_values = {"@bazel_tools//tools/cpp:compiler": "lexan"},
+)
+
+config_setting(
+    name = "compiler_msvc",
+    flag_values = {"@bazel_tools//tools/cpp:compiler": "msvc-cl"},
+)
+
+config_setting(
+    name = "compiler_emscripten",
+    constraint_values = [
+        "@platforms//cpu:wasm32",
+    ],
+)
+
+# See https://github.com/bazelbuild/bazel/issues/12707
+config_setting(
+    name = "compiler_gcc_bug",
+    flag_values = {
+        "@bazel_tools//tools/cpp:compiler": "compiler",
+    },
+)
+
+config_setting(
+    name = "compiler_gcc_actual",
+    flag_values = {
+        "@bazel_tools//tools/cpp:compiler": "gcc",
+    },
+)
+
+selects.config_setting_group(
+    name = "compiler_gcc",
+    match_any = [
+        ":compiler_gcc_bug",
+        ":compiler_gcc_actual",
+    ],
+)
+
+# Additional warnings for Clang OR GCC (skip for MSVC)
+CLANG_GCC_COPTS = [
+    "-Wunused",
+    "-Wextra-semi",
+    "-Wunreachable-code",
+    "-Wshadow",
+    "-Wmissing-declarations",
+]
+
+# Warnings supported by Clang and Clang-cl
+CLANG_OR_CLANGCL_OPTS = CLANG_GCC_COPTS + [
+    "-Wfloat-overflow-conversion",
+    "-Wfloat-zero-conversion",
+    "-Wfor-loop-analysis",
+    "-Wgnu-redeclared-enum",
+    "-Winfinite-recursion",
+    "-Wliteral-conversion",
+    "-Wno-c++98-compat",
+    "-Wno-unused-command-line-argument",
+    "-Wprivate-header",
+    "-Wself-assign",
+    "-Wstring-conversion",
+    "-Wtautological-overlap-compare",
+    "-Wthread-safety-analysis",
+    "-Wundefined-func-template",
+    "-Wunreachable-code-aggressive",
+    "-Wunused-comparison",
+]
+
+# Warnings only supported by Clang, but not Clang-cl
+CLANG_ONLY_COPTS = CLANG_OR_CLANGCL_OPTS + [
+    # Do not treat the third_party headers as system headers when building
+    # highway - the errors are pertinent.
+    "--no-system-header-prefix=third_party/highway",
+]
+
+COPTS = select({
+    ":compiler_msvc": [],
+    ":compiler_gcc": CLANG_GCC_COPTS,
+    ":compiler_clangcl": CLANG_OR_CLANGCL_OPTS,
+    # Default to clang because compiler detection only works in Bazel
+    "//conditions:default": CLANG_ONLY_COPTS,
+}) + select({
+    "@platforms//cpu:riscv64": [
+        "-march=rv64gcv1p0",
+        "-menable-experimental-extensions",
+    ],
+    "//conditions:default": [
+    ],
+})
+
+# V8 embeds Highway in a static archive, including on Windows: do not set
+# HWY_SHARED_DEFINE, which marks its consumers as importing from a DLL.
+cc_library(
+    name = "hwy",
+    srcs = [
+        "hwy/abort.cc",
+        "hwy/aligned_allocator.cc",
+        "hwy/per_target.cc",
+        "hwy/print.cc",
+        "hwy/targets.cc",
+    ],
+    # Normal headers with include guards
+    hdrs = [
+        "hwy/abort.h",
+        "hwy/aligned_allocator.h",
+        "hwy/base.h",
+        "hwy/cache_control.h",
+        "hwy/detect_compiler_arch.h",  # private
+        "hwy/print.h",
+        "hwy/x86_cpuid.h",
+    ],
+    copts = COPTS + RUSTY_V8_DEPENDENCY_COPTS,
+    features = ["-module_maps"],
+    local_defines = ["hwy_EXPORTS"],
+    textual_hdrs = [
+        # These are textual because config macros influence them:
+        "hwy/detect_targets.h",  # private
+        "hwy/targets.h",
+        # This .cc file #includes itself through foreach_target.h
+        "hwy/per_target.cc",
+        # End of list
+        "hwy/highway.h",  # public
+        "hwy/foreach_target.h",  # public
+        "hwy/per_target.h",  # public
+        "hwy/print-inl.h",  # public
+        "hwy/highway_export.h",  # public
+        "hwy/ops/arm_neon-inl.h",
+        "hwy/ops/arm_sve-inl.h",
+        "hwy/ops/emu128-inl.h",
+        "hwy/ops/generic_ops-inl.h",
+        "hwy/ops/inside-inl.h",
+        "hwy/ops/scalar-inl.h",
+        "hwy/ops/set_macros-inl.h",
+        "hwy/ops/shared-inl.h",
+        "hwy/ops/x86_128-inl.h",
+        "hwy/ops/x86_256-inl.h",
+        "hwy/ops/x86_512-inl.h",
+        "hwy/ops/x86_avx3-inl.h",
+        # Select avoids recompiling native arch if only non-native changed
+    ] + select({
+        ":compiler_emscripten": [
+            "hwy/ops/wasm_128-inl.h",
+            "hwy/ops/wasm_256-inl.h",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "@platforms//cpu:riscv64": ["hwy/ops/rvv-inl.h"],
+        "//conditions:default": [],
+    }),
+    deps = RUSTY_V8_DEPENDENCY_DEPS,
+)
