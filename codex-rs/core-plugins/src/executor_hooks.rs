@@ -3,7 +3,9 @@
 use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
 use codex_config::HookHandlerConfig;
 use codex_config::types::PluginsConfigToml;
+use codex_exec_server::DiscoveredPluginFiles;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
+use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_mcp::ToolInfo;
@@ -12,6 +14,7 @@ use codex_plugin::PluginId;
 use codex_plugin::is_allowlisted_bundled_cleanup_hook;
 use codex_plugin::manifest::PluginManifestHooks;
 use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_utils_path_uri::PathUri;
 use serde_json::Map;
 use serde_json::Value;
 
@@ -32,23 +35,55 @@ pub fn executor_plugin_hook_sources<'a>(
     plugins_config: &PluginsConfigToml,
     lookup_enabled_tool: impl Fn(&str, &str) -> Option<&'a ToolInfo>,
 ) -> Vec<ExecutorPluginHookSource> {
-    let mut sources = Vec::new();
-
-    for entry in snapshot.roots() {
-        if !plugins_config.allows_plugin(&entry.selected_root.id) {
-            continue;
-        }
-        let Ok(plugin_id) = PluginId::parse(&entry.selected_root.id) else {
-            continue;
-        };
+    let plugins = snapshot.roots().iter().filter_map(|entry| {
         let CapabilityRootLocation::Environment {
             environment_id,
             path: plugin_root,
         } = &entry.selected_root.location;
-        let Ok(discovery) = &entry.result else {
+        let plugin = entry.result.as_ref().ok()?.plugin.as_ref()?;
+        Some((
+            entry.selected_root.id.as_str(),
+            environment_id.as_str(),
+            plugin_root,
+            plugin,
+        ))
+    });
+    admitted_hook_sources(plugins, plugins_config, lookup_enabled_tool)
+}
+
+/// Applies the same inline-hook admission and MCP routing policy to V2 inventories.
+/// Callers must additionally restrict sources to their accepted plugin installations.
+pub fn executor_plugin_hook_sources_v2<'a>(
+    snapshots: &[ExecutorCapabilityDiscoveryV2Snapshot],
+    plugins_config: &PluginsConfigToml,
+    lookup_enabled_tool: impl Fn(&str, &str) -> Option<&'a ToolInfo>,
+) -> Vec<ExecutorPluginHookSource> {
+    let plugins = snapshots.iter().flat_map(|snapshot| {
+        snapshot.result.iter().flat_map(move |inventory| {
+            inventory.plugins.iter().map(move |plugin| {
+                (
+                    plugin.id.as_str(),
+                    snapshot.environment_id.as_str(),
+                    &plugin.root,
+                    &plugin.files,
+                )
+            })
+        })
+    });
+    admitted_hook_sources(plugins, plugins_config, lookup_enabled_tool)
+}
+
+fn admitted_hook_sources<'a, 'b>(
+    plugins: impl Iterator<Item = (&'b str, &'b str, &'b PathUri, &'b DiscoveredPluginFiles)>,
+    plugins_config: &PluginsConfigToml,
+    lookup_enabled_tool: impl Fn(&str, &str) -> Option<&'a ToolInfo>,
+) -> Vec<ExecutorPluginHookSource> {
+    let mut sources = Vec::new();
+    for (plugin_id, environment_id, plugin_root, plugin) in plugins {
+        if !plugins_config.allows_plugin(plugin_id) {
             continue;
-        };
-        let Some(plugin) = &discovery.plugin else {
+        }
+        let Ok(plugin_id) = PluginId::parse(plugin_id) else {
             continue;
         };
         let Ok(manifest) = parse_plugin_manifest_uri(
@@ -72,7 +107,7 @@ pub fn executor_plugin_hook_sources<'a>(
 
             sources.push(ExecutorPluginHookSource {
                 plugin_id: plugin_id.clone(),
-                environment_id: environment_id.clone(),
+                environment_id: environment_id.to_string(),
                 mcp_environment_id: None,
                 mcp_metadata: None,
                 plugin_root: plugin_root.clone(),

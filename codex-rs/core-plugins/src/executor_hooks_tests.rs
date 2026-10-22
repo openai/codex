@@ -499,3 +499,59 @@ fn ignores_file_backed_executor_plugin_hooks() {
         Vec::<ExecutorPluginHookSource>::new()
     );
 }
+
+#[test]
+fn v2_hooks_preserve_admission_policy_and_environment_routing() {
+    let manifest = cleanup_hook_manifest();
+    let files = DiscoveredPluginFiles {
+        manifest: CapabilityTextFile {
+            path: PathUri::parse("file:///plugins/computer-use/.codex-plugin/plugin.json").unwrap(),
+            contents: manifest.to_string(),
+        },
+        mcp_config: None,
+        apps_config: None,
+    };
+    let plugin = codex_exec_server::ExecutorPlugin {
+        id: "computer-use@openai-bundled".to_string(),
+        display_name: "Computer use".to_string(),
+        remote_plugin_id: None,
+        version: "local".to_string(),
+        root: PathUri::parse("file:///plugins/computer-use").unwrap(),
+        files,
+        skills: Vec::new(),
+    };
+    let mut untrusted = plugin.clone();
+    untrusted.id = "computer-use@untrusted".to_string();
+    let inventory = Arc::new(codex_exec_server::DiscoverV2CapabilitiesResponse {
+        plugins: vec![plugin, untrusted],
+        ..Default::default()
+    });
+    let snapshots = [
+        ExecutorCapabilityDiscoveryV2Snapshot {
+            environment_id: "executor-a".to_string(),
+            result: Ok(Arc::clone(&inventory)),
+        },
+        ExecutorCapabilityDiscoveryV2Snapshot {
+            environment_id: "executor-b".to_string(),
+            result: Ok(inventory),
+        },
+        ExecutorCapabilityDiscoveryV2Snapshot {
+            environment_id: "failed".to_string(),
+            result: Err("discovery failed".to_string()),
+        },
+    ];
+    let mut second = expected_source(/*index*/ 0);
+    second.environment_id = "executor-b".to_string();
+    assert_eq!(
+        executor_plugin_hook_sources_v2(&snapshots, &PluginsConfigToml::default(), |_, _| None),
+        vec![expected_source(/*index*/ 0), second]
+    );
+    let disabled = toml::from_str(
+        "[_default]\nenabled = true\n[\"computer-use@openai-bundled\"]\nenabled = false",
+    )
+    .unwrap();
+    assert_eq!(
+        executor_plugin_hook_sources_v2(&snapshots, &disabled, |_, _| None),
+        Vec::new()
+    );
+}

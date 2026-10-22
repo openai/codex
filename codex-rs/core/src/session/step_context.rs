@@ -10,11 +10,11 @@ use crate::session::step_settings::ResolvedStepSettings;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::tools::router::ToolRouter;
-use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_extension_api::ExtensionData;
 use codex_file_system::EnvironmentAccess;
 use codex_mcp::McpBinding;
 use codex_otel::SessionTelemetry;
+use codex_plugin::ExecutorPluginHookSource;
 use codex_protocol::items::ModelInvocationContext;
 use codex_protocol::protocol::TurnContextItem;
 use tokio_util::sync::CancellationToken;
@@ -35,8 +35,8 @@ pub(crate) struct StepContext {
     pub(crate) environments: TurnEnvironmentSnapshot,
     /// Child bindings captured with this step; configured-only when opted in.
     pub(crate) inherited_environments: TurnEnvironmentSnapshot,
-    /// Legacy discovery retained for executor hook materialization in this exact step.
-    pub(crate) executor_capability_discovery: Option<Arc<ExecutorCapabilityDiscoverySnapshot>>,
+    /// Admitted executor hooks bound to this step's discovery, plugin policy, and MCP routing.
+    pub(crate) executor_hook_sources: Vec<ExecutorPluginHookSource>,
     /// Keeps the extension inputs used to build this step's tools for its World State as well.
     pub(crate) extension_data: ExtensionData,
     /// The exact MCP connections, configuration, and catalog captured for this step.

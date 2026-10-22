@@ -76,6 +76,7 @@ pub use discoverable::ToolSuggestDiscoverablePlugin;
 pub use discoverable::ToolSuggestPluginDiscoveryInput;
 pub use executor_catalog::catalog_from_snapshots;
 pub use executor_hooks::executor_plugin_hook_sources;
+pub use executor_hooks::executor_plugin_hook_sources_v2;
 pub use executor_provider::ExecutorPluginProvider;
 pub use executor_provider::ExecutorPluginProviderError;
 pub use executor_provider::PluginRootOwnership;

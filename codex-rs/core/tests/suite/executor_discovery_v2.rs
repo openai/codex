@@ -2,6 +2,7 @@
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core_plugins::ExecutorPluginProvider;
@@ -36,7 +37,11 @@ use codex_mcp::McpResourceClient;
 use codex_mcp_extension::PluginProviders;
 use codex_mcp_extension::install_plugin_providers;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
+use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::user_input::UserInput;
 use codex_skills_extension::ExecutorSkillProvider;
 use codex_skills_extension::SkillProviders;
 use codex_skills_extension::SkillsExtensionConfig;
@@ -1193,6 +1198,193 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
                 .collect::<Vec<_>>(),
             &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
+    );
+    Ok(())
+}
+
+#[test_case::test_case("Stop"; "stop")]
+#[test_case::test_case("Interrupt"; "interrupt")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_cleanup_hooks_follow_plugin_selection_without_legacy_roots(
+    hook_event: &'static str,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let model = responses::start_mock_server().await;
+    let hook_calls = Arc::new(AtomicUsize::new(0));
+    let recorded = Arc::clone(&hook_calls);
+    wiremock::Mock::given(wiremock::matchers::path("/hooks"))
+        .respond_with(move |request: &wiremock::Request| {
+            let request: Value =
+                serde_json::from_slice(&request.body).expect("MCP request should be valid JSON");
+            let result = match request["method"].as_str() {
+                Some("initialize") => json!({
+                    "protocolVersion": request["params"]["protocolVersion"],
+                    "capabilities": {"tools": {}}, "serverInfo": {"name": "hooks", "version": "1"}
+                }),
+                Some("notifications/initialized") => return wiremock::ResponseTemplate::new(202),
+                Some("tools/list") => json!({"tools": [{
+                    "name": "turn_ended", "inputSchema": {"type": "object"}
+                }]}),
+                Some("tools/call") => {
+                    assert_eq!(request["params"]["name"], "turn_ended");
+                    assert_eq!(
+                        request["params"]["arguments"]["hook_event_name"],
+                        hook_event
+                    );
+                    recorded.fetch_add(1, Ordering::SeqCst);
+                    json!({"content": []})
+                }
+                other => panic!("unexpected MCP request: {other:?}"),
+            };
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(json!({"jsonrpc": "2.0", "id": request["id"], "result": result}))
+        })
+        .mount(&model)
+        .await;
+    let manifest = json!({"name": "computer-use", "hooks": {"hooks": {(hook_event): [{"hooks": [{
+        "type": "mcp_tool", "server": "node_repl", "tool": "turn_ended",
+        "input": {"hook_event_name": "${hook_event_name}", "session_id": "${session_id}", "turn_id": "${turn_id}"}
+    }]}]}}});
+    let inventory = json!({"plugins": [{
+        "id": "computer-use@openai-bundled", "displayName": "Computer use",
+        "remotePluginId": null, "version": "1", "root": "file:///plugins/computer-use",
+        "files": {"manifest": {"path": "file:///plugins/computer-use/.codex-plugin/plugin.json",
+            "contents": manifest.to_string()}, "mcpConfig": null, "appsConfig": null}, "skills": []
+    }], "skills": [], "warnings": []});
+    let executor = Executor::start(/*supports_v2*/ true, DiscoveryFailure::None).await?;
+    *executor.inventory.lock().await = Some(inventory);
+    let hook_url = format!("{}/hooks", model.uri());
+    let hook_server = serde_json::from_value(json!({
+        "url": hook_url, "environment_id": codex_exec_server::REMOTE_ENVIRONMENT_ID
+    }))?;
+    let mut extensions = ExtensionRegistryBuilder::new();
+    codex_mcp_extension::install_plugins(
+        &mut extensions,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let home = Arc::new(tempfile::TempDir::new()?);
+    std::fs::write(
+        home.path().join("config.toml"),
+        "[plugins.\"computer-use@openai-bundled\"]\nenabled = true\n",
+    )?;
+    let test = test_codex()
+        .with_home(home)
+        .with_extensions(Arc::new(extensions.build()))
+        .with_exec_server_url(executor.url.clone())
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Plugins)
+                .expect("enable plugins");
+            config
+                .features
+                .enable(Feature::ExecutorCapabilityDiscoveryV2)
+                .expect("enable V2 discovery");
+            config
+                .features
+                .disable(Feature::ExecutorCapabilityDiscovery)
+                .expect("disable V1 discovery");
+            config
+                .mcp_servers
+                .set(
+                    [(String::from("node_repl"), hook_server)]
+                        .into_iter()
+                        .collect(),
+                )
+                .expect("configure the executor hook server");
+        })
+        .build_with_auto_env(&model)
+        .await?;
+    core_test_support::wait_for_mcp_server(&test.codex, "node_repl").await?;
+    let mut selection = test.executor_environment().selection().clone();
+    selection.environment_id = codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string();
+    selection.selected_capability_roots = Default::default();
+    for disabled in [false, true] {
+        core_test_support::submit_thread_settings(
+            &test.codex,
+            codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(
+                    TurnEnvironmentSelections::new(
+                        test.config.cwd.clone(),
+                        vec![selection.clone()],
+                    )
+                    .into_requests(),
+                ),
+                disabled_plugin_ids: Some(if disabled {
+                    vec!["computer-use@openai-bundled".to_string()]
+                } else {
+                    Vec::new()
+                }),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let mut response = responses::sse_response(responses::sse(vec![
+            responses::ev_response_created("response"),
+            responses::ev_assistant_message("message", "Done."),
+            responses::ev_completed("response"),
+        ]));
+        if hook_event == "Interrupt" {
+            response = response.set_delay(std::time::Duration::from_secs(60));
+        }
+        let requests = responses::mount_response_once(&model, response).await;
+        test.codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Finish this turn.".to_string(),
+                text_elements: Vec::new(),
+            }]))
+            .await?;
+        if hook_event == "Interrupt" {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while requests.requests().is_empty() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .context("interrupted turn should reach inference with its prepared step")?;
+            test.codex.submit(Op::Interrupt).await?;
+        }
+        core_test_support::wait_for_event(&test.codex, |event| {
+            if hook_event == "Interrupt" {
+                matches!(event, EventMsg::TurnAborted(_))
+            } else {
+                matches!(event, EventMsg::TurnComplete(_))
+            }
+        })
+        .await;
+        if !disabled {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while hook_calls.load(Ordering::SeqCst) == 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .context("V2 cleanup hook should run")?;
+        } else {
+            // Cleanup is asynchronous; turn completion alone cannot prove disablement.
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                    while hook_calls.load(Ordering::SeqCst) == 1 {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .is_err(),
+                "disabled cleanup hook must remain silent"
+            );
+        }
+        assert_eq!(hook_calls.load(Ordering::SeqCst), 1);
+    }
+    let requests = executor.requests.lock().await;
+    assert!(
+        requests
+            .iter()
+            .any(|request| request["method"] == "capabilities/discoverV2")
+    );
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request["method"] == "capabilityRoots/discoverV1")
     );
     Ok(())
 }

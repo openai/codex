@@ -291,7 +291,7 @@ impl StepContext {
             turn: Arc::clone(&turn),
             inherited_environments: environments.clone(),
             environments,
-            executor_capability_discovery: None,
+            executor_hook_sources: Vec::new(),
             extension_data: codex_extension_api::ExtensionData::new(turn.sub_id.clone()),
             mcp: Arc::new(codex_mcp::McpBinding::empty(mcp_config_for_test(
                 &turn.config,
