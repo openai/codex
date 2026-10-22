@@ -121,7 +121,7 @@ async fn mcp_requests_preserve_trace_context_across_workers_and_continuations() 
             .call_tool(
                 "test".to_string(),
                 /*arguments*/ None,
-                Some(json!({"application":"tool-meta"})),
+                |_| Ok(Some(json!({"application":"tool-meta"}))),
                 Some(Duration::from_secs(5)),
             )
             .instrument(tool)

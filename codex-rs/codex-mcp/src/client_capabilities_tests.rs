@@ -75,10 +75,29 @@ fn user_verification_is_projected_only_to_the_host_owned_plugin_service() {
         /*apps_mcp_product_sku*/ None,
         /*originator*/ None,
     );
-    let extensions = ClientMcpExtensions::new([(
-        OPENAI_ELICITATION_EXTENSION_ID.to_string(),
-        json!({"form": {}, "userVerification": {}}),
-    )]);
+    let extensions = ClientMcpExtensions::new([
+        (
+            OPENAI_ELICITATION_EXTENSION_ID.to_string(),
+            json!({"form": {}, "userVerification": {}}),
+        ),
+        (
+            crate::MCP_NETWORK_POLICY_META_CAPABILITY.to_string(),
+            json!({}),
+        ),
+    ]);
+    assert_eq!(
+        server_mcp_extensions(
+            &extensions,
+            CODEX_APPS_MCP_SERVER_NAME,
+            /*server*/ None,
+            /*advertise_network_policy*/ true,
+            "https://chatgpt.com",
+        ),
+        ClientMcpExtensions::new([(
+            OPENAI_ELICITATION_EXTENSION_ID.to_string(),
+            json!({"form": {}}),
+        )]),
+    );
     for (name, registration, settings) in [
         (
             CODEX_APPS_MCP_SERVER_NAME,
@@ -125,7 +144,13 @@ fn user_verification_is_projected_only_to_the_host_owned_plugin_service() {
         catalog.register(registration);
         let catalog = catalog.build();
         assert_eq!(
-            server_mcp_extensions(&extensions, name, catalog.server(name)),
+            server_mcp_extensions(
+                &extensions,
+                name,
+                catalog.server(name),
+                /*advertise_network_policy*/ false,
+                "https://chatgpt.com",
+            ),
             ClientMcpExtensions::new([(OPENAI_ELICITATION_EXTENSION_ID.to_string(), settings)]),
         );
     }

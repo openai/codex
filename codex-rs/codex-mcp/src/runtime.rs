@@ -83,6 +83,8 @@ pub struct McpToolCallResult {
 
 /// Configuration and owning-thread state needed to materialize an MCP runtime.
 pub struct McpRuntimeInput {
+    /// Policy source captured with the configuration and connections in this publication.
+    pub network_policy_metadata: Option<Arc<dyn crate::NetworkPolicyMetadataProvider>>,
     pub startup_policy: McpStartupPolicy,
     pub config: Arc<McpConfig>,
     pub plugins_available: bool,

@@ -79,7 +79,7 @@ async fn call(client: &RmcpClient) -> anyhow::Result<Value> {
             .call_tool(
                 "verified_operation".into(),
                 Some(json!({"resource": "example"})),
-                Some(json!({"caller": "preserved"})),
+                |_| Ok(Some(json!({"caller": "preserved"}))),
                 Some(Duration::from_secs(/*secs*/ 5)),
             )
             .await?,

@@ -295,7 +295,7 @@ async fn modern_tool_mrtr_drives_form_and_url_elicitation_and_preserves_metadata
             .call_tool(
                 "confirm".into(),
                 Some(json!({"mode": mode})),
-                Some(json!({"requestContext": "caller-context"})),
+                |_| Ok(Some(json!({"requestContext": "caller-context"}))),
                 Some(Duration::from_secs(5)),
             )
             .await?;
@@ -460,7 +460,11 @@ async fn modern_tool_mrtr_uses_recovered_protocol_after_legacy_session_expiry() 
         .call_tool(
             "confirm".into(),
             Some(json!({})),
-            Some(json!({"requestContext": "caller-context", "openai/readOnly": false})),
+            |_| {
+                Ok(Some(
+                    json!({"requestContext": "caller-context", "openai/readOnly": false}),
+                ))
+            },
             Some(Duration::from_secs(5)),
         )
         .await?;
@@ -639,7 +643,7 @@ async fn modern_tool_mrtr_accepts_sse_discovery_and_metadata_bearing_rounds() ->
         .call_tool(
             "confirm".to_owned(),
             Some(json!({})),
-            /*meta*/ None,
+            |_| Ok(None),
             Some(Duration::from_secs(5)),
         )
         .await?;
@@ -715,7 +719,7 @@ async fn modern_tool_mrtr_preserves_state_only_rounds_without_elicitation() -> a
         .call_tool(
             "state-only".into(),
             Some(json!({})),
-            /*meta*/ None,
+            |_| Ok(None),
             Some(Duration::from_secs(5)),
         )
         .await?;

@@ -98,6 +98,7 @@ impl AppsRequestProcessor {
                         host_owned_codex_apps_enabled(&mcp_config, auth.as_ref())
                             .then(|| Arc::clone(&self.auth_manager));
                     let runtime = McpRuntime::new(McpRuntimeInput {
+                        network_policy_metadata: None,
                         startup_policy: McpStartupPolicy::Eager,
                         config: Arc::clone(&mcp_config),
                         plugins_available: false,

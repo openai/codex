@@ -170,7 +170,7 @@ async fn exercise_stdio_server(
         .call_tool(
             "echo".to_owned(),
             Some(json!({"message": "hello stdio"})),
-            /*meta*/ None,
+            |_| Ok(None),
             Some(Duration::from_secs(5)),
         )
         .await?;

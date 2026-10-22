@@ -179,7 +179,7 @@ pub(crate) async fn call_echo_tool(
         .call_tool(
             "echo".to_string(),
             Some(json!({ "message": message })),
-            /*meta*/ None,
+            |_| Ok(None),
             Some(Duration::from_secs(5)),
         )
         .await

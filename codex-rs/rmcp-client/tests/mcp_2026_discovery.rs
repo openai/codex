@@ -34,6 +34,9 @@ const MODERN_VERSION: &str = "2026-07-28";
 const LEGACY_VERSION: &str = "2025-06-18";
 const MAX_MCP_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
+#[path = "mcp_2026_discovery/tool_call_session_meta_tests.rs"]
+mod tool_call_session_meta_tests;
+
 fn initialize_params() -> InitializeRequestParams {
     InitializeRequestParams::new(
         ClientCapabilities::default(),
@@ -152,7 +155,7 @@ async fn read_only_tool_requests_preserve_host_policy_and_caller_metadata() -> a
                 .call_tool(
                     "write".to_string(),
                     Some(json!({"message": "hello"})),
-                    Some(caller_meta),
+                    |_| Ok(Some(caller_meta.clone())),
                     /*timeout*/ None,
                 )
                 .await?;
@@ -392,7 +395,7 @@ async fn legacy_fallback_does_not_follow_cross_origin_tool_redirects() -> anyhow
             .call_tool(
                 "query_logs_sql".to_string(),
                 Some(json!({"query": "sensitive-query"})),
-                /*meta*/ None,
+                |_| Ok(None),
                 Some(Duration::from_secs(5)),
             )
             .await
@@ -812,7 +815,7 @@ async fn modern_sdk_emits_standard_headers_and_rejects_invalid_header_schemas() 
         .call_tool(
             "echo".to_string(),
             Some(json!({"tenant": "acme"})),
-            /*meta*/ None,
+            |_| Ok(None),
             Some(Duration::from_secs(5)),
         )
         .await?;

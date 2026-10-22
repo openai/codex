@@ -230,7 +230,7 @@ async fn oauth_tool_call_child() -> anyhow::Result<()> {
         .call_tool(
             "probe".to_string(),
             /*arguments*/ None,
-            /*meta*/ None,
+            |_| Ok(None),
             Some(Duration::from_secs(/*secs*/ 5)),
         )
         .await?;

@@ -252,6 +252,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         codex_mcp::host_owned_codex_apps_enabled(&mcp_config, auth.as_ref())
             .then(|| Arc::clone(&auth_manager));
     let mcp_runtime = McpRuntime::new(McpRuntimeInput {
+        network_policy_metadata: None,
         startup_policy: McpStartupPolicy::Eager,
         config: Arc::clone(&mcp_config),
         plugins_available: false,

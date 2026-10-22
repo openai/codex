@@ -140,7 +140,7 @@ for line in sys.stdin:
             .call_tool(
                 "probe".to_string(),
                 /*arguments*/ None,
-                /*meta*/ None,
+                |_| Ok(None),
                 Some(Duration::from_secs(/*secs*/ 5)),
             )
             .await?;

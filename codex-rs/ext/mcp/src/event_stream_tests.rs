@@ -155,6 +155,7 @@ impl Fixture {
         config.mcp_server_catalog = catalog.build();
         let config = Arc::new(config);
         let runtime_input = || McpRuntimeInput {
+            network_policy_metadata: None,
             startup_policy: McpStartupPolicy::Eager,
             config: Arc::clone(&config),
             plugins_available: false,

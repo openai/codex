@@ -312,7 +312,7 @@ async fn runtime_oauth_child() -> anyhow::Result<()> {
         .call_tool(
             "echo".to_string(),
             /*arguments*/ None,
-            /*meta*/ None,
+            |_| Ok(None),
             Some(Duration::from_secs(5)),
         )
         .await;

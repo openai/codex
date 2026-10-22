@@ -7,8 +7,12 @@
 
 #[path = "connection_manager/catalog_telemetry.rs"]
 mod catalog_telemetry;
+#[path = "connection_manager/network_policy.rs"]
+mod network_policy;
 #[path = "connection_manager/required.rs"]
 mod required;
+pub use network_policy::NetworkPolicyMetadata;
+pub use network_policy::NetworkPolicyMetadataProvider;
 #[path = "connection_manager/resources.rs"]
 mod resources;
 #[path = "connection_manager/startup.rs"]
@@ -266,6 +270,8 @@ impl McpServerView {
 
 /// A published view over a set of running MCP server connections.
 pub(crate) struct McpConnectionSet {
+    config: Option<Arc<crate::McpConfig>>,
+    network_policy_metadata: Option<Arc<dyn NetworkPolicyMetadataProvider>>,
     servers: HashMap<String, McpServerView>,
     pub(crate) event_stream_connection: Option<Arc<EventStreamConnectionSettings>>,
     disabled_servers: Vec<String>,
@@ -293,6 +299,7 @@ impl McpConnectionSet {
         let McpRuntimeInput {
             startup_policy,
             config,
+            network_policy_metadata,
             plugins_available: _,
             ready_selected_capability_roots: _,
             mcp_servers,
@@ -391,6 +398,8 @@ impl McpConnectionSet {
                 &client_mcp_extensions,
                 &server_name,
                 registration,
+                network_policy_metadata.is_some(),
+                &config.chatgpt_base_url,
             );
             let is_host_owned_codex_apps = registration.is_some_and(|server| {
                 server
@@ -951,6 +960,8 @@ impl McpConnectionSet {
             }
         }
         let manager = Self {
+            config: Some(config),
+            network_policy_metadata,
             servers,
             event_stream_connection,
             disabled_servers,
@@ -1009,6 +1020,8 @@ impl McpConnectionSet {
 
     pub fn empty(prefix_mcp_tool_names: bool) -> Self {
         Self {
+            config: None,
+            network_policy_metadata: None,
             servers: HashMap::new(),
             event_stream_connection: None,
             disabled_servers: Vec::new(),
@@ -1210,7 +1223,19 @@ impl McpConnectionSet {
         }
         let result: rmcp::model::CallToolResult = client
             .client
-            .call_tool(tool.to_string(), arguments, meta, effective_timeout)
+            .call_tool(
+                tool.to_string(),
+                arguments,
+                self.network_policy_meta_for_call(
+                    &client,
+                    self.config
+                        .as_ref()
+                        .and_then(|config| config.permission_profile_for_server(server)),
+                    &view.metadata.environment_id,
+                    meta,
+                ),
+                effective_timeout,
+            )
             .await
             .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
 

@@ -91,6 +91,7 @@ async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_current_auth_manager_token(
     let plugins_manager = plugins_manager_for_config(&config, Arc::clone(&auth_manager));
     let mcp_config = Arc::new(config.to_mcp_config(&plugins_manager).await);
     let runtime = McpRuntime::new(McpRuntimeInput {
+        network_policy_metadata: None,
         startup_policy: McpStartupPolicy::Eager,
         config: mcp_config,
         plugins_available: false,

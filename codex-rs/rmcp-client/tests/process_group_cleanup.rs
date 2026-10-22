@@ -165,7 +165,7 @@ async fn shutdown_kills_initialized_stdio_server_with_in_flight_operation() -> R
             .call_tool(
                 "sync".to_string(),
                 Some(json!({ "sleep_after_ms": 300_000 })),
-                /*meta*/ None,
+                |_| Ok(None),
                 Some(Duration::from_secs(300)),
             )
             .await

@@ -366,7 +366,7 @@ pub fn effective_mcp_servers(
     effective_mcp_servers_from_configured(configured_mcp_servers(config), config, auth)
 }
 
-fn is_trusted_chatgpt_mcp_server(
+pub(crate) fn is_trusted_chatgpt_mcp_server(
     transport: &McpServerTransportConfig,
     chatgpt_base_url: &str,
 ) -> bool {
@@ -470,6 +470,7 @@ pub async fn read_mcp_resource(
         /*previous*/ None,
         McpPublicationGate::already_published(),
         McpRuntimeInput {
+            network_policy_metadata: None,
             startup_policy: McpStartupPolicy::Eager,
             config: Arc::new(runtime_config),
             plugins_available: false,
@@ -558,6 +559,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         /*previous*/ None,
         McpPublicationGate::already_published(),
         McpRuntimeInput {
+            network_policy_metadata: None,
             startup_policy: McpStartupPolicy::Eager,
             config: Arc::new(runtime_config),
             plugins_available: false,
