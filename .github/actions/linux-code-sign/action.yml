@@ -14,8 +14,25 @@ inputs:
 runs:
   using: composite
   steps:
+    # The installer verifies the signer with an older Cosign. Give it Sigstore's
+    # trusted root so it can verify both release signatures offline.
+    - name: Check out the Sigstore trust root
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        repository: sigstore/root-signing
+        ref: c9bda74ad2221f938f7d2e0295ca3aad2da710a8
+        path: .cosign-installer-trust
+        sparse-checkout: targets/trusted_root.json
+        sparse-checkout-cone-mode: false
+        persist-credentials: false
+
     - name: Install cosign
-      uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+      uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      with:
+        cosign-release: v3.1.4
+      env:
+        COSIGN_OFFLINE: "true"
+        COSIGN_TRUSTED_ROOT: ${{ github.workspace }}/.cosign-installer-trust/targets/trusted_root.json
 
     - name: Cosign Linux artifacts
       shell: bash
@@ -28,6 +45,9 @@ runs:
         COSIGN_OIDC_ISSUER: "https://oauth2.sigstore.dev/auth"
       run: |
         set -euo pipefail
+
+        # The installer can keep its bootstrap when both downloads are identical.
+        cosign version --json | jq -e '.gitVersion == "v3.1.4"' > /dev/null
 
         dest="$ARTIFACTS_DIR"
         if [[ ! -d "$dest" ]]; then
@@ -42,7 +62,10 @@ runs:
             exit 1
           fi
 
+          # Existing release consumers verify the v2 bundle format.
           cosign sign-blob \
+            --new-bundle-format=false \
+            --use-signing-config=false \
             --yes \
             --bundle "${artifact}.sigstore" \
             "$artifact"
