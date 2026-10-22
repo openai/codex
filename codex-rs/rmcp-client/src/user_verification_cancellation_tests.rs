@@ -99,7 +99,7 @@ async fn dropping_tool_call_cancels_remote_request() -> anyhow::Result<()> {
         let mut call = Box::pin(client.call_tool(
             "wait".into(),
             /*arguments*/ None,
-            /*meta*/ None,
+            |_| Ok(None),
             /*timeout*/ None,
         ));
         // Drop before yielding to the transport's independently scheduled send tasks.
@@ -125,7 +125,7 @@ async fn dropping_tool_call_cancels_remote_request() -> anyhow::Result<()> {
         let mut next = Box::pin(client.call_tool(
             "next".into(),
             /*arguments*/ None,
-            /*meta*/ None,
+            |_| Ok(None),
             /*timeout*/ None,
         ));
         let request = tokio::select! {
