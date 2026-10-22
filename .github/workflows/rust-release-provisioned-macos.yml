@@ -180,9 +180,9 @@ jobs:
             bin codex-resources codex-path codex-package.json CodexCLI.app
           (cd verified && shasum -a 256 "codex-provisioned-package-$TARGET.tar.gz" > SHA256SUMS)
       - uses: ./.github/actions/setup-ci
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          version: "0.11.3"
+          version: "0.13.5"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ matrix.target }}-app-server

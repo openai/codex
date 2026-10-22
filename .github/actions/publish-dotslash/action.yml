@@ -21,10 +21,10 @@ runs:
         persist-credentials: false
 
     - name: Install uv
-      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       with:
-        version: "0.12.13"
-        checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
+        version: "0.13.5"
+        checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
         github-token: ""
         enable-cache: false
 

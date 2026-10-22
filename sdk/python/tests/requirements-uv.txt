@@ -1,0 +1,3 @@
+# Verify the Linux x86-64 wheel even if the test image's pip trusts a stale CA.
+uv==0.13.5 \
+    --hash=sha256:fa8d26e08e34c29c0c4e820cf3181757086d547240b4f4d31ff1d8bd810ca946
