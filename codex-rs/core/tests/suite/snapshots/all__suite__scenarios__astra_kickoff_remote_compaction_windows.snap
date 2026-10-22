@@ -158,12 +158,13 @@ Settings:
     Capabilities from the `calendar` plugin:
     - Skills from this plugin are prefixed with `calendar:`.
     Use these plugin-associated capabilities to help solve the task.
+10:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-10:message/assistant:
+11:message/assistant:
     Agenda drafted for the kickoff.
-11:message/user:
-    Summarize the kickoff notes with $notes:summarize.
 12:message/user:
+    Summarize the kickoff notes with $notes:summarize.
+13:message/user:
     <skill>
     <name>notes:summarize</name>
     <path><PLUGINS_CACHE>/test/notes/local/skills/summarize/SKILL.md</path>
@@ -175,14 +176,14 @@ Settings:
     Extract decisions and action items.
 
     </skill>
-13:message/developer:
+14:message/developer:
     Capabilities from the `notes` plugin:
     - Skills from this plugin are prefixed with `notes:`.
     Use these plugin-associated capabilities to help solve the task.
 -- request 3 (compaction) --
-14:message/assistant:
+15:message/assistant:
     The team chose Friday and assigned owners.
-15:compaction_trigger
+16:compaction_trigger
 
 ## Window 2 (after request 3: input diverged at item 02)
 Settings: same as window 1

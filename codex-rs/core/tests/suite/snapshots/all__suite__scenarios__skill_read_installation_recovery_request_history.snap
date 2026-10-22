@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 1456
 expression: "context_snapshot::format_context_snapshot(\"Astra reads Cloud instructions, discovers an omitted deployment installation, and reads its instructions from env-04.\",\n&bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: Astra reads Cloud instructions, discovers an omitted deployment installation, and reads its instructions from env-04.
@@ -36,9 +35,10 @@ Scenario: Astra reads Cloud instructions, discovers an omitted deployment instal
     <ENVIRONMENT_CONTEXT>
 06:message/user:
     Read the review and deployment instructions, find all deployment installations, then read the instructions from env-04.
+07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (request) --
-07:function_call/skills.read:{"package":"skill://executor-00/review","source":{"kind":"cloud"}}
-08:function_call_output:{
+08:function_call/skills.read:{"package":"skill://executor-00/review","source":{"kind":"cloud"}}
+09:function_call_output:{
       "contents": "# Deployment\\nRun scripts/check.py from an available installation.",
       "installations": [
         {
@@ -58,8 +58,8 @@ Scenario: Astra reads Cloud instructions, discovers an omitted deployment instal
       "resource": "skill://deployment/review/SKILL.md"
     }
 -- request 3 (request) --
-09:function_call/skills.read:{"package":"skill://deployment/deploy"}
-10:function_call_output:{
+10:function_call/skills.read:{"package":"skill://deployment/deploy"}
+11:function_call_output:{
       "contents": "# Deployment\\nRun scripts/check.py from an available installation.",
       "installations": [
         {
@@ -77,8 +77,8 @@ Scenario: Astra reads Cloud instructions, discovers an omitted deployment instal
       "resource": "skill://deployment/deploy/SKILL.md"
     }
 -- request 4 (request) --
-11:function_call/skills.installations:{"package":"skill://deployment/deploy"}
-12:function_call_output:{
+12:function_call/skills.installations:{"package":"skill://deployment/deploy"}
+13:function_call_output:{
       "installations": [
         {
           "package": "skill://deployment/deploy",
@@ -96,8 +96,8 @@ Scenario: Astra reads Cloud instructions, discovers an omitted deployment instal
       "next_cursor": null
     }
 -- request 5 (request) --
-13:function_call/skills.read:{"package":"skill://deployment/deploy","source":{"environment_id":"env-04","kind":"executor"}}
-14:function_call_output:{
+14:function_call/skills.read:{"package":"skill://deployment/deploy","source":{"environment_id":"env-04","kind":"executor"}}
+15:function_call_output:{
       "contents": "# Deployment in env-04\\nRun scripts/check.py from this installation.",
       "installations": [
         {

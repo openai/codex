@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios_frozen_cloud_skills.rs
-assertion_line: 142
 expression: "context_snapshot::format_context_snapshot(\"A cloud parent lists and reads a frozen skill alongside a named executor after the snapshot file has been removed.\",\n&bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: A cloud parent lists and reads a frozen skill alongside a named executor after the snapshot file has been removed.
@@ -111,9 +110,10 @@ Settings:
     </environment_context>
 06:message/user:
     List the cloud skills, then read the work skill.
+07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (request) --
-07:function_call/skills.list:{"authority":{"kind":"cloud"}}
-08:function_call_output:{"next_cursor":null,"skills":[{"authority":{"kind":"cloud"},"description":"Inspect and explain the reque...:work","package":"skill://demo/work"}],"warnings":[]} [hash=0a735291ec9e0ec7]
+08:function_call/skills.list:{"authority":{"kind":"cloud"}}
+09:function_call_output:{"next_cursor":null,"skills":[{"authority":{"kind":"cloud"},"description":"Inspect and explain the reque...:work","package":"skill://demo/work"}],"warnings":[]} [hash=0a735291ec9e0ec7]
 -- request 3 (request) --
-09:function_call/skills.read:{"package":"c0/work","source":{"kind":"cloud"}}
-10:function_call_output:{"contents":"# Work\\nInspect the inputs before explaining the result.\\n","installations":[{"package":"sk...cursor":null,"resource":"skill://demo/work/SKILL.md"} [hash=adc0897fa3bc41cf]
+10:function_call/skills.read:{"package":"c0/work","source":{"kind":"cloud"}}
+11:function_call_output:{"contents":"# Work\\nInspect the inputs before explaining the result.\\n","installations":[{"package":"sk...cursor":null,"resource":"skill://demo/work/SKILL.md"} [hash=adc0897fa3bc41cf]

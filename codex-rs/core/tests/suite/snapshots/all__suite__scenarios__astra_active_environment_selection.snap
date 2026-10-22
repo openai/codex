@@ -103,10 +103,11 @@ Scenario: Astra starts in one workspace, switches for the next step of the activ
     </environment_context>
 06:message/user:
     Ask before continuing in the other workspace.
+07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-07:function_call/functions.request_user_input:{"questions":[{"header":"Continue","id":"continue","options":[{"description":"Continue working.","label"...o"}],"question":"Continue in the other workspace?"}]} [hash=028e565351844d96]
-08:function_call_output:{"answers":{"continue":{"answers":["Yes"]}}}
-09:message/user:
+08:function_call/functions.request_user_input:{"questions":[{"header":"Continue","id":"continue","options":[{"description":"Continue working.","label"...o"}],"question":"Continue in the other workspace?"}]} [hash=028e565351844d96]
+09:function_call_output:{"answers":{"continue":{"answers":["Yes"]}}}
+10:message/user:
     <environment_context>
       <cwd><CWD>/other-workspace</cwd>
       <shell><HOST_SHELL></shell>
@@ -115,9 +116,9 @@ Scenario: Astra starts in one workspace, switches for the next step of the activ
       <filesystem><workspace_roots><root><CWD>/other-workspace</root></workspace_roots><permission_profile t...ntry></file_system></permission_profile></filesystem> [hash=0be8191a0451377a]
     </environment_context>
 -- request 3 (turn) --
-10:message/assistant:
+11:message/assistant:
     I continued in the other workspace.
-11:message/user:
+12:message/user:
     <environment_context>
       <cwd><CWD></cwd>
       <shell><HOST_SHELL></shell>
@@ -125,5 +126,5 @@ Scenario: Astra starts in one workspace, switches for the next step of the activ
       <timezone><HOST_TIMEZONE></timezone>
       <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
     </environment_context>
-12:message/user:
+13:message/user:
     Which workspace are you using now?

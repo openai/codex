@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios_retained_tool_outputs.rs
-expression: "context_snapshot::format_request_history_snapshot(if enabled\n{\n    \"Retained thread instructions stop emergency tool-output trimming. Compaction shares the 64K retention budget with oversized task details, and a cold resume preserves the retained tool content.\"\n} else\n{\n    \"With retention disabled, the client can still send retain=true. Tool outputs use ordinary emergency trimming and are not retained after compaction and cold resume.\"\n}, &requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+expression: "context_snapshot::format_request_history_snapshot(if enabled\n{\n    \"Retained thread instructions stop emergency tool-output trimming. Compaction keeps whole outputs within the shared 64K retention budget, dropping oversized task details and older instructions. A cold resume preserves the latest instruction unchanged.\"\n} else\n{\n    \"With retention disabled, the client can still send retain=true. Tool outputs use ordinary emergency trimming and are not retained after compaction and cold resume.\"\n}, &requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: With retention disabled, the client can still send retain=true. Tool outputs use ordinary emergency trimming and are not retained after compaction and cold resume.
 
@@ -33,16 +33,17 @@ Scenario: With retention disabled, the client can still send retain=true. Tool o
 05:message/user:
     <ENVIRONMENT_CONTEXT>
 06:function_call_output/codex_app.send_message_to_thread:Investigate the failing tests; report your findings without changing files.
+07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-07:message/assistant:
+08:message/assistant:
     I will investigate the tests.
-08:function_call_output/codex_app.task_details:Investigate the failing tests carefully. Investigate the failing tests carefully. Investigate the failin...s carefully. Investigate the failing tests carefully. [hash=3c65017b6f98a38f]
+09:function_call_output/codex_app.task_details:Investigate the failing tests carefully. Investigate the failing tests carefully. Investigate the failin...s carefully. Investigate the failing tests carefully. [hash=3c65017b6f98a38f]
 -- request 3 (turn) --
-09:message/assistant:
+10:message/assistant:
     I will use those task details.
-10:function_call_output/codex_app.send_message_to_thread:Report your findings without changing files.
+11:function_call_output/codex_app.send_message_to_thread:Report your findings without changing files.
 
-## Window 2 (after request 3: input diverged at item 10)
+## Window 2 (after request 3: input diverged at item 11)
 -- request 4 (compaction) --
 00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
         - namespace/functions; hash=fada4a476a3754dd
@@ -71,14 +72,15 @@ Scenario: With retention disabled, the client can still send retain=true. Tool o
 05:message/user:
     <ENVIRONMENT_CONTEXT>
 06:function_call_output/codex_app.send_message_to_thread:Investigate the failing tests; report your findings without changing files.
-07:message/assistant:
+07:configuration_update:reasoning={"effort":"low"}
+08:message/assistant:
     I will investigate the tests.
-08:function_call_output/codex_app.task_details:Investigate the failing tests carefully. Investigate the failing tests carefully. Investigate the failin...s carefully. Investigate the failing tests carefully. [hash=3c65017b6f98a38f]
-09:message/assistant:
+09:function_call_output/codex_app.task_details:Investigate the failing tests carefully. Investigate the failing tests carefully. Investigate the failin...s carefully. Investigate the failing tests carefully. [hash=3c65017b6f98a38f]
+10:message/assistant:
     I will use those task details.
-10:function_call_output/codex_app.send_message_to_thread:Output exceeded the available model context and was truncated
-11:function_call_output/example.progress:Output exceeded the available model context and was truncated
-12:compaction_trigger
+11:function_call_output/codex_app.send_message_to_thread:Output exceeded the available model context and was truncated
+12:function_call_output/example.progress:Output exceeded the available model context and was truncated
+13:compaction_trigger
 
 ## Window 3 (after request 4: input diverged at item 06)
 -- request 5 (turn) --
@@ -113,3 +115,4 @@ Scenario: With retention disabled, the client can still send retain=true. Tool o
     <ENVIRONMENT_CONTEXT>
 08:message/user:
     What request are you working on?
+09:configuration_update:reasoning={"effort":"low"}

@@ -100,10 +100,11 @@ Settings:
     </environment_context>
 06:message/user:
     Plan the release.
+07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (compaction; Remote /compact request) --
-07:message/assistant:
+08:message/assistant:
     The release plan has three steps.
-08:compaction_trigger
+09:compaction_trigger
 
 ## Window 2 (after request 2: input diverged at item 07)
 Settings: unavailable (items only)

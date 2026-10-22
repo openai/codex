@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 1272
 expression: "context_snapshot::format_request_history_snapshot(description,\n&mock.requests(),\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Native tools are unavailable while the V2 runtime and its instructions remain enabled.
@@ -94,6 +93,7 @@ Settings:
     </environment_context>
 06:message/user:
     Check which agents are working under /root before delegating more work.
+07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-07:function_call/collaboration.list_agents:{"path_prefix":"/root"}
-08:function_call_output:unsupported call: collaborationlist_agents
+08:function_call/collaboration.list_agents:{"path_prefix":"/root"}
+09:function_call_output:unsupported call: collaborationlist_agents

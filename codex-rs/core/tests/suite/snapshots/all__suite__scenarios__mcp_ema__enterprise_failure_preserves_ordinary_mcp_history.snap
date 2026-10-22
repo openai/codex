@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios_mcp_ema.rs
-assertion_line: 125
 expression: "histories[1]"
 ---
 Scenario: Ordinary MCP keeps the same tool schemas, calls, and history when enterprise authentication fails.
@@ -55,8 +54,9 @@ Settings:
     <ENVIRONMENT_CONTEXT>
 05:message/user:
     List my calendar events.
+06:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-06:function_call/mcp__ordinary.calendar_list_events:{}
-07:function_call_output:Wall time: <DURATION> seconds
+07:function_call/mcp__ordinary.calendar_list_events:{}
+08:function_call_output:Wall time: <DURATION> seconds
     Output:
     {"_codex_apps":null}

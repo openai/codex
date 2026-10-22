@@ -42,13 +42,14 @@ Settings:
     <MULTI_AGENT_MODE>
 05:message/user:
     Ask a worker to check the release, then finish your turn.
+06:configuration_update:reasoning={"effort":"medium"}
 -- request 2 (turn) --
-06:function_call/collaboration.spawn_agent:{"fork_turns":"none","message":"Check whether the release is ready.","task_name":"worker"}
-07:function_call_output:{"task_name":"/root/worker"}
+07:function_call/collaboration.spawn_agent:{"fork_turns":"none","message":"Check whether the release is ready.","task_name":"worker"}
+08:function_call_output:{"task_name":"/root/worker"}
 -- request 3 (turn) --
-08:message/assistant:
+09:message/assistant:
     I have delegated the release check.
-09:agent_message
+10:agent_message
 
 ## Window 2 (after request 3: input diverged at item 00)
 Settings: same as window 1
@@ -77,9 +78,10 @@ Settings: same as window 1
 04:message/developer:
     <MULTI_AGENT_MODE>
 05:agent_message
+06:configuration_update:reasoning={"effort":"medium"}
 -- request 5 (turn) --
-06:function_call/check_release:{}
-07:function_call_output:All release checks passed.
+07:function_call/check_release:{}
+08:function_call_output:All release checks passed.
 
 Woken parent mailbox:
 [

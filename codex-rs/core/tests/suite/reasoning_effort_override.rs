@@ -47,10 +47,6 @@ fn override_builder() -> TestCodexBuilder {
             model.supports_reasoning_effort_updates = true;
         })
         .with_config(|config| {
-            config
-                .features
-                .enable(Feature::ReasoningEffortOverride)
-                .expect("enable reasoning effort overrides");
             config.model_reasoning_effort = Some(ReasoningEffort::Medium);
         })
 }

@@ -103,18 +103,19 @@ Scenario: Astra continues after new user input yields a running code cell, then 
     </environment_context>
 06:message/user:
     Check the release status.
+07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-07:custom_tool_call/exec:// @exec: {"yield_time_ms": 60000}
+08:custom_tool_call/exec:// @exec: {"yield_time_ms": 60000}
     text(await tools.check_release({}));
-08:custom_tool_call_output:Script running with cell ID <CELL_ID>
+09:custom_tool_call_output:Script running with cell ID <CELL_ID>
     Wall time <DURATION> seconds
     Output:
 
-09:message/user:
+10:message/user:
     Please also highlight the customer impact.
 -- request 3 (turn) --
-10:function_call/functions.wait:{"cell_id":"<CELL_ID>","yield_time_ms":60000}
-11:function_call_output:Script completed
+11:function_call/functions.wait:{"cell_id":"<CELL_ID>","yield_time_ms":60000}
+12:function_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | Release ready

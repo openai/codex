@@ -90,15 +90,16 @@ Scenario: Astra receives host and handler timings on completed and failed code-m
     </environment_context>
 06:message/user:
     Run a code cell, then inspect its timing and a failed wait.
+07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-07:custom_tool_call/exec:text('ready');
-08:custom_tool_call_output:Script completed
+08:custom_tool_call/exec:text('ready');
+09:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds (code-mode <DURATION> seconds; overhead <DURATION> seconds)
     Output:
      | ready
 -- request 3 (turn) --
-09:function_call/functions.wait:{"cell_id":"missing"}
-10:function_call_output:Script failed
+10:function_call/functions.wait:{"cell_id":"missing"}
+11:function_call_output:Script failed
     Wall time <DURATION> seconds (code-mode <DURATION> seconds; overhead <DURATION> seconds)
     Output:
      | Script error:

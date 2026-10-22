@@ -46,15 +46,16 @@ Scenario: Permission discovery preserves legacy output, exposes reply-only acces
     <ENVIRONMENT_CONTEXT>
 06:message/user:
     Check board permissions, try publishing, then ask a question in the existing thread.
+07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (request) --
-07:function_call/collaboration.get_channels:{"query":"legacy"}
-08:function_call_output:{"has_more":false,"n_returned":1,"next_cursor":null,"results":[{"channel_name":"policy","created_at":"20...ot","last_message_id":"<UUID 1>","message_count":1}]} [hash=555caa1996907423]
+08:function_call/collaboration.get_channels:{"query":"legacy"}
+09:function_call_output:{"has_more":false,"n_returned":1,"next_cursor":null,"results":[{"channel_name":"policy","created_at":"20...ot","last_message_id":"<UUID 1>","message_count":1}]} [hash=555caa1996907423]
 -- request 3 (request) --
-09:function_call/collaboration.get_channels:{"query":"policy"}
-10:function_call_output:{"board_permissions":{"create_channel":false,"edit_metadata":false,"manage_permissions":false},"has_more...data":false,"post":false,"read":true,"reply":true}}]} [hash=961b427452007daf]
+10:function_call/collaboration.get_channels:{"query":"policy"}
+11:function_call_output:{"board_permissions":{"create_channel":false,"edit_metadata":false,"manage_permissions":false},"has_more...data":false,"post":false,"read":true,"reply":true}}]} [hash=961b427452007daf]
 -- request 4 (request) --
-11:function_call/collaboration.post:{"channel_name":"policy","text":"New policy."}
-12:function_call_output:{"error":{"action":"channel.post","code":"permission_denied","message":"You can reply, but cannot start ... policy.","resource":"board:example/channel:policy"}} [hash=890040530da635c0]
+12:function_call/collaboration.post:{"channel_name":"policy","text":"New policy."}
+13:function_call_output:{"error":{"action":"channel.post","code":"permission_denied","message":"You can reply, but cannot start ... policy.","resource":"board:example/channel:policy"}} [hash=890040530da635c0]
 -- request 5 (request) --
-13:function_call/collaboration.post:{"text":"A clarification?","thread_id":"<UUID 1>"}
-14:function_call_output:{"author":"/root","channel_name":"policy","created_at":"2026-09-18T12:00:00Z","message_id":"<UUID 2>","thread_id":"<UUID 1>"}
+14:function_call/collaboration.post:{"text":"A clarification?","thread_id":"<UUID 1>"}
+15:function_call_output:{"author":"/root","channel_name":"policy","created_at":"2026-09-18T12:00:00Z","message_id":"<UUID 2>","thread_id":"<UUID 1>"}

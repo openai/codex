@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
-expression: "context_snapshot::format_request_history_snapshot(\"Astra calls list_agents using the selected catalog parameter schema.\",\n&mock.requests(),\n&ContextSnapshotOptions::default().include_request_settings(),)"
+expression: "context_snapshot::format_request_history_snapshot(description,\n&mock.requests(),\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Astra calls list_agents using the selected catalog parameter schema.
 
@@ -100,6 +100,7 @@ Settings:
     </environment_context>
 06:message/user:
     Check which agents are working under /root before delegating more work.
+07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-07:function_call/collaboration.list_agents:{"path_prefix":"/root"}
-08:function_call_output:{"agents":[{"agent_name":"/root","agent_status":"running"}]}
+08:function_call/collaboration.list_agents:{"path_prefix":"/root"}
+09:function_call_output:{"agents":[{"agent_name":"/root","agent_status":"running"}]}

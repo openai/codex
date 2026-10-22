@@ -34,12 +34,13 @@ Scenario: Astra compacts a completed launch-notes turn in the background. The us
     <ENVIRONMENT_CONTEXT>
 06:message/user:
     Draft the launch notes.
+07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (request) --
-07:message/assistant:
+08:message/assistant:
     I drafted the launch notes.
-08:compaction_trigger
+09:compaction_trigger
 
-## Window 2 (after request 2: input diverged at item 08)
+## Window 2 (after request 2: input diverged at item 09)
 -- request 3 (request) --
 00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
         - namespace/functions; hash=fada4a476a3754dd
@@ -69,11 +70,12 @@ Scenario: Astra compacts a completed launch-notes turn in the background. The us
     <ENVIRONMENT_CONTEXT>
 06:message/user:
     Draft the launch notes.
-07:message/assistant:
+07:configuration_update:reasoning={"effort":"low"}
+08:message/assistant:
     I drafted the launch notes.
-08:message/developer:
+09:message/developer:
     <COLLABORATION_MODE>
-09:message/user:
+10:message/user:
     Check who can finish the notes.
 
 ## Window 3 (after request 3: input diverged at item 02)

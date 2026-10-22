@@ -109,13 +109,14 @@ Settings:
     </environment_context>
 07:message/user:
     Prepare the release.
+08:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-08:message/assistant:
+09:message/assistant:
     The release is ready for validation.
-09:message/developer:
+10:message/developer:
     Your context window is nearly exhausted (only 0 tokens remaining) and will be automatically reset for yo... and history items will be persistent across windows. [hash=23016acc05795bc3]
-10:message/user:
+11:message/user:
     Suggest my next message.
 -- request 3 (turn) --
-11:function_call/functions.get_context_remaining:{}
-12:function_call_output:You have 0 tokens left in this context window.
+12:function_call/functions.get_context_remaining:{}
+13:function_call_output:You have 0 tokens left in this context window.

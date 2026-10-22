@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 375
 expression: "context_snapshot::format_context_snapshot(\"Astra uses the catalog question schema to ask who a launch update is for, keeps working, and receives the user's answer in the active turn.\",\n&entries, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: Astra uses the catalog question schema to ask who a launch update is for, keeps working, and receives the user's answer in the active turn.
@@ -35,22 +34,23 @@ Scenario: Astra uses the catalog question schema to ask who a launch update is f
     <ENVIRONMENT_CONTEXT>
 06:message/user:
     Draft a short launch update. Ask me who it is for and keep working while I answer.
+07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (request) --
-07:function_call/functions.request_user_input_async:{"questions":[{"options":["Internal team","Customers"],"title":"Who should receive the launch update?"}]}
-08:function_call_output:{"accepted":true}
+08:function_call/functions.request_user_input_async:{"questions":[{"options":["Internal team","Customers"],"title":"Who should receive the launch update?"}]}
+09:function_call_output:{"accepted":true}
 -- request 3 (request) --
-09:message/assistant:
+10:message/assistant:
     I drafted a short launch update.
-10:message/user:
+11:message/user:
     <send_user_message_question_reply>
     [{"answer":"Customers","question":"Who should receive the launch update?","questionItemId":"[\\"request_user_input_async\\",\\"audience-question\\",0]"}]
     </send_user_message_question_reply>
 -- request 4 (request) --
-11:message/assistant:
+12:message/assistant:
     Here is the launch update for customers.
-12:message/developer:
+13:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-13:message/user:
-    <ENVIRONMENT_CONTEXT>
 14:message/user:
+    <ENVIRONMENT_CONTEXT>
+15:message/user:
     Now give it an email subject.

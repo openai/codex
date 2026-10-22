@@ -122,10 +122,11 @@ Settings:
     </environment_context>
 06:message/user:
     Which workflow skills are available?
+07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (request) --
-07:function_call/skills.list:{"authority":{"kind":"executor"}}
-08:function_call_output:{"next_cursor":null,"skills":[{"authority":{"id":"workspace-skills","kind":"executor"},"description":"Us.../<SKILLS_ROOT>/skills/active-helper"}],"warnings":[]} [hash=b72a3cc66e4d3c51]
-09:message/developer:
+08:function_call/skills.list:{"authority":{"kind":"executor"}}
+09:function_call_output:{"next_cursor":null,"skills":[{"authority":{"id":"workspace-skills","kind":"executor"},"description":"Us.../<SKILLS_ROOT>/skills/active-helper"}],"warnings":[]} [hash=b72a3cc66e4d3c51]
+10:message/developer:
     <skills_instructions>
     ## Skills
     A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that ...locators can be expanded using the skill roots table. [hash=f00d6a4d3e192f06]

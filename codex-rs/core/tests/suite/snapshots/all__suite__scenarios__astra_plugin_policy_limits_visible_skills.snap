@@ -111,3 +111,4 @@ Settings:
     </environment_context>
 06:message/user:
     Plan a team kickoff. Which planning skills are available?
+07:configuration_update:reasoning={"effort":"low"}

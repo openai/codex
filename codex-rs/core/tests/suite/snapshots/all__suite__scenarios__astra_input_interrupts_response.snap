@@ -34,8 +34,9 @@ Scenario: Astra receives new user input after its unfinished response is interru
     <ENVIRONMENT_CONTEXT>
 06:message/user:
     Draft a launch update.
+07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (request) --
-07:message/assistant:
+08:message/assistant:
     I will draft the update.
-08:message/user:
+09:message/user:
     Make it a customer update.
