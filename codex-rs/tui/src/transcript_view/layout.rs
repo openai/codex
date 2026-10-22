@@ -58,6 +58,48 @@ pub(super) fn activity_layout(
     }
 }
 
+fn cell_content_layout(
+    cell: &dyn HistoryCell,
+    width: u16,
+    mode: HistoryRenderMode,
+    presentation: CellPresentation,
+    shortcut: Option<ShortcutHint>,
+) -> TextLayout {
+    let mut layout = if presentation.disclosure {
+        activity_layout(
+            ActivityTranscriptLines {
+                activity: if presentation.expanded {
+                    cell.expanded_hyperlink_lines(width)
+                } else {
+                    cell.compact_hyperlink_lines(width)
+                },
+                auxiliary: Vec::new(),
+                disclosure: cell.activity_disclosure(width),
+            },
+            width,
+            presentation.expanded,
+            shortcut,
+        )
+    } else {
+        TextLayout::new(
+            crate::history_cell::fullscreen_session_lines(cell, width, presentation.detailed, mode),
+            width,
+        )
+    };
+    if let Some(protocol) = presentation.image_protocol
+        && let Some(path) = cell.image_path()
+    {
+        layout.image =
+            crate::transcript_image::TranscriptImage::load(path.as_path(), width, protocol)
+                .map(Arc::new);
+    }
+    layout
+}
+
+fn is_rich_user_prompt(cell: &dyn HistoryCell, mode: HistoryRenderMode) -> bool {
+    mode == HistoryRenderMode::Rich && cell.as_any().is::<crate::history_cell::UserHistoryCell>()
+}
+
 #[derive(Default)]
 pub(super) struct LayoutCache {
     entries: Vec<CachedLayout>,
@@ -86,6 +128,7 @@ struct CachedLayout {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct CellPresentation {
     separated: bool,
+    shares_prompt_background: bool,
     turn_tip_space: bool,
     expanded: bool,
     disclosure: bool,
@@ -94,6 +137,32 @@ pub(super) struct CellPresentation {
 }
 
 impl TranscriptView {
+    fn content_presentation(
+        &mut self,
+        cell: &dyn HistoryCell,
+        full_content: bool,
+        mode: HistoryRenderMode,
+    ) -> CellPresentation {
+        let ids = cell.activity_ids();
+        let disclosure = !self.detailed && mode == HistoryRenderMode::Rich && !ids.is_empty();
+        let manually_expanded = self.disclosure.is_expanded(&ids);
+        let reveal_image = ids.is_empty() || manually_expanded || self.detailed;
+        if manually_expanded {
+            self.disclosure.expanded.extend(ids);
+        }
+        CellPresentation {
+            separated: false,
+            shares_prompt_background: false,
+            turn_tip_space: false,
+            expanded: disclosure && (full_content || manually_expanded),
+            disclosure,
+            detailed: full_content,
+            image_protocol: self
+                .image_protocol
+                .filter(|_| mode == HistoryRenderMode::Rich && reveal_image),
+        }
+    }
+
     pub(super) fn layout(
         &mut self,
         cells: &[Arc<dyn HistoryCell>],
@@ -168,62 +237,47 @@ impl TranscriptView {
             return Some(Arc::new(TextLayout::new(Vec::new(), width)));
         }
         let mode = self.mode;
-        let ids = cell.activity_ids();
-        let disclosure = !self.detailed && mode == HistoryRenderMode::Rich && !ids.is_empty();
-        let manually_expanded = self.disclosure.is_expanded(&ids);
-        let reveal_image = ids.is_empty() || manually_expanded || self.detailed;
-        let expanded = disclosure && (full_content || manually_expanded);
-        if manually_expanded {
-            self.disclosure.expanded.extend(ids);
-        }
-        let separated = index > 0 && !cell.is_stream_continuation();
-        let presentation = CellPresentation {
-            separated,
-            turn_tip_space: self.turn_tip_key == Some(EntryKey::cell(cell)),
-            expanded,
-            disclosure,
-            detailed: full_content,
-            image_protocol: self
-                .image_protocol
-                .filter(|_| mode == HistoryRenderMode::Rich && reveal_image),
-        };
+        let mut presentation = self.content_presentation(cell.as_ref(), full_content, mode);
         let shortcut = self
             .disclosure
             .keymap
             .primary_hint(KeymapContext::Global, "open_transcript");
+        let shares_prompt_background = is_rich_user_prompt(cell.as_ref(), mode)
+            && (0..index)
+                .rev()
+                .find(|&previous| {
+                    let previous = &cells[previous];
+                    let key = EntryKey::cell(previous);
+                    if let Some(layout) = self.search.match_layout(key).or_else(|| {
+                        self.snapshot()
+                            .and_then(|snapshot| snapshot.pinned.get(&key))
+                            .cloned()
+                    }) {
+                        return layout.row_count() > 0;
+                    }
+                    let previous_presentation =
+                        self.content_presentation(previous.as_ref(), self.detailed, mode);
+                    self.cache
+                        .has_visible_content(previous, width, previous_presentation, || {
+                            cell_content_layout(
+                                previous.as_ref(),
+                                width,
+                                mode,
+                                previous_presentation,
+                                shortcut,
+                            )
+                        })
+                })
+                .is_some_and(|previous| is_rich_user_prompt(cells[previous].as_ref(), mode));
+        presentation.separated =
+            index > 0 && !cell.is_stream_continuation() && !shares_prompt_background;
+        presentation.shares_prompt_background = shares_prompt_background;
+        presentation.turn_tip_space = self.turn_tip_key == Some(EntryKey::cell(cell));
         Some(self.cache.get(cell, width, presentation, || {
-            let mut layout = if disclosure {
-                activity_layout(
-                    ActivityTranscriptLines {
-                        activity: if expanded {
-                            cell.expanded_hyperlink_lines(width)
-                        } else {
-                            cell.compact_hyperlink_lines(width)
-                        },
-                        auxiliary: Vec::new(),
-                        disclosure: cell.activity_disclosure(width),
-                    },
-                    width,
-                    expanded,
-                    shortcut,
-                )
-            } else {
-                TextLayout::new(
-                    crate::history_cell::fullscreen_session_lines(
-                        cell.as_ref(),
-                        width,
-                        full_content,
-                        mode,
-                    ),
-                    width,
-                )
-            };
-            if let Some(protocol) = presentation.image_protocol
-                && let Some(path) = cell.image_path()
-            {
-                layout.image =
-                    crate::transcript_image::TranscriptImage::load(path.as_path(), width, protocol)
-                        .map(Arc::new);
+            let mut layout =
+                cell_content_layout(cell.as_ref(), width, mode, presentation, shortcut);
+            if shares_prompt_background {
+                layout = layout.without_leading_blank_row();
             }
             layout
         }))
@@ -292,6 +346,36 @@ impl LayoutCache {
         });
         self.evict();
         layout
+    }
+
+    fn has_visible_content(
+        &mut self,
+        cell: &Arc<dyn HistoryCell>,
+        width: u16,
+        presentation: CellPresentation,
+        render: impl FnOnce() -> TextLayout,
+    ) -> bool {
+        let source = Arc::downgrade(cell);
+        let animation_tick = cell.transcript_animation_tick();
+        if let Some(index) = self.entries.iter().position(|entry| {
+            entry.width == width
+                && entry.presentation.expanded == presentation.expanded
+                && entry.presentation.disclosure == presentation.disclosure
+                && entry.presentation.detailed == presentation.detailed
+                && entry.presentation.image_protocol == presentation.image_protocol
+                && entry.source.ptr_eq(&source)
+                && (entry.rendered_frame == self.frame
+                    || (cell.has_stable_transcript_height()
+                        && entry.animation_tick == animation_tick))
+        }) {
+            let visible = self.entries[index].layout.row_count() > 0;
+            if index + 1 != self.entries.len() {
+                let entry = self.entries.remove(index);
+                self.entries.push(entry);
+            }
+            return visible;
+        }
+        self.get(cell, width, presentation, render).row_count() > 0
     }
 
     pub(super) fn clear(&mut self) {

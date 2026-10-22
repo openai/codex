@@ -1,16 +1,15 @@
 ---
 source: tui/src/app/tests.rs
-assertion_line: 8342
 expression: transcript
 ---
+  /init - create an AGENTS.md file with instructions for Codex
+  /status - show current session configuration
   /permissions - choose what Codex is allowed to do
   /model - choose what model and reasoning effort to use
   /review - review any changes and find issues
 
 
 › retained prompt
-
-
 
   [Image #1]
   [Image #2]

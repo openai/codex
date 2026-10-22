@@ -6,9 +6,9 @@ expression: buffer_text(&buffer)
 
 › first
 
-
-
 › second
+
+
 
 ⌃space select
  ↑/↓ to scroll · pgup/pgdn to page · home/end to jump

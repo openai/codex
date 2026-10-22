@@ -31,6 +31,87 @@ fn finish_scan(view: &mut TranscriptView, cells: &[Arc<dyn HistoryCell>]) {
 }
 
 #[test]
+fn search_match_separates_user_prompts_only_while_visible() {
+    use crate::history_cell::ReasoningSummaryCell;
+    use crate::history_cell::new_user_prompt;
+    use std::path::Path;
+
+    crate::terminal_palette::with_test_default_colors(
+        crate::terminal_probe::DefaultColors {
+            fg: (235, 235, 235),
+            bg: (18, 20, 30),
+        },
+        || {
+            let prompt = |text| {
+                Arc::new(new_user_prompt(text, Vec::new(), Vec::new(), Vec::new()))
+                    as Arc<dyn HistoryCell>
+            };
+            let cells: Vec<Arc<dyn HistoryCell>> = vec![
+                prompt("first".into()),
+                Arc::new(ReasoningSummaryCell::new(
+                    "Reasoning".into(),
+                    "needle detail".into(),
+                    Path::new("."),
+                    /*transcript_only*/ true,
+                )),
+                prompt("needle second".into()),
+            ];
+            let area = Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 30, /*height*/ 12,
+            );
+            let mut view = TranscriptView::default();
+            view.render(area, &mut Buffer::empty(area), &cells);
+            view.begin_search();
+            view.paste_search("needle");
+            finish_scan(&mut view, &cells);
+            assert_eq!(view.search.current.as_ref().unwrap().anchor.index, 2);
+
+            view.handle_key(
+                KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+                &cells,
+            );
+            finish_scan(&mut view, &cells);
+            assert_eq!(view.search.current.as_ref().unwrap().anchor.index, 1);
+            assert!(view.current_layout(&cells, /*index*/ 2).unwrap().separated);
+
+            view.handle_key(
+                KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+                &cells,
+            );
+            finish_scan(&mut view, &cells);
+            assert_eq!(view.search.current.as_ref().unwrap().anchor.index, 2);
+            let mut buffer = Buffer::empty(area);
+            view.render(area, &mut buffer, &cells);
+            let rendered = crate::transcript_view::tests::text(&buffer);
+            let rows = rendered.lines().collect::<Vec<_>>();
+            let first = rows.iter().position(|row| row.contains("› first")).unwrap();
+            let second = rows
+                .iter()
+                .position(|row| row.contains("› needle second"))
+                .unwrap();
+            let background = buffer[(area.width - 1, first as u16)].bg;
+            assert_ne!(background, ratatui::style::Color::Reset);
+            let joined = (first..=second)
+                .map(|row| {
+                    let marker = if buffer[(area.width - 1, row as u16)].bg == background {
+                        '#'
+                    } else {
+                        '.'
+                    };
+                    format!("{marker}|{}|", rows[row])
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            insta::assert_snapshot!(joined, @r"
+            #|› first|
+            #||
+            #|› needle second|
+            ");
+        },
+    );
+}
+
+#[test]
 fn find_keeps_context_and_allows_reading_without_losing_the_query() {
     let cells = vec![
         cell("earlier needle"),
