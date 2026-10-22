@@ -66,6 +66,11 @@ impl ManagedMitmCa {
         Ok(ca)
     }
 
+    #[cfg(test)]
+    pub(super) fn for_test(proxy_dir: &Path) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self::create(proxy_dir)?))
+    }
+
     fn create(proxy_dir: &Path) -> Result<Self> {
         fs::create_dir_all(proxy_dir)
             .with_context(|| format!("failed to create {}", proxy_dir.display()))?;
