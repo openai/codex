@@ -616,6 +616,25 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(async move { model_context::load_latest_model_context(self, params).await })
     }
 
+    fn is_model_context_current(
+        &self,
+        params: LoadThreadHistoryParams,
+        revision: String,
+    ) -> ThreadStoreFuture<'_, bool> {
+        Box::pin(async move {
+            let resolved = if params.include_archived {
+                thread_rollout_resolver::resolve_current_including_archived(self, params.thread_id)
+                    .await?
+            } else {
+                thread_rollout_resolver::resolve_current(self, params.thread_id).await?
+            };
+            let Some(resolved) = resolved else {
+                return Ok(false);
+            };
+            Ok(history_revision::read(&resolved.path).await.as_ref() == Some(&revision))
+        })
+    }
+
     fn prepare_fork(&self, params: PrepareForkParams) -> ThreadStoreFuture<'_, PreparedFork> {
         Box::pin(async move { paginated_fork::prepare(self, params).await })
     }

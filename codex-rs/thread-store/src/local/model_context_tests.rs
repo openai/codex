@@ -34,6 +34,62 @@ use crate::local::test_support::test_config;
 use crate::local::test_support::write_session_file_with_history_mode;
 
 #[tokio::test]
+async fn model_context_revision_invalidates_after_append_or_removal() {
+    let home = TempDir::new().expect("temp dir");
+    let uuid = Uuid::from_u128(/*v*/ 1009);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let path = write_paginated_rollout(
+        home.path(),
+        "2025-01-03T13-00-08",
+        uuid,
+        [user_message("saved message")],
+    );
+    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let params = LoadThreadHistoryParams {
+        thread_id,
+        include_archived: false,
+    };
+    let context = store
+        .load_latest_model_context(params.clone())
+        .await
+        .expect("load model context");
+    let revision = context.revision.expect("stable history revision");
+    assert!(
+        store
+            .is_model_context_current(params.clone(), revision.clone())
+            .await
+            .expect("validate unchanged context")
+    );
+
+    let new_item = user_message("message appended during configuration loading");
+    append_items(&path, [new_item.clone()]);
+    assert!(
+        !store
+            .is_model_context_current(params.clone(), revision.clone())
+            .await
+            .expect("invalidate stale context")
+    );
+    let updated = store
+        .load_latest_model_context(params.clone())
+        .await
+        .expect("load updated model context");
+    let mut expected = context.items;
+    expected.push(new_item);
+    assert_eq!(
+        serde_json::to_value(updated.items).expect("serialize updated context"),
+        serde_json::to_value(expected).expect("serialize expected context")
+    );
+
+    std::fs::remove_file(path).expect("remove rollout");
+    assert!(
+        !store
+            .is_model_context_current(params, revision)
+            .await
+            .expect("invalidate removed context")
+    );
+}
+
+#[tokio::test]
 async fn stops_at_newest_usable_compaction_and_keeps_companions() {
     let home = TempDir::new().expect("temp dir");
     let uuid = Uuid::from_u128(/*v*/ 1001);

@@ -268,6 +268,19 @@ pub trait ThreadStore: Any + Send + Sync {
         })
     }
 
+    /// Checks whether a previously loaded model context still represents the stored history.
+    ///
+    /// Stores that cannot validate the opaque revision must return false. A false result or an
+    /// error requires a fresh read. This does not acquire writer ownership;
+    /// [`Self::resume_thread`] must still validate the snapshot after acquisition.
+    fn is_model_context_current(
+        &self,
+        _params: LoadThreadHistoryParams,
+        _revision: String,
+    ) -> ThreadStoreFuture<'_, bool> {
+        Box::pin(async { Ok(false) })
+    }
+
     /// Freezes source history and model context used to initialize a referenced fork.
     ///
     /// Stores without reference-backed fork support can retain this default implementation.

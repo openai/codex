@@ -13,6 +13,7 @@ use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
+use app_test_support::create_fake_paginated_rollout;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::rollout_path;
@@ -78,6 +79,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_rollout::RolloutItem;
 use codex_rollout::RolloutRecorder;
@@ -765,6 +767,7 @@ async fn metadata_and_mcp_requests_complete_while_unrelated_resume_loads_config(
 
 #[derive(Clone, Copy)]
 enum ResumeMutation {
+    Unchanged,
     GitMetadata,
     ProjectDeletion,
     Archive,
@@ -772,20 +775,40 @@ enum ResumeMutation {
     DuplicateResume,
 }
 
-#[test_case(ResumeMutation::GitMetadata; "git_metadata_and_project_assignment")]
-#[test_case(ResumeMutation::ProjectDeletion; "project_deletion")]
-#[test_case(ResumeMutation::Archive; "archive")]
-#[test_case(ResumeMutation::Delete; "delete")]
-#[test_case(ResumeMutation::DuplicateResume; "duplicate_resume")]
+#[test_case(ResumeMutation::GitMetadata, ThreadHistoryMode::Legacy; "git_metadata_and_project_assignment")]
+#[test_case(ResumeMutation::ProjectDeletion, ThreadHistoryMode::Legacy; "project_deletion")]
+#[test_case(ResumeMutation::Archive, ThreadHistoryMode::Legacy; "archive")]
+#[test_case(ResumeMutation::Delete, ThreadHistoryMode::Legacy; "delete")]
+#[test_case(ResumeMutation::DuplicateResume, ThreadHistoryMode::Legacy; "duplicate_resume")]
+#[test_case(ResumeMutation::Unchanged, ThreadHistoryMode::Paginated; "unchanged_paginated_history")]
+#[test_case(ResumeMutation::GitMetadata, ThreadHistoryMode::Paginated; "paginated_git_metadata")]
+#[test_case(ResumeMutation::ProjectDeletion, ThreadHistoryMode::Paginated; "paginated_project_deletion")]
+#[test_case(ResumeMutation::Archive, ThreadHistoryMode::Paginated; "paginated_archive")]
+#[test_case(ResumeMutation::Delete, ThreadHistoryMode::Paginated; "paginated_delete")]
+#[test_case(ResumeMutation::DuplicateResume, ThreadHistoryMode::Paginated; "paginated_duplicate_resume")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_revalidates_persisted_thread_after_config_load(
     mutation: ResumeMutation,
+    history_mode: ThreadHistoryMode,
 ) -> Result<()> {
-    let responses_server = create_mock_responses_server_repeating_assistant("Ready").await;
+    let responses_server = responses::start_mock_server().await;
+    let model_requests = responses::mount_sse_once(
+        &responses_server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "Ready"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&responses_server.uri()).write(codex_home.path())?;
     let filename_timestamp = "2025-01-05T12-00-00";
-    let thread_id = create_fake_rollout(
+    let create_rollout = match history_mode {
+        ThreadHistoryMode::Legacy => create_fake_rollout,
+        ThreadHistoryMode::Paginated => create_fake_paginated_rollout,
+    };
+    let thread_id = create_rollout(
         codex_home.path(),
         filename_timestamp,
         "2025-01-05T12:00:00Z",
@@ -854,11 +877,19 @@ async fn resume_revalidates_persisted_thread_after_config_load(
             thread_id: "resume-by-path".to_string(),
             path: Some(path.canonicalize()?),
             cwd: Some(resume_cwd.path().to_string_lossy().into_owned()),
+            exclude_turns: matches!(history_mode, ThreadHistoryMode::Paginated),
             ..Default::default()
         },
     }));
     let mut early_resume = poll!(&mut resume);
     let mutation_request = match mutation {
+        ResumeMutation::Unchanged => ClientRequest::ThreadRead {
+            request_id: RequestId::Integer(2),
+            params: ThreadReadParams {
+                thread_id: thread_id.clone(),
+                include_turns: false,
+            },
+        },
         ResumeMutation::GitMetadata => ClientRequest::ThreadMetadataUpdate {
             request_id: RequestId::Integer(2),
             params: ThreadMetadataUpdateParams {
@@ -895,6 +926,7 @@ async fn resume_revalidates_persisted_thread_after_config_load(
             params: ThreadResumeParams {
                 thread_id: thread_id.clone(),
                 cwd: Some(resume_cwd.path().to_string_lossy().into_owned()),
+                exclude_turns: matches!(history_mode, ThreadHistoryMode::Paginated),
                 ..Default::default()
             },
         },
@@ -920,7 +952,9 @@ async fn resume_revalidates_persisted_thread_after_config_load(
     };
     let resume_config_loads = blocked_resume.matching_loads.load(Ordering::Relaxed);
     let turn_result = match mutation {
-        ResumeMutation::GitMetadata | ResumeMutation::ProjectDeletion => {
+        ResumeMutation::Unchanged
+        | ResumeMutation::GitMetadata
+        | ResumeMutation::ProjectDeletion => {
             complete_in_process_turn(&mut client, RequestId::Integer(3), &thread_id).await
         }
         ResumeMutation::Archive | ResumeMutation::Delete | ResumeMutation::DuplicateResume => {
@@ -947,7 +981,8 @@ async fn resume_revalidates_persisted_thread_after_config_load(
         ThreadLoadedListResponse {
             data: match mutation {
                 ResumeMutation::Archive | ResumeMutation::Delete => Vec::new(),
-                ResumeMutation::GitMetadata
+                ResumeMutation::Unchanged
+                | ResumeMutation::GitMetadata
                 | ResumeMutation::ProjectDeletion
                 | ResumeMutation::DuplicateResume => vec![thread_id.clone()],
             },
@@ -955,7 +990,9 @@ async fn resume_revalidates_persisted_thread_after_config_load(
         }
     );
     match mutation {
-        ResumeMutation::GitMetadata | ResumeMutation::ProjectDeletion => {
+        ResumeMutation::Unchanged
+        | ResumeMutation::GitMetadata
+        | ResumeMutation::ProjectDeletion => {
             let resumed: ThreadResumeResponse =
                 serde_json::from_value(resumed.expect("resume updated thread"))?;
             let expected_git_info =
@@ -973,11 +1010,23 @@ async fn resume_revalidates_persisted_thread_after_config_load(
                 (resumed.thread.git_info, resumed.thread.project_id),
                 (expected_git_info.clone(), expected_project_id.clone())
             );
-            assert!(
-                resume_config_loads >= 2,
-                "changed persisted metadata must reload config"
-            );
+            if matches!(mutation, ResumeMutation::Unchanged) {
+                assert_eq!(resume_config_loads, 1);
+            } else {
+                assert!(
+                    resume_config_loads >= 2,
+                    "changed persisted metadata must reload config"
+                );
+            }
             turn_result?;
+            assert!(
+                model_requests
+                    .single_request()
+                    .message_input_texts("user")
+                    .iter()
+                    .any(|text| text == "Saved user message"),
+                "resumed model context must retain the saved user message"
+            );
 
             // Check persisted metadata after the resumed writer appends a turn
             // and shuts down; an in-memory response alone can hide stale writes.
@@ -1033,13 +1082,21 @@ async fn resume_revalidates_persisted_thread_after_config_load(
     Ok(())
 }
 
+#[test_case(ThreadHistoryMode::Legacy; "legacy")]
+#[test_case(ThreadHistoryMode::Paginated; "paginated")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resume_reloads_config_when_saved_workspace_roots_change() -> Result<()> {
+async fn resume_reloads_config_when_saved_workspace_roots_change(
+    history_mode: ThreadHistoryMode,
+) -> Result<()> {
     let responses_server = create_mock_responses_server_repeating_assistant("Ready").await;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&responses_server.uri()).write(codex_home.path())?;
     let filename_timestamp = "2025-01-05T12-00-00";
-    let thread_id = create_fake_rollout(
+    let create_rollout = match history_mode {
+        ThreadHistoryMode::Legacy => create_fake_rollout,
+        ThreadHistoryMode::Paginated => create_fake_paginated_rollout,
+    };
+    let thread_id = create_rollout(
         codex_home.path(),
         filename_timestamp,
         "2025-01-05T12:00:00Z",
@@ -1085,6 +1142,7 @@ async fn resume_reloads_config_when_saved_workspace_roots_change() -> Result<()>
         params: ThreadResumeParams {
             thread_id: thread_id.clone(),
             cwd: Some(cwd.to_string_lossy().into_owned()),
+            exclude_turns: matches!(history_mode, ThreadHistoryMode::Paginated),
             ..Default::default()
         },
     }));

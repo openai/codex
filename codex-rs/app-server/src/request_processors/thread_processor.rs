@@ -110,6 +110,7 @@ struct ResumeConfigState {
 struct PreparedResumeConfig {
     state: ResumeConfigState,
     config: Config,
+    model_context: Option<ResumedHistory>,
 }
 
 struct ThreadRevertRuntimeSnapshot {
@@ -2427,7 +2428,10 @@ impl ThreadRequestProcessor {
             )
             .await?;
         let (thread_history, resume_source_thread) = self
-            .load_resume_initial_history_from_stored_thread(stored_thread)
+            .load_resume_initial_history_from_stored_thread(
+                stored_thread,
+                /*prepared_model_context*/ None,
+            )
             .await?;
         let response_history = thread_history.clone();
         let NewThread {
@@ -3986,14 +3990,20 @@ impl ThreadRequestProcessor {
         } = params.clone();
         let include_turns = !exclude_turns;
 
+        let prepared_model_context = prepared_config
+            .as_mut()
+            .and_then(|prepared| prepared.model_context.take());
         let resume_result = if let Some(history) = history {
             self.resume_thread_from_history(history.as_slice())
                 .await
                 .map(|thread_history| (thread_history, None))
         } else if let Some(stored_thread) = stored_thread_from_running_probe {
-            self.load_resume_initial_history_from_stored_thread(*stored_thread)
-                .await
-                .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread)))
+            self.load_resume_initial_history_from_stored_thread(
+                *stored_thread,
+                prepared_model_context,
+            )
+            .await
+            .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread)))
         } else {
             match self
                 .read_stored_thread_for_resume(
@@ -4004,7 +4014,10 @@ impl ThreadRequestProcessor {
                 .await
             {
                 Ok(stored_thread) => self
-                    .load_resume_initial_history_from_stored_thread(stored_thread)
+                    .load_resume_initial_history_from_stored_thread(
+                        stored_thread,
+                        prepared_model_context,
+                    )
                     .await
                     .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread))),
                 Err(error) => Err(error),
@@ -4261,6 +4274,13 @@ impl ThreadRequestProcessor {
                 *prepared_config = Some(PreparedResumeConfig {
                     state: config_state,
                     config,
+                    model_context: if paginated_resume
+                        && let InitialHistory::Resumed(history) = thread_history
+                    {
+                        Some(history)
+                    } else {
+                        None
+                    },
                 });
                 // Recheck the thread and history after a possible archive, delete, or aliased resume.
                 return Ok(ControlFlow::Continue(()));
@@ -4893,8 +4913,27 @@ impl ThreadRequestProcessor {
     async fn load_resume_initial_history_from_stored_thread(
         &self,
         stored_thread: StoredThread,
+        prepared_model_context: Option<ResumedHistory>,
     ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
         if matches!(stored_thread.history_mode, ThreadHistoryMode::Paginated) {
+            if let Some(context) = prepared_model_context
+                && context.conversation_id == stored_thread.thread_id
+                && context.rollout_path == stored_thread.rollout_path
+                && let Some(revision) = context.history_revision.as_ref()
+                && self
+                    .thread_store
+                    .is_model_context_current(
+                        StoreLoadThreadHistoryParams {
+                            thread_id: stored_thread.thread_id,
+                            include_archived: true,
+                        },
+                        revision.clone(),
+                    )
+                    .await
+                    .unwrap_or(false)
+            {
+                return Ok((InitialHistory::Resumed(context), stored_thread));
+            }
             let model_context = self
                 .thread_store
                 .load_latest_model_context(StoreLoadThreadHistoryParams {
@@ -4912,6 +4951,7 @@ impl ThreadRequestProcessor {
             return Ok((history, stored_thread));
         }
 
+        drop(prepared_model_context);
         let thread_id = stored_thread.thread_id.to_string();
         let rollout_path = stored_thread.rollout_path.clone();
         let mut stored_thread = self
