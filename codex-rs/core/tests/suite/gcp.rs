@@ -44,8 +44,7 @@ async fn vertex_requests_use_command_auth_with_namespaces_and_tool_search() -> R
         ]),
     )
     .await;
-    let auth_fixture =
-        ProviderAuthCommandFixture::new(&["vertex-access-token", "vertex-access-token"])?;
+    let auth_fixture = ProviderAuthCommandFixture::fixed_token("vertex-access-token")?;
     let mut provider = ModelProviderInfo::create_gcp_provider();
     provider.base_url = Some(format!(
         "{}/v1/projects/example-project/locations/global/publishers/openai/v1",
@@ -305,8 +304,7 @@ async fn vertex_guardian_requests_use_luna() -> Result<()> {
         ],
     )
     .await;
-    let auth_fixture =
-        ProviderAuthCommandFixture::new(&["vertex-access-token", "vertex-access-token"])?;
+    let auth_fixture = ProviderAuthCommandFixture::fixed_token("vertex-access-token")?;
     let mut provider = ModelProviderInfo::create_gcp_provider();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     provider.auth = Some(auth_fixture.auth());

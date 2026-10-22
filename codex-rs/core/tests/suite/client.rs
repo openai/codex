@@ -878,6 +878,22 @@ pub(super) struct ProviderAuthCommandFixture {
 }
 
 impl ProviderAuthCommandFixture {
+    /// Each thread can resolve credentials independently, including at the same time.
+    pub(super) fn fixed_token(token: &str) -> std::io::Result<Self> {
+        let tempdir = tempfile::tempdir()?;
+        std::fs::write(tempdir.path().join("token.txt"), token)?;
+        let (command, args): (&str, &[&str]) = if cfg!(windows) {
+            ("cmd.exe", &["/D", "/C", "type", "token.txt"])
+        } else {
+            ("cat", &["token.txt"])
+        };
+        Ok(Self {
+            tempdir,
+            command: command.to_owned(),
+            args: args.iter().copied().map(str::to_owned).collect(),
+        })
+    }
+
     pub(super) fn new(tokens: &[&str]) -> std::io::Result<Self> {
         let tempdir = tempfile::tempdir()?;
         let tokens_file = tempdir.path().join("tokens.txt");
