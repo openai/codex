@@ -2563,8 +2563,15 @@ requires_openai_auth = {requires_openai_auth}
 
         for (label, config_toml, login_status, target, expected) in [
             (
-                "disabled by default",
+                "enabled by default",
                 "",
+                LoginStatus::NotAuthenticated,
+                AppServerTarget::Embedded,
+                true,
+            ),
+            (
+                "explicitly disabled",
+                "[features]\nbedrock_setup_wizard = false\n",
                 LoginStatus::NotAuthenticated,
                 AppServerTarget::Embedded,
                 false,
