@@ -6,10 +6,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rmcp::RoleClient;
-use rmcp::model::CallToolRequest;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
-use rmcp::model::ClientRequest;
 use rmcp::model::DEFAULT_MRTR_MAX_ROUNDS;
 use rmcp::model::GetExtensions;
 use rmcp::model::GetMeta;
@@ -43,17 +41,11 @@ pub(crate) async fn call_tool(
     let mut state_only_rounds = 0;
     let mut submitted_verification_proof = false;
     for round in 0..DEFAULT_MRTR_MAX_ROUNDS {
-        let response = async {
-            let handle = service
-                .peer()
-                .send_request_with_option(
-                    ClientRequest::CallToolRequest(CallToolRequest::new(params.clone())),
-                    PeerRequestOptions::no_options(),
-                )
-                .await?;
-            let id = handle.id.clone();
-            Ok::<_, ServiceError>((id, handle.await_response().await?))
-        }
+        let response = crate::tool_request::call_tool(
+            service.peer(),
+            params.clone(),
+            PeerRequestOptions::no_options(),
+        )
         .await;
         let (id, result) = response.map_err(|error| {
             if submitted_verification_proof

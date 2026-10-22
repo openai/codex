@@ -1,4 +1,4 @@
-//! Ensures MCP cancellation releases pending elicitation routes and tool timeout pauses.
+//! Ensures MCP cancellation stops remote tool work and releases pending elicitation routes.
 
 use super::ElicitationClientService;
 use super::ElicitationPauseState;
@@ -11,21 +11,24 @@ use pretty_assertions::assert_eq;
 use rmcp::RoleServer;
 use rmcp::ServerHandler;
 use rmcp::ServiceExt;
+use rmcp::model::CallToolResult;
 use rmcp::model::CancelledNotification;
 use rmcp::model::CancelledNotificationParam;
 use rmcp::model::ClientConfig;
 use rmcp::model::ClientJsonRpcMessage;
+use rmcp::model::ClientNotification;
+use rmcp::model::ClientRequest;
 use rmcp::model::CustomRequest;
 use rmcp::model::ElicitationAction;
+use rmcp::model::InitializeResult;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::RequestId;
 use rmcp::model::ServerJsonRpcMessage;
 use rmcp::model::ServerNotification;
 use rmcp::model::ServerRequest;
+use rmcp::model::ServerResult;
 use rmcp::service::PeerRequestOptions;
 use rmcp::service::QuitReason;
-use rmcp::service::RunningService;
-use rmcp::service::ServerInitializeError;
 use rmcp::service::serve_directly;
 use rmcp::transport::IntoTransport;
 use rmcp::transport::Transport;
@@ -42,9 +45,7 @@ struct ElicitationTestServer;
 impl ServerHandler for ElicitationTestServer {}
 
 struct ElicitationTestTransport {
-    servers: mpsc::UnboundedSender<
-        Result<RunningService<RoleServer, ElicitationTestServer>, ServerInitializeError>,
-    >,
+    servers: mpsc::UnboundedSender<tokio::io::DuplexStream>,
 }
 
 impl InProcessTransportFactory for ElicitationTestTransport {
@@ -52,12 +53,100 @@ impl InProcessTransportFactory for ElicitationTestTransport {
         let servers = self.servers.clone();
         Box::pin(async move {
             let (client, server) = tokio::io::duplex(/*max_buf_size*/ 4096);
-            tokio::spawn(async move {
-                let _ = servers.send(ElicitationTestServer.serve(server).await);
-            });
+            servers.send(server).map_err(std::io::Error::other)?;
             Ok(client)
         })
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn dropping_tool_call_cancels_remote_request() -> anyhow::Result<()> {
+    // Run on the sole worker so independently spawned sends can be polled in reverse order.
+    tokio::spawn(async {
+        let (servers, mut server_rx) = mpsc::unbounded_channel();
+        let client = RmcpClient::new_in_process_client(Arc::new(ElicitationTestTransport { servers }))
+            .await?;
+        let mut server = IntoTransport::<RoleServer, _, _>::into_transport(server_rx.recv().await.unwrap());
+        let mut initialize = Box::pin(client.initialize(
+            ClientConfig::default().with_protocol_version(ProtocolVersion::V_2025_06_18),
+            Some(Duration::from_secs(5)),
+            Box::new(|_, _| Box::pin(async { anyhow::bail!("unexpected elicitation") })),
+        ));
+        let request = tokio::select! {
+            result = &mut initialize => panic!("client initialized before handshake: {result:?}"),
+            request = timeout(Duration::from_secs(5), server.receive()) => request?,
+        };
+        let Some(ClientJsonRpcMessage::Request(request)) = request else {
+            anyhow::bail!("expected initialize request");
+        };
+        assert!(matches!(request.request, ClientRequest::InitializeRequest(_)));
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::InitializeResult(
+                    InitializeResult::default().with_protocol_version(ProtocolVersion::V_2025_06_18),
+                ),
+                request.id,
+            ))
+            .await?;
+        timeout(Duration::from_secs(5), initialize).await??;
+        let initialized = timeout(Duration::from_secs(5), server.receive()).await?;
+        assert!(matches!(
+            initialized,
+            Some(ClientJsonRpcMessage::Notification(notification))
+                if matches!(notification.notification, ClientNotification::InitializedNotification(_))
+        ));
+
+        let mut call = Box::pin(client.call_tool(
+            "wait".into(),
+            /*arguments*/ None,
+            /*meta*/ None,
+            /*timeout*/ None,
+        ));
+        // Drop before yielding to the transport's independently scheduled send tasks.
+        assert!(futures::poll!(call.as_mut()).is_pending());
+        drop(call);
+        let request = timeout(Duration::from_secs(5), server.receive()).await?;
+        let Some(ClientJsonRpcMessage::Request(request)) = request else {
+            anyhow::bail!("expected tool call before cancellation");
+        };
+        assert!(matches!(request.request, ClientRequest::CallToolRequest(_)));
+        let notification = timeout(Duration::from_secs(1), server.receive())
+            .await
+            .map_err(|_| anyhow::anyhow!("dropping the call did not cancel the server request"))?;
+        let Some(ClientJsonRpcMessage::Notification(notification)) = notification else {
+            anyhow::bail!("expected cancellation notification");
+        };
+        let ClientNotification::CancelledNotification(cancelled) = notification.notification else {
+            anyhow::bail!("expected cancellation notification");
+        };
+        assert_eq!(cancelled.params.request_id, Some(request.id));
+
+        // Cancellation applies to this request, not the shared MCP connection.
+        let mut next = Box::pin(client.call_tool(
+            "next".into(),
+            /*arguments*/ None,
+            /*meta*/ None,
+            /*timeout*/ None,
+        ));
+        let request = tokio::select! {
+            result = &mut next => panic!("tool completed before response: {result:?}"),
+            request = timeout(Duration::from_secs(5), server.receive()) => request?,
+        };
+        let Some(ClientJsonRpcMessage::Request(request)) = request else {
+            anyhow::bail!("expected next tool call");
+        };
+        let result = CallToolResult::success(Vec::new());
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::CallToolResult(result.clone()),
+                request.id,
+            ))
+            .await?;
+        assert_eq!(timeout(Duration::from_secs(5), next).await??, result);
+        client.shutdown().await;
+        Ok(())
+    })
+    .await?
 }
 
 #[traced_test]
@@ -77,7 +166,13 @@ async fn recovered_connections_accept_elicitations_with_previously_cancelled_ids
             "elicitationId": "authorization",
         }),
     ] {
-        let (servers, mut server_rx) = mpsc::unbounded_channel();
+        let (servers, mut transport_rx) = mpsc::unbounded_channel();
+        let (ready_tx, mut server_rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(server) = transport_rx.recv().await {
+                let _ = ready_tx.send(ElicitationTestServer.serve(server).await);
+            }
+        });
         let client =
             RmcpClient::new_in_process_client(Arc::new(ElicitationTestTransport { servers }))
                 .await?;

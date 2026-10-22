@@ -60,6 +60,7 @@ use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
 use rmcp::service::ServiceError;
 use rmcp::transport::AuthorizationManager;
+use rmcp::transport::IntoTransport;
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::auth::AuthClient;
 use rmcp::transport::auth::AuthError;
@@ -94,6 +95,7 @@ use crate::oauth::validate_refresh_token_issuer;
 use crate::oauth_client_credentials::OAuthClientCredentials;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::oauth_refresh_mode::McpOAuthRefreshMode;
+use crate::ordered_byte_transport::OrderedByteTransport;
 use crate::protocol_mode::McpProtocolMode;
 use crate::startup_error::is_authentication_required_error;
 use crate::stdio_server_launcher::StdioServerCommand;
@@ -895,17 +897,9 @@ impl RmcpClient {
                     }
                     let mut options = rmcp::service::PeerRequestOptions::no_options();
                     options.meta = meta;
-                    let result = service
-                        .peer()
-                        .send_request_with_option(
-                            ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(
-                                rmcp_params,
-                            )),
-                            options,
-                        )
-                        .await?
-                        .await_response()
-                        .await?;
+                    let (_, result) =
+                        crate::tool_request::call_tool(service.peer(), rmcp_params, options)
+                            .await?;
                     match result {
                         ServerResult::CallToolResult(result) => Ok(result),
                         _ => Err(rmcp::service::ServiceError::UnexpectedResponse),
@@ -1329,7 +1323,12 @@ impl RmcpClient {
             PendingTransport::InProcess { transport } => (
                 client_service
                     .serve_with_lifecycle(
-                        track_tool_list_changes(transport, Arc::clone(&self.tool_list_revision)),
+                        track_tool_list_changes(
+                            OrderedByteTransport::new(
+                                IntoTransport::<RoleClient, _, _>::into_transport(transport),
+                            ),
+                            Arc::clone(&self.tool_list_revision),
+                        ),
                         lifecycle,
                     )
                     .boxed(),
@@ -1338,7 +1337,10 @@ impl RmcpClient {
             PendingTransport::Stdio { transport } => (
                 client_service
                     .serve_with_lifecycle(
-                        track_tool_list_changes(*transport, Arc::clone(&self.tool_list_revision)),
+                        track_tool_list_changes(
+                            OrderedByteTransport::new(*transport),
+                            Arc::clone(&self.tool_list_revision),
+                        ),
                         lifecycle,
                     )
                     .boxed(),
