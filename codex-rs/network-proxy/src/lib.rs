@@ -107,6 +107,7 @@ pub use proxy::is_managed_proxy_env_var;
 pub use proxy::proxy_url_env_value;
 pub use proxy::strip_managed_proxy_env;
 pub use remote_config::RemoteCredentialBrokerCache;
+pub use remote_config::RemoteCredentialMasking;
 pub use remote_config::RemoteNetworkProxyConfig;
 pub use remote_config::RemoteNetworkProxyLaunchConfig;
 pub use request_cancellation::NetworkRequestCancellation;

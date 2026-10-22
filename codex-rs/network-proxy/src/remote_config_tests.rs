@@ -12,6 +12,7 @@ use crate::NetworkProxyAuditMetadata;
 use crate::NetworkProxyConfig;
 use crate::NetworkProxyState;
 use crate::Platform;
+use crate::RemoteCredentialMasking;
 use std::sync::Arc;
 
 #[test]
@@ -47,13 +48,14 @@ fn optional_socket_policy_preserves_input_and_resolves_at_remote_boundary() {
 
 #[tokio::test]
 async fn round_trip_preserves_supported_effective_settings() {
-    for (executor_os, socket, credential_masking) in [
-        (Platform::Linux, "/var/run/example.sock", false),
-        (Platform::Linux, "/var/run/example.sock", true),
-        (Platform::Macos, "/var/run/example.sock", false),
-        (Platform::Macos, "/var/run/example.sock", true),
-        (Platform::Windows, r"C:\example.sock", false),
-        (Platform::Unknown, r"C:\example.sock", false),
+    for (executor_os, socket, credential_masking, configured_provider) in [
+        (Platform::Linux, "/var/run/example.sock", false, false),
+        (Platform::Linux, "/var/run/example.sock", true, false),
+        (Platform::Linux, "/var/run/example.sock", true, true),
+        (Platform::Macos, "/var/run/example.sock", false, false),
+        (Platform::Macos, "/var/run/example.sock", true, true),
+        (Platform::Windows, r"C:\example.sock", false, false),
+        (Platform::Unknown, r"C:\example.sock", false, false),
     ] {
         let mut config = NetworkProxyConfig {
             enabled: true,
@@ -65,14 +67,67 @@ async fn round_trip_preserves_supported_effective_settings() {
             allow_local_binding: Some(true),
             ..NetworkProxyConfig::default()
         };
-        config.set_allowed_domains(vec!["example.com".into()]);
+        // Domain permissions serialize as a sorted map.
         config.set_denied_domains(vec!["blocked.example.com".into()]);
+        config.set_allowed_domains(vec!["example.com".into()]);
         config.set_allow_unix_sockets(vec![socket.into()]);
 
         let mut remote = RemoteNetworkProxyConfig::from_effective_config(&config)
             .expect("supported remote config");
-        remote.credential_masking = credential_masking;
         config.set_credential_broker_enabled(credential_masking);
+        if configured_provider {
+            config.credential_providers.insert(
+                "vendor".to_string(),
+                crate::CredentialProviderConfig {
+                    env: vec!["VENDOR_TOKEN".to_string()],
+                    patterns: vec!["vendor_[a-z]{8}".to_string()],
+                    url_prefix_from_env: Some("VENDOR_BASE_URL".to_string()),
+                    auth: vec![crate::CredentialAuthMethod::Bearer],
+                    ..Default::default()
+                },
+            );
+        }
+        if credential_masking {
+            remote.enable_credential_masking(config.credential_providers.clone());
+        }
+        let wire = serde_json::to_value(&remote).expect("serialize remote config");
+        assert_eq!(
+            wire.get("credentialMasking"),
+            credential_masking.then_some(&serde_json::Value::Bool(true))
+        );
+        assert_eq!(
+            wire.get("credentialProviders"),
+            configured_provider
+                .then(|| serde_json::to_value(&config.credential_providers).unwrap())
+                .as_ref()
+        );
+        assert_eq!(
+            serde_json::from_value::<RemoteNetworkProxyConfig>(wire.clone())
+                .expect("deserialize remote config"),
+            remote
+        );
+        let mut disabled_wire = wire;
+        disabled_wire
+            .as_object_mut()
+            .unwrap()
+            .remove("credentialMasking");
+        let mut expected_wire = disabled_wire.clone();
+        expected_wire
+            .as_object_mut()
+            .unwrap()
+            .remove("credentialProviders");
+        // Ignore provider rules when the peer omits or explicitly disables masking.
+        let mut explicitly_disabled_wire = disabled_wire.clone();
+        explicitly_disabled_wire["credentialMasking"] = false.into();
+        for wire in [disabled_wire, explicitly_disabled_wire] {
+            let disabled: RemoteNetworkProxyConfig =
+                serde_json::from_value(wire).expect("disabled masking ignores provider rules");
+            assert!(!disabled.credential_masking_enabled());
+            assert_eq!(serde_json::to_value(disabled).unwrap(), expected_wire);
+        }
+        let diagnostic = format!("{remote:?}");
+        assert!(!diagnostic.contains("vendor_[a-z]{8}"));
+        assert!(!diagnostic.contains("VENDOR_BASE_URL"));
         let round_trip = remote.clone().into_network_proxy_config();
 
         assert_eq!(round_trip, config);
@@ -102,7 +157,14 @@ async fn round_trip_preserves_supported_effective_settings() {
         );
         assert_eq!(
             proxy
-                .remote_launch_config(DefaultFalse, credential_masking)
+                .remote_launch_config(
+                    DefaultFalse,
+                    if credential_masking {
+                        RemoteCredentialMasking::WithConfiguredProviders
+                    } else {
+                        RemoteCredentialMasking::Disabled
+                    },
+                )
                 .await
                 .unwrap()
                 .proxy
@@ -242,7 +304,7 @@ async fn remote_credential_mappings_follow_the_environment_and_broker_config() {
             ..NetworkProxyConfig::default()
         })
         .unwrap();
-        proxy.credential_masking = true;
+        proxy.enable_credential_masking(Default::default());
         NetworkProxyState::from_remote_launch_config(
             RemoteNetworkProxyLaunchConfig::new(proxy)
                 .for_execution(environment_id.to_string(), "execution".to_string())
@@ -371,7 +433,7 @@ async fn local_binding_is_resolved_for_each_executor() -> anyhow::Result<()> {
             .await?;
         assert_eq!(
             proxy
-                .remote_launch_config(policy, /*credential_masking*/ false)
+                .remote_launch_config(policy, RemoteCredentialMasking::Disabled)
                 .await
                 .ok()
                 .map(|launch| launch.proxy.allow_local_binding),

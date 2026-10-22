@@ -11,7 +11,7 @@ use pretty_assertions::assert_eq;
 use pretty_assertions::assert_ne;
 
 #[test_case::test_case(false, false, None; "builtin_providers")]
-#[test_case::test_case(true, false, None; "configured_provider_fallback")]
+#[test_case::test_case(true, false, None; "configured_provider")]
 #[test_case::test_case(true, true, None; "configured_provider_login_fallback")]
 #[test_case::test_case(true, false, Some("BASH_ENV"); "configured_provider_executor_startup_fallback")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -27,7 +27,8 @@ async fn remote_credential_masking_request_history(
         eprintln!("skipping credential masking: this scenario requires a Bash or Zsh executor");
         return Ok(());
     }
-    let use_zsh_snapshot = shell.name() == "zsh" && !configured_provider;
+    let expect_masking = !use_login_shell && executor_startup_env.is_none();
+    let use_zsh_snapshot = shell.name() == "zsh" && expect_masking;
     let home = Arc::new(TempDir::new()?);
     if let Some(warning) =
         codex_sandboxing::system_bwrap_warning(&PermissionProfile::workspace_write(), home.path())
@@ -35,11 +36,19 @@ async fn remote_credential_masking_request_history(
         eprintln!("skipping sandbox test: {warning}");
         return Ok(());
     }
-    const API_KEY: &str = "sk-proj-executor-only-0000000000000000000000000000000000";
+    let (credential_env, credential, prefix) = if configured_provider {
+        ("VENDOR_TOKEN", "vendor_abcdefgh", "vendor_")
+    } else {
+        (
+            "OPENAI_API_KEY",
+            "sk-proj-executor-only-0000000000000000000000000000000000",
+            "sk-proj-",
+        )
+    };
     const CALL_ID: &str = "print-credential";
     // Use our own native executor so only its environment contains the credential.
     let mut executor_env = vec![
-        ("OPENAI_API_KEY", API_KEY),
+        (credential_env, credential),
         ("OPENAI_BASE_URL", "https://api.openai.com/v1"),
     ];
     executor_env.extend(executor_startup_env.map(|key| (key, "/dev/null")));
@@ -78,7 +87,7 @@ allow_local_binding = true
 
 [shell_environment_policy]
 ignore_default_excludes = true
-include_only = ["HOME", "PATH", "OPENAI_API_KEY", "OPENAI_BASE_URL"{startup_env}]
+include_only = ["HOME", "PATH", "{credential_env}", "OPENAI_BASE_URL"{startup_env}]
 
 [features]
 unified_exec = true
@@ -104,13 +113,14 @@ credential_masking = true
         })
         .build(&server)
         .await?;
-    let mut command = if configured_provider {
+    let mut command = if !expect_masking {
         // Keep the real credential out of the model-visible command text.
-        fs::write(test.workspace_path("expected-api-key"), API_KEY)?;
-        "test \"$OPENAI_API_KEY\" = \"$(<expected-api-key)\" && printf 'unmasked fallback'"
-            .to_string()
+        fs::write(test.workspace_path("expected-api-key"), credential)?;
+        format!(
+            "test \"${credential_env}\" = \"$(<expected-api-key)\" && printf 'unmasked fallback'"
+        )
     } else {
-        "printf '%s' \"$OPENAI_API_KEY\"".to_string()
+        format!("printf '%s' \"${credential_env}\"")
     };
     if let Some(key) = executor_startup_env {
         command = format!("test -n \"${key}\" && {command}");
@@ -143,11 +153,11 @@ credential_masking = true
     .await;
 
     test.codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![text(
-            "Print OPENAI_API_KEY from the executor environment.",
-        )]))
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![text(&format!(
+            "Print {credential_env} from the executor environment.",
+        ))]))
         .await?;
-    if configured_provider {
+    if use_login_shell || shell.name() == "zsh" && !use_zsh_snapshot {
         let warning = wait_for_event(&test.codex, |event| {
             matches!(event, EventMsg::Warning(warning) if warning.message.starts_with("Credential masking is unavailable"))
         })
@@ -155,7 +165,7 @@ credential_masking = true
         let EventMsg::Warning(warning) = warning else {
             unreachable!("waited for a credential masking warning")
         };
-        insta::assert_snapshot!(warning.message, @"Credential masking is unavailable for this network proxy configuration on environment `remote`. This command will run with unmasked credentials.");
+        insta::assert_snapshot!(warning.message, @"Credential masking is unavailable for this shell startup on environment `remote`. This command will run with unmasked credentials.");
     }
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -165,29 +175,31 @@ credential_masking = true
     assert_eq!(requests.len(), 2);
     // Check complete, raw requests before any snapshot rewriting or normalization.
     for request in &requests {
-        assert!(!request.body_json().to_string().contains(API_KEY));
+        assert!(!request.body_json().to_string().contains(credential));
     }
     let output = requests[1]
         .function_call_output_text(CALL_ID)
         .context("model follow-up should include the executor output")?;
     assert!(output.contains("Process exited with code 0"), "{output}");
-    if configured_provider {
+    if !expect_masking {
         assert!(output.ends_with("Output:\nunmasked fallback"), "{output}");
         return Ok(());
     }
     let (_, placeholder) = output
         .split_once("Output:\n")
         .context("executor output should contain a credential placeholder")?;
-    assert!(placeholder.starts_with("sk-proj-"));
-    assert_eq!(placeholder.len(), API_KEY.len());
-    assert_ne!(placeholder, API_KEY);
+    assert!(placeholder.starts_with(prefix));
+    assert_eq!(placeholder.len(), credential.len());
+    assert_ne!(placeholder, credential);
 
+    // Share the full-history snapshots after normalizing the provider-specific variable name.
     let mut snapshot = context_snapshot::format_request_history_snapshot(
         "A remote executor masks its credential before the command output reaches the model.",
         &requests,
         &ContextSnapshotOptions::default().rewrite_known_segments(),
     )
-    .replace(placeholder, "<CREDENTIAL_PLACEHOLDER>");
+    .replace(placeholder, "<CREDENTIAL_PLACEHOLDER>")
+    .replace(credential_env, "<CREDENTIAL_ENV>");
     for (pattern, replacement) in [
         (r"Chunk ID: [a-z0-9]+", "Chunk ID: <CHUNK_ID>"),
         (

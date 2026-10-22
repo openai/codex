@@ -12,6 +12,7 @@ use crate::http_proxy;
 use crate::network_policy::NetworkDecision;
 use crate::network_policy::NetworkDecisionSource;
 use crate::network_policy::NetworkPolicyDecider;
+use crate::remote_config::RemoteCredentialMasking;
 use crate::runtime::BlockedRequestObserver;
 use crate::runtime::ConfigState;
 use crate::runtime::HostAuthorization;
@@ -949,15 +950,17 @@ impl NetworkProxy {
     pub async fn remote_launch_config(
         &self,
         local_binding_policy: crate::LocalBindingPolicy,
-        credential_masking: bool,
+        credential_masking: RemoteCredentialMasking,
     ) -> Result<crate::RemoteNetworkProxyLaunchConfig> {
         let (mut config, brokerage_created_default_allowlist, _) =
             self.state.current_cfg_with_brokerage_provenance().await?;
-        // Configured providers are not transported yet, so these commands run unmasked.
-        let credential_masking = credential_masking
-            && config.enabled
+        let credential_masking = config.enabled
             && config.credential_broker
-            && config.credential_providers.is_empty();
+            && match credential_masking {
+                RemoteCredentialMasking::Disabled => false,
+                RemoteCredentialMasking::BuiltInOnly => config.credential_providers.is_empty(),
+                RemoteCredentialMasking::WithConfiguredProviders => true,
+            };
         anyhow::ensure!(
             !credential_masking
                 || (!config.dangerously_allow_plaintext_credential_injection
@@ -1021,7 +1024,9 @@ impl NetworkProxy {
             "MXC cannot enforce allow_local_binding=false: native host-loopback access is bidirectional; use true or a different sandbox backend"
         );
         let mut proxy = crate::RemoteNetworkProxyConfig::from_effective_config(&config)?;
-        proxy.credential_masking = credential_masking;
+        if credential_masking {
+            proxy.enable_credential_masking(config.credential_providers);
+        }
         tracing::debug!(network_config = ?proxy, "resolved remote execution network configuration");
         let (environment_id, execution_id) = self
             .execution_scope
@@ -1970,7 +1975,7 @@ mod tests {
         assert_eq!(proxy.current_cfg().await?, config);
 
         let remote = proxy
-            .remote_launch_config(DefaultFalse, /*credential_masking*/ false)
+            .remote_launch_config(DefaultFalse, RemoteCredentialMasking::Disabled)
             .await?;
         assert_eq!(
             (
@@ -2068,7 +2073,7 @@ mod tests {
         owner_config.set_denied_domains(vec!["denied.example".to_string()]);
         assert_eq!(
             scoped
-                .remote_launch_config(DefaultFalse, /*credential_masking*/ false)
+                .remote_launch_config(DefaultFalse, RemoteCredentialMasking::Disabled)
                 .await?
                 .proxy
                 .domains,
@@ -2507,7 +2512,7 @@ mod tests {
             /*fallback_policy_decider*/ None,
         )?;
         let launch = scoped
-            .remote_launch_config(RequireTrue, /*credential_masking*/ false)
+            .remote_launch_config(RequireTrue, RemoteCredentialMasking::Disabled)
             .await?;
         let prepared = scoped.prepare_for_optional_environment(
             HashMap::from([(
@@ -2522,7 +2527,7 @@ mod tests {
         assert!(!launch.proxy.enabled);
         assert!(
             scoped
-                .remote_launch_config(DefaultFalse, /*credential_masking*/ true)
+                .remote_launch_config(DefaultFalse, RemoteCredentialMasking::BuiltInOnly)
                 .await
                 .is_err()
         );
@@ -2538,15 +2543,50 @@ mod tests {
             },
         );
         let custom_provider_proxy = NetworkProxy::builder()
-            .state(Arc::new(network_proxy_state_for_policy(config)))
+            .state(Arc::new(network_proxy_state_for_policy(config.clone())))
             .build()
             .await?;
         assert_eq!(
             custom_provider_proxy
-                .remote_launch_config(DefaultFalse, /*credential_masking*/ true)
+                .remote_launch_config(DefaultFalse, RemoteCredentialMasking::BuiltInOnly)
                 .await?
                 .proxy,
             launch.proxy
+        );
+        assert!(
+            custom_provider_proxy
+                .remote_launch_config(
+                    DefaultFalse,
+                    RemoteCredentialMasking::WithConfiguredProviders
+                )
+                .await
+                .is_err()
+        );
+        config.dangerously_allow_plaintext_credential_injection = false;
+        let custom_provider_proxy = NetworkProxy::builder()
+            .state(Arc::new(network_proxy_state_for_policy(config.clone())))
+            .build()
+            .await?;
+        assert_eq!(
+            custom_provider_proxy
+                .remote_launch_config(DefaultFalse, RemoteCredentialMasking::Disabled)
+                .await?
+                .proxy,
+            launch.proxy
+        );
+        let custom_launch = custom_provider_proxy
+            .remote_launch_config(
+                DefaultFalse,
+                RemoteCredentialMasking::WithConfiguredProviders,
+            )
+            .await?;
+        assert!(custom_launch.proxy.credential_masking_enabled());
+        assert_eq!(
+            custom_launch
+                .proxy
+                .into_network_proxy_config()
+                .credential_providers,
+            config.credential_providers,
         );
 
         let mut owner_config = NetworkProxyConfig::default();
@@ -2563,7 +2603,7 @@ mod tests {
         )?;
         assert!(
             owner_scoped
-                .remote_launch_config(DefaultFalse, /*credential_masking*/ false)
+                .remote_launch_config(DefaultFalse, RemoteCredentialMasking::Disabled)
                 .await
                 .is_err()
         );
@@ -2595,13 +2635,16 @@ mod tests {
                 .state(Arc::new(network_proxy_state_for_policy(config)))
                 .build()
                 .await?;
-            for credential_masking in [false, true] {
+            for (credential_masking, expected_masking) in [
+                (RemoteCredentialMasking::Disabled, false),
+                (RemoteCredentialMasking::BuiltInOnly, true),
+            ] {
                 let launch = proxy
                     .remote_launch_config(DefaultFalse, credential_masking)
                     .await?;
                 assert!(launch.proxy.enabled);
                 assert_eq!(launch.proxy.mode, mode);
-                assert_eq!(launch.proxy.credential_masking, credential_masking);
+                assert_eq!(launch.proxy.credential_masking_enabled(), expected_masking);
             }
         }
         assert_eq!(

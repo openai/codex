@@ -523,7 +523,9 @@ async fn native_request_handles_remote_proxy_config_for_platform(
     config.set_allowed_domains(vec!["allowed.example".to_string()]);
     let mut proxy_config = RemoteNetworkProxyConfig::from_effective_config(&config)
         .expect("supported remote proxy config");
-    proxy_config.credential_masking = credential_masking;
+    if credential_masking {
+        proxy_config.enable_credential_masking(Default::default());
+    }
     let params = ExecParams {
         metadata: Default::default(),
         process_id: ProcessId::from("process-remote-proxy"),
@@ -627,7 +629,7 @@ async fn disabled_remote_proxy_config_is_rejected_before_exporting_ports() {
     let mut proxy_config =
         RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig::default())
             .expect("serializable disabled proxy config");
-    proxy_config.credential_masking = true;
+    proxy_config.enable_credential_masking(Default::default());
     let params = ExecParams {
         metadata: Default::default(),
         process_id: ProcessId::from("process-disabled-remote-proxy"),

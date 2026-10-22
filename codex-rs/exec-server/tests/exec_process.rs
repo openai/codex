@@ -8,6 +8,8 @@ mod tls_proxy;
 #[path = "exec_process/windows_sandbox.rs"]
 mod windows_sandbox;
 
+#[cfg(unix)]
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -522,7 +524,9 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
     const API_KEY: &str = "sk-proj-executor-only-0000000000000000000000000000000000";
     const PROFILE_GH_TOKEN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const REQUEST_GH_TOKEN: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const VENDOR_TOKEN: &str = "vendor_abcdefgh";
     const CUSTOM_HOST: &str = "chatgpt.com";
+    let configured_provider = shell_name == "bash" && shell_args.first() == Some(&"-c");
     let shell_path = format!("/bin/{shell_name}");
     if shell_name == "zsh" && !std::path::Path::new(&shell_path).exists() {
         eprintln!("skipping zsh test: {shell_path} is unavailable");
@@ -553,6 +557,12 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
         })
         .transpose()?;
     let mut executor_env = vec![("OPENAI_API_KEY", API_KEY.to_string())];
+    if configured_provider {
+        executor_env.extend([
+            ("VENDOR_TOKEN", VENDOR_TOKEN.to_string()),
+            ("VENDOR_BASE_URL", "https://api.openai.com/v1".to_string()),
+        ]);
+    }
     if let Some(upstream) = &upstream {
         let ca_path = home.path().join("upstream-ca.pem");
         std::fs::write(&ca_path, &upstream.ca_cert_pem)?;
@@ -681,6 +691,11 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
             .include_only
             .extend(["GH_TOKEN", "GH_ALIAS", "AUTH_SIZE_*"].map(str::to_string));
     }
+    if configured_provider {
+        policy
+            .include_only
+            .extend(["VENDOR_TOKEN", "VENDOR_BASE_URL"].map(str::to_string));
+    }
     let mut proxy_settings = NetworkProxyConfig {
         enabled: true,
         ..NetworkProxyConfig::default()
@@ -691,7 +706,23 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
     }
     proxy_settings.set_allowed_domains(allowed_domains);
     let mut proxy_config = RemoteNetworkProxyConfig::from_effective_config(&proxy_settings)?;
-    proxy_config.credential_masking = credential_masking;
+    let mut providers = BTreeMap::new();
+    if configured_provider {
+        providers.insert(
+            "vendor".to_string(),
+            codex_network_proxy::CredentialProviderConfig {
+                env: vec!["VENDOR_TOKEN".to_string()],
+                patterns: vec!["vendor_[a-z]{8}".to_string()],
+                url_prefix_from_env: Some("VENDOR_BASE_URL".to_string()),
+                auth: vec![codex_network_proxy::CredentialAuthMethod::Header],
+                header: Some("X-Vendor-Token".to_string()),
+                ..Default::default()
+            },
+        );
+    }
+    if credential_masking {
+        proxy_config.enable_credential_masking(providers);
+    }
     let mut saved_api_key = None;
 
     for (attempt, &shell_args) in shell_args.iter().enumerate() {
@@ -741,8 +772,13 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
             command
         };
         let command = if credential_masking {
+            let vendor_header = if configured_provider {
+                "--header \"X-Vendor-Token: $(<\"$HOME/vendor-token\")\""
+            } else {
+                ""
+            };
             format!(
-                "{command}; test \"$GH_ENTERPRISE_TOKEN\" = executor-unbound-enterprise-token || exit 45; test \"$AUTH_ALIAS\" = \"Bearer $OPENAI_API_KEY\" || exit 42; printf '|%s' \"$OPENAI_API_KEY\"; curl --silent --show-error --fail --max-time 5 --noproxy '' --config \"$HOME/curl.conf\" \"${{OPENAI_BASE_URL:-https://api.openai.com/v1}}/models\" >/dev/null"
+                "{command}; test \"$GH_ENTERPRISE_TOKEN\" = executor-unbound-enterprise-token || exit 45; test \"$AUTH_ALIAS\" = \"Bearer $OPENAI_API_KEY\" || exit 42; printf '|%s' \"$OPENAI_API_KEY\"; curl --silent --show-error --fail --max-time 5 --noproxy '' --config \"$HOME/curl.conf\" {vendor_header} \"${{OPENAI_BASE_URL:-https://api.openai.com/v1}}/models\" >/dev/null"
             )
         } else {
             format!("{command}; test \"$OPENAI_API_KEY\" = '{API_KEY}' || exit 46")
@@ -758,6 +794,11 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
             format!(
                 "printf 'header = \"Authorization: %s\"\\n' \"$AUTH_ALIAS\" > \"$HOME/curl.conf\" || exit 44; {command}"
             )
+        } else {
+            command
+        };
+        let command = if configured_provider && attempt == 0 {
+            format!("printf '%s' \"$VENDOR_TOKEN\" > \"$HOME/vendor-token\"; {command}")
         } else {
             command
         };
@@ -833,6 +874,16 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
                 format!("header = \"Authorization: Bearer {saved_api_key}\"\n")
             );
             let request = upstream.next_request()?;
+            if configured_provider {
+                let placeholder = std::fs::read_to_string(home.path().join("vendor-token"))?;
+                assert!(placeholder.starts_with("vendor_"));
+                assert_eq!(placeholder.len(), VENDOR_TOKEN.len());
+                assert_ne!(placeholder, VENDOR_TOKEN);
+                assert_eq!(
+                    request.headers.get("x-vendor-token"),
+                    Some(&vec![VENDOR_TOKEN.to_string()])
+                );
+            }
             assert_eq!(
                 (
                     request.connect_authority.as_str(),

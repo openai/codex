@@ -40,11 +40,11 @@ use crate::unified_exec::TerminalSandboxSource;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_core_plugins::PluginMetricsSidecar;
-use codex_exec_server::EnvironmentCapabilities;
 use codex_features::Feature;
 use codex_network_proxy::CREDENTIAL_BROKER_ACTIVE_ENV_KEY;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::RemoteCredentialMasking;
 use codex_network_proxy::RemoteNetworkProxyConfig;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -352,13 +352,18 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                                 "failed to query exec-server capabilities: {err}"
                             ))))
                         })?;
-                let credential_masking = ctx
+                let network_proxy = environment_info.capabilities.network_proxy();
+                let credential_masking = if ctx
                     .step_context
                     .turn
                     .config
                     .features
                     .enabled(Feature::CredentialMasking)
-                    && environment_info.capabilities.credential_masking;
+                {
+                    network_proxy.credential_masking
+                } else {
+                    RemoteCredentialMasking::Disabled
+                };
                 let mut launch = network
                     .remote_launch_config(
                         crate::windows_sandbox::local_binding_policy_for_sandbox(
@@ -374,7 +379,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                 warn_if_remote_credential_masking_unavailable(
                     ctx,
                     req,
-                    &environment_info.capabilities,
+                    network_proxy.credential_masking,
                     &launch.proxy,
                 )
                 .await;
@@ -402,7 +407,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                 if !launch.proxy.enabled {
                     (env, None, None)
                 } else {
-                    if !environment_info.capabilities.network_proxy_launch {
+                    if !network_proxy.launch {
                         return Err(ToolError::Rejected(
                             "selected exec-server does not support executor-local network proxy launches"
                                 .to_string(),
@@ -701,7 +706,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
 async fn warn_if_remote_credential_masking_unavailable(
     ctx: &ToolCtx,
     req: &UnifiedExecRequest,
-    capabilities: &EnvironmentCapabilities,
+    credential_masking: RemoteCredentialMasking,
     proxy_config: &RemoteNetworkProxyConfig,
 ) {
     if !ctx
@@ -715,11 +720,11 @@ async fn warn_if_remote_credential_masking_unavailable(
     }
 
     let environment_id = &req.turn_environment.selection.environment_id;
-    let message = if !capabilities.credential_masking {
+    let message = if credential_masking == RemoteCredentialMasking::Disabled {
         format!(
             "Credential masking is unavailable on environment `{environment_id}` because its exec-server does not support it. This command will run with unmasked credentials."
         )
-    } else if !proxy_config.credential_masking {
+    } else if !proxy_config.credential_masking_enabled() {
         format!(
             "Credential masking is unavailable for this network proxy configuration on environment `{environment_id}`. This command will run with unmasked credentials."
         )
