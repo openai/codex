@@ -255,6 +255,9 @@ async fn run_until_thread_start(
 async fn fresh_startup_uses_server_defaults_with_explicit_and_managed_precedence() -> Result<()> {
     for (choice, managed, expected_model, expected_effort, expected_provider) in [
         ("saved", false, None, None, None),
+        ("embedded_saved", false, None, None, None),
+        ("typed_reviewer", false, None, None, None),
+        ("kv_reviewer", false, None, None, None),
         ("cli_model", true, Some("cli-model"), None, None),
         ("kv_model", false, Some("kv-model"), None, None),
         (
@@ -291,6 +294,7 @@ async fn fresh_startup_uses_server_defaults_with_explicit_and_managed_precedence
 model = "client-model"
 model_reasoning_effort = "low"
 model_provider = "client-provider"
+approvals_reviewer = "auto_review"
 [model_providers.client-provider]
 name = "Client provider"
 base_url = "http://127.0.0.1:9/v1"
@@ -303,7 +307,7 @@ requires_openai_auth = false
             if choice == "managed" {
                 ""
             } else {
-                "model = \"server-model\"\nmodel_reasoning_effort = \"high\"\n"
+                "model = \"server-model\"\nmodel_reasoning_effort = \"high\"\napprovals_reviewer = \"user\"\n"
             },
         )?;
         if managed {
@@ -328,6 +332,14 @@ requires_openai_auth = false
                 "model_reasoning_effort".to_string(),
                 TomlValue::String("low".to_string()),
             )),
+            "typed_reviewer" => {
+                harness_overrides.approvals_reviewer = Some(ApprovalsReviewer::User);
+                cli_kv_overrides.push(("approvals_reviewer".into(), "auto_review".into()));
+            }
+            "kv_reviewer" => cli_kv_overrides.extend([
+                ("approvals_reviewer".into(), "user".into()),
+                ("approvals_reviewer".into(), "auto_review".into()),
+            ]),
             "profile_model" | "profile_effort" => {
                 let path = client_home.path().join("work.config.toml");
                 std::fs::write(
@@ -343,6 +355,11 @@ requires_openai_auth = false
             }
             _ => {}
         }
+        let (target, server_home) = if choice == "embedded_saved" {
+            (AppServerTarget::Embedded, &client_home)
+        } else {
+            (remote_target(), &server_home)
+        };
         let mut launch_choices = crate::app_server_session::StartupLaunchChoices::from_launch(
             &cli_kv_overrides,
             &harness_overrides,
@@ -364,7 +381,7 @@ requires_openai_auth = false
             HistoryCapabilities::Current,
             /*blocked_thread_list*/ None,
             /*failed_thread_name*/ None,
-            crate::app_server_session::ThreadParamsMode::Remote,
+            target.thread_params_mode(),
             LoaderOverrides {
                 user_config_path: Some(server_home.path().join("config.toml").abs()),
                 system_requirements_path: Some(server_home.path().join("requirements.toml")),
@@ -373,7 +390,6 @@ requires_openai_auth = false
         )
         .await?;
         server = server.with_remote_cwd_override(Some(server_config.cwd.to_path_buf()));
-        let target = remote_target();
         assert!(
             prepare_fresh_startup_config(
                 &mut config,
@@ -406,7 +422,7 @@ requires_openai_auth = false
                 ReasoningEffortConfig::High,
             );
         }
-        crate::app_server_session::start_thread_with_request_handle(
+        let started = crate::app_server_session::start_thread_with_request_handle(
             server.request_handle(),
             &crate::local_settings::LocalSettings::from(&config),
             config,
@@ -418,6 +434,22 @@ requires_openai_auth = false
         .await?;
         let starts = recorded_params(&requests, "thread/start");
         assert_eq!(starts.len(), 1, "{choice}");
+        let expected_reviewer = match choice {
+            "kv_reviewer" | "profile_model" | "profile_effort" => Some("auto_review"),
+            "typed_reviewer" => Some("user"),
+            _ => None,
+        };
+        assert_eq!(
+            starts[0]["approvalsReviewer"],
+            serde_json::json!(expected_reviewer),
+            "{choice}"
+        );
+        if choice == "embedded_saved" {
+            assert_eq!(
+                started.session.approvals_reviewer,
+                ApprovalsReviewer::AutoReview
+            );
+        }
         assert_eq!(
             (
                 starts[0]["model"].clone(),
@@ -440,6 +472,25 @@ requires_openai_auth = false
                 serde_json::json!({"cwd": server_config.cwd.display().to_string(), "includeLayers": true})
             ],
         );
+        if choice == "saved" {
+            assert_eq!(started.session.approvals_reviewer, ApprovalsReviewer::User);
+            let (mut app, _events, mut ops) = make_test_app_with_channels().await;
+            app.app_server_target = target;
+            app.set_approvals_reviewer_in_app_and_widget(ApprovalsReviewer::AutoReview);
+            app.pending_startup_thread_start = true;
+            let thread_id = started.session.thread_id;
+            app.handle_startup_thread_started(&mut server, Ok(started))
+                .await?;
+            app.chat_widget.insert_str("first turn");
+            app.chat_widget
+                .handle_key_event(KeyEvent::from(KeyCode::Enter));
+            app.submit_thread_op(&mut server, thread_id, next_user_turn_op(&mut ops))
+                .await?;
+            assert_eq!(
+                recorded_params(&requests, "turn/start")[0]["approvalsReviewer"],
+                "user"
+            );
+        }
         server.shutdown().await?;
         proxy.await??;
     }

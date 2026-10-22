@@ -1,8 +1,9 @@
-//! First-thread model overrides come from invocation inputs, independently of local config.
+//! First-thread overrides come from invocation inputs, independently of local config.
 //! Explicit profile launches retain their existing resolved-config path until server profile
 //! selection is available for connected launches.
 
 use crate::legacy_core::config::ConfigOverrides;
+use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_config::LoaderOverrides;
 
@@ -12,6 +13,14 @@ pub(crate) struct StartupLaunchChoices {
     pub(crate) effort: Option<serde_json::Value>,
     provider: Option<String>,
     selected_profile: bool,
+    pub(super) approvals_reviewer: StartupApprovalsReviewer,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(super) enum StartupApprovalsReviewer {
+    #[default]
+    Config,
+    Invocation(Option<ApprovalsReviewer>),
 }
 
 impl StartupLaunchChoices {
@@ -48,6 +57,12 @@ impl StartupLaunchChoices {
                     .map(str::to_owned)
             }),
             selected_profile: false,
+            approvals_reviewer: StartupApprovalsReviewer::Invocation(
+                harness_overrides
+                    .approvals_reviewer
+                    .or_else(|| value("approvals_reviewer")?.clone().try_into().ok())
+                    .map(Into::into),
+            ),
         }
     }
 
