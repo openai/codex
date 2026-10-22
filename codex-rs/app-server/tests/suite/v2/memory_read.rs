@@ -22,9 +22,11 @@ use tempfile::TempDir;
 
 #[tokio::test]
 async fn memory_read_version_selects_only_its_own_context() -> Result<()> {
-    for (version, expected, excluded) in [
-        ("v1", "legacy-only-marker", "v2-only-marker"),
-        ("v2", "v2-only-marker", "legacy-only-marker"),
+    for (version, has_v1_workspace, expected, excluded) in [
+        (Some("v1"), true, "legacy-only-marker", "v2-only-marker"),
+        (Some("v2"), true, "v2-only-marker", "legacy-only-marker"),
+        (None, true, "legacy-only-marker", "v2-only-marker"),
+        (None, false, "v2-only-marker", "legacy-only-marker"),
     ] {
         let server = start_mock_server().await;
         let home = TempDir::new()?;
@@ -35,6 +37,9 @@ async fn memory_read_version_selects_only_its_own_context() -> Result<()> {
             ("memories", "legacy-only-marker"),
             ("memories_v2", "v2-only-marker"),
         ] {
+            if directory == "memories" && !has_v1_workspace {
+                continue;
+            }
             tokio::fs::create_dir_all(home.path().join(directory)).await?;
             tokio::fs::write(
                 home.path().join(directory).join("memory_summary.md"),
@@ -55,17 +60,18 @@ async fn memory_read_version_selects_only_its_own_context() -> Result<()> {
             .with_codex_home(home.path())
             .build_initialized()
             .await?;
+        let mut config = std::collections::HashMap::from([(
+            "memories.generate_memories".to_string(),
+            json!(false),
+        )]);
+        if let Some(version) = version {
+            config.insert("memories.version".to_string(), json!(version));
+        }
         let start = app
             .send_thread_start_request_with_auto_env(ThreadStartParams {
                 // Skip background consolidation so it cannot consume the read test's response.
                 ephemeral: Some(true),
-                config: Some(
-                    [
-                        ("memories.version".to_string(), json!(version)),
-                        ("memories.generate_memories".to_string(), json!(false)),
-                    ]
-                    .into(),
-                ),
+                config: Some(config),
                 ..Default::default()
             })
             .await?;

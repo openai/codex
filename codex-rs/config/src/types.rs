@@ -320,7 +320,8 @@ pub use codex_protocol::MemoryVersion;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct MemoriesToml {
-    /// Selects the memory pipeline; v1 remains the default.
+    /// Selects the memory pipeline. Fresh profiles default to v2 when memories are enabled,
+    /// unless dual-write is explicitly disabled; existing v1 profiles default to v1.
     pub version: Option<MemoryVersion>,
     /// Generate both versions while v1 is selected; v2 runs alone after cutover.
     pub dual_write: Option<bool>,

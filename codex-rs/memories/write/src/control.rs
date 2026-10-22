@@ -24,7 +24,7 @@ pub(crate) async fn clear_memory_root_contents(memory_root: &Path) -> std::io::R
             ));
         }
         Ok(_) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(err),
     }
 

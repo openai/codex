@@ -2752,7 +2752,7 @@
               "$ref": "#/definitions/MemoryVersion"
             }
           ],
-          "description": "Selects the memory pipeline; v1 remains the default."
+          "description": "Selects the memory pipeline. Fresh profiles default to v2 when memories are enabled, unless dual-write is explicitly disabled; existing v1 profiles default to v1."
         }
       },
       "type": "object"

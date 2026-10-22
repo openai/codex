@@ -398,6 +398,34 @@ consolidation_model = "gpt-5.2"
 }
 
 #[tokio::test]
+async fn fresh_memory_profiles_preserve_explicit_version_and_transition_opt_out() {
+    for (settings, expected) in [
+        ("", codex_protocol::MemoryVersion::V2),
+        ("version = 'v1'", codex_protocol::MemoryVersion::V1),
+        ("dual_write = false", codex_protocol::MemoryVersion::V1),
+        (
+            "version = 'v2'\ndual_write = false",
+            codex_protocol::MemoryVersion::V2,
+        ),
+    ] {
+        let home = tempdir().expect("tempdir");
+        let cfg = toml::from_str::<ConfigToml>(&format!(
+            "[features]\nmemories = true\n[memories]\n{settings}"
+        ))
+        .expect("memory config");
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            home.abs(),
+        )
+        .await
+        .expect("load config");
+        assert_eq!(config.memories.version, expected, "{settings}");
+        assert!(!home.path().join("memories").exists());
+    }
+}
+
+#[tokio::test]
 async fn goal_max_token_budget_requires_positive_integer() {
     let config_toml = toml::from_str::<ConfigToml>("[goals]\nmax_goal_token_budget = 25000\n")
         .expect("positive goal token budget should deserialize");
@@ -6301,7 +6329,7 @@ async fn memory_tool_makes_memories_root_readable_without_creating_or_widening_w
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
-    let memories_root = codex_home.path().join("memories");
+    let memories_root = codex_home.path().join("memories_v2");
     let memories_root_abs = memories_root.abs();
 
     let config = Config::load_from_base_config_with_overrides(

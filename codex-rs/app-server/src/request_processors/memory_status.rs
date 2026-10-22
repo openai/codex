@@ -35,10 +35,19 @@ impl ThreadRequestProcessor {
         let summary = tokio::fs::read_to_string(root.join("memory_summary.md"))
             .await
             .ok();
-        let ready = count >= minimum
-            && summary
-                .as_deref()
-                .is_some_and(codex_memories_write::workspace::is_valid_v2_summary);
+        let has_v1_workspace = tokio::fs::try_exists(
+            self.config
+                .codex_home
+                .join(MemoryVersion::V1.directory_name()),
+        )
+        .await
+        .map_err(|error| internal_error(format!("failed to check v1 memory workspace: {error}")))?;
+        // Fresh profiles can start on V2 without consolidating any V1 history first.
+        let ready = !has_v1_workspace
+            || count >= minimum
+                && summary
+                    .as_deref()
+                    .is_some_and(codex_memories_write::workspace::is_valid_v2_summary);
         Ok(Some(
             MemoryStatusResponse {
                 v2_consolidated_threads: count,

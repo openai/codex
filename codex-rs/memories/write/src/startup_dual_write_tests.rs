@@ -10,14 +10,34 @@ use wiremock::matchers::path_regex;
 
 #[tokio::test]
 async fn dual_write_runs_both_versions_until_v2_is_selected() -> anyhow::Result<()> {
-    for (selected_version, expected_pipelines) in [(MemoryVersion::V1, 2), (MemoryVersion::V2, 1)] {
+    for (version, expected_pipelines) in [(Some("v1"), 2), (Some("v2"), 1), (None, 1)] {
         let server = start_mock_server().await;
         let home = Arc::new(TempDir::new()?);
-        let mut memories = startup_test_memories_config();
-        memories.dual_write = true;
-        memories.version = selected_version;
-        let test =
-            build_test_codex_with_memories_config(&server, Arc::clone(&home), memories).await?;
+        let version_config = version
+            .map(|version| format!("version = {version:?}"))
+            .unwrap_or_default();
+        tokio::fs::write(
+            home.path().join("config.toml"),
+            format!(
+                "[features]\nmemories = true\n\
+                 [memories]\ndual_write = true\nmax_raw_memories_for_consolidation = 1\n\
+                 min_rollout_idle_hours = 0\n{version_config}\n"
+            ),
+        )
+        .await?;
+        let test = test_codex()
+            .with_home(Arc::clone(&home))
+            .build(&server)
+            .await?;
+        let selected_version = test.config.memories.version;
+        assert_eq!(
+            selected_version,
+            if version == Some("v1") {
+                MemoryVersion::V1
+            } else {
+                MemoryVersion::V2
+            }
+        );
         let db = test.codex.state_db().expect("memory state");
         let source = seed_stage1_candidate(
             &db,
@@ -28,7 +48,9 @@ async fn dual_write_runs_both_versions_until_v2_is_selected() -> anyhow::Result<
         .await?;
         let v1_root = home.path().join("memories");
         let v2_root = home.path().join("memories_v2");
-        seed_required_memory_artifacts(&v1_root).await?;
+        if version.is_some() {
+            seed_required_memory_artifacts(&v1_root).await?;
+        }
         tokio::fs::create_dir_all(&v2_root).await?;
         tokio::fs::write(
             v2_root.join("memory_summary.md"),
@@ -119,6 +141,9 @@ async fn dual_write_runs_both_versions_until_v2_is_selected() -> anyhow::Result<
         );
         assert!(!v2_root.join("MEMORY.md").exists());
         assert!(!v2_root.join("raw_memories.md").exists());
+        if version.is_none() {
+            assert!(!v1_root.exists());
+        }
         shutdown_test_codex(&test).await?;
     }
     Ok(())
