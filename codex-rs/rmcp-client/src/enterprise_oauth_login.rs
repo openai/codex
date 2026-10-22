@@ -25,6 +25,7 @@ use tracing::instrument::WithSubscriber;
 use url::Host;
 use url::Url;
 
+use crate::EmaErrorDetail;
 use crate::StoredOAuthTokens;
 use crate::ema_auth_policy::validate_ema_oauth_endpoint;
 use crate::ema_claims::validate_oidc_identity_assertion;
@@ -138,7 +139,7 @@ impl EnterpriseOAuthLoginHandle {
             .complete(/*emit_browser_url*/ false)
             .with_subscriber(tracing::subscriber::NoSubscriber::default())
             .await
-            .map_err(|_| anyhow!("enterprise IdP authorization failed"))?;
+            .map_err(|_| anyhow!(EmaErrorDetail::new("enterprise IdP authorization failed")))?;
         validate_enterprise_credentials(&stored)?;
         Ok(EnterpriseOAuthCredentials {
             stored,
@@ -171,15 +172,20 @@ impl EnterpriseOAuthCredentials {
             self.keyring_backend,
         )
         .await?;
-        let generation = guard
-            .generation_file
-            .current()
-            .map_err(|_| anyhow!("failed to read enterprise login generation"))?;
+        let generation = guard.generation_file.current().map_err(|_| {
+            anyhow!(EmaErrorDetail::new(
+                "failed to read enterprise login generation"
+            ))
+        })?;
         if generation.as_ref() != Some(&self.generation) {
-            bail!("enterprise sign-in was invalidated by logout");
+            bail!(EmaErrorDetail::new(
+                "enterprise sign-in was invalidated by logout"
+            ));
         }
         let Some(authority) = is_current().await else {
-            bail!("enterprise sign-in no longer matches the active account or configuration");
+            bail!(EmaErrorDetail::new(
+                "enterprise sign-in no longer matches the active account or configuration"
+            ));
         };
         tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {
             save_oauth_tokens_with_lock_held(
@@ -190,7 +196,11 @@ impl EnterpriseOAuthCredentials {
                 self.keyring_backend,
             )
         })
-        .map_err(|_| anyhow!("failed to store enterprise credentials"))?;
+        .map_err(|_| {
+            anyhow!(EmaErrorDetail::new(
+                "failed to store enterprise credentials"
+            ))
+        })?;
         Ok(authority)
     }
 }
@@ -241,7 +251,14 @@ pub async fn perform_enterprise_oauth_login_return_url(
     )
     .with_subscriber(tracing::subscriber::NoSubscriber::default())
     .await
-    .map_err(|_| anyhow!("failed to start enterprise IdP authorization"))?;
+    .map_err(|error| {
+        if error.downcast_ref::<EmaErrorDetail>().is_some() {
+            return EmaErrorDetail::from_error(&error);
+        }
+        EmaErrorDetail::from_error(&error.context(EmaErrorDetail::new(
+            "failed to start enterprise IdP authorization",
+        )))
+    })?;
     // Keep the current attempt valid until replacement setup succeeds. A logout
     // or another completed setup during this work must still invalidate this start.
     let generation = async {

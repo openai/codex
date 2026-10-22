@@ -530,7 +530,7 @@ oauth = {{ client_id = "mcp-client", client_secret = "resource-secret", token_en
     enterprise_callback(&replacement, &issuer, callback_port)?;
     assert_eq!(
         enterprise_completion(&mut client).await?,
-        json!({"name":"enterprise","threadId":thread_id,"loginId":first["loginId"],"success":false,"error":"Enterprise sign-in failed."})
+        json!({"name":"enterprise","threadId":thread_id,"loginId":first["loginId"],"success":false,"error":"Enterprise sign-in was cancelled."})
     );
     assert_eq!(
         enterprise_rpc(
@@ -543,7 +543,7 @@ oauth = {{ client_id = "mcp-client", client_secret = "resource-secret", token_en
     );
     assert_eq!(
         enterprise_completion(&mut client).await?,
-        json!({"name":"enterprise","threadId":thread_id,"loginId":replacement["loginId"],"success":false,"error":"Enterprise sign-in failed."})
+        json!({"name":"enterprise","threadId":thread_id,"loginId":replacement["loginId"],"success":false,"error":"Enterprise sign-in was cancelled."})
     );
     let idp = McpServerIdpOAuthConfig {
         issuer: issuer.clone(),
@@ -606,7 +606,7 @@ oauth = {{ client_id = "mcp-client", client_secret = "resource-secret", token_en
     assert_eq!(response.status(), http::StatusCode::OK);
     assert_eq!(
         enterprise_completion(&mut client).await?,
-        json!({"name":"enterprise","threadId":thread_id,"loginId":previous["loginId"],"success":false,"error":"Enterprise sign-in failed."})
+        json!({"name":"enterprise","threadId":thread_id,"loginId":previous["loginId"],"success":false,"error":"enterprise sign-in no longer matches the active account or configuration"})
     );
 
     let retry = enterprise_rpc(
@@ -967,6 +967,7 @@ oauth = {{ client_id = "mcp-client", client_secret = "resource-secret", token_en
         Some(codex_app_server_protocol::McpServerStartupFailureReason::ReauthenticationRequired);
     for (error, reason) in [
         (Some("invalid_client"), None),
+        (Some("invalid_scope"), None),
         (Some("insufficient_user_authentication"), reauthentication),
         (Some("invalid_grant"), reauthentication),
         (None, reauthentication),
@@ -1002,6 +1003,13 @@ oauth = {{ client_id = "mcp-client", client_secret = "resource-secret", token_en
         })
         .await??;
         assert_eq!(failure.failure_reason, reason, "{error:?}: {failure:?}");
+        if error == Some("invalid_scope") {
+            assert!(
+                failure.error.as_deref().is_some_and(
+                    |error| error.contains("IdentityProvider: HTTP 400: invalid_scope")
+                )
+            );
+        }
         if reason.is_some() {
             let status = enterprise_rpc(
                 &client,
@@ -1403,7 +1411,7 @@ oauth = {{ client_id = "mcp-client", client_secret = "resource-secret", token_en
     .await??;
     assert_eq!(
         login_completion.context("enterprise login completion")?,
-        json!({"name":"enterprise","threadId":recovered["thread"]["id"],"loginId":stalled["loginId"],"success":false,"error":"Enterprise sign-in failed."})
+        json!({"name":"enterprise","threadId":recovered["thread"]["id"],"loginId":stalled["loginId"],"success":false,"error":"Enterprise sign-in was cancelled."})
     );
     assert_eq!(
         resource_exchanges.load(std::sync::atomic::Ordering::SeqCst),

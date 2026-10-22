@@ -16,6 +16,7 @@ use serde_json::Value;
 use url::Url;
 
 use crate::EmaCredentialLease;
+use crate::EmaErrorDetail;
 use crate::ema_auth_policy::advertised_capability;
 use crate::ema_auth_policy::resolve_ema_client_auth;
 use crate::ema_auth_policy::validate_ema_auth_resource;
@@ -95,7 +96,10 @@ pub async fn exchange_ema_auth_token<L: Send, R: Send>(
         request.mcp_client_secret,
         request.token_endpoint_auth_method,
     )
-    .await?;
+    .await
+    .context(EmaErrorDetail::new(
+        "enterprise MCP authorization server discovery failed",
+    ))?;
     let issuer = metadata
         .issuer
         .as_deref()
@@ -179,9 +183,9 @@ async fn discover_ema_authorization_metadata(
                 continue;
             };
             if metadata.issuer.as_deref() != Some(issuer.as_str()) {
-                bail!(
+                bail!(EmaErrorDetail::new(
                     "enterprise authorization metadata issuer does not match its advertised issuer"
-                );
+                ));
             }
             validate_ema_oauth_endpoint(
                 &metadata.token_endpoint,

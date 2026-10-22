@@ -5,6 +5,8 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use codex_config::McpEmaTokenEndpointAuthMethod;
+use rmcp::transport::auth::enterprise::EmaError;
+use rmcp::transport::auth::enterprise::EmaExchangeStage;
 use serde_json::Value;
 use url::Host;
 use url::Url;
@@ -35,8 +37,74 @@ pub enum EmaCredentialKind {
     Keyring,
 }
 
-/// Carries only a credential kind and an already sanitized auth failure to transport.
-/// Unexpected errors deliberately retain neither provider text nor their source chain.
+/// A diagnostic containing only static local text or sanitized SDK exchange fields.
+/// Never retains an arbitrary error's display text, provider response, or source chain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EmaErrorDetail {
+    message: &'static str,
+    stage: Option<EmaExchangeStage>,
+    status: Option<u16>,
+}
+
+impl EmaErrorDetail {
+    pub fn new(message: &'static str) -> Self {
+        Self {
+            message,
+            stage: None,
+            status: None,
+        }
+    }
+
+    pub fn from_error(error: &anyhow::Error) -> Self {
+        // SDK diagnostics are already sanitized, including allowlisted OAuth codes.
+        // Prefer them to an outer operation label when both are available.
+        if let Some(error) = error.downcast_ref::<EmaError>() {
+            let (stage, status, message) = match error {
+                EmaError::InvalidRequest(message) => (None, None, *message),
+                EmaError::InvalidResponse { stage, message } => (Some(*stage), None, *message),
+                EmaError::RequestFailed(stage) => (Some(*stage), None, "request failed"),
+                EmaError::InvalidGrant(stage) => (Some(*stage), None, "invalid_grant"),
+                EmaError::InsufficientUserAuthentication(stage) => {
+                    (Some(*stage), None, "insufficient_user_authentication")
+                }
+                EmaError::OAuthRejected {
+                    stage,
+                    status,
+                    code,
+                } => (Some(*stage), Some(*status), *code),
+                _ => (None, None, "enterprise MCP token exchange failed"),
+            };
+            return Self {
+                message,
+                stage,
+                status,
+            };
+        }
+        error
+            .chain()
+            .filter_map(|cause| cause.downcast_ref::<Self>())
+            .last()
+            .copied()
+            .or_else(|| error.downcast_ref::<Self>().copied())
+            .unwrap_or_else(|| Self::new("enterprise MCP token exchange failed"))
+    }
+}
+
+impl std::fmt::Display for EmaErrorDetail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(stage) = self.stage {
+            write!(f, "{stage:?}: ")?;
+        }
+        if let Some(status) = self.status {
+            write!(f, "HTTP {status}: ")?;
+        }
+        f.write_str(self.message)
+    }
+}
+
+impl std::error::Error for EmaErrorDetail {}
+
+/// Carries a credential kind and sanitized failure to transport, without raw error chains.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EmaTokenSourceError {
     AuthFailure {
@@ -45,6 +113,7 @@ pub enum EmaTokenSourceError {
     },
     Unexpected {
         credential: EmaCredentialKind,
+        detail: EmaErrorDetail,
     },
 }
 
@@ -57,12 +126,17 @@ impl EmaTokenSourceError {
     }
 
     pub fn unexpected(credential: EmaCredentialKind) -> Self {
-        Self::Unexpected { credential }
+        Self::Unexpected {
+            credential,
+            detail: EmaErrorDetail::new("enterprise MCP token exchange failed"),
+        }
     }
 
     fn credential(self) -> EmaCredentialKind {
         match self {
-            Self::AuthFailure { credential, .. } | Self::Unexpected { credential } => credential,
+            Self::AuthFailure { credential, .. } | Self::Unexpected { credential, .. } => {
+                credential
+            }
         }
     }
 
@@ -107,6 +181,9 @@ impl EmaTokenSourceError {
 
 impl std::fmt::Display for EmaTokenSourceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Self::Unexpected { detail, .. } = self {
+            return std::fmt::Display::fmt(detail, f);
+        }
         let message = match (self.credential(), self.failure()) {
             (
                 _,

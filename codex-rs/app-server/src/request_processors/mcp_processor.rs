@@ -253,7 +253,13 @@ impl McpRequestProcessor {
                 login.login_id,
                 Box::pin(async move {
                     match completion.wait_for(|state| state.is_complete()).await {
-                        Ok(result) if *result == EnterpriseLoginCompletion::Succeeded => Ok(()),
+                        Ok(result) => match *result {
+                            EnterpriseLoginCompletion::Succeeded => Ok(()),
+                            EnterpriseLoginCompletion::Failed(detail) => Err(detail.into()),
+                            EnterpriseLoginCompletion::Pending => {
+                                Err(anyhow::anyhow!("Enterprise sign-in failed."))
+                            }
+                        },
                         _ => Err(anyhow::anyhow!("Enterprise sign-in failed.")),
                     }
                 }),

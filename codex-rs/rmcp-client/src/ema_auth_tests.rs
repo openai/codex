@@ -233,15 +233,15 @@ async fn modern_challenge_confines_metadata_redirects() -> Result<()> {
         .with_priority(1)
         .mount(&authorization)
         .await;
-    let error = discover_ema_authorization_metadata(
-        EmaDiscoveryRequest::from(&exchange),
-        /*client_secret*/ None,
-        /*token_endpoint_auth_method*/ None,
-    )
-    .await
-    .err()
-    .context("cross-origin redirect must fail")?;
-    assert!(error.to_string().contains("cross-origin redirect"));
+    let error = exchange_ema_auth_token(exchange, std::convert::identity)
+        .await
+        .err()
+        .context("cross-origin redirect must fail")?;
+    assert!(format!("{error:#}").contains("cross-origin redirect"));
+    assert_eq!(
+        EmaErrorDetail::from_error(&error).to_string(),
+        "enterprise MCP authorization server discovery failed"
+    );
     assert!(
         attacker
             .received_requests()

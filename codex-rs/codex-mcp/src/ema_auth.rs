@@ -21,6 +21,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_rmcp_client::EmaAuthFailure;
 use codex_rmcp_client::EmaAuthenticatedHttpClient;
+use codex_rmcp_client::EmaErrorDetail;
 use codex_rmcp_client::EmaRequestAuthority;
 use codex_rmcp_client::McpOAuthRefreshMode;
 use codex_rmcp_client::McpProtocolMode;
@@ -124,7 +125,14 @@ impl EmaAuth {
 
     pub(crate) async fn check_account(&self) -> Result<()> {
         self.authority.check()?;
-        if !self.manager.account_login_is_current(&self.account).await? {
+        if !self
+            .manager
+            .account_login_is_current(&self.account)
+            .await
+            .context(EmaErrorDetail::new(
+                "enterprise MCP account credential validation failed",
+            ))?
+        {
             self.authority.revoke();
             bail!(codex_rmcp_client::EmaTokenSourceError::new(
                 codex_rmcp_client::EmaCredentialKind::Account,
@@ -212,12 +220,16 @@ pub(crate) async fn stored_ema_credentials(
                     OAuthCredentialsStoreMode::Keyring,
                     keyring_backend,
                 )
-                .map_err(|_| anyhow!("failed to read enterprise credentials"))
+                .map_err(|_| anyhow!(EmaErrorDetail::new("failed to read enterprise credentials")))
             })
         })
     })
     .await
-    .map_err(|_| anyhow!("enterprise credential read task failed"))?
+    .map_err(|_| {
+        anyhow!(EmaErrorDetail::new(
+            "enterprise credential read task failed"
+        ))
+    })?
 }
 
 // Discovery and both credential exchanges must check the owner at each dispatch,

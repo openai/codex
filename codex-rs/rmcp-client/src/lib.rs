@@ -51,6 +51,7 @@ pub use ema_auth::EmaAuthTokenExchangeRequest;
 pub use ema_auth::exchange_ema_auth_token;
 pub use ema_auth_policy::EmaAuthFailure;
 pub use ema_auth_policy::EmaCredentialKind;
+pub use ema_auth_policy::EmaErrorDetail;
 pub use ema_auth_policy::EmaInvalidGrantSource;
 pub use ema_auth_policy::EmaTokenSourceError;
 pub use ema_auth_policy::validate_ema_auth_resource;

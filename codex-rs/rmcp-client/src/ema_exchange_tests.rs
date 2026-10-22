@@ -19,6 +19,9 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::*;
+use crate::EmaCredentialKind;
+use crate::EmaErrorDetail;
+use crate::EmaTokenSourceError;
 use crate::ema_auth_policy::validate_ema_oauth_endpoint;
 use crate::ema_claims::ID_JAG_TOKEN_TYPE;
 use crate::ema_claims::validate_oidc_identity_assertion;
@@ -387,6 +390,7 @@ async fn provider_errors_preserve_credential_policy_without_reflecting_credentia
             "insufficient_user_authentication",
             "unauthorized_client",
             "invalid_client",
+            "invalid_scope",
             "malformed",
         ] {
             let server = MockServer::builder().start().await;
@@ -436,6 +440,24 @@ async fn provider_errors_preserve_credential_policy_without_reflecting_credentia
                 !format!("{error:#?}").contains(SENTINEL),
                 "provider reflected a credential"
             );
+            // Even an unsafe outer context must not reach the transport diagnostic.
+            let detail = EmaErrorDetail::from_error(&error.context(SENTINEL));
+            let transport_error = EmaTokenSourceError::Unexpected {
+                credential: EmaCredentialKind::Keyring,
+                detail,
+            };
+            assert!(!format!("{transport_error:#?} {transport_error}").contains(SENTINEL));
+            if code == "invalid_scope" {
+                let stage = if endpoint == "/idp/token" {
+                    "IdentityProvider"
+                } else {
+                    "ResourceAuthorizationServer"
+                };
+                assert_eq!(
+                    transport_error.to_string(),
+                    format!("{stage}: HTTP 400: invalid_scope")
+                );
+            }
             assert_eq!(
                 server.received_requests().await.expect("requests").len(),
                 if endpoint == "/as/token" { 2 } else { 1 },

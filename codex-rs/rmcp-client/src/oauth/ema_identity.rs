@@ -11,6 +11,7 @@ use codex_keyring_store::KeyringStore;
 use tracing::instrument::WithSubscriber;
 
 use crate::ema_auth_policy::EmaAuthFailure;
+use crate::ema_auth_policy::EmaErrorDetail;
 use crate::ema_auth_policy::ema_reauthentication_required;
 use crate::ema_claims::OidcClaims;
 use crate::ema_claims::oidc_identity;
@@ -41,7 +42,7 @@ pub struct EmaCredentialLease {
 fn sanitize_ema_credential_error(error: anyhow::Error, message: &'static str) -> anyhow::Error {
     match error.downcast::<EmaAuthFailure>() {
         Ok(failure) => anyhow::Error::new(failure).context(message),
-        Err(_) => anyhow!(message),
+        Err(_) => EmaErrorDetail::new(message).into(),
     }
 }
 
@@ -91,7 +92,7 @@ impl StoredOAuthCredentialSnapshot {
         )
         .with_subscriber(tracing::subscriber::NoSubscriber::default())
         .await
-        .map_err(|_| anyhow!("failed to lock enterprise credentials"))?;
+        .map_err(|_| anyhow!(EmaErrorDetail::new("failed to lock enterprise credentials")))?;
         let keyring_store = keyring_store.clone();
         tokio::task::spawn_blocking(move || {
             tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {
@@ -113,7 +114,11 @@ impl StoredOAuthCredentialSnapshot {
             })
         })
         .await
-        .map_err(|_| anyhow!("enterprise credential pinning task failed"))?
+        .map_err(|_| {
+            anyhow!(EmaErrorDetail::new(
+                "enterprise credential pinning task failed"
+            ))
+        })?
         .map_err(|error: anyhow::Error| {
             sanitize_ema_credential_error(error, "failed to pin enterprise credentials")
         })
@@ -129,7 +134,7 @@ impl EmaCredentialSnapshot {
         )
         .with_subscriber(tracing::subscriber::NoSubscriber::default())
         .await
-        .map_err(|_| anyhow!("failed to lock enterprise credentials"))?;
+        .map_err(|_| anyhow!(EmaErrorDetail::new("failed to lock enterprise credentials")))?;
         let pinned = self.clone();
         tokio::task::spawn_blocking(move || {
             tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {
@@ -151,7 +156,11 @@ impl EmaCredentialSnapshot {
             })
         })
         .await
-        .map_err(|_| anyhow!("enterprise credential validation task failed"))?
+        .map_err(|_| {
+            anyhow!(EmaErrorDetail::new(
+                "enterprise credential validation task failed"
+            ))
+        })?
         .map_err(|error: anyhow::Error| {
             sanitize_ema_credential_error(error, "failed to validate enterprise credentials")
         })
@@ -177,7 +186,7 @@ impl EmaCredentialSnapshot {
         )
         .with_subscriber(tracing::subscriber::NoSubscriber::default())
         .await
-        .map_err(|_| anyhow!("failed to lock enterprise credentials"))?;
+        .map_err(|_| anyhow!(EmaErrorDetail::new("failed to lock enterprise credentials")))?;
         if !is_current.await {
             return Ok(());
         }

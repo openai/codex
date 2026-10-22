@@ -152,6 +152,22 @@ async fn enterprise_callback_errors_and_sdk_logs_exclude_credentials() -> Result
     {
         return Ok(());
     }
+    let server = MockServer::start().await;
+    let issuer = format!("{}/idp", server.uri());
+    metadata(&server, &format!("https://{SECRET}.example/idp")).await;
+    let error = login(
+        &issuer, /*callback_url*/ None, /*auth_method*/ None,
+    )
+    .await
+    .err()
+    .expect("reject mismatched discovery issuer");
+    assert_eq!(
+        error.downcast_ref::<EmaErrorDetail>(),
+        Some(&EmaErrorDetail::new(
+            "failed to discover enterprise IdP authorization metadata"
+        ))
+    );
+    assert!(!format!("{error} {error:?} {error:#}").contains(SECRET));
     for (callback_error, token_success) in [(true, false), (false, false), (false, true)] {
         let server = MockServer::start().await;
         let issuer = format!("{}/idp", server.uri());
@@ -520,6 +536,13 @@ async fn enterprise_public_api_storage_and_privacy() -> Result<()> {
         delete_enterprise_oauth_tokens(CREDENTIAL_NAME, &issuer, AuthKeyringBackendKind::Direct)
             .await
             .unwrap_err();
+    let save_error = save_error.context(EmaErrorDetail::new(
+        "enterprise sign-in credential commit failed",
+    ));
+    assert_eq!(
+        EmaErrorDetail::from_error(&save_error).to_string(),
+        "failed to store enterprise credentials"
+    );
     for error in [save_error, delete_error] {
         assert!(!format!("{error} {error:?} {error:#}").contains(SECRET));
     }

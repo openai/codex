@@ -18,6 +18,7 @@ use rmcp::transport::auth::OAuthHttpClient;
 use tracing::instrument::WithSubscriber;
 
 use crate::EmaCredentialLease;
+use crate::EmaErrorDetail;
 use crate::ema_auth_policy::advertised_capability;
 use crate::ema_auth_policy::ema_reauthentication_required;
 use crate::ema_auth_policy::resolve_ema_client_auth;
@@ -96,7 +97,10 @@ pub async fn resolve_ema_account_idp_identity<L: Send>(
         http_client,
         redirect_mode,
     )
-    .await?;
+    .await
+    .context(EmaErrorDetail::new(
+        "enterprise IdP discovery or validation failed",
+    ))?;
     Ok(EmaIdpIdentity {
         token_endpoint,
         refresh_token,
@@ -146,13 +150,19 @@ pub(crate) async fn resolve_ema_idp_authorization_manager(
     let resolution = manager
         .resolve_metadata()
         .await
-        .context("failed to discover enterprise IdP authorization metadata")?;
+        .context(EmaErrorDetail::new(
+            "failed to discover enterprise IdP authorization metadata",
+        ))?;
     if !resolution.source.is_discovered() {
-        bail!("enterprise IdP must publish authorization metadata");
+        bail!(EmaErrorDetail::new(
+            "enterprise IdP must publish authorization metadata"
+        ));
     }
     let metadata = resolution.metadata;
     if metadata.issuer.as_deref() != Some(issuer) {
-        bail!("enterprise IdP authorization metadata issuer does not match configuration");
+        bail!(EmaErrorDetail::new(
+            "enterprise IdP authorization metadata issuer does not match configuration"
+        ));
     }
     validate_ema_oauth_endpoint(&metadata.token_endpoint, "enterprise IdP token endpoint")?;
 
@@ -196,7 +206,10 @@ async fn resolve_ema_idp_identity_in<K: KeyringStore + Clone + 'static>(
         request.http_client,
         request.redirect_mode,
     )
-    .await?;
+    .await
+    .context(EmaErrorDetail::new(
+        "enterprise IdP discovery or validation failed",
+    ))?;
     let credentials = request.credentials;
     let credential_lock = RefreshCredentialLock::acquire_for_server(
         &credentials.credentials.credentials().server_name,
@@ -204,7 +217,7 @@ async fn resolve_ema_idp_identity_in<K: KeyringStore + Clone + 'static>(
     )
     .with_subscriber(tracing::subscriber::NoSubscriber::default())
     .await
-    .map_err(|_| anyhow!("failed to lock enterprise credentials"))?;
+    .map_err(|_| anyhow!(EmaErrorDetail::new("failed to lock enterprise credentials")))?;
     let keyring_store = keyring_store.clone();
     // The worker retains the short read lock if its caller stops waiting for the reread.
     tokio::task::spawn_blocking(move || {
@@ -230,7 +243,11 @@ async fn resolve_ema_idp_identity_in<K: KeyringStore + Clone + 'static>(
         })
     })
     .await
-    .map_err(|_| anyhow!("enterprise IdP credential reread task failed"))?
+    .map_err(|_| {
+        anyhow!(EmaErrorDetail::new(
+            "enterprise IdP credential reread task failed"
+        ))
+    })?
 }
 
 async fn resolve_ema_idp_token_endpoint(

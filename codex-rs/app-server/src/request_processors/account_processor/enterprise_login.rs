@@ -3,9 +3,11 @@
 //! The credential store separately fences logins invalidated by another process.
 
 use super::*;
+use anyhow::Context;
 use codex_config::McpEmaRegistration;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_mcp::ema_auth_scope;
+use codex_rmcp_client::EmaErrorDetail;
 use codex_rmcp_client::EnterpriseOAuthLoginRequest;
 use codex_rmcp_client::perform_enterprise_oauth_login_return_url;
 use futures::FutureExt;
@@ -21,12 +23,12 @@ pub(crate) struct EnterpriseLoginTarget {
 pub(crate) enum EnterpriseLoginCompletion {
     Pending,
     Succeeded,
-    Failed,
+    Failed(EmaErrorDetail),
 }
 
 impl EnterpriseLoginCompletion {
     pub(crate) fn is_complete(self) -> bool {
-        matches!(self, Self::Succeeded | Self::Failed)
+        matches!(self, Self::Succeeded | Self::Failed(_))
     }
 }
 
@@ -227,13 +229,19 @@ impl EnterpriseLoginState {
             _ = setup_cancel.cancelled() => Err(internal_error("enterprise sign-in was cancelled")),
             _ = cancel.cancelled() => Err(internal_error("enterprise sign-in was cancelled")),
             result = perform_enterprise_oauth_login_return_url(request) =>
-                result.map_err(|_| internal_error("failed to start enterprise sign-in")),
+                result.map_err(|error| internal_error(
+                    EmaErrorDetail::from_error(
+                        &error.context(EmaErrorDetail::new("failed to start enterprise sign-in")),
+                    ).to_string(),
+                )),
         };
         let handle = match handle {
             Ok(handle) => handle,
             Err(error) => {
                 self.clear(&login_id).await;
-                completed.send_replace(EnterpriseLoginCompletion::Failed);
+                completed.send_replace(EnterpriseLoginCompletion::Failed(EmaErrorDetail::new(
+                    "failed to start enterprise sign-in",
+                )));
                 return Err(error);
             }
         };
@@ -244,9 +252,12 @@ impl EnterpriseLoginState {
         tokio::spawn(async move {
             let result = tokio::select! {
                 biased;
-                _ = cancel.cancelled() => Err(anyhow::anyhow!("Enterprise sign-in was cancelled.")),
+                _ = cancel.cancelled() =>
+                    Err(EmaErrorDetail::new("Enterprise sign-in was cancelled.").into()),
                 result = async {
-                    let credentials = handle.wait().await?;
+                    let credentials = handle.wait().await.context(EmaErrorDetail::new(
+                        "Enterprise sign-in authorization failed.",
+                    ))?;
                     callback_closed.clone().await;
                     let mut active = credentials.commit_if(|| async {
                         lifecycle.auth_manager.reload().await;
@@ -273,7 +284,9 @@ impl EnterpriseLoginState {
                         // the grant, and let new threads pin only the committed credential.
                         lifecycle.config_manager.revoke_mcp_ema();
                         Some(active)
-                    }).await?;
+                    }).await.context(EmaErrorDetail::new(
+                        "Enterprise sign-in credential commit failed.",
+                    ))?;
                     // A successful commit is no longer cancelable. Clear it while
                     // still holding the commit gate.
                     *active = None;
@@ -286,11 +299,9 @@ impl EnterpriseLoginState {
             if result.is_err() {
                 lifecycle.clear(&completion_id).await;
             }
-            let success = result.is_ok();
-            completed.send_replace(if success {
-                EnterpriseLoginCompletion::Succeeded
-            } else {
-                EnterpriseLoginCompletion::Failed
+            completed.send_replace(match result {
+                Ok(()) => EnterpriseLoginCompletion::Succeeded,
+                Err(error) => EnterpriseLoginCompletion::Failed(EmaErrorDetail::from_error(&error)),
             });
         });
         Ok(EnterpriseLogin {
