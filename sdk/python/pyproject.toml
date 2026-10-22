@@ -28,7 +28,7 @@ Documentation = "https://github.com/openai/codex/tree/main/sdk/python/docs"
 format = ["ruff>=0.15.8"]
 test = [
   "pytest>=8.0",
-  "datamodel-code-generator==0.31.2",
+  "datamodel-code-generator==0.64.0",
   { include-group = "format" },
 ]
 dev = [

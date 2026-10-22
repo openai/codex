@@ -500,13 +500,12 @@ def test_python_codegen_schema_annotation_adds_stable_variant_titles() -> None:
         "GranularAskForApproval",
     ]
 
-    reasoning_summary_titles = [
-        variant.get("title") for variant in definitions["ReasoningSummary"]["oneOf"]
-    ]
-    assert reasoning_summary_titles == [
-        "ReasoningSummaryValue",
-        "NoneReasoningSummary",
-    ]
+    from openai_codex.generated.v2_all import ReasoningSummary
+
+    reasoning_values, disabled = definitions["ReasoningSummary"]["oneOf"]
+    assert reasoning_values["title"] == "ReasoningSummaryValue"
+    assert disabled["enum"] == ["none"]
+    assert ReasoningSummary.model_validate("none").root == "none"
 
 
 def test_generate_v2_all_uses_titles_for_generated_names() -> None:

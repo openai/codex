@@ -397,16 +397,6 @@ def _variant_collision_key(base: str, variant: dict[str, Any], generated_name: s
     return "|".join(parts)
 
 
-def _set_discriminator_titles(props: dict[str, Any], owner: str) -> None:
-    for key in DISCRIMINATOR_KEYS:
-        prop = props.get(key)
-        if not isinstance(prop, dict):
-            continue
-        if _string_literal(prop) is None or "title" in prop:
-            continue
-        prop["title"] = f"{owner}{_to_pascal_case(key)}"
-
-
 def _annotate_variant_list(variants: list[Any], base: str | None) -> None:
     seen = {
         variant["title"]
@@ -438,12 +428,11 @@ def _annotate_variant_list(variants: list[Any], base: str | None) -> None:
             seen.add(generated_name)
             variant_name = generated_name
 
-        if isinstance(variant_name, str):
-            props = variant.get("properties")
-            if isinstance(props, dict):
-                _set_discriminator_titles(props, variant_name)
-
         _annotate_schema(variant, base)
+        # A titled inline union becomes a separate RootModel. Keep its variants
+        # directly accessible on the enclosing SDK union.
+        if "oneOf" in variant or "anyOf" in variant or _string_literal(variant) is not None:
+            variant.pop("title", None)
 
 
 def _annotate_schema(value: Any, base: str | None = None) -> None:
@@ -455,10 +444,15 @@ def _annotate_schema(value: Any, base: str | None = None) -> None:
     if not isinstance(value, dict):
         return
 
+    # The titles describe fields. Passing them to the generator as inline model
+    # names would change discriminator values from strings into RootModels.
     owner = value.get("title")
     props = value.get("properties")
     if isinstance(owner, str) and isinstance(props, dict):
-        _set_discriminator_titles(props, owner)
+        for key in DISCRIMINATOR_KEYS:
+            prop = props.get(key)
+            if isinstance(prop, dict) and _string_literal(prop) is not None:
+                prop["x-title"] = prop.pop("title", f"{owner}{_to_pascal_case(key)}")
 
     one_of = value.get("oneOf")
     if isinstance(one_of, list):
@@ -535,6 +529,15 @@ def _normalized_schema_bundle_text(schema_dir: Path) -> str:
     _preserve_guardian_approval_path_wrappers(schema)
     definitions = schema.get("definitions", {})
     if isinstance(definitions, dict):
+        # Older SDKs accept omission for these nullable project and section IDs.
+        for model, field in (
+            ("Thread", "projectId"),
+            ("ThreadProjectUpdatedNotification", "projectId"),
+            ("ThreadSectionMoveParams", "sectionId"),
+        ):
+            required = definitions.get(model, {}).get("required", [])
+            if field in required:
+                required.remove(field)
         for name, definition in definitions.items():
             if isinstance(definition, dict):
                 if name == "CodexErrorInfo":
@@ -572,11 +575,13 @@ def generate_v2_all(schema_dir: Path, *, format_output: bool = True) -> None:
                 "--output-model-type",
                 "pydantic_v2.BaseModel",
                 "--target-python-version",
-                "3.11",
+                "3.10",
                 "--use-standard-collections",
                 "--enum-field-as-literal",
                 "one",
                 "--field-constraints",
+                "--field-extra-keys-without-x-prefix",
+                "x-title",
                 "--use-default-kwarg",
                 "--snake-case-field",
                 "--allow-population-by-field-name",
@@ -592,8 +597,6 @@ def generate_v2_all(schema_dir: Path, *, format_output: bool = True) -> None:
         )
     _preserve_inline_image_class_names(out_path)
     _add_legacy_image_generation_thread_item_alias(out_path)
-    _require_nullable_field(out_path, "ChatgptAccount", r"email: str \| None")
-    _require_nullable_field(out_path, "McpResourceReadTarget", r"link_id: Annotated\[[\s\S]*?\]")
     _preserve_open_enum(out_path, "CodexErrorInfoValue", allow_empty=True)
     _preserve_reasoning_effort_enum(out_path)
     _preserve_thread_source_enum(out_path)
@@ -633,27 +636,6 @@ def _add_legacy_image_generation_thread_item_alias(out_path: Path) -> None:
 
     alias = "\n\nImageGenerationThreadItem = ResultThreadItem\n"
     out_path.write_text(source[:class_end] + alias + source[class_end:])
-
-
-def _require_nullable_field(out_path: Path, class_name: str, field_pattern: str) -> None:
-    """Preserve required-but-nullable fields that codegen gives a None default."""
-    source = out_path.read_text()
-    class_start = source.find(f"class {class_name}(BaseModel):")
-    if class_start == -1:
-        raise RuntimeError(f"Generated SDK is missing {class_name}")
-    class_end = source.find("\n\nclass ", class_start)
-    if class_end == -1:
-        class_end = len(source)
-
-    class_source, count = re.subn(
-        rf"(^    {field_pattern}) = None$",
-        r"\1",
-        source[class_start:class_end],
-        flags=re.MULTILINE,
-    )
-    if count != 1:
-        raise RuntimeError(f"Generated {class_name} field did not have the expected nullable shape")
-    out_path.write_text(source[:class_start] + class_source + source[class_end:])
 
 
 def _preserve_reasoning_effort_enum(out_path: Path) -> None:
