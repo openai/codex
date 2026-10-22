@@ -14,12 +14,12 @@ workspace = true
 
 [dependencies]
 codex-client = { workspace = true }
+codex-http-client = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-redacted-string = { workspace = true }
 http = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-url = { workspace = true }
 
 [dev-dependencies]
 codex-utils-absolute-path = { workspace = true }

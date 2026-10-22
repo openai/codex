@@ -3,6 +3,7 @@
 use std::io;
 
 use crate::oauth::OAuthError;
+use crate::oauth::generate_state;
 use crate::oauth::sanitize_url_for_logging;
 use chrono::Utc;
 use codex_secrets::redact_secrets;
@@ -14,6 +15,9 @@ use super::OAuthSessionConfig;
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub(super) struct StoredToken {
     pub access_token: String,
+    /// Stable across refreshes, replaced by a new authorization grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -34,7 +38,7 @@ pub(super) struct TokenResponse {
 impl TokenResponse {
     pub(super) fn into_stored(
         self,
-        previous_refresh_token: Option<&str>,
+        previous_token: Option<&StoredToken>,
     ) -> io::Result<StoredToken> {
         if self.access_token.trim().is_empty() {
             return Err(io::Error::other(
@@ -68,9 +72,13 @@ impl TokenResponse {
             .transpose()?;
         Ok(StoredToken {
             access_token: self.access_token,
+            authorization_id: match previous_token {
+                Some(previous) => previous.authorization_id.clone(),
+                None => Some(generate_state()),
+            },
             refresh_token: self
                 .refresh_token
-                .or_else(|| previous_refresh_token.map(str::to_string)),
+                .or_else(|| previous_token.and_then(|previous| previous.refresh_token.clone())),
             expires_at,
         })
     }
@@ -125,15 +133,28 @@ pub(super) fn endpoint_error(
             } else {
                 "not applicable"
             };
-            io::Error::other(format!(
-                "provider OAuth token endpoint {endpoint} returned HTTP {} - {detail}{request_id}. Request: grant_type={grant_type}, client_id={client_id}, client_auth=none (public client), pkce={pkce}, redirect_uri={redirect_uri}, resource={resource}, authorization_scopes={scopes}",
-                rejection.status.as_u16(),
-            ))
+            let kind = if rejection.status.is_server_error()
+                || matches!(rejection.status.as_u16(), 408 | 429)
+            {
+                io::ErrorKind::Other
+            } else {
+                io::ErrorKind::PermissionDenied
+            };
+            io::Error::new(
+                kind,
+                format!(
+                    "provider OAuth token endpoint {endpoint} returned HTTP {} - {detail}{request_id}. Request: grant_type={grant_type}, client_id={client_id}, client_auth=none (public client), pkce={pkce}, redirect_uri={redirect_uri}, resource={resource}, authorization_scopes={scopes}",
+                    rejection.status.as_u16(),
+                ),
+            )
         }
         OAuthError::Transport(_) => io::Error::other(format!(
             "provider OAuth token exchange failed for {endpoint}"
         )),
-        OAuthError::InvalidResponse => io::Error::other("provider OAuth token response is invalid"),
+        OAuthError::InvalidResponse => io::Error::new(
+            io::ErrorKind::InvalidData,
+            "provider OAuth token response is invalid",
+        ),
     }
 }
 

@@ -7,6 +7,37 @@ use pretty_assertions::assert_eq;
 use tokio::sync::Notify;
 
 #[tokio::test]
+async fn logout_removes_saved_and_cached_credentials() {
+    let server = MockServer::start().await;
+    let (manager, _home) = client(config(&server), Arc::new(MockKeyringStore::default()));
+    let manager = manager.without_interactive_login();
+    save_token(
+        &manager,
+        "access",
+        Some("refresh"),
+        Utc::now().timestamp() + 3600,
+    );
+    assert_eq!(manager.resolve_access_token().await.unwrap(), "access");
+    assert_eq!(
+        manager.status().await.unwrap(),
+        OAuthSessionStatus::Succeeded
+    );
+
+    assert!(manager.logout().await.unwrap());
+    assert!(manager.load_token().unwrap().is_none());
+    assert_eq!(
+        manager.status().await.unwrap(),
+        OAuthSessionStatus::NotReady
+    );
+    assert_eq!(
+        manager.resolve_access_token().await.unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied,
+    );
+    assert!(!manager.logout().await.unwrap());
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn status_subscriptions_survive_gateway_changes_and_are_isolated_by_home() {
     let server = MockServer::start().await;
     let home = tempfile::tempdir().unwrap();
@@ -285,6 +316,7 @@ async fn expired_readiness_stays_not_ready_while_refresh_is_blocked() {
         let server = MockServer::start().await;
         let (manager, home) = client(config(&server), Arc::new(MockKeyringStore::default()));
         let expired = StoredToken {
+            authorization_id: None,
             access_token: "expired".into(),
             refresh_token: Some("refresh".into()),
             expires_at: Some(Utc::now().timestamp() - 1),
@@ -526,6 +558,18 @@ async fn legacy_policy_authorizes_missing_and_rejected_credentials() {
             std::io::ErrorKind::PermissionDenied
         );
         manager.control.allow_automatic_login();
+        assert_eq!(
+            manager
+                .clone()
+                .without_interactive_login()
+                .resolve_with_browser(super::super::RefreshPolicy::WhenExpired, |_| panic!(
+                    "background mode opened browser"
+                ))
+                .await
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
         assert_eq!(
             manager
                 .resolve_with_browser(

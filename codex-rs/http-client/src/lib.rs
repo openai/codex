@@ -1,3 +1,6 @@
+use url::Host;
+use url::Url;
+
 mod chatgpt_cloudflare_cookies;
 mod chatgpt_hosts;
 mod client;
@@ -83,3 +86,26 @@ pub use crate::windows_proxy_auth::WindowsProxyTls;
 pub use crate::windows_proxy_auth::connect_windows_proxy;
 #[cfg(windows)]
 pub use crate::windows_tls::build_windows_platform_tls_config;
+
+/// Validates HTTPS or loopback HTTP endpoints, rejecting userinfo and fragments.
+/// Errors identify the caller-supplied field without including the URL.
+pub fn validate_endpoint_url(value: &str, field: &str) -> Result<Url, String> {
+    let url = Url::parse(value).map_err(|_| format!("invalid {field} URL"))?;
+    let loopback = match url.host() {
+        Some(Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(Host::Ipv4(host)) => host.is_loopback(),
+        Some(Host::Ipv6(host)) => host.is_loopback(),
+        None => false,
+    };
+    if url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || !(url.scheme() == "https" || (url.scheme() == "http" && loopback))
+    {
+        return Err(format!(
+            "{field} must use HTTPS (or loopback HTTP), without userinfo or a fragment"
+        ));
+    }
+    Ok(url)
+}

@@ -73,6 +73,12 @@ impl OAuthSessionStorage {
             .set(&SecretScope::Global, &secret_name(credential_id)?, value)
             .map_err(|_| io::Error::other("failed to save provider OAuth credentials"))
     }
+
+    pub(super) fn delete(&self, credential_id: &str) -> io::Result<bool> {
+        self.0
+            .delete(&SecretScope::Global, &secret_name(credential_id)?)
+            .map_err(|_| io::Error::other("failed to remove provider OAuth credentials"))
+    }
 }
 
 fn secret_name(credential_id: &str) -> io::Result<SecretName> {

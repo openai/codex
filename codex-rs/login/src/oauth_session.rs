@@ -29,22 +29,26 @@ use http::StatusCode;
 use sha2::Digest;
 use sha2::Sha256;
 use tokio::sync::Mutex;
-use url::Host;
 use url::Url;
 
 #[path = "oauth_session_callback.rs"]
 mod callback;
 #[path = "oauth_session_login.rs"]
 mod login;
+#[path = "oauth_session_request.rs"]
+mod request;
 #[path = "oauth_session_storage.rs"]
 mod storage;
 #[path = "oauth_session_token.rs"]
 mod token;
 
+pub use codex_model_provider_info::OAuthSessionConfig;
 pub use login::OAuthLoginControl;
 pub use login::OAuthSessionStatus;
 pub use login::OAuthSessionStatusChange;
 pub use login::subscribe_oauth_session_status;
+pub use request::OAuthRequestCredentials;
+pub use request::OAuthSessionRequest;
 
 use callback::CallbackListener;
 use storage::OAuthSessionStorage;
@@ -63,26 +67,21 @@ pub enum OAuthSessionError {
     LoginInProgress,
 }
 
-/// Public-client OAuth settings that identify one configured authorization grant.
-#[derive(Clone, PartialEq, Eq)]
-pub struct OAuthSessionConfig {
-    pub authorization_url: String,
-    pub token_url: String,
-    pub client_id: String,
-    pub resource: Option<String>,
-    pub scopes: Vec<String>,
-    pub redirect_port: Option<u16>,
-}
-
 /// Resolves and persists an OAuth access token without knowing how a consumer uses it.
 #[derive(Clone)]
 pub struct OAuthSessionManager {
     control: Arc<OAuthLoginControl>,
     state: Arc<OAuthSessionState>,
+    // Whether resolving missing/rejected credentials may start browser sign-in.
+    // Existing credentials can still be reused or refreshed when this is false.
+    allow_interactive_login: bool,
 }
 
+#[derive(Clone)]
 enum RefreshPolicy {
     WhenExpired,
+    // Reconcile the cached token with the persisted grant before reusing it.
+    ObserveStored,
     AfterRejection(String),
 }
 
@@ -90,7 +89,7 @@ impl RefreshPolicy {
     fn can_reuse(&self, token: &StoredToken) -> bool {
         token_is_usable(token)
             && match self {
-                Self::WhenExpired => true,
+                Self::WhenExpired | Self::ObserveStored => true,
                 Self::AfterRejection(rejected_access_token) => {
                     token.access_token != *rejected_access_token
                 }
@@ -99,7 +98,7 @@ impl RefreshPolicy {
 }
 
 enum RefreshOutcome {
-    AccessToken(String),
+    Credentials(StoredToken),
     LoginRequired,
 }
 
@@ -145,6 +144,7 @@ impl OAuthSessionManager {
             .map_err(|_| io::Error::other("failed to create provider OAuth HTTP client"))?;
         Ok(Self {
             control: OAuthLoginControl::for_host(&codex_home, http_client_factory),
+            allow_interactive_login: true,
             state: Arc::new(OAuthSessionState {
                 config,
                 status_tx: login::status_sender_for_host(&codex_home, http_client_factory),
@@ -156,6 +156,27 @@ impl OAuthSessionManager {
                 status: tokio::sync::watch::channel(/*init*/ None).0,
             }),
         })
+    }
+
+    /// Keeps background credential consumers from opening a browser without
+    /// changing the login behavior of other managers in the same runtime.
+    pub fn without_interactive_login(mut self) -> Self {
+        self.allow_interactive_login = false;
+        self
+    }
+
+    fn interactive_login_allowed(&self) -> bool {
+        self.allow_interactive_login
+            && !self
+                .control
+                .explicit_login
+                .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Keeps the sent token paired with its sign-in identity across unauthorized
+    /// recovery and retries, using the existing gateway credential lifecycle.
+    pub fn begin_request(&self) -> OAuthSessionRequest {
+        OAuthSessionRequest::new(self.clone())
     }
 
     /// Returns a usable token, refreshing or starting browser login according to the host policy.
@@ -181,6 +202,16 @@ impl OAuthSessionManager {
         policy: RefreshPolicy,
         open_browser: impl FnOnce(&Url),
     ) -> io::Result<String> {
+        self.resolve_credentials_with_browser(policy, open_browser)
+            .await
+            .map(|token| token.access_token)
+    }
+
+    async fn resolve_credentials_with_browser(
+        &self,
+        policy: RefreshPolicy,
+        open_browser: impl FnOnce(&Url),
+    ) -> io::Result<StoredToken> {
         validate_config(&self.state.config)?;
         let mut cached = self.lock_cached_token().await?;
         let terminal_status = self.state.status.borrow().as_ref().is_some_and(|snapshot| {
@@ -199,11 +230,7 @@ impl OAuthSessionManager {
             && cached.login_required.is_some()
             && cached.token == cached.login_required
         {
-            if !self
-                .control
-                .explicit_login
-                .load(std::sync::atomic::Ordering::Relaxed)
-            {
+            if self.interactive_login_allowed() {
                 return self.authorize_with_browser(&mut cached, open_browser).await;
             }
             return Err(self.login_required_error(cached.token.as_ref()));
@@ -222,9 +249,9 @@ impl OAuthSessionManager {
             if !terminal_matches {
                 self.publish_status(OAuthSessionStatus::Succeeded, Some(token));
             }
-            let access_token = token.access_token.clone();
+            let token = token.clone();
             cached.login_required = None;
-            return Ok(access_token);
+            return Ok(token);
         }
         // The provider may rotate its token before the HTTP response arrives. Keep the
         // refresh, persistence, and cache update alive if the caller drops this future.
@@ -232,10 +259,10 @@ impl OAuthSessionManager {
         let (mut cached, result) = tokio::spawn(async move {
             let result = match manager.refresh(&mut cached, &policy).await {
                 Err(error) => Err(error),
-                Ok(RefreshOutcome::AccessToken(access_token)) => {
+                Ok(RefreshOutcome::Credentials(token)) => {
                     cached.login_required = None;
-                    manager.publish_status(OAuthSessionStatus::Succeeded, cached.token.as_ref());
-                    Ok(access_token)
+                    manager.publish_status(OAuthSessionStatus::Succeeded, Some(&token));
+                    Ok(token)
                 }
                 Ok(RefreshOutcome::LoginRequired) => {
                     cached.login_required = cached.token.clone();
@@ -251,10 +278,7 @@ impl OAuthSessionManager {
                 .get_ref()
                 .and_then(|source| source.downcast_ref::<OAuthSessionError>())
                 == Some(&OAuthSessionError::LoginRequired)
-        }) && !self
-            .control
-            .explicit_login
-            .load(std::sync::atomic::Ordering::Relaxed)
+        }) && self.interactive_login_allowed()
         {
             return self.authorize_with_browser(&mut cached, open_browser).await;
         }
@@ -265,7 +289,7 @@ impl OAuthSessionManager {
         &self,
         cached: &mut OAuthSessionCache,
         credential_lock: &Arc<std::fs::File>,
-    ) -> io::Result<String> {
+    ) -> io::Result<StoredToken> {
         let token = cached
             .pending
             .as_ref()
@@ -281,10 +305,10 @@ impl OAuthSessionManager {
         })
         .await
         .map_err(|_| io::Error::other("provider OAuth credential save task failed"))??;
-        let access_token = token.access_token.clone();
+        let token = token.clone();
         cached.token = cached.pending.take();
         cached.login_required = None;
-        Ok(access_token)
+        Ok(token)
     }
 
     async fn refresh(
@@ -307,7 +331,7 @@ impl OAuthSessionManager {
             if let Some(token) = cached.token.as_ref()
                 && policy.can_reuse(token)
             {
-                return Ok(RefreshOutcome::AccessToken(token.access_token.clone()));
+                return Ok(RefreshOutcome::Credentials(token.clone()));
             }
             let Some(refresh_token) = cached
                 .token
@@ -326,11 +350,11 @@ impl OAuthSessionManager {
                 .await
             {
                 Ok(response) => {
-                    cached.pending = Some(response.into_stored(Some(refresh_token))?);
+                    cached.pending = Some(response.into_stored(cached.token.as_ref())?);
                     return self
                         .persist_pending(cached, &credential_lock)
                         .await
-                        .map(RefreshOutcome::AccessToken);
+                        .map(RefreshOutcome::Credentials);
                 }
                 Err(OAuthError::Rejected(rejection))
                     if rejection.status == StatusCode::BAD_REQUEST
@@ -365,13 +389,14 @@ impl OAuthSessionManager {
             if let Some(token) = cached.token.as_ref()
                 && policy.can_reuse(token)
             {
-                return Ok(RefreshOutcome::AccessToken(token.access_token.clone()));
+                return Ok(RefreshOutcome::Credentials(token.clone()));
             }
         }
         Ok(RefreshOutcome::LoginRequired)
     }
 
-    fn credential_id(&self) -> String {
+    /// Stable, opaque identity of the issuer, client, audience, and scopes.
+    pub fn credential_id(&self) -> String {
         let config = &self.state.config;
         let mut digest = Sha256::new();
         digest.update(self.state.codex_home.to_string_lossy().as_bytes());
@@ -420,7 +445,7 @@ impl OAuthSessionManager {
         &self,
         cached: &mut OAuthSessionCache,
         open_browser: impl FnOnce(&Url),
-    ) -> io::Result<String> {
+    ) -> io::Result<StoredToken> {
         let pkce = generate_pkce();
         let state = generate_state();
         let mut listener = CallbackListener::new(self.state.config.redirect_port, state.clone())?;
@@ -468,10 +493,10 @@ impl OAuthSessionManager {
                     Some(&redirect_uri),
                 )
             })?;
-        cached.pending = Some(response.into_stored(/*previous_refresh_token*/ None)?);
-        let access_token = self.persist_pending(cached, &credential_lock).await?;
-        self.publish_status(OAuthSessionStatus::Succeeded, cached.token.as_ref());
-        Ok(access_token)
+        cached.pending = Some(response.into_stored(/*previous_token*/ None)?);
+        let token = self.persist_pending(cached, &credential_lock).await?;
+        self.publish_status(OAuthSessionStatus::Succeeded, Some(&token));
+        Ok(token)
     }
 
     fn oauth(&self) -> OAuthClient<'_> {
@@ -485,18 +510,6 @@ impl OAuthSessionManager {
                 error_body_limit: ErrorBodyLimit::Bytes(8 * 1024),
             },
         )
-    }
-}
-
-impl fmt::Debug for OAuthSessionConfig {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Configured URLs may contain issuer-specific credentials in arbitrary query keys.
-        formatter
-            .debug_struct("OAuthSessionConfig")
-            .field("client_id", &self.client_id)
-            .field("scopes", &self.scopes)
-            .field("redirect_port", &self.redirect_port)
-            .finish_non_exhaustive()
     }
 }
 
@@ -552,24 +565,7 @@ fn validate_config(config: &OAuthSessionConfig) -> io::Result<()> {
 }
 
 fn validate_oauth_url(value: &str, description: &str) -> io::Result<Url> {
-    let url = Url::parse(value).map_err(|_| io::Error::other(format!("invalid {description}")))?;
-    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
-        return Err(io::Error::other(format!(
-            "{description} cannot include embedded credentials or fragments"
-        )));
-    }
-    let is_loopback = match url.host() {
-        Some(Host::Ipv4(address)) => address.is_loopback(),
-        Some(Host::Ipv6(address)) => address.is_loopback(),
-        Some(Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        None => false,
-    };
-    if url.scheme() != "https" && !(url.scheme() == "http" && is_loopback) {
-        return Err(io::Error::other(format!(
-            "{description} must use HTTPS unless it is loopback"
-        )));
-    }
-    Ok(url)
+    codex_http_client::validate_endpoint_url(value, description).map_err(io::Error::other)
 }
 
 #[cfg(test)]

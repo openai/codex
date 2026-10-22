@@ -26,6 +26,9 @@ use crate::test_support::transport_default_auth_route_config;
 #[path = "oauth_session_login_tests.rs"]
 mod login_tests;
 
+#[path = "oauth_session_request_tests.rs"]
+mod request_tests;
+
 #[path = "oauth_session_storage_tests.rs"]
 mod storage_tests;
 
@@ -48,6 +51,7 @@ fn client(
 fn config(server: &MockServer) -> OAuthSessionConfig {
     OAuthSessionConfig {
         authorization_url: format!("{}/authorize", server.uri()),
+        device_authorization_url: None,
         token_url: format!("{}/token", server.uri()),
         client_id: "codex-test".to_string(),
         resource: Some("https://gateway.example.test/codex".to_string()),
@@ -59,6 +63,7 @@ fn config(server: &MockServer) -> OAuthSessionConfig {
 fn loopback_config() -> OAuthSessionConfig {
     OAuthSessionConfig {
         authorization_url: "http://127.0.0.1:18080/authorize".to_string(),
+        device_authorization_url: None,
         token_url: "http://127.0.0.1:18080/token".to_string(),
         client_id: "codex-test".to_string(),
         resource: None,
@@ -74,6 +79,7 @@ fn save_token(
     expires_at: i64,
 ) {
     let token = StoredToken {
+        authorization_id: None,
         access_token: access_token.to_string(),
         refresh_token: refresh_token.map(str::to_string),
         expires_at: Some(expires_at),
@@ -492,6 +498,7 @@ async fn gateway_credentials_use_a_dedicated_encrypted_file_and_reload_large_tok
     .expect("gateway auth manager");
     client
         .save_token(&StoredToken {
+            authorization_id: None,
             access_token: access_token.clone(),
             refresh_token: None,
             expires_at: None,
@@ -570,9 +577,18 @@ async fn browser_authorization_exchanges_and_persists_under_the_store_lock() {
         .await
         .expect("browser authorization");
 
-    assert_eq!(token, "browser-access-token");
-    let expected =
-        json!({"access_token": "browser-access-token", "refresh_token": "browser-refresh-token"});
+    assert_eq!(token.access_token, "browser-access-token");
+    let authorization_id = cached
+        .token
+        .as_ref()
+        .and_then(|token| token.authorization_id.as_ref())
+        .expect("new browser authorization has a grant ID");
+    let expected = json!({
+        "access_token": "browser-access-token",
+        "refresh_token": "browser-refresh-token",
+        "authorization_id": authorization_id,
+    });
+
     assert_eq!(
         serde_json::to_value(cached.token.as_ref()).expect("cached token"),
         expected
@@ -632,7 +648,8 @@ async fn token_grants_reject_redirects_without_sending_credentials_to_the_target
                 client
                     .authorize_with_browser(&mut cached, complete_browser_authorization)
                     .await
-                    .expect_err("code exchange redirect")
+                    .err()
+                    .expect("code exchange redirect")
             }
         };
         assert!(
@@ -830,6 +847,7 @@ async fn only_explicit_refresh_grant_rejections_request_reauthorization() {
         (400, Some("invalid_request")),
         (400, None),
         (401, Some("unauthorized_client")),
+        (429, Some("temporarily_unavailable")),
         (503, Some("unsupported_grant_type")),
     ] {
         let server = MockServer::start().await;
@@ -859,10 +877,16 @@ async fn only_explicit_refresh_grant_rejections_request_reauthorization() {
                 assert!(matches!(result, Ok(super::RefreshOutcome::LoginRequired)));
             }
             _ => {
-                let message = result
-                    .err()
-                    .expect("surface token endpoint failure")
-                    .to_string();
+                let error = result.err().expect("surface token endpoint failure");
+                assert_eq!(
+                    error.kind(),
+                    if status >= 500 || status == 429 {
+                        std::io::ErrorKind::Other
+                    } else {
+                        std::io::ErrorKind::PermissionDenied
+                    }
+                );
+                let message = error.to_string();
                 assert!(message.contains(&format!("returned HTTP {status}")));
                 if let Some(error_code) = error_code {
                     assert!(message.contains(error_code));
@@ -890,6 +914,7 @@ async fn invalid_grant_recovers_external_credentials_with_a_bounded_retry() {
             .respond_with(move |_: &wiremock::Request| {
                 writer
                     .save_token(&StoredToken {
+                        authorization_id: None,
                         access_token: "external-access".to_string(),
                         refresh_token: Some("external-refresh".to_string()),
                         expires_at: retry_status.map(|_| Utc::now().timestamp() - 1),
@@ -1085,6 +1110,7 @@ async fn failed_save_retains_rotation_without_overwriting_a_new_external_login()
         if recovery == Recovery::ExternalLogin {
             manager
                 .save_token(&StoredToken {
+                    authorization_id: None,
                     access_token: "external-access".to_string(),
                     refresh_token: Some("external-refresh".to_string()),
                     expires_at: None,
@@ -1105,7 +1131,8 @@ async fn failed_save_retains_rotation_without_overwriting_a_new_external_login()
             manager
                 .authorize_with_browser(&mut cached, complete_browser_authorization)
                 .await
-                .expect_err("failed login must preserve the correct recovery baseline");
+                .err()
+                .expect("failed login must preserve the correct recovery baseline");
         }
         if recovery == Recovery::Expired {
             manager

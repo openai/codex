@@ -25,6 +25,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
+url = { workspace = true }
 zstd = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

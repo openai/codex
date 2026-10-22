@@ -112,6 +112,42 @@ pub(super) fn status_sender_for_host(
 }
 
 impl OAuthSessionManager {
+    /// Identifies the persisted sign-in without refreshing an expired access token.
+    /// Refresh preserves this ID; explicit login creates a new one.
+    pub async fn authorization_id(&self) -> io::Result<String> {
+        let _lock = storage::lock_credentials(&self.state.codex_home).await?;
+        self.load_token_async()
+            .await?
+            .and_then(|token| token.authorization_id)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    OAuthSessionError::LoginRequired,
+                )
+            })
+    }
+
+    pub async fn login(&self) -> io::Result<()> {
+        self.login_with_browser(std::future::pending(), open_browser)
+            .await
+    }
+
+    /// Removes the persisted grant and its in-memory copy without contacting the issuer.
+    pub async fn logout(&self) -> io::Result<bool> {
+        let mut cached = self.lock_cached_token().await?;
+        let credential_lock = storage::lock_credentials(&self.state.codex_home).await?;
+        let manager = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let _credential_lock = credential_lock;
+            let removed = manager.state.storage.delete(&manager.credential_id())?;
+            *cached = OAuthSessionCache::default();
+            manager.publish_status(OAuthSessionStatus::NotReady, /*credential*/ None);
+            Ok(removed)
+        })
+        .await
+        .map_err(|_| io::Error::other("provider OAuth credential removal task failed"))?
+    }
+
     /// Returns the OAuth account configuration used to scope status notifications.
     pub fn config(&self) -> &OAuthSessionConfig {
         &self.state.config

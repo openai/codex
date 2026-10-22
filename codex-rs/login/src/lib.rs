@@ -88,9 +88,11 @@ pub use oauth_session::OAuthSessionStatusChange as GatewayAuthStatusChange;
 pub use oauth_session::subscribe_oauth_session_status as subscribe_gateway_auth_status;
 
 pub use oauth_session::OAuthLoginControl;
+pub use oauth_session::OAuthRequestCredentials;
 pub use oauth_session::OAuthSessionConfig;
 pub use oauth_session::OAuthSessionError;
 pub use oauth_session::OAuthSessionManager;
+pub use oauth_session::OAuthSessionRequest;
 pub use oauth_session::OAuthSessionStatus;
 pub use oauth_session::OAuthSessionStatusChange;
 pub use oauth_session::subscribe_oauth_session_status;
