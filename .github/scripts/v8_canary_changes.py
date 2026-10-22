@@ -20,7 +20,6 @@ ROOT = Path(__file__).resolve().parents[2]
 # workflow changes because they can alter whether the canary is invoked.
 CANARY_PATH_PATTERNS = {
     ".bazelrc",
-    ".github/actions/setup-bazel-ci/**",
     ".github/actions/prepare-bazel-ci/**",
     ".github/actions/setup-ci/**",
     ".github/scripts/run_bazel_with_buildbuddy.py",

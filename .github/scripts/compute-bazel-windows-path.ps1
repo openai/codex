@@ -8,7 +8,7 @@ This script derives a smaller, cache-stable PATH that keeps the Windows
 toolchain entries Bazel-backed CI tasks need: MSVC and Windows SDK paths,
 MinGW runtime DLL paths for gnullvm-built tests, Git, PowerShell, Node, Python,
 DotSlash, and the standard Windows system directories.
-`setup-bazel-ci` runs this after exporting the MSVC environment, and the script
+`prepare-bazel-ci` runs this after exporting the MSVC environment, and the script
 publishes the result via `GITHUB_ENV` as `CODEX_BAZEL_WINDOWS_PATH` so later
 steps can pass that explicit PATH to Bazel.
 #>

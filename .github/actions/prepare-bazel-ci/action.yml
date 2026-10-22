@@ -10,7 +10,7 @@ inputs:
 outputs:
   repository-cache-path:
     description: Filesystem path used for the Bazel repository cache.
-    value: ${{ steps.setup_bazel.outputs.repository-cache-path }}
+    value: ${{ steps.configure_bazel_repository_cache.outputs.repository-cache-path }}
   repository-cache-key:
     description: Primary actions/cache key for the Bazel repository cache.
     value: ${{ steps.cache_bazel_repository_key.outputs.repository-cache-key }}
@@ -21,11 +21,86 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Set up Bazel CI
-      id: setup_bazel
-      uses: ./.github/actions/setup-bazel-ci
+    - id: setup_ci
+      uses: ./.github/actions/setup-ci
+
+    - name: Set up Bazel
+      uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+      # Without an explicit Bazelisk version, setup-bazel leaves PATH unchanged
+      # and Windows can use the runner's standalone Bazel, ignoring .bazelversion.
       with:
-        target: ${{ inputs.target }}
+        bazelisk-version: 1.28.1
+        # setup-bazel writes an explicit output_base, which otherwise overrides
+        # BAZEL_OUTPUT_USER_ROOT and leaves Bazel's I/O-heavy trees on C:.
+        output-base: ${{ steps.setup_ci.outputs.bazel-output-base }}
+
+    - name: Configure Bazel repository cache
+      id: configure_bazel_repository_cache
+      shell: bash
+      run: |
+        echo "repository-cache-path=$BAZEL_REPOSITORY_CACHE" >> "$GITHUB_OUTPUT"
+
+    - name: Expose MSVC SDK environment (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        # Bazel exec-side Rust build scripts do not reliably inherit the MSVC developer
+        # shell on GitHub-hosted Windows runners, so discover the latest VS install and
+        # ask `VsDevCmd.bat` to materialize the x64/x64 compiler + SDK environment.
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        if (-not (Test-Path $vswhere)) {
+          throw "vswhere.exe not found"
+        }
+
+        $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+        if (-not $installPath) {
+          throw "Could not locate a Visual Studio installation with VC tools"
+        }
+
+        $vsDevCmd = Join-Path $installPath 'Common7\Tools\VsDevCmd.bat'
+        if (-not (Test-Path $vsDevCmd)) {
+          throw "VsDevCmd.bat not found at $vsDevCmd"
+        }
+
+        # Keep the export surface explicit: these are the paths and SDK roots that the
+        # MSVC toolchain probes need later when Bazel runs Windows exec-platform build
+        # scripts such as `aws-lc-sys`.
+        $varsToExport = @(
+          'INCLUDE',
+          'LIB',
+          'LIBPATH',
+          'PATH',
+          'UCRTVersion',
+          'UniversalCRTSdkDir',
+          'VCINSTALLDIR',
+          'VCToolsInstallDir',
+          'WindowsLibPath',
+          'WindowsSdkBinPath',
+          'WindowsSdkDir',
+          'WindowsSDKLibVersion',
+          'WindowsSDKVersion'
+        )
+
+        # `VsDevCmd.bat` is a batch file, so invoke it under `cmd.exe`, suppress its
+        # banner, then dump the resulting environment with `set`. Re-export only the
+        # approved keys into `GITHUB_ENV` so later steps inherit the same MSVC context.
+        $envLines = & cmd.exe /c ('"{0}" -no_logo -arch=x64 -host_arch=x64 >nul && set' -f $vsDevCmd)
+        foreach ($line in $envLines) {
+          if ($line -notmatch '^(.*?)=(.*)$') {
+            continue
+          }
+
+          $name = $matches[1]
+          $value = $matches[2]
+          if ($varsToExport -contains $name) {
+            "$name=$value" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+        }
+
+    - name: Compute cache-stable Windows Bazel PATH
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: ./.github/scripts/compute-bazel-windows-path.ps1
 
     - name: Compute bazel repository cache key
       id: cache_bazel_repository_key
@@ -47,7 +122,7 @@ runs:
       continue-on-error: true
       uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
       with:
-        path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
+        path: ${{ steps.configure_bazel_repository_cache.outputs.repository-cache-path }}
         key: ${{ steps.cache_bazel_repository_key.outputs.repository-cache-key }}
         restore-keys: |
           ${{ steps.cache_bazel_repository_key.outputs.repository-cache-restore-key }}
