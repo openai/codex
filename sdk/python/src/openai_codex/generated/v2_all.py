@@ -43,6 +43,13 @@ class AmazonBedrockAccount(BaseModel):
     ] = False
 
 
+class GcpAccount(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    type: Annotated[Literal["gcp"], Field(title="GcpAccountType")]
+
+
 class AccountRoutingOverride(Enum):
     no_constraint = "NO_CONSTRAINT"
     us = "us"
@@ -6840,11 +6847,11 @@ class ChatgptAccount(BaseModel):
     type: Annotated[Literal["chatgpt"], Field(title="ChatgptAccountType")]
 
 
-class Account(RootModel[ApiKeyAccount | ChatgptAccount | AmazonBedrockAccount]):
+class Account(RootModel[ApiKeyAccount | ChatgptAccount | AmazonBedrockAccount | GcpAccount]):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    root: ApiKeyAccount | ChatgptAccount | AmazonBedrockAccount
+    root: ApiKeyAccount | ChatgptAccount | AmazonBedrockAccount | GcpAccount
 
 
 class AccountLoginCompletedNotification(BaseModel):

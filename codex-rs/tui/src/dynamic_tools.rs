@@ -1320,7 +1320,7 @@ async fn background_turn_program(
                 }
                 true
             }
-            Some(Account::AmazonBedrock { .. }) | None => false,
+            Some(Account::AmazonBedrock { .. } | Account::Gcp {}) | None => false,
         };
     // Retain saved metadata while suppressing it for accounts that cannot use Daybreak.
     let enabled = enabled && eligible;

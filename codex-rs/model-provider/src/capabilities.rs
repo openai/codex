@@ -10,6 +10,8 @@ use codex_model_provider_info::RemoteCompactionSupport;
 /// can further restrict the functionality exposed to the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderCapabilities {
+    /// Whether requests may include the Responses API `reasoning.summary` parameter.
+    pub reasoning_summaries: bool,
     pub image_generation: bool,
     pub web_search: bool,
     pub external_web_access: bool,
@@ -19,6 +21,7 @@ pub struct ProviderCapabilities {
 impl Default for ProviderCapabilities {
     fn default() -> Self {
         Self {
+            reasoning_summaries: true,
             image_generation: true,
             web_search: true,
             external_web_access: true,

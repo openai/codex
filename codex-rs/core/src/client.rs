@@ -964,7 +964,8 @@ impl ModelClient {
             effort: effort
                 .or_else(|| model_info.default_reasoning_level.clone())
                 .map(|effort| model_info.resolve_reasoning_effort(effort)),
-            summary: (model_info.supports_reasoning_summary_parameter
+            summary: (self.state.provider.capabilities().reasoning_summaries
+                && model_info.supports_reasoning_summary_parameter
                 && summary != ReasoningSummaryConfig::None)
                 .then_some(summary),
             // When Responses Lite is disabled, omit context so Responses uses the default,
