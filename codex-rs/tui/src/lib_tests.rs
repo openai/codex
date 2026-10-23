@@ -942,7 +942,6 @@ async fn latest_session_lookup_params_keep_local_filters_for_embedded_sessions()
     let cwd = temp_dir.path().join("project");
 
     let params = latest_session_lookup_params(
-        /*uses_remote_filesystem*/ false,
         /*model_provider*/ None,
         Some(cwd.as_path()),
         /*include_non_interactive*/ false,
@@ -957,7 +956,6 @@ async fn latest_session_lookup_params_keep_local_filters_for_embedded_sessions()
     assert!(params.use_state_db_only);
 
     let scan_params = latest_session_lookup_params(
-        /*uses_remote_filesystem*/ false,
         /*model_provider*/ None,
         Some(cwd.as_path()),
         /*include_non_interactive*/ false,
@@ -972,7 +970,6 @@ async fn latest_session_lookup_params_honor_explicit_provider() -> color_eyre::R
     let temp_dir = TempDir::new()?;
     let cwd = temp_dir.path().join("project");
     let params = latest_session_lookup_params(
-        /*uses_remote_filesystem*/ false,
         Some("selected-provider".to_string()),
         Some(cwd.as_path()),
         /*include_non_interactive*/ false,
@@ -994,7 +991,6 @@ async fn latest_session_lookup_params_honor_explicit_provider() -> color_eyre::R
 async fn latest_session_lookup_params_omit_local_filters_for_remote_sessions() -> std::io::Result<()>
 {
     let params = latest_session_lookup_params(
-        /*uses_remote_filesystem*/ true,
         /*model_provider*/ None,
         /*cwd_filter*/ None,
         /*include_non_interactive*/ false,
@@ -1009,7 +1005,6 @@ async fn latest_session_lookup_params_omit_local_filters_for_remote_sessions() -
 #[tokio::test]
 async fn latest_session_lookup_params_can_include_non_interactive_sources() -> std::io::Result<()> {
     let params = latest_session_lookup_params(
-        /*uses_remote_filesystem*/ true,
         /*model_provider*/ None,
         /*cwd_filter*/ None,
         /*include_non_interactive*/ true,
@@ -1034,7 +1029,6 @@ async fn latest_session_lookup_params_keep_explicit_cwd_filter_for_remote_sessio
     let cwd = Path::new("repo/on/server");
 
     let params = latest_session_lookup_params(
-        /*uses_remote_filesystem*/ true,
         /*model_provider*/ None,
         Some(cwd),
         /*include_non_interactive*/ false,
@@ -1164,7 +1158,6 @@ async fn fork_last_filters_latest_session_by_cwd_unless_show_all() -> color_eyre
         /*show_all*/ false,
     );
     let scoped_target = lookup_latest_session_target_with_app_server(
-        /*uses_remote_filesystem*/ false,
         &mut app_server,
         &config,
         filter_cwd,
@@ -1177,7 +1170,6 @@ async fn fork_last_filters_latest_session_by_cwd_unless_show_all() -> color_eyre
         /*show_all*/ true,
     );
     let show_all_target = lookup_latest_session_target_with_app_server(
-        /*uses_remote_filesystem*/ false,
         &mut app_server,
         &config,
         show_all_filter_cwd,
@@ -1187,7 +1179,7 @@ async fn fork_last_filters_latest_session_by_cwd_unless_show_all() -> color_eyre
     .expect("expected global fork --last target");
     app_server.shutdown().await?;
 
-    assert_eq!(scoped_target.thread_id, linked_thread_id);
+    assert_eq!(scoped_target.thread_id, project_thread_id);
     assert_eq!(show_all_target.thread_id, other_thread_id);
     Ok(())
 }
@@ -1225,7 +1217,6 @@ async fn latest_session_lookup_falls_back_for_rollout_missing_from_state_db()
     )?;
 
     let target = lookup_latest_session_target_with_app_server(
-        /*uses_remote_filesystem*/ false,
         &mut app_server,
         &config,
         Some(project_cwd.as_path()),

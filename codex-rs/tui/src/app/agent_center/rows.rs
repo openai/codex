@@ -150,6 +150,10 @@ impl AgentsOverviewView {
                                 /*max_width*/ None,
                             )
                         }
+                        AgentsOverviewGrouping::Directory => format_directory_display(
+                            self.rows[index].thread.cwd.as_path(),
+                            /*max_width*/ None,
+                        ),
                         AgentsOverviewGrouping::Status => task.group.label().to_owned(),
                         AgentsOverviewGrouping::Model => model_name(&task.thread).to_owned(),
                     }
@@ -168,8 +172,10 @@ impl AgentsOverviewView {
                 } else {
                     format!("{count} of {total}")
                 };
-                let group = if state.grouping == AgentsOverviewGrouping::Project
-                    && !self.is_pinned(index)
+                let group = if matches!(
+                    state.grouping,
+                    AgentsOverviewGrouping::Project | AgentsOverviewGrouping::Directory
+                ) && !self.is_pinned(index)
                 {
                     crate::text_formatting::center_truncate_path(
                         &group,

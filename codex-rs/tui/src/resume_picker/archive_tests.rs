@@ -218,7 +218,7 @@ fn archived_status_preserves_directory_filter_and_hides_archive_shortcut() {
         @"Filter: Cwd   Archived  Sort: Updated "
     );
 
-    state.toggle_filter_mode();
+    state.change_filter_mode(super::super::ToolbarValueDirection::Next);
 
     assert_eq!(
         *requested_filters.lock().unwrap(),

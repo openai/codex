@@ -1,13 +1,42 @@
 //! Command Center grouping, including restoration and client-local preference persistence.
-//! The view owns the live choice; ordered app events save it through the existing config writer.
+//! Directory is view-local so selecting it never writes a value that older clients reject.
 
 use super::super::App;
 use super::super::agents_overview::AgentsOverviewState;
-use super::AgentsOverviewGrouping;
 use super::AgentsOverviewView;
 use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
 use codex_app_server_protocol::Thread;
+
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub(in crate::app) enum AgentsOverviewGrouping {
+    #[default]
+    Project,
+    Directory,
+    Status,
+    Model,
+}
+
+impl From<codex_config::types::AgentsOverviewGrouping> for AgentsOverviewGrouping {
+    fn from(grouping: codex_config::types::AgentsOverviewGrouping) -> Self {
+        match grouping {
+            codex_config::types::AgentsOverviewGrouping::Project => Self::Project,
+            codex_config::types::AgentsOverviewGrouping::Status => Self::Status,
+            codex_config::types::AgentsOverviewGrouping::Model => Self::Model,
+        }
+    }
+}
+
+impl AgentsOverviewGrouping {
+    pub(super) fn persisted(self) -> Option<codex_config::types::AgentsOverviewGrouping> {
+        match self {
+            Self::Project => Some(codex_config::types::AgentsOverviewGrouping::Project),
+            Self::Directory => None,
+            Self::Status => Some(codex_config::types::AgentsOverviewGrouping::Status),
+            Self::Model => Some(codex_config::types::AgentsOverviewGrouping::Model),
+        }
+    }
+}
 
 pub(super) fn model_name(thread: &Thread) -> &str {
     thread
@@ -56,6 +85,12 @@ impl AgentsOverviewView {
                     std::cmp::Reverse(self.rows[*index].thread.updated_at),
                 )
             }),
+            AgentsOverviewGrouping::Directory => visible.sort_by_key(|index| {
+                (
+                    &self.directory_group_keys[*index],
+                    std::cmp::Reverse(self.rows[*index].thread.updated_at),
+                )
+            }),
             AgentsOverviewGrouping::Status => {}
             AgentsOverviewGrouping::Model => visible.sort_by_key(|index| {
                 (
@@ -81,6 +116,9 @@ impl AgentsOverviewView {
             AgentsOverviewGrouping::Project => {
                 self.project_groups[left].key == self.project_groups[right].key
             }
+            AgentsOverviewGrouping::Directory => {
+                self.directory_group_keys[left] == self.directory_group_keys[right]
+            }
             AgentsOverviewGrouping::Status => self.rows[left].group == self.rows[right].group,
             AgentsOverviewGrouping::Model => {
                 model_name(&self.rows[left].thread) == model_name(&self.rows[right].thread)
@@ -96,7 +134,7 @@ impl AgentsOverviewState {
             .view_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .grouping = grouping;
+            .grouping = grouping.into();
         state
     }
 }
@@ -104,7 +142,7 @@ impl AgentsOverviewState {
 impl App {
     pub(in super::super) async fn persist_agents_overview_grouping(
         &mut self,
-        grouping: AgentsOverviewGrouping,
+        grouping: codex_config::types::AgentsOverviewGrouping,
     ) {
         self.local_settings.tui.agents_overview_grouping = grouping;
         let edit = ConfigEdit::SetPath {

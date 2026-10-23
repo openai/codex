@@ -186,6 +186,7 @@ struct PageLoadRequest {
     request_token: usize,
     search_token: Option<usize>,
     mode: PageLoadMode,
+    filter_mode: SessionFilterMode,
     cwd_filter: Option<PathBuf>,
     status: SessionStatus,
     provider_filter: ProviderFilter,
@@ -218,6 +219,7 @@ enum ProviderFilter {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SessionFilterMode {
     Cwd,
+    Repo,
     All,
 }
 
@@ -230,11 +232,20 @@ impl SessionFilterMode {
         }
     }
 
-    fn toggle(self, filter_cwd: Option<&Path>) -> Self {
-        match self {
-            Self::Cwd => Self::All,
-            Self::All if filter_cwd.is_some() => Self::Cwd,
-            Self::All => Self::All,
+    fn change(
+        self,
+        direction: ToolbarValueDirection,
+        filter_cwd: Option<&Path>,
+        repo_filter_available: bool,
+    ) -> Self {
+        match (self, direction) {
+            (Self::Cwd, ToolbarValueDirection::Next) if repo_filter_available => Self::Repo,
+            (Self::Cwd, ToolbarValueDirection::Next | ToolbarValueDirection::Previous)
+            | (Self::Repo, ToolbarValueDirection::Next) => Self::All,
+            (Self::Repo, ToolbarValueDirection::Previous) => Self::Cwd,
+            (Self::All, ToolbarValueDirection::Previous) if repo_filter_available => Self::Repo,
+            (Self::All, _) if filter_cwd.is_some() => Self::Cwd,
+            (Self::All, _) => Self::All,
         }
     }
 }
@@ -250,6 +261,11 @@ enum ToolbarControl {
     Filter,
     Status,
     Sort,
+}
+
+enum ToolbarValueDirection {
+    Previous,
+    Next,
 }
 
 impl ToolbarControl {
@@ -570,6 +586,12 @@ async fn run_session_picker_with_loader(
     picker_loader: PickerLoader,
     bg_rx: mpsc::UnboundedReceiver<BackgroundEvent>,
 ) -> Result<SessionSelection> {
+    let (repo_filter_tx, repo_filter_rx) = mpsc::unbounded_channel();
+    if let Some(cwd) = options.local_filter_cwd.clone() {
+        tokio::task::spawn_blocking(move || {
+            let _ = repo_filter_tx.send(local_repo_filter_available(&cwd));
+        });
+    }
     let alt = AltScreenGuard::enter(tui);
     let mut state = PickerState::new(
         options.backend_id,
@@ -577,9 +599,12 @@ async fn run_session_picker_with_loader(
         picker_loader,
         options.provider_filter,
         options.show_all,
-        options.filter_cwd,
+        options.local_filter_cwd.clone(),
         options.action,
     );
+    state.filter_mode =
+        SessionFilterMode::from_show_all(options.show_all, options.filter_cwd.as_deref());
+    state.filter_cwd = options.filter_cwd;
     state.local_filter_cwd = options.local_filter_cwd;
     state.use_theme_colors = options.use_theme_colors;
     state.copy_on_select = options.copy_on_select;
@@ -604,6 +629,7 @@ async fn run_session_picker_with_loader(
     }
     let mut tui_events = alt.tui.event_stream().fuse();
     let mut background_events = UnboundedReceiverStream::new(bg_rx).fuse();
+    let mut repo_filter_events = UnboundedReceiverStream::new(repo_filter_rx).fuse();
 
     loop {
         tokio::select! {
@@ -657,6 +683,9 @@ async fn run_session_picker_with_loader(
                 if let Some(selection) = state.handle_background_event(event).await? {
                     return Ok(selection);
                 }
+            }
+            Some(available) = repo_filter_events.next() => {
+                state.set_repo_filter_available(available);
             }
             else => break,
         }
@@ -735,6 +764,7 @@ fn spawn_app_server_page_loader(
                     let cwd_filter = page_cwd_filter.for_request(
                         request.cursor.as_ref(),
                         request.cwd_filter.as_deref(),
+                        request.filter_mode,
                         uses_remote_filesystem,
                     );
                     let cursor = request.cursor.map(|PageCursor::AppServer(cursor)| cursor);
@@ -888,6 +918,7 @@ struct PickerState {
     status: SessionStatus,
     filter_cwd: Option<PathBuf>,
     local_filter_cwd: Option<PathBuf>,
+    repo_filter_available: bool,
     toolbar_focus: ToolbarControl,
     density: SessionListDensity,
     launch_context: SessionPickerLaunchContext,
@@ -1091,6 +1122,7 @@ impl PickerState {
             local_filter_cwd: filter_cwd.clone(),
             local_cwd_matches: HashMap::new(),
             filter_cwd,
+            repo_filter_available: false,
             toolbar_focus: ToolbarControl::Filter,
             density: SessionListDensity::Comfortable,
             launch_context: SessionPickerLaunchContext::Startup,
@@ -1141,6 +1173,11 @@ impl PickerState {
 
     fn request_frame(&self) {
         self.requester.schedule_frame();
+    }
+
+    fn set_repo_filter_available(&mut self, available: bool) {
+        self.repo_filter_available = available;
+        self.request_frame();
     }
 
     fn is_transcript_loading(&self) -> bool {
@@ -1421,11 +1458,12 @@ impl PickerState {
                 self.focus_previous_toolbar_control();
                 self.request_frame();
             }
-            _ if allow_plain_char_navigation
-                && (self.keymap.list.move_left.is_pressed(key)
-                    || self.keymap.list.move_right.is_pressed(key)) =>
-            {
-                self.change_focused_toolbar_value();
+            _ if allow_plain_char_navigation && self.keymap.list.move_left.is_pressed(key) => {
+                self.change_focused_toolbar_value(ToolbarValueDirection::Previous);
+                self.request_frame();
+            }
+            _ if allow_plain_char_navigation && self.keymap.list.move_right.is_pressed(key) => {
+                self.change_focused_toolbar_value(ToolbarValueDirection::Next);
                 self.request_frame();
             }
             KeyEvent {
@@ -1506,6 +1544,7 @@ impl PickerState {
             request_token,
             search_token,
             mode,
+            filter_mode: self.filter_mode,
             cwd_filter: self.active_cwd_filter(),
             status: self.status,
             provider_filter: self.provider_filter.clone(),
@@ -1546,6 +1585,7 @@ impl PickerState {
                         request_token,
                         search_token,
                         mode: PageLoadMode::StoreDefault,
+                        filter_mode: self.filter_mode,
                         cwd_filter: self.active_cwd_filter(),
                         status: self.status,
                         provider_filter: self.provider_filter.clone(),
@@ -1716,11 +1756,13 @@ impl PickerState {
             return false;
         };
         paths_match(row_cwd, filter_cwd)
-            || codex_git_utils::repository_identity(row_cwd)
-                .zip(codex_git_utils::repository_identity(filter_cwd))
-                .is_some_and(|(row, filter)| {
-                    row.common_dir == filter.common_dir && row.relative_cwd == filter.relative_cwd
-                })
+            || (self.filter_mode == SessionFilterMode::Repo
+                && codex_git_utils::repository_identity(row_cwd)
+                    .zip(codex_git_utils::repository_identity(filter_cwd))
+                    .is_some_and(|(row, filter)| {
+                        row.common_dir == filter.common_dir
+                            && row.relative_cwd == filter.relative_cwd
+                    }))
     }
 
     fn set_query(&mut self, new_query: String) {
@@ -1871,6 +1913,7 @@ impl PickerState {
             request_token,
             search_token,
             mode,
+            filter_mode: self.filter_mode,
             cwd_filter: self.active_cwd_filter(),
             status: self.status,
             provider_filter: self.provider_filter.clone(),
@@ -1910,8 +1953,12 @@ impl PickerState {
         self.start_initial_load();
     }
 
-    fn toggle_filter_mode(&mut self) {
-        let next_filter_mode = self.filter_mode.toggle(self.filter_cwd.as_deref());
+    fn change_filter_mode(&mut self, direction: ToolbarValueDirection) {
+        let next_filter_mode = self.filter_mode.change(
+            direction,
+            self.filter_cwd.as_deref(),
+            self.repo_filter_available,
+        );
         if self.filter_mode == next_filter_mode {
             return;
         }
@@ -1929,7 +1976,7 @@ impl PickerState {
 
     fn active_cwd_filter(&self) -> Option<PathBuf> {
         match self.filter_mode {
-            SessionFilterMode::Cwd => self.filter_cwd.clone(),
+            SessionFilterMode::Cwd | SessionFilterMode::Repo => self.filter_cwd.clone(),
             SessionFilterMode::All => None,
         }
     }
@@ -1942,10 +1989,10 @@ impl PickerState {
         self.toolbar_focus = self.toolbar_focus.next(self.action);
     }
 
-    fn change_focused_toolbar_value(&mut self) {
+    fn change_focused_toolbar_value(&mut self, direction: ToolbarValueDirection) {
         match self.toolbar_focus {
             ToolbarControl::Sort => self.toggle_sort_key(),
-            ToolbarControl::Filter => self.toggle_filter_mode(),
+            ToolbarControl::Filter => self.change_filter_mode(direction),
             ToolbarControl::Status => self.toggle_status(),
         }
     }
@@ -2152,6 +2199,16 @@ pub(crate) fn repository_cwd_filter(
     ThreadListCwdFilter::One(cwd.to_string_lossy().into_owned())
 }
 
+fn local_repo_filter_available(cwd: &Path) -> bool {
+    codex_git_utils::linked_worktree_cwds(cwd).is_some_and(|cwds| {
+        cwds.into_iter()
+            .filter_map(|cwd| dunce::canonicalize(cwd).ok())
+            .collect::<HashSet<_>>()
+            .len()
+            > 1
+    })
+}
+
 fn paths_match(a: &Path, b: &Path) -> bool {
     path_utils::paths_match_after_normalization(a, b)
 }
@@ -2289,19 +2346,27 @@ fn filter_control_spans(state: &PickerState, compact: bool) -> Vec<Span<'static>
             ),
         ];
     }
-    vec![
+    let mut values = vec![
         "Filter: ".set_style(secondary_text_style()),
         toolbar_value(
             filter_mode_label(SessionFilterMode::Cwd),
             state.filter_mode == SessionFilterMode::Cwd,
             filter_focused,
         ),
-        toolbar_value(
-            filter_mode_label(SessionFilterMode::All),
-            state.filter_mode == SessionFilterMode::All,
+    ];
+    if state.repo_filter_available {
+        values.push(toolbar_value(
+            filter_mode_label(SessionFilterMode::Repo),
+            state.filter_mode == SessionFilterMode::Repo,
             filter_focused,
-        ),
-    ]
+        ));
+    }
+    values.push(toolbar_value(
+        filter_mode_label(SessionFilterMode::All),
+        state.filter_mode == SessionFilterMode::All,
+        filter_focused,
+    ));
+    values
 }
 
 fn toolbar_value(label: &'static str, active: bool, focused: bool) -> Span<'static> {
@@ -2321,6 +2386,7 @@ fn toolbar_value(label: &'static str, active: bool, focused: bool) -> Span<'stat
 fn filter_mode_label(filter_mode: SessionFilterMode) -> &'static str {
     match filter_mode {
         SessionFilterMode::Cwd => "Cwd",
+        SessionFilterMode::Repo => "Repo",
         SessionFilterMode::All => "All",
     }
 }
@@ -3773,7 +3839,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn linked_worktree_sessions_are_included_for_local_repositories() {
+    async fn linked_worktree_sessions_follow_directory_scope() {
         let root = tempfile::tempdir().expect("temporary repository");
         let primary = root.path().join("primary");
         let linked = root.path().join("linked");
@@ -3802,7 +3868,16 @@ mod tests {
         let mut row = make_row("session.jsonl", "2025-01-01T00:00:00Z", "Linked session");
         row.cwd = Some(linked.clone());
         let single = ThreadListCwdFilter::One(primary.display().to_string());
+        state.repo_filter_available = local_repo_filter_available(&primary);
         state.start_initial_load();
+        state.ingest_page(page(
+            vec![row.clone()],
+            /*next_cursor*/ None,
+            /*num_scanned_files*/ 1,
+            /*reached_scan_cap*/ false,
+        ));
+        assert!(state.filtered_rows.is_empty());
+        state.change_filter_mode(ToolbarValueDirection::Next);
         state.ingest_page(page(
             vec![row.clone()],
             /*next_cursor*/ None,
@@ -3887,6 +3962,22 @@ mod tests {
             .handle_background_event(event)
             .await
             .expect("ingest app-server page");
+        assert!(
+            live_picker
+                .filtered_rows
+                .iter()
+                .all(|row| row.cwd.as_deref() == Some(primary.as_path()))
+        );
+        live_picker.filter_mode = SessionFilterMode::Repo;
+        live_picker.start_initial_load();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(10), bg_rx.recv())
+            .await
+            .expect("app-server repo page response")
+            .expect("repo page event");
+        live_picker
+            .handle_background_event(event)
+            .await
+            .expect("ingest app-server repo page");
         let linked_index = live_picker
             .filtered_rows
             .iter()
@@ -3906,18 +3997,15 @@ mod tests {
             live_picker.handle_key(accept).await.expect("fork selection"),
             Some(SessionSelection::Fork(SessionTarget { thread_id, .. })) if thread_id == linked_id
         ));
-        let mut local = crate::latest_session_lookup_params(
-            /*uses_remote_filesystem*/ false,
+        let local = crate::latest_session_lookup_params(
             /*model_provider*/ None,
             Some(&primary),
             /*include_non_interactive*/ false,
             crate::LatestSessionLookupMode::StateDbOnly,
         );
-        assert!(matches!(local.cwd, Some(ThreadListCwdFilter::Many(_))));
-        local.cwd = Some(single.clone());
+        assert_eq!(local.cwd, Some(single.clone()));
         assert_eq!(
             crate::latest_session_lookup_params(
-                /*uses_remote_filesystem*/ true,
                 /*model_provider*/ None,
                 Some(&primary),
                 /*include_non_interactive*/ false,
@@ -5606,7 +5694,7 @@ session_picker_view = "dense"
         use crate::test_backend::VT100Backend;
 
         let loader = page_only_loader(|_| {});
-        let state = PickerState::new(
+        let mut state = PickerState::new(
             crate::backend_id::BackendId::new(),
             FrameRequester::test_dummy(),
             loader,
@@ -5615,6 +5703,7 @@ session_picker_view = "dense"
             Some(PathBuf::from("/tmp/project")),
             SessionPickerAction::Resume,
         );
+        state.set_repo_filter_available(/*available*/ true);
 
         let width: u16 = 100;
         let backend = VT100Backend::new(width, /*height*/ 1);
@@ -6362,10 +6451,28 @@ session_picker_view = "dense"
             .handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
             .await
             .unwrap();
+        assert_eq!(state.filter_mode, SessionFilterMode::All);
+        state.set_repo_filter_available(/*available*/ true);
+        assert_eq!(state.filter_mode, SessionFilterMode::All);
 
-        let guard = recorded_requests.lock().unwrap();
-        assert_eq!(guard.len(), 2);
-        assert_eq!(guard[1].cwd_filter, None);
+        let cwd_filter = Some(Path::new("/tmp/project"));
+        for (key, filter_mode, expected_cwd) in [
+            (KeyCode::Left, SessionFilterMode::Repo, cwd_filter),
+            (KeyCode::Left, SessionFilterMode::Cwd, cwd_filter),
+            (KeyCode::Right, SessionFilterMode::Repo, cwd_filter),
+            (KeyCode::Right, SessionFilterMode::All, None),
+        ] {
+            state
+                .handle_key(KeyEvent::new(key, KeyModifiers::NONE))
+                .await
+                .unwrap();
+            let guard = recorded_requests.lock().unwrap();
+            let request = guard.last().expect("filter reload request");
+            assert_eq!(
+                (request.filter_mode, request.cwd_filter.as_deref()),
+                (filter_mode, expected_cwd)
+            );
+        }
     }
 
     #[tokio::test]

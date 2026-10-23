@@ -278,7 +278,7 @@ define_keymap_actions! {
         archive => "Archive the selected task and its child agents.",
         delete => "Permanently delete the selected task and its child agents.",
         hide => "Hide the selected task until explicitly resumed.",
-        toggle_grouping => "Cycle task grouping by project, status, or model.",
+        toggle_grouping => "Cycle task grouping by project, directory, status, or model.",
     }
     approval "Approval" {
         open_fullscreen => "Open approval details fullscreen.",

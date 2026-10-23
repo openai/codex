@@ -1,0 +1,28 @@
+---
+source: tui/src/app/agents_overview_tests.rs
+expression: normalize_agent_center_snapshot(directory_grouping)
+---
+  Agent command center  Group: Directory  g
+   All 7   Needs you 0   Working 0   Ready 7   Inactive 0                                                                                      tab/⇧tab filter
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+      Tasks                                                                                   Status         Updated
+  /tmp/worktree-root/linked  2
+    ○ Linked README                                                                           Ready           2m ago
+    ○ Linked tree                                                                             Ready           2m ago
+
+  /tmp/worktree-root/linked/shared/child  1
+    ○ Linked child                                                                            Ready           2m ago
+
+  /tmp/worktree-root/primary  2
+  › ○ Primary README                                                                          Ready           2m ago
+    ○ Primary tree                                                                            Ready           2m ago
+
+  /tmp/worktree-root/primary/shared/child  1
+    ○ Primary child                                                                           Ready           2m ago
+
+  /tmp/worktree-root/primary/subdir/child  1
+    ○ Nested repository                                                                       Ready           2m ago
+
+
+
+  ? help  esc back  ↑/↓ move  enter open  n new

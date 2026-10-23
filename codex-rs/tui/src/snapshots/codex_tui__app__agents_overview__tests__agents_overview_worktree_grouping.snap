@@ -1,23 +1,23 @@
 ---
 source: tui/src/app/agents_overview_tests.rs
-expression: normalize_agent_center_snapshot(grouping)
+expression: normalize_agent_center_snapshot(project_grouping)
 ---
   Agent command center  Group: Project  g
-   All 4   Needs you 0   Working 0   Ready 4   Inactive 0                                                                                      tab/⇧tab filter
+   All 7   Needs you 0   Working 0   Ready 7   Inactive 0                                                                                      tab/⇧tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
       Tasks                                                                                   Status         Updated
-  /tmp/worktree-root/primary  2
-  › ○ Task                                                                                    Ready           2m ago
-    ○ Task                                                                                    Ready           2m ago
+  /tmp/worktree-root/primary  4
+  › ○ Primary README                                                                          Ready           2m ago
+    ○ Primary tree                                                                            Ready           2m ago
+    ○ Linked README                                                                           Ready           2m ago
+    ○ Linked tree                                                                             Ready           2m ago
+
+  /tmp/worktree-root/primary/shared/child  2
+    ○ Primary child                                                                           Ready           2m ago
+    ○ Linked child                                                                            Ready           2m ago
 
   /tmp/worktree-root/primary/subdir/child  1
-    ○ Task                                                                                    Ready           2m ago
-
-  /tmp/worktree-root/primary/subdir/child  1
-    ○ Task                                                                                    Ready           2m ago
-
-
-
+    ○ Nested repository                                                                       Ready           2m ago
 
 
 

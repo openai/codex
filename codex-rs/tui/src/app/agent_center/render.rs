@@ -137,6 +137,7 @@ impl Renderable for AgentsOverviewView {
         };
         let grouping = match state.grouping {
             AgentsOverviewGrouping::Project => "Project",
+            AgentsOverviewGrouping::Directory => "Directory",
             AgentsOverviewGrouping::Status => "Status",
             AgentsOverviewGrouping::Model => "Model",
         };

@@ -43,7 +43,6 @@ use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::Thread as AppServerThread;
-#[cfg(test)]
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
@@ -863,7 +862,6 @@ async fn lookup_session_target_with_app_server(
 }
 
 async fn lookup_latest_session_target_with_app_server(
-    uses_remote_filesystem: bool,
     app_server: &mut AppServerSession,
     config: &Config,
     cwd_filter: Option<&Path>,
@@ -877,7 +875,6 @@ async fn lookup_latest_session_target_with_app_server(
     ] {
         let response = app_server
             .thread_list(latest_session_lookup_params(
-                uses_remote_filesystem,
                 model_provider.clone(),
                 cwd_filter,
                 include_non_interactive,
@@ -911,7 +908,6 @@ enum LatestSessionLookupMode {
 }
 
 fn latest_session_lookup_params(
-    uses_remote_filesystem: bool,
     model_provider: Option<String>,
     cwd_filter: Option<&Path>,
     include_non_interactive: bool,
@@ -931,8 +927,7 @@ fn latest_session_lookup_params(
         project_id: None,
         parent_thread_id: None,
         ancestor_thread_id: None,
-        cwd: cwd_filter
-            .map(|cwd| resume_picker::repository_cwd_filter(cwd, uses_remote_filesystem)),
+        cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().into_owned())),
         use_state_db_only: match lookup_mode {
             LatestSessionLookupMode::StateDbOnly => true,
             LatestSessionLookupMode::ScanAndRepair => false,
@@ -1550,10 +1545,6 @@ async fn run_ratatui_app(
                 .run_until(
                     &mut tui,
                     lookup_latest_session_target_with_app_server(
-                        uses_remote_workspace_or_environment(
-                            &app_server_target,
-                            &environment_manager,
-                        ),
                         startup_app_server,
                         &config,
                         filter_cwd,
@@ -1652,7 +1643,6 @@ async fn run_ratatui_app(
             .run_until(
                 &mut tui,
                 lookup_latest_session_target_with_app_server(
-                    uses_remote_workspace_or_environment(&app_server_target, &environment_manager),
                     startup_app_server,
                     &config,
                     filter_cwd,

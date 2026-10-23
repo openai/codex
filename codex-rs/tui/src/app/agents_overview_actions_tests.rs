@@ -238,10 +238,20 @@ async fn archiving_selects_the_next_displayed_task() -> Result<()> {
                 let expected = match (grouping, filtered) {
                     (AgentsOverviewGrouping::Status, false) => vec![3, 2, 1, 4],
                     (AgentsOverviewGrouping::Status, true) => vec![3, 1, 4],
-                    (AgentsOverviewGrouping::Project | AgentsOverviewGrouping::Model, false) => {
+                    (
+                        AgentsOverviewGrouping::Project
+                        | AgentsOverviewGrouping::Directory
+                        | AgentsOverviewGrouping::Model,
+                        false,
+                    ) => {
                         vec![3, 4, 2, 1]
                     }
-                    (AgentsOverviewGrouping::Project | AgentsOverviewGrouping::Model, true) => {
+                    (
+                        AgentsOverviewGrouping::Project
+                        | AgentsOverviewGrouping::Directory
+                        | AgentsOverviewGrouping::Model,
+                        true,
+                    ) => {
                         vec![3, 4, 1]
                     }
                 };
@@ -311,6 +321,7 @@ async fn archiving_selects_the_next_displayed_task() -> Result<()> {
 async fn external_removals_preserve_adjacent_selection() {
     for grouping in [
         AgentsOverviewGrouping::Project,
+        AgentsOverviewGrouping::Directory,
         AgentsOverviewGrouping::Status,
         AgentsOverviewGrouping::Model,
     ] {
@@ -362,7 +373,9 @@ async fn external_removals_preserve_adjacent_selection() {
             );
             let expected = match grouping {
                 AgentsOverviewGrouping::Status => [ids[0], ids[3]],
-                AgentsOverviewGrouping::Project | AgentsOverviewGrouping::Model => [ids[3], ids[0]],
+                AgentsOverviewGrouping::Project
+                | AgentsOverviewGrouping::Directory
+                | AgentsOverviewGrouping::Model => [ids[3], ids[0]],
             };
             let archive = ServerNotification::ThreadArchived(ThreadArchivedNotification {
                 thread_id: ids[2].to_string(),
@@ -438,6 +451,7 @@ async fn hiding_tasks_keeps_selection_adjacent_in_display_order() -> Result<()> 
     let mut selections = Vec::new();
     for grouping in [
         AgentsOverviewGrouping::Project,
+        AgentsOverviewGrouping::Directory,
         AgentsOverviewGrouping::Status,
         AgentsOverviewGrouping::Model,
     ] {
@@ -470,10 +484,20 @@ async fn hiding_tasks_keeps_selection_adjacent_in_display_order() -> Result<()> 
                 // The preceding filtered case retains Other 2; rediscovered tasks append.
                 (AgentsOverviewGrouping::Status, false) => vec![3, 1, 4, 2],
                 (AgentsOverviewGrouping::Status, true) => vec![3, 1, 4],
-                (AgentsOverviewGrouping::Project | AgentsOverviewGrouping::Model, false) => {
+                (
+                    AgentsOverviewGrouping::Project
+                    | AgentsOverviewGrouping::Directory
+                    | AgentsOverviewGrouping::Model,
+                    false,
+                ) => {
                     vec![3, 4, 2, 1]
                 }
-                (AgentsOverviewGrouping::Project | AgentsOverviewGrouping::Model, true) => {
+                (
+                    AgentsOverviewGrouping::Project
+                    | AgentsOverviewGrouping::Directory
+                    | AgentsOverviewGrouping::Model,
+                    true,
+                ) => {
                     vec![3, 4, 1]
                 }
             };

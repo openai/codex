@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use super::PageCursor;
+use super::SessionFilterMode;
 use super::repository_cwd_filter;
 use codex_app_server_protocol::ThreadListCwdFilter;
 
@@ -17,10 +18,19 @@ impl PageCwdFilter {
         &mut self,
         cursor: Option<&PageCursor>,
         cwd: Option<&Path>,
+        filter_mode: SessionFilterMode,
         uses_remote_filesystem: bool,
     ) -> Option<ThreadListCwdFilter> {
         if cursor.is_none() {
-            self.current = cwd.map(|cwd| repository_cwd_filter(cwd, uses_remote_filesystem));
+            self.current = match filter_mode {
+                SessionFilterMode::Cwd => {
+                    cwd.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().into_owned()))
+                }
+                SessionFilterMode::Repo => {
+                    cwd.map(|cwd| repository_cwd_filter(cwd, uses_remote_filesystem))
+                }
+                SessionFilterMode::All => None,
+            };
         }
         self.current.clone()
     }

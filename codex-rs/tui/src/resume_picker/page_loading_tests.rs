@@ -1,10 +1,10 @@
-//! Checks that a cursor keeps its original checkout filter until the listing restarts.
+//! Checks that a cursor keeps its original directory scope until the listing restarts.
 
 use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn linked_checkout_changes_only_affect_the_next_listing_cycle() {
+fn directory_scope_changes_only_affect_the_next_listing_cycle() {
     let root = tempfile::tempdir().expect("temporary repository");
     let primary = root.path().join("primary");
     let linked = root.path().join("linked");
@@ -20,6 +20,7 @@ fn linked_checkout_changes_only_affect_the_next_listing_cycle() {
         filter.for_request(
             /*cursor*/ None,
             Some(&primary),
+            SessionFilterMode::Cwd,
             /*uses_remote_filesystem*/ false,
         ),
         single
@@ -41,11 +42,21 @@ fn linked_checkout_changes_only_affect_the_next_listing_cycle() {
         filter.for_request(
             Some(&cursor),
             Some(&primary),
+            SessionFilterMode::Repo,
             /*uses_remote_filesystem*/ false,
         ),
         single
     );
-    let both = Some(ThreadListCwdFilter::Many(vec![
+    assert_eq!(
+        filter.for_request(
+            /*cursor*/ None,
+            Some(&primary),
+            SessionFilterMode::Cwd,
+            /*uses_remote_filesystem*/ false,
+        ),
+        single
+    );
+    let repo = Some(ThreadListCwdFilter::Many(vec![
         primary.to_string_lossy().into_owned(),
         linked.to_string_lossy().into_owned(),
     ]));
@@ -53,25 +64,37 @@ fn linked_checkout_changes_only_affect_the_next_listing_cycle() {
         filter.for_request(
             /*cursor*/ None,
             Some(&primary),
+            SessionFilterMode::Repo,
             /*uses_remote_filesystem*/ false,
         ),
-        both
+        repo
     );
     std::fs::remove_file(linked.join(".git")).expect("remove linked checkout registration");
     assert_eq!(
         filter.for_request(
             Some(&cursor),
             Some(&primary),
+            SessionFilterMode::Cwd,
             /*uses_remote_filesystem*/ false,
         ),
-        both
+        repo
     );
     assert_eq!(
         filter.for_request(
             /*cursor*/ None,
             Some(&primary),
+            SessionFilterMode::Repo,
             /*uses_remote_filesystem*/ false,
         ),
         single
+    );
+    assert_eq!(
+        filter.for_request(
+            /*cursor*/ None,
+            Some(&primary),
+            SessionFilterMode::All,
+            /*uses_remote_filesystem*/ false,
+        ),
+        None
     );
 }
