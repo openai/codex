@@ -194,7 +194,9 @@ impl ToolCallRuntime {
             otel.name = %call.tool_name,
             tool_name = %call.tool_name,
             thread.id = %session.thread_id,
+            turn_id = %turn.sub_id,
             call_id = call.call_id.as_str(),
+            codex.tool.phase = "dispatch",
             aborted = false,
         );
         let abort_dispatch_span = dispatch_span.clone();
@@ -207,13 +209,23 @@ impl ToolCallRuntime {
                     if let Some(tool_runtime) = tool_runtime
                         && let Some(readiness) = tool_runtime.wait_until_ready(&session)
                     {
-                        readiness.await;
+                        readiness
+                            .instrument(trace_span!("tool_dispatch.wait_until_ready"))
+                            .await;
                     }
 
                     if supports_parallel {
-                        Either::Left(lock.read().await)
+                        Either::Left(
+                            lock.read()
+                                .instrument(trace_span!("tool_dispatch.parallel_lock"))
+                                .await,
+                        )
                     } else {
-                        Either::Right(lock.write().await)
+                        Either::Right(
+                            lock.write()
+                                .instrument(trace_span!("tool_dispatch.exclusive_lock"))
+                                .await,
+                        )
                     }
                 }
                 .or_cancel_tool(&invocation_cancellation_token)
@@ -234,7 +246,6 @@ impl ToolCallRuntime {
                         source,
                         dispatch_call_state,
                     )
-                    .instrument(dispatch_span.clone())
                     .await;
                 drop(guard);
                 // The sampling loop collects results in order only after its stream ends.
@@ -252,7 +263,7 @@ impl ToolCallRuntime {
                 }
                 result
             }
-            .in_current_span(),
+            .instrument(dispatch_span.or_current()),
         ));
 
         async move {
@@ -884,3 +895,7 @@ mod tests {
 #[cfg(test)]
 #[path = "parallel_observation_tests.rs"]
 mod observation_tests;
+
+#[cfg(test)]
+#[path = "parallel_trace_tests.rs"]
+mod trace_tests;
