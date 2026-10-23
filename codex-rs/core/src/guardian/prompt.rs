@@ -27,9 +27,7 @@ use crate::context::NodeReplReviewEvidenceMode;
 use crate::context::is_guardian_context_message;
 use crate::context::node_repl_review_evidence_mode;
 use crate::session::session::Session;
-use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
-use codex_utils_output_truncation::truncate_text;
 
 use super::ApprovalRequestReasons;
 use super::GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS;
@@ -38,7 +36,6 @@ use super::GuardianApprovalRequest;
 use super::GuardianReviewContext;
 use super::approval_request::format_guardian_action_pretty;
 
-const GUARDIAN_MAX_APPROVAL_REASON_TOKENS: usize = 512;
 // Bound both JSON and permission evidence without restricting manual approvals.
 const MAX_GUARDIAN_ENVIRONMENT_ID_BYTES: usize = 256;
 pub(super) const GUARDIAN_TRANSCRIPT_START: &str = ">>> TRANSCRIPT START\n";
@@ -152,12 +149,7 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
             | GuardianApprovalRequest::McpToolCall { .. }
             | GuardianApprovalRequest::RequestPermissions { .. } => PlannedActionKind::Command,
         },
-        reason: reasons.retry.or(reasons.approval).map(|reason| {
-            truncate_text(
-                &reason,
-                TruncationPolicy::Tokens(GUARDIAN_MAX_APPROVAL_REASON_TOKENS),
-            )
-        }),
+        reason: reasons.retry.or(reasons.approval),
     };
     let permissions = parent_context
         .map(|context| {

@@ -3586,6 +3586,7 @@ dependencies = [
  "codex-history",
  "codex-protocol",
  "codex-protocol-test-support",
+ "codex-utils-output-truncation",
  "pretty_assertions",
  "serde",
  "serde_json",

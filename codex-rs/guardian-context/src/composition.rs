@@ -17,6 +17,8 @@ use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::user_input::UserInput;
+use codex_utils_output_truncation::TruncationPolicy as OutputTruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
 
 use crate::ActionPresentation;
 use crate::BudgetPriority;
@@ -30,6 +32,8 @@ use crate::TranscriptFormat;
 use crate::TranscriptRecord;
 use crate::TruncationObservation;
 use crate::retained_instructions::RetainedInstructionKind;
+
+const MAX_APPROVAL_REASON_TOKENS: usize = 512;
 
 /// Consumer framing after the host has selected a full or delta transcript.
 pub enum ContextPresentation<'a> {
@@ -148,7 +152,7 @@ impl CollectedContext {
             .unwrap_or_default()
     }
 
-    /// Frames the selected transcript while preserving structured text through admission.
+    /// Applies consumer caps and frames the selected transcript before request admission.
     pub fn compose(
         self,
         presentation: ContextPresentation<'_>,
@@ -380,7 +384,15 @@ impl CollectedContext {
                         SectionDelivery::user_content(items),
                     )
                 }
-                ContextSection::PlannedAction(planned) => {
+                ContextSection::PlannedAction(mut planned) => {
+                    if action != ActionPresentation::Async {
+                        planned.reason = planned.reason.map(|reason| {
+                            truncate_text(
+                                &reason,
+                                OutputTruncationPolicy::Tokens(MAX_APPROVAL_REASON_TOKENS),
+                            )
+                        });
+                    }
                     let mut items = planned
                         .render(action)
                         .into_iter()

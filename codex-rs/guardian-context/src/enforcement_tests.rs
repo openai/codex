@@ -261,50 +261,73 @@ fn recovery_shortens_older_history_only_after_optional_evidence() {
 
 #[test]
 fn planned_action_budget_omits_descriptions_without_changing_arguments() {
+    let reason = format!("reason-start {} reason-end", "x".repeat(/*n*/ 10_000));
     let action = crate::PlannedAction {
         json: r#"{"tool":"write_record","arguments":{"description":"required payload"}}"#
             .to_owned(),
         kind: crate::PlannedActionKind::Command,
-        reason: None,
+        reason: Some(reason),
         tool_descriptions: Some("optional tool description ".repeat(/*n*/ 100)),
     };
-    let required = action.render(crate::ActionPresentation::SyncFull);
-    let context = crate::CollectedContext {
-        sections: vec![crate::ContextSection::PlannedAction(action)],
-    }
-    .compose(
-        crate::ContextPresentation::SyncFull {
-            session_id: "review",
-        },
-        crate::PreparedTranscript {
-            items: Vec::new(),
-            omission_note: None,
-            truncations: Vec::new(),
-        },
-    )
-    .unwrap();
-    let mut required_items = required.iter().map(|item| text(item)).collect::<Vec<_>>();
-    required_items.push(text("evidence omitted"));
-    let budget = crate::estimate_input_tokens(&user_message(required_items.clone())) + 100;
-    let selected = context
-        .enforce_budget(
-            RequestBudget {
-                max_input_tokens: budget,
-                existing_context_tokens: 0,
+    for (presentation, action_presentation) in [
+        (
+            crate::ContextPresentation::SyncFull {
+                session_id: "review",
             },
-            "evidence omitted".to_owned(),
-            HistoryTruncation::Preserve,
+            crate::ActionPresentation::SyncFull,
+        ),
+        (
+            crate::ContextPresentation::SyncDelta {
+                session_id: "review",
+            },
+            crate::ActionPresentation::SyncDelta,
+        ),
+    ] {
+        let mut bounded = action.clone();
+        bounded.reason = bounded.reason.map(|reason| {
+            codex_utils_output_truncation::truncate_text(
+                &reason,
+                codex_utils_output_truncation::TruncationPolicy::Tokens(/*tokens*/ 512),
+            )
+        });
+        let required = bounded.render(action_presentation);
+        let context = crate::CollectedContext {
+            sections: vec![crate::ContextSection::PlannedAction(action.clone())],
+        }
+        .compose(
+            presentation,
+            crate::PreparedTranscript {
+                items: Vec::new(),
+                omission_note: None,
+                truncations: Vec::new(),
+            },
         )
         .unwrap();
-    // The sync preamble is also required and remains ahead of the action.
-    let messages = selected.into_messages();
-    let ResponseItem::Message { content, .. } = &messages[0] else {
-        panic!("expected user evidence");
-    };
-    assert_eq!(
-        &content[content.len() - required_items.len()..],
-        required_items
-    );
+        let mut required_items = required.iter().map(|item| text(item)).collect::<Vec<_>>();
+        required_items.push(text("evidence omitted"));
+        let budget = crate::estimate_input_tokens(&user_message(required_items.clone()))
+            + section_tokens(&context.sections[0])
+            + 100;
+        let selected = context
+            .enforce_budget(
+                RequestBudget {
+                    max_input_tokens: budget,
+                    existing_context_tokens: 0,
+                },
+                "evidence omitted".to_owned(),
+                HistoryTruncation::Preserve,
+            )
+            .unwrap();
+        // The sync preamble is also required and remains ahead of the action.
+        let messages = selected.into_messages();
+        let ResponseItem::Message { content, .. } = &messages[0] else {
+            panic!("expected user evidence");
+        };
+        assert_eq!(
+            &content[content.len() - required_items.len()..],
+            required_items
+        );
+    }
 }
 
 #[test]
