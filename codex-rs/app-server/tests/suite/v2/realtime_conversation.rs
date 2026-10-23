@@ -93,6 +93,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 use test_case::test_case;
 use test_case::test_matrix;
+use tokio::sync::Notify;
 use tokio::time::timeout;
 use uuid::Uuid;
 use wiremock::Match;
@@ -3769,6 +3770,8 @@ async fn websocket_v2_background_agent_steering_ack_requests_response_create() -
     // the background-agent handoff stays active while realtime sends a second
     // tool call that should steer the active task.
     let main_loop_responses_server = responses::start_mock_server().await;
+    let request_received = Arc::new(Notify::new());
+    let notify_request_received = Arc::clone(&request_received);
     let (gate_completed_tx, gate_completed_rx) = mpsc::channel();
     let gated_response = responses::sse(vec![
         responses::ev_response_created("resp-1"),
@@ -3777,6 +3780,10 @@ async fn websocket_v2_background_agent_steering_ack_requests_response_create() -
     ]);
     Mock::given(method("POST"))
         .and(path_regex(".*/responses$"))
+        .and(move |_: &WiremockRequest| {
+            notify_request_received.notify_one();
+            true
+        })
         .respond_with(GatedSseResponse {
             gate_rx: Mutex::new(Some(gate_completed_rx)),
             response: gated_response,
@@ -3792,8 +3799,11 @@ async fn websocket_v2_background_agent_steering_ack_requests_response_create() -
             vec![
                 session_updated("sess_v2_steering_ack"),
                 v2_background_agent_tool_call("call_active", "start a task"),
-                v2_background_agent_tool_call("call_steer", "steer the active task"),
             ],
+            vec![v2_background_agent_tool_call(
+                "call_steer",
+                "steer the active task",
+            )],
             vec![],
             vec![],
             vec![],
@@ -3810,22 +3820,40 @@ async fn websocket_v2_background_agent_steering_ack_requests_response_create() -
         .await?;
     assert_eq!(turn_started.thread_id, harness.thread_id);
 
-    // Phase 2: the second tool call happens while `call_active` is still
-    // running, so app-server sends a steering acknowledgement as a function-call
-    // output for the second call.
+    // Phase 2: wait for the first model request, then use an audio frame to
+    // release the scripted steering call while the first response remains blocked.
+    timeout(DEFAULT_TIMEOUT, request_received.notified()).await?;
+    harness.append_audio(harness.thread_id.clone()).await?;
+    assert_eq!(
+        harness.sideband_outbound_request(/*request_index*/ 1).await["type"],
+        "input_audio_buffer.append",
+    );
     assert_v2_function_call_output(
-        &harness.sideband_outbound_request(/*request_index*/ 1).await,
+        &harness.sideband_outbound_request(/*request_index*/ 2).await,
         "call_steer",
         V2_STEERING_ACKNOWLEDGEMENT,
     );
 
     // Phase 3: realtime needs a `response.create` after the steering
     // acknowledgement so it can surface that acknowledgement to the user.
-    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 2).await);
+    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 3).await);
 
-    // Phase 4: release the gated delegated turn. Codex should then continue
-    // the same run with the steering text included in the follow-up Responses
-    // request, proving realtime did not merely acknowledge and drop it.
+    // Phase 4: the handoff notification follows core admission; the acknowledgement
+    // above does not. Wait for routing before releasing the first response.
+    timeout(
+        DEFAULT_TIMEOUT,
+        harness.mcp.read_stream_until_matching_notification(
+            "steering handoff routed",
+            |notification| {
+                notification.method == "thread/realtime/itemAdded"
+                    && notification.params.as_ref().is_some_and(|params| {
+                        params["item"]["type"] == "handoff_request"
+                            && params["item"]["handoff_id"] == "call_steer"
+                    })
+            },
+        ),
+    )
+    .await??;
     let _ = gate_completed_tx.send(());
     let turn_completed = harness
         .read_notification::<TurnCompletedNotification>("turn/completed")
@@ -3835,9 +3863,14 @@ async fn websocket_v2_background_agent_steering_ack_requests_response_create() -
     let requests = harness.main_loop_responses_requests().await?;
     assert_eq!(requests.len(), 2);
     assert!(
+        !response_request_contains_text(&requests[0], "steer the active task"),
+        "first Responses request should precede steering: {}",
+        requests[0],
+    );
+    assert!(
         response_request_contains_text(&requests[1], "steer the active task"),
-        "follow-up Responses request should contain steering prompt: {}",
-        requests[1]
+        "second Responses request should contain steering prompt: {}",
+        requests[1],
     );
 
     harness.shutdown().await;
