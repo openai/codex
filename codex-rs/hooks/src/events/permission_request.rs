@@ -101,8 +101,8 @@ pub(crate) async fn run(
         };
     }
 
-    let input_json = match serde_json::to_string(&build_command_input(&request)) {
-        Ok(input_json) => input_json,
+    let input = match serde_json::to_value(build_command_input(&request)) {
+        Ok(input) => input,
         Err(error) => {
             let hook_events = common::serialization_failure_hook_events_for_tool_use(
                 matched,
@@ -120,7 +120,7 @@ pub(crate) async fn run(
     let results = dispatcher::execute_handlers(
         engine,
         matched,
-        input_json,
+        &input,
         request.cwd.as_path(),
         Some(request.turn_id.clone()),
         parse_completed,
@@ -225,7 +225,13 @@ fn parse_completed(
                         } else if let Some(parsed_decision) = parsed.decision {
                             match parsed_decision {
                                 output_parser::PermissionRequestDecision::Allow => {
-                                    decision = Some(PermissionRequestDecision::Allow);
+                                    // Environment authority may restrict the controller's policy, never grant it.
+                                    if !matches!(
+                                        handler.source_path,
+                                        crate::engine::HandlerSourcePath::Environment { .. }
+                                    ) {
+                                        decision = Some(PermissionRequestDecision::Allow);
+                                    }
                                 }
                                 output_parser::PermissionRequestDecision::Deny { message } => {
                                     status = HookRunStatus::Blocked;

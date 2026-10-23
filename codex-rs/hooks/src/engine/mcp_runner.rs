@@ -32,7 +32,7 @@ pub(crate) async fn run_mcp_tool(
     server: &str,
     tool: &str,
     argument_template: &Map<String, Value>,
-    hook_event_json: &str,
+    hook_event: &Value,
     metadata: Option<&Map<String, Value>>,
 ) -> HandlerRunResult {
     let started_at = chrono::Utc::now().timestamp();
@@ -45,11 +45,12 @@ pub(crate) async fn run_mcp_tool(
                 .await
                 .context("hook trust verification timed out")??;
         }
-        let hook_event: Value =
-            serde_json::from_str(hook_event_json).context("failed to parse hook event input")?;
-        let input = expand_mcp_argument_template(argument_template, &hook_event)?;
+        let input = expand_mcp_argument_template(argument_template, hook_event)?;
         let (environment_id, mut call_metadata) = match &handler.source_path {
             HandlerSourcePath::Local(_) => (None, None),
+            HandlerSourcePath::Environment { environment_id, .. } => {
+                (Some(environment_id.clone()), None)
+            }
             HandlerSourcePath::ExecutorScoped {
                 environment_id,
                 mcp_environment_id,

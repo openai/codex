@@ -78,8 +78,14 @@ pub(crate) fn select_handlers_for_matcher_inputs(
 }
 
 pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
-    let HandlerSourcePath::Local(source_path) = &handler.source_path else {
-        unreachable!("executor-scoped hooks do not produce public hook summaries");
+    let source_path = match &handler.source_path {
+        HandlerSourcePath::Local(path)
+        | HandlerSourcePath::Environment {
+            source_path: path, ..
+        } => path,
+        HandlerSourcePath::ExecutorScoped { .. } => {
+            unreachable!("executor-scoped hooks do not produce public hook summaries")
+        }
     };
     HookRunSummary {
         builtin: handler.builtin,
@@ -103,13 +109,13 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
 pub(crate) async fn execute_handlers<T: 'static>(
     engine: &ClaudeHooksEngine,
     handlers: Vec<ConfiguredHandler>,
-    input_json: String,
+    input: &Value,
     cwd: &Path,
     turn_id: Option<String>,
     parse: fn(&ConfiguredHandler, HandlerRunResult, Option<String>) -> ParsedHandler<T>,
 ) -> Vec<ParsedHandler<T>> {
     execute_handlers_with_metadata(
-        engine, handlers, input_json, cwd, turn_id, /*metadata*/ None, parse,
+        engine, handlers, input, cwd, turn_id, /*metadata*/ None, parse,
     )
     .await
 }
@@ -117,7 +123,7 @@ pub(crate) async fn execute_handlers<T: 'static>(
 pub(crate) async fn execute_handlers_with_metadata<T: 'static>(
     engine: &ClaudeHooksEngine,
     handlers: Vec<ConfiguredHandler>,
-    input_json: String,
+    input: &Value,
     cwd: &Path,
     turn_id: Option<String>,
     metadata: Option<&Map<String, Value>>,
@@ -133,21 +139,22 @@ pub(crate) async fn execute_handlers_with_metadata<T: 'static>(
             executor_handlers.push(handler);
             continue;
         }
+        let event_input = handler.source_path.event_input(input);
         if handler.execution_mode() == HookExecutionMode::Async {
             engine.command_runtime.schedule_async_hook(
+                engine.clone(),
                 handler,
-                input_json.clone(),
+                event_input.into_owned(),
                 cwd.to_path_buf(),
                 turn_id.clone(),
                 parse,
             );
             continue;
         }
-        let input_json = input_json.clone();
         let turn_id = turn_id.clone();
         pending.push(async move {
             let result =
-                execute_handler(engine, &handler, &input_json, cwd, /*metadata*/ None).await;
+                execute_handler(engine, &handler, &event_input, cwd, /*metadata*/ None).await;
             let parsed = parse(&handler, result, turn_id);
             (configured_order, parsed)
         });
@@ -169,13 +176,18 @@ pub(crate) async fn execute_handlers_with_metadata<T: 'static>(
     if should_stop || !should_block {
         for handler in executor_handlers {
             let task_engine = engine.clone();
-            let input_json = input_json.clone();
+            let event_input = input.clone();
             let cwd = cwd.to_path_buf();
             let metadata = metadata.cloned();
             engine.command_runtime.schedule_async_task(async move {
-                let result =
-                    execute_handler(&task_engine, &handler, &input_json, &cwd, metadata.as_ref())
-                        .await;
+                let result = execute_handler(
+                    &task_engine,
+                    &handler,
+                    &event_input,
+                    &cwd,
+                    metadata.as_ref(),
+                )
+                .await;
                 if let Some(error) = result.error {
                     tracing::warn!(
                         source_path = %handler.source_path,
@@ -190,10 +202,10 @@ pub(crate) async fn execute_handlers_with_metadata<T: 'static>(
     completed.into_iter().map(|(_, parsed)| parsed).collect()
 }
 
-async fn execute_handler(
+pub(super) async fn execute_handler(
     engine: &ClaudeHooksEngine,
     handler: &ConfiguredHandler,
-    input_json: &str,
+    event_input: &Value,
     cwd: &Path,
     metadata: Option<&Map<String, Value>>,
 ) -> HandlerRunResult {
@@ -204,7 +216,7 @@ async fn execute_handler(
                 handler,
                 command,
                 env,
-                input_json,
+                &event_input.to_string(),
                 cwd,
             )
             .await
@@ -220,7 +232,7 @@ async fn execute_handler(
                 server,
                 tool,
                 input,
-                input_json,
+                event_input,
                 metadata,
             )
             .await
@@ -234,8 +246,14 @@ pub(crate) fn completed_summary(
     status: HookRunStatus,
     entries: Vec<codex_protocol::protocol::HookOutputEntry>,
 ) -> HookRunSummary {
-    let HandlerSourcePath::Local(source_path) = &handler.source_path else {
-        unreachable!("executor-scoped hooks do not produce public hook summaries");
+    let source_path = match &handler.source_path {
+        HandlerSourcePath::Local(path)
+        | HandlerSourcePath::Environment {
+            source_path: path, ..
+        } => path,
+        HandlerSourcePath::ExecutorScoped { .. } => {
+            unreachable!("executor-scoped hooks do not produce public hook summaries")
+        }
     };
     HookRunSummary {
         builtin: handler.builtin,

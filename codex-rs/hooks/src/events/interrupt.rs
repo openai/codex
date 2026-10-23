@@ -48,7 +48,12 @@ pub(crate) fn preview(handlers: &[ConfiguredHandler]) -> Vec<HookRunSummary> {
     )
     .into_iter()
     // Executor-scoped hooks run asynchronously and do not emit public hook lifecycle events.
-    .filter(|handler| matches!(handler.source_path, HandlerSourcePath::Local(_)))
+    .filter(|handler| {
+        !matches!(
+            handler.source_path,
+            HandlerSourcePath::ExecutorScoped { .. }
+        )
+    })
     .map(|handler| dispatcher::running_summary(&handler))
     .collect()
 }
@@ -72,7 +77,7 @@ pub(crate) async fn run(engine: &ClaudeHooksEngine, request: InterruptRequest) -
         permission_mode,
         request_metadata,
     } = request;
-    let input_json = match serde_json::to_string(&InterruptCommandInput {
+    let input = match serde_json::to_value(InterruptCommandInput {
         session_id: session_id.to_string(),
         turn_id: turn_id.clone(),
         transcript_path: NullableString::from_path(transcript_path),
@@ -81,7 +86,7 @@ pub(crate) async fn run(engine: &ClaudeHooksEngine, request: InterruptRequest) -
         model,
         permission_mode,
     }) {
-        Ok(input_json) => input_json,
+        Ok(input) => input,
         Err(error) => {
             return InterruptOutcome {
                 hook_events: common::serialization_failure_hook_events(
@@ -96,7 +101,7 @@ pub(crate) async fn run(engine: &ClaudeHooksEngine, request: InterruptRequest) -
     let results = dispatcher::execute_handlers_with_metadata(
         engine,
         matched,
-        input_json,
+        &input,
         cwd.as_path(),
         Some(turn_id),
         request_metadata.as_ref(),

@@ -303,8 +303,9 @@ impl Session {
         };
 
         // Validate the environment configuration supplied in the update.
-        let environment_config_validation =
-            environments.as_deref().map(validate_environment_configs);
+        let environment_config_validation = environments
+            .as_deref()
+            .map(|environments| validate_environment_configs(environments, &self.features));
 
         // Confirm the task we originally targeted is still running.
         let active = self.active_turn.lock().await;

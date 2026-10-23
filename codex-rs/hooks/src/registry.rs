@@ -84,13 +84,9 @@ impl Hooks {
         let hooks = Self::from_config(config, mcp_executor, Arc::clone(&environment), |shell| {
             CommandHookRuntime::new(shell, environment, thread_id, result_sender)
         });
-        let required_load_errors = hooks.engine.required_load_errors();
-        if !required_load_errors.is_empty() {
-            anyhow::bail!(
-                "failed to load required managed hooks: {}",
-                required_load_errors.join("; ")
-            );
-        }
+        crate::engine::discovery::ensure_required_hooks_loaded(
+            hooks.engine.required_load_errors(),
+        )?;
         Ok((hooks, result_receiver))
     }
 
@@ -111,6 +107,54 @@ impl Hooks {
     ) -> bool {
         self.plugin_hook_sources.iter().eq(sources)
             && self.plugin_hook_load_warnings.iter().eq(warnings)
+    }
+
+    /// Adds only owner-admitted requirements hooks; execution remains scoped to their environment.
+    pub fn with_environment_hooks(
+        &self,
+        sources: Vec<crate::EnvironmentHookSource>,
+        executor: Arc<dyn crate::HookEnvironmentExecutor>,
+    ) -> Self {
+        let discovered = self.discover_environment_hooks(sources);
+        let mut hooks = self.clone();
+        hooks.engine.command_runtime.environment_executor = Some(executor);
+        if !discovered.handlers.is_empty() {
+            Arc::make_mut(&mut hooks.engine.handlers).extend(discovered.handlers);
+        }
+        if !discovered.warnings.is_empty() {
+            let mut warnings = hooks.engine.warnings.to_vec();
+            warnings.extend(discovered.warnings);
+            hooks.engine.warnings = warnings.into();
+        }
+        hooks
+    }
+
+    /// List this session's declarations, including hooks that are disabled or not yet trusted.
+    pub fn list_with_environment_hooks(
+        &self,
+        sources: Vec<crate::EnvironmentHookSource>,
+    ) -> HookListOutcome {
+        let discovered = self.discover_environment_hooks(sources);
+        let mut hooks = self.engine.hook_entries.as_ref().clone();
+        hooks.extend(discovered.hook_entries);
+        let mut warnings = self.engine.warnings.to_vec();
+        warnings.extend(discovered.warnings);
+        HookListOutcome { hooks, warnings }
+    }
+
+    fn discover_environment_hooks(
+        &self,
+        sources: Vec<crate::EnvironmentHookSource>,
+    ) -> crate::engine::discovery::DiscoveryResult {
+        if !self.engine.enabled {
+            return crate::engine::discovery::DiscoveryResult::default();
+        }
+        let display_order = self
+            .engine
+            .hook_entries
+            .last()
+            .map_or(0, |entry| entry.display_order.saturating_add(1));
+        crate::engine::discovery::discover_environment_hooks(sources, display_order)
     }
 
     pub fn with_executor_hooks(&self, executor_hooks: Vec<ExecutorPluginHookSource>) -> Self {

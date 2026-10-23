@@ -8,6 +8,7 @@ use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde_json::Value;
 
 use super::common;
 use crate::engine::ClaudeHooksEngine;
@@ -86,8 +87,8 @@ pub(crate) async fn run_pre(
         };
     }
 
-    let input_json = match pre_command_input_json(&request) {
-        Ok(input_json) => input_json,
+    let input = match pre_command_input(&request) {
+        Ok(input) => input,
         Err(error) => {
             return PreCompactOutcome {
                 hook_events: common::serialization_failure_hook_events(
@@ -104,7 +105,7 @@ pub(crate) async fn run_pre(
     let results = dispatcher::execute_handlers(
         engine,
         matched,
-        input_json,
+        &input,
         request.cwd.as_path(),
         Some(request.turn_id),
         parse_pre_completed,
@@ -121,9 +122,9 @@ pub(crate) async fn run_pre(
     }
 }
 
-fn pre_command_input_json(request: &PreCompactRequest) -> Result<String, serde_json::Error> {
+fn pre_command_input(request: &PreCompactRequest) -> Result<Value, serde_json::Error> {
     let subagent = SubagentCommandInputFields::from(request.subagent.as_ref());
-    serde_json::to_string(&PreCompactCommandInput {
+    serde_json::to_value(PreCompactCommandInput {
         session_id: request.session_id.to_string(),
         turn_id: request.turn_id.clone(),
         agent_id: subagent.agent_id,
@@ -167,8 +168,8 @@ pub(crate) async fn run_post(
         };
     }
 
-    let input_json = match post_command_input_json(&request) {
-        Ok(input_json) => input_json,
+    let input = match post_command_input(&request) {
+        Ok(input) => input,
         Err(error) => {
             return StatelessHookOutcome {
                 hook_events: common::serialization_failure_hook_events(
@@ -185,7 +186,7 @@ pub(crate) async fn run_post(
     let results = dispatcher::execute_handlers(
         engine,
         matched,
-        input_json,
+        &input,
         request.cwd.as_path(),
         Some(request.turn_id),
         parse_post_completed,
@@ -202,9 +203,9 @@ pub(crate) async fn run_post(
     }
 }
 
-fn post_command_input_json(request: &PostCompactRequest) -> Result<String, serde_json::Error> {
+fn post_command_input(request: &PostCompactRequest) -> Result<Value, serde_json::Error> {
     let subagent = SubagentCommandInputFields::from(request.subagent.as_ref());
-    serde_json::to_string(&PostCompactCommandInput {
+    serde_json::to_value(PostCompactCommandInput {
         session_id: request.session_id.to_string(),
         turn_id: request.turn_id.clone(),
         agent_id: subagent.agent_id,
@@ -355,17 +356,15 @@ mod tests {
 
     use super::parse_post_completed;
     use super::parse_pre_completed;
-    use super::post_command_input_json;
-    use super::pre_command_input_json;
+    use super::post_command_input;
+    use super::pre_command_input;
     use crate::engine::ConfiguredHandler;
     use crate::engine::HandlerRunResult;
 
     #[test]
     fn pre_compact_input_includes_lifecycle_metadata() {
         let request = pre_request();
-        let input_json = pre_command_input_json(&request).expect("serialize command input");
-        let input: serde_json::Value =
-            serde_json::from_str(&input_json).expect("parse command input");
+        let input = pre_command_input(&request).expect("serialize command input");
 
         assert_eq!(
             input,
@@ -384,9 +383,7 @@ mod tests {
     #[test]
     fn post_compact_input_includes_lifecycle_metadata() {
         let request = post_request();
-        let input_json = post_command_input_json(&request).expect("serialize command input");
-        let input: serde_json::Value =
-            serde_json::from_str(&input_json).expect("parse command input");
+        let input = post_command_input(&request).expect("serialize command input");
 
         assert_eq!(
             input,

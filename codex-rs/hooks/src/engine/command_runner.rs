@@ -21,6 +21,7 @@ use codex_utils_pty::Command;
 #[cfg(windows)]
 use codex_utils_pty::JobObject;
 use futures::future::try_join;
+use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 #[cfg(not(unix))]
 use tokio::process::Command;
@@ -32,9 +33,9 @@ use tracing::Span;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+use super::ClaudeHooksEngine;
 use super::CommandShell;
 use super::ConfiguredHandler;
-use super::ConfiguredHandlerKind;
 use super::HandlerRunResult;
 use super::dispatcher::ParsedHandler;
 use super::dispatcher::hook_event_name_label;
@@ -55,6 +56,7 @@ const MAX_CONCURRENT_ASYNC_HOOKS: usize = 8;
 /// Owns command execution and bounded asynchronous work for one session.
 #[derive(Clone)]
 pub(crate) struct CommandHookRuntime {
+    pub(crate) environment_executor: Option<Arc<dyn crate::HookEnvironmentExecutor>>,
     shell: CommandShell,
     environment: Arc<Vec<(OsString, OsString)>>,
     result_sender: Sender<HookCompletedEvent>,
@@ -84,6 +86,7 @@ impl CommandHookRuntime {
         result_sender: Sender<HookCompletedEvent>,
     ) -> Self {
         Self {
+            environment_executor: None,
             shell,
             environment,
             result_sender,
@@ -100,6 +103,7 @@ impl CommandHookRuntime {
 
     pub(crate) fn reconfigured(&self, shell: CommandShell) -> Self {
         Self {
+            environment_executor: self.environment_executor.clone(),
             shell,
             environment: Arc::clone(&self.environment),
             result_sender: self.result_sender.clone(),
@@ -114,8 +118,9 @@ impl CommandHookRuntime {
 
     pub(crate) fn schedule_async_hook<T: 'static>(
         &self,
+        engine: ClaudeHooksEngine,
         handler: ConfiguredHandler,
-        input_json: String,
+        event_input: Value,
         cwd: std::path::PathBuf,
         turn_id: Option<String>,
         parse: fn(&ConfiguredHandler, HandlerRunResult, Option<String>) -> ParsedHandler<T>,
@@ -127,12 +132,14 @@ impl CommandHookRuntime {
         let result_sender = self.result_sender.clone();
         let runtime = self.clone();
         self.schedule_async_task(async move {
-            let result = match &handler.kind {
-                ConfiguredHandlerKind::Command { command, env, .. } => {
-                    run_command(&runtime, &handler, command, env, &input_json, &cwd).await
-                }
-                ConfiguredHandlerKind::McpTool { .. } => return,
-            };
+            let result = super::dispatcher::execute_handler(
+                &engine,
+                &handler,
+                &event_input,
+                &cwd,
+                /*metadata*/ None,
+            )
+            .await;
             let mut hook_result = parse(&handler, result, turn_id).completed;
             let mut entries = Vec::new();
             let mut warnings = Vec::new();
@@ -237,6 +244,37 @@ pub(crate) async fn run_command(
                 },
             );
         }
+    }
+
+    if let super::HandlerSourcePath::Environment { environment_id, .. } = &handler.source_path {
+        let result = match &runtime.environment_executor {
+            Some(executor) => {
+                executor
+                    .execute(
+                        environment_id,
+                        command_line,
+                        env,
+                        input_json,
+                        Duration::from_secs(handler.timeout_sec),
+                    )
+                    .await
+            }
+            None => Err(anyhow::anyhow!("environment hook executor is unavailable")),
+        };
+        let (exit_code, stdout, stderr, error) = match result {
+            Ok(output) => (Some(output.exit_code), output.stdout, output.stderr, None),
+            Err(error) => (None, String::new(), String::new(), Some(error.to_string())),
+        };
+        return HandlerRunResult {
+            context_metadata: codex_protocol::models::ContentItemMetadata::command_hook(),
+            started_at,
+            completed_at: chrono::Utc::now().timestamp(),
+            duration_ms: started.elapsed().as_millis().try_into().unwrap_or(i64::MAX),
+            exit_code,
+            stdout,
+            stderr,
+            error,
+        };
     }
 
     let mut command = build_command(&runtime.shell, command_line, &runtime.environment, env);

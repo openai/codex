@@ -32,6 +32,7 @@ use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
+use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
@@ -2420,6 +2421,77 @@ async fn wait_for_mcp_calls(calls: &Arc<Mutex<Vec<HookMcpCall>>>, count: usize) 
     })
     .await
     .expect("executor hook should complete in the background");
+}
+
+#[tokio::test]
+async fn subagent_stop_paths_are_scoped_to_each_hook() {
+    let (mut engine, calls, mut request, _, _) = executor_stop_hook_fixture();
+    let local_cwd = request.cwd.clone();
+    let transcript = local_cwd.join("parent.jsonl");
+    let agent_transcript = local_cwd.join("child.jsonl");
+    request.transcript_path = Some(transcript.to_path_buf());
+    request.target = StopHookTarget::SubagentStop {
+        agent_id: "child".to_string(),
+        agent_type: "explorer".to_string(),
+        agent_transcript_path: Some(agent_transcript.to_path_buf()),
+    };
+
+    let source_path = local_cwd.join("hooks.json");
+    let local = ConfiguredHandler {
+        event_name: HookEventName::SubagentStop,
+        source_path: source_path.clone().into(),
+        source: HookSource::User,
+        kind: ConfiguredHandlerKind::McpTool {
+            server: "recorder".to_string(),
+            tool: "capture".to_string(),
+            input: serde_json::from_value(serde_json::json!({
+                "cwd": "${cwd}",
+                "transcript_path": "${transcript_path}",
+                "agent_transcript_path": "${agent_transcript_path}",
+            }))
+            .expect("object input"),
+        },
+        ..engine.handlers[0].clone()
+    };
+    let remote = ConfiguredHandler {
+        source_path: HandlerSourcePath::Environment {
+            environment_id: "remote".to_string(),
+            cwd: PathUri::parse("file:///C:/team%20workspace").expect("Windows working directory"),
+            source_path,
+        },
+        source: HookSource::System,
+        ..local.clone()
+    };
+    engine.handlers = Arc::new(vec![remote, local]);
+    engine.run_stop(request).await;
+
+    let inputs: HashMap<_, _> = calls
+        .lock()
+        .expect("lock MCP calls")
+        .drain(..)
+        .map(|call| (call.environment_id, serde_json::Value::Object(call.input)))
+        .collect();
+    assert_eq!(
+        inputs,
+        HashMap::from([
+            (
+                Some("remote".to_string()),
+                serde_json::json!({
+                    "cwd": r"C:\team workspace",
+                    "transcript_path": null,
+                    "agent_transcript_path": null,
+                })
+            ),
+            (
+                None,
+                serde_json::json!({
+                    "cwd": local_cwd,
+                    "transcript_path": transcript,
+                    "agent_transcript_path": agent_transcript,
+                })
+            ),
+        ])
+    );
 }
 
 #[tokio::test]

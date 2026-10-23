@@ -47,6 +47,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use serde_json::Map;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -79,6 +80,11 @@ pub(crate) struct ConfiguredHandler {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HandlerSourcePath {
     Local(AbsolutePathBuf),
+    Environment {
+        environment_id: String,
+        cwd: PathUri,
+        source_path: AbsolutePathBuf,
+    },
     /// Executor-scoped handlers are currently excluded from user-visible hook reporting
     /// (events, summary, telemetry). Their handlers are always executed async.
     ///
@@ -95,6 +101,24 @@ pub(crate) enum HandlerSourcePath {
     },
 }
 
+impl HandlerSourcePath {
+    /// Use the environment's working directory and withhold controller-owned transcript paths.
+    fn event_input<'a>(&self, input: &'a Value) -> Cow<'a, Value> {
+        match self {
+            Self::Environment { cwd, .. } => {
+                let mut input = input.clone();
+                input["cwd"] = Value::String(cwd.inferred_native_path_string());
+                input["transcript_path"] = Value::Null;
+                if let Some(path) = input.get_mut("agent_transcript_path") {
+                    *path = Value::Null;
+                }
+                Cow::Owned(input)
+            }
+            Self::Local(_) | Self::ExecutorScoped { .. } => Cow::Borrowed(input),
+        }
+    }
+}
+
 impl From<AbsolutePathBuf> for HandlerSourcePath {
     fn from(path: AbsolutePathBuf) -> Self {
         Self::Local(path)
@@ -105,6 +129,7 @@ impl std::fmt::Display for HandlerSourcePath {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Local(path) => write!(formatter, "{}", path.display()),
+            Self::Environment { source_path, .. } => write!(formatter, "{}", source_path.display()),
             Self::ExecutorScoped {
                 environment_id,
                 manifest_path,
@@ -237,6 +262,8 @@ pub struct HookListEntry {
     pub source_path: AbsolutePathBuf,
     pub source: HookSource,
     pub plugin_id: Option<String>,
+    /// The owning execution environment, if this hook came from its requirements.
+    pub environment_id: Option<String>,
     pub display_order: i64,
     pub enabled: bool,
     pub is_managed: bool,
@@ -246,9 +273,12 @@ pub struct HookListEntry {
 
 #[derive(Clone)]
 pub(crate) struct ClaudeHooksEngine {
+    pub(crate) enabled: bool,
     // Per-turn views share configuration; executor overlays copy handlers on mutation.
     pub(crate) handlers: Arc<Vec<ConfiguredHandler>>,
-    warnings: Arc<[String]>,
+    /// Retain the session inventory without copying it for every hook dispatch.
+    pub(crate) hook_entries: Arc<Vec<HookListEntry>>,
+    pub(crate) warnings: Arc<[String]>,
     required_load_errors: Arc<[String]>,
     pub(crate) command_runtime: CommandHookRuntime,
     pub(crate) mcp_executor: Arc<dyn HookMcpExecutor>,
@@ -266,7 +296,9 @@ impl ClaudeHooksEngine {
     ) -> Self {
         if !enabled && plugin_hook_sources.is_empty() {
             return Self {
+                enabled,
                 handlers: Arc::default(),
+                hook_entries: Arc::default(),
                 warnings: Arc::default(),
                 required_load_errors: Arc::default(),
                 command_runtime,
@@ -284,12 +316,15 @@ impl ClaudeHooksEngine {
         );
         if !enabled {
             discovered.handlers.retain(|handler| handler.builtin);
+            discovered.hook_entries.clear();
             // Disabled ordinary hooks must not emit warnings or reject session startup.
             discovered.warnings.clear();
             discovered.required_load_errors.clear();
         }
         Self {
+            enabled,
             handlers: Arc::new(discovered.handlers),
+            hook_entries: Arc::new(discovered.hook_entries),
             warnings: discovered.warnings.into(),
             required_load_errors: discovered.required_load_errors.into(),
             command_runtime,

@@ -127,9 +127,9 @@ pub(crate) async fn run(
         };
     }
 
-    let (input_json, turn_id) = match request.target {
+    let (input, turn_id) = match request.target {
         StartHookTarget::SessionStart { source } => {
-            let input_json = match serde_json::to_string(&SessionStartCommandInput::new(
+            let input = match serde_json::to_value(SessionStartCommandInput::new(
                 request.session_id.to_string(),
                 request.transcript_path.clone(),
                 request.cwd.display().to_string(),
@@ -137,7 +137,7 @@ pub(crate) async fn run(
                 request.permission_mode.clone(),
                 source.as_str().to_string(),
             )) {
-                Ok(input_json) => input_json,
+                Ok(input) => input,
                 Err(error) => {
                     return serialization_failure_outcome(
                         common::serialization_failure_hook_events(
@@ -148,7 +148,7 @@ pub(crate) async fn run(
                     );
                 }
             };
-            (input_json, turn_id)
+            (input, turn_id)
         }
         StartHookTarget::SubagentStart {
             turn_id: subagent_turn_id,
@@ -166,8 +166,8 @@ pub(crate) async fn run(
                 agent_id,
                 agent_type,
             };
-            let input_json = match serde_json::to_string(&input) {
-                Ok(input_json) => input_json,
+            let input = match serde_json::to_value(input) {
+                Ok(input) => input,
                 Err(error) => {
                     return serialization_failure_outcome(
                         common::serialization_failure_hook_events(
@@ -178,14 +178,14 @@ pub(crate) async fn run(
                     );
                 }
             };
-            (input_json, Some(subagent_turn_id))
+            (input, Some(subagent_turn_id))
         }
     };
 
     let results = dispatcher::execute_handlers(
         engine,
         matched,
-        input_json,
+        &input,
         request.cwd.as_path(),
         turn_id,
         parse_completed,

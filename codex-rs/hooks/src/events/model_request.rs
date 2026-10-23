@@ -106,7 +106,7 @@ pub(crate) async fn run(
     if matched.is_empty() {
         return Vec::new();
     }
-    let input = match serde_json::to_string(&request) {
+    let input = match serde_json::to_value(&request) {
         Ok(input) => input,
         Err(error) => {
             return common::serialization_failure_hook_events(
@@ -119,7 +119,7 @@ pub(crate) async fn run(
     dispatcher::execute_handlers(
         engine,
         matched,
-        input,
+        &input,
         request.cwd.as_path(),
         Some(request.turn_id),
         parse_completed,

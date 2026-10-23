@@ -60,14 +60,14 @@ pub(crate) async fn run(
         return SessionEndOutcome::default();
     }
 
-    let input_json = match serde_json::to_string(&SessionEndCommandInput {
+    let input = match serde_json::to_value(SessionEndCommandInput {
         session_id: request.session_id.to_string(),
         transcript_path: NullableString::from_path(request.transcript_path.clone()),
         cwd: request.cwd.display().to_string(),
         hook_event_name: "SessionEnd".to_string(),
         reason: SESSION_END_REASON.to_string(),
     }) {
-        Ok(input_json) => input_json,
+        Ok(input) => input,
         Err(error) => {
             return SessionEndOutcome {
                 hook_events: common::serialization_failure_hook_events(
@@ -82,7 +82,7 @@ pub(crate) async fn run(
     let results = dispatcher::execute_handlers(
         engine,
         matched,
-        input_json,
+        &input,
         request.cwd.as_path(),
         Some(request.turn_id),
         parse_completed,
