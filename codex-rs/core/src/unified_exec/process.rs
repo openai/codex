@@ -12,6 +12,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 
+use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEvent;
 use codex_exec_server::ProcessSignal as ExecServerProcessSignal;
@@ -48,7 +49,7 @@ pub(crate) struct OutputBuffers<const MAX_BYTES: usize = UNIFIED_EXEC_OUTPUT_MAX
 }
 
 impl<const MAX_BYTES: usize> OutputBuffers<MAX_BYTES> {
-    pub(super) fn push_chunk(&mut self, chunk: &[u8]) {
+    pub(super) fn push_chunk(&mut self, _stream: ExecOutputStream, chunk: &[u8]) {
         self.pending.push_chunk(chunk);
         self.transcript.push_chunk(chunk);
     }
@@ -362,14 +363,14 @@ impl UnifiedExecProcess {
             stderr_rx,
             mut exit_rx,
         } = spawned;
-        let output_rx = codex_utils_pty::combine_output_receivers(stdout_rx, stderr_rx);
         let mut managed = Self::new(
             ProcessHandle::Local(Box::new(process_handle)),
             Some(sandbox_type),
             OutputDrainPolicy::BoundedAfterExit,
         );
         managed.output_task = Some(Self::spawn_local_output_task(
-            output_rx,
+            stdout_rx,
+            stderr_rx,
             managed.output_handles().clone(),
             managed.output_tx.clone(),
         ));
@@ -558,7 +559,7 @@ impl UnifiedExecProcess {
                     for chunk in chunks.into_iter().filter(|chunk| chunk.seq > last_seq) {
                         let bytes = chunk.chunk.into_inner();
                         let mut guard = output_buffer.lock().await;
-                        guard.push_chunk(&bytes);
+                        guard.push_chunk(chunk.stream, &bytes);
                         drop(guard);
                         let _ = output_tx.send(bytes);
                         output_notify.notify_waiters();
@@ -604,7 +605,7 @@ impl UnifiedExecProcess {
                         last_seq = chunk.seq;
                         let bytes = chunk.chunk.into_inner();
                         let mut guard = output_buffer.lock().await;
-                        guard.push_chunk(&bytes);
+                        guard.push_chunk(chunk.stream, &bytes);
                         drop(guard);
                         let _ = output_tx.send(bytes);
                         output_notify.notify_waiters();
@@ -654,7 +655,8 @@ impl UnifiedExecProcess {
     }
 
     fn spawn_local_output_task(
-        mut receiver: tokio::sync::broadcast::Receiver<Vec<u8>>,
+        mut stdout: tokio::sync::mpsc::Receiver<Vec<u8>>,
+        mut stderr: tokio::sync::mpsc::Receiver<Vec<u8>>,
         output_handles: OutputHandles,
         output_tx: broadcast::Sender<Vec<u8>>,
     ) -> JoinHandle<()> {
@@ -670,22 +672,22 @@ impl UnifiedExecProcess {
                 output_closed: Arc::clone(&output_closed),
                 output_closed_notify: Arc::clone(&output_closed_notify),
             };
-            loop {
-                match receiver.recv().await {
-                    Ok(chunk) => {
-                        let mut guard = output_buffer.lock().await;
-                        guard.push_chunk(&chunk);
-                        drop(guard);
-                        let _ = output_tx.send(chunk);
-                        output_notify.notify_waiters();
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        output_closed.store(true, Ordering::Release);
-                        output_closed_notify.notify_waiters();
-                        break;
-                    }
+            let mut stdout_open = true;
+            let mut stderr_open = true;
+            while stdout_open || stderr_open {
+                let (stream, chunk) = tokio::select! {
+                    chunk = stdout.recv(), if stdout_open => (ExecOutputStream::Stdout, chunk),
+                    chunk = stderr.recv(), if stderr_open => (ExecOutputStream::Stderr, chunk),
                 };
+                if let Some(chunk) = chunk {
+                    output_buffer.lock().await.push_chunk(stream, &chunk);
+                    let _ = output_tx.send(chunk);
+                    output_notify.notify_waiters();
+                } else if stream == ExecOutputStream::Stdout {
+                    stdout_open = false;
+                } else {
+                    stderr_open = false;
+                }
             }
         })
     }
