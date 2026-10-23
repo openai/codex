@@ -1,5 +1,6 @@
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
 use crate::shell::ShellInvocation;
 use crate::shell::get_shell_by_model_provided_path;
@@ -12,6 +13,7 @@ use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -91,6 +93,20 @@ struct ExecCommandWorkdirArgs {
     // resolved against the selected environment cwd, not the process cwd.
     #[serde(default)]
     workdir: Option<String>,
+}
+
+impl ExecCommandWorkdirArgs {
+    /// Share cwd resolution between hooks and execution after environment selection.
+    fn resolve_cwd(&self, environment: &TurnEnvironment) -> Result<PathUri, FunctionCallError> {
+        self.workdir
+            .as_deref()
+            .filter(|workdir| !workdir.is_empty())
+            .map_or_else(
+                || Ok(environment.cwd().clone()),
+                |workdir| environment.cwd().join(workdir),
+            )
+            .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))
+    }
 }
 
 fn default_exec_yield_time_ms() -> u64 {

@@ -47,6 +47,7 @@ use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use codex_utils_string::truncate_middle_chars;
 
 use super::super::shell_spec::CommandToolOptions;
@@ -183,16 +184,7 @@ impl ExecCommandHandler {
         );
         let workdir_args: ExecCommandWorkdirArgs = parse_arguments(&arguments)?;
         let turn_environment = selected_executor(&environments, &step_context.environments)?;
-        let native_environment_cwd = turn_environment.cwd().clone();
-        let cwd = workdir_args
-            .workdir
-            .as_deref()
-            .filter(|workdir| !workdir.is_empty())
-            .map_or_else(
-                || Ok(native_environment_cwd.clone()),
-                |workdir| native_environment_cwd.join(workdir),
-            )
-            .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+        let cwd = workdir_args.resolve_cwd(turn_environment)?;
         let environment = Arc::clone(&turn_environment.environment);
         let fs = environment.get_filesystem();
 
@@ -408,7 +400,7 @@ impl ExecCommandHandler {
             yield_time_ms,
             max_output_tokens,
             cwd,
-            sandbox_cwd: native_environment_cwd,
+            sandbox_cwd: turn_environment.cwd().clone(),
             turn_environment: turn_environment.clone(),
             network: context.step_context.turn.network.clone(),
             tty,
@@ -520,6 +512,24 @@ impl CoreToolRuntime for ExecCommandHandler {
                 tool_name: HookToolName::bash(),
                 tool_input: serde_json::json!({ "command": args.cmd }),
             })
+    }
+
+    fn pre_tool_use_cwd(
+        &self,
+        invocation: &ToolInvocation,
+    ) -> Result<Option<PathUri>, FunctionCallError> {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return Ok(None);
+        };
+        let args: ExecCommandWorkdirArgs = parse_arguments(arguments)?;
+        let environment = selected_executor(
+            &invocation.environments,
+            &invocation.step_context.environments,
+        )?;
+        let cwd = args.resolve_cwd(environment)?;
+        // Hook scripts execute on the host. Remote command paths cannot replace
+        // the host cwd in hook input, even when both machines use the same OS.
+        Ok((!environment.environment.is_remote()).then_some(cwd))
     }
 
     fn with_updated_hook_input(

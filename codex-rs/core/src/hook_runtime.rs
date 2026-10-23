@@ -196,6 +196,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
     tool_use_id: String,
     tool_name: &HookToolName,
     tool_input: &Value,
+    tool_cwd: Option<codex_utils_path_uri::PathUri>,
     target_environments: &[&str],
 ) -> PreToolUseHookResult {
     let turn_context = &step_context.turn;
@@ -204,6 +205,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
         turn_id: turn_context.sub_id.clone(),
         subagent: thread_spawn_subagent_hook_context(sess, turn_context),
         cwd: tool_hook_cwd(&step_context.environments, turn_context),
+        tool_cwd,
         transcript_path: sess.hook_transcript_path().await,
         model: step_context.settings.model_info.slug.clone(),
         permission_mode: hook_permission_mode(step_context.settings.approval_policy()),

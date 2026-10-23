@@ -91,6 +91,10 @@ const BLOCKED_PROMPT_CONTEXT: &str = "Remember the blocked lighthouse note.";
 const PERMISSION_REQUEST_HOOK_MATCHER: &str = "^Bash$";
 const PERMISSION_REQUEST_ALLOW_REASON: &str = "should not be used for allow";
 
+#[cfg(test)]
+#[path = "hooks_cwd_tests.rs"]
+mod cwd_tests;
+
 #[tokio::test]
 async fn managed_hook_discovery_failure_rejects_session_startup_when_hooks_enabled() -> Result<()> {
     let server = start_mock_server().await;

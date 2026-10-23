@@ -490,6 +490,79 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
 }
 
 #[tokio::test]
+async fn exec_command_pre_tool_use_cwd_resolves_selected_environment() {
+    let (session, mut turn) = make_session_and_context().await;
+    let mut selected = turn.initial_environments.environments[0].clone();
+    let TurnEnvironmentState::Ready(environment) = &mut selected else {
+        panic!("ready environment");
+    };
+    environment.selection.environment_id = "other".to_string();
+    environment.selection.cwd = PathUri::parse("file:///C:/repo-B").unwrap();
+    turn.initial_environments.environments.push(selected);
+    let turn = Arc::new(turn);
+    let mut invocation = ToolInvocation {
+        session: session.into(),
+        step_context: StepContext::for_test(Arc::clone(&turn)),
+        turn,
+        cancellation_token: tokio_util::sync::CancellationToken::new(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "hook-cwd".to_string(),
+        tool_name: codex_tools::ToolName::plain("exec_command"),
+        source: ToolCallSource::Direct,
+        payload: ToolPayload::Function {
+            arguments: String::new(),
+        },
+        environments: Default::default(),
+    };
+    for (workdir, expected) in [
+        (None, "file:///C:/repo-B"),
+        (Some(""), "file:///C:/repo-B"),
+        (Some(r"nested\..\target"), "file:///C:/repo-B/target"),
+        (Some(r"D:\repo-C"), "file:///D:/repo-C"),
+    ] {
+        invocation.payload = ToolPayload::Function {
+            arguments: serde_json::json!({
+                "cmd": "echo hello",
+                "environment_id": "other",
+                "workdir": workdir,
+            })
+            .to_string(),
+        };
+        let handler = ExecCommandHandler::default();
+        invocation.environments = handler.environments_for_input(&invocation).unwrap();
+        assert_eq!(
+            handler.pre_tool_use_cwd(&invocation).unwrap(),
+            Some(PathUri::parse(expected).unwrap()),
+        );
+    }
+}
+
+#[tokio::test]
+async fn exec_command_pre_tool_use_cwd_rejects_invalid_environment_and_path() {
+    for args in [
+        serde_json::json!({ "cmd": "echo hello", "environment_id": "missing" }),
+        serde_json::json!({ "cmd": "echo hello", "workdir": "\u{0}" }),
+    ] {
+        let mut invocation = invocation_for_payload(
+            "exec_command",
+            "invalid-cwd",
+            ToolPayload::Function {
+                arguments: args.to_string(),
+            },
+        )
+        .await;
+        let handler = ExecCommandHandler::default();
+        let cwd = handler
+            .environments_for_input(&invocation)
+            .and_then(|environments| {
+                invocation.environments = environments;
+                handler.pre_tool_use_cwd(&invocation)
+            });
+        assert!(matches!(cwd, Err(FunctionCallError::RespondToModel(_))));
+    }
+}
+
+#[tokio::test]
 async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
     let payload = ToolPayload::Function {
         arguments: serde_json::json!({ "chars": "echo hi" }).to_string(),

@@ -43,6 +43,7 @@ use codex_tools::FunctionsNamespaceFunctionPrefixes;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
+use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use indexmap::IndexMap;
 use indexmap::map::Entry;
@@ -173,6 +174,16 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
             tool_name: function_hook_tool_name(invocation),
             tool_input: function_hook_tool_input(arguments),
         })
+    }
+
+    /// Resolves a local execution cwd exposed in `PreToolUse` stdin, when the tool
+    /// supports a per-call working directory. Remote commands return `None` to
+    /// retain the host cwd. This does not move the hook process.
+    fn pre_tool_use_cwd(
+        &self,
+        _invocation: &ToolInvocation,
+    ) -> Result<Option<PathUri>, FunctionCallError> {
+        Ok(None)
     }
 
     /// Rebuilds a tool invocation from hook-facing `tool_input`.
@@ -775,6 +786,17 @@ impl ToolRegistry {
         }
 
         let fail_before_execution = async |invocation: &ToolInvocation, err: FunctionCallError| {
+            let log_payload = tool_log_payload(&invocation.payload, &invocation.source);
+            otel.tool_result_with_tags(
+                &tool_name,
+                &call_id_owned,
+                log_payload.as_ref(),
+                Duration::ZERO,
+                /*success*/ false,
+                &err.to_string(),
+                &tool_result_tags,
+                &extra_trace_fields,
+            );
             if tool.is_builtin_control_tool() {
                 let mut analytics = ControlToolCallGuard::new(invocation);
                 analytics.finish(ControlToolCallStatus::Failed);
@@ -799,12 +821,17 @@ impl ToolRegistry {
             Err(err) => return Err(fail_before_execution(&invocation, err).await),
         };
         if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
+            let tool_cwd = match tool.pre_tool_use_cwd(&invocation) {
+                Ok(cwd) => cwd,
+                Err(err) => return Err(fail_before_execution(&invocation, err).await),
+            };
             match run_pre_tool_use_hooks(
                 &invocation.session,
                 invocation.step_context.as_ref(),
                 invocation.call_id.clone(),
                 &pre_tool_use_payload.tool_name,
                 &pre_tool_use_payload.tool_input,
+                tool_cwd,
                 &invocation.environments.hook_ids(),
             )
             .or_cancel_tool(&cancellation_token)
