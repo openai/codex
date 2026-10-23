@@ -25,6 +25,27 @@ pub fn managed_config_auth_manager(
     crate::config_server_auth_manager(service_config, auth.codex_home, &factory)
 }
 
+/// Existing grants are left to the loader's normal cache and refresh handling.
+pub async fn ensure_config_server_login(
+    auth: AuthConfig,
+    requirements: &ConfigRequirementsToml,
+) -> std::io::Result<()> {
+    let Some(manager) = managed_config_auth_manager(auth, requirements)? else {
+        return Ok(());
+    };
+    if let Err(error) = manager.authorization_id().await {
+        if error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<codex_login::OAuthSessionError>())
+            != Some(&codex_login::OAuthSessionError::LoginRequired)
+        {
+            return Err(error);
+        }
+        manager.login().await?;
+    }
+    Ok(())
+}
+
 pub fn managed_config_bundle_loader(
     auth_manager: Arc<AuthManager>,
     chatgpt_base_url: String,

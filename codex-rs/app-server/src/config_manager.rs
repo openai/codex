@@ -1,5 +1,5 @@
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_config::chatgpt_config_bundle_loader;
+use codex_cloud_config::managed_config_bundle_loader;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLayerStack;
 use codex_config::LoaderOverrides;
@@ -196,23 +196,24 @@ impl ConfigManager {
         auth_manager: Arc<AuthManager>,
         config: &Config,
     ) {
-        let chatgpt_base_url = config.chatgpt_base_url.clone();
-        let http_client_factory = config.http_client_factory();
-        let endpoint = codex_backend_client::Client::new(
-            chatgpt_base_url.clone(),
-            http_client_factory.clone(),
-        )
-        .config_bundle_url();
-        let http_client_factory = http_client_factory.with_network_policy(
-            self.local_network_policy
-                .policy()
-                .restrict_to_endpoints(endpoint.parse().into_iter().collect()),
-        );
-        let loader = chatgpt_config_bundle_loader(
+        // Keep config-server settings and their refresh worker when only
+        // ChatGPT/API-key credentials change.
+        if self
+            .current_managed_config_loader()
+            .config_server()
+            .is_some()
+        {
+            self.revoke_mcp_ema();
+            return;
+        }
+        let loader = managed_config_bundle_loader(
             auth_manager,
-            chatgpt_base_url,
+            config.chatgpt_base_url.clone(),
             self.codex_home.clone(),
-            http_client_factory,
+            config
+                .http_client_factory()
+                .with_network_policy(self.local_network_policy.policy()),
+            config.config_layer_stack.requirements_toml(),
         );
         if let Ok(mut guard) = self.cloud_config_bundle.write() {
             guard.retire_ema_policy();
@@ -225,8 +226,10 @@ impl ConfigManager {
 
     pub(crate) fn clear_chatgpt_config_loader(&self) {
         if let Ok(mut guard) = self.cloud_config_bundle.write() {
-            guard.retire_ema_policy();
-            *guard = CloudConfigBundleLoader::default();
+            if guard.config_server().is_none() {
+                guard.retire_ema_policy();
+                *guard = CloudConfigBundleLoader::default();
+            }
         } else {
             warn!("failed to clear cloud config bundle loader");
         }

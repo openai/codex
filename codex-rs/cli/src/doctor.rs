@@ -628,7 +628,7 @@ async fn load_config(
         ..config_overrides_from_interactive(interactive, arg0_paths)
     };
 
-    crate::cloud_config::config_builder(
+    let config = crate::cloud_config::config_builder(
         &root_config_overrides,
         LoaderOverrides::default(),
         overrides,
@@ -636,7 +636,9 @@ async fn load_config(
     .await?
     .build()
     .await
-    .context("failed to load Codex config")
+    .context("failed to load Codex config")?;
+    config.config_layer_stack.ensure_config_server_applied()?;
+    Ok(config)
 }
 
 fn config_overrides_from_interactive(
