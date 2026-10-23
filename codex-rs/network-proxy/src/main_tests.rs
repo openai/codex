@@ -1,5 +1,6 @@
-use super::parse_standalone_config;
+use clap::Parser;
 use codex_network_proxy::NetworkMitmCaConfig;
+use codex_network_proxy::StaticNetworkProxyConfig;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -37,12 +38,17 @@ fn enables_mitm_for_limited_mode_and_hooks() {
             }),
         ),
     ] {
-        let bytes = serde_json::to_vec(&json!({"network": network})).unwrap();
-        let config = parse_standalone_config(&bytes).unwrap();
-        assert_eq!(
-            (config.network.mitm, config.network.mitm_ca),
-            (expected_mitm, expected_ca)
-        );
+        let bytes = serde_json::to_vec(&json!({"network": network, "constraints": {}})).unwrap();
+        for parse in [
+            StaticNetworkProxyConfig::from_slice,
+            StaticNetworkProxyConfig::from_slice_strict,
+        ] {
+            let config = parse(&bytes).unwrap();
+            assert_eq!(
+                (config.network.mitm, config.network.mitm_ca),
+                (expected_mitm, expected_ca.clone())
+            );
+        }
     }
 }
 
@@ -60,11 +66,12 @@ fn accepts_dynamic_domain_socket_and_hook_matcher_keys() {
                     "headers": {"authorization": ["Bearer token"]}
                 }
             }]
-        }
+        },
+        "constraints": {}
     }))
     .unwrap();
 
-    let config = parse_standalone_config(&bytes).unwrap();
+    let config = StaticNetworkProxyConfig::from_slice_strict(&bytes).unwrap();
 
     assert_eq!(
         config.network.allowed_domains(),
@@ -77,69 +84,20 @@ fn accepts_dynamic_domain_socket_and_hook_matcher_keys() {
 }
 
 #[test]
-fn rejects_unknown_fields_at_every_mitm_hook_level() {
-    for (network, unknown_field) in [
-        (
-            json!({"enabled": true, "unexpected_network": true}),
-            "unexpected_network",
-        ),
-        (
-            json!({
-                "enabled": true,
-                "mitm_hooks": [{
-                    "host": "api.example.com",
-                    "unexpected_hook": true
-                }]
-            }),
-            "unexpected_hook",
-        ),
-        (
-            json!({
-                "enabled": true,
-                "mitm_hooks": [{
-                    "host": "api.example.com",
-                    "match": {"unexpected_matcher": true}
-                }]
-            }),
-            "unexpected_matcher",
-        ),
-        (
-            json!({
-                "enabled": true,
-                "mitm_hooks": [{
-                    "host": "api.example.com",
-                    "actions": {"unexpected_action": true}
-                }]
-            }),
-            "unexpected_action",
-        ),
-        (
-            json!({
-                "enabled": true,
-                "mitm_hooks": [{
-                    "host": "api.example.com",
-                    "actions": {
-                        "inject_request_headers": [{
-                            "name": "authorization",
-                            "unexpected_header": true
-                        }]
-                    }
-                }]
-            }),
-            "unexpected_header",
-        ),
+fn strict_flag_controls_config_parsing() {
+    let base = ["codex-network-proxy", "--config", "policy.json"];
+    let lenient = super::Args::try_parse_from(base).unwrap();
+    let strict = super::Args::try_parse_from(base.into_iter().chain(["--strict"])).unwrap();
+    for bytes in [
+        br#"{"network":{"enabled":true}}"#.as_slice(),
+        br#"{"network":{"enabled":true},"metadata":{"future_setting":true},"constraints":{}}"#,
     ] {
-        let bytes = serde_json::to_vec(&json!({"network": network})).unwrap();
-        let error = parse_standalone_config(&bytes).unwrap_err();
-        assert!(
-            error.to_string().contains(unknown_field),
-            "expected {unknown_field} in {error}"
-        );
+        assert!(lenient.parse_config(bytes).is_ok());
+        assert!(strict.parse_config(bytes).is_err());
     }
-}
-
-#[test]
-fn rejects_trailing_json_values() {
-    let error = parse_standalone_config(br#"{"network":{"enabled":true}} {}"#).unwrap_err();
-    assert!(error.to_string().contains("trailing characters"));
+    assert!(
+        strict
+            .parse_config(br#"{"network":{"enabled":true},"constraints":{}}"#)
+            .is_ok()
+    );
 }

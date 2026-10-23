@@ -1,3 +1,7 @@
+mod standalone;
+
+pub use standalone::StaticNetworkProxyConfig;
+
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;

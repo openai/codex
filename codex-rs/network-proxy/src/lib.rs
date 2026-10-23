@@ -53,6 +53,7 @@ pub use config::NetworkMode;
 pub use config::NetworkProxyConfig;
 pub use config::NetworkUnixSocketPermission;
 pub use config::NetworkUnixSocketPermissions;
+pub use config::StaticNetworkProxyConfig;
 pub use config::host_and_port_from_network_addr;
 pub use config::managed_proxy_ports;
 pub use credential_broker::CREDENTIAL_BROKER_ACTIVE_ENV_KEY;

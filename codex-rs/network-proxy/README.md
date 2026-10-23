@@ -110,12 +110,16 @@ standalone JSON file:
 
 `mitm` defaults to `false`. `mitm_ca` defaults to `None` and is omitted from serialized JSON when
 unset. HTTPS MITM is enabled automatically for limited mode or configured `mitm_hooks`. Set `mitm` to
-`true` to enable it explicitly. The proxy requires `network.enabled = true` and rejects unknown
-fields, including fields nested inside MITM hooks.
+`true` to enable it explicitly. The proxy requires `network.enabled = true`. Unknown policy fields are rejected in both modes.
+Standalone documents may include a top-level `metadata` value and omit `constraints`.
 
 ```bash
 cargo run -p codex-network-proxy -- --config /path/to/network-proxy.json
 ```
+
+Managed hosts must pass `--strict`, which rejects unknown fields at every typed level and requires
+an explicit `constraints` object. Library callers use `StaticNetworkProxyConfig::from_slice_strict`
+for the same checks.
 
 ### 3) Point a client at it
 

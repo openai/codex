@@ -7,14 +7,11 @@ use clap::Parser;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigReloaderFuture;
 use codex_network_proxy::ConfigState;
-use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxy;
-use codex_network_proxy::NetworkProxyConfig;
-use codex_network_proxy::NetworkProxyConstraints;
 use codex_network_proxy::NetworkProxyState;
 use codex_network_proxy::Platform;
-use codex_network_proxy::build_config_state;
-use serde::Deserialize;
+use codex_network_proxy::StaticNetworkProxyConfig;
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
@@ -27,29 +24,19 @@ struct Args {
     /// Standalone JSON configuration containing a `network` object.
     #[arg(long, value_name = "PATH")]
     config: PathBuf,
+    /// Reject unknown config fields and require explicit managed constraints.
+    #[arg(long)]
+    strict: bool,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StandaloneConfig {
-    network: NetworkProxyConfig,
-}
-
-fn parse_standalone_config(bytes: &[u8]) -> Result<StandaloneConfig> {
-    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    let mut ignored_fields = Vec::new();
-    let mut config: StandaloneConfig = serde_ignored::deserialize(&mut deserializer, |path| {
-        ignored_fields.push(path.to_string());
-    })?;
-    deserializer.end()?;
-    ensure!(
-        ignored_fields.is_empty(),
-        "unknown fields in network proxy config: {}",
-        ignored_fields.join(", ")
-    );
-    config.network.mitm |=
-        config.network.mode == NetworkMode::Limited || !config.network.mitm_hooks.is_empty();
-    Ok(config)
+impl Args {
+    fn parse_config(&self, bytes: &[u8]) -> Result<StaticNetworkProxyConfig> {
+        if self.strict {
+            StaticNetworkProxyConfig::from_slice_strict(bytes)
+        } else {
+            StaticNetworkProxyConfig::from_slice(bytes)
+        }
+    }
 }
 
 struct StaticConfigReloader {
@@ -76,29 +63,26 @@ async fn main() -> Result<()> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
     let args = Args::parse();
-    let bytes = std::fs::read(&args.config).with_context(|| {
-        format!(
-            "failed to read network proxy config: {}",
-            args.config.display()
-        )
-    })?;
+    let mut bytes = Vec::new();
+    std::fs::File::open(&args.config)
+        .with_context(|| {
+            format!(
+                "failed to read network proxy config: {}",
+                args.config.display()
+            )
+        })?
+        .take((MAX_CONFIG_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
     ensure!(
         bytes.len() <= MAX_CONFIG_BYTES,
         "network proxy config exceeds {MAX_CONFIG_BYTES} bytes"
     );
-    let config = parse_standalone_config(&bytes)
+    let config = args
+        .parse_config(&bytes)
         .with_context(|| format!("invalid network proxy config: {}", args.config.display()))?;
-    ensure!(
-        config.network.enabled,
-        "standalone network proxy requires network.enabled = true"
-    );
-
-    let config_state = build_config_state(
-        config.network,
-        NetworkProxyConstraints::default(),
-        Platform::native(),
-    )
-    .context("failed to initialize network proxy policy")?;
+    let config_state = config
+        .build_state(Platform::native())
+        .context("failed to initialize network proxy policy")?;
     let reloader = Arc::new(StaticConfigReloader {
         state: config_state.clone(),
     });
