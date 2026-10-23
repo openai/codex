@@ -68,6 +68,53 @@ fn request_snapshots_reuse_history_without_deduping_new_identical_items() -> any
 }
 
 #[test]
+fn repeated_image_output_matches_content_instead_of_payload_location() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_writer(&temp)?;
+    start_turn(&writer, "turn-1")?;
+    let mut output = json!({
+        "type": "function_call_output",
+        "id": "image-output",
+        "call_id": "call-image",
+        "output": [
+            {"type": "input_text", "text": "Image:"},
+            {"type": "input_image", "image_url": "data:image/png;base64,first"}
+        ]
+    });
+    let empty_output = json!({
+        "type": "function_call_output",
+        "call_id": "call-empty",
+        "output": []
+    });
+    for inference_id in ["inference-1", "inference-2"] {
+        let request = writer.write_json_payload(
+            RawPayloadKind::InferenceRequest,
+            &json!({"input": [output.clone(), empty_output.clone()]}),
+        )?;
+        append_inference_start(&writer, inference_id, "turn-1", request)?;
+    }
+
+    let rollout = replay_bundle(temp.path())?;
+    assert_eq!(
+        rollout.inference_calls["inference-1"].request_item_ids,
+        rollout.inference_calls["inference-2"].request_item_ids,
+    );
+    assert_eq!(rollout.conversation_items.len(), 2);
+
+    // Keeping the call and item IDs must not hide a changed image.
+    output["output"][1]["image_url"] = json!("data:image/png;base64,second");
+    let request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({"input": [output]}),
+    )?;
+    append_inference_start(&writer, "inference-3", "turn-1", request)?;
+    expect_replay_error(
+        &temp,
+        "model-visible call id call-image was reused with different content",
+    )
+}
+
+#[test]
 fn response_outputs_require_harness_acceptance() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;

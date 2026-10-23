@@ -6,6 +6,8 @@ use anyhow::bail;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ResponseItem;
 use serde_json::Value;
+use sha2::Digest;
+use sha2::Sha256;
 
 use crate::model::AgentMessageMetadata;
 use crate::model::ConversationBody;
@@ -93,7 +95,7 @@ fn normalize_model_item(
             channel: Some(ConversationChannel::Commentary),
             kind: ConversationItemKind::FunctionCallOutput,
             agent_message: None,
-            body: tool_output_body(item.get("output"), raw_payload),
+            body: tool_output_body(item.get("output"), raw_payload)?,
             call_id: item
                 .get("call_id")
                 .and_then(Value::as_str)
@@ -117,7 +119,7 @@ fn normalize_model_item(
             channel: Some(ConversationChannel::Commentary),
             kind: ConversationItemKind::CustomToolCallOutput,
             agent_message: None,
-            body: tool_output_body(item.get("output"), raw_payload),
+            body: tool_output_body(item.get("output"), raw_payload)?,
             call_id: item
                 .get("call_id")
                 .and_then(Value::as_str)
@@ -195,7 +197,7 @@ fn normalize_message_item(
         kind: ConversationItemKind::Message,
         agent_message: None,
         body: ConversationBody {
-            parts: content_parts(item.get("content"), raw_payload),
+            parts: content_parts(item.get("content"), raw_payload)?,
         },
         call_id: None,
     })
@@ -398,9 +400,12 @@ fn channel_from_phase(phase: &str) -> Option<ConversationChannel> {
     }
 }
 
-fn content_parts(content: Option<&Value>, raw_payload: &RawPayloadRef) -> Vec<ConversationPart> {
+fn content_parts(
+    content: Option<&Value>,
+    raw_payload: &RawPayloadRef,
+) -> Result<Vec<ConversationPart>> {
     let Some(content) = content.and_then(Value::as_array) else {
-        return vec![payload_ref_part("content", raw_payload)];
+        return Ok(vec![payload_ref_part("content", raw_payload)]);
     };
 
     let mut parts = Vec::new();
@@ -413,16 +418,23 @@ fn content_parts(content: Option<&Value>, raw_payload: &RawPayloadRef) -> Vec<Co
                     });
                 }
             }
-            Some("input_image") => parts.push(payload_ref_part("input_image", raw_payload)),
-            Some(other) => parts.push(payload_ref_part(other, raw_payload)),
-            None => parts.push(payload_ref_part("content", raw_payload)),
+            other => {
+                // Repeated images live in different request payloads. Compare their
+                // content without copying large image bodies into the reduced graph.
+                let mut canonical = part.clone();
+                canonical.sort_all_objects();
+                let mut digest = Sha256::new();
+                serde_json::to_writer(&mut digest, &canonical)?;
+                parts.push(ConversationPart::PayloadRef {
+                    label: other.unwrap_or("content").to_string(),
+                    raw_payload_id: raw_payload.raw_payload_id.clone(),
+                    content_sha256: Some(format!("{:x}", digest.finalize())),
+                });
+            }
         }
     }
 
-    if parts.is_empty() {
-        parts.push(payload_ref_part("empty_content", raw_payload));
-    }
-    parts
+    Ok(parts)
 }
 
 fn custom_tool_call_body(item: &Value, raw_payload: &RawPayloadRef) -> ConversationBody {
@@ -463,19 +475,22 @@ fn raw_text_or_json_body(value: Option<&Value>, raw_payload: &RawPayloadRef) -> 
     }
 }
 
-fn tool_output_body(output: Option<&Value>, raw_payload: &RawPayloadRef) -> ConversationBody {
-    match output {
+fn tool_output_body(
+    output: Option<&Value>,
+    raw_payload: &RawPayloadRef,
+) -> Result<ConversationBody> {
+    Ok(match output {
         Some(Value::String(text)) => ConversationBody {
             parts: vec![ConversationPart::Text { text: text.clone() }],
         },
         Some(Value::Array(_)) => ConversationBody {
-            parts: content_parts(output, raw_payload),
+            parts: content_parts(output, raw_payload)?,
         },
         Some(value) => json_body(value, raw_payload),
         None => ConversationBody {
             parts: vec![payload_ref_part("tool_output", raw_payload)],
         },
-    }
+    })
 }
 
 fn compaction_body(item: &Value, raw_payload: &RawPayloadRef) -> Result<ConversationBody> {
@@ -509,6 +524,7 @@ fn payload_ref_part(label: &str, raw_payload: &RawPayloadRef) -> ConversationPar
     ConversationPart::PayloadRef {
         label: label.to_string(),
         raw_payload_id: raw_payload.raw_payload_id.clone(),
+        content_sha256: None,
     }
 }
 

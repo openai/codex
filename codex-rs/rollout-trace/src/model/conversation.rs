@@ -138,6 +138,9 @@ pub enum ConversationPart {
     PayloadRef {
         label: String,
         raw_payload_id: RawPayloadId,
+        /// Content identity across snapshots, independent of the containing payload file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_sha256: Option<String>,
     },
 }
 

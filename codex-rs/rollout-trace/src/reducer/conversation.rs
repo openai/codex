@@ -633,6 +633,16 @@ fn conversation_body_matches(left: &ConversationBody, right: &ConversationBody) 
                         raw_payload_id: _,
                     },
                 ) => left_summary == right_summary,
+                (
+                    ConversationPart::PayloadRef {
+                        content_sha256: Some(left_hash),
+                        ..
+                    },
+                    ConversationPart::PayloadRef {
+                        content_sha256: Some(right_hash),
+                        ..
+                    },
+                ) => left_hash == right_hash,
                 _ => left == right,
             })
 }
