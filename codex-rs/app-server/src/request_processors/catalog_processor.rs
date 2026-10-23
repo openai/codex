@@ -97,6 +97,7 @@ fn hooks_to_info(hooks: &[codex_hooks::HookListEntry]) -> Vec<HookMetadata> {
                 source_path: hook.source_path.clone(),
                 source: hook.source.into(),
                 plugin_id: hook.plugin_id.clone(),
+                environment_id: hook.environment_id.clone(),
                 display_order: hook.display_order,
                 enabled: hook.enabled,
                 is_managed: hook.is_managed,
@@ -621,12 +622,35 @@ impl CatalogRequestProcessor {
         Ok(SkillsExtraRootsSetResponse {})
     }
 
-    /// Handle `hooks/list` by resolving hooks for each requested cwd.
+    /// Resolve a loaded thread's hook inventory, or inspect configuration for each requested cwd.
     async fn hooks_list_response(
         &self,
         params: HooksListParams,
     ) -> Result<HooksListResponse, JSONRPCErrorError> {
-        let HooksListParams { cwds } = params;
+        let HooksListParams { cwds, thread_id } = params;
+        if let Some(thread_id) = thread_id {
+            if !cwds.is_empty() {
+                return Err(invalid_request("specify either threadId or cwds"));
+            }
+            let thread_id = ThreadId::from_string(&thread_id)
+                .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+            let thread = self
+                .thread_manager
+                .get_thread(thread_id)
+                .await
+                .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
+            let cwd = thread.config_snapshot().await.cwd().to_path_buf();
+            let hooks = thread.list_hooks();
+            return Ok(HooksListResponse {
+                data: vec![codex_app_server_protocol::HooksListEntry {
+                    cwd,
+                    hooks: hooks_to_info(&hooks.hooks),
+                    warnings: hooks.warnings,
+                    errors: Vec::new(),
+                }],
+            });
+        }
+
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.to_path_buf()]
         } else {

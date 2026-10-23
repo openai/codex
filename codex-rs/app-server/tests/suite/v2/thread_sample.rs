@@ -563,6 +563,7 @@ async fn sample_skips_inherited_stop_hooks() -> Result<()> {
     let list_id = client
         .send_hooks_list_request(HooksListParams {
             cwds: vec![home.path().to_path_buf()],
+            ..Default::default()
         })
         .await?;
     let hooks: HooksListResponse = client.read_response(list_id).await?;

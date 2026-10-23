@@ -2,9 +2,9 @@ use super::*;
 use crate::app_event::ConnectorsSnapshot;
 use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::chatwidget::connectors::ConnectorsCacheState;
+use crate::hooks_rpc::HooksListTarget;
 use codex_app_server_protocol::HookErrorInfo;
 use codex_app_server_protocol::HooksListEntry;
-use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::MarketplaceLoadErrorInfo;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::PluginAvailability;
@@ -136,18 +136,18 @@ async fn marketplace_upgrade_failure_includes_backend_messages_snapshot() {
 async fn hooks_popup_shows_list_diagnostics() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let cwd = chat.config.cwd.clone();
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
 
     chat.on_hooks_loaded(
-        cwd.to_path_buf(),
-        Ok(HooksListResponse {
-            data: vec![HooksListEntry {
-                cwd: cwd.to_path_buf(),
-                hooks: Vec::new(),
-                warnings: vec!["skipped invalid matcher for PreToolUse".to_string()],
-                errors: vec![HookErrorInfo {
-                    path: test_path_buf("/tmp/hooks.json"),
-                    message: "failed to parse hooks config".to_string(),
-                }],
+        HooksListTarget::Thread(thread_id),
+        Ok(HooksListEntry {
+            cwd: cwd.to_path_buf(),
+            hooks: Vec::new(),
+            warnings: vec!["skipped invalid matcher for PreToolUse".to_string()],
+            errors: vec![HookErrorInfo {
+                path: test_path_buf("/tmp/hooks.json"),
+                message: "failed to parse hooks config".to_string(),
             }],
         }),
     );

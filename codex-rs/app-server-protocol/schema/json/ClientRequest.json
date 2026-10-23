@@ -1690,11 +1690,18 @@
     "HooksListParams": {
       "properties": {
         "cwds": {
-          "description": "When empty, defaults to the current session working directory.",
+          "description": "Working directories to inspect when no thread is specified. An empty list uses the session cwd.",
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "threadId": {
+          "description": "List a loaded thread's hooks, including its selected environments. Omit `cwds` in this mode.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"

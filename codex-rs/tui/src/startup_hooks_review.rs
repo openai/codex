@@ -22,9 +22,9 @@ use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::config_update::format_config_error;
 use crate::hooks_rpc::HookTrustUpdate;
+use crate::hooks_rpc::HooksListTarget;
 use crate::hooks_rpc::fetch_hooks_list;
 use crate::hooks_rpc::hook_needs_review;
-use crate::hooks_rpc::hooks_list_entry_for_cwd;
 use crate::hooks_rpc::write_hook_trusts;
 use crate::keymap::ListAction;
 use crate::keymap::RuntimeKeymap;
@@ -53,19 +53,18 @@ pub(crate) async fn load_startup_hooks_review_entry(
     request_handle: AppServerRequestHandle,
     cwd: PathBuf,
 ) -> HooksListEntry {
-    let response = match fetch_hooks_list(request_handle, cwd.clone()).await {
-        Ok(response) => response,
+    match fetch_hooks_list(request_handle, &HooksListTarget::Cwd(cwd.clone())).await {
+        Ok(entry) => entry,
         Err(err) => {
             tracing::warn!("failed to load startup hook review state: {err:#}");
-            return HooksListEntry {
+            HooksListEntry {
                 cwd,
                 hooks: Vec::new(),
                 warnings: Vec::new(),
                 errors: Vec::new(),
-            };
+            }
         }
-    };
-    hooks_list_entry_for_cwd(response, &cwd)
+    }
 }
 
 pub(crate) async fn maybe_run_startup_hooks_review(
@@ -370,6 +369,7 @@ mod tests {
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: HookSource::User,
             plugin_id: None,
+            environment_id: None,
             display_order: 0,
             enabled: false,
             current_hash: format!("sha256:{key}"),

@@ -9,9 +9,9 @@ use codex_app_server_protocol::HooksListParams;
 use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
+use codex_protocol::ThreadId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
-use std::path::Path;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -21,31 +21,37 @@ pub(crate) struct HookTrustUpdate {
     pub(crate) current_hash: String,
 }
 
-pub(crate) async fn fetch_hooks_list(
-    request_handle: AppServerRequestHandle,
-    cwd: PathBuf,
-) -> Result<HooksListResponse> {
-    let request_id = RequestId::String(format!("hooks-list-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::HooksList {
-            request_id,
-            params: HooksListParams { cwds: vec![cwd] },
-        })
-        .await
-        .wrap_err("hooks/list failed in TUI")
+/// A running thread's inventory, or configuration to inspect before a thread exists.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum HooksListTarget {
+    Thread(ThreadId),
+    Cwd(PathBuf),
 }
 
-pub(crate) fn hooks_list_entry_for_cwd(response: HooksListResponse, cwd: &Path) -> HooksListEntry {
+pub(crate) async fn fetch_hooks_list(
+    request_handle: AppServerRequestHandle,
+    target: &HooksListTarget,
+) -> Result<HooksListEntry> {
+    let params = match target {
+        HooksListTarget::Thread(id) => HooksListParams {
+            thread_id: Some(id.to_string()),
+            ..Default::default()
+        },
+        HooksListTarget::Cwd(cwd) => HooksListParams {
+            cwds: vec![cwd.clone()],
+            ..Default::default()
+        },
+    };
+    let request_id = RequestId::String(format!("hooks-list-{}", Uuid::new_v4()));
+    let response: HooksListResponse = request_handle
+        .request_typed(ClientRequest::HooksList { request_id, params })
+        .await
+        .wrap_err("hooks/list failed in TUI")?;
     response
         .data
         .into_iter()
-        .find(|entry| entry.cwd.as_path() == cwd)
-        .unwrap_or_else(|| HooksListEntry {
-            cwd: cwd.to_path_buf(),
-            hooks: Vec::new(),
-            warnings: Vec::new(),
-            errors: Vec::new(),
-        })
+        .next()
+        .ok_or_else(|| color_eyre::eyre::eyre!("hooks/list returned no inventory for {target:?}"))
 }
 
 pub(crate) fn hook_needs_review(hook: &HookMetadata) -> bool {

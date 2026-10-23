@@ -1730,7 +1730,9 @@ pub(super) fn hook_run(
         handler_type: codex_app_server_protocol::HookHandlerType::Command,
         execution_mode: codex_app_server_protocol::HookExecutionMode::Sync,
         scope: codex_app_server_protocol::HookScope::Turn,
-        source_path: PathBuf::from(test_path_display("/tmp/hooks.json")).abs(),
+        source_path: PathBuf::from(test_path_display("/tmp/hooks.json"))
+            .abs()
+            .into(),
         source: codex_app_server_protocol::HookSource::User,
         display_order: 0,
         status,

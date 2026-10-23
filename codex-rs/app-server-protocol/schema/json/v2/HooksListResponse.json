@@ -136,6 +136,13 @@
         "enabled": {
           "type": "boolean"
         },
+        "environmentId": {
+          "description": "The owning execution environment, if this hook came from its requirements.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "eventName": {
           "$ref": "#/definitions/HookEventName"
         },

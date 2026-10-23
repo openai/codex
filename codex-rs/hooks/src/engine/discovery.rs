@@ -589,7 +589,7 @@ fn append_environment_hooks(
         handler.source_path = super::HandlerSourcePath::Environment {
             environment_id: source.environment_id.clone(),
             cwd: source.cwd.clone(),
-            source_path: path.clone(),
+            source_path: path.clone().into(),
         };
     }
 }

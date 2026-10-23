@@ -47,13 +47,16 @@ pub struct SkillsExtraRootsSetParams {
 #[ts(export_to = "v2/")]
 pub struct SkillsExtraRootsSetResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct HooksListParams {
-    /// When empty, defaults to the current session working directory.
+    /// Working directories to inspect when no thread is specified. An empty list uses the session cwd.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cwds: Vec<PathBuf>,
+    /// List a loaded thread's hooks, including its selected environments. Omit `cwds` in this mode.
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -597,6 +600,8 @@ pub struct HookMetadata {
     pub source_path: AbsolutePathBuf,
     pub source: HookSource,
     pub plugin_id: Option<String>,
+    /// The owning execution environment, if this hook came from its requirements.
+    pub environment_id: Option<String>,
     pub display_order: i64,
     pub enabled: bool,
     pub is_managed: bool,

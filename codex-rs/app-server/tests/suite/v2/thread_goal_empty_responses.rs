@@ -7,6 +7,8 @@ use app_test_support::create_mock_responses_server_sequence;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::HookEventName;
+use codex_app_server_protocol::HookSource;
 use codex_app_server_protocol::HooksListParams;
 use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::MergeStrategy;
@@ -111,10 +113,17 @@ command_windows = """Write-Output '{"continue":false}'"""
         let list = mcp
             .send_hooks_list_request(HooksListParams {
                 cwds: vec![codex_home.path().to_path_buf()],
+                ..Default::default()
             })
             .await?;
         let HooksListResponse { data } = mcp.read_response(list).await?;
-        let hook = &data[0].hooks[0];
+        let hook = data[0]
+            .hooks
+            .iter()
+            .find(|hook| {
+                hook.source == HookSource::User && hook.event_name == HookEventName::PreCompact
+            })
+            .expect("user config should register the pre-compact hook");
         let trust = mcp
             .send_config_batch_write_request(ConfigBatchWriteParams {
                 edits: vec![ConfigEdit {

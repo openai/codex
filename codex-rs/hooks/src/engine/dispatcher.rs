@@ -79,10 +79,10 @@ pub(crate) fn select_handlers_for_matcher_inputs(
 
 pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
     let source_path = match &handler.source_path {
-        HandlerSourcePath::Local(path)
-        | HandlerSourcePath::Environment {
+        HandlerSourcePath::Local(path) => path.clone().into(),
+        HandlerSourcePath::Environment {
             source_path: path, ..
-        } => path,
+        } => path.clone().into(),
         HandlerSourcePath::ExecutorScoped { .. } => {
             unreachable!("executor-scoped hooks do not produce public hook summaries")
         }
@@ -94,7 +94,7 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
         handler_type: handler.handler_type(),
         execution_mode: handler.execution_mode(),
         scope: scope_for_event(handler.event_name),
-        source_path: source_path.clone(),
+        source_path,
         source: handler.source,
         display_order: handler.display_order,
         status: HookRunStatus::Running,
@@ -247,10 +247,10 @@ pub(crate) fn completed_summary(
     entries: Vec<codex_protocol::protocol::HookOutputEntry>,
 ) -> HookRunSummary {
     let source_path = match &handler.source_path {
-        HandlerSourcePath::Local(path)
-        | HandlerSourcePath::Environment {
+        HandlerSourcePath::Local(path) => path.clone().into(),
+        HandlerSourcePath::Environment {
             source_path: path, ..
-        } => path,
+        } => path.clone().into(),
         HandlerSourcePath::ExecutorScoped { .. } => {
             unreachable!("executor-scoped hooks do not produce public hook summaries")
         }
@@ -262,7 +262,7 @@ pub(crate) fn completed_summary(
         handler_type: handler.handler_type(),
         execution_mode: handler.execution_mode(),
         scope: scope_for_event(handler.event_name),
-        source_path: source_path.clone(),
+        source_path,
         source: handler.source,
         display_order: handler.display_order,
         status,

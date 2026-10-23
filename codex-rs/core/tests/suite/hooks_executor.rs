@@ -5,8 +5,11 @@ use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::EnvironmentConfig;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
+use codex_core::shell::ShellType;
+use codex_core::shell::get_shell;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::EnvironmentConfigReadParams;
 use codex_exec_server::ExecServerRuntimeOptions;
 use codex_features::Feature;
 use codex_protocol::capabilities::CapabilityRootLocation;
@@ -15,6 +18,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -26,6 +30,7 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
+use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use core_test_support::TestTargetOs;
 use core_test_support::apps_test_server::AppsTestServer;
@@ -37,6 +42,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_once;
 use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
@@ -327,6 +333,254 @@ async fn environment_requires_loadable_managed_hooks_at_startup_and_readiness() 
             .is_primary_environment_configured()
     );
     thread.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_lists_the_environment_hook_that_blocks_a_turn() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("enable hooks");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let thread = &test.codex;
+    let initial = thread.list_hooks();
+    let selection = thread
+        .environment_selections()
+        .await
+        .into_iter()
+        .next()
+        .context("thread should have a selected environment")?;
+    let mut config = environment_config_for_selection(&test.config, &selection);
+    config.environment_hooks = toml::from_str(
+        r#"
+        [[UserPromptSubmit]]
+        [[UserPromptSubmit.hooks]]
+        type = "command"
+        command = "echo blocked-by-listed-hook >&2; exit 2"
+        command_windows = "Write-Error 'blocked-by-listed-hook'; exit 2"
+    "#,
+    )?;
+    thread.environment_ready(&selection, config).await?;
+
+    let listed = thread.list_hooks();
+    let entry = listed
+        .hooks
+        .iter()
+        .find(|hook| hook.environment_id.as_deref() == Some(selection.environment_id.as_str()))
+        .context("list should include this environment's hook")?;
+    thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "this turn should be blocked".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let run = wait_for_event_match(thread, |event| match event {
+        EventMsg::HookCompleted(event)
+            if event.run.source_path == LegacyAppPathString::from_abs_path(&entry.source_path) =>
+        {
+            Some(event.run.clone())
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(run.status, HookRunStatus::Blocked);
+    assert_eq!(run.event_name, entry.event_name);
+    assert_eq!(run.display_order, entry.display_order);
+
+    wait_for_event(thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    thread
+        .environment_failed(&selection, "executor disconnected".into())
+        .await?;
+    assert_eq!(thread.list_hooks(), initial);
+    Ok(())
+}
+
+const HOOK_INPUT_PROMPT: &str = "environment-hook-prompt";
+
+#[test_case(
+    ShellType::PowerShell,
+    "& (Get-Process -Id $PID).Path -NoProfile -Command '[Console]::Error.WriteLine(([Console]::In.ReadLine() | ConvertFrom-Json).prompt); exit 2'",
+    HookRunStatus::Blocked, HOOK_INPUT_PROMPT;
+    "PowerShell preserves a native hook's blocking exit status"
+)]
+#[test_case(
+    ShellType::PowerShell, "ForEach-Object { ($_ | ConvertFrom-Json).prompt }",
+    HookRunStatus::Completed, HOOK_INPUT_PROMPT;
+    "PowerShell delivers the prompt to a successful hook"
+)]
+#[test_case(
+    ShellType::PowerShell, "ForEach-Object { $_ }; Write-Error 'hook failed'",
+    HookRunStatus::Failed, "hook exited with code 1";
+    "PowerShell reports a cmdlet failure"
+)]
+#[cfg_attr(unix, test_case(
+    ShellType::Bash, "(grep -o environment-hook-prompt)",
+    HookRunStatus::Completed, HOOK_INPUT_PROMPT;
+    "Bash delivers the prompt and EOF to a hook starting with a subshell"
+))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn environment_hook_receives_prompt_and_reports_exit_status(
+    shell_type: ShellType,
+    command: &str,
+    expected_status: HookRunStatus,
+    expected_output: &str,
+) -> Result<()> {
+    let Some(shell) = get_shell(shell_type) else {
+        assert!(
+            cfg!(unix) && shell_type == ShellType::PowerShell,
+            "expected {shell_type:?} to be installed"
+        );
+        return Ok(());
+    };
+    let server = start_mock_server().await;
+    mount_response_once(&server, completed_turn_response("after-hook")).await;
+    let test = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("enable hooks");
+        })
+        .with_user_shell(shell)
+        .build(&server)
+        .await?;
+    let thread = &test.codex;
+    let selection = thread
+        .environment_selections()
+        .await
+        .into_iter()
+        .next()
+        .context("thread should have a selected environment")?;
+    let mut config = environment_config_for_selection(&test.config, &selection);
+    config.environment_hooks = serde_json::from_value(json!({
+        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": command}]}]
+    }))?;
+    thread.environment_ready(&selection, config).await?;
+
+    thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: HOOK_INPUT_PROMPT.to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let run = wait_for_event_match(thread, |event| match event {
+        EventMsg::HookCompleted(event) => Some(event.run.clone()),
+        _ => None,
+    })
+    .await;
+    let entries: Vec<_> = run
+        .entries
+        .iter()
+        .map(|entry| entry.text.as_str())
+        .collect();
+    assert_eq!(
+        (run.status, entries),
+        (expected_status, vec![expected_output])
+    );
+    wait_for_event(thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_tool_use_hook_runs_only_on_the_executor_that_owns_the_command() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("enable hooks");
+        })
+        .build(&server)
+        .await?;
+    let manager = test.thread_manager.environment_manager();
+
+    // Give both executors the same hook and workspace. Each ExecServerProcess has
+    // a private CODEX_HOME, so the hook input file identifies where it actually ran.
+    let mut executors = Vec::new();
+    let mut selections = Vec::new();
+    let mut input_files = HashMap::new();
+    for id in ["other", "owner"] {
+        let executor = ExecServerProcess::start().await?;
+        manager.upsert_environment(
+            id.into(),
+            executor.websocket_url.clone(),
+            /*connect_timeout*/ None,
+        )?;
+        executors.push(executor);
+        let environment = manager
+            .get_environment(id)
+            .context("executor should be registered")?;
+        let mut selection = test.executor_environment().selection().clone();
+        selection.environment_id = id.into();
+        let reported = environment
+            .read_environment_config(EnvironmentConfigReadParams {
+                cwd: selection.cwd.clone(),
+                config_paths: Vec::new(),
+                requirements_paths: vec![vec!["hooks".into()]],
+            })
+            .await?;
+        let home = reported.codex_home_dir.to_abs_path()?;
+        input_files.insert(id, home.join("pre-tool-use-input.json"));
+        let mut config = environment_config_for_selection(&test.config, &selection);
+        config.environment_hooks = toml::from_str(
+            r#"
+            [[PreToolUse]]
+            matcher = '^Bash$'
+            [[PreToolUse.hooks]]
+            type = 'command'
+            command = 'cat > "$CODEX_HOME/pre-tool-use-input.json"; echo denied-by-environment-hook >&2; exit 2'
+        "#,
+        )?;
+        selection.config = EnvironmentConfigState::Ready(config);
+        selections.push(selection);
+    }
+
+    // Target the second executor, so always running the primary's hook also fails.
+    let call_id = "command-in-owner";
+    let command = "echo ran > command-ran";
+    let args = json!({ "environment_id": "owner", "cmd": command });
+    let responses = mount_response_sequence(
+        &server,
+        vec![
+            sse_response(sse(vec![
+                ev_response_created("first"),
+                ev_function_call(call_id, "exec_command", &args.to_string()),
+                ev_completed("first"),
+            ])),
+            completed_turn_response("second"),
+        ],
+    )
+    .await;
+    test.submit_turn_with_environments("run the command in owner", Some(selections))
+        .await?;
+
+    let output = responses
+        .function_call_output_text(call_id)
+        .context("missing tool result")?;
+    assert!(
+        output.contains("Command blocked by PreToolUse hook: denied-by-environment-hook"),
+        "{output}"
+    );
+    assert!(
+        !test.workspace_path("command-ran").try_exists()?,
+        "the denied command ran"
+    );
+    let owner_input =
+        std::fs::read(&input_files["owner"]).context("owner did not receive the hook")?;
+    let input: Value = serde_json::from_slice(&owner_input)?;
+    assert_eq!(input["tool_use_id"], call_id);
+    assert_eq!(input["tool_input"]["command"], command);
+    assert!(
+        !input_files["other"].try_exists()?,
+        "the other executor also received the hook"
+    );
     Ok(())
 }
 

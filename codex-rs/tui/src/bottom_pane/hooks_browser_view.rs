@@ -708,6 +708,9 @@ fn event_description(event_name: HookEventName) -> &'static str {
 }
 
 fn hook_source_summary(hook: &HookMetadata) -> String {
+    if let Some(id) = &hook.environment_id {
+        return format!("Environment - {id}");
+    }
     match hook.source {
         HookSource::Plugin => hook
             .plugin_id
@@ -719,6 +722,9 @@ fn hook_source_summary(hook: &HookMetadata) -> String {
 }
 
 fn detail_source_value(hook: &HookMetadata) -> String {
+    if hook.environment_id.is_some() {
+        return hook_source_summary(hook);
+    }
     match hook.source {
         HookSource::Plugin => hook_source_summary(hook),
         HookSource::System
@@ -839,6 +845,7 @@ mod tests {
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source,
             plugin_id: plugin_id.map(str::to_string),
+            environment_id: None,
             display_order,
             enabled,
             current_hash,

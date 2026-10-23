@@ -5214,6 +5214,7 @@ async fn wait_for_plugin_hooks(
             let request_id = mcp
                 .send_hooks_list_request(HooksListParams {
                     cwds: vec![cwd.to_path_buf()],
+                    ..Default::default()
                 })
                 .await?;
             let HooksListResponse { data } = mcp.read_response(request_id).await?;

@@ -1408,8 +1408,8 @@ impl App {
             AppEvent::FetchPluginsList { cwd } => {
                 self.fetch_plugins_list(app_server, cwd);
             }
-            AppEvent::FetchHooksList { cwd } => {
-                self.fetch_hooks_list(app_server, cwd);
+            AppEvent::FetchHooksList { target } => {
+                self.fetch_hooks_list(app_server, target);
             }
             AppEvent::OpenMarketplaceAddPrompt => {
                 self.chat_widget.open_marketplace_add_prompt();
@@ -1471,8 +1471,8 @@ impl App {
                     section_errors,
                 );
             }
-            AppEvent::HooksLoaded { cwd, result } => {
-                self.chat_widget.on_hooks_loaded(cwd, result);
+            AppEvent::HooksLoaded { target, result } => {
+                self.chat_widget.on_hooks_loaded(target, result);
             }
             AppEvent::FetchMarketplaceAdd { cwd, source } => {
                 self.fetch_marketplace_add(app_server, cwd, source);

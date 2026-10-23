@@ -13612,6 +13612,13 @@
           "enabled": {
             "type": "boolean"
           },
+          "environmentId": {
+            "description": "The owning execution environment, if this hook came from its requirements.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "eventName": {
             "$ref": "#/definitions/v2/HookEventName"
           },
@@ -13779,7 +13786,7 @@
             "default": "unknown"
           },
           "sourcePath": {
-            "$ref": "#/definitions/v2/AbsolutePathBuf"
+            "$ref": "#/definitions/v2/LegacyAppPathString"
           },
           "startedAt": {
             "format": "int64",
@@ -13900,11 +13907,18 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "cwds": {
-            "description": "When empty, defaults to the current session working directory.",
+            "description": "Working directories to inspect when no thread is specified. An empty list uses the session cwd.",
             "items": {
               "type": "string"
             },
             "type": "array"
+          },
+          "threadId": {
+            "description": "List a loaded thread's hooks, including its selected environments. Omit `cwds` in this mode.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "title": "HooksListParams",

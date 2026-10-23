@@ -2022,7 +2022,16 @@ class HooksListParams(BaseModel):
     )
     cwds: Annotated[
         list[str] | None,
-        Field(description="When empty, defaults to the current session working directory."),
+        Field(
+            description="Working directories to inspect when no thread is specified. An empty list uses the session cwd."
+        ),
+    ] = None
+    thread_id: Annotated[
+        str | None,
+        Field(
+            alias="threadId",
+            description="List a loaded thread's hooks, including its selected environments. Omit `cwds` in this mode.",
+        ),
     ] = None
 
 
@@ -8418,6 +8427,13 @@ class HookMetadata1(BaseModel):
     current_hash: Annotated[str, Field(alias="currentHash")]
     display_order: Annotated[int, Field(alias="displayOrder")]
     enabled: bool
+    environment_id: Annotated[
+        str | None,
+        Field(
+            alias="environmentId",
+            description="The owning execution environment, if this hook came from its requirements.",
+        ),
+    ] = None
     event_name: Annotated[HookEventName, Field(alias="eventName")]
     is_managed: Annotated[bool, Field(alias="isManaged")]
     key: str
@@ -8448,6 +8464,13 @@ class HookMetadata2(BaseModel):
     current_hash: Annotated[str, Field(alias="currentHash")]
     display_order: Annotated[int, Field(alias="displayOrder")]
     enabled: bool
+    environment_id: Annotated[
+        str | None,
+        Field(
+            alias="environmentId",
+            description="The owning execution environment, if this hook came from its requirements.",
+        ),
+    ] = None
     event_name: Annotated[HookEventName, Field(alias="eventName")]
     is_managed: Annotated[bool, Field(alias="isManaged")]
     key: str
@@ -8478,6 +8501,13 @@ class PromptHookMetadata(BaseModel):
     current_hash: Annotated[str, Field(alias="currentHash")]
     display_order: Annotated[int, Field(alias="displayOrder")]
     enabled: bool
+    environment_id: Annotated[
+        str | None,
+        Field(
+            alias="environmentId",
+            description="The owning execution environment, if this hook came from its requirements.",
+        ),
+    ] = None
     event_name: Annotated[HookEventName, Field(alias="eventName")]
     is_managed: Annotated[bool, Field(alias="isManaged")]
     key: str
@@ -8506,6 +8536,13 @@ class AgentHookMetadata(BaseModel):
     current_hash: Annotated[str, Field(alias="currentHash")]
     display_order: Annotated[int, Field(alias="displayOrder")]
     enabled: bool
+    environment_id: Annotated[
+        str | None,
+        Field(
+            alias="environmentId",
+            description="The owning execution environment, if this hook came from its requirements.",
+        ),
+    ] = None
     event_name: Annotated[HookEventName, Field(alias="eventName")]
     is_managed: Annotated[bool, Field(alias="isManaged")]
     key: str
@@ -8547,7 +8584,7 @@ class HookRunSummary(BaseModel):
     id: str
     scope: HookScope
     source: HookSource | None = "unknown"
-    source_path: Annotated[AbsolutePathBuf, Field(alias="sourcePath")]
+    source_path: Annotated[LegacyAppPathString, Field(alias="sourcePath")]
     started_at: Annotated[int, Field(alias="startedAt")]
     status: HookRunStatus
     status_message: Annotated[str | None, Field(alias="statusMessage")] = None

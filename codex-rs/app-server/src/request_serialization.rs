@@ -776,7 +776,7 @@ mod tests {
                 FIRST_REQUEST_VALUE,
                 ClientRequest::HooksList {
                     request_id: RequestId::Integer(i64::from(FIRST_REQUEST_VALUE)),
-                    params: HooksListParams { cwds: Vec::new() },
+                    params: HooksListParams::default(),
                 },
             ),
             (

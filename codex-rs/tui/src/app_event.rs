@@ -936,9 +936,9 @@ pub(crate) enum AppEvent {
         cwd: PathBuf,
     },
 
-    /// Fetch lifecycle hook inventory for the provided working directory.
+    /// Fetch lifecycle hook inventory for the current thread or working directory.
     FetchHooksList {
-        cwd: PathBuf,
+        target: crate::hooks_rpc::HooksListTarget,
     },
 
     /// Result of fetching plugin marketplace state.
@@ -962,8 +962,8 @@ pub(crate) enum AppEvent {
 
     /// Result of fetching lifecycle hook inventory.
     HooksLoaded {
-        cwd: PathBuf,
-        result: Result<codex_app_server_protocol::HooksListResponse, String>,
+        target: crate::hooks_rpc::HooksListTarget,
+        result: Result<codex_app_server_protocol::HooksListEntry, String>,
     },
 
     /// Open the prompt for adding a marketplace source.

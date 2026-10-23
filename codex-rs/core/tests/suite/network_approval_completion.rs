@@ -1,4 +1,4 @@
-//! Exercises remote network review startup and cleanup, including MXC's local-binding default.
+//! Exercises remote network launch policy, including owner hooks and MXC's local-binding default.
 
 use super::accept_initialized_exec_server;
 use super::read_exec_server_json;
@@ -9,9 +9,12 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::TurnInputRequest;
+use codex_core::config::NetworkProxySpec;
+use codex_exec_server::ExecParams;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::items::CommandExecutionStatus;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
@@ -26,6 +29,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::startup::STARTUP_TIMEOUT;
+use core_test_support::test_codex::environment_config_for_selection;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use pretty_assertions::assert_eq;
@@ -97,30 +101,33 @@ async fn remote_local_binding_policy_and_review_cleanup(
     .await;
     let exec_server = tokio::spawn(async move {
         let mut websocket = accept_initialized_exec_server(listener).await;
-        let start = loop {
-            let request = read_exec_server_json(&mut websocket, STARTUP_TIMEOUT).await;
-            if request["method"] == "process/start" {
-                break request;
-            }
-            respond_setup_request(&mut websocket, &request).await;
-        };
-        assert!(
-            start["params"]["networkProxy"]["policyDecisionTimeoutMs"]
-                .as_u64()
-                .is_some()
+        let hook = accept_process_start(&mut websocket).await;
+        // The owner hook keeps its filesystem access, but must use the command's network policy.
+        assert_eq!(
+            hook.sandbox.expect("owner hook sandbox policy").permissions,
+            PermissionProfile::Disabled
         );
+        assert!(hook.enforce_managed_network);
+        let hook_launch = hook.network_proxy.expect("owner hook requires the proxy");
+        assert!(hook_launch.proxy.enabled);
+        assert_eq!(
+            hook_launch.execution_id.as_deref(),
+            Some(hook.process_id.as_str())
+        );
+
+        let command = accept_process_start(&mut websocket).await;
+        let launch = command.network_proxy.expect("command requires the proxy");
+        assert_ne!(
+            command.sandbox.expect("command sandbox policy").permissions,
+            PermissionProfile::Disabled
+        );
+        assert_eq!(hook_launch.environment_id, launch.environment_id);
+        assert_eq!(hook_launch.proxy, launch.proxy);
+        assert!(launch.policy_decision_timeout_ms.is_some());
         let allow_local_binding =
             expected_local_binding.expect("invalid MXC config must not launch");
-        assert_eq!(
-            start["params"]["networkProxy"]["proxy"]["allowLocalBinding"],
-            allow_local_binding
-        );
-        let process_id = &start["params"]["processId"];
-        send_exec_server_json(
-            &mut websocket,
-            json!({"id": start["id"], "result": {"processId": process_id}}),
-        )
-        .await;
+        assert_eq!(launch.proxy.allow_local_binding, allow_local_binding);
+        let process_id = command.process_id;
         let host = if allow_local_binding {
             "10.0.0.1"
         } else {
@@ -140,7 +147,7 @@ async fn remote_local_binding_policy_and_review_cleanup(
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_millis(/*millis*/ 10)) => {},
                     request = read_exec_server_json(&mut websocket, Duration::from_secs(/*secs*/ 10)) => {
-                        respond_setup_request(&mut websocket, &request).await;
+                        respond_to_setup_or_hook_request(&mut websocket, &request).await;
                     }
                 }
             }
@@ -170,7 +177,7 @@ async fn remote_local_binding_policy_and_review_cleanup(
                     send_exec_server_json(&mut websocket, json!({"id": request["id"], "result": {"chunks": [], "nextSeq": 4, "exited": true, "exitCode": 0, "closed": true, "failure": null, "sandboxDenied": false}})).await;
                 }
                 None => panic!("withdrawn request must not be approved: {request}"),
-                _ => respond_setup_request(&mut websocket, &request).await,
+                _ => respond_to_setup_or_hook_request(&mut websocket, &request).await,
             }
         }
     });
@@ -214,6 +221,23 @@ mode = "full"
             SandboxType::WindowsMxc
         );
     }
+    let selection = test
+        .codex
+        .environment_selections()
+        .await
+        .pop()
+        .expect("remote environment");
+    let mut config = environment_config_for_selection(&test.config, &selection);
+    config.network_policy = test
+        .config
+        .permissions
+        .network
+        .as_ref()
+        .map(NetworkProxySpec::environment_policy);
+    config.environment_hooks = serde_json::from_value(json!({
+        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "exit 0"}]}],
+    }))?;
+    test.codex.environment_ready(&selection, config).await?;
     let (sandbox_policy, permission_profile) = turn_permission_fields(
         test.session_configured.permission_profile.clone(),
         test.config.cwd.as_path(),
@@ -282,6 +306,23 @@ mode = "full"
     Ok(())
 }
 
+async fn accept_process_start(websocket: &mut WebSocketStream<TcpStream>) -> ExecParams {
+    loop {
+        let mut request = read_exec_server_json(websocket, STARTUP_TIMEOUT).await;
+        if request["method"] == "process/start" {
+            let start: ExecParams =
+                serde_json::from_value(request["params"].take()).expect("process start");
+            send_exec_server_json(
+                websocket,
+                json!({"id": request["id"], "result": {"processId": start.process_id}}),
+            )
+            .await;
+            return start;
+        }
+        respond_to_setup_or_hook_request(websocket, &request).await;
+    }
+}
+
 fn review_body(request: &wiremock::Request) -> Value {
     let bytes = if request
         .headers
@@ -295,18 +336,16 @@ fn review_body(request: &wiremock::Request) -> Value {
     serde_json::from_slice(&bytes).expect("request JSON")
 }
 
-async fn respond_setup_request(websocket: &mut WebSocketStream<TcpStream>, request: &Value) {
-    match request["method"].as_str() {
-        Some("environment/info") => {
-            send_exec_server_json(websocket, json!({
-                "id": request["id"],
-                "result": {
-                    "shell": {"name": "powershell", "path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"},
-                    "platformOs": "windows",
-                    "capabilities": {"networkProxyLaunch": true}
-                }
-            })).await;
-        }
+async fn respond_to_setup_or_hook_request(
+    websocket: &mut WebSocketStream<TcpStream>,
+    request: &Value,
+) {
+    let result = match request["method"].as_str() {
+        Some("environment/info") => json!({
+            "shell": {"name": "powershell", "path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"},
+            "platformOs": "windows",
+            "capabilities": {"networkProxyLaunch": true}
+        }),
         Some("fs/getMetadata" | "fs/readFile" | "fs/readDirectory") => {
             send_exec_server_json(
                 websocket,
@@ -316,27 +355,15 @@ async fn respond_setup_request(websocket: &mut WebSocketStream<TcpStream>, reque
                 }),
             )
             .await;
+            return;
         }
-        Some("fs/canonicalize") => {
-            send_exec_server_json(
-                websocket,
-                json!({
-                    "id": request["id"],
-                    "result": {"path": request["params"]["path"]}
-                }),
-            )
-            .await;
+        Some("fs/canonicalize") => json!({"path": request["params"]["path"]}),
+        Some("fs/walk") => json!({"entries": [], "errors": [], "truncated": false}),
+        Some("process/write") => json!({"status": "accepted"}),
+        Some("process/read") => {
+            json!({"chunks": [], "nextSeq": 1, "exited": true, "exitCode": 0, "closed": true})
         }
-        Some("fs/walk") => {
-            send_exec_server_json(
-                websocket,
-                json!({
-                    "id": request["id"],
-                    "result": {"entries": [], "errors": [], "truncated": false}
-                }),
-            )
-            .await;
-        }
-        _ => panic!("unexpected setup request: {request}"),
-    }
+        _ => panic!("unexpected setup or hook request: {request}"),
+    };
+    send_exec_server_json(websocket, json!({"id": request["id"], "result": result})).await;
 }
