@@ -1,0 +1,17 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-guardian-v3"
+version.workspace = true
+
+[lib]
+doctest = false
+test = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-message-board = { workspace = true }
+codex-protocol = { workspace = true }
+codex-state = { workspace = true }

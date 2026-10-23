@@ -69,6 +69,7 @@ members = [
     "ext/git-attribution",
     "ext/guardian-reviewer",
     "ext/guardian-v2",
+    "ext/guardian-v3",
     "ext/history-notes",
     "ext/image-generation",
     "ext/items",
