@@ -120,7 +120,7 @@ impl AuthProvider for RuntimeRequestAuth {
         Box::pin(async move {
             Ok(replace_auth_headers(
                 headers,
-                self.resolve_auth_headers().await?,
+                self.auth.auth_headers(self.mode)?,
             ))
         })
     }

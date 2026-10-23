@@ -156,7 +156,7 @@ impl AuthProvider for AuthManagerAuthProvider {
         auth_provider_from_auth(&auth).add_auth_headers(headers)
     }
 
-    fn resolve_auth_headers(&self) -> AuthHeadersFuture<'_> {
+    fn apply_auth_headers(&self, mut headers: HeaderMap) -> AuthHeadersFuture<'_> {
         Box::pin(async move {
             let auth = self
                 .auth_manager
@@ -166,7 +166,8 @@ impl AuthProvider for AuthManagerAuthProvider {
                 .ok_or_else(|| {
                     AuthError::Transient("managed authentication is unavailable".to_string())
                 })?;
-            auth_provider_from_auth(&auth).to_auth_headers()
+            headers.extend(auth_provider_from_auth(&auth).to_auth_headers()?);
+            Ok(headers)
         })
     }
 
@@ -751,7 +752,7 @@ mod tests {
             .expect("initial auth should be cached");
         let provider = auth_provider_from_auth_manager(Arc::clone(&auth_manager), &expected_auth);
         let initial_headers = provider
-            .resolve_auth_headers()
+            .apply_auth_headers(HeaderMap::new())
             .await
             .expect("initial auth headers");
 
@@ -771,7 +772,7 @@ mod tests {
         // Ordinary requests retain the manager's cache until refresh or recovery runs.
         assert_eq!(
             provider
-                .resolve_auth_headers()
+                .apply_auth_headers(HeaderMap::new())
                 .await
                 .expect("cached auth headers"),
             initial_headers
@@ -785,7 +786,7 @@ mod tests {
         );
 
         let resolved_headers = provider
-            .resolve_auth_headers()
+            .apply_auth_headers(HeaderMap::new())
             .await
             .expect("managed auth headers should resolve");
         assert_eq!(
@@ -808,7 +809,7 @@ mod tests {
             Err(AuthError::Transient(_))
         ));
         assert!(matches!(
-            provider.resolve_auth_headers().await,
+            provider.apply_auth_headers(HeaderMap::new()).await,
             Err(AuthError::Transient(_))
         ));
     }

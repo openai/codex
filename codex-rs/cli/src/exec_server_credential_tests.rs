@@ -42,14 +42,17 @@ async fn waits_for_initial_rotation_replaces_token_and_eof_clears_auth() {
             .await,
         Err(CredentialError::InitialTimeout)
     );
-    assert!(provider.resolve_auth_headers().await.is_err());
+    assert!(provider.apply_auth_headers(HeaderMap::new()).await.is_err());
     assert!(provider.to_auth_headers().is_err());
     writer
         .write_all(&frame("env-a", "first-scoped-token", expires))
         .expect("write");
     provider.wait_for_initial().await.expect("initial token");
     next_update(&mut updates).await;
-    let headers = provider.resolve_auth_headers().await.expect("headers");
+    let headers = provider
+        .apply_auth_headers(HeaderMap::new())
+        .await
+        .expect("headers");
     assert_eq!(headers.len(), 1);
     assert_eq!(headers[AUTHORIZATION], "Bearer first-scoped-token");
     assert!(headers[AUTHORIZATION].is_sensitive());
@@ -62,7 +65,10 @@ async fn waits_for_initial_rotation_replaces_token_and_eof_clears_auth() {
     next_update(&mut updates).await;
     // A request sent before the parent update can retry with the replacement.
     assert!(provider.refresh_after_unauthorized(headers).await);
-    let headers = provider.resolve_auth_headers().await.expect("headers");
+    let headers = provider
+        .apply_auth_headers(HeaderMap::new())
+        .await
+        .expect("headers");
     assert_eq!(headers.len(), 1);
     assert_eq!(headers[AUTHORIZATION], "Bearer rotated-scoped-token");
     assert!(headers[AUTHORIZATION].is_sensitive());
@@ -70,7 +76,7 @@ async fn waits_for_initial_rotation_replaces_token_and_eof_clears_auth() {
 
     drop(writer);
     pipe.parent_closed.await.expect("reader must monitor EOF");
-    assert!(provider.resolve_auth_headers().await.is_err());
+    assert!(provider.apply_auth_headers(HeaderMap::new()).await.is_err());
     assert!(!provider.refresh_after_unauthorized(headers).await);
     assert_eq!(provider.check_pipe_failure(), Ok(()));
 }
@@ -114,7 +120,7 @@ async fn malformed_rotations_latch_failure_and_clear_existing_credential() {
             .expect("bad frame terminates without EOF");
         let auth_error = pipe
             .provider
-            .resolve_auth_headers()
+            .apply_auth_headers(HeaderMap::new())
             .await
             .expect_err("reject auth");
         assert_eq!(pipe.provider.check_pipe_failure(), Err(error));
@@ -152,7 +158,12 @@ async fn eof_before_a_complete_frame_never_authenticates() {
         drop(writer);
         pipe.parent_closed.await.expect("reader monitors EOF");
         assert_eq!(pipe.provider.wait_for_initial().await, Err(expected));
-        assert!(pipe.provider.resolve_auth_headers().await.is_err());
+        assert!(
+            pipe.provider
+                .apply_auth_headers(HeaderMap::new())
+                .await
+                .is_err()
+        );
     }
 }
 
@@ -168,14 +179,14 @@ async fn expiry_is_checked_again_on_every_request() {
         provider.wait_for_initial().await,
         Err(CredentialError::Expired)
     );
-    assert!(provider.resolve_auth_headers().await.is_err());
+    assert!(provider.apply_auth_headers(HeaderMap::new()).await.is_err());
     assert!(!provider.refresh_after_unauthorized(HeaderMap::new()).await);
     updates.send_replace(CredentialState::Active {
         token: HeaderValue::from_static("new-scoped-token"),
         expires_at: expired + 60,
     });
     let headers = provider
-        .resolve_auth_headers()
+        .apply_auth_headers(HeaderMap::new())
         .await
         .expect("rotation restores auth");
     assert_eq!(headers[AUTHORIZATION], "Bearer new-scoped-token");

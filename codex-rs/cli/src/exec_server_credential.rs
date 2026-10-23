@@ -128,9 +128,11 @@ impl AuthProvider for ExecutorCredentialProvider {
     ) -> codex_api::AuthRefreshFuture<'_> {
         Box::pin(async move {
             // The parent owns refresh; only retry if it already supplied a valid replacement.
-            self.resolve_auth_headers().await.is_ok_and(|headers| {
-                headers.get(AUTHORIZATION) != rejected_headers.get(AUTHORIZATION)
-            })
+            self.apply_auth_headers(HeaderMap::new())
+                .await
+                .is_ok_and(|headers| {
+                    headers.get(AUTHORIZATION) != rejected_headers.get(AUTHORIZATION)
+                })
         })
     }
 }

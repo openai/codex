@@ -134,7 +134,10 @@ async fn gateway_credentials_accompany_primary_auth_in_models_and_responses() {
         );
         // WebSocket handshakes use the synchronous header interface.
         assert_eq!(auth.to_auth_headers().unwrap(), expected);
-        assert_eq!(auth.resolve_auth_headers().await.unwrap(), expected);
+        assert_eq!(
+            auth.apply_auth_headers(HeaderMap::new()).await.unwrap(),
+            expected
+        );
         assert_eq!(scoped.auth.to_auth_headers().unwrap(), expected);
         assert!(auth.to_auth_headers().unwrap()[name].is_sensitive());
         let transport = ReqwestTransport::from_http_client(

@@ -120,19 +120,6 @@ impl AuthProvider for CombinedAuth {
         Ok(())
     }
 
-    fn resolve_auth_headers(&self) -> AuthHeadersFuture<'_> {
-        Box::pin(async move {
-            let mut headers = self.primary.resolve_auth_headers().await?;
-            if headers.contains_key(&self.name) {
-                return Err(AuthError::Build(
-                    "gateway OAuth conflicts with primary auth headers".into(),
-                ));
-            }
-            headers.insert(self.name.clone(), self.value.clone());
-            Ok(headers)
-        })
-    }
-
     fn apply_auth(&self, request: codex_http_client::Request) -> AuthProviderFuture<'_> {
         Box::pin(async move {
             let mut request = self.primary.apply_auth(request).await?;

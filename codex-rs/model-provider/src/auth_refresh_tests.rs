@@ -101,7 +101,7 @@ async fn concurrent_external_rejections_share_one_refresh() {
     assert!(provider.refresh_after_unauthorized(rejected).await);
     assert_eq!(external.refreshes.load(Ordering::SeqCst), 1);
     assert_eq!(
-        provider.resolve_auth_headers().await.unwrap()[http::header::AUTHORIZATION],
+        provider.apply_auth_headers(HeaderMap::new()).await.unwrap()[http::header::AUTHORIZATION],
         "Bearer replacement"
     );
 }
@@ -186,7 +186,7 @@ async fn check_concurrent_refresh(trigger: RefreshTrigger) {
                     .await
             }
             RefreshTrigger::Proactive => {
-                let headers = provider.resolve_auth_headers().await.unwrap();
+                let headers = provider.apply_auth_headers(HeaderMap::new()).await.unwrap();
                 assert_eq!(
                     headers[http::header::AUTHORIZATION],
                     "Bearer replacement-token"
@@ -213,7 +213,7 @@ async fn check_concurrent_refresh(trigger: RefreshTrigger) {
             .refresh_after_unauthorized(rejected_headers.clone())
             .await
     );
-    let updated_headers = provider.resolve_auth_headers().await.unwrap();
+    let updated_headers = provider.apply_auth_headers(HeaderMap::new()).await.unwrap();
     assert_eq!(
         updated_headers[http::header::AUTHORIZATION],
         "Bearer replacement-token"
@@ -234,7 +234,7 @@ async fn check_concurrent_refresh(trigger: RefreshTrigger) {
         .await;
     assert!(provider.refresh_after_unauthorized(updated_headers).await);
     assert_eq!(
-        provider.resolve_auth_headers().await.unwrap()[http::header::AUTHORIZATION],
+        provider.apply_auth_headers(HeaderMap::new()).await.unwrap()[http::header::AUTHORIZATION],
         "Bearer next-token"
     );
     // A permanent failure must not prevent a later guarded reload of fresh credentials.

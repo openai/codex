@@ -47,9 +47,9 @@ impl AuthProvider for RegistrationAuthProvider {
         Ok(())
     }
 
-    fn resolve_auth_headers(&self) -> codex_api::AuthHeadersFuture<'_> {
+    fn apply_auth_headers(&self, headers: HeaderMap) -> codex_api::AuthHeadersFuture<'_> {
         self.calls.fetch_add(1, Ordering::Relaxed);
-        Box::pin(async { Ok(HeaderMap::new()) })
+        Box::pin(async move { Ok(headers) })
     }
 }
 

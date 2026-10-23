@@ -134,7 +134,7 @@ async fn concurrent_requests_share_registration_and_replacement_preserves_in_fli
         first
             .clone()
             .into_auth_provider(RuntimeAuthMode::DualHeader)
-            .resolve_auth_headers()
+            .apply_auth_headers(HeaderMap::new())
             .await
             .unwrap()["authorization"],
         "Bearer key-a"
@@ -143,7 +143,7 @@ async fn concurrent_requests_share_registration_and_replacement_preserves_in_fli
         replacement
             .clone()
             .into_auth_provider(RuntimeAuthMode::DualHeader)
-            .resolve_auth_headers()
+            .apply_auth_headers(HeaderMap::new())
             .await
             .unwrap()["authorization"],
         "Bearer key-b"
@@ -230,7 +230,7 @@ async fn policy_recovery_preserves_pending_registration() {
     let headers = selected
         .clone()
         .into_auth_provider(RuntimeAuthMode::DualHeader)
-        .resolve_auth_headers()
+        .apply_auth_headers(HeaderMap::new())
         .await
         .unwrap();
     assert_eq!(headers["authorization"], "Bearer key-a");
@@ -450,14 +450,14 @@ async fn new_request_uses_refreshed_credentials_without_replacing_the_runtime() 
     let provider = runtime
         .clone()
         .into_auth_provider(RuntimeAuthMode::DualHeader);
-    let first = provider.resolve_auth_headers().await.unwrap();
+    let first = provider.apply_auth_headers(HeaderMap::new()).await.unwrap();
     let refreshed = oauth(Some("login-a"), "new");
     *source.current.write().unwrap() = refreshed.clone();
     let next_runtime = manager.auth().await.unwrap();
     let next = next_runtime
         .clone()
         .into_auth_provider(RuntimeAuthMode::DualHeader)
-        .resolve_auth_headers()
+        .apply_auth_headers(HeaderMap::new())
         .await
         .unwrap();
     assert_eq!(
@@ -466,7 +466,7 @@ async fn new_request_uses_refreshed_credentials_without_replacing_the_runtime() 
     );
     assert_ne!(first[AUTHORIZATION], next[AUTHORIZATION]);
     assert_eq!(
-        provider.resolve_auth_headers().await.unwrap()[AUTHORIZATION],
+        provider.apply_auth_headers(HeaderMap::new()).await.unwrap()[AUTHORIZATION],
         first[AUTHORIZATION]
     );
     assert!(Arc::ptr_eq(runtime.runtime(), next_runtime.runtime()));

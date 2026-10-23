@@ -734,12 +734,13 @@ impl AuthProvider for AsyncHeaderAuth {
         ))
     }
 
-    fn resolve_auth_headers(&self) -> codex_api::AuthHeadersFuture<'_> {
-        Box::pin(async {
-            Ok(HeaderMap::from_iter([(
+    fn apply_auth_headers(&self, mut headers: HeaderMap) -> codex_api::AuthHeadersFuture<'_> {
+        Box::pin(async move {
+            headers.insert(
                 http::header::AUTHORIZATION,
                 HeaderValue::from_static("Bearer async-auth"),
-            )]))
+            );
+            Ok(headers)
         })
     }
 }

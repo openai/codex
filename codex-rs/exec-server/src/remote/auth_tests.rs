@@ -55,15 +55,16 @@ impl AuthProvider for RotatingAuth {
         Ok(())
     }
 
-    fn resolve_auth_headers(&self) -> codex_api::AuthHeadersFuture<'_> {
-        Box::pin(async {
+    fn apply_auth_headers(&self, mut headers: HeaderMap) -> codex_api::AuthHeadersFuture<'_> {
+        Box::pin(async move {
             self.stall_at(if self.refreshes.load(Ordering::SeqCst) == 0 {
                 AuthStage::Initial
             } else {
                 AuthStage::Retry
             })
             .await;
-            self.to_auth_headers()
+            self.add_auth_headers(&mut headers)?;
+            Ok(headers)
         })
     }
 

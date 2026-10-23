@@ -305,7 +305,7 @@ impl EnvironmentRegistryClient {
     async fn resolve_auth(&self) -> Result<(HeaderMap, Option<HeaderValue>), ExecServerError> {
         let mut headers = self
             .auth_provider
-            .resolve_auth_headers()
+            .apply_auth_headers(HeaderMap::new())
             .await
             .map_err(|error| {
                 ExecServerError::EnvironmentRegistryAuth(format!(
@@ -1132,9 +1132,8 @@ mod tests {
             Ok(())
         }
 
-        fn resolve_auth_headers(&self) -> codex_api::AuthHeadersFuture<'_> {
-            Box::pin(async {
-                let mut headers = HeaderMap::new();
+        fn apply_auth_headers(&self, mut headers: HeaderMap) -> codex_api::AuthHeadersFuture<'_> {
+            Box::pin(async move {
                 let _ = headers.insert(
                     http::header::AUTHORIZATION,
                     HeaderValue::from_static("Bearer registry-token"),

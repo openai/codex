@@ -36,7 +36,7 @@ pub trait AuthProvider: Send + Sync {
     ///
     /// Implementations should be cheap and non-blocking. This method is also
     /// used by telemetry and non-HTTP request paths. Providers that require async
-    /// work must return an error here and override `resolve_auth_headers`.
+    /// work must return an error here and override `apply_auth_headers`.
     /// Callers must not send the request if this returns an error.
     fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), AuthError>;
 
@@ -60,15 +60,6 @@ pub trait AuthProvider: Send + Sync {
         })
     }
 
-    /// Resolves auth headers for an outbound request.
-    ///
-    /// Unlike [`Self::to_auth_headers`], implementations may perform asynchronous work to refresh
-    /// credentials before returning. Header-only providers with static credentials can rely on the
-    /// default implementation.
-    fn resolve_auth_headers(&self) -> AuthHeadersFuture<'_> {
-        Box::pin(async { self.to_auth_headers() })
-    }
-
     /// Refreshes credentials after an explicit HTTP 401. Returns whether the caller
     /// may retry with new credentials. Callers must bound retries and pass the headers
     /// of the rejected request so concurrent failures can reuse an earlier refresh.
@@ -77,10 +68,13 @@ pub trait AuthProvider: Send + Sync {
     }
 
     /// Authenticates a header-only request, including removing credentials it supersedes.
-    /// WebSocket handshakes must use the returned map rather than overlaying resolved headers.
+    ///
+    /// Implementations may refresh credentials asynchronously. Providers with static credentials
+    /// can rely on the default implementation.
+    /// Callers must use the returned map rather than overlaying resolved headers.
     fn apply_auth_headers(&self, mut headers: HeaderMap) -> AuthHeadersFuture<'_> {
         Box::pin(async move {
-            headers.extend(self.resolve_auth_headers().await?);
+            headers.extend(self.to_auth_headers()?);
             Ok(headers)
         })
     }
