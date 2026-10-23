@@ -1936,6 +1936,34 @@ async fn silent_appends_preserve_evidence_and_explicit_subscriptions()
             .await?,
         0
     );
+    let first = reader
+        .subscribed_channels(
+            child,
+            PageRequest {
+                cursor: None,
+                limit: NonZeroU32::MIN,
+            },
+        )
+        .await?;
+    let last = reader
+        .subscribed_channels(
+            child,
+            PageRequest {
+                cursor: first.next_cursor,
+                limit: NonZeroU32::MIN,
+            },
+        )
+        .await?;
+    assert_eq!(
+        (first.results, last),
+        (
+            vec![channel.into()],
+            Page {
+                results: vec!["release".into()],
+                next_cursor: None,
+            }
+        )
+    );
     // Normal posts on this same board still subscribe their author and notify once.
     let discussion = PostRequest {
         request_id: "discussion".into(),

@@ -19,6 +19,7 @@ use crate::ChannelQuery;
 use crate::ChannelSummary;
 use crate::CreateChannelRequest;
 use crate::Page;
+use crate::PageRequest;
 use crate::PostContent;
 use crate::PostMetadata;
 use crate::PostPreview;
@@ -79,6 +80,31 @@ impl LocalAgentMessageBoard {
             .bind(now.to_rfc3339()).bind(now.timestamp_micros()).bind(author.to_string()).bind(description.as_str())
             .execute(&mut *tx).await.map_err(storage_error)?;
         tx.commit().await.map_err(storage_error)
+    }
+
+    /// Lists the caller's channel subscriptions within the existing page budget.
+    pub async fn subscribed_channels(
+        &self,
+        caller: ThreadId,
+        page: PageRequest,
+    ) -> Result<Page<String>> {
+        self.host.agent_path(caller).await?;
+        let window = Window::new(&page)?;
+        // Probe the existing subscriptions primary key for each channel.
+        let channels = sqlx::query_scalar::<_, String>(
+            "SELECT c.name FROM channels AS c WHERE c.board=? AND EXISTS (
+                SELECT 1 FROM subscriptions AS s
+                WHERE s.board=c.board AND s.target=json_object('Channel',c.name) AND s.agent=?
+             ) ORDER BY c.name LIMIT ? OFFSET ?",
+        )
+        .bind(self.identity.to_string())
+        .bind(caller.to_string())
+        .bind((window.limit + 1) as i64)
+        .bind(window.offset())
+        .fetch_all(self.pool.as_ref())
+        .await
+        .map_err(storage_error)?;
+        window.finish(channels)
     }
 }
 
