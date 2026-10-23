@@ -44,7 +44,7 @@ impl RolloutBudget {
         });
     }
 
-    /// Returns true once the configured budget is exhausted, including on later calls.
+    /// Records usage and returns whether an enforced budget is exhausted.
     pub(crate) fn record_usage(&self, usage: &TokenUsage) -> CodexResult<bool> {
         let Some(mut state) = self.lock() else {
             return Ok(false);
@@ -63,7 +63,8 @@ impl RolloutBudget {
                 + usage.non_cached_input() as f64 * state.config.prefill_token_weight
         };
         state.weighted_tokens_used += units;
-        Ok(state.weighted_tokens_used >= state.config.limit_tokens as f64)
+        Ok(state.config.enforce_limit
+            && state.weighted_tokens_used >= state.config.limit_tokens as f64)
     }
 
     pub(crate) fn pending_reminder(

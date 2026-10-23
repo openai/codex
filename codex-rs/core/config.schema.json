@@ -4495,6 +4495,10 @@
         "enabled": {
           "type": "boolean"
         },
+        "enforce_limit": {
+          "description": "Stop when the shared budget is exhausted. Defaults to true.",
+          "type": "boolean"
+        },
         "limit_tokens": {
           "format": "int64",
           "minimum": 1.0,

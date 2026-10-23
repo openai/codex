@@ -421,6 +421,9 @@ impl FeatureConfig for TokenBudgetConfigToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RolloutBudgetConfigToml {
+    /// Stop when the shared budget is exhausted. Defaults to true.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enforce_limit: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

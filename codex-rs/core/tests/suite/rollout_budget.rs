@@ -30,6 +30,7 @@ const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 
 fn rollout_budget() -> RolloutBudgetConfig {
     RolloutBudgetConfig {
+        enforce_limit: true,
         limit_tokens: 100,
         reminder_at_remaining_tokens: vec![75, 50, 25],
         sampling_token_weight: 1.0,
@@ -277,11 +278,15 @@ async fn subagent_usage_draws_from_the_shared_budget() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exhausted_budget_fails_current_and_later_turns() -> Result<()> {
+#[test_case(true ; "enforced")]
+#[test_case(false ; "advisory")]
+async fn exhausted_budget_respects_enforcement_on_current_and_later_turns(
+    enforce_limit: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    mount_sse_sequence(
+    let responses = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
@@ -296,8 +301,9 @@ async fn exhausted_budget_fails_current_and_later_turns() -> Result<()> {
     )
     .await;
     let test = test_codex()
-        .with_config(|config| {
+        .with_config(move |config| {
             config.rollout_budget = Some(RolloutBudgetConfig {
+                enforce_limit,
                 limit_tokens: 30,
                 reminder_at_remaining_tokens: vec![20, 10],
                 ..rollout_budget()
@@ -314,20 +320,31 @@ async fn exhausted_budget_fails_current_and_later_turns() -> Result<()> {
             }]))
             .await?;
 
-        wait_for_event(&test.codex, |event| {
-            matches!(
-                event,
-                EventMsg::Error(error)
-                    if error.codex_error_info == Some(CodexErrorInfo::SessionBudgetExceeded)
-            )
+        let event = wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::Error(_) | EventMsg::TurnComplete(_))
         })
         .await;
+        if !enforce_limit {
+            assert!(matches!(event, EventMsg::TurnComplete(_)));
+            continue;
+        }
+        assert!(matches!(
+            event,
+            EventMsg::Error(error)
+                if error.codex_error_info == Some(CodexErrorInfo::SessionBudgetExceeded)
+        ));
         wait_for_event(&test.codex, |event| {
             matches!(event, EventMsg::TurnComplete(_))
         })
         .await;
     }
 
+    if !enforce_limit {
+        assert_eq!(
+            rollout_budget_texts(&responses.requests()[1]).last(),
+            Some(&rollout_budget_message(/*remaining_tokens*/ 0))
+        );
+    }
     Ok(())
 }
 
