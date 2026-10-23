@@ -5,7 +5,7 @@ use ts_rs::TS;
 
 use super::ReasoningEffort;
 
-/// Async classifier experiment, resolved once for each parent task.
+/// Legacy classifier modes retained for configuration and model-catalog compatibility.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -18,6 +18,7 @@ pub enum AsyncClassifierMode {
 /// Optional model-owned defaults for Guardian v2 classification experiments.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct GuardianV2ModelConfig {
+    /// Deprecated and ignored; asynchronous classification always uses conversations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub async_classifier_mode: Option<AsyncClassifierMode>,
     /// Reset retained async history when the next request exceeds this token estimate.

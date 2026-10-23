@@ -51,16 +51,6 @@ pub(crate) struct GuardianV2Config {
 }
 
 impl GuardianV2Config {
-    pub(super) fn classifier_mode(
-        &self,
-        model_defaults: Option<&GuardianV2ModelConfig>,
-    ) -> codex_protocol::openai_models::AsyncClassifierMode {
-        self.local_overrides
-            .async_classifier_mode
-            .or_else(|| model_defaults.and_then(|defaults| defaults.async_classifier_mode))
-            .unwrap_or_default()
-    }
-
     pub(crate) fn resolve(config: &Config) -> Result<Self, String> {
         let effective_config = config.config_layer_stack.effective_config();
         let mut configured = match effective_config

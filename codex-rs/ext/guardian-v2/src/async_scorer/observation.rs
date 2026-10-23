@@ -135,13 +135,14 @@ impl GuardianV2Extension {
         let context_mode = GuardianContextMode::from_history(input.conversation_history.as_ref());
         let analytics = input.session_store.get::<AnalyticsEventsClient>();
         let sampled_at = SystemTime::now();
-        let (tool_call_index, reservation) = match input.thread_store.get::<ConversationBackend>() {
-            Some(conversation) => {
-                let (index, reservation) = conversation.reserve(|| score_progress.observe(&input));
-                (index, reservation.map(Some))
-            }
-            None => (score_progress.observe(&input), Ok(None)),
+        let Some(conversation) = input.thread_store.get::<ConversationBackend>() else {
+            let index = score_progress.observe(&input);
+            score_progress.invalidate(index);
+            score_progress.fail_closed(sampled_at);
+            return;
         };
+        let (tool_call_index, reservation) =
+            conversation.reserve(|| score_progress.observe(&input));
         tracing::Span::current().record("tool_call_index", tool_call_index);
         let reservation = match reservation {
             Ok(reservation) => reservation,
@@ -297,7 +298,6 @@ impl GuardianV2Extension {
             }
         };
         let parent_compaction = selected_compaction.item;
-        let parent_compaction_hash = selected_compaction.model_hash;
         let call_id = input.call_id.to_owned();
         let mcp_tool = input.mcp_tool.cloned();
         let action = GuardianAction {
@@ -379,7 +379,6 @@ impl GuardianV2Extension {
         let classification = Classification {
             reservation,
             classification_started_at,
-            sampler,
             decisions_sampler: input
                 .thread_store
                 .get::<super::decisions::DecisionsSampler>(),
@@ -401,7 +400,6 @@ impl GuardianV2Extension {
             config,
             context_mode,
             parent_compaction,
-            parent_compaction_hash,
             call_id,
             mcp_tool,
             planned_action,

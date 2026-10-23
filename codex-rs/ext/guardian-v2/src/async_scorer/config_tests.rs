@@ -325,38 +325,3 @@ fn model_runtime_settings_preserve_local_overrides() {
         )
     );
 }
-
-#[test]
-fn classifier_mode_uses_local_override_then_model_default() {
-    use codex_protocol::openai_models::AsyncClassifierMode;
-    for local in [
-        None,
-        Some(AsyncClassifierMode::Snapshot),
-        Some(AsyncClassifierMode::Conversation),
-    ] {
-        let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
-            transcript_mode: Some(TranscriptFormat::Json),
-            async_classifier_mode: local,
-            ..Default::default()
-        })
-        .unwrap();
-        for model in [
-            None,
-            Some(AsyncClassifierMode::Snapshot),
-            Some(AsyncClassifierMode::Conversation),
-        ] {
-            let defaults = GuardianV2ModelConfig {
-                async_classifier_mode: model,
-                ..Default::default()
-            };
-            assert_eq!(
-                config.classifier_mode(Some(&defaults)),
-                local.or(model).unwrap_or(AsyncClassifierMode::Conversation)
-            );
-        }
-        assert_eq!(
-            config.classifier_mode(/*model_defaults*/ None),
-            local.unwrap_or(AsyncClassifierMode::Conversation)
-        );
-    }
-}

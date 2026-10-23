@@ -5,12 +5,9 @@ use codex_app_server_protocol::GuardianApprovalReviewStatus;
 use codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
-use test_case::test_case;
 
-#[test_case("snapshot"; "snapshot")]
-#[test_case("conversation"; "conversation")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn later_low_does_not_release_earlier_review(mode: &str) -> Result<()> {
+async fn later_low_does_not_release_earlier_review() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let state = Arc::new(MockResponsesState {
         luna_gates: (0..2).map(|_| Notify::new()).collect(),
@@ -86,7 +83,7 @@ async fn later_low_does_not_release_earlier_review(mode: &str) -> Result<()> {
         .with_approval_policy("on-request")
         .with_root_config("approvals_reviewer = \"auto_review\"")
         .with_extra_config(&format!(
-            "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_url}/mcp\"\ndefault_tools_approval_mode = \"prompt\"\nsupports_parallel_tool_calls = true\n\n[features.guardianv2]\nenabled = true\nmax_tool_call_lag = 2\nasync_classifier_mode = '{mode}'\n\n[features.guardianv2.review_scope]\ncomputer_use_only = false"
+            "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_url}/mcp\"\ndefault_tools_approval_mode = \"prompt\"\nsupports_parallel_tool_calls = true\n\n[features.guardianv2]\nenabled = true\nmax_tool_call_lag = 2\n\n[features.guardianv2.review_scope]\ncomputer_use_only = false"
         ))
         .enable_feature(Feature::GuardianApproval)
         .write(codex_home.path())?;

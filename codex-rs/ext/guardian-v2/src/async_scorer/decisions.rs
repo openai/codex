@@ -6,7 +6,9 @@
 //! Evidence preserves message roles, content order, and boundaries.
 //! The caller records measurements after baseline publication; dropping its task aborts Decisions work.
 
+#[cfg(test)]
 use super::sampler::LunaSampler;
+#[cfg(test)]
 use super::sampler::LunaSamplingRequest;
 use codex_history::ResponseItemEnvelope;
 use codex_http_client::HttpClient;
@@ -120,6 +122,7 @@ impl DecisionsSampler {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn start_snapshot_comparison(
         self: &Arc<Self>,
         request: &LunaSamplingRequest,

@@ -94,7 +94,7 @@ async fn host_owned_orchestrator_connector_reaches_guardian_context() -> Result<
         .with_pre_build_hook(|home| {
             std::fs::write(
                 home.join("config.toml"),
-                "[features.guardianv2]\nenabled = true\nasync_classifier_mode = \"snapshot\"\n\n[features.guardianv2.review_scope]\ncomputer_use_only = false\n\n[apps._default]\ndefault_tools_approval_mode = \"prompt\"\n",
+                "[features.guardianv2]\nenabled = true\n\n[features.guardianv2.review_scope]\ncomputer_use_only = false\n\n[apps._default]\ndefault_tools_approval_mode = \"prompt\"\n",
             )
             .expect("write Guardian configuration");
         })

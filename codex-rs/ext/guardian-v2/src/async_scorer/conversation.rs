@@ -2,7 +2,7 @@
 //! Admission assigns order and reserves capacity atomically before async preparation.
 //! Only newer completions replace history.
 //! Permits bound preparation and sampling through full response completion.
-//! Backend replacement invalidates its generation without changing snapshot shutdown policy.
+//! Backend replacement invalidates its generation.
 //! Oversized retained requests rebuild from fresh evidence before the model's hard limit.
 //! Preparation exposes the complete input without starting model execution.
 //! Each request owns its fork; failed or cancelled requests leave committed history intact.

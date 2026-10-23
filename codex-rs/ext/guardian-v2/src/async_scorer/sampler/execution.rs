@@ -1,5 +1,5 @@
 //! Executes one prepared classifier request with the existing retry and streaming rules.
-//! Snapshot output returns immediately with a detached drain that retains cancellation.
+//! Legacy snapshot execution remains test-only until the transport tests are migrated.
 //! Retained requests publish the same early result but keep ownership through completion.
 //! Sampling outcomes describe score delivery, independently of retained response draining.
 //! Requests and retries stop when the account owner that started the classification changes.
@@ -29,10 +29,14 @@ use codex_protocol::turn_input::CyberAccessProgram;
 use http::StatusCode;
 use serde_json::json;
 use std::collections::HashMap;
+#[cfg(test)]
 use std::future::Future;
+#[cfg(test)]
 use std::pin::Pin;
 use std::sync::Arc;
+#[cfg(test)]
 use std::sync::atomic::AtomicBool;
+#[cfg(test)]
 use std::sync::atomic::Ordering;
 use tokio::sync::oneshot;
 
@@ -60,8 +64,9 @@ pub(super) struct RetainedCompletion {
     pub(super) early_score: Option<String>,
 }
 
-/// Snapshot admission owns supersession; retained admission owns the response through completion.
+/// Retained admission owns the response through completion; snapshot mode is test-only.
 pub(super) enum SamplingMode<'a> {
+    #[cfg(test)]
     Snapshot {
         superseded: Pin<Box<dyn Future<Output = ()> + Send>>,
         scored: Arc<AtomicBool>,
@@ -72,6 +77,7 @@ pub(super) enum SamplingMode<'a> {
 impl SamplingMode<'_> {
     async fn superseded(&mut self) {
         match self {
+            #[cfg(test)]
             Self::Snapshot { superseded, .. } => {
                 superseded.await;
             }
@@ -168,11 +174,12 @@ impl SamplingExecution {
                     status.is_server_error() || *status == StatusCode::TOO_MANY_REQUESTS
                 }
             }
+            #[cfg(test)]
+            LunaSamplerError::IncompatibleCompaction => false,
             LunaSamplerError::Provider(_)
             | LunaSamplerError::MissingOutput
             | LunaSamplerError::OutputTooLarge
             | LunaSamplerError::Superseded
-            | LunaSamplerError::IncompatibleCompaction
             | LunaSamplerError::InputTooLarge
             | LunaSamplerError::QueueFull
             | LunaSamplerError::Api(
@@ -252,15 +259,20 @@ impl SamplingExecution {
             .auth_manager()
             .map(|manager| manager.unauthorized_recovery());
         let retention_budget = match &mode {
+            #[cfg(test)]
             SamplingMode::Snapshot { .. } => 0,
             SamplingMode::Retained(completion) => completion.remaining_tokens,
         };
         'retry: loop {
             ensure_account_owner()?;
             telemetry.attempts = telemetry.attempts.saturating_add(1);
-            if let SamplingMode::Retained(completion) = &mut mode {
-                completion.output = Some(Vec::new());
-                completion.remaining_tokens = retention_budget;
+            match &mut mode {
+                SamplingMode::Retained(completion) => {
+                    completion.output = Some(Vec::new());
+                    completion.remaining_tokens = retention_budget;
+                }
+                #[cfg(test)]
+                SamplingMode::Snapshot { .. } => {}
             }
             let lease = match tokio::select! {
                 biased;
@@ -359,12 +371,13 @@ impl SamplingExecution {
                 biased;
                 _ = &mut owner_changed => return Err(account_changed_error()),
                 _ = mode.superseded() => {
-                    let scored = matches!(&mode, SamplingMode::Snapshot { scored, .. } if scored.load(Ordering::Relaxed));
-                    return if scored && !output.is_empty() {
-                        Ok(output)
-                    } else {
-                        Err(LunaSamplerError::Superseded)
-                    };
+                    #[cfg(test)]
+                    if matches!(&mode, SamplingMode::Snapshot { scored, .. } if scored.load(Ordering::Relaxed))
+                        && !output.is_empty()
+                    {
+                        return Ok(output);
+                    }
+                    return Err(LunaSamplerError::Superseded);
                 }
                 event = response.next() => event,
             } {
@@ -399,8 +412,7 @@ impl SamplingExecution {
                         // The first output token is the complete classification.
                         // Later output cannot revise that decision; drain it only
                         // to preserve connection reuse and token accounting.
-                        let (mut superseded, scored) = match mode {
-                            SamplingMode::Snapshot { superseded, scored } => (superseded, scored),
+                        match mode {
                             SamplingMode::Retained(ref mut retained) => {
                                 retained.early_score = Some(delta.clone());
                                 if let Some(ready) = retained.ready.take() {
@@ -408,29 +420,39 @@ impl SamplingExecution {
                                 }
                                 continue;
                             }
-                        };
-                        scored.store(true, Ordering::Relaxed);
-                        tokio::spawn(async move {
-                            while let Some(event) = tokio::select! {
-                                biased;
-                                _ = &mut superseded => None,
-                                event = response.next() => event,
-                            } {
-                                match event {
-                                    Ok(ResponseEvent::Completed { token_usage, .. }) => {
-                                        response.reuse(token_usage.as_ref()).await;
-                                        break;
+                            #[cfg(test)]
+                            SamplingMode::Snapshot {
+                                mut superseded,
+                                scored,
+                            } => {
+                                scored.store(true, Ordering::Relaxed);
+                                tokio::spawn(async move {
+                                    while let Some(event) = tokio::select! {
+                                        biased;
+                                        _ = &mut superseded => None,
+                                        event = response.next() => event,
+                                    } {
+                                        match event {
+                                            Ok(ResponseEvent::Completed {
+                                                token_usage, ..
+                                            }) => {
+                                                response.reuse(token_usage.as_ref()).await;
+                                                break;
+                                            }
+                                            Err(_) => break,
+                                            _ => {}
+                                        }
                                     }
-                                    Err(_) => break,
-                                    _ => {}
-                                }
+                                });
+                                return Ok(delta);
                             }
-                        });
-                        return Ok(delta);
+                        }
                     }
                     ResponseEvent::OutputItemDone(item) => {
-                        if let SamplingMode::Retained(completion) = &mut mode {
-                            completion.record(item.clone());
+                        match &mut mode {
+                            SamplingMode::Retained(completion) => completion.record(item.clone()),
+                            #[cfg(test)]
+                            SamplingMode::Snapshot { .. } => {}
                         }
                         if let ResponseItem::Message { role, content, .. } = item
                             && role == "assistant"
@@ -454,6 +476,7 @@ impl SamplingExecution {
                 if output.len() > MAX_OUTPUT_BYTES {
                     return Err(LunaSamplerError::OutputTooLarge);
                 }
+                #[cfg(test)]
                 if !output.is_empty()
                     && let SamplingMode::Snapshot { scored, .. } = &mode
                 {

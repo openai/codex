@@ -20,7 +20,6 @@ pub(super) enum ParentCompactionError {
 
 pub(super) struct ParentCompaction {
     pub(super) item: Option<ResponseItem>,
-    pub(super) model_hash: Option<String>,
 }
 
 pub(super) fn select_parent_compaction(
@@ -33,10 +32,7 @@ pub(super) fn select_parent_compaction(
     let checkpoint = history.latest_compaction();
     let model_hash = match mode {
         GuardianContextMode::Independent => {
-            return Ok(ParentCompaction {
-                item: None,
-                model_hash: None,
-            });
+            return Ok(ParentCompaction { item: None });
         }
         GuardianContextMode::Legacy => legacy_model_hash,
         GuardianContextMode::ThreadOwned => checkpoint.and_then(|checkpoint| checkpoint.model_hash),
@@ -61,10 +57,7 @@ pub(super) fn select_parent_compaction(
     let item = item.filter(|_| {
         mode == GuardianContextMode::ThreadOwned || sampler.supports_parent_compaction(model_hash)
     });
-    Ok(ParentCompaction {
-        item,
-        model_hash: model_hash.map(str::to_owned),
-    })
+    Ok(ParentCompaction { item })
 }
 
 // An unusable latest compaction must never fall back to an older one. Missing

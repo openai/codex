@@ -346,7 +346,7 @@
       ]
     },
     "AsyncClassifierMode": {
-      "description": "Async classifier experiment, resolved once for each parent task.",
+      "description": "Legacy classifier modes retained for configuration and model-catalog compatibility.",
       "enum": [
         "snapshot",
         "conversation"
@@ -2061,7 +2061,7 @@
               "$ref": "#/definitions/AsyncClassifierMode"
             }
           ],
-          "description": "Classifier mode override. Otherwise use the model default, then conversation."
+          "description": "Deprecated and ignored; asynchronous classification always uses conversations."
         },
         "classifier_instructions": {
           "type": "string"

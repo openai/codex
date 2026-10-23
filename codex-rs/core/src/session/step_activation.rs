@@ -154,6 +154,8 @@ fn check_legacy_model_safety(
                     .as_ref()
                     .and_then(|messages| messages.guardian_v2.clone())
                     .unwrap_or_default();
+                // The legacy mode is accepted for compatibility but no longer selects behavior.
+                settings.async_classifier_mode = None;
                 // Missing and empty transcript records supply the same defaults.
                 if settings.transcript.as_ref().is_some_and(|transcript| {
                     *transcript == GuardianV2TranscriptModelConfig::default()

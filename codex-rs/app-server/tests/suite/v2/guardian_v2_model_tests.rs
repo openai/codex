@@ -153,13 +153,10 @@ async fn computer_use_scoring_follows_model_review_requirement(
     Ok(())
 }
 
-#[test_case("snapshot", 0.0; "snapshot low risk")]
-#[test_case("snapshot", 1.0; "snapshot high risk")]
-#[test_case("conversation", 0.0; "conversation low risk")]
-#[test_case("conversation", 1.0; "conversation high risk")]
+#[test_case(0.0; "low risk")]
+#[test_case(1.0; "high risk")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_programs_follow_each_turn_without_changing_parent_selection(
-    classifier_mode: &str,
     luna_score: f64,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -235,7 +232,6 @@ default_tools_approval_mode = "prompt"
 
 [features.guardianv2]
 enabled = true
-async_classifier_mode = "{classifier_mode}"
 
 [features.guardianv2.review_scope]
 computer_use_only = false

@@ -15,27 +15,22 @@ use test_case::test_case;
 #[test_case(GuardianRisk::Low, ThreadLifecycle::Fork, ModelReviewRequirement::Optional; "fork")]
 #[test_case(GuardianRisk::Low, ThreadLifecycle::New, ModelReviewRequirement::Required; "mandatory_review")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn classifier_modes_preserve_approval_matrix(
+async fn conversation_classifier_preserves_approval_matrix(
     risk: GuardianRisk,
     lifecycle: ThreadLifecycle,
     requirement: ModelReviewRequirement,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
-    for mode in [
-        AsyncClassifierMode::Snapshot,
+    guardian_v2_routes_scoped_tool_approvals(
+        risk,
+        lifecycle,
+        requirement,
+        ReviewOutcome::Allow,
+        TranscriptContent::Normal,
+        GuardianToolScope::AllTools,
+        /*sensitive_action*/ None,
         AsyncClassifierMode::Conversation,
-    ] {
-        guardian_v2_routes_scoped_tool_approvals(
-            risk,
-            lifecycle,
-            requirement,
-            ReviewOutcome::Allow,
-            TranscriptContent::Normal,
-            GuardianToolScope::AllTools,
-            /*sensitive_action*/ None,
-            mode,
-        )
-        .await?;
-    }
+    )
+    .await?;
     Ok(())
 }

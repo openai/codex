@@ -152,7 +152,7 @@ pub struct GuardianV2ConfigToml {
     /// Transcript encoding for synchronous Guardian review and asynchronous scoring. Defaults to line.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript_mode: Option<codex_protocol::TranscriptFormat>,
-    /// Classifier mode override. Otherwise use the model default, then conversation.
+    /// Deprecated and ignored; asynchronous classification always uses conversations.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub async_classifier_mode: Option<codex_protocol::openai_models::AsyncClassifierMode>,
     /// Reset retained async history when the next request exceeds this token estimate.

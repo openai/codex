@@ -57,6 +57,7 @@ pub(crate) struct ContextInput<'a> {
     pub(crate) node_repl_images: Option<&'a [codex_protocol::models::ContentItem]>,
 }
 
+#[cfg(test)]
 pub(crate) type RenderedContext = ComposedContext;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,6 +88,7 @@ impl Default for TranscriptConfig {
 }
 
 impl TranscriptConfig {
+    #[cfg(test)]
     pub(crate) fn build_context(
         &self,
         input: ContextInput<'_>,

@@ -11,10 +11,14 @@ pub(super) use telemetry::SampledScore;
 use super::request::PreparedRequest;
 use super::score::PendingScore;
 use connection_pool::ConnectionPool;
+#[cfg(test)]
 use std::collections::VecDeque;
 use std::sync::Arc;
+#[cfg(test)]
 use std::sync::Mutex;
+#[cfg(test)]
 use std::sync::atomic::AtomicBool;
+#[cfg(test)]
 use std::sync::atomic::Ordering;
 
 use codex_api::ApiError;
@@ -86,10 +90,12 @@ pub struct LunaSamplingRequest {
     /// Trusted classifier instructions with their role and content attribution.
     pub instructions: RenderedFragment,
     /// Composed evidence messages, with roles, annotations and content order intact.
+    #[cfg(test)]
     pub input: Vec<ResponseItem>,
     /// Opaque parent compaction to reuse only for compatible model configurations.
     pub parent_compaction: Option<ResponseItem>,
     /// Host-selected compatibility hash for the supplied parent checkpoint.
+    #[cfg(test)]
     pub parent_compaction_hash: Option<String>,
     /// Reasoning budget explicitly selected for this request.
     pub reasoning_effort: ReasoningEffort,
@@ -130,6 +136,7 @@ pub enum LunaSamplerError {
     Superseded,
     /// The supplied parent checkpoint cannot be consumed by this Luna configuration.
     #[error("parent compaction is incompatible with Luna")]
+    #[cfg(test)]
     IncompatibleCompaction,
     /// The complete classifier input exceeded the model allowance.
     #[error("Luna input exceeds the complete request budget")]
@@ -139,6 +146,7 @@ pub enum LunaSamplerError {
     QueueFull,
 }
 
+#[cfg(test)]
 struct ActiveRequest {
     supersede: oneshot::Sender<()>,
     scored: Arc<AtomicBool>,
@@ -148,6 +156,7 @@ struct ActiveRequest {
 pub struct LunaSampler {
     config: Arc<LunaSamplerConfig>,
     connections: Arc<ConnectionPool>,
+    #[cfg(test)]
     active_requests: Mutex<VecDeque<ActiveRequest>>,
 }
 
@@ -166,6 +175,7 @@ impl LunaSampler {
         Self {
             connections: ConnectionPool::new(Arc::clone(&config)),
             config,
+            #[cfg(test)]
             active_requests: Mutex::new(VecDeque::with_capacity(MAX_CONCURRENT_REQUESTS)),
         }
     }
@@ -280,6 +290,7 @@ impl LunaSampler {
     }
 
     /// Sends one tool-less classification request using an available transport.
+    #[cfg(test)]
     pub async fn sample(
         &self,
         mut request: LunaSamplingRequest,
