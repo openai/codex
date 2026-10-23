@@ -150,7 +150,8 @@ impl ContextProfile {
                 let prepare_text = |text: &str| {
                     let text = match self.target {
                         ContextTarget::Sync => match &entry.kind {
-                            ConversationTranscriptEntryKind::ToolCall(_) => {
+                            ConversationTranscriptEntryKind::ToolCall(_)
+                            | ConversationTranscriptEntryKind::ToolOutput(_) => {
                                 std::borrow::Cow::Owned(crate::truncate_text(
                                     text,
                                     self.transcript.entry_limits.tool_tokens,
@@ -161,7 +162,6 @@ impl ContextProfile {
                             | ConversationTranscriptEntryKind::Assistant
                             | ConversationTranscriptEntryKind::ProtectedAssistant
                             | ConversationTranscriptEntryKind::Reasoning
-                            | ConversationTranscriptEntryKind::ToolOutput(_)
                             | ConversationTranscriptEntryKind::NodeReplToolOutput(_) => {
                                 std::borrow::Cow::Borrowed(text)
                             }

@@ -267,7 +267,7 @@ pub(crate) fn render_guardian_transcript_entries(
 /// Keep both tool calls and tool results here. The reviewer often needs the
 /// agent's exact queried path / arguments as well as the returned evidence to
 /// decide whether the pending approval is justified.
-/// Tool-call truncation happens in sync preparation; other caps still apply
+/// Tool-call and output truncation happen in sync preparation; other caps still apply
 /// during collection. The cursor counts every non-empty evidence entry.
 pub(super) fn collect_guardian_context(
     history: &dyn SectionHistory,

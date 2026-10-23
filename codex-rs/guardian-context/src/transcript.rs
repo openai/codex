@@ -2,7 +2,7 @@
 //!
 //! Both Guardian consumers receive the same role and tool-source attribution,
 //! with generated compaction summaries attributed to the assistant, complete user
-//! messages and capped non-user entries, except sync tool calls prepared later. Resolved context profiles
+//! messages and capped non-user entries, except sync tool calls and outputs prepared later. Resolved context profiles
 //! apply aggregate retention after the host selects its full/delta slice. Tool outputs with a
 //! call ID retain their generic label when the call is unavailable. Outputs
 //! without a call ID require an explicit name.
@@ -411,6 +411,7 @@ fn collect_transcript_for_target(
                 truncate_text(&text, config.entry_limits.message_tokens)
             }
             ConversationTranscriptEntryKind::ToolCall(_)
+            | ConversationTranscriptEntryKind::ToolOutput(_)
                 if target == crate::ContextTarget::Sync =>
             {
                 text
