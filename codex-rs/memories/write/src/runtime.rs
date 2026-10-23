@@ -400,6 +400,7 @@ impl MemoryStartupContext {
         &self,
         config: Config,
         prompt: Vec<UserInput>,
+        workspace_lock: Arc<crate::MemoryWorkspaceLock>,
     ) -> anyhow::Result<SpawnedConsolidationAgent> {
         let NewThread {
             thread_id, thread, ..
@@ -413,6 +414,15 @@ impl MemoryStartupContext {
                 ..StartThreadOptions::new(config)
             })
             .await?;
+
+        // Cancellation or a shutdown timeout must not release workspace ownership
+        // while the agent can still write. The phase-2 handler keeps another owner
+        // through the final baseline reset after this thread has terminated.
+        let running_thread = Arc::clone(&thread);
+        tokio::spawn(async move {
+            running_thread.wait_until_terminated().await;
+            drop(workspace_lock);
+        });
 
         let agent = SpawnedConsolidationAgent { thread_id, thread };
         let submit_result = match agent

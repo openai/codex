@@ -1,5 +1,6 @@
 use crate::ExternalMemoryFile;
 use crate::discover_external_memory_files;
+use codex_memories_write::MemoryWorkspaceLock;
 use codex_protocol::MemoryVersion;
 use codex_rollout::StateDbHandle;
 use serde::Serialize;
@@ -57,10 +58,7 @@ pub(super) async fn import(
     selection: MemoryVersion,
     selected_memory: &[String],
 ) -> io::Result<MemoryImportOutcome> {
-    let selected_memory = selected_memory
-        .iter()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
+    let selected_memory = selected_memory.iter().cloned().collect::<BTreeSet<_>>();
     if selected_memory.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -74,52 +72,72 @@ pub(super) async fn import(
         )
     })?;
     let memory_files = discover_external_memory_files(external_agent_home)?;
-    let mut synchronized_projects = BTreeSet::new();
-    let mut failures = Vec::new();
-    // Imports are profile-wide, but clients can still select either namespace per thread.
-    // Synchronize only the requested external resources, not existing v1 memories or notes.
-    for &version in memory_versions(codex_home, selection)? {
-        let memory_root = codex_home.join(version.directory_name());
-        let store = state_db
-            .memories_for_version(version)
-            .await
-            .map_err(io::Error::other)?;
-        codex_memories_write::workspace::prepare_memory_workspace(&memory_root)
-            .await
-            .map_err(io::Error::other)?;
-        let copy_outcome = copy_resources(&memory_root, &memory_files, &selected_memory)?;
-        if !copy_outcome.synchronized_projects.is_empty()
-            && let Err(err) = store
-                .enqueue_global_consolidation(chrono::Utc::now().timestamp())
+    let versions = memory_versions(codex_home, selection)?;
+    // Acquire every destination before changing either namespace. A busy v2
+    // consolidation must not leave a partially imported v1 workspace.
+    let workspace_locks = versions
+        .iter()
+        .map(|version| MemoryWorkspaceLock::try_acquire(&codex_home.join(version.directory_name())))
+        .collect::<io::Result<Vec<_>>>()?;
+    let codex_home = codex_home.to_path_buf();
+    let state_db = std::sync::Arc::clone(state_db);
+    // Workspace preparation runs blocking Git work. Let it finish under the
+    // locks even if the caller drops the import future while awaiting it.
+    tokio::spawn(async move {
+        let _workspace_locks = workspace_locks;
+        let selected_memory = selected_memory
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let mut synchronized_projects = BTreeSet::new();
+        let mut failures = Vec::new();
+        // Imports are profile-wide, but clients can still select either namespace per thread.
+        // Synchronize only the requested external resources, not existing v1 memories or notes.
+        for &version in versions {
+            let memory_root = codex_home.join(version.directory_name());
+            let store = state_db
+                .memories_for_version(version)
                 .await
-        {
-            tracing::warn!(error = %err, "failed to enqueue imported memory consolidation");
-        }
-        synchronized_projects.extend(copy_outcome.synchronized_projects);
-        for failure in copy_outcome.failures {
-            if !failures.contains(&failure) {
-                failures.push(failure);
+                .map_err(io::Error::other)?;
+            codex_memories_write::workspace::prepare_memory_workspace(&memory_root)
+                .await
+                .map_err(io::Error::other)?;
+            let copy_outcome = copy_resources(&memory_root, &memory_files, &selected_memory)?;
+            if !copy_outcome.synchronized_projects.is_empty()
+                && let Err(err) = store
+                    .enqueue_global_consolidation(chrono::Utc::now().timestamp())
+                    .await
+            {
+                tracing::warn!(error = %err, "failed to enqueue imported memory consolidation");
+            }
+            synchronized_projects.extend(copy_outcome.synchronized_projects);
+            for failure in copy_outcome.failures {
+                if !failures.contains(&failure) {
+                    failures.push(failure);
+                }
             }
         }
-    }
-    // Cleanup may affect only one namespace, but a real failure in either still wins.
-    for project_key in selected_memory {
-        if failures
-            .iter()
-            .any(|failure| failure.project_key == project_key)
-        {
-            synchronized_projects.remove(project_key);
-        } else if !synchronized_projects.contains(project_key) {
-            failures.push(MemoryImportFailure {
-                project_key: project_key.to_string(),
-                message: format!("selected memory was not found: {project_key}"),
-            });
+        // Cleanup may affect only one namespace, but a real failure in either still wins.
+        for project_key in selected_memory {
+            if failures
+                .iter()
+                .any(|failure| failure.project_key == project_key)
+            {
+                synchronized_projects.remove(project_key);
+            } else if !synchronized_projects.contains(project_key) {
+                failures.push(MemoryImportFailure {
+                    project_key: project_key.to_string(),
+                    message: format!("selected memory was not found: {project_key}"),
+                });
+            }
         }
-    }
-    Ok(MemoryImportOutcome {
-        synchronized_projects: synchronized_projects.into_iter().collect(),
-        failures,
+        Ok(MemoryImportOutcome {
+            synchronized_projects: synchronized_projects.into_iter().collect(),
+            failures,
+        })
     })
+    .await
+    .map_err(io::Error::other)?
 }
 
 pub(crate) fn memory_versions(
