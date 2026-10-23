@@ -340,12 +340,14 @@ impl TraceReducer {
             }
             RawTraceEventPayload::ToolCallRuntimeStarted {
                 tool_call_id,
+                kind,
                 runtime_payload,
             } => {
                 self.start_tool_runtime_observation(
                     event.seq,
                     event.wall_time_unix_ms,
                     tool_call_id,
+                    kind,
                     runtime_payload,
                 )?;
             }

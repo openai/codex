@@ -329,6 +329,7 @@ fn send_message_runtime_payload_targets_delivered_child_message() -> anyhow::Res
     writer.append_with_context(
         trace_context_for_agent("turn-1"),
         RawTraceEventPayload::ToolCallRuntimeStarted {
+            kind: ToolCallKind::SendMessage,
             tool_call_id: "call-send".to_string(),
             runtime_payload: begin_payload,
         },
@@ -610,6 +611,7 @@ fn close_agent_runtime_payload_targets_thread() -> anyhow::Result<()> {
     writer.append_with_context(
         trace_context_for_agent("turn-1"),
         RawTraceEventPayload::ToolCallRuntimeStarted {
+            kind: ToolCallKind::CloseAgent,
             tool_call_id: "call-close".to_string(),
             runtime_payload: begin_payload.clone(),
         },
@@ -918,6 +920,7 @@ fn append_spawn_agent_tool_lifecycle(
     writer.append_with_context(
         trace_context_for_agent(turn_id),
         RawTraceEventPayload::ToolCallRuntimeStarted {
+            kind: ToolCallKind::SpawnAgent,
             tool_call_id: "call-spawn".to_string(),
             runtime_payload: begin.clone(),
         },

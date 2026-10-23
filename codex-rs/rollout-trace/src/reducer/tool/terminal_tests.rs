@@ -78,6 +78,7 @@ fn exec_tool_reduces_to_terminal_operation_and_session() -> anyhow::Result<()> {
     let runtime_start = writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::ToolCallRuntimeStarted {
+            kind: ToolCallKind::ExecCommand,
             tool_call_id: "tool-1".to_string(),
             runtime_payload: runtime_start_payload,
         },
@@ -267,7 +268,7 @@ fn reused_process_ids_keep_sessions_and_stdin_joins_distinct() -> anyhow::Result
                 model_visible_call_id: None,
                 code_mode_runtime_tool_id: None,
                 requester: crate::raw_event::RawToolCallRequester::Model,
-                kind,
+                kind: kind.clone(),
                 summary: generic_summary("terminal"),
                 invocation_payload: None,
             },
@@ -285,6 +286,7 @@ fn reused_process_ids_keep_sessions_and_stdin_joins_distinct() -> anyhow::Result
         let runtime_start = writer.append_with_context(
             trace_context_for_thread(thread, turn),
             RawTraceEventPayload::ToolCallRuntimeStarted {
+                kind,
                 tool_call_id,
                 runtime_payload: request,
             },

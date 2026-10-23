@@ -156,6 +156,8 @@ pub enum RawTraceEventPayload {
     },
     ToolCallRuntimeStarted {
         tool_call_id: ToolCallId,
+        /// Executed handler, which may differ from the requested callable.
+        kind: ToolCallKind,
         /// Runtime/protocol observation for how Codex began executing the tool.
         runtime_payload: RawPayloadRef,
     },

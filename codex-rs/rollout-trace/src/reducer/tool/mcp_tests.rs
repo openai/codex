@@ -94,6 +94,7 @@ fn mcp_calls_keep_callable_identity_and_classify_the_backend() -> anyhow::Result
             }),
         )?;
         writer.append(RawTraceEventPayload::ToolCallRuntimeStarted {
+            kind: expected.kind.clone(),
             tool_call_id: "call-mcp".to_string(),
             runtime_payload: begin.clone(),
         })?;

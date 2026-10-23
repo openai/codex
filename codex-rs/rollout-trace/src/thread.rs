@@ -497,12 +497,14 @@ impl EnabledThreadTraceContext {
         match trace_event {
             crate::protocol_event::ToolRuntimeTraceEvent::Started {
                 tool_call_id,
+                kind,
                 payload,
             } => {
                 let runtime_payload = self
                     .write_json_payload_best_effort(RawPayloadKind::ToolRuntimeEvent, &payload)?;
                 Some(RawTraceEventPayload::ToolCallRuntimeStarted {
                     tool_call_id: tool_call_id.to_string(),
+                    kind,
                     runtime_payload,
                 })
             }

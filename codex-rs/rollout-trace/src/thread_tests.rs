@@ -1,15 +1,23 @@
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::PatchApplyBeginEvent;
+use codex_protocol::protocol::PatchApplyEndEvent;
+use codex_protocol::protocol::PatchApplyStatus;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 use super::*;
@@ -18,6 +26,10 @@ use crate::CompactionCheckpointTracePayload;
 use crate::ExecutionStatus;
 use crate::RawTraceEventPayload;
 use crate::RolloutStatus;
+use crate::ToolCallKind;
+use crate::ToolDispatchPayload;
+use crate::ToolDispatchRequester;
+use crate::ToolDispatchResult;
 use crate::replay_bundle;
 
 #[test]
@@ -222,6 +234,81 @@ fn protocol_wrapper_records_selected_events_as_raw_payloads() -> anyhow::Result<
     });
 
     assert!(protocol_event_seen);
+    Ok(())
+}
+
+#[test]
+fn intercepted_exec_records_patch_without_a_terminal() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let thread_id = ThreadId::new();
+    let trace =
+        ThreadTraceContext::start_root_in_root_for_test(temp.path(), minimal_metadata(thread_id))?;
+    trace.record_codex_turn_started("turn-1");
+    let dispatch = trace.start_tool_dispatch_trace(|| Some(ToolDispatchInvocation {
+        thread_id: thread_id.to_string(),
+        codex_turn_id: "turn-1".to_string(),
+        tool_call_id: "patch-call".to_string(),
+        tool_name: "exec_command".to_string(),
+        tool_namespace: None,
+        requester: ToolDispatchRequester::Model {
+            model_visible_call_id: "patch-call".to_string(),
+        },
+        payload: ToolDispatchPayload::Function {
+            arguments: serde_json::json!({"cmd": "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: hello.txt\n+hello\n*** End Patch\nEOF"}).to_string(),
+        },
+    }));
+    let bundle = single_bundle_dir(temp.path())?;
+    let before = replay_bundle(&bundle)?.tool_calls["patch-call"].clone();
+    let changes = HashMap::from([(
+        PathBuf::from("hello.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    )]);
+    trace.record_tool_call_event(
+        "turn-1",
+        &EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+            call_id: "patch-call".to_string(),
+            turn_id: "turn-1".to_string(),
+            auto_approved: true,
+            changes: changes.clone(),
+        }),
+    );
+    trace.record_tool_call_event(
+        "turn-1",
+        &EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+            call_id: "patch-call".to_string(),
+            turn_id: "turn-1".to_string(),
+            stdout: "Success".to_string(),
+            stderr: String::new(),
+            success: true,
+            changes,
+            status: PatchApplyStatus::Completed,
+        }),
+    );
+    dispatch.record_completed(
+        ExecutionStatus::Completed,
+        ToolDispatchResult::DirectResponse {
+            response_item: ResponseInputItem::FunctionCallOutput {
+                call_id: "patch-call".to_string(),
+                output: FunctionCallOutputPayload::from_text("Success".to_string()),
+            },
+        },
+    );
+
+    let rollout = replay_bundle(&bundle)?;
+    let call = &rollout.tool_calls["patch-call"];
+    assert_eq!(call.kind, ToolCallKind::ApplyPatch);
+    assert_eq!(call.execution.status, ExecutionStatus::Completed);
+    assert_eq!(call.summary, before.summary);
+    assert_eq!(
+        call.raw_invocation_payload_id,
+        before.raw_invocation_payload_id
+    );
+    assert_eq!(call.raw_runtime_payload_ids.len(), 2);
+    assert!(call.raw_result_payload_id.is_some());
+    assert!(rollout.terminal_operations.is_empty());
+    assert!(rollout.terminal_sessions.is_empty());
     Ok(())
 }
 
