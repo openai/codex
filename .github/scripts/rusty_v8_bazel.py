@@ -26,7 +26,6 @@ MODULE_BAZEL = ROOT / "MODULE.bazel"
 RUSTY_V8_CHECKSUMS_DIR = ROOT / "third_party" / "v8"
 RELEASE_ARTIFACT_PROFILE = "release"
 SANDBOX_ARTIFACT_PROFILE = "ptrcomp_sandbox_release"
-ARTIFACT_BAZEL_CONFIGS = ["rusty-v8-upstream-libcxx"]
 
 
 def bazel_execroot() -> Path:
@@ -123,14 +122,6 @@ def ensure_bazel_output_files(
     if missing:
         raise SystemExit(f"missing built outputs for {labels}: {missing}")
     return outputs
-
-
-def artifact_bazel_configs(bazel_configs: list[str] | None = None) -> list[str]:
-    configured = list(ARTIFACT_BAZEL_CONFIGS)
-    for config in bazel_configs or []:
-        if config not in configured:
-            configured.append(config)
-    return configured
 
 
 def release_pair_label(target: str, sandbox: bool = False) -> str:
@@ -290,7 +281,6 @@ def stage_release_pair(
     bazel_configs: list[str] | None = None,
     sandbox: bool = False,
 ) -> None:
-    bazel_configs = artifact_bazel_configs(bazel_configs)
     outputs = ensure_bazel_output_files(
         platform,
         [release_pair_label(target, sandbox)],

@@ -2,7 +2,8 @@
 
 The root package is placed inside the fetched source tree so relative source
 labels and globs have their normal Bazel semantics. Reuse upstream's platform
-and CPU configuration in place, with Codex's narrow patch to bazel/defs.bzl.
+and CPU configuration in place, with Codex's narrow patch to bazel/defs.bzl
+and the target CPU setting.
 V8's MODULE and toolchain BUILD files are never part of Codex's dependency or
 toolchain graph.
 """

@@ -16,11 +16,13 @@ for its consumers. All Bazel compilation modes use the same published V8
 release archive on supported platforms.
 
 The Bazel `v8` crate feature selection enables V8's in-process sandbox.
-Darwin/Linux consumers select prebuilts only when both the V8 sandbox and pointer
-compression settings match the published artifact. For source instrumentation
-or custom V8 C++ settings, use `--//:rusty_v8_from_source=true`; the archive
-and binding then both come from the source path. The published release archive
-cannot incorporate local V8 C++ flags or native debug/sanitizer settings.
+Darwin/Linux consumers use the matching published pair by default.
+For a source build use `--//:rusty_v8_from_source=true`; both archive and
+bindings then come from the source path. Source targets enforce the workspace
+runtime and sandbox/pointer-compression ABI. Release-pair targets enforce either
+the legacy or the sandbox ABI plus Chromium's pinned runtime. Target CPU follows
+the named artifact. The underlying V8 settings are internal, and callers do
+not pass separate V8 feature or libc++ flags.
 
 Current pinned versions:
 
@@ -110,10 +112,10 @@ from upstream `rusty_v8` source. Those ABI-specific outputs cannot be produced
 by Codex's Bazel Windows GNU toolchain.
 
 The Bazel graph pins the same libc++, libc++abi, and llvm-libc source revisions
-used by `rusty_v8 v152.2.0`, compiles published artifact targets with
-`--config=rusty-v8-upstream-libcxx`, and folds the matching runtime objects into
-the final static archive so consumers can link it with the `v8` crate's default
-`use_custom_libcxx` feature. The config keeps the object files and the bundled
+used by `rusty_v8 v152.2.0`. The named release and sandbox-release pair targets
+select those headers and fold the matching runtime objects into the final static
+archive so consumers can link it with the `v8` crate's default
+`use_custom_libcxx` feature. The profile keeps the object files and the bundled
 runtime on Chromium's `std::__Cr` ABI namespace instead of mixing those objects
 with the toolchain libc++ default namespace. Bazel consumers use these
 published archives for supported Darwin/Linux platforms, as do Cargo release and
@@ -157,14 +159,16 @@ each fetch, including added, removed or reordered groups. The importer rejects
 missing boundaries, malformed or empty sections, and new compiled targets. Only
 the two known Dragonbox and FP16 declarations are skipped, since the dependency
 overlays already supply them. `v8_binary` is valid V8 syntax, but compiled targets
-must be reviewed against the owned engine BUILD on an upgrade. The
-upstream `bazel/config` platform and CPU package is reused unchanged.
-`v8_defs.patch` records just the Codex differences to upstream's
-`bazel/defs.bzl`: release flag visibility, libc++ headers/runtime, Windows
+must be reviewed against the owned engine BUILD on an upgrade.
+The upstream `bazel/config` platform and CPU package is reused; only the CPU
+setting changes from a CLI flag to an internal setting. `v8_defs.patch` records
+that change and the Codex differences to upstream's `bazel/defs.bzl`:
+internal ABI/runtime settings, their visibility, libc++ headers/runtime, Windows
 compiler and linker settings, and snapshot generation. All engine rules,
 including Torque and V8's test configuration helpers, load from that file.
-The engine BUILD owns feature policy and dependency targets; the remaining V8
-ABI, runtime and CPU settings still support the existing release commands.
+The engine BUILD owns feature policy and dependency targets. ABI, runtime and
+CPU settings are selected together by `artifact_profile.bzl` for source and
+release-pair targets.
 
 V8's private Abseil is built from the pinned 20250814.1 sources and uses
 `codex_v8_lts_20250814` for its supported inline-namespace option. Protobuf

@@ -1,13 +1,34 @@
 # What: adapt the pinned V8 rule helpers to Codex's engine configuration.
-# Scope: bazel/defs.bzl only; the engine graph and dependency choices live in
-# third_party/v8/engine.BUILD.bazel. The platform/CPU config is unmodified V8.
-# Preserve the existing release flags, Chromium libc++ headers/runtime, Clang
-# Windows driver flags, and Windows target-ABI snapshot tool. The optional
+# Scope: bazel/defs.bzl and bazel/config/v8-target-cpu.bzl; the engine graph
+# and dependency choices live in third_party/v8/engine.BUILD.bazel. ABI,
+# runtime and CPU settings are internal outputs of artifact_profile.bzl.
+# Preserve Chromium libc++ headers/runtime, Clang Windows driver flags, and
+# the Windows target-ABI snapshot tool. The optional
 # Linux backtrace link flag is omitted because that feature is fixed off.
 # On a V8 pin change, review these hunks and build the native canary matrix.
 
+diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bzl
 --- a/orig/v8-15.2.124.1/bazel/defs.bzl
 +++ b/mod/v8-15.2.124.1/bazel/defs.bzl
+@@ -18,16 +18,16 @@
+     return FlagInfo(value = ctx.build_setting_value)
+
+ _create_option_flag = rule(
+     implementation = _options_impl,
+-    build_setting = config.bool(flag = True),
++    build_setting = config.bool(flag = False),
+     attrs = {
+         "scope": attr.string(),
+     },
+ )
+
+ _create_option_string = rule(
+     implementation = _options_impl,
+-    build_setting = config.string(flag = True),
++    build_setting = config.string(flag = False),
+     attrs = {
+         "scope": attr.string(),
+     },
 @@ -42,12 +42,30 @@
  )
 
@@ -174,3 +195,17 @@
          suffix = suffix,
          target_os = select({
              "@v8//bazel/config:is_macos": "mac",
+diff --git a/orig/v8-15.2.124.1/bazel/config/v8-target-cpu.bzl b/mod/v8-15.2.124.1/bazel/config/v8-target-cpu.bzl
+--- a/orig/v8-15.2.124.1/bazel/config/v8-target-cpu.bzl
++++ b/mod/v8-15.2.124.1/bazel/config/v8-target-cpu.bzl
+@@ -24,8 +24,8 @@
+
+ v8_target_cpu = rule(
+     implementation = _host_target_cpu_impl,
+-    build_setting = config.string(flag = True),
+-    doc = "CPU that V8 will generate code for.",
++    build_setting = config.string(flag = False),
++    doc = "Internal CPU that V8 generates code for; set by the artifact transition.",
+     attrs = {
+         "scope": attr.string(),
+     },

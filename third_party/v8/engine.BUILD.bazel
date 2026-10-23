@@ -23,8 +23,8 @@ load("@v8_python_deps//:requirements.bzl", "requirement")
 # Used by the Codex-owned pip hub; pin changes travel with the V8 source.
 exports_files(["bazel/requirements.txt"])
 
-# Codex V8 source policy. Only ABI, runtime and target CPU vary; these still
-# accept the existing release inputs. CPU selection lives in bazel/config.
+# Codex V8 source policy. Only ABI, runtime and target CPU vary, selected by
+# artifact profiles. CPU selection lives in bazel/config.
 # Upstream experiments, profiling and debug flags use their pinned 15.2 defaults.
 # ICU and no-ICU remain separate targets for the engine and its generators.
 v8_flag(name = "v8_enable_sandbox")
