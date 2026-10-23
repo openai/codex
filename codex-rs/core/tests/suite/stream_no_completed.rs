@@ -73,6 +73,7 @@ async fn retries_on_early_close() {
         capabilities: None,
         project_id: None,
         location: None,
+        credential_file: None,
         include_internal_metadata: false,
     };
 

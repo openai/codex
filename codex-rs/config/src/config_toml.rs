@@ -986,6 +986,11 @@ pub fn validate_model_providers(
                 "model_providers.{key}: provider name must not be empty"
             ));
         }
+        if key == GCP_PROVIDER_ID {
+            provider
+                .validate_gcp_credential_file()
+                .map_err(|message| format!("model_providers.{key}: {message}"))?;
+        }
         provider
             .validate()
             .map_err(|message| format!("model_providers.{key}: {message}"))?;
@@ -1158,5 +1163,22 @@ command = "print-token"
             ),
             (Some("https://vertex.example.com/v1"), Some("print-token"))
         );
+    }
+
+    #[test]
+    fn gcp_provider_rejects_relative_credential_file() {
+        for credential_file in ["", "adc.json", "../adc.json"] {
+            let error = toml::from_str::<ConfigToml>(&format!(
+                r#"
+[model_providers.gcp]
+credential_file = "{credential_file}"
+"#,
+            ))
+            .expect_err("GCP overrides must validate credential paths before merging defaults");
+
+            assert!(error.to_string().contains(
+                "model_providers.gcp: provider credential_file must be an absolute path"
+            ));
+        }
     }
 }

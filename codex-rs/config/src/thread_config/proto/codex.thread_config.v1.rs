@@ -83,6 +83,8 @@ pub struct ModelProvider {
     pub project_id: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "21")]
     pub location: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "22")]
+    pub credential_file: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StringMap {

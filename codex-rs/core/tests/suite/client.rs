@@ -910,6 +910,7 @@ impl ProviderAuthCommandFixture {
             codex_utils_cargo_bin::write_executable(
                 &script_path,
                 r#"#!/bin/sh
+printf '%s\n' "$GOOGLE_APPLICATION_CREDENTIALS" >> credential-env.txt
 if [ -f fail-until-401 ]; then
     exit 1
 fi
@@ -929,6 +930,9 @@ mv tokens.next tokens.txt
                 &script_path,
                 r#"@echo off
 setlocal EnableExtensions DisableDelayedExpansion
+setlocal EnableDelayedExpansion
+echo(!GOOGLE_APPLICATION_CREDENTIALS!>> credential-env.txt
+endlocal
 if exist fail-until-401 exit /b 1
 
 set "first_line="
@@ -969,6 +973,41 @@ move /y tokens.next tokens.txt >nul
                 .expect("tempdir should be absolute"),
         }
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn provider_auth_command_logs_credential_paths_with_cmd_metacharacters() -> anyhow::Result<()> {
+    let auth_fixture = ProviderAuthCommandFixture::new(&["first-token", "second-token"])?;
+    let credential_file = auth_fixture
+        .tempdir
+        .path()
+        .join("ADC (team)&^!credentials!%PATH%.json");
+
+    for (credential_path, token) in [
+        (Some(credential_file.as_os_str()), "first-token"),
+        (None, "second-token"),
+    ] {
+        let mut command = codex_utils_process::background_command(&auth_fixture.command);
+        command
+            .args(&auth_fixture.args)
+            .current_dir(auth_fixture.tempdir.path());
+        if let Some(credential_path) = credential_path {
+            command.env("GOOGLE_APPLICATION_CREDENTIALS", credential_path);
+        } else {
+            command.env_remove("GOOGLE_APPLICATION_CREDENTIALS");
+        }
+        let output = command.output()?;
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(String::from_utf8(output.stdout)?, format!("{token}\r\n"));
+        assert_eq!(output.stderr, Vec::<u8>::new());
+    }
+
+    assert_eq!(
+        std::fs::read_to_string(auth_fixture.tempdir.path().join("credential-env.txt"))?,
+        format!("{}\r\n\r\n", credential_file.display()),
+    );
+    Ok(())
 }
 
 fn non_zero_u64(value: u64) -> NonZeroU64 {
@@ -1746,6 +1785,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         capabilities: None,
         project_id: None,
         location: None,
+        credential_file: None,
         include_internal_metadata: false,
     };
 
@@ -3254,6 +3294,7 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
         capabilities: None,
         project_id: None,
         location: None,
+        credential_file: None,
         include_internal_metadata: false,
     };
 
@@ -4104,6 +4145,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         capabilities: None,
         project_id: None,
         location: None,
+        credential_file: None,
         include_internal_metadata: false,
     };
 
@@ -4194,6 +4236,7 @@ async fn env_var_overrides_loaded_auth() {
         capabilities: None,
         project_id: None,
         location: None,
+        credential_file: None,
         include_internal_metadata: false,
     };
 

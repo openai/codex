@@ -87,6 +87,7 @@ async fn continue_after_stream_error() {
         capabilities: None,
         project_id: None,
         location: None,
+        credential_file: None,
         include_internal_metadata: false,
     };
 

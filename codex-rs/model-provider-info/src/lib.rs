@@ -29,6 +29,7 @@ use std::fmt;
 use std::num::NonZeroU64;
 use std::path::Component;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::PoisonError;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -173,6 +174,9 @@ pub struct ModelProviderInfo {
     /// Google Cloud location for the built-in GCP provider. Takes precedence
     /// over `GOOGLE_CLOUD_LOCATION`; defaults to `global` when neither is set.
     pub location: Option<String>,
+    /// Absolute path to a Google ADC credential file. For GCP, overrides
+    /// GOOGLE_APPLICATION_CREDENTIALS in the auth command's environment only.
+    pub credential_file: Option<PathBuf>,
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
@@ -308,7 +312,20 @@ other non-default provider fields are not supported"
         Ok(())
     }
 
+    /// Checks the credential-file path for a GCP provider or built-in GCP override.
+    pub fn validate_gcp_credential_file(&self) -> Result<(), String> {
+        if let Some(credential_file) = &self.credential_file
+            && !credential_file.is_absolute()
+        {
+            return Err("provider credential_file must be an absolute path".to_string());
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.is_gcp() {
+            self.validate_gcp_credential_file()?;
+        }
         if let Some(gateway) = &self.gateway_oauth {
             gateway.validate(self)?;
         }
@@ -578,6 +595,7 @@ other non-default provider fields are not supported"
             capabilities: None,
             project_id: None,
             location: None,
+            credential_file: None,
             include_internal_metadata: true,
         }
     }
@@ -620,6 +638,7 @@ other non-default provider fields are not supported"
             capabilities: None,
             project_id: None,
             location: None,
+            credential_file: None,
             include_internal_metadata: false,
         }
     }
@@ -658,6 +677,7 @@ other non-default provider fields are not supported"
             supports_standalone_web_search: false,
             project_id: None,
             location: None,
+            credential_file: None,
             include_internal_metadata: false,
         }
     }
@@ -779,21 +799,27 @@ pub fn merge_configured_model_providers(
                 }
             }
         } else if key == GCP_PROVIDER_ID {
+            provider
+                .validate_gcp_credential_file()
+                .and_then(|()| provider.validate())
+                .map_err(|message| format!("model_providers.{GCP_PROVIDER_ID} {message}"))?;
             let base_url_override = provider.base_url.take();
             let auth_override = provider.auth.take();
+            let credential_file_override = provider.credential_file.take();
             let http_headers_override = provider.http_headers.take();
             let project_id_override = provider.project_id.take();
             let location_override = provider.location.take();
             if provider != ModelProviderInfo::default() {
                 return Err(format!(
                     "model_providers.{GCP_PROVIDER_ID} only supports changing \
-`base_url`, `auth`, `http_headers`, `project_id`, and `location`; other non-default provider fields are not supported"
+`base_url`, `auth`, `http_headers`, `project_id`, `location`, and `credential_file`; other non-default provider fields are not supported"
                 ));
             }
 
             if let Some(built_in_provider) = model_providers.get_mut(GCP_PROVIDER_ID) {
                 built_in_provider.project_id = project_id_override;
                 built_in_provider.location = location_override;
+                built_in_provider.credential_file = credential_file_override;
                 if let Some(base_url_override) = base_url_override {
                     built_in_provider.base_url = Some(base_url_override);
                 }
@@ -859,6 +885,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         capabilities: None,
         project_id: None,
         location: None,
+        credential_file: None,
         include_internal_metadata: false,
     }
 }

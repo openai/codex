@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -240,7 +241,18 @@ pub(crate) fn auth_manager_for_provider(
     provider: &ModelProviderInfo,
 ) -> Option<Arc<AuthManager>> {
     match provider.auth.clone() {
-        Some(config) => Some(AuthManager::external_bearer_only(config)),
+        Some(config) => {
+            let mut env = HashMap::new();
+            if provider.is_gcp()
+                && let Some(credential_file) = &provider.credential_file
+            {
+                env.insert(
+                    "GOOGLE_APPLICATION_CREDENTIALS".to_string(),
+                    credential_file.as_os_str().to_os_string(),
+                );
+            }
+            Some(AuthManager::external_bearer_only_with_env(config, env))
+        }
         None => auth_manager,
     }
 }

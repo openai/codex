@@ -3,6 +3,8 @@ use super::manager::ExternalAuth;
 use super::manager::ExternalAuthFuture;
 use super::manager::ExternalAuthRefreshContext;
 use codex_protocol::config_types::ModelProviderAuthInfo;
+use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fmt;
 use std::io;
 use std::ops::Deref;
@@ -20,9 +22,9 @@ pub(crate) struct BearerTokenRefresher {
 }
 
 impl BearerTokenRefresher {
-    pub(crate) fn new(config: ModelProviderAuthInfo) -> Self {
+    pub(crate) fn new(config: ModelProviderAuthInfo, env: HashMap<String, OsString>) -> Self {
         Self {
-            state: Arc::new(ExternalBearerAuthState::new(config)),
+            state: Arc::new(ExternalBearerAuthState::new(config, env)),
         }
     }
 
@@ -43,7 +45,8 @@ impl BearerTokenRefresher {
                 }
             }
 
-            let access_token = run_provider_auth_command(&self.state.config).await?;
+            let access_token =
+                run_provider_auth_command(&self.state.config, &self.state.env).await?;
             *cached = Some(CachedExternalBearerToken {
                 access_token: access_token.clone(),
                 fetched_at: Instant::now(),
@@ -54,7 +57,7 @@ impl BearerTokenRefresher {
     }
 
     async fn refresh(&self, _context: ExternalAuthRefreshContext) -> io::Result<CodexAuth> {
-        let access_token = run_provider_auth_command(&self.state.config).await?;
+        let access_token = run_provider_auth_command(&self.state.config, &self.state.env).await?;
         let mut cached = self.state.cached_token.lock().await;
         *cached = Some(CachedExternalBearerToken {
             access_token: access_token.clone(),
@@ -83,13 +86,15 @@ impl fmt::Debug for BearerTokenRefresher {
 
 struct ExternalBearerAuthState {
     config: ModelProviderAuthInfo,
+    env: HashMap<String, OsString>,
     cached_token: Mutex<Option<CachedExternalBearerToken>>,
 }
 
 impl ExternalBearerAuthState {
-    fn new(config: ModelProviderAuthInfo) -> Self {
+    fn new(config: ModelProviderAuthInfo, env: HashMap<String, OsString>) -> Self {
         Self {
             config,
+            env,
             cached_token: Mutex::new(None),
         }
     }
@@ -100,11 +105,15 @@ struct CachedExternalBearerToken {
     fetched_at: Instant,
 }
 
-async fn run_provider_auth_command(config: &ModelProviderAuthInfo) -> io::Result<String> {
+async fn run_provider_auth_command(
+    config: &ModelProviderAuthInfo,
+    env: &HashMap<String, OsString>,
+) -> io::Result<String> {
     let program = resolve_provider_auth_program(&config.command, &config.cwd)?;
     let mut command = Command::from(codex_utils_process::background_command(&program));
     command
         .args(config.args.iter().map(Deref::deref))
+        .envs(env)
         .current_dir(config.cwd.as_path())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

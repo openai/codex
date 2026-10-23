@@ -52,6 +52,7 @@ message ModelProvider {
   optional string model_catalog_url = 19;
   optional string project_id = 20;
   optional string location = 21;
+  optional string credential_file = 22;
 }
 
 message StringMap {

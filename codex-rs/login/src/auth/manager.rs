@@ -13,7 +13,9 @@ use http::StatusCode;
 use serde::Deserialize;
 #[cfg(test)]
 use serial_test::serial;
+use std::collections::HashMap;
 use std::env;
+use std::ffi::OsString;
 use std::fmt::Debug;
 use std::future::Future;
 use std::path::Path;
@@ -2408,6 +2410,15 @@ impl AuthManager {
     }
 
     pub fn external_bearer_only(config: ModelProviderAuthInfo) -> Arc<Self> {
+        Self::external_bearer_only_with_env(config, HashMap::new())
+    }
+
+    /// Creates a provider-scoped token cache whose command environment overrides are
+    /// retained for both initial authentication and every subsequent refresh.
+    pub fn external_bearer_only_with_env(
+        config: ModelProviderAuthInfo,
+        env: HashMap<String, OsString>,
+    ) -> Arc<Self> {
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Arc::new(Self {
             codex_home: PathBuf::from("non-existent"),
@@ -2429,7 +2440,7 @@ impl AuthManager {
             refresh_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_bootstrap_cooldown: Mutex::default(),
-            external_auth: RwLock::new(Some(Arc::new(BearerTokenRefresher::new(config)))),
+            external_auth: RwLock::new(Some(Arc::new(BearerTokenRefresher::new(config, env)))),
             workload_identity_selected: false,
             // External bearer auth refreshes by running the provider's command and never makes
             // auth-owned HTTP requests, so this route is intentionally inert.

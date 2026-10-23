@@ -3034,6 +3034,10 @@
           ],
           "description": "Optional API capability overrides for a custom Responses-compatible provider. Unspecified capabilities retain their existing provider defaults."
         },
+        "credential_file": {
+          "description": "Absolute path to a Google ADC credential file. For GCP, overrides GOOGLE_APPLICATION_CREDENTIALS in the auth command's environment only.",
+          "type": "string"
+        },
         "env_http_headers": {
           "additionalProperties": {
             "type": "string"

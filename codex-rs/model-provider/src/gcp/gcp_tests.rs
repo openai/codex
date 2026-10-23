@@ -165,6 +165,76 @@ async fn configured_base_url_bypasses_project_discovery() {
 }
 
 #[tokio::test]
+async fn credential_files_scope_token_caches_and_refreshes() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let first_file = tempdir.path().join("first credentials.json");
+    let second_file = tempdir.path().join("second credentials.json");
+    std::fs::write(&first_file, "first-token").unwrap();
+    std::fs::write(&second_file, "second-token").unwrap();
+
+    #[cfg(unix)]
+    let (command, args) = (
+        "sh".to_string(),
+        vec![
+            "-c".into(),
+            "cat \"$GOOGLE_APPLICATION_CREDENTIALS\"".into(),
+        ],
+    );
+    #[cfg(windows)]
+    let (command, args) = {
+        std::fs::write(
+            tempdir.path().join("read-token.cmd"),
+            "@type \"%GOOGLE_APPLICATION_CREDENTIALS%\"\r\n",
+        )
+        .unwrap();
+        (
+            "cmd.exe".to_string(),
+            vec!["/d".into(), "/c".into(), r".\read-token.cmd".into()],
+        )
+    };
+    let mut first_info = ModelProviderInfo::create_gcp_provider();
+    first_info.auth = Some(ModelProviderAuthInfo {
+        command,
+        args,
+        timeout_ms: std::num::NonZeroU64::new(5_000).unwrap(),
+        refresh_interval_ms: 300_000,
+        cwd: tempdir.path().try_into().unwrap(),
+    });
+    first_info.credential_file = Some(first_file.clone());
+    let mut second_info = first_info.clone();
+    second_info.credential_file = Some(second_file);
+    let first = GcpModelProvider::new(first_info, /*auth_manager*/ None);
+    let second = GcpModelProvider::new(second_info, /*auth_manager*/ None);
+
+    assert_eq!(
+        (first.auth().await, second.auth().await),
+        (
+            Some(CodexAuth::from_api_key("first-token")),
+            Some(CodexAuth::from_api_key("second-token")),
+        ),
+    );
+    std::fs::write(first_file, "refreshed-token").unwrap();
+    assert_eq!(
+        first.auth().await,
+        Some(CodexAuth::from_api_key("first-token"))
+    );
+    first
+        .auth_manager()
+        .unwrap()
+        .unauthorized_recovery()
+        .next()
+        .await
+        .unwrap();
+    assert_eq!(
+        (first.auth().await, second.auth().await),
+        (
+            Some(CodexAuth::from_api_key("refreshed-token")),
+            Some(CodexAuth::from_api_key("second-token")),
+        ),
+    );
+}
+
+#[tokio::test]
 async fn bundled_vertex_models_filter_catalog_and_normalize_unsupported_tool_metadata() {
     let provider = GcpModelProvider::new(
         ModelProviderInfo::create_gcp_provider(),

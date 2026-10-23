@@ -28,8 +28,71 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use test_case::test_case;
+use wiremock::Mock;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 use super::client::ProviderAuthCommandFixture;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn vertex_credential_file_is_retained_when_refreshing_after_401() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let auth_fixture = ProviderAuthCommandFixture::new(&["first-token", "second-token"])?;
+    let auth = auth_fixture.auth();
+    let credential_file = auth.cwd.join("adc.json").into_path_buf();
+    let credential_log = auth.cwd.join("credential-env.txt");
+    let inherited_credential_file = std::env::var_os("GOOGLE_APPLICATION_CREDENTIALS");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("authorization", "Bearer first-token"))
+        .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let response = responses::mount_sse_once_match(
+        &server,
+        header("authorization", "Bearer second-token"),
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let mut provider = ModelProviderInfo::create_gcp_provider();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider.auth = Some(auth);
+    provider.credential_file = Some(credential_file.clone());
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider_id = GCP_PROVIDER_ID.to_string();
+            config.model_provider = provider;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("say hello").await?;
+
+    assert_eq!(
+        response.single_request().header("authorization").as_deref(),
+        Some("Bearer second-token"),
+    );
+    let observed = std::fs::read_to_string(credential_log)?;
+    let expected = credential_file.to_string_lossy();
+    assert_eq!(
+        observed.lines().collect::<Vec<_>>(),
+        vec![expected.as_ref(); 2]
+    );
+    assert_eq!(
+        std::env::var_os("GOOGLE_APPLICATION_CREDENTIALS"),
+        inherited_credential_file,
+    );
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn vertex_requests_use_command_auth_with_namespaces_and_tool_search() -> Result<()> {
