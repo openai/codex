@@ -153,3 +153,29 @@ fn rejects_malformed_attachments_instead_of_silently_dropping_them() {
         assert_eq!(message, "History backend returned invalid image content.");
     }
 }
+
+#[test]
+fn sparse_catalog_messages_preserve_defaults_and_explicit_empty_descriptions() {
+    let action = super::HistoryNotesAction::NotesReadFile;
+    let mut expected = action.spec(/*history_messages*/ None, /*notes_messages*/ None);
+    let codex_tools::ToolSpec::Namespace(namespace) = &mut expected else {
+        panic!("expected namespace");
+    };
+    namespace.description.clear();
+    let codex_tools::ResponsesApiNamespaceTool::Function(tool) = &mut namespace.tools[0] else {
+        panic!("expected function");
+    };
+    tool.description.clear();
+    let messages = codex_protocol::openai_models::NotesToolMessages {
+        namespace_description: Some(String::new()),
+        read_file: Some(codex_protocol::openai_models::ToolMessage {
+            description: Some(String::new()),
+            parameters: Some(String::new()),
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        action.spec(/*history_messages*/ None, Some(&messages)),
+        expected
+    );
+}

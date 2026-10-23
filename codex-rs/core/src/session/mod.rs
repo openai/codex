@@ -104,6 +104,7 @@ use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_otel::current_span_trace_id;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
+use codex_prompts::ResolvedModelMessages;
 use codex_prompts::render_model_instructions;
 use codex_protocol::ResponseUsageMetadata;
 use codex_protocol::SessionId;
@@ -4062,6 +4063,13 @@ impl Session {
                 .and_then(|messages| messages.tools.as_ref())
                 .and_then(|tools| tools.multi_agent.as_ref())
             {
+                extension_data.insert(messages.clone());
+            }
+            let model_messages = ResolvedModelMessages::from_model(&settings.model_info);
+            if let Some(messages) = model_messages.history() {
+                extension_data.insert(messages.clone());
+            }
+            if let Some(messages) = model_messages.notes() {
                 extension_data.insert(messages.clone());
             }
             let (mcp, prepared_recommendations) = tokio::join!(

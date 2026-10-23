@@ -44,7 +44,7 @@ pub(crate) fn create_wait_tool(
         strict: false,
         parameters: parameters_override
             .and_then(
-                |parameters| match crate::tools::catalog_parameters::parse(parameters) {
+                |parameters| match codex_tools::parse_catalog_tool_parameters(parameters) {
                     Ok(parameters) => Some(parameters),
                     Err(reason) => {
                         tracing::warn!(

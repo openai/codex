@@ -1,6 +1,7 @@
 //! Shared tool definitions and Responses API tool primitives that can live
 //! outside `codex-core`.
 
+mod catalog_tool_message;
 mod code_mode;
 mod dynamic_tool;
 mod function_call_error;
@@ -23,6 +24,7 @@ mod tool_payload;
 mod tool_search;
 mod tool_spec;
 
+pub use catalog_tool_message::with_catalog_tool_message;
 pub use code_mode::augment_tool_spec_for_code_mode;
 pub use code_mode::code_mode_name_for_tool_name;
 pub use code_mode::collect_code_mode_exec_prompt_tool_definitions;
@@ -41,6 +43,7 @@ pub use json_schema::AdditionalProperties;
 pub use json_schema::JsonSchema;
 pub use json_schema::JsonSchemaPrimitiveType;
 pub use json_schema::JsonSchemaType;
+pub use json_schema::parse_catalog_tool_parameters;
 pub use json_schema::parse_tool_input_schema;
 pub use json_schema::parse_tool_input_schema_without_compaction;
 pub use mcp_tool::mcp_call_tool_result_output_schema;

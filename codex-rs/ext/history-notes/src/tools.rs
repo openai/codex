@@ -13,10 +13,13 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::openai_models::HistoryToolMessages;
+use codex_protocol::openai_models::NotesToolMessages;
 use codex_tools::JsonToolOutput;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolExposure;
+use codex_tools::with_catalog_tool_message;
 use serde_json::Value;
 use serde_json::json;
 
@@ -235,6 +238,60 @@ impl HistoryNotesAction {
             }),
         }
     }
+
+    fn spec(
+        self,
+        history_messages: Option<&HistoryToolMessages>,
+        notes_messages: Option<&NotesToolMessages>,
+    ) -> ToolSpec {
+        let (namespace_description, tool_message) = match self {
+            Self::HistoryListWindows => history_messages
+                .map(|messages| (&messages.namespace_description, &messages.list_windows)),
+            Self::HistoryListItems => history_messages
+                .map(|messages| (&messages.namespace_description, &messages.list_items)),
+            Self::HistoryReadItem => history_messages
+                .map(|messages| (&messages.namespace_description, &messages.read_item)),
+            Self::HistorySearchContents => history_messages
+                .map(|messages| (&messages.namespace_description, &messages.search_contents)),
+            Self::NotesListFilesByPrefix => notes_messages.map(|messages| {
+                (
+                    &messages.namespace_description,
+                    &messages.list_files_by_prefix,
+                )
+            }),
+            Self::NotesReadFile => notes_messages
+                .map(|messages| (&messages.namespace_description, &messages.read_file)),
+            Self::NotesSearchContents => notes_messages
+                .map(|messages| (&messages.namespace_description, &messages.search_contents)),
+            Self::NotesAppendToFile => notes_messages
+                .map(|messages| (&messages.namespace_description, &messages.append_to_file)),
+            Self::NotesWriteFile => notes_messages
+                .map(|messages| (&messages.namespace_description, &messages.write_file)),
+        }
+        .map_or((None, None), |(namespace_description, tool_message)| {
+            (namespace_description.as_deref(), tool_message.as_ref())
+        });
+        let tool = with_catalog_tool_message(
+            ResponsesApiTool {
+                name: self.name().to_string(),
+                description: self.description().to_string(),
+                strict: false,
+                parameters: parse_tool_input_schema(&self.parameters()).unwrap_or_else(|error| {
+                    panic!("History tool input schema should parse: {error}")
+                }),
+                output_schema: None,
+                defer_loading: None,
+            },
+            tool_message,
+        );
+        ToolSpec::Namespace(ResponsesApiNamespace {
+            name: self.namespace().to_string(),
+            description: namespace_description
+                .unwrap_or(self.namespace_description())
+                .to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Function(tool)],
+        })
+    }
 }
 
 pub(crate) struct HistoryNotesTool {
@@ -242,6 +299,7 @@ pub(crate) struct HistoryNotesTool {
     backend: HistoryNotesBackend,
     session_id: String,
     current_agent_name: String,
+    spec: ToolSpec,
 }
 
 impl HistoryNotesTool {
@@ -250,12 +308,15 @@ impl HistoryNotesTool {
         backend: HistoryNotesBackend,
         session_id: String,
         current_agent_name: String,
+        history_messages: Option<&HistoryToolMessages>,
+        notes_messages: Option<&NotesToolMessages>,
     ) -> Self {
         Self {
             action,
             backend,
             session_id,
             current_agent_name,
+            spec: action.spec(history_messages, notes_messages),
         }
     }
 
@@ -292,20 +353,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for HistoryNotesTool {
     }
 
     fn spec(&self) -> ToolSpec {
-        ToolSpec::Namespace(ResponsesApiNamespace {
-            name: self.action.namespace().to_string(),
-            description: self.action.namespace_description().to_string(),
-            tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-                name: self.action.name().to_string(),
-                description: self.action.description().to_string(),
-                strict: false,
-                parameters: parse_tool_input_schema(&self.action.parameters()).unwrap_or_else(
-                    |error| panic!("History tool input schema should parse: {error}"),
-                ),
-                output_schema: None,
-                defer_loading: None,
-            })],
-        })
+        self.spec.clone()
     }
 
     fn exposure(&self) -> ToolExposure {

@@ -66,7 +66,7 @@ impl ToolExecutor<ToolInvocation> for RequestUserInputAsyncHandler {
             /*additional_properties*/ Some(false.into()),
         );
         if let Some(parameters_override) = &self.parameters {
-            match crate::tools::catalog_parameters::parse(parameters_override) {
+            match codex_tools::parse_catalog_tool_parameters(parameters_override) {
                 Ok(schema) => parameters = schema,
                 Err(reason) => tracing::warn!(
                     tool = TOOL_NAME,

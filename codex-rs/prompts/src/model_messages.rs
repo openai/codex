@@ -144,6 +144,27 @@ impl<'a> ResolvedModelMessages<'a> {
             })
     }
 
+    /// Selects native history definitions; missing fields delegate to the tool owner.
+    pub fn history(self) -> Option<&'a codex_protocol::openai_models::HistoryToolMessages> {
+        self.catalog_messages?.tools.as_ref()?.history.as_ref()
+    }
+
+    /// Selects native notes definitions; missing fields delegate to the tool owner.
+    pub fn notes(self) -> Option<&'a codex_protocol::openai_models::NotesToolMessages> {
+        self.catalog_messages?.tools.as_ref()?.notes.as_ref()
+    }
+
+    /// Selects context-window control definitions independently of runtime tool names.
+    pub fn context_management(
+        self,
+    ) -> Option<&'a codex_protocol::openai_models::ContextManagementToolMessages> {
+        self.catalog_messages?
+            .tools
+            .as_ref()?
+            .context_management
+            .as_ref()
+    }
+
     /// Resolves optional confirmation policies, leaving missing values to actor defaults.
     pub fn confirmation_policies(&self) -> Option<&'a ConfirmationPolicies> {
         self.catalog_messages

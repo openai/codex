@@ -35,6 +35,11 @@ use crate::protocol::MultiAgentVersion;
 mod access_programs;
 mod incremental_tools;
 pub use incremental_tools::IncrementalToolMessages;
+#[path = "openai_models/memento_v2.rs"]
+mod memento_v2;
+pub use memento_v2::ContextManagementToolMessages;
+pub use memento_v2::HistoryToolMessages;
+pub use memento_v2::NotesToolMessages;
 #[path = "openai_models/guardian.rs"]
 mod guardian;
 pub use guardian::GuardianModelPolicy;
@@ -585,6 +590,15 @@ pub struct ConfirmationPolicies {
 /// Model-owned tool messages and description prefixes.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ToolMessages {
+    /// Native Memento V2 history tool definitions, independent of runtime namespace aliases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<HistoryToolMessages>,
+    /// Native Memento V2 notes tool definitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<NotesToolMessages>,
+    /// Memento V2 context-window control tool definitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_management: Option<ContextManagementToolMessages>,
     /// Optional wording for incremental catalog notices.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub incremental_tools: Option<IncrementalToolMessages>,
@@ -634,7 +648,8 @@ pub struct ToolMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Complete JSON Schema encoded as a string. Consumed by Multi-Agent V2 tools, Code Mode wait,
-    /// request_user_input_async (the send_user_message_async catalog key), and MCP resource helpers.
+    /// request_user_input_async (the send_user_message_async catalog key), MCP resource helpers,
+    /// and Memento V2 tools.
     /// Uses the harness's supported schema subset; unrecognized keywords are ignored.
     /// Missing, null, invalid or unsupported structures, or a root without `type: "object"`
     /// retains the harness parameters. Schema semantics must remain API-compatible.

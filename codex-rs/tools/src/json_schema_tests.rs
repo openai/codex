@@ -2,10 +2,38 @@ use super::AdditionalProperties;
 use super::JsonSchema;
 use super::JsonSchemaPrimitiveType;
 use super::JsonSchemaType;
+use super::parse_catalog_tool_parameters;
 use super::parse_tool_input_schema;
 use super::parse_tool_input_schema_without_compaction;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+
+#[test]
+fn catalog_parameters_preserve_schema_without_normalization() {
+    let parameters = serde_json::json!({
+        "type": "object",
+        "properties": {"paths": {"type": "array"}},
+        "$defs": {"unused": {"type": "string"}}
+    });
+    let parsed = parse_catalog_tool_parameters(&parameters.to_string()).expect("catalog schema");
+    assert_eq!(serde_json::to_value(parsed).unwrap(), parameters);
+}
+
+#[test]
+fn catalog_parameters_reject_invalid_shapes() {
+    for (parameters, reason) in [
+        ("", "schema is not valid JSON"),
+        ("null", "schema must declare an object type"),
+        ("{}", "schema must declare an object type"),
+        (r#"{"type":"array"}"#, "schema must declare an object type"),
+        (
+            r#"{"type":"object","properties":{"text":{"type":"unsupported"}}}"#,
+            "schema uses unsupported JSON Schema structures",
+        ),
+    ] {
+        assert_eq!(parse_catalog_tool_parameters(parameters), Err(reason));
+    }
+}
 
 // Tests in this section exercise normalization transforms that mutate badly
 // formed JSON for consumption by the Responses API.

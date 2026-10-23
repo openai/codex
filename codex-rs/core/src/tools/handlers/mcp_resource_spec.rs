@@ -2,6 +2,7 @@ use codex_protocol::openai_models::ToolMessage;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolSpec;
+use codex_tools::with_catalog_tool_message;
 use std::collections::BTreeMap;
 
 pub fn create_list_mcp_resources_tool(messages: Option<&ToolMessage>) -> ToolSpec {
@@ -29,7 +30,7 @@ pub fn create_list_mcp_resources_tool(messages: Option<&ToolMessage>) -> ToolSpe
         parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
         output_schema: None,
     };
-    with_model_messages(tool, messages)
+    ToolSpec::Function(with_catalog_tool_message(tool, messages))
 }
 
 pub fn create_list_mcp_resource_templates_tool(messages: Option<&ToolMessage>) -> ToolSpec {
@@ -58,7 +59,7 @@ pub fn create_list_mcp_resource_templates_tool(messages: Option<&ToolMessage>) -
         parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
         output_schema: None,
     };
-    with_model_messages(tool, messages)
+    ToolSpec::Function(with_catalog_tool_message(tool, messages))
 }
 
 pub fn create_read_mcp_resource_tool(messages: Option<&ToolMessage>) -> ToolSpec {
@@ -93,26 +94,7 @@ pub fn create_read_mcp_resource_tool(messages: Option<&ToolMessage>) -> ToolSpec
         ),
         output_schema: None,
     };
-    with_model_messages(tool, messages)
-}
-
-fn with_model_messages(mut tool: ResponsesApiTool, messages: Option<&ToolMessage>) -> ToolSpec {
-    if let Some(messages) = messages {
-        if let Some(description) = &messages.description {
-            tool.description.clone_from(description);
-        }
-        if let Some(parameters) = &messages.parameters {
-            match crate::tools::catalog_parameters::parse(parameters) {
-                Ok(parameters) => tool.parameters = parameters,
-                Err(reason) => tracing::warn!(
-                    tool = %tool.name,
-                    reason,
-                    "Invalid catalog tool parameters; using bundled parameters"
-                ),
-            }
-        }
-    }
-    ToolSpec::Function(tool)
+    ToolSpec::Function(with_catalog_tool_message(tool, messages))
 }
 
 #[cfg(test)]

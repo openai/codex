@@ -6,11 +6,11 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::get_context_remaining_spec::GET_CONTEXT_REMAINING_TOOL_NAME;
-use crate::tools::handlers::get_context_remaining_spec::create_get_context_remaining_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::openai_models::ToolMessage;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use serde_json::Value as JsonValue;
@@ -57,7 +57,17 @@ impl ToolOutput for GetContextRemainingOutput {
     }
 }
 
-pub struct GetContextRemainingHandler;
+pub struct GetContextRemainingHandler {
+    spec: ToolSpec,
+}
+
+impl GetContextRemainingHandler {
+    pub(crate) fn new(messages: Option<&ToolMessage>) -> Self {
+        Self {
+            spec: super::get_context_remaining_spec::create_get_context_remaining_tool(messages),
+        }
+    }
+}
 
 impl ToolExecutor<ToolInvocation> for GetContextRemainingHandler {
     fn tool_name(&self) -> ToolName {
@@ -69,7 +79,7 @@ impl ToolExecutor<ToolInvocation> for GetContextRemainingHandler {
     }
 
     fn spec(&self) -> ToolSpec {
-        create_get_context_remaining_tool()
+        self.spec.clone()
     }
 
     fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>

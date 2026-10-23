@@ -20,6 +20,8 @@ use codex_extension_api::ToolExecutor;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_protocol::AgentPath;
+use codex_protocol::openai_models::HistoryToolMessages;
+use codex_protocol::openai_models::NotesToolMessages;
 use codex_utils_output_truncation::TruncationPolicy;
 use serde_json::json;
 
@@ -161,6 +163,39 @@ impl ToolContributor for HistoryNotesExtension {
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+        self.tools_with_messages(
+            session_store,
+            thread_store,
+            /*history_messages*/ None,
+            /*notes_messages*/ None,
+        )
+    }
+
+    fn tools_for_step(
+        &self,
+        session_store: &ExtensionData,
+        thread_store: &ExtensionData,
+        step_store: &ExtensionData,
+    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+        let history_messages = step_store.get::<HistoryToolMessages>();
+        let notes_messages = step_store.get::<NotesToolMessages>();
+        self.tools_with_messages(
+            session_store,
+            thread_store,
+            history_messages.as_deref(),
+            notes_messages.as_deref(),
+        )
+    }
+}
+
+impl HistoryNotesExtension {
+    fn tools_with_messages(
+        &self,
+        session_store: &ExtensionData,
+        thread_store: &ExtensionData,
+        history_messages: Option<&HistoryToolMessages>,
+        notes_messages: Option<&NotesToolMessages>,
+    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
         let Some(config) = thread_store.get::<HistoryNotesExtensionConfig>() else {
             return Vec::new();
         };
@@ -176,6 +211,8 @@ impl ToolContributor for HistoryNotesExtension {
                     config.backend.clone(),
                     session_store.level_id().to_string(),
                     identity.agent_name.clone(),
+                    history_messages,
+                    notes_messages,
                 )) as Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>
             })
             .collect()
