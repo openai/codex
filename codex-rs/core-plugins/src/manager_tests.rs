@@ -1848,6 +1848,71 @@ async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metad
     );
 }
 
+// A reduced snapshot remains usable for execution, but display callers must fetch enrichment.
+// Display-resolution changes alone must not invalidate effective runtime metadata.
+#[tokio::test]
+async fn unresolved_display_assets_does_not_satisfy_display_cache_reads() {
+    let codex_home = TempDir::new().unwrap();
+    let manager = test_plugins_manager(codex_home.path().to_path_buf());
+    let auth = manager.auth_manager.auth_cached();
+    let plugins = vec![remote_installed_linear_plugin()];
+    let generation = manager
+        .prepare_remote_installed_plugins_cache_generation(auth.as_ref())
+        .unwrap();
+    assert_eq!(
+        manager.write_remote_installed_plugins_cache_snapshot(
+            generation,
+            plugins.clone(),
+            auth.as_ref(),
+            RemoteInstalledPluginsCachePublication::Refresh(InstalledPluginDisplayAssets::Skip),
+        ),
+        Some(true)
+    );
+    assert!(
+        manager
+            .build_remote_installed_plugin_marketplaces_from_cache(&[
+                REMOTE_GLOBAL_MARKETPLACE_NAME
+            ],)
+            .is_none()
+    );
+    let runtime = manager
+        .build_remote_installed_plugin_marketplaces_from_cache_with_display_assets(
+            &[REMOTE_GLOBAL_MARKETPLACE_NAME],
+            InstalledPluginDisplayAssets::Skip,
+        )
+        .expect("runtime metadata is ready");
+    assert_eq!(runtime[0].plugins.len(), 1);
+    assert_eq!(
+        manager.write_remote_installed_plugins_cache_snapshot(
+            generation,
+            plugins.clone(),
+            auth.as_ref(),
+            RemoteInstalledPluginsCachePublication::Refresh(InstalledPluginDisplayAssets::Include),
+        ),
+        Some(false)
+    );
+    assert_eq!(
+        manager.build_remote_installed_plugin_marketplaces_from_cache(&[
+            REMOTE_GLOBAL_MARKETPLACE_NAME
+        ],),
+        Some(runtime)
+    );
+    assert_eq!(
+        manager.write_remote_installed_plugins_cache_snapshot(
+            generation,
+            plugins,
+            auth.as_ref(),
+            RemoteInstalledPluginsCachePublication::Refresh(InstalledPluginDisplayAssets::Skip),
+        ),
+        Some(false)
+    );
+    assert!(
+        manager
+            .build_remote_installed_plugin_marketplaces_from_cache(&[])
+            .is_none()
+    );
+}
+
 #[tokio::test]
 async fn build_remote_installed_plugin_marketplaces_from_cache_filters_by_marketplace_name() {
     let codex_home = TempDir::new().unwrap();
@@ -7839,7 +7904,7 @@ fn reconciliation_fences_refresh_publication_and_recovers_after_cancellation() {
             stale_refresh_generation,
             Vec::new(),
             /*auth*/ None,
-            RemoteInstalledPluginsCachePublication::Refresh,
+            RemoteInstalledPluginsCachePublication::Refresh(InstalledPluginDisplayAssets::Include),
         ),
         None
     );
@@ -7871,7 +7936,7 @@ fn reconciliation_fences_refresh_publication_and_recovers_after_cancellation() {
             refresh_generation,
             vec![remote_installed_plugin("beta")],
             /*auth*/ None,
-            RemoteInstalledPluginsCachePublication::Refresh,
+            RemoteInstalledPluginsCachePublication::Refresh(InstalledPluginDisplayAssets::Include),
         ),
         Some(true)
     );

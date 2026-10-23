@@ -12,6 +12,7 @@ use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::PluginsConfigInput;
 use crate::PluginsManager;
 use crate::marketplace::MarketplacePluginInstallPolicy;
+use crate::remote::InstalledPluginDisplayAssets;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 
 const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
@@ -87,9 +88,10 @@ impl PluginsManager {
             .context("failed to list plugin marketplaces for tool suggestions")?
             .marketplaces;
         let remote_installed_marketplaces = if use_remote_global_catalog {
-            self.build_remote_installed_plugin_marketplaces_from_cache(&[
-                REMOTE_GLOBAL_MARKETPLACE_NAME,
-            ])
+            self.build_remote_installed_plugin_marketplaces_from_cache_with_display_assets(
+                &[REMOTE_GLOBAL_MARKETPLACE_NAME],
+                InstalledPluginDisplayAssets::Skip,
+            )
         } else {
             None
         };

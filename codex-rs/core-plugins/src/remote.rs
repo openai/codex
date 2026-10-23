@@ -1282,9 +1282,32 @@ fn build_remote_marketplace(
     }))
 }
 
+/// Selects whether installed-plugin metadata needs display enrichment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InstalledPluginDisplayAssets {
+    /// Resolve image URLs and creator names.
+    #[default]
+    Include,
+    /// Skip display lookups; retain stored display fields and execution metadata.
+    Skip,
+}
+
 pub(crate) async fn fetch_remote_installed_plugins(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
+) -> Result<Vec<RemoteInstalledPlugin>, RemotePluginCatalogError> {
+    fetch_remote_installed_plugins_with_display_assets(
+        config,
+        auth,
+        InstalledPluginDisplayAssets::Include,
+    )
+    .await
+}
+
+pub(crate) async fn fetch_remote_installed_plugins_with_display_assets(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    display_assets: InstalledPluginDisplayAssets,
 ) -> Result<Vec<RemoteInstalledPlugin>, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
     let mut installed_plugins = fetch_installed_plugins(
@@ -1292,6 +1315,7 @@ pub(crate) async fn fetch_remote_installed_plugins(
         auth,
         RemoteInstalledPluginScope::All,
         /*include_download_urls*/ false,
+        display_assets,
     )
     .await?
     .into_iter()
@@ -2175,6 +2199,7 @@ async fn fetch_installed_plugins_for_scope(
         auth,
         RemoteInstalledPluginScope::Single(scope),
         /*include_download_urls*/ false,
+        InstalledPluginDisplayAssets::Include,
     )
     .await
 }
@@ -2184,6 +2209,7 @@ async fn fetch_installed_plugins(
     auth: &CodexAuth,
     scope: RemoteInstalledPluginScope,
     include_download_urls: bool,
+    display_assets: InstalledPluginDisplayAssets,
 ) -> Result<Vec<RemotePluginInstalledItem>, RemotePluginCatalogError> {
     // Only a complete inventory is authoritative: every failure discards all fetched pages
     // before callers can publish the snapshot or remove plugins absent from it.
@@ -2198,6 +2224,7 @@ async fn fetch_installed_plugins(
                 scope,
                 page_token.as_deref(),
                 include_download_urls,
+                display_assets,
             )
             .await?;
             plugins.extend(response.plugins);
@@ -2275,6 +2302,7 @@ async fn get_remote_plugin_installed_page(
     scope: RemoteInstalledPluginScope,
     page_token: Option<&str>,
     include_download_urls: bool,
+    display_assets: InstalledPluginDisplayAssets,
 ) -> Result<RemotePluginInstalledResponse, RemotePluginCatalogError> {
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let mut url = Url::parse(&format!("{base_url}/ps/plugins/installed"))
@@ -2288,6 +2316,10 @@ async fn get_remote_plugin_installed_page(
     if include_download_urls {
         url.query_pairs_mut()
             .append_pair("includeDownloadUrls", "true");
+    }
+    if display_assets == InstalledPluginDisplayAssets::Skip {
+        url.query_pairs_mut()
+            .append_pair("includeDisplayAssets", "false");
     }
     if let Some(page_token) = page_token {
         url.query_pairs_mut().append_pair("pageToken", page_token);

@@ -162,6 +162,55 @@ async fn remote_installed_plugins_paginate_across_all_scopes_without_download_ur
     );
 }
 
+// Skipping display assets must survive pagination without requesting bundle downloads.
+#[tokio::test]
+async fn installed_plugins_skip_display_resolution_on_every_page() {
+    let server = MockServer::start().await;
+    for (cursor, next_cursor) in [(None, Some("next page/+")), (Some("next page/+"), None)] {
+        let mock = Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/installed"))
+            .and(query_param("includeDisplayAssets", "false"))
+            .and(query_param_is_missing("includeDownloadUrls"));
+        let mock = match cursor {
+            Some(cursor) => mock.and(query_param("pageToken", cursor)),
+            None => mock.and(query_param_is_missing("pageToken")),
+        };
+        mock.respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "plugins": [],
+            "pagination": {"next_page_token": next_cursor},
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    }
+    let (config, selected_urls) =
+        recording_remote_plugin_service_config(format!("{}/backend-api", server.uri()));
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    let plugins = fetch_remote_installed_plugins_with_display_assets(
+        &config,
+        Some(&auth),
+        InstalledPluginDisplayAssets::Skip,
+    )
+    .await
+    .expect("runtime metadata request succeeds");
+
+    assert_eq!(plugins, Vec::new());
+    assert_eq!(
+        recorded_http_client_urls(&selected_urls),
+        vec![
+            format!(
+                "{}/backend-api/ps/plugins/installed?limit=200&includeDisplayAssets=false",
+                server.uri()
+            ),
+            format!(
+                "{}/backend-api/ps/plugins/installed?limit=200&includeDisplayAssets=false&pageToken=next+page%2F%2B",
+                server.uri()
+            ),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn remote_installed_plugins_reject_cyclic_cursors() {
     let server = MockServer::start().await;

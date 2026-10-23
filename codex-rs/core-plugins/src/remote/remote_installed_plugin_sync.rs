@@ -13,6 +13,7 @@ use super::RemotePluginServiceConfig;
 use super::RemotePluginShareDiscoverability;
 use super::ensure_chatgpt_auth;
 use super::fetch_installed_plugins;
+use crate::remote::InstalledPluginDisplayAssets;
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
 use crate::store::PluginStoreError;
@@ -141,6 +142,7 @@ pub(crate) async fn sync_remote_installed_plugin_bundles_once_with_snapshot(
         auth,
         RemoteInstalledPluginScope::All,
         /*include_download_urls*/ true,
+        InstalledPluginDisplayAssets::Include,
     )
     .await?;
     // `/installed` is an authoritative full snapshot. If any row cannot be
