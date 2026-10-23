@@ -28,6 +28,7 @@ pub use feature_configs::GuardianV2ConfigToml;
 pub use feature_configs::GuardianV2ReviewScopeConfigToml;
 pub use feature_configs::GuardianV2TranscriptConfigToml;
 pub use feature_configs::GuardianV2TranscriptSource;
+pub use feature_configs::GuardianV3ConfigToml;
 pub use feature_configs::MultiAgentV2ConfigToml;
 pub use feature_configs::NetworkProxyConfigToml;
 pub use feature_configs::NetworkProxyDomainPermissionToml;
@@ -401,6 +402,8 @@ pub enum Feature {
     GuardianV2,
     /// Run Decisions alongside Guardian V2 for measurement without changing approvals.
     GuardianV2DecisionsComparison,
+    /// Enable Guardian V3 integrations.
+    GuardianV3,
     /// Removed compatibility flag for the unused Guardian extension prototype.
     GuardianExt,
     /// Enable persisted thread goals and automatic goal continuation.
@@ -900,6 +903,8 @@ pub struct FeaturesToml {
     )]
     pub guardianv2: Option<FeatureToml<GuardianV2ConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guardianv3: Option<FeatureToml<GuardianV3ConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<FeatureToml<TokenBudgetConfigToml>>,
@@ -961,6 +966,9 @@ impl FeaturesToml {
             && let Some(enabled) = config.thread_context
         {
             entries.insert(Feature::GuardianThreadContext.key().to_string(), enabled);
+        }
+        if let Some(enabled) = self.guardianv3.as_ref().and_then(FeatureToml::enabled) {
+            entries.insert(Feature::GuardianV3.key().to_string(), enabled);
         }
         if let Some(enabled) = self.multi_agent_v2.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::MultiAgentV2.key().to_string(), enabled);
@@ -1961,6 +1969,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GuardianV2DecisionsComparison,
         key: "guardianv2_decisions_comparison",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GuardianV3,
+        key: "guardianv3",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

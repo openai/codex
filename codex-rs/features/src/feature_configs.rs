@@ -284,6 +284,20 @@ where
     Ok(feature)
 }
 
+/// User-configurable settings for Guardian V3.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GuardianV3ConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
+impl FeatureConfig for GuardianV3ConfigToml {
+    fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MultiAgentV2ConfigToml {

@@ -988,6 +988,9 @@
             "guardianv2_decisions_comparison": {
               "type": "boolean"
             },
+            "guardianv3": {
+              "$ref": "#/definitions/FeatureToml_for_GuardianV3ConfigToml"
+            },
             "hooks": {
               "type": "boolean"
             },
@@ -1694,6 +1697,16 @@
         }
       ]
     },
+    "FeatureToml_for_GuardianV3ConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/GuardianV3ConfigToml"
+        }
+      ]
+    },
     "FeatureToml_for_MultiAgentV2ConfigToml": {
       "anyOf": [
         {
@@ -2144,6 +2157,16 @@
         "reasoning"
       ],
       "type": "string"
+    },
+    "GuardianV3ConfigToml": {
+      "additionalProperties": false,
+      "description": "User-configurable settings for Guardian V3.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
     },
     "History": {
       "additionalProperties": false,
@@ -7505,6 +7528,9 @@
         },
         "guardianv2_decisions_comparison": {
           "type": "boolean"
+        },
+        "guardianv3": {
+          "$ref": "#/definitions/FeatureToml_for_GuardianV3ConfigToml"
         },
         "hooks": {
           "type": "boolean"
