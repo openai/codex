@@ -14,7 +14,7 @@ enum FinalizedEvent {
 }
 
 fn complete_subagent(chat: &mut ChatWidget, id: &str) {
-    let item = AppServerThreadItem::SubAgentActivity {
+    let item = AppServerThreadItemPayload::SubAgentActivity {
         model: None,
         reasoning_effort: None,
         id: id.to_string(),
@@ -23,18 +23,19 @@ fn complete_subagent(chat: &mut ChatWidget, id: &str) {
         agent_path: "/root/stack_tip".to_string(),
     };
     for notification in [
-        ServerNotification::ItemStarted(ItemStartedNotification {
-            thread_id: "thread-1".to_string(),
-            turn_id: "turn-1".to_string(),
-            started_at_ms: 0,
-            item: item.clone(),
-        }),
-        ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: "thread-1".to_string(),
-            turn_id: "turn-1".to_string(),
-            completed_at_ms: 0,
+        ServerNotification::ItemStarted(ItemStartedNotification::new(
+            "thread-1".to_string(),
+            "turn-1".to_string(),
+            item.clone(),
+            /*started_at_ms*/ 0,
+        )),
+        ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+            "thread-1".to_string(),
+            "turn-1".to_string(),
             item,
-        }),
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 0,
+        )),
     ] {
         chat.handle_server_notification(notification, /*replay_kind*/ None);
     }

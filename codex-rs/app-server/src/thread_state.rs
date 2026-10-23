@@ -19,6 +19,7 @@ use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_rollout::RolloutItem;
 use codex_rollout::state_db::StateDbHandle;
 use codex_utils_path_uri::LegacyAppPathString;
@@ -95,9 +96,22 @@ pub(crate) enum ThreadListenerCommand {
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
     pub(crate) started_at: Option<i64>,
-    pub(crate) command_execution_started: HashSet<String>,
+    pub(crate) command_start_times: HashMap<String, i64>,
     pub(crate) last_error: Option<TurnError>,
     pub(crate) last_agent_message: Option<ThreadItem>,
+}
+
+impl TurnSummary {
+    pub(crate) fn record_command_start(&mut self, item_id: String, started_at_ms: i64) -> bool {
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            self.command_start_times.entry(item_id)
+        {
+            entry.insert(started_at_ms);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[derive(Default)]
@@ -115,6 +129,7 @@ pub(crate) struct ThreadState {
     last_thread_settings: Option<ThreadSettings>,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
+    history_mode: ThreadHistoryMode,
     listener_thread: Option<Weak<CodexThread>>,
     watch_registration: WatchRegistration,
 }
@@ -133,12 +148,14 @@ impl ThreadState {
         conversation: &Arc<CodexThread>,
         watch_registration: WatchRegistration,
         thread_settings_baseline: ThreadSettings,
+        history_mode: ThreadHistoryMode,
     ) -> (mpsc::UnboundedReceiver<ThreadListenerCommand>, u64) {
         if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
             let _ = previous.send(());
         }
         self.listener_generation = self.listener_generation.wrapping_add(1);
         self.last_thread_settings = Some(thread_settings_baseline);
+        self.history_mode = history_mode;
         let (listener_command_tx, listener_command_rx) = mpsc::unbounded_channel();
         self.listener_command_tx = Some(listener_command_tx);
         self.listener_thread = Some(Arc::downgrade(conversation));
@@ -209,10 +226,10 @@ impl ThreadState {
                 matches!(content, CoreAgentMessageContent::Text { text } if !text.trim().is_empty())
             })
         {
-            self.turn_summary.last_agent_message =
-                Some(ThreadItem::from(CoreTurnItem::AgentMessage(item.clone())));
+            self.turn_summary.last_agent_message = Some(ThreadItem::from(payload));
         }
-        self.current_turn_history.handle_event(event);
+        self.current_turn_history
+            .handle_event_for_history_mode(event, self.history_mode);
         if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_)) {
             self.last_terminal_turn_id = Some(event_turn_id.to_string());
             if !self.current_turn_history.has_active_turn() {

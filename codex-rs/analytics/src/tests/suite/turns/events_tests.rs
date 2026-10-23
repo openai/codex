@@ -34,7 +34,7 @@ use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SubAgentActivityKind;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_app_server_protocol::WebSearchItem;
@@ -474,7 +474,7 @@ async fn turn_event_counts_completed_tool_items() {
         )
         .await;
 
-    let mcp_tool_call_item = |status, duration_ms| ThreadItem::McpToolCall {
+    let mcp_tool_call_item = |status, duration_ms| ThreadItemPayload::McpToolCall {
         id: "mcp-1".to_string(),
         server: "server".to_string(),
         tool: "search".to_string(),
@@ -497,13 +497,13 @@ async fn turn_event_counts_completed_tool_items() {
     };
     let completed_tool_items = vec![
         sample_command_execution_item(CommandExecutionStatus::Completed, Some(0), Some(1)),
-        ThreadItem::FileChange {
+        ThreadItemPayload::FileChange {
             id: "file-change-1".to_string(),
             changes: Vec::new(),
             status: PatchApplyStatus::Completed,
         },
         mcp_tool_call_item(McpToolCallStatus::Completed, Some(2)),
-        ThreadItem::DynamicToolCall {
+        ThreadItemPayload::DynamicToolCall {
             id: "dynamic-1".to_string(),
             // A name collision with code-mode exec must not change the event boundary.
             namespace: Some("custom".to_string()),
@@ -514,7 +514,7 @@ async fn turn_event_counts_completed_tool_items() {
             success: Some(true),
             duration_ms: Some(3),
         },
-        ThreadItem::CollabAgentToolCall {
+        ThreadItemPayload::CollabAgentToolCall {
             id: "collab-1".to_string(),
             tool: CollabAgentTool::SpawnAgent,
             status: CollabAgentToolCallStatus::Completed,
@@ -525,7 +525,7 @@ async fn turn_event_counts_completed_tool_items() {
             reasoning_effort: None,
             agents_states: Default::default(),
         },
-        ThreadItem::SubAgentActivity {
+        ThreadItemPayload::SubAgentActivity {
             model: None,
             reasoning_effort: None,
             id: "sub-agent-activity-1".to_string(),
@@ -533,7 +533,7 @@ async fn turn_event_counts_completed_tool_items() {
             agent_thread_id: "thread-child".to_string(),
             agent_path: "/root/child".to_string(),
         },
-        ThreadItem::SubAgentActivity {
+        ThreadItemPayload::SubAgentActivity {
             model: None,
             reasoning_effort: None,
             id: "sub-agent-activity-completed".to_string(),
@@ -541,13 +541,13 @@ async fn turn_event_counts_completed_tool_items() {
             agent_thread_id: "thread-child".to_string(),
             agent_path: "/root/child".to_string(),
         },
-        ThreadItem::WebSearch(WebSearchItem {
+        ThreadItemPayload::WebSearch(WebSearchItem {
             id: "web-1".to_string(),
             query: "codex".to_string(),
             action: None,
             results: None,
         }),
-        ThreadItem::ImageGeneration(ImageGenerationItem {
+        ThreadItemPayload::ImageGeneration(ImageGenerationItem {
             id: "image-1".to_string(),
             status: "completed".to_string(),
             revised_prompt: None,
@@ -567,12 +567,12 @@ async fn turn_event_counts_completed_tool_items() {
         reducer
             .ingest(
                 AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
-                    ItemStartedNotification {
-                        thread_id: "thread-2".to_string(),
-                        turn_id: "turn-2".to_string(),
-                        started_at_ms: 998,
-                        item: item.clone(),
-                    },
+                    ItemStartedNotification::new(
+                        "thread-2".to_string(),
+                        "turn-2".to_string(),
+                        item.clone(),
+                        /*started_at_ms*/ 998,
+                    ),
                 ))),
                 &mut out,
             )
@@ -583,12 +583,13 @@ async fn turn_event_counts_completed_tool_items() {
         reducer
             .ingest(
                 AnalyticsFact::Notification(Box::new(ServerNotification::ItemCompleted(
-                    ItemCompletedNotification {
-                        thread_id: "thread-2".to_string(),
-                        turn_id: "turn-2".to_string(),
-                        completed_at_ms: 1_000,
+                    ItemCompletedNotification::new(
+                        "thread-2".to_string(),
+                        "turn-2".to_string(),
                         item,
-                    },
+                        /*started_at_ms*/ None,
+                        /*completed_at_ms*/ 1_000,
+                    ),
                 ))),
                 &mut out,
             )

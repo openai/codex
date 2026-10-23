@@ -8,7 +8,7 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SleepItem;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -286,28 +286,29 @@ clock_source = "external"
         );
     }
 
-    let expected_item = ThreadItem::Sleep(SleepItem {
+    let expected_item = ThreadItemPayload::Sleep(SleepItem {
         id: CALL_ID.to_string(),
         duration_ms: DURATION_MS,
     });
     assert!(completed.completed_at_ms >= started.started_at_ms);
     assert_eq!(
         started,
-        ItemStartedNotification {
-            item: expected_item.clone(),
-            thread_id: thread.id.clone(),
-            turn_id: turn.id.clone(),
-            started_at_ms: started.started_at_ms,
-        }
+        ItemStartedNotification::new(
+            thread.id.clone(),
+            turn.id.clone(),
+            expected_item.clone(),
+            started.started_at_ms
+        )
     );
     assert_eq!(
         completed,
-        ItemCompletedNotification {
-            item: expected_item,
-            thread_id: thread.id,
-            turn_id: turn.id,
-            completed_at_ms: completed.completed_at_ms,
-        }
+        ItemCompletedNotification::new(
+            thread.id,
+            turn.id,
+            expected_item,
+            Some(started.started_at_ms),
+            completed.completed_at_ms
+        )
     );
 
     Ok(())
@@ -320,7 +321,7 @@ async fn wait_for_sleep_started(
     loop {
         let started: ItemStartedNotification =
             timeout(DEFAULT_READ_TIMEOUT, mcp.read_notification("item/started")).await??;
-        if matches!(&started.item, ThreadItem::Sleep(item) if item.id == call_id) {
+        if matches!(&started.item.payload, ThreadItemPayload::Sleep(item) if item.id == call_id) {
             return Ok(started);
         }
     }
@@ -336,7 +337,7 @@ async fn wait_for_sleep_completed(
             mcp.read_notification("item/completed"),
         )
         .await??;
-        if matches!(&completed.item, ThreadItem::Sleep(item) if item.id == call_id) {
+        if matches!(&completed.item.payload, ThreadItemPayload::Sleep(item) if item.id == call_id) {
             return Ok(completed);
         }
     }

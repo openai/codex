@@ -12,9 +12,9 @@ use ratatui::layout::Rect;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-fn dynamic_item(id: &str, status: DynamicToolCallStatus) -> AppServerThreadItem {
+fn dynamic_item(id: &str, status: DynamicToolCallStatus) -> AppServerThreadItemPayload {
     let completed = status != DynamicToolCallStatus::InProgress;
-    AppServerThreadItem::DynamicToolCall {
+    AppServerThreadItemPayload::DynamicToolCall {
         id: id.to_string(),
         namespace: Some("test".to_string()),
         tool: "lookup".to_string(),

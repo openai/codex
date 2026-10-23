@@ -929,19 +929,22 @@ async fn agents_overview_details_render_markdown() {
     app.agents_overview.last_messages.clear();
     app.track_agents_overview_activity(
         thread_id,
-        &ServerNotification::ItemCompleted(codex_app_server_protocol::ItemCompletedNotification {
-            thread_id: thread.id.clone(),
-            turn_id: "turn".into(),
-            completed_at_ms: 0,
-            item: ThreadItem::AgentMessage {
-                id: "answer".into(),
-                text: message.into(),
-                phase: None,
-                memory_citation: None,
-                delivery: None,
-                questions: None,
-            },
-        }),
+        &ServerNotification::ItemCompleted(
+            codex_app_server_protocol::ItemCompletedNotification::new(
+                thread.id.clone(),
+                "turn".into(),
+                ThreadItemPayload::AgentMessage {
+                    id: "answer".into(),
+                    text: message.into(),
+                    phase: None,
+                    memory_citation: None,
+                    delivery: None,
+                    questions: None,
+                },
+                /*started_at_ms*/ None,
+                /*completed_at_ms*/ 0,
+            ),
+        ),
     );
     let view = app.agents_overview_view(vec![thread.clone()], Some(thread_id));
     terminal
@@ -1080,11 +1083,10 @@ async fn agents_overview_reasoning_uses_existing_events_and_expires_with_attachm
         .threads
         .insert(parent_id, Some(parent.clone()));
     app.track_agents_overview_notification(&ServerNotification::ItemCompleted(
-        codex_app_server_protocol::ItemCompletedNotification {
-            thread_id: parent.id.clone(),
-            turn_id: "previous-turn".into(),
-            completed_at_ms: 0,
-            item: ThreadItem::AgentMessage {
+        codex_app_server_protocol::ItemCompletedNotification::new(
+            parent.id.clone(),
+            "previous-turn".into(),
+            ThreadItemPayload::AgentMessage {
                 id: "answer".into(),
                 text: "Previous answer".into(),
                 phase: None,
@@ -1092,7 +1094,9 @@ async fn agents_overview_reasoning_uses_existing_events_and_expires_with_attachm
                 delivery: None,
                 questions: None,
             },
-        },
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 0,
+        ),
     ));
     let channel = app.thread_event_channels.remove(&thread_id).unwrap();
     let details = app.agents_overview_details(

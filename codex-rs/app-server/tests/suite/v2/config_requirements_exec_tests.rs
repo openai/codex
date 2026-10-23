@@ -9,7 +9,7 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
@@ -125,12 +125,12 @@ decision = "prompt"
         loop {
             let completed: ItemCompletedNotification =
                 app.read_notification("item/completed").await?;
-            if let ThreadItem::CommandExecution {
+            if let ThreadItemPayload::CommandExecution {
                 id,
                 status,
                 exit_code,
                 ..
-            } = completed.item
+            } = completed.item.payload
                 && id == call_id
             {
                 assert_eq!(

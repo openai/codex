@@ -437,11 +437,10 @@ impl ChatWidget {
                 let last_agent_message =
                     notification
                         .turn
-                        .items
-                        .iter()
+                        .item_payloads()
                         .rev()
                         .find_map(|item| match item {
-                            ThreadItem::AgentMessage {
+                            ThreadItemPayload::AgentMessage {
                                 id,
                                 text,
                                 phase: Some(MessagePhase::FinalAnswer) | None,
@@ -557,19 +556,19 @@ impl ChatWidget {
         replay_kind: Option<ReplayKind>,
     ) {
         self.restore_realtime_transcripts_before_turn(&notification.turn_id);
-        match notification.item {
-            ThreadItem::UserMessage { content, .. } if replay_kind.is_none() => {
+        match notification.item.payload {
+            ThreadItemPayload::UserMessage { content, .. } if replay_kind.is_none() => {
                 self.note_realtime_user_item_started(&notification.turn_id, &content);
             }
-            ThreadItem::UserMessage { content, .. }
+            ThreadItemPayload::UserMessage { content, .. }
                 if realtime::realtime_delegation_input(&content).is_some() =>
             {
                 self.remember_realtime_delegated_reasoning_turn(&notification.turn_id);
             }
-            ThreadItem::AgentMessage { id, .. } if replay_kind.is_none() => {
+            ThreadItemPayload::AgentMessage { id, .. } if replay_kind.is_none() => {
                 self.is_realtime_delegated_agent_item(&notification.turn_id, &id);
             }
-            ThreadItem::Reasoning { id, .. } => {
+            ThreadItemPayload::Reasoning { id, .. } => {
                 if replay_kind.is_none()
                     && !self.is_realtime_delegated_reasoning_turn(&notification.turn_id)
                 {
@@ -586,7 +585,7 @@ impl ChatWidget {
                     self.on_reasoning_item_started(id);
                 }
             }
-            ThreadItem::ContextCompaction { id }
+            ThreadItemPayload::ContextCompaction { id }
                 if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) =>
             {
                 // Buffered starts reconstruct an in-flight compaction when switching tasks.
@@ -601,19 +600,21 @@ impl ChatWidget {
                 };
                 self.on_context_compaction_started(id, elapsed);
             }
-            item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_started(item),
-            ThreadItem::FileChange { id: _, changes, .. } => {
+            item @ ThreadItemPayload::CommandExecution { .. } => {
+                self.on_command_execution_started(item)
+            }
+            ThreadItemPayload::FileChange { id: _, changes, .. } => {
                 self.on_patch_apply_begin(file_update_changes_to_display(changes));
             }
-            item @ ThreadItem::McpToolCall { .. } => self.on_mcp_tool_call_started(item),
-            item @ ThreadItem::DynamicToolCall { .. } => self.on_dynamic_tool_item(item),
-            ThreadItem::WebSearch(item) => {
+            item @ ThreadItemPayload::McpToolCall { .. } => self.on_mcp_tool_call_started(item),
+            item @ ThreadItemPayload::DynamicToolCall { .. } => self.on_dynamic_tool_item(item),
+            ThreadItemPayload::WebSearch(item) => {
                 self.on_web_search_begin(item.id);
             }
-            ThreadItem::ImageGeneration(_) => {
+            ThreadItemPayload::ImageGeneration(_) => {
                 self.on_image_generation_begin();
             }
-            ThreadItem::CollabAgentToolCall {
+            ThreadItemPayload::CollabAgentToolCall {
                 id,
                 tool,
                 status,
@@ -623,7 +624,7 @@ impl ChatWidget {
                 model,
                 reasoning_effort,
                 agents_states,
-            } => self.on_collab_agent_tool_call(ThreadItem::CollabAgentToolCall {
+            } => self.on_collab_agent_tool_call(ThreadItemPayload::CollabAgentToolCall {
                 id,
                 tool,
                 status,
@@ -634,7 +635,7 @@ impl ChatWidget {
                 reasoning_effort,
                 agents_states,
             }),
-            ThreadItem::EnteredReviewMode { review, .. } if replay_kind.is_none() => {
+            ThreadItemPayload::EnteredReviewMode { review, .. } if replay_kind.is_none() => {
                 self.enter_review_mode_with_hint(review, /*from_replay*/ false);
             }
             _ => {}
@@ -649,8 +650,8 @@ impl ChatWidget {
         self.restore_realtime_transcripts_before_turn(&notification.turn_id);
         if replay_kind.is_none()
             && self.is_realtime_delegated_reasoning_turn(&notification.turn_id)
-            && realtime::is_private_realtime_agent_item(&notification.item)
-            && !matches!(&notification.item, ThreadItem::AgentMessage { id, .. } | ThreadItem::Reasoning { id, .. }
+            && realtime::is_private_realtime_agent_item(&notification.item.payload)
+            && !matches!(&notification.item.payload, ThreadItemPayload::AgentMessage { id, .. } | ThreadItemPayload::Reasoning { id, .. }
             if matches!(
                 self.realtime_conversation.agent_items.get(&(notification.turn_id.clone(), id.clone())),
                 Some(realtime::RealtimeAgentItemOrigin::Typed)
@@ -660,22 +661,24 @@ impl ChatWidget {
         }
         // Buffered live notifications can introduce questions; historical turn replay cannot.
         if replay_kind == Some(ReplayKind::ThreadSnapshot)
-            && let ThreadItem::AgentMessage {
+            && let ThreadItemPayload::AgentMessage {
                 id,
                 questions: Some(questions),
                 ..
-            } = &notification.item
+            } = &notification.item.payload
         {
             self.add_async_questions(id, questions);
         }
         if replay_kind.is_none()
-            && let ThreadItem::Reasoning { id, .. } = &notification.item
+            && let ThreadItemPayload::Reasoning { id, .. } = &notification.item.payload
             && self.status_state.reasoning_item_id.as_ref() != Some(id)
         {
             return;
         }
-        match notification.item {
-            item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_completed(item),
+        match notification.item.payload {
+            item @ ThreadItemPayload::CommandExecution { .. } => {
+                self.on_command_execution_completed(item)
+            }
             item => self.handle_thread_item(
                 item,
                 notification.turn_id,

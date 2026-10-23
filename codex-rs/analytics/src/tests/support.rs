@@ -31,7 +31,7 @@ use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
 use codex_app_server_protocol::Thread;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSource as AppServerThreadSource;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -545,17 +545,17 @@ pub(super) async fn ingest_completed_command_execution_item(
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
-                ItemStartedNotification {
-                    thread_id: thread_id.to_string(),
-                    turn_id: "turn-1".to_string(),
-                    started_at_ms: 1_000,
-                    item: sample_command_execution_item_with_id(
+                ItemStartedNotification::new(
+                    thread_id.to_string(),
+                    "turn-1".to_string(),
+                    sample_command_execution_item_with_id(
                         item_id,
                         CommandExecutionStatus::InProgress,
                         /*exit_code*/ None,
                         /*duration_ms*/ None,
                     ),
-                },
+                    /*started_at_ms*/ 1_000,
+                ),
             ))),
             events,
         )
@@ -563,17 +563,18 @@ pub(super) async fn ingest_completed_command_execution_item(
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(ServerNotification::ItemCompleted(
-                ItemCompletedNotification {
-                    thread_id: thread_id.to_string(),
-                    turn_id: "turn-1".to_string(),
-                    completed_at_ms: 1_042,
-                    item: sample_command_execution_item_with_id(
+                ItemCompletedNotification::new(
+                    thread_id.to_string(),
+                    "turn-1".to_string(),
+                    sample_command_execution_item_with_id(
                         item_id,
                         CommandExecutionStatus::Completed,
                         Some(0),
                         Some(42),
                     ),
-                },
+                    /*started_at_ms*/ None,
+                    /*completed_at_ms*/ 1_042,
+                ),
             ))),
             events,
         )
@@ -640,7 +641,7 @@ pub(super) fn sample_command_execution_item(
     status: CommandExecutionStatus,
     exit_code: Option<i32>,
     duration_ms: Option<i64>,
-) -> ThreadItem {
+) -> ThreadItemPayload {
     sample_command_execution_item_with_id("item-1", status, exit_code, duration_ms)
 }
 
@@ -649,8 +650,8 @@ pub(super) fn sample_command_execution_item_with_id(
     status: CommandExecutionStatus,
     exit_code: Option<i32>,
     duration_ms: Option<i64>,
-) -> ThreadItem {
-    ThreadItem::CommandExecution {
+) -> ThreadItemPayload {
+    ThreadItemPayload::CommandExecution {
         model_context: None,
         sandbox_type: None,
         id: id.to_string(),

@@ -2684,6 +2684,7 @@ mod tests {
     use crate::legacy_core::config::ConfigOverrides;
     use app_test_support::create_fake_paginated_rollout;
     use app_test_support::create_fake_rollout;
+    use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnStatus;
@@ -4127,7 +4128,7 @@ mod tests {
         assert_eq!(regular.turns.len(), 1);
         assert!(matches!(
             regular.turns[0].items.as_slice(),
-            [codex_app_server_protocol::ThreadItem::UserMessage { content, .. }]
+            [codex_app_server_protocol::ThreadItem { payload: codex_app_server_protocol::ThreadItemPayload::UserMessage { content, .. }, .. }]
                 if content == &[UserInput::Text {
                     text: "Saved user message".to_string(),
                     text_elements: Vec::new(),
@@ -4261,22 +4262,26 @@ mod tests {
                     root_turn_id: None,
                     items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: vec![
-                        codex_app_server_protocol::ThreadItem::UserMessage {
-                            id: "user-1".to_string(),
-                            client_id: None,
-                            content: vec![codex_app_server_protocol::UserInput::Text {
-                                text: "hello from history".to_string(),
-                                text_elements: Vec::new(),
-                            }],
-                        },
-                        codex_app_server_protocol::ThreadItem::AgentMessage {
-                            id: "assistant-1".to_string(),
-                            text: "assistant reply".to_string(),
-                            phase: None,
-                            memory_citation: None,
-                            delivery: None,
-                            questions: None,
-                        },
+                        ThreadItem::untimed(
+                            codex_app_server_protocol::ThreadItemPayload::UserMessage {
+                                id: "user-1".to_string(),
+                                client_id: None,
+                                content: vec![codex_app_server_protocol::UserInput::Text {
+                                    text: "hello from history".to_string(),
+                                    text_elements: Vec::new(),
+                                }],
+                            },
+                        ),
+                        ThreadItem::untimed(
+                            codex_app_server_protocol::ThreadItemPayload::AgentMessage {
+                                id: "assistant-1".to_string(),
+                                text: "assistant reply".to_string(),
+                                phase: None,
+                                memory_citation: None,
+                                delivery: None,
+                                questions: None,
+                            },
+                        ),
                     ],
                     status: TurnStatus::Completed,
                     error: None,

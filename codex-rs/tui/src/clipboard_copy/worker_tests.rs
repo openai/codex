@@ -37,11 +37,10 @@ async fn blocked_copy_allows_overlay_exit_rejects_backlog_and_wakes_completion()
         crate::chatwidget::tests::make_chatwidget_manual_with_sender().await;
     chat.handle_server_notification(
         codex_app_server_protocol::ServerNotification::ItemCompleted(
-            codex_app_server_protocol::ItemCompletedNotification {
-                thread_id: String::new(),
-                turn_id: "turn-1".into(),
-                completed_at_ms: 0,
-                item: codex_app_server_protocol::ThreadItem::AgentMessage {
+            codex_app_server_protocol::ItemCompletedNotification::new(
+                String::new(),
+                "turn-1".into(),
+                codex_app_server_protocol::ThreadItemPayload::AgentMessage {
                     id: "msg-1".into(),
                     text: "café\nsecond line".into(),
                     phase: None,
@@ -49,7 +48,9 @@ async fn blocked_copy_allows_overlay_exit_rejects_backlog_and_wakes_completion()
                     delivery: None,
                     questions: None,
                 },
-            },
+                /*started_at_ms*/ None,
+                /*completed_at_ms*/ 0,
+            ),
         ),
         /*replay_kind*/ None,
     );

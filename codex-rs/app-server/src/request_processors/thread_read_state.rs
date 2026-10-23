@@ -112,8 +112,12 @@ pub(super) async fn publish(
         return None;
     }
     let has_error = summary.last_error.is_some();
-    let final_text = match &summary.last_agent_message {
-        Some(ThreadItem::AgentMessage { text, .. }) => Some(text.as_str()),
+    let final_text = match summary
+        .last_agent_message
+        .as_ref()
+        .map(|message| &message.payload)
+    {
+        Some(ThreadItemPayload::AgentMessage { text, .. }) => Some(text.as_str()),
         _ => None,
     };
     let visible = match &event.msg {

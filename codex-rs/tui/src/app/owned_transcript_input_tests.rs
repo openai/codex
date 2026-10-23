@@ -200,17 +200,18 @@ fn complete_plan_turn(app: &mut App) {
             thread_id: thread_id.clone(),
             turn: turn.clone(),
         }),
-        ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: thread_id.clone(),
-            turn_id: turn.id.clone(),
-            completed_at_ms: 0,
-            item: ThreadItem::Plan {
+        ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+            thread_id.clone(),
+            turn.id.clone(),
+            ThreadItemPayload::Plan {
                 id: "plan".into(),
                 text: (1..=40)
                     .map(|row| format!("- Plan step {row:02}\n"))
                     .collect(),
             },
-        }),
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 0,
+        )),
         ServerNotification::TurnCompleted(TurnCompletedNotification {
             thread_id,
             turn: Turn {

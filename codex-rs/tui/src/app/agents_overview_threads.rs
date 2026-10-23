@@ -18,7 +18,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadReadParams;
@@ -400,16 +400,17 @@ impl App {
                                     .await
                                     && let Some(turn) = turns.data.first()
                                 {
-                                    if let Some(ThreadItem::UserMessage { content, .. }) =
-                                        turn.items.first()
+                                    if let Some(ThreadItemPayload::UserMessage {
+                                        content, ..
+                                    }) = turn.item_payloads().next()
                                     {
                                         response.thread.preview =
                                             ChatWidget::user_message_display_from_inputs(content)
                                                 .message;
                                     }
                                     last_message =
-                                        turn.items.iter().rev().find_map(|item| match item {
-                                            ThreadItem::AgentMessage { text, .. } => {
+                                        turn.item_payloads().rev().find_map(|item| match item {
+                                            ThreadItemPayload::AgentMessage { text, .. } => {
                                                 Some(preview_agent_message(text))
                                             }
                                             _ => None,

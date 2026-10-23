@@ -1731,23 +1731,23 @@ impl App {
         let confirmed_message_ids = snapshot
             .turns
             .iter()
-            .flat_map(|turn| &turn.items)
+            .flat_map(Turn::item_payloads)
             .chain(snapshot.events.iter().filter_map(|event| {
                 let ThreadBufferedEvent::Notification(notification) = event else {
                     return None;
                 };
                 if let ServerNotification::ItemStarted(notification) = notification.as_ref() {
-                    Some(&notification.item)
+                    Some(&notification.item.payload)
                 } else if let ServerNotification::ItemCompleted(notification) =
                     notification.as_ref()
                 {
-                    Some(&notification.item)
+                    Some(&notification.item.payload)
                 } else {
                     None
                 }
             }))
             .filter_map(|item| {
-                if let ThreadItem::UserMessage { client_id, .. } = item {
+                if let ThreadItemPayload::UserMessage { client_id, .. } = item {
                     client_id.clone()
                 } else {
                     None
@@ -2046,7 +2046,7 @@ impl App {
         let automatic_title_user_message = if self.chat_widget.thread_name().is_none()
             && let ThreadBufferedEvent::Notification(notification) = &event
             && let ServerNotification::ItemCompleted(notification) = notification.as_ref()
-            && let ThreadItem::UserMessage { content, .. } = &notification.item
+            && let ThreadItemPayload::UserMessage { content, .. } = &notification.item.payload
         {
             Some(
                 content

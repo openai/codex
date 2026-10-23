@@ -830,16 +830,16 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
-                ItemStartedNotification {
-                    thread_id: "thread-subagent".to_string(),
-                    turn_id: "turn-subagent".to_string(),
-                    started_at_ms: 1_000,
-                    item: sample_command_execution_item(
+                ItemStartedNotification::new(
+                    "thread-subagent".to_string(),
+                    "turn-subagent".to_string(),
+                    sample_command_execution_item(
                         CommandExecutionStatus::InProgress,
                         /*exit_code*/ None,
                         /*duration_ms*/ None,
                     ),
-                },
+                    /*started_at_ms*/ 1_000,
+                ),
             ))),
             &mut events,
         )
@@ -847,16 +847,17 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(ServerNotification::ItemCompleted(
-                ItemCompletedNotification {
-                    thread_id: "thread-subagent".to_string(),
-                    turn_id: "turn-subagent".to_string(),
-                    completed_at_ms: 1_042,
-                    item: sample_command_execution_item(
+                ItemCompletedNotification::new(
+                    "thread-subagent".to_string(),
+                    "turn-subagent".to_string(),
+                    sample_command_execution_item(
                         CommandExecutionStatus::Completed,
                         Some(0),
                         Some(42),
                     ),
-                },
+                    /*started_at_ms*/ None,
+                    /*completed_at_ms*/ 1_042,
+                ),
             ))),
             &mut events,
         )

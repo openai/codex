@@ -308,16 +308,16 @@ async fn completed_background_tool_item_emits_after_turn_event() {
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
-                ItemStartedNotification {
-                    thread_id: "thread-2".to_string(),
-                    turn_id: "turn-2".to_string(),
-                    started_at_ms: 998,
-                    item: sample_command_execution_item(
+                ItemStartedNotification::new(
+                    "thread-2".to_string(),
+                    "turn-2".to_string(),
+                    sample_command_execution_item(
                         CommandExecutionStatus::InProgress,
                         /*exit_code*/ None,
                         /*duration_ms*/ None,
                     ),
-                },
+                    /*started_at_ms*/ 998,
+                ),
             ))),
             &mut out,
         )
@@ -343,16 +343,17 @@ async fn completed_background_tool_item_emits_after_turn_event() {
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(ServerNotification::ItemCompleted(
-                ItemCompletedNotification {
-                    thread_id: "thread-2".to_string(),
-                    turn_id: "turn-2".to_string(),
-                    completed_at_ms: 1_000,
-                    item: sample_command_execution_item(
+                ItemCompletedNotification::new(
+                    "thread-2".to_string(),
+                    "turn-2".to_string(),
+                    sample_command_execution_item(
                         CommandExecutionStatus::Completed,
                         Some(0),
                         Some(1),
                     ),
-                },
+                    /*started_at_ms*/ None,
+                    /*completed_at_ms*/ 1_000,
+                ),
             ))),
             &mut out,
         )
@@ -430,16 +431,17 @@ async fn item_completed_without_turn_state_does_not_create_turn_state() {
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(ServerNotification::ItemCompleted(
-                ItemCompletedNotification {
-                    thread_id: "thread-2".to_string(),
-                    turn_id: "turn-2".to_string(),
-                    completed_at_ms: 1_000,
-                    item: sample_command_execution_item(
+                ItemCompletedNotification::new(
+                    "thread-2".to_string(),
+                    "turn-2".to_string(),
+                    sample_command_execution_item(
                         CommandExecutionStatus::Completed,
                         Some(0),
                         Some(1),
                     ),
-                },
+                    /*started_at_ms*/ None,
+                    /*completed_at_ms*/ 1_000,
+                ),
             ))),
             &mut out,
         )

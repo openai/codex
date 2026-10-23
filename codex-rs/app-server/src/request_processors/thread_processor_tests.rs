@@ -153,6 +153,7 @@ mod thread_processor_behavior_tests {
     use chrono::Utc;
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ThreadItem;
+    use codex_app_server_protocol::ThreadItemPayload;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_config::CloudConfigBundleLoader;
     use codex_config::LoaderOverrides;
@@ -333,14 +334,14 @@ mod thread_processor_behavior_tests {
         let active_turn = Turn {
             id: "live-turn".to_string(),
             root_turn_id: None,
-            items: vec![ThreadItem::UserMessage {
+            items: vec![ThreadItem::untimed(ThreadItemPayload::UserMessage {
                 id: "live-user-message".to_string(),
                 client_id: None,
                 content: vec![V2UserInput::Text {
                     text: "live".to_string(),
                     text_elements: Vec::new(),
                 }],
-            }],
+            })],
             items_view: TurnItemsView::Full,
             error: None,
             status: TurnStatus::InProgress,

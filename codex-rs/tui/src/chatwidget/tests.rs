@@ -102,7 +102,7 @@ pub(super) use codex_app_server_protocol::ServerNotification;
 pub(super) use codex_app_server_protocol::SkillMetadata;
 pub(super) use codex_app_server_protocol::SkillSummary;
 pub(super) use codex_app_server_protocol::ThreadClosedNotification;
-pub(super) use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
+pub(super) use codex_app_server_protocol::ThreadItemPayload as AppServerThreadItemPayload;
 pub(super) use codex_app_server_protocol::ToolRequestUserInputOption;
 pub(super) use codex_app_server_protocol::ToolRequestUserInputParams;
 pub(super) use codex_app_server_protocol::ToolRequestUserInputQuestion;

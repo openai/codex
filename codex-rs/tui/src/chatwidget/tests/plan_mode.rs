@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::ThreadItem;
 use pretty_assertions::assert_eq;
 
 fn paste_hidden_plan_shell_payload(chat: &mut ChatWidget) -> String {
@@ -812,14 +813,16 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
             id: "turn-1".to_string(),
             root_turn_id: None,
             items_view: codex_app_server_protocol::TurnItemsView::Full,
-            items: vec![AppServerThreadItem::AgentMessage {
-                id: "msg-plan".to_string(),
-                text: "Plan details".to_string(),
-                phase: Some(MessagePhase::FinalAnswer),
-                memory_citation: None,
-                delivery: None,
-                questions: None,
-            }],
+            items: vec![ThreadItem::untimed(
+                AppServerThreadItemPayload::AgentMessage {
+                    id: "msg-plan".to_string(),
+                    text: "Plan details".to_string(),
+                    phase: Some(MessagePhase::FinalAnswer),
+                    memory_citation: None,
+                    delivery: None,
+                    questions: None,
+                },
+            )],
             status: AppServerTurnStatus::Completed,
             error: None,
             started_at: None,
@@ -853,14 +856,16 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
             id: "turn-1".to_string(),
             root_turn_id: None,
             items_view: codex_app_server_protocol::TurnItemsView::Full,
-            items: vec![AppServerThreadItem::AgentMessage {
-                id: "msg-plan-replay".to_string(),
-                text: "Plan details".to_string(),
-                phase: Some(MessagePhase::FinalAnswer),
-                memory_citation: None,
-                delivery: None,
-                questions: None,
-            }],
+            items: vec![ThreadItem::untimed(
+                AppServerThreadItemPayload::AgentMessage {
+                    id: "msg-plan-replay".to_string(),
+                    text: "Plan details".to_string(),
+                    phase: Some(MessagePhase::FinalAnswer),
+                    memory_citation: None,
+                    delivery: None,
+                    questions: None,
+                },
+            )],
             status: AppServerTurnStatus::Completed,
             error: None,
             started_at: None,

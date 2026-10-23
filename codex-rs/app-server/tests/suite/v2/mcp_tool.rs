@@ -29,13 +29,14 @@ use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
@@ -388,10 +389,10 @@ async fn model_mcp_tool_call_uses_session_client_extensions() -> Result<()> {
     .await?;
 
     let completed = wait_for_mcp_tool_call_completed(&mut mcp, call_id).await?;
-    let ThreadItem::McpToolCall {
+    let ThreadItemPayload::McpToolCall {
         result: Some(result),
         ..
-    } = completed.item
+    } = completed.item.payload
     else {
         panic!("expected completed MCP tool call item");
     };
@@ -1053,7 +1054,7 @@ async fn mcp_tool_call_completion_notification_contains_truncated_large_result()
     let completed = wait_for_mcp_tool_call_completed(&mut mcp, call_id).await?;
     assert_eq!(completed.turn_id, turn.id);
 
-    let ThreadItem::McpToolCall {
+    let ThreadItemPayload::McpToolCall {
         id,
         server,
         tool,
@@ -1061,7 +1062,7 @@ async fn mcp_tool_call_completion_notification_contains_truncated_large_result()
         result: Some(result),
         error,
         ..
-    } = completed.item
+    } = completed.item.payload
     else {
         panic!("expected completed MCP tool call item");
     };
@@ -1081,7 +1082,7 @@ async fn mcp_tool_call_completion_notification_contains_truncated_large_result()
     assert!(text.contains("truncated"));
     assert!(text.len() < DEFAULT_OUTPUT_BYTES_CAP + 1024);
 
-    let serialized_item = serde_json::to_string(&ThreadItem::McpToolCall {
+    let serialized_item = serde_json::to_string(&ThreadItemPayload::McpToolCall {
         id,
         server,
         tool,
@@ -1193,7 +1194,7 @@ async fn mcp_tool_call_hint_survives_mid_call_thread_read_and_resume() -> Result
         ..
     } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
 
-    let expected_item = ThreadItem::McpToolCall {
+    let expected_item = ThreadItemPayload::McpToolCall {
         id: call_id.to_string(),
         server: TEST_SERVER_NAME.to_string(),
         tool: TEST_TOOL_NAME.to_string(),
@@ -1211,8 +1212,8 @@ async fn mcp_tool_call_hint_survives_mid_call_thread_read_and_resume() -> Result
     let resumed_item = resumed_thread
         .turns
         .iter()
-        .flat_map(|turn| &turn.items)
-        .find(|item| matches!(item, ThreadItem::McpToolCall { id, .. } if id == call_id))
+        .flat_map(Turn::item_payloads)
+        .find(|item| matches!(item, ThreadItemPayload::McpToolCall { id, .. } if id == call_id))
         .expect("resumed thread should include the in-progress MCP tool call");
     assert_eq!(resumed_item, &expected_item);
 
@@ -1228,11 +1229,11 @@ async fn mcp_tool_call_hint_survives_mid_call_thread_read_and_resume() -> Result
 
     let completed = wait_for_mcp_tool_call_completed(&mut mcp, call_id).await?;
     assert_eq!(completed.turn_id, turn.id);
-    let ThreadItem::McpToolCall {
+    let ThreadItemPayload::McpToolCall {
         status,
         read_only_hint,
         ..
-    } = &completed.item
+    } = &completed.item.payload
     else {
         panic!("expected the completed MCP tool call item");
     };
@@ -1258,10 +1259,10 @@ async fn mcp_tool_call_hint_survives_mid_call_thread_read_and_resume() -> Result
     let persisted_item = completed_read
         .turns
         .iter()
-        .flat_map(|turn| &turn.items)
-        .find(|item| matches!(item, ThreadItem::McpToolCall { id, .. } if id == call_id))
+        .flat_map(Turn::item_payloads)
+        .find(|item| matches!(item, ThreadItemPayload::McpToolCall { id, .. } if id == call_id))
         .expect("completed thread history should include the persisted MCP tool call");
-    assert_eq!(persisted_item, &completed.item);
+    assert_eq!(persisted_item, &completed.item.payload);
 
     mcp_server_handle.abort();
     let _ = mcp_server_handle.await;
@@ -1608,7 +1609,8 @@ async fn wait_for_mcp_tool_call_completed(
             mcp.read_notification("item/completed"),
         )
         .await??;
-        if matches!(&completed.item, ThreadItem::McpToolCall { id, .. } if id == call_id) {
+        if matches!(&completed.item.payload, ThreadItemPayload::McpToolCall { id, .. } if id == call_id)
+        {
             return Ok(completed);
         }
     }

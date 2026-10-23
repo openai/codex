@@ -37,7 +37,7 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -2650,12 +2650,12 @@ async fn user_approval_skips_async_guardian_without_changing_other_modes() -> Re
         while tool_results.len() < 3 {
             let completed: ItemCompletedNotification =
                 timeout(TIMEOUT, app_server.read_notification("item/completed")).await??;
-            if let ThreadItem::McpToolCall {
+            if let ThreadItemPayload::McpToolCall {
                 status,
                 result,
                 error,
                 ..
-            } = completed.item
+            } = completed.item.payload
             {
                 tool_results.push((status, result.map(|result| result.content), error));
             }

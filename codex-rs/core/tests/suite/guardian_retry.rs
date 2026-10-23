@@ -308,9 +308,13 @@ async fn guardian_retry_executes_only_after_a_completed_approval() -> Result<()>
         .await?;
     let mut reviews = Vec::new();
     let mut warnings = Vec::new();
+    let mut command_started_at_ms = None;
     loop {
         match test.codex.next_event().await?.msg {
-            EventMsg::GuardianAssessment(review) => reviews.push(review.status),
+            EventMsg::GuardianAssessment(review) => reviews.push(review),
+            EventMsg::ItemCompleted(event) if event.item.id() == "write-marker" => {
+                command_started_at_ms = event.started_at_ms;
+            }
             EventMsg::GuardianWarning(warning) => warnings.push(warning.message),
             EventMsg::TurnComplete(_) => break,
             _ => {}
@@ -338,12 +342,16 @@ async fn guardian_retry_executes_only_after_a_completed_approval() -> Result<()>
         assert_eq!(request.inputs_of_type("agent_message"), expected_messages);
     }
     assert_eq!(
-        reviews,
+        reviews
+            .iter()
+            .map(|review| review.status)
+            .collect::<Vec<_>>(),
         vec![
             GuardianAssessmentStatus::InProgress,
             GuardianAssessmentStatus::Approved,
         ]
     );
+    assert_eq!(command_started_at_ms, Some(reviews[0].started_at_ms));
     assert_eq!(
         warnings.len(),
         1,

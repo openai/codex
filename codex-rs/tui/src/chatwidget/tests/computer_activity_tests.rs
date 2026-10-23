@@ -4,8 +4,8 @@ use pretty_assertions::assert_eq;
 fn computer_item(
     id: &str,
     status: codex_app_server_protocol::McpToolCallStatus,
-) -> AppServerThreadItem {
-    AppServerThreadItem::McpToolCall {
+) -> AppServerThreadItemPayload {
+    AppServerThreadItemPayload::McpToolCall {
         id: id.to_string(),
         server: "cua_repl".to_string(),
         tool: "js".to_string(),
@@ -83,7 +83,7 @@ async fn computer_activity_keeps_reasoning_in_order_live_and_replayed() {
                 let summary = format!("{part} action {id}");
                 if replay {
                     chat.replay_thread_item(
-                        AppServerThreadItem::Reasoning {
+                        AppServerThreadItemPayload::Reasoning {
                             id: summary.clone(),
                             summary: vec![summary],
                             content: Vec::new(),
@@ -133,7 +133,7 @@ async fn computer_activity_preserves_boundaries_and_expanded_output() {
     assert!(lines_to_single_string(&cells[0]).contains("Used computer · 1 action"));
     chat.on_mcp_tool_call_completed(computer_item("2", McpToolCallStatus::Completed));
     let mut other = computer_item("other", McpToolCallStatus::Completed);
-    if let AppServerThreadItem::McpToolCall { server, .. } = &mut other {
+    if let AppServerThreadItemPayload::McpToolCall { server, .. } = &mut other {
         *server = "another_server".to_string();
     }
     chat.on_mcp_tool_call_completed(other);

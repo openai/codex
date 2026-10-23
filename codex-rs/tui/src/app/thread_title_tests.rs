@@ -20,6 +20,7 @@ use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
@@ -270,7 +271,10 @@ async fn check_thread_title_generation(scenario: TitleScenario) -> color_eyre::R
         .push(Turn {
             id: "existing-turn".to_string(),
             root_turn_id: None,
-            items: vec![title_user_message("user-message", "Fix the login timeout")],
+            items: vec![ThreadItem::untimed(title_user_message(
+                "user-message",
+                "Fix the login timeout",
+            ))],
             items_view: Default::default(),
             status: TurnStatus::Completed,
             error: None,
@@ -286,12 +290,13 @@ async fn check_thread_title_generation(scenario: TitleScenario) -> color_eyre::R
                 &mut tui,
                 &mut app_server,
                 ThreadBufferedEvent::Notification(Box::new(ServerNotification::ItemCompleted(
-                    ItemCompletedNotification {
-                        thread_id: thread_id.to_string(),
-                        turn_id: "existing-turn".to_string(),
-                        item: title_user_message("user-message", "Fix the login timeout"),
-                        completed_at_ms: 0,
-                    },
+                    ItemCompletedNotification::new(
+                        thread_id.to_string(),
+                        "existing-turn".to_string(),
+                        title_user_message("user-message", "Fix the login timeout"),
+                        /*started_at_ms*/ None,
+                        /*completed_at_ms*/ 0,
+                    ),
                 ))),
             )
             .await?;
@@ -742,8 +747,8 @@ fn truncates_generated_titles_without_splitting_unicode() {
     assert_eq!(parse_thread_title(&response), Some(expected));
 }
 
-fn title_user_message(id: &str, text: &str) -> ThreadItem {
-    ThreadItem::UserMessage {
+fn title_user_message(id: &str, text: &str) -> ThreadItemPayload {
+    ThreadItemPayload::UserMessage {
         id: id.to_string(),
         client_id: None,
         content: vec![UserInput::Text {
@@ -753,8 +758,8 @@ fn title_user_message(id: &str, text: &str) -> ThreadItem {
     }
 }
 
-fn title_agent_message(id: &str, text: &str, phase: Option<MessagePhase>) -> ThreadItem {
-    ThreadItem::AgentMessage {
+fn title_agent_message(id: &str, text: &str, phase: Option<MessagePhase>) -> ThreadItemPayload {
+    ThreadItemPayload::AgentMessage {
         id: id.to_string(),
         text: text.to_string(),
         phase,

@@ -44,7 +44,7 @@ use crate::pager_overlay::Overlay;
 use crate::pager_overlay::TranscriptHistoryState;
 use crate::tui;
 use crate::tui::TuiEvent;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use codex_protocol::ThreadId;
@@ -539,12 +539,12 @@ pub(crate) fn backtrack_revert_before_turn_id(
                     &previous.items
                 };
                 is_hidden_nested_review_turn(previous, turn)
-                    && previous_items
-                        .iter()
-                        .any(|item| matches!(item, ThreadItem::EnteredReviewMode { .. }))
-                    && previous_items
-                        .iter()
-                        .any(|item| matches!(item, ThreadItem::ExitedReviewMode { .. }))
+                    && previous_items.iter().any(|item| {
+                        matches!(&item.payload, ThreadItemPayload::EnteredReviewMode { .. })
+                    })
+                    && previous_items.iter().any(|item| {
+                        matches!(&item.payload, ThreadItemPayload::ExitedReviewMode { .. })
+                    })
             });
         let first_item = if turn_index == start_turn {
             start_item
@@ -553,21 +553,22 @@ pub(crate) fn backtrack_revert_before_turn_id(
         };
         // Clipped items affect whether an input is a steer, but were never displayed and
         // therefore must not change the transcript's review visibility or prompt ordinals.
-        let mut user_messages_in_turn = turn.items[..first_item]
-            .iter()
-            .filter(|item| matches!(item, ThreadItem::UserMessage { .. }))
+        let mut user_messages_in_turn = turn
+            .item_payloads()
+            .take(first_item)
+            .filter(|item| matches!(item, ThreadItemPayload::UserMessage { .. }))
             .count();
-        for item in &turn.items[first_item..] {
+        for item in turn.item_payloads().skip(first_item) {
             let content = match item {
-                ThreadItem::EnteredReviewMode { .. } => {
+                ThreadItemPayload::EnteredReviewMode { .. } => {
                     review_mode = true;
                     continue;
                 }
-                ThreadItem::ExitedReviewMode { .. } => {
+                ThreadItemPayload::ExitedReviewMode { .. } => {
                     review_mode = false;
                     continue;
                 }
-                ThreadItem::UserMessage { content, .. } => content,
+                ThreadItemPayload::UserMessage { content, .. } => content,
                 _ => continue,
             };
             let is_steer = user_messages_in_turn > 0;
@@ -625,19 +626,17 @@ pub(crate) fn is_hidden_nested_review_turn(previous: &Turn, turn: &Turn) -> bool
         || turn.status != TurnStatus::Interrupted
         || turn.completed_at.is_some()
         || !previous
-            .items
-            .iter()
-            .any(|item| matches!(item, ThreadItem::EnteredReviewMode { .. }))
+            .item_payloads()
+            .any(|item| matches!(item, ThreadItemPayload::EnteredReviewMode { .. }))
         || !previous
-            .items
-            .iter()
-            .any(|item| matches!(item, ThreadItem::ExitedReviewMode { .. }))
+            .item_payloads()
+            .any(|item| matches!(item, ThreadItemPayload::ExitedReviewMode { .. }))
     {
         return false;
     }
 
-    let mut user_messages = turn.items.iter().filter_map(|item| match item {
-        ThreadItem::UserMessage { content, .. } => Some(content),
+    let mut user_messages = turn.item_payloads().filter_map(|item| match item {
+        ThreadItemPayload::UserMessage { content, .. } => Some(content),
         _ => None,
     });
     matches!(
@@ -722,6 +721,7 @@ mod tests {
     use crate::bottom_pane::MentionBinding;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
+    use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::UserInput;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
@@ -745,7 +745,7 @@ mod tests {
             id: turn_id.to_string(),
             root_turn_id: None,
             items: (0..user_messages)
-                .map(|index| ThreadItem::UserMessage {
+                .map(|index| ThreadItemPayload::UserMessage {
                     id: format!("user-{index}"),
                     client_id: None,
                     content: vec![UserInput::Text {
@@ -753,6 +753,7 @@ mod tests {
                         text_elements: Vec::new(),
                     }],
                 })
+                .map(ThreadItem::untimed)
                 .collect(),
             items_view: codex_app_server_protocol::TurnItemsView::Full,
             status,
@@ -776,7 +777,7 @@ mod tests {
     #[test]
     fn backtrack_revert_before_turn_id_resolves_first_and_later_prompts() {
         let mut hidden = turn("hidden", TurnStatus::Completed, /*user_messages*/ 1);
-        let ThreadItem::UserMessage { content, .. } = &mut hidden.items[0] else {
+        let ThreadItemPayload::UserMessage { content, .. } = &mut hidden.items[0].payload else {
             unreachable!()
         };
         *content = vec![UserInput::Text {
@@ -917,15 +918,17 @@ mod tests {
         );
         review_turn.items.insert(
             /*index*/ 0,
-            ThreadItem::EnteredReviewMode {
+            ThreadItem::untimed(ThreadItemPayload::EnteredReviewMode {
                 id: "review-start".to_string(),
                 review: "changes against main".to_string(),
-            },
+            }),
         );
-        review_turn.items.push(ThreadItem::ExitedReviewMode {
-            id: "review-end".to_string(),
-            review: "review complete".to_string(),
-        });
+        review_turn
+            .items
+            .push(ThreadItem::untimed(ThreadItemPayload::ExitedReviewMode {
+                id: "review-end".to_string(),
+                review: "review complete".to_string(),
+            }));
         let turns = vec![
             turn("turn-1", TurnStatus::Completed, /*user_messages*/ 1),
             review_turn,
@@ -963,14 +966,14 @@ mod tests {
             "Review the current code changes (staged, unstaged, and untracked files).";
         let review_turn = Turn {
             items: vec![
-                ThreadItem::EnteredReviewMode {
+                ThreadItem::untimed(ThreadItemPayload::EnteredReviewMode {
                     id: "review-start".to_string(),
                     review: review_hint.to_string(),
-                },
-                ThreadItem::ExitedReviewMode {
+                }),
+                ThreadItem::untimed(ThreadItemPayload::ExitedReviewMode {
                     id: "review-end".to_string(),
                     review: "review complete".to_string(),
-                },
+                }),
             ],
             ..turn(
                 "turn-review",
@@ -980,7 +983,7 @@ mod tests {
         };
         let review_child_turn = Turn {
             items: (0..2)
-                .map(|index| ThreadItem::UserMessage {
+                .map(|index| ThreadItemPayload::UserMessage {
                     id: format!("review-prompt-{index}"),
                     client_id: None,
                     content: vec![UserInput::Text {
@@ -988,6 +991,7 @@ mod tests {
                         text_elements: Vec::new(),
                     }],
                 })
+                .map(ThreadItem::untimed)
                 .collect(),
             ..turn(
                 "turn-review-child",
@@ -1029,7 +1033,7 @@ mod tests {
     #[test]
     fn backtrack_revert_before_turn_id_restores_canonical_mention_bindings() {
         let mut selected_turn = turn("turn-2", TurnStatus::Completed, /*user_messages*/ 1);
-        selected_turn.items = vec![ThreadItem::UserMessage {
+        selected_turn.items = vec![ThreadItem::untimed(ThreadItemPayload::UserMessage {
             id: "selected-prompt".to_string(),
             client_id: None,
             content: vec![
@@ -1050,7 +1054,7 @@ mod tests {
                     path: "app://google_calendar".to_string(),
                 },
             ],
-        }];
+        })];
         let turns = vec![
             turn("turn-1", TurnStatus::Completed, /*user_messages*/ 1),
             selected_turn,

@@ -4,6 +4,7 @@ use super::*;
 use crate::app::test_support::make_test_app;
 use crate::thread_transcript::RawReasoningVisibility;
 use crate::thread_transcript::thread_items_to_transcript_cells;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::TurnItemsView;
 use pretty_assertions::assert_eq;
 
@@ -13,7 +14,7 @@ enum ActivityKind {
     Exploration,
 }
 
-fn call(id: &str, kind: ActivityKind, status: &str) -> ThreadItem {
+fn call(id: &str, kind: ActivityKind, status: &str) -> ThreadItemPayload {
     let value = match kind {
         ActivityKind::Computer => serde_json::json!({
             "type": "mcpToolCall", "id": id, "server": "cua_repl", "tool": "js",
@@ -31,8 +32,8 @@ fn call(id: &str, kind: ActivityKind, status: &str) -> ThreadItem {
     serde_json::from_value(value).expect("activity fixture")
 }
 
-fn reasoning(id: &str) -> ThreadItem {
-    ThreadItem::Reasoning {
+fn reasoning(id: &str) -> ThreadItemPayload {
+    ThreadItemPayload::Reasoning {
         id: id.to_owned(),
         summary: vec![format!(
             "**Considering {id}**\n\nRetained reasoning for {id}."
@@ -41,11 +42,11 @@ fn reasoning(id: &str) -> ThreadItem {
     }
 }
 
-fn turn(items: Vec<ThreadItem>) -> Turn {
+fn turn(items: Vec<ThreadItemPayload>) -> Turn {
     Turn {
         id: "turn".to_owned(),
         root_turn_id: None,
-        items,
+        items: items.into_iter().map(ThreadItem::untimed).collect(),
         items_view: TurnItemsView::Full,
         status: TurnStatus::Completed,
         error: None,
@@ -55,11 +56,14 @@ fn turn(items: Vec<ThreadItem>) -> Turn {
     }
 }
 
-fn project(app: &App, items: &[ThreadItem]) -> Vec<Arc<dyn HistoryCell>> {
+fn project(
+    app: &App,
+    items: &[impl std::borrow::Borrow<ThreadItemPayload>],
+) -> Vec<Arc<dyn HistoryCell>> {
     thread_items_to_transcript_cells(
         /*thread_id*/ None,
         &app.config.cwd,
-        items.iter().cloned(),
+        items.iter().map(|entry| entry.borrow().clone()),
         RawReasoningVisibility::Hidden,
         Some(&app.config),
     )
@@ -127,7 +131,7 @@ async fn older_page_hydration_keeps_pending_computer_and_exploration_completion(
                 .chat_widget
                 .handle_command_execution_completed_now(call("pending", kind, "completed")),
         }
-        current.items[3] = call("pending", kind, "completed");
+        current.items[3] = ThreadItem::untimed(call("pending", kind, "completed"));
         let expected = project(&app, &current.items);
         assert_eq!(
             app.chat_widget
@@ -146,7 +150,7 @@ async fn trailing_reasoning_identity_rejects_identical_text_from_another_turn() 
         let mut same_turn = reasoning("same-turn-detail");
         let mut next_turn = reasoning("next-turn-detail");
         for item in [&mut same_turn, &mut next_turn] {
-            if let ThreadItem::Reasoning { summary, .. } = item {
+            if let ThreadItemPayload::Reasoning { summary, .. } = item {
                 *summary = vec!["Exactly the same reasoning text".to_owned()];
             }
         }
@@ -191,7 +195,7 @@ async fn every_page_split_folds_reasoning_before_answer_and_completion_boundarie
             let mut app = make_test_app().await;
             let mut items = vec![call("call", kind, "completed"), reasoning("detail")];
             if let Some(text) = answer {
-                items.push(ThreadItem::AgentMessage {
+                items.push(ThreadItemPayload::AgentMessage {
                     id: "answer".to_owned(),
                     text: text.to_owned(),
                     phase: None,
@@ -247,7 +251,7 @@ async fn every_page_split_folds_reasoning_before_answer_and_completion_boundarie
 async fn failed_exploration_retains_following_reasoning_at_every_page_split() {
     let mut app = make_test_app().await;
     let mut failed = call("failed", ActivityKind::Exploration, "failed");
-    if let ThreadItem::CommandExecution { exit_code, .. } = &mut failed {
+    if let ThreadItemPayload::CommandExecution { exit_code, .. } = &mut failed {
         *exit_code = Some(1);
     }
     let current = turn(vec![

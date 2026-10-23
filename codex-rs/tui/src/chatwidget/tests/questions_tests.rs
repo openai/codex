@@ -779,7 +779,7 @@ async fn question_drafts_survive_navigation_and_snapshot_replay() {
     chat.bottom_pane.handle_paste("second draft".into());
     let saved = chat.capture_thread_input_state();
     let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
-    let item = AppServerThreadItem::AgentMessage {
+    let item = AppServerThreadItemPayload::AgentMessage {
         id: "buffered".into(),
         text: String::new(),
         phase: None,
@@ -795,12 +795,13 @@ async fn question_drafts_survive_navigation_and_snapshot_replay() {
         assert!(chat.bottom_pane.questions.is_none());
     }
     chat.handle_server_notification(
-        ServerNotification::ItemCompleted(ItemCompletedNotification {
+        ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+            "thread".into(),
+            "turn".into(),
             item,
-            thread_id: "thread".into(),
-            turn_id: "turn".into(),
-            completed_at_ms: 0,
-        }),
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 0,
+        )),
         Some(ReplayKind::ThreadSnapshot),
     );
     assert_eq!(question_count(&chat), 1);
@@ -980,7 +981,7 @@ async fn desktop_async_answer_dismisses_only_its_question_and_preserves_the_othe
         let reply = format!(
             "# Context from my IDE setup:\n\n## Open tabs:\n- lib.rs: src/lib.rs\n\n## My request for Codex:\n{reply}"
         );
-        let item = AppServerThreadItem::UserMessage {
+        let item = AppServerThreadItemPayload::UserMessage {
             id: "answer".into(),
             client_id: None,
             content: vec![UserInput::Text {
@@ -989,12 +990,13 @@ async fn desktop_async_answer_dismisses_only_its_question_and_preserves_the_othe
             }],
         };
         chat.handle_server_notification(
-            ServerNotification::ItemCompleted(ItemCompletedNotification {
-                thread_id: "thread".into(),
-                turn_id: "turn".into(),
-                completed_at_ms: 0,
-                item: item.clone(),
-            }),
+            ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+                "thread".into(),
+                "turn".into(),
+                item.clone(),
+                /*started_at_ms*/ None,
+                /*completed_at_ms*/ 0,
+            )),
             replay_kind,
         );
         assert_eq!(question_count(&chat), 1);

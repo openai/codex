@@ -6,6 +6,7 @@ use crate::chatwidget::tests::helpers::render_bottom_popup;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
+use codex_app_server_protocol::ThreadItem;
 use pretty_assertions::assert_eq;
 
 fn delta(thread: &str, turn: &str, item: &str) -> ServerNotification {
@@ -18,11 +19,10 @@ fn delta(thread: &str, turn: &str, item: &str) -> ServerNotification {
 }
 
 fn completed(thread: &str) -> ServerNotification {
-    ServerNotification::ItemCompleted(ItemCompletedNotification {
-        thread_id: thread.into(),
-        turn_id: "turn".into(),
-        completed_at_ms: 0,
-        item: ThreadItem::AgentMessage {
+    ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+        thread.into(),
+        "turn".into(),
+        ThreadItemPayload::AgentMessage {
             id: "answer".into(),
             text: "Final **answer**".into(),
             phase: None,
@@ -30,7 +30,9 @@ fn completed(thread: &str) -> ServerNotification {
             delivery: None,
             questions: None,
         },
-    })
+        /*started_at_ms*/ None,
+        /*completed_at_ms*/ 0,
+    ))
 }
 
 #[tokio::test]
@@ -50,16 +52,18 @@ async fn refreshed_active_reasoning_accepts_later_deltas_and_complete_summary() 
             ThreadEventChannel::new_with_session(capacity, session.clone(), vec![turn.clone()]);
         {
             let mut store = channel.store.lock().await;
-            store.push_notification(ServerNotification::ItemStarted(ItemStartedNotification {
-                thread_id: thread_id.to_string(),
-                turn_id: turn.id.clone(),
-                item: ThreadItem::Reasoning {
-                    id: "reasoning".into(),
-                    summary: Vec::new(),
-                    content: Vec::new(),
-                },
-                started_at_ms: 0,
-            }));
+            store.push_notification(ServerNotification::ItemStarted(
+                ItemStartedNotification::new(
+                    thread_id.to_string(),
+                    turn.id.clone(),
+                    ThreadItemPayload::Reasoning {
+                        id: "reasoning".into(),
+                        summary: Vec::new(),
+                        content: Vec::new(),
+                    },
+                    /*started_at_ms*/ 0,
+                ),
+            ));
             store.push_notification(ServerNotification::ReasoningSummaryTextDelta(
                 ReasoningSummaryTextDeltaNotification {
                     thread_id: thread_id.to_string(),
@@ -71,29 +75,25 @@ async fn refreshed_active_reasoning_accepts_later_deltas_and_complete_summary() 
             ));
             assert_eq!(store.buffer.len(), capacity.min(/*other*/ 2));
             if voice_handoff {
-                store.push_notification(ServerNotification::ItemStarted(ItemStartedNotification {
-                    thread_id: thread_id.to_string(),
-                    turn_id: turn.id.clone(),
-                    item: ThreadItem::UserMessage {
+                store.push_notification(ServerNotification::ItemStarted(ItemStartedNotification::new(thread_id.to_string(), turn.id.clone(), ThreadItemPayload::UserMessage {
                         id: "voice-handoff".into(),
                         client_id: None,
                         content: vec![AppServerUserInput::Text {
                             text: "<realtime_delegation><input>spoken follow-up</input></realtime_delegation>".into(),
                             text_elements: Vec::new(),
                         }],
-                    },
-                    started_at_ms: 0,
-                }));
+                    }, /*started_at_ms*/ 0)));
             }
         }
         let mut snapshot = channel.store.lock().await.snapshot();
         app.thread_event_channels.insert(thread_id, channel);
         if refreshed_item_is_partial {
-            turn.items.push(ThreadItem::Reasoning {
-                id: "reasoning".into(),
-                summary: vec!["**First heading**\nOriginal analysis paragraph".into()],
-                content: Vec::new(),
-            });
+            turn.items
+                .push(ThreadItem::untimed(ThreadItemPayload::Reasoning {
+                    id: "reasoning".into(),
+                    summary: vec!["**First heading**\nOriginal analysis paragraph".into()],
+                    content: Vec::new(),
+                }));
         }
         if refresh {
             app.apply_refreshed_snapshot_thread(
@@ -122,19 +122,14 @@ async fn refreshed_active_reasoning_accepts_later_deltas_and_complete_summary() 
             /*replay_kind*/ None,
         );
         assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Final paragraph"));
-        let completed = ServerNotification::ItemCompleted(ItemCompletedNotification {
-                thread_id: thread_id.to_string(),
-                turn_id: "reasoning-turn".into(),
-                item: ThreadItem::Reasoning {
+        let completed = ServerNotification::ItemCompleted(ItemCompletedNotification::new(thread_id.to_string(), "reasoning-turn".into(), ThreadItemPayload::Reasoning {
                     id: "reasoning".into(),
                     summary: vec![
                         "**First heading**\nOriginal analysis paragraph\n**Running checks**\nFinal paragraph"
                             .into(),
                     ],
                     content: Vec::new(),
-                },
-                completed_at_ms: 0,
-            });
+                }, /*started_at_ms*/ None, /*completed_at_ms*/ 0));
         let store = &app.thread_event_channels[&thread_id].store;
         store.lock().await.push_notification_ref(&completed);
         assert!(
@@ -224,7 +219,7 @@ fn buffered_replay_keeps_unfinished_and_unrelated_deltas_in_order() {
 #[test]
 fn evicted_voice_delegation_marker_still_suppresses_private_replay() {
     let mut store = ThreadEventStore::new(/*capacity*/ 2);
-    let voice_request = ThreadItem::UserMessage {
+    let voice_request = ThreadItemPayload::UserMessage {
         id: "user".into(),
         client_id: None,
         content: vec![codex_app_server_protocol::UserInput::Text {
@@ -233,19 +228,18 @@ fn evicted_voice_delegation_marker_still_suppresses_private_replay() {
         }],
     };
     store.push_notification(ServerNotification::ItemStarted(
-        codex_app_server_protocol::ItemStartedNotification {
-            thread_id: "thread".into(),
-            turn_id: "voice-turn".into(),
-            started_at_ms: 0,
-            item: voice_request.clone(),
-        },
+        codex_app_server_protocol::ItemStartedNotification::new(
+            "thread".into(),
+            "voice-turn".into(),
+            voice_request.clone(),
+            /*started_at_ms*/ 0,
+        ),
     ));
     store.push_notification(delta("thread", "voice-turn", "reasoning"));
-    let private = ServerNotification::ItemCompleted(ItemCompletedNotification {
-        thread_id: "thread".into(),
-        turn_id: "voice-turn".into(),
-        completed_at_ms: 0,
-        item: ThreadItem::AgentMessage {
+    let private = ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+        "thread".into(),
+        "voice-turn".into(),
+        ThreadItemPayload::AgentMessage {
             id: "reasoning".into(),
             text: "[ANALYSIS] private".into(),
             phase: None,
@@ -253,7 +247,9 @@ fn evicted_voice_delegation_marker_still_suppresses_private_replay() {
             delivery: None,
             questions: None,
         },
-    });
+        /*started_at_ms*/ None,
+        /*completed_at_ms*/ 0,
+    ));
     store.push_notification(private.clone());
     assert!(store.snapshot().events.is_empty());
     store.push_notification(delta("thread", "voice-turn", "unfinished"));
@@ -286,16 +282,17 @@ fn evicted_voice_delegation_marker_still_suppresses_private_replay() {
                 content_index: 0,
             },
         ),
-        ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: "thread".into(),
-            turn_id: "voice-turn".into(),
-            completed_at_ms: 0,
-            item: ThreadItem::Reasoning {
+        ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+            "thread".into(),
+            "voice-turn".into(),
+            ThreadItemPayload::Reasoning {
                 id: "reasoning".into(),
                 summary: vec!["private summary".into()],
                 content: vec!["private raw reasoning".into()],
             },
-        }),
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 0,
+        )),
     ] {
         store.push_notification(notification);
         assert!(store.snapshot().events.is_empty());
@@ -305,7 +302,7 @@ fn evicted_voice_delegation_marker_still_suppresses_private_replay() {
     resumed.set_turns(vec![Turn {
         id: "voice-turn".into(),
         root_turn_id: None,
-        items: vec![voice_request],
+        items: vec![ThreadItem::untimed(voice_request)],
         items_view: codex_app_server_protocol::TurnItemsView::Summary,
         status: TurnStatus::InProgress,
         error: None,
@@ -331,12 +328,12 @@ fn evicted_voice_delegation_marker_still_suppresses_private_replay() {
 
 #[test]
 fn saved_voice_turn_suppresses_reasoning_without_hiding_typed_reasoning() {
-    let reasoning = ThreadItem::Reasoning {
+    let reasoning = ThreadItemPayload::Reasoning {
         id: "reasoning".into(),
         summary: vec!["private summary".into()],
         content: vec!["private raw reasoning".into()],
     };
-    let voice_request = ThreadItem::UserMessage {
+    let voice_request = ThreadItemPayload::UserMessage {
         id: "voice-request".into(),
         client_id: None,
         content: vec![codex_app_server_protocol::UserInput::Text {
@@ -357,21 +354,27 @@ fn saved_voice_turn_suppresses_reasoning_without_hiding_typed_reasoning() {
     };
     let mut store = ThreadEventStore::new(/*capacity*/ 4);
     store.set_turns(vec![
-        turn("voice", vec![voice_request.clone(), reasoning.clone()]),
-        turn("typed", vec![reasoning.clone()]),
+        turn(
+            "voice",
+            vec![
+                ThreadItem::untimed(voice_request.clone()),
+                ThreadItem::untimed(reasoning.clone()),
+            ],
+        ),
+        turn("typed", vec![ThreadItem::untimed(reasoning.clone())]),
     ]);
     assert_eq!(
         store.snapshot().turns,
         vec![
-            turn("voice", vec![voice_request]),
-            turn("typed", vec![reasoning])
+            turn("voice", vec![ThreadItem::untimed(voice_request)]),
+            turn("typed", vec![ThreadItem::untimed(reasoning)])
         ]
     );
 }
 
 #[test]
 fn snapshot_keeps_typed_output_before_voice_handoff_in_the_same_turn() {
-    let commentary = |id: &str, text: &str| ThreadItem::AgentMessage {
+    let commentary = |id: &str, text: &str| ThreadItemPayload::AgentMessage {
         id: id.into(),
         text: text.into(),
         phase: Some(codex_protocol::models::MessagePhase::Commentary),
@@ -379,7 +382,7 @@ fn snapshot_keeps_typed_output_before_voice_handoff_in_the_same_turn() {
         memory_citation: None,
         delivery: None,
     };
-    let marker = ThreadItem::UserMessage {
+    let marker = ThreadItemPayload::UserMessage {
         id: "voice".into(),
         client_id: None,
         content: vec![codex_app_server_protocol::UserInput::Text {
@@ -393,7 +396,11 @@ fn snapshot_keeps_typed_output_before_voice_handoff_in_the_same_turn() {
     store.set_turns(vec![Turn {
         id: "shared".into(),
         root_turn_id: None,
-        items: vec![typed.clone(), marker.clone(), private.clone()],
+        items: vec![
+            ThreadItem::untimed(typed.clone()),
+            ThreadItem::untimed(marker.clone()),
+            ThreadItem::untimed(private.clone()),
+        ],
         items_view: codex_app_server_protocol::TurnItemsView::Full,
         status: TurnStatus::InProgress,
         error: None,
@@ -403,33 +410,44 @@ fn snapshot_keeps_typed_output_before_voice_handoff_in_the_same_turn() {
     }]);
     for item in [typed.clone(), marker.clone(), private] {
         store.push_notification(ServerNotification::ItemCompleted(
-            ItemCompletedNotification {
-                thread_id: "thread".into(),
-                turn_id: "shared".into(),
-                completed_at_ms: 0,
+            ItemCompletedNotification::new(
+                "thread".into(),
+                "shared".into(),
                 item,
-            },
+                /*started_at_ms*/ None,
+                /*completed_at_ms*/ 0,
+            ),
         ));
     }
     let snapshot = store.snapshot();
-    assert_eq!(snapshot.turns[0].items, vec![typed.clone(), marker]);
+    assert_eq!(
+        snapshot.turns[0]
+            .items
+            .iter()
+            .map(|entry| &entry.payload)
+            .collect::<Vec<_>>(),
+        [&typed, &marker]
+    );
     let completed = snapshot
         .events
         .into_iter()
         .filter_map(|event| match event {
             ThreadBufferedEvent::Notification(notification) => match *notification {
-                ServerNotification::ItemCompleted(item) => Some(item.item),
+                ServerNotification::ItemCompleted(item) => Some(item.item.payload),
                 _ => None,
             },
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(completed, vec![typed, snapshot.turns[0].items[1].clone()]);
+    assert_eq!(
+        completed,
+        vec![typed, snapshot.turns[0].items[1].payload.clone()]
+    );
 }
 
 #[test]
 fn snapshot_keeps_typed_item_completed_after_voice_handoff() {
-    let typed = ThreadItem::AgentMessage {
+    let typed = ThreadItemPayload::AgentMessage {
         id: "typed".into(),
         text: "Typed commentary completed late".into(),
         phase: Some(codex_protocol::models::MessagePhase::Commentary),
@@ -437,7 +455,7 @@ fn snapshot_keeps_typed_item_completed_after_voice_handoff() {
         memory_citation: None,
         delivery: None,
     };
-    let private = ThreadItem::AgentMessage {
+    let private = ThreadItemPayload::AgentMessage {
         id: "private".into(),
         text: "Voice-private commentary".into(),
         phase: Some(codex_protocol::models::MessagePhase::Commentary),
@@ -445,7 +463,7 @@ fn snapshot_keeps_typed_item_completed_after_voice_handoff() {
         memory_citation: None,
         delivery: None,
     };
-    let marker = ThreadItem::UserMessage {
+    let marker = ThreadItemPayload::UserMessage {
         id: "voice".into(),
         client_id: None,
         content: vec![codex_app_server_protocol::UserInput::Text {
@@ -456,22 +474,23 @@ fn snapshot_keeps_typed_item_completed_after_voice_handoff() {
     let mut store = ThreadEventStore::new(/*capacity*/ 8);
     for item in [typed.clone(), marker, private.clone()] {
         store.push_notification(ServerNotification::ItemStarted(
-            codex_app_server_protocol::ItemStartedNotification {
-                thread_id: "thread".into(),
-                turn_id: "shared".into(),
-                started_at_ms: 0,
+            codex_app_server_protocol::ItemStartedNotification::new(
+                "thread".into(),
+                "shared".into(),
                 item,
-            },
+                /*started_at_ms*/ 0,
+            ),
         ));
     }
     for item in [typed.clone(), private] {
         store.push_notification(ServerNotification::ItemCompleted(
-            ItemCompletedNotification {
-                thread_id: "thread".into(),
-                turn_id: "shared".into(),
-                completed_at_ms: 0,
+            ItemCompletedNotification::new(
+                "thread".into(),
+                "shared".into(),
                 item,
-            },
+                /*started_at_ms*/ None,
+                /*completed_at_ms*/ 0,
+            ),
         ));
     }
     let completed = store
@@ -480,7 +499,7 @@ fn snapshot_keeps_typed_item_completed_after_voice_handoff() {
         .into_iter()
         .filter_map(|event| match event {
             ThreadBufferedEvent::Notification(notification) => match *notification {
-                ServerNotification::ItemCompleted(n) => Some(n.item),
+                ServerNotification::ItemCompleted(n) => Some(n.item.payload),
                 _ => None,
             },
             _ => None,
@@ -494,11 +513,10 @@ async fn evicted_voice_marker_survives_widget_snapshot_for_late_reasoning() {
     let thread_id = ThreadId::new();
     let mut store = ThreadEventStore::new(/*capacity*/ 1);
     store.push_notification(ServerNotification::ItemStarted(
-        codex_app_server_protocol::ItemStartedNotification {
-            thread_id: thread_id.to_string(),
-            turn_id: "voice-turn".into(),
-            started_at_ms: 0,
-            item: ThreadItem::UserMessage {
+        codex_app_server_protocol::ItemStartedNotification::new(
+            thread_id.to_string(),
+            "voice-turn".into(),
+            ThreadItemPayload::UserMessage {
                 id: "user".into(),
                 client_id: None,
                 content: vec![codex_app_server_protocol::UserInput::Text {
@@ -507,7 +525,8 @@ async fn evicted_voice_marker_survives_widget_snapshot_for_late_reasoning() {
                     text_elements: Vec::new(),
                 }],
             },
-        },
+            /*started_at_ms*/ 0,
+        ),
     ));
     store.push_notification(delta(&thread_id.to_string(), "voice-turn", "private"));
     let snapshot = store.snapshot();
@@ -534,16 +553,17 @@ async fn evicted_voice_marker_survives_widget_snapshot_for_late_reasoning() {
         /*replay_kind*/ None,
     );
     app.chat_widget.handle_server_notification(
-        ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: thread_id.to_string(),
-            turn_id: "voice-turn".into(),
-            completed_at_ms: 0,
-            item: ThreadItem::Reasoning {
+        ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+            thread_id.to_string(),
+            "voice-turn".into(),
+            ThreadItemPayload::Reasoning {
                 id: "late-reasoning".into(),
                 summary: vec!["private after switch".into()],
                 content: Vec::new(),
             },
-        }),
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 0,
+        )),
         /*replay_kind*/ None,
     );
     app.chat_widget.handle_server_notification(
@@ -551,11 +571,10 @@ async fn evicted_voice_marker_survives_widget_snapshot_for_late_reasoning() {
         /*replay_kind*/ None,
     );
     app.chat_widget.handle_server_notification(
-        ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: thread_id.to_string(),
-            turn_id: "voice-turn".into(),
-            completed_at_ms: 0,
-            item: ThreadItem::AgentMessage {
+        ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+            thread_id.to_string(),
+            "voice-turn".into(),
+            ThreadItemPayload::AgentMessage {
                 id: "private-commentary".into(),
                 text: "[COMMENTARY] private after switch".into(),
                 phase: None,
@@ -563,7 +582,9 @@ async fn evicted_voice_marker_survives_widget_snapshot_for_late_reasoning() {
                 delivery: None,
                 questions: None,
             },
-        }),
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 0,
+        )),
         /*replay_kind*/ None,
     );
     while let Ok(event) = events.try_recv() {
@@ -649,7 +670,7 @@ async fn misalignment_buffered_replay_preserves_input_after_continuation() {
     };
     let failed_turn = Turn {
         error: Some(error.clone()),
-        items: vec![ThreadItem::McpToolCall {
+        items: vec![ThreadItem::untimed(ThreadItemPayload::McpToolCall {
             id: "tool-call".into(),
             server: "sample".into(),
             tool: "inspect".into(),
@@ -663,7 +684,7 @@ async fn misalignment_buffered_replay_preserves_input_after_continuation() {
             result: None,
             error: None,
             duration_ms: None,
-        }],
+        })],
         ..test_turn("failed-turn", TurnStatus::Failed, Vec::new())
     };
     let continued_turn = test_turn("continued-turn", TurnStatus::Completed, Vec::new());

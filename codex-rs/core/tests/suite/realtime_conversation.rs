@@ -3937,7 +3937,7 @@ async fn conversation_user_text_turn_is_not_sent_to_realtime(ephemeral: bool) ->
                 ThreadTimelineEntry::Realtime { item, .. }
                     if matches!(&item.content, ThreadRealtimeItemContent::TranscriptSegment { text, .. } if text == "spoken before typed input") => Some("speech"),
                 ThreadTimelineEntry::Item { item, .. }
-                    if matches!(item.as_ref(), codex_app_server_protocol::ThreadItem::UserMessage { .. }) => Some("typed input"),
+                    if matches!(&item.payload, codex_app_server_protocol::ThreadItemPayload::UserMessage { .. }) => Some("typed input"),
                 _ => None,
             }).collect::<Vec<_>>(),
             vec!["speech", "typed input"]

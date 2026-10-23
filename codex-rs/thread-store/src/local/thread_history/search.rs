@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::strip_user_message_prefix;
@@ -176,12 +176,11 @@ ORDER BY rollout_ordinal ASC
         let mut matching_occurrences = 0_usize;
         while let Some(row) = rows.try_next().await.map_err(thread_history_error)? {
             let row = candidate_row(row)?;
-            let item =
-                serde_json::from_str::<ThreadItem>(row.item_json.as_str()).map_err(|err| {
-                    ThreadStoreError::Internal {
-                        message: format!("failed to deserialize stored thread item: {err}"),
-                    }
-                })?;
+            let item = serde_json::from_str::<ThreadItemPayload>(row.item_json.as_str()).map_err(
+                |err| ThreadStoreError::Internal {
+                    message: format!("failed to deserialize stored thread item: {err}"),
+                },
+            )?;
             let Some(text) = searchable_text(&item) else {
                 continue;
             };
@@ -309,9 +308,9 @@ fn invalid_cursor(cursor: &str) -> ThreadStoreError {
     }
 }
 
-fn searchable_text(item: &ThreadItem) -> Option<Cow<'_, str>> {
+fn searchable_text(item: &ThreadItemPayload) -> Option<Cow<'_, str>> {
     match item {
-        ThreadItem::UserMessage { content, .. } => {
+        ThreadItemPayload::UserMessage { content, .. } => {
             let mut text_parts = content
                 .iter()
                 .filter_map(|input| match input {
@@ -335,27 +334,27 @@ fn searchable_text(item: &ThreadItem) -> Option<Cow<'_, str>> {
                 }
             }
         }
-        ThreadItem::AgentMessage { text, .. } => {
+        ThreadItemPayload::AgentMessage { text, .. } => {
             let text = markdown_to_search_text(text);
             (!text.is_empty()).then_some(Cow::Owned(text))
         }
-        ThreadItem::HookPrompt { .. }
-        | ThreadItem::FunctionCallOutput { .. }
-        | ThreadItem::Plan { .. }
-        | ThreadItem::Reasoning { .. }
-        | ThreadItem::CommandExecution { .. }
-        | ThreadItem::FileChange { .. }
-        | ThreadItem::McpToolCall { .. }
-        | ThreadItem::DynamicToolCall { .. }
-        | ThreadItem::CollabAgentToolCall { .. }
-        | ThreadItem::SubAgentActivity { .. }
-        | ThreadItem::WebSearch(_)
-        | ThreadItem::ImageView { .. }
-        | ThreadItem::Sleep(_)
-        | ThreadItem::ImageGeneration(_)
-        | ThreadItem::EnteredReviewMode { .. }
-        | ThreadItem::ExitedReviewMode { .. }
-        | ThreadItem::ContextCompaction { .. } => None,
+        ThreadItemPayload::HookPrompt { .. }
+        | ThreadItemPayload::FunctionCallOutput { .. }
+        | ThreadItemPayload::Plan { .. }
+        | ThreadItemPayload::Reasoning { .. }
+        | ThreadItemPayload::CommandExecution { .. }
+        | ThreadItemPayload::FileChange { .. }
+        | ThreadItemPayload::McpToolCall { .. }
+        | ThreadItemPayload::DynamicToolCall { .. }
+        | ThreadItemPayload::CollabAgentToolCall { .. }
+        | ThreadItemPayload::SubAgentActivity { .. }
+        | ThreadItemPayload::WebSearch(_)
+        | ThreadItemPayload::ImageView { .. }
+        | ThreadItemPayload::Sleep(_)
+        | ThreadItemPayload::ImageGeneration(_)
+        | ThreadItemPayload::EnteredReviewMode { .. }
+        | ThreadItemPayload::ExitedReviewMode { .. }
+        | ThreadItemPayload::ContextCompaction { .. } => None,
     }
 }
 

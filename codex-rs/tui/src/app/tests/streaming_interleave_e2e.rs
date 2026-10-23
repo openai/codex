@@ -126,23 +126,23 @@ async fn command_start_before_message_completion_does_not_duplicate_preamble() -
                                 observed_order.push("agent delta");
                             }
                             ServerNotification::ItemStarted(started)
-                                if matches!(&started.item, ThreadItem::CommandExecution { .. }) =>
+                                if matches!(&started.item.payload, ThreadItemPayload::CommandExecution { .. }) =>
                             {
                                 observed_order.push("command started");
                                 release_completion.take().expect("first command start").send(()).expect("completion gate should remain open");
                             }
                             ServerNotification::ItemCompleted(completed)
-                                if matches!(&completed.item, ThreadItem::AgentMessage { text, .. } if text == PREAMBLE) =>
+                                if matches!(&completed.item.payload, ThreadItemPayload::AgentMessage { text, .. } if text == PREAMBLE) =>
                             {
                                 observed_order.push("agent completed");
                             }
                             ServerNotification::ItemCompleted(completed) => {
-                                if let ThreadItem::CommandExecution {
+                                if let ThreadItemPayload::CommandExecution {
                                     status,
                                     aggregated_output,
                                     exit_code,
                                     ..
-                                } = &completed.item
+                                } = &completed.item.payload
                                 {
                                     completed_command = Some((
                                         status.clone(),

@@ -16,7 +16,7 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -318,9 +318,9 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
             let params = notification.params.expect("item/started params");
             let item_started: ItemStartedNotification =
                 serde_json::from_value(params).expect("deserialize item/started notification");
-            let ThreadItem::UserMessage {
+            let ThreadItemPayload::UserMessage {
                 client_id, content, ..
-            } = item_started.item
+            } = item_started.item.payload
             else {
                 continue;
             };

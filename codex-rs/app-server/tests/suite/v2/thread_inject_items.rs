@@ -11,6 +11,7 @@ use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -330,10 +331,16 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
     assert_eq!(turn.id, turn_started.turn.id);
     assert_eq!(turn_started.turn.status, TurnStatus::InProgress);
     assert_eq!(item_completed.turn_id, turn_started.turn.id);
-    assert_eq!(item_started.item, item_completed.item);
+    assert_eq!(
+        item_completed.item,
+        ThreadItem {
+            completed_at_ms: Some(item_completed.completed_at_ms),
+            ..item_started.item
+        }
+    );
     assert!(matches!(
-        &item_completed.item,
-        ThreadItem::FunctionCallOutput {
+        &item_completed.item.payload,
+        ThreadItemPayload::FunctionCallOutput {
             name,
             namespace,
             output: FunctionCallOutputBody::Text(output),

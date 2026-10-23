@@ -130,7 +130,7 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillErrorInfo;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryMode;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
@@ -322,15 +322,15 @@ enum ThreadInteractiveRequest {
 /// receiver thread ids. All other notification variants return `None`.
 fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[String]> {
     match notification {
-        ServerNotification::ItemStarted(notification) => match &notification.item {
-            ThreadItem::CollabAgentToolCall {
+        ServerNotification::ItemStarted(notification) => match &notification.item.payload {
+            ThreadItemPayload::CollabAgentToolCall {
                 receiver_thread_ids,
                 ..
             } => Some(receiver_thread_ids),
             _ => None,
         },
-        ServerNotification::ItemCompleted(notification) => match &notification.item {
-            ThreadItem::CollabAgentToolCall {
+        ServerNotification::ItemCompleted(notification) => match &notification.item.payload {
+            ThreadItemPayload::CollabAgentToolCall {
                 receiver_thread_ids,
                 ..
             } => Some(receiver_thread_ids),
@@ -340,14 +340,14 @@ fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[Str
     }
 }
 
-fn sub_agent_activity_item(notification: &ServerNotification) -> Option<&ThreadItem> {
+fn sub_agent_activity_item(notification: &ServerNotification) -> Option<&ThreadItemPayload> {
     match notification {
-        ServerNotification::ItemStarted(notification) => match &notification.item {
-            ThreadItem::SubAgentActivity { .. } => Some(&notification.item),
+        ServerNotification::ItemStarted(notification) => match &notification.item.payload {
+            ThreadItemPayload::SubAgentActivity { .. } => Some(&notification.item.payload),
             _ => None,
         },
-        ServerNotification::ItemCompleted(notification) => match &notification.item {
-            ThreadItem::SubAgentActivity { .. } => Some(&notification.item),
+        ServerNotification::ItemCompleted(notification) => match &notification.item.payload {
+            ThreadItemPayload::SubAgentActivity { .. } => Some(&notification.item.payload),
             _ => None,
         },
         _ => None,
@@ -359,8 +359,8 @@ fn collab_receiver_is_not_found(
     receiver_thread_id: &str,
 ) -> bool {
     match notification {
-        ServerNotification::ItemCompleted(notification) => match &notification.item {
-            ThreadItem::CollabAgentToolCall { agents_states, .. } => {
+        ServerNotification::ItemCompleted(notification) => match &notification.item.payload {
+            ThreadItemPayload::CollabAgentToolCall { agents_states, .. } => {
                 agents_states.get(receiver_thread_id).is_some_and(|state| {
                     matches!(
                         &state.status,
@@ -627,7 +627,7 @@ pub(crate) struct App {
     windows_sandbox: WindowsSandboxState,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
-    pending_realtime_speech_replay: HashMap<ThreadId, Vec<(String, ThreadItem)>>,
+    pending_realtime_speech_replay: HashMap<ThreadId, Vec<(String, ThreadItemPayload)>>,
     pending_realtime_transcript_replay:
         HashMap<ThreadId, VecDeque<crate::chatwidget::RealtimeTranscriptRecord>>,
     realtime_replay_order: VecDeque<ThreadId>,

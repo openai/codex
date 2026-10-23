@@ -154,7 +154,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerResponse;
 use codex_app_server_protocol::SubAgentActivityKind;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
 use codex_app_server_protocol::WebSearchAction;
@@ -535,36 +535,36 @@ struct TurnToolCounts {
 }
 
 impl TurnToolCounts {
-    fn record(&mut self, item: &ThreadItem) {
+    fn record(&mut self, item: &ThreadItemPayload) {
         match item {
-            ThreadItem::CommandExecution { .. } => self.shell_command += 1,
-            ThreadItem::FileChange { .. } => self.file_change += 1,
-            ThreadItem::McpToolCall { .. } => self.mcp_tool_call += 1,
-            ThreadItem::DynamicToolCall { .. } => self.dynamic_tool_call += 1,
-            ThreadItem::SubAgentActivity {
+            ThreadItemPayload::CommandExecution { .. } => self.shell_command += 1,
+            ThreadItemPayload::FileChange { .. } => self.file_change += 1,
+            ThreadItemPayload::McpToolCall { .. } => self.mcp_tool_call += 1,
+            ThreadItemPayload::DynamicToolCall { .. } => self.dynamic_tool_call += 1,
+            ThreadItemPayload::SubAgentActivity {
                 kind: SubAgentActivityKind::Completed,
                 ..
             } => return,
-            ThreadItem::CollabAgentToolCall { id, .. }
-            | ThreadItem::SubAgentActivity { id, .. } => {
+            ThreadItemPayload::CollabAgentToolCall { id, .. }
+            | ThreadItemPayload::SubAgentActivity { id, .. } => {
                 if !self.subagent_tool_call_ids.insert(id.clone()) {
                     return;
                 }
                 self.subagent_tool_call += 1;
             }
-            ThreadItem::WebSearch(_) => self.web_search += 1,
-            ThreadItem::ImageGeneration(_) => self.image_generation += 1,
-            ThreadItem::UserMessage { .. }
-            | ThreadItem::HookPrompt { .. }
-            | ThreadItem::AgentMessage { .. }
-            | ThreadItem::FunctionCallOutput { .. }
-            | ThreadItem::Plan { .. }
-            | ThreadItem::Reasoning { .. }
-            | ThreadItem::ImageView { .. }
-            | ThreadItem::Sleep(_)
-            | ThreadItem::EnteredReviewMode { .. }
-            | ThreadItem::ExitedReviewMode { .. }
-            | ThreadItem::ContextCompaction { .. } => return,
+            ThreadItemPayload::WebSearch(_) => self.web_search += 1,
+            ThreadItemPayload::ImageGeneration(_) => self.image_generation += 1,
+            ThreadItemPayload::UserMessage { .. }
+            | ThreadItemPayload::HookPrompt { .. }
+            | ThreadItemPayload::AgentMessage { .. }
+            | ThreadItemPayload::FunctionCallOutput { .. }
+            | ThreadItemPayload::Plan { .. }
+            | ThreadItemPayload::Reasoning { .. }
+            | ThreadItemPayload::ImageView { .. }
+            | ThreadItemPayload::Sleep(_)
+            | ThreadItemPayload::EnteredReviewMode { .. }
+            | ThreadItemPayload::ExitedReviewMode { .. }
+            | ThreadItemPayload::ContextCompaction { .. } => return,
         }
         self.total += 1;
     }
@@ -2060,15 +2060,17 @@ impl AnalyticsReducer {
                 }));
             }
             ServerNotification::ItemStarted(notification) => {
-                let Some(item_id) = tracked_tool_item_id(&notification.item) else {
+                let Some(item_id) = tracked_tool_item_id(&notification.item.payload) else {
                     return;
                 };
                 let Some(started_at_ms) = option_i64_to_u64(Some(notification.started_at_ms))
                 else {
                     return;
                 };
-                let model_context = match &notification.item {
-                    ThreadItem::CommandExecution { model_context, .. } => model_context.clone(),
+                let model_context = match &notification.item.payload {
+                    ThreadItemPayload::CommandExecution { model_context, .. } => {
+                        model_context.clone()
+                    }
                     _ => None,
                 };
                 self.turn_state(notification.turn_id.clone())
@@ -2079,7 +2081,7 @@ impl AnalyticsReducer {
                     turn_id: notification.turn_id.clone(),
                     item_id: item_id.to_string(),
                 };
-                let cua_identity = cua_mcp_tool_identity(&notification.item);
+                let cua_identity = cua_mcp_tool_identity(&notification.item.payload);
                 if cua_identity.is_some()
                     && self
                         .turns
@@ -2148,7 +2150,10 @@ impl AnalyticsReducer {
                 ));
             }
             ServerNotification::ItemCompleted(notification) => {
-                if matches!(notification.item, ThreadItem::SubAgentActivity { .. }) {
+                if matches!(
+                    notification.item.payload,
+                    ThreadItemPayload::SubAgentActivity { .. }
+                ) {
                     let Some(turn_state) = self.turns.get_mut(&notification.turn_id) else {
                         tracing::warn!(
                             thread_id = %notification.thread_id,
@@ -2157,10 +2162,10 @@ impl AnalyticsReducer {
                         );
                         return;
                     };
-                    turn_state.tool_counts.record(&notification.item);
+                    turn_state.tool_counts.record(&notification.item.payload);
                     return;
                 }
-                let Some(item_id) = tracked_tool_item_id(&notification.item) else {
+                let Some(item_id) = tracked_tool_item_id(&notification.item.payload) else {
                     return;
                 };
                 let key = ToolItemKey {
@@ -2168,7 +2173,7 @@ impl AnalyticsReducer {
                     turn_id: notification.turn_id.clone(),
                     item_id: item_id.to_string(),
                 };
-                let is_cua = cua_mcp_tool_identity(&notification.item).is_some();
+                let is_cua = cua_mcp_tool_identity(&notification.item.payload).is_some();
                 if is_cua
                     && self
                         .turns
@@ -2177,18 +2182,20 @@ impl AnalyticsReducer {
                 {
                     return;
                 }
-                let elicitation_type =
-                    if matches!(notification.item, ThreadItem::McpToolCall { .. }) {
-                        // Producers enqueue known classifications before completion on
-                        // the same analytics queue, so completed keys need no history.
-                        self.pending_mcp_tool_elicitations
-                            .iter()
-                            .position(|(pending, _)| pending == &key)
-                            .and_then(|index| self.pending_mcp_tool_elicitations.remove(index))
-                            .map(|(_, elicitation_type)| elicitation_type)
-                    } else {
-                        None
-                    };
+                let elicitation_type = if matches!(
+                    notification.item.payload,
+                    ThreadItemPayload::McpToolCall { .. }
+                ) {
+                    // Producers enqueue known classifications before completion on
+                    // the same analytics queue, so completed keys need no history.
+                    self.pending_mcp_tool_elicitations
+                        .iter()
+                        .position(|(pending, _)| pending == &key)
+                        .and_then(|index| self.pending_mcp_tool_elicitations.remove(index))
+                        .map(|(_, elicitation_type)| elicitation_type)
+                } else {
+                    None
+                };
                 let Some(turn_state) = self.turns.get_mut(&notification.turn_id) else {
                     tracing::warn!(
                         thread_id = %notification.thread_id,
@@ -2198,7 +2205,7 @@ impl AnalyticsReducer {
                     );
                     return;
                 };
-                turn_state.tool_counts.record(&notification.item);
+                turn_state.tool_counts.record(&notification.item.payload);
                 let Some((started_at_ms, model_context)) =
                     self.tool_items_started_at_ms.remove(&key)
                 else {
@@ -2222,7 +2229,7 @@ impl AnalyticsReducer {
                 if let Some(mut event) = tool_item_event(ToolItemEventInput {
                     thread_id: &notification.thread_id,
                     turn_id: &notification.turn_id,
-                    item: &notification.item,
+                    item: &notification.item.payload,
                     model_context: model_context.as_ref(),
                     started_at_ms,
                     completed_at_ms,
@@ -2245,12 +2252,14 @@ impl AnalyticsReducer {
                         .and_then(|config| config.turn_metadata.root_turn_id());
                     // Fast collaborator tools can complete before their sampling response.
                     // Keep the event until that response can supply its originating ID.
-                    let emission =
-                        if matches!(&notification.item, ThreadItem::CollabAgentToolCall { .. }) {
-                            ToolEventEmission::AwaitResponse
-                        } else {
-                            ToolEventEmission::ImmediateUnlessCorrelated
-                        };
+                    let emission = if matches!(
+                        &notification.item.payload,
+                        ThreadItemPayload::CollabAgentToolCall { .. }
+                    ) {
+                        ToolEventEmission::AwaitResponse
+                    } else {
+                        ToolEventEmission::ImmediateUnlessCorrelated
+                    };
                     self.record_tool_event(
                         &notification.thread_id,
                         &notification.turn_id,
@@ -2903,32 +2912,34 @@ fn warn_missing_analytics_context(
     );
 }
 
-pub(crate) fn tracked_tool_item_id(item: &ThreadItem) -> Option<&str> {
+pub(crate) fn tracked_tool_item_id(item: &ThreadItemPayload) -> Option<&str> {
     match item {
-        ThreadItem::CommandExecution { id, .. }
-        | ThreadItem::FileChange { id, .. }
-        | ThreadItem::McpToolCall { id, .. }
-        | ThreadItem::DynamicToolCall { id, .. }
-        | ThreadItem::CollabAgentToolCall { id, .. } => Some(id),
-        ThreadItem::WebSearch(item) => Some(&item.id),
-        ThreadItem::ImageGeneration(item) => Some(&item.id),
-        ThreadItem::UserMessage { .. }
-        | ThreadItem::HookPrompt { .. }
-        | ThreadItem::AgentMessage { .. }
-        | ThreadItem::FunctionCallOutput { .. }
-        | ThreadItem::Plan { .. }
-        | ThreadItem::Reasoning { .. }
-        | ThreadItem::SubAgentActivity { .. }
-        | ThreadItem::ImageView { .. }
-        | ThreadItem::Sleep(_)
-        | ThreadItem::EnteredReviewMode { .. }
-        | ThreadItem::ExitedReviewMode { .. }
-        | ThreadItem::ContextCompaction { .. } => None,
+        ThreadItemPayload::CommandExecution { id, .. }
+        | ThreadItemPayload::FileChange { id, .. }
+        | ThreadItemPayload::McpToolCall { id, .. }
+        | ThreadItemPayload::DynamicToolCall { id, .. }
+        | ThreadItemPayload::CollabAgentToolCall { id, .. } => Some(id),
+        ThreadItemPayload::WebSearch(item) => Some(&item.id),
+        ThreadItemPayload::ImageGeneration(item) => Some(&item.id),
+        ThreadItemPayload::UserMessage { .. }
+        | ThreadItemPayload::HookPrompt { .. }
+        | ThreadItemPayload::AgentMessage { .. }
+        | ThreadItemPayload::FunctionCallOutput { .. }
+        | ThreadItemPayload::Plan { .. }
+        | ThreadItemPayload::Reasoning { .. }
+        | ThreadItemPayload::SubAgentActivity { .. }
+        | ThreadItemPayload::ImageView { .. }
+        | ThreadItemPayload::Sleep(_)
+        | ThreadItemPayload::EnteredReviewMode { .. }
+        | ThreadItemPayload::ExitedReviewMode { .. }
+        | ThreadItemPayload::ContextCompaction { .. } => None,
     }
 }
 
-fn cua_mcp_tool_identity(item: &ThreadItem) -> Option<(&str, &str, Option<&str>, Option<&str>)> {
-    let ThreadItem::McpToolCall {
+fn cua_mcp_tool_identity(
+    item: &ThreadItemPayload,
+) -> Option<(&str, &str, Option<&str>, Option<&str>)> {
+    let ThreadItemPayload::McpToolCall {
         server,
         tool,
         plugin_id,
@@ -3037,7 +3048,7 @@ fn item_review_summary_key(pending_review: &PendingReviewState) -> Option<ToolIt
 struct ToolItemEventInput<'a> {
     thread_id: &'a str,
     turn_id: &'a str,
-    item: &'a ThreadItem,
+    item: &'a ThreadItemPayload,
     model_context: Option<&'a ModelInvocationContext>,
     started_at_ms: u64,
     completed_at_ms: u64,
@@ -3063,7 +3074,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
         elicitation_type,
     } = input;
     match item {
-        ThreadItem::CommandExecution {
+        ThreadItemPayload::CommandExecution {
             id,
             sandbox_type,
             plugin_id,
@@ -3122,7 +3133,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                 },
             ))
         }
-        ThreadItem::FileChange {
+        ThreadItemPayload::FileChange {
             id,
             changes,
             status,
@@ -3160,7 +3171,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                 },
             }))
         }
-        ThreadItem::McpToolCall {
+        ThreadItemPayload::McpToolCall {
             id,
             server,
             tool,
@@ -3209,7 +3220,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                 },
             ))
         }
-        ThreadItem::DynamicToolCall {
+        ThreadItemPayload::DynamicToolCall {
             id,
             tool,
             status,
@@ -3256,7 +3267,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                 },
             ))
         }
-        ThreadItem::CollabAgentToolCall {
+        ThreadItemPayload::CollabAgentToolCall {
             id,
             tool,
             status,
@@ -3323,7 +3334,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                 },
             ))
         }
-        ThreadItem::WebSearch(item) => {
+        ThreadItemPayload::WebSearch(item) => {
             let base = tool_item_base(
                 thread_id,
                 turn_id,
@@ -3353,7 +3364,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                 },
             }))
         }
-        ThreadItem::ImageGeneration(item) => {
+        ThreadItemPayload::ImageGeneration(item) => {
             let (terminal_status, failure_kind) = image_generation_outcome(item.status.as_str());
             let base = tool_item_base(
                 thread_id,
@@ -4235,11 +4246,10 @@ mod tests {
         reducer
             .ingest(
                 AnalyticsFact::Notification(Box::new(ServerNotification::ItemCompleted(
-                    ItemCompletedNotification {
-                        thread_id: keys[2].thread_id.clone(),
-                        turn_id: keys[2].turn_id.clone(),
-                        completed_at_ms: 1_000,
-                        item: ThreadItem::McpToolCall {
+                    ItemCompletedNotification::new(
+                        keys[2].thread_id.clone(),
+                        keys[2].turn_id.clone(),
+                        ThreadItemPayload::McpToolCall {
                             id: keys[2].item_id.clone(),
                             server: "server".to_string(),
                             tool: "tool".to_string(),
@@ -4254,7 +4264,9 @@ mod tests {
                             error: None,
                             duration_ms: None,
                         },
-                    },
+                        /*started_at_ms*/ None,
+                        /*completed_at_ms*/ 1_000,
+                    ),
                 ))),
                 &mut events,
             )

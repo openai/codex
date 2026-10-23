@@ -19,6 +19,7 @@ use crate::thread_sample::SampleThread;
 use crate::thread_sample::generate_sample;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ThreadHistoryMode as ApiThreadHistoryMode;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadItemsListAnchor;
 use codex_app_server_protocol::ThreadItemsListCursor;
 use codex_app_server_protocol::ThreadRevertParams;
@@ -3515,8 +3516,8 @@ impl ThreadRequestProcessor {
                 })
                 .await
                 .map_err(paginated_history_list_error)?;
-            for item in page.items {
-                items.push(deserialize_stored_thread_item(item)?);
+            for item in &page.items {
+                items.push(stored_thread_item_to_api_item(item)?);
             }
             let Some(next_cursor) = page.next_cursor else {
                 return Ok(items);
@@ -6366,29 +6367,31 @@ fn paginated_history_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
     }
 }
 
-fn deserialize_stored_thread_item(
-    item: codex_thread_store::StoredThreadItem,
+fn stored_thread_item_to_api_item(
+    stored_item: &codex_thread_store::StoredThreadItem,
 ) -> Result<ThreadItem, JSONRPCErrorError> {
-    serde_json::from_slice::<ThreadItem>(&item.item_json).map_err(|err| {
+    let payload = serde_json::from_slice(&stored_item.item_json).map_err(|err| {
         internal_error(format!(
             "failed to deserialize stored thread item {}: {err}",
-            item.item_id
+            stored_item.item_id
         ))
+    })?;
+    Ok(ThreadItem {
+        payload,
+        started_at_ms: stored_item.started_at_ms,
+        completed_at_ms: stored_item.completed_at_ms,
     })
 }
 
 fn stored_thread_item_to_entry(
     stored_item: codex_thread_store::StoredThreadItem,
 ) -> Result<ThreadItemEntry, JSONRPCErrorError> {
-    let turn_id = stored_item.turn_id.clone();
-    let started_at_ms = stored_item.started_at_ms;
-    let completed_at_ms = stored_item.completed_at_ms;
-    let item = deserialize_stored_thread_item(stored_item)?;
+    let item = stored_thread_item_to_api_item(&stored_item)?;
     Ok(ThreadItemEntry {
-        turn_id,
+        turn_id: stored_item.turn_id,
+        started_at_ms: item.started_at_ms,
+        completed_at_ms: item.completed_at_ms,
         item,
-        started_at_ms,
-        completed_at_ms,
     })
 }
 
@@ -6410,8 +6413,8 @@ fn stored_turn_to_api_turn(
     });
     let items = turn
         .items
-        .into_iter()
-        .map(deserialize_stored_thread_item)
+        .iter()
+        .map(stored_thread_item_to_api_item)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Turn {
         id: turn.turn_id,

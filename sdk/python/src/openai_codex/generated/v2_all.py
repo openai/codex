@@ -5309,8 +5309,22 @@ class HookPromptThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     fragments: list[HookPromptFragment]
     id: str
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     type: Annotated[Literal["hookPrompt"], Field(title="HookPromptThreadItemType")]
 
 
@@ -5318,7 +5332,21 @@ class PlanThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     id: str
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     text: str
     type: Annotated[Literal["plan"], Field(title="PlanThreadItemType")]
 
@@ -5327,8 +5355,22 @@ class ReasoningThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     content: list[str] | None = []
     id: str
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     summary: list[str] | None = []
     type: Annotated[Literal["reasoning"], Field(title="ReasoningThreadItemType")]
 
@@ -5339,6 +5381,13 @@ class McpToolCallThreadItem(BaseModel):
     )
     app_context: Annotated[McpToolCallAppContext | None, Field(alias="appContext")] = None
     arguments: Any
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     duration_ms: Annotated[
         int | None,
         Field(alias="durationMs", description="The duration of the MCP tool call in milliseconds."),
@@ -5363,6 +5412,13 @@ class McpToolCallThreadItem(BaseModel):
     read_only_hint: Annotated[bool | None, Field(alias="readOnlyHint")] = None
     result: McpToolCallResult | None = None
     server: str
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     status: McpToolCallStatus
     tool: str
     type: Annotated[Literal["mcpToolCall"], Field(title="McpToolCallThreadItemType")]
@@ -5373,6 +5429,13 @@ class DynamicToolCallThreadItem(BaseModel):
         populate_by_name=True,
     )
     arguments: Any
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     content_items: Annotated[
         list[DynamicToolCallOutputContentItem] | None, Field(alias="contentItems")
     ] = None
@@ -5384,6 +5447,13 @@ class DynamicToolCallThreadItem(BaseModel):
     ] = None
     id: str
     namespace: str | None = None
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     status: DynamicToolCallStatus
     success: bool | None = None
     tool: str
@@ -5396,6 +5466,13 @@ class SubAgentActivityThreadItem(BaseModel):
     )
     agent_path: Annotated[str, Field(alias="agentPath")]
     agent_thread_id: Annotated[str, Field(alias="agentThreadId")]
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     id: str
     kind: SubAgentActivityKind
     model: Annotated[
@@ -5411,6 +5488,13 @@ class SubAgentActivityThreadItem(BaseModel):
             description="Resolved reasoning effort at sub-agent creation, when known.",
         ),
     ] = None
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     type: Annotated[Literal["subAgentActivity"], Field(title="SubAgentActivityThreadItemType")]
 
 
@@ -5418,8 +5502,22 @@ class ImageViewThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     id: str
     path: LegacyAppPathString
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     type: Annotated[Literal["imageView"], Field(title="ImageViewThreadItemType")]
 
 
@@ -5427,8 +5525,22 @@ class SleepThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     duration_ms: Annotated[int, Field(alias="durationMs", ge=0)]
     id: str
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     type: Annotated[Literal["sleep"], Field(title="SleepThreadItemType")]
 
 
@@ -5436,6 +5548,13 @@ class FileIdThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     failure: ImageGenerationFailure | None = None
     id: str
     input_images: Annotated[
@@ -5447,6 +5566,13 @@ class FileIdThreadItem(BaseModel):
     ] = None
     revised_prompt: Annotated[str | None, Field(alias="revisedPrompt")] = None
     saved_path: Annotated[AbsolutePathBuf | None, Field(alias="savedPath")] = None
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     status: str
     transparent_background: Annotated[bool | None, Field(alias="transparentBackground")] = None
     type: Annotated[Literal["imageGeneration"], Field(title="ImageGenerationThreadItemType")]
@@ -5457,6 +5583,13 @@ class ResultThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     failure: ImageGenerationFailure | None = None
     id: str
     input_images: Annotated[
@@ -5468,6 +5601,13 @@ class ResultThreadItem(BaseModel):
     ] = None
     revised_prompt: Annotated[str | None, Field(alias="revisedPrompt")] = None
     saved_path: Annotated[AbsolutePathBuf | None, Field(alias="savedPath")] = None
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     status: str
     transparent_background: Annotated[bool | None, Field(alias="transparentBackground")] = None
     type: Annotated[Literal["imageGeneration"], Field(title="ImageGenerationThreadItemType")]
@@ -5481,8 +5621,22 @@ class EnteredReviewModeThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     id: str
     review: str
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     type: Annotated[Literal["enteredReviewMode"], Field(title="EnteredReviewModeThreadItemType")]
 
 
@@ -5490,8 +5644,22 @@ class ExitedReviewModeThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     id: str
     review: str
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     type: Annotated[Literal["exitedReviewMode"], Field(title="ExitedReviewModeThreadItemType")]
 
 
@@ -5499,7 +5667,21 @@ class ContextCompactionThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     id: str
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     type: Annotated[Literal["contextCompaction"], Field(title="ContextCompactionThreadItemType")]
 
 
@@ -9993,8 +10175,22 @@ class UserMessageThreadItem(BaseModel):
         populate_by_name=True,
     )
     client_id: Annotated[str | None, Field(alias="clientId")] = None
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     content: list[UserInput]
     id: str
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     type: Annotated[Literal["userMessage"], Field(title="UserMessageThreadItemType")]
 
 
@@ -10002,11 +10198,25 @@ class AgentMessageThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     delivery: AgentMessageDelivery | None = None
     id: str
     memory_citation: Annotated[MemoryCitation | None, Field(alias="memoryCitation")] = None
     phase: MessagePhase | None = None
     questions: list[AsyncUserInputQuestion] | None = None
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     text: str
     type: Annotated[Literal["agentMessage"], Field(title="AgentMessageThreadItemType")]
 
@@ -10030,6 +10240,13 @@ class CommandExecutionThreadItem(BaseModel):
             description="A best-effort parsing of the command to understand the action(s) it will perform. This returns a list of CommandAction objects because a single shell command may be composed of many commands piped together.",
         ),
     ]
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     cwd: Annotated[LegacyAppPathString, Field(description="The command's working directory.")]
     duration_ms: Annotated[
         int | None,
@@ -10063,6 +10280,13 @@ class CommandExecutionThreadItem(BaseModel):
         ),
     ] = None
     source: CommandExecutionSource | None = "agent"
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     status: CommandExecutionStatus
     type: Annotated[Literal["commandExecution"], Field(title="CommandExecutionThreadItemType")]
 
@@ -10072,7 +10296,21 @@ class FileChangeThreadItem(BaseModel):
         populate_by_name=True,
     )
     changes: list[FileUpdateChange]
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     id: str
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     status: PatchApplyStatus
     type: Annotated[Literal["fileChange"], Field(title="FileChangeThreadItemType")]
 
@@ -10088,6 +10326,13 @@ class CollabAgentToolCallThreadItem(BaseModel):
             description="Last known status of the target agents, when available.",
         ),
     ]
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     id: Annotated[str, Field(description="Unique identifier for this collab tool call.")]
     model: Annotated[
         str | None, Field(description="Model requested for the spawned agent, when applicable.")
@@ -10116,6 +10361,13 @@ class CollabAgentToolCallThreadItem(BaseModel):
             alias="senderThreadId", description="Thread ID of the agent issuing the collab request."
         ),
     ]
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     status: Annotated[
         CollabAgentToolCallStatus, Field(description="Current status of the collab tool call.")
     ]
@@ -10130,12 +10382,26 @@ class WebSearchThreadItem(BaseModel):
         populate_by_name=True,
     )
     action: WebSearchAction | None = None
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     id: str
     query: str
     results: Annotated[
         list[Any] | None,
         Field(
             description="Structured search results returned out-of-band by standalone web search.\n\nThese stay as opaque JSON at the extension/app-server boundary so new result fields and result types can pass through without a Codex release."
+        ),
+    ] = None
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
         ),
     ] = None
     type: Annotated[Literal["webSearch"], Field(title="WebSearchThreadItemType")]
@@ -11575,10 +11841,24 @@ class FunctionCallOutputThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
     id: str
     name: str
     namespace: str | None = None
     output: FunctionCallOutputBody
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
     type: Annotated[Literal["functionCallOutput"], Field(title="FunctionCallOutputThreadItemType")]
 
 
@@ -11606,7 +11886,7 @@ class ThreadItem(
         | ContextCompactionThreadItem
     ]
 ):
-    root: (
+    root: Annotated[
         UserMessageThreadItem
         | HookPromptThreadItem
         | AgentMessageThreadItem
@@ -11626,8 +11906,11 @@ class ThreadItem(
         | ResultThreadItem
         | EnteredReviewModeThreadItem
         | ExitedReviewModeThreadItem
-        | ContextCompactionThreadItem
-    )
+        | ContextCompactionThreadItem,
+        Field(
+            description="A thread item and its recorded lifecycle times. The payload stays flat on the wire."
+        ),
+    ]
 
 
 class ThreadItemEntry(BaseModel):

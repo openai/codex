@@ -543,7 +543,7 @@ pub struct StoredThreadItem {
     pub started_at_ms: Option<i64>,
     /// Exact lifecycle completion time in Unix milliseconds, when recorded by the producer.
     pub completed_at_ms: Option<i64>,
-    /// Serialized app-server ThreadItem snapshot.
+    /// Serialized app-server item payload. Its lifecycle times are stored in the columns above.
     pub item_json: Vec<u8>,
 }
 

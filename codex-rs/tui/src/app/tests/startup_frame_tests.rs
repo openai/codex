@@ -94,7 +94,7 @@ async fn owned_startup_hides_tip_in_transcript() -> Result<()> {
 async fn owned_startup_preserves_loading_until_resume_replay_is_applied() -> Result<()> {
     for items in [
         Vec::new(),
-        vec![ThreadItem::AgentMessage {
+        vec![ThreadItemPayload::AgentMessage {
             id: "answer".into(),
             text: "Retained **answer** after resume.".into(),
             phase: None,

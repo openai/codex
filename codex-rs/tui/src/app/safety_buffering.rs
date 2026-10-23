@@ -10,6 +10,7 @@ use crate::chatwidget::ThreadInputState;
 use crate::chatwidget::ThreadInputStateRestoreMode;
 use crate::chatwidget::UserMessage;
 use codex_app_server_protocol::ThreadHistoryMode;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::UserInput;
 
@@ -153,7 +154,7 @@ impl App {
                         .data
                         .into_iter()
                         .rev()
-                        .map(|entry| entry.item)
+                        .map(ThreadItem::from)
                         .collect();
                     turn.items_view = TurnItemsView::Full;
                 }
@@ -178,9 +179,9 @@ impl App {
                 .iter()
                 .find(|turn| turn.id == turn_id)
                 .into_iter()
-                .flat_map(|turn| &turn.items)
+                .flat_map(Turn::item_payloads)
                 .filter_map(|item| match item {
-                    ThreadItem::UserMessage { content, .. } => Some(content),
+                    ThreadItemPayload::UserMessage { content, .. } => Some(content),
                     _ => None,
                 })
                 .skip(/*n*/ 1)

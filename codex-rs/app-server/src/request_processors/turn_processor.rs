@@ -4,6 +4,7 @@ use codex_agent_extension::AgentInvocation;
 use codex_agent_extension::AgentRun;
 use codex_agent_extension::AgentRunner;
 use codex_app_server_protocol::ImageReference as V2ImageReference;
+use codex_app_server_protocol::ThreadItem;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -1412,7 +1413,7 @@ impl TurnRequestProcessor {
         let items = if display_text.is_empty() {
             Vec::new()
         } else {
-            vec![ThreadItem::UserMessage {
+            vec![ThreadItem::untimed(ThreadItemPayload::UserMessage {
                 id: turn_id.clone(),
                 client_id: None,
                 content: vec![V2UserInput::Text {
@@ -1420,7 +1421,7 @@ impl TurnRequestProcessor {
                     // Review prompt display text is synthesized; no UI element ranges to preserve.
                     text_elements: Vec::new(),
                 }],
-            }]
+            })]
         };
 
         Turn {

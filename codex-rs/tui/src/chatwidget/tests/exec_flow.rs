@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::ThreadItem;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -52,17 +53,18 @@ async fn replayed_command_completion_preserves_tracking_without_duplicate_starts
     chat.on_task_started();
     let mut item =
         begin_unified_exec_startup(&mut chat, "call-replay", "process-replay", "cat replay");
-    if let AppServerThreadItem::CommandExecution { status, .. } = &mut item {
+    if let AppServerThreadItemPayload::CommandExecution { status, .. } = &mut item {
         *status = AppServerCommandExecutionStatus::Completed;
     }
 
     chat.handle_server_notification(
-        ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: String::new(),
-            turn_id: "turn-1".to_string(),
-            completed_at_ms: 0,
+        ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+            String::new(),
+            "turn-1".to_string(),
             item,
-        }),
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 0,
+        )),
         Some(ReplayKind::ThreadSnapshot),
     );
 
@@ -95,7 +97,7 @@ async fn replayed_completion_preserves_unrelated_running_command() {
                 /*animations_enabled*/ false,
             )));
         }
-        if let AppServerThreadItem::CommandExecution {
+        if let AppServerThreadItemPayload::CommandExecution {
             id,
             command,
             status,
@@ -238,7 +240,7 @@ async fn adjacent_exploration_groups_across_reasoning_live_and_replayed() {
             ("after-message", "cat final.txt", 0),
         ] {
             let command = vec!["bash".to_string(), "-lc".to_string(), script.to_string()];
-            let mut item = AppServerThreadItem::CommandExecution {
+            let mut item = AppServerThreadItemPayload::CommandExecution {
                 model_context: None,
                 sandbox_type: None,
                 id: id.to_string(),
@@ -262,7 +264,7 @@ async fn adjacent_exploration_groups_across_reasoning_live_and_replayed() {
             if !replay {
                 handle_exec_begin(&mut chat, item.clone());
             }
-            if let AppServerThreadItem::CommandExecution { status, .. } = &mut item {
+            if let AppServerThreadItemPayload::CommandExecution { status, .. } = &mut item {
                 *status = if exit_code == 0 {
                     AppServerCommandExecutionStatus::Completed
                 } else {
@@ -278,7 +280,7 @@ async fn adjacent_exploration_groups_across_reasoning_live_and_replayed() {
                 for summary in ["Inspecting the page", "Checking its contents"] {
                     if replay {
                         chat.replay_thread_item(
-                            AppServerThreadItem::Reasoning {
+                            AppServerThreadItemPayload::Reasoning {
                                 id: summary.to_string(),
                                 summary: vec![summary.to_string()],
                                 content: Vec::new(),
@@ -332,8 +334,8 @@ async fn adjacent_exploration_groups_across_reasoning_live_and_replayed() {
 async fn replayed_commands_preserve_individual_output_and_failure_status() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let cwd = chat.config.cwd.clone();
-    let replayed_command =
-        |id: &str, output: &str, source: ExecCommandSource| AppServerThreadItem::CommandExecution {
+    let replayed_command = |id: &str, output: &str, source: ExecCommandSource| {
+        AppServerThreadItemPayload::CommandExecution {
             model_context: None,
             sandbox_type: None,
             id: id.to_string(),
@@ -348,21 +350,22 @@ async fn replayed_commands_preserve_individual_output_and_failure_status() {
             aggregated_output: Some(format!("{output}\n")),
             exit_code: Some(0),
             duration_ms: Some(5),
-        };
+        }
+    };
     let mut declined = replayed_command("call-declined", "declined", ExecCommandSource::Agent);
     let mut failed = replayed_command(
         "call-failed",
         "failure",
         ExecCommandSource::UnifiedExecStartup,
     );
-    if let AppServerThreadItem::CommandExecution {
+    if let AppServerThreadItemPayload::CommandExecution {
         status, exit_code, ..
     } = &mut failed
     {
         *status = AppServerCommandExecutionStatus::Failed;
         *exit_code = Some(7);
     }
-    if let AppServerThreadItem::CommandExecution {
+    if let AppServerThreadItemPayload::CommandExecution {
         status, exit_code, ..
     } = &mut declined
     {
@@ -371,14 +374,18 @@ async fn replayed_commands_preserve_individual_output_and_failure_status() {
     }
     let turn = AppServerTurn {
         items: vec![
-            replayed_command("call-first", "first", ExecCommandSource::Agent),
-            replayed_command(
+            ThreadItem::untimed(replayed_command(
+                "call-first",
+                "first",
+                ExecCommandSource::Agent,
+            )),
+            ThreadItem::untimed(replayed_command(
                 "call-second",
                 "second",
                 ExecCommandSource::UnifiedExecStartup,
-            ),
-            failed,
-            declined,
+            )),
+            ThreadItem::untimed(failed),
+            ThreadItem::untimed(declined),
         ],
         ..app_server_turn(
             "turn-1",
@@ -530,7 +537,7 @@ async fn exec_end_without_begin_uses_event_command() {
     let cwd = chat.config.cwd.clone();
     handle_exec_end(
         &mut chat,
-        AppServerThreadItem::CommandExecution {
+        AppServerThreadItemPayload::CommandExecution {
             model_context: None,
             sandbox_type: None,
             id: "call-orphan".to_string(),

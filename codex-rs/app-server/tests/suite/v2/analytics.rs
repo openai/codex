@@ -15,7 +15,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -439,8 +439,8 @@ async fn multi_agent_v2_tools_emit_collaborator_analytics() -> Result<()> {
         .items;
     let child_thread_id = items
         .iter()
-        .find_map(|item| match item {
-            ThreadItem::SubAgentActivity {
+        .find_map(|item| match &item.payload {
+            ThreadItemPayload::SubAgentActivity {
                 id,
                 agent_thread_id,
                 ..
@@ -451,12 +451,14 @@ async fn multi_agent_v2_tools_emit_collaborator_analytics() -> Result<()> {
     assert!(
         !items
             .iter()
-            .any(|item| matches!(item, ThreadItem::CollabAgentToolCall { .. }))
+            .any(|item| matches!(&item.payload, ThreadItemPayload::CollabAgentToolCall { .. }))
     );
     let activity_ids = items
         .iter()
-        .filter_map(|item| match item {
-            ThreadItem::SubAgentActivity { id, .. } if id.starts_with("call-") => Some(id.as_str()),
+        .filter_map(|item| match &item.payload {
+            ThreadItemPayload::SubAgentActivity { id, .. } if id.starts_with("call-") => {
+                Some(id.as_str())
+            }
             _ => None,
         })
         .collect::<Vec<_>>();

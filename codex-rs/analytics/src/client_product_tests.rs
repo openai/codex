@@ -22,7 +22,7 @@ use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_login::AuthManager;
 use codex_protocol::ThreadId;
@@ -238,11 +238,10 @@ async fn buffered_tool_events_preserve_attribution_or_drop_it_on_queue_overflow(
             turn: started.turn,
         }));
         // Collaborator completions wait in the reducer for subsequent sampling evidence.
-        let completed = ItemCompletedNotification {
-            thread_id: thread_id.to_string(),
-            turn_id: "turn-1".to_string(),
-            completed_at_ms: 2,
-            item: ThreadItem::CollabAgentToolCall {
+        let completed = ItemCompletedNotification::new(
+            thread_id.to_string(),
+            "turn-1".to_string(),
+            ThreadItemPayload::CollabAgentToolCall {
                 id: "item".to_string(),
                 tool: CollabAgentTool::SendMessage,
                 status: CollabAgentToolCallStatus::Failed,
@@ -253,13 +252,17 @@ async fn buffered_tool_events_preserve_attribution_or_drop_it_on_queue_overflow(
                 reasoning_effort: None,
                 agents_states: Default::default(),
             },
-        };
-        client.track_notification(&ServerNotification::ItemStarted(ItemStartedNotification {
-            thread_id: thread_id.to_string(),
-            turn_id: "turn-1".to_string(),
-            started_at_ms: 1,
-            item: completed.item.clone(),
-        }));
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 2,
+        );
+        client.track_notification(&ServerNotification::ItemStarted(
+            ItemStartedNotification::new(
+                thread_id.to_string(),
+                "turn-1".to_string(),
+                completed.item.payload.clone(),
+                /*started_at_ms*/ 1,
+            ),
+        ));
         client.track_notification(&ServerNotification::ItemCompleted(completed));
         let measurement = PluginMeasurementsInput {
             thread_id: thread_id.to_string(),

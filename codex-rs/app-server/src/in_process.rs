@@ -80,7 +80,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
@@ -120,8 +120,11 @@ fn server_notification_requires_delivery(notification: &ServerNotification) -> b
             | ServerNotification::ThreadAttachmentUpdated(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::ItemCompleted(ItemCompletedNotification {
-                item: ThreadItem::AgentMessage {
-                    delivery: Some(AgentMessageDelivery::Async),
+                item: codex_app_server_protocol::ThreadItem {
+                    payload: ThreadItemPayload::AgentMessage {
+                        delivery: Some(AgentMessageDelivery::Async),
+                        ..
+                    },
                     ..
                 },
                 ..
@@ -1084,8 +1087,10 @@ mod tests {
             })
         ));
         assert!(server_notification_requires_delivery(
-            &ServerNotification::ItemCompleted(ItemCompletedNotification {
-                item: ThreadItem::AgentMessage {
+            &ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+                "thread-1".to_string(),
+                "turn-1".to_string(),
+                ThreadItemPayload::AgentMessage {
                     id: "item-1".to_string(),
                     text: "Still working".to_string(),
                     phase: None,
@@ -1093,10 +1098,9 @@ mod tests {
                     delivery: Some(AgentMessageDelivery::Async),
                     questions: None,
                 },
-                thread_id: "thread-1".to_string(),
-                turn_id: "turn-1".to_string(),
-                completed_at_ms: 0,
-            })
+                /*started_at_ms*/ None,
+                /*completed_at_ms*/ 0
+            ))
         ));
     }
 

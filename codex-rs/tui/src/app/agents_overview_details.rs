@@ -12,7 +12,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadActiveFlag;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadStatus;
 use codex_protocol::ThreadId;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -104,7 +104,11 @@ impl App {
                 had_header || reasoning.header.is_some()
             }
             ServerNotification::ItemCompleted(ItemCompletedNotification {
-                item: ThreadItem::AgentMessage { text, .. },
+                item:
+                    codex_app_server_protocol::ThreadItem {
+                        payload: ThreadItemPayload::AgentMessage { text, .. },
+                        ..
+                    },
                 ..
             }) => {
                 activity.last_message = Some(preview_agent_message(text));

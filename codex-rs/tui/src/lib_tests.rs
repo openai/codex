@@ -11,6 +11,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::Turn;
 use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -1489,11 +1490,11 @@ async fn resume_picker_loads_complete_paginated_and_legacy_transcripts() -> colo
                 started
                     .turns
                     .iter()
-                    .flat_map(|turn| &turn.items)
+                    .flat_map(Turn::item_payloads)
                     .any(|item| {
                         matches!(
                             item,
-                            codex_app_server_protocol::ThreadItem::UserMessage { .. }
+                            codex_app_server_protocol::ThreadItemPayload::UserMessage { .. }
                         )
                     })
             );

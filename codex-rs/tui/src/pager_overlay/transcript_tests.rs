@@ -272,7 +272,7 @@ async fn focus_loss_stops_edge_drag_and_preserves_selection_after_focus_returns(
 #[tokio::test]
 async fn opening_find_retains_the_selected_mutable_revision() -> Result<()> {
     let cell = history_cell::DynamicToolCallCell::from_item(
-        codex_app_server_protocol::ThreadItem::DynamicToolCall {
+        codex_app_server_protocol::ThreadItemPayload::DynamicToolCall {
             id: "tool".into(),
             namespace: None,
             tool: "inspect".into(),

@@ -60,7 +60,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
                     vec![test_turn(
                         "cached",
                         TurnStatus::Completed,
-                        vec![ThreadItem::Plan {
+                        vec![ThreadItemPayload::Plan {
                             id: "cached-plan".into(),
                             text: "Cached previous conversation".into(),
                         }],

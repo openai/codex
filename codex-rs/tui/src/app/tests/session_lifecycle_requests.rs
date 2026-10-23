@@ -2589,7 +2589,7 @@ async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> 
     let initial_cells = crate::thread_transcript::thread_items_to_transcript_cells(
         Some(thread_id),
         &app.config.cwd,
-        started.turns.iter().flat_map(|turn| turn.items.clone()),
+        started.turns.iter().flat_map(Turn::item_payloads).cloned(),
         crate::thread_transcript::RawReasoningVisibility::Hidden,
         Some(&app.config),
     );
@@ -2763,7 +2763,7 @@ async fn transcript_alt_beginning_loads_every_older_history_page() -> Result<()>
     let initial_cells = crate::thread_transcript::thread_items_to_transcript_cells(
         Some(thread_id),
         &app.config.cwd,
-        started.turns.iter().flat_map(|turn| turn.items.clone()),
+        started.turns.iter().flat_map(Turn::item_payloads).cloned(),
         crate::thread_transcript::RawReasoningVisibility::Hidden,
         Some(&app.config),
     );
@@ -3179,7 +3179,7 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
     let mut initial_cells = crate::thread_transcript::thread_items_to_transcript_cells(
         Some(thread_id),
         &app.config.cwd,
-        started.turns.iter().flat_map(|turn| turn.items.clone()),
+        started.turns.iter().flat_map(Turn::item_payloads).cloned(),
         crate::thread_transcript::RawReasoningVisibility::Hidden,
         Some(&app.config),
     );
@@ -3709,7 +3709,7 @@ async fn cold_paginated_subagent_transcript_excludes_inherited_parent_history() 
     let [child_entry] = child_item_page.data.as_slice() else {
         panic!("paginated subagent should expose exactly one child message");
     };
-    let ThreadItem::UserMessage { content, .. } = &child_entry.item else {
+    let ThreadItemPayload::UserMessage { content, .. } = &child_entry.item.payload else {
         panic!("paginated subagent should expose its child user message");
     };
     assert_eq!(resumed.session.thread_id, child_thread_id);
@@ -3725,9 +3725,9 @@ async fn cold_paginated_subagent_transcript_excludes_inherited_parent_history() 
         resumed
             .turns
             .iter()
-            .flat_map(|turn| turn.items.iter())
+            .flat_map(Turn::item_payloads)
             .collect::<Vec<_>>(),
-        vec![&child_entry.item],
+        vec![&child_entry.item.payload],
     );
 
     let cells = crate::thread_transcript::load_session_transcript(

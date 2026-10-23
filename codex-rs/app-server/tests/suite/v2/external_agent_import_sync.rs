@@ -14,9 +14,10 @@ use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
 use pretty_assertions::assert_eq;
@@ -229,16 +230,18 @@ async fn start_app_server(codex_home: &Path) -> Result<TestAppServer> {
 fn assert_history(response: &ThreadReadResponse, expected: &[(&str, &str)]) {
     let mut actual = Vec::new();
     let mut markers = 0;
-    for item in response.thread.turns.iter().flat_map(|turn| &turn.items) {
+    for item in response.thread.turns.iter().flat_map(Turn::item_payloads) {
         match item {
-            ThreadItem::UserMessage { content, .. } => {
+            ThreadItemPayload::UserMessage { content, .. } => {
                 actual.extend(content.iter().filter_map(|input| match input {
                     UserInput::Text { text, .. } => Some(("user", text.as_str())),
                     _ => None,
                 }));
             }
-            ThreadItem::AgentMessage { text, .. } if text == IMPORT_MARKER => markers += 1,
-            ThreadItem::AgentMessage { text, .. } => actual.push(("assistant", text.as_str())),
+            ThreadItemPayload::AgentMessage { text, .. } if text == IMPORT_MARKER => markers += 1,
+            ThreadItemPayload::AgentMessage { text, .. } => {
+                actual.push(("assistant", text.as_str()))
+            }
             _ => {}
         }
     }

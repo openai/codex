@@ -9,7 +9,7 @@ use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::McpServerToolCallResponse;
 use codex_app_server_protocol::SelectedCapabilityRoot;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -185,9 +185,9 @@ async fn daybreak_access_respects_plugin_provenance(case: AccessCall) -> Result<
         .await?;
         loop {
             let event: ItemCompletedNotification = app.read_notification("item/completed").await?;
-            if let ThreadItem::McpToolCall {
+            if let ThreadItemPayload::McpToolCall {
                 result, plugin_id, ..
-            } = event.item
+            } = event.item.payload
             {
                 assert_eq!(plugin_id.as_deref(), Some("selected-daybreak"));
                 results.push((

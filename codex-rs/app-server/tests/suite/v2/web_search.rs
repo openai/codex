@@ -9,11 +9,12 @@ use app_test_support::TestAppServer;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -304,15 +305,15 @@ async fn assert_standalone_web_search_round_trips_output(
         })
     );
     assert_eq!(
-        started.item,
-        ThreadItem::WebSearch(WebSearchItem {
+        started.item.payload,
+        ThreadItemPayload::WebSearch(WebSearchItem {
             id: call_id.to_string(),
             query: String::new(),
             action: None,
             results: None,
         })
     );
-    let expected_completed_item = ThreadItem::WebSearch(WebSearchItem {
+    let expected_completed_item = ThreadItemPayload::WebSearch(WebSearchItem {
         id: call_id.to_string(),
         query: "standalone web search".to_string(),
         action: Some(WebSearchAction::Search {
@@ -328,7 +329,7 @@ async fn assert_standalone_web_search_round_trips_output(
             "future_field": {"preserved": true},
         })]),
     });
-    assert_eq!(completed.item, expected_completed_item);
+    assert_eq!(completed.item.payload, expected_completed_item);
 
     drop(mcp);
     let mut reloaded_mcp = TestAppServer::builder()
@@ -344,11 +345,11 @@ async fn assert_standalone_web_search_round_trips_output(
         .await?;
     let ThreadReadResponse { thread, .. } =
         timeout(DEFAULT_READ_TIMEOUT, reloaded_mcp.read_response(read_req)).await??;
-    let persisted_web_searches: Vec<&ThreadItem> = thread
+    let persisted_web_searches: Vec<&ThreadItemPayload> = thread
         .turns
         .iter()
-        .flat_map(|turn| &turn.items)
-        .filter(|item| matches!(item, ThreadItem::WebSearch(_)))
+        .flat_map(Turn::item_payloads)
+        .filter(|item| matches!(item, ThreadItemPayload::WebSearch(_)))
         .collect();
     assert_eq!(persisted_web_searches, vec![&expected_completed_item]);
 
@@ -358,7 +359,7 @@ async fn assert_standalone_web_search_round_trips_output(
 async fn wait_for_web_search_started(mcp: &mut TestAppServer) -> Result<ItemStartedNotification> {
     loop {
         let started: ItemStartedNotification = mcp.read_notification("item/started").await?;
-        if matches!(&started.item, ThreadItem::WebSearch(_)) {
+        if matches!(&started.item.payload, ThreadItemPayload::WebSearch(_)) {
             return Ok(started);
         }
     }
@@ -369,7 +370,7 @@ async fn wait_for_web_search_completed(
 ) -> Result<ItemCompletedNotification> {
     loop {
         let completed: ItemCompletedNotification = mcp.read_notification("item/completed").await?;
-        if matches!(&completed.item, ThreadItem::WebSearch(_)) {
+        if matches!(&completed.item.payload, ThreadItemPayload::WebSearch(_)) {
             return Ok(completed);
         }
     }

@@ -8,7 +8,7 @@ use super::ThreadEventSnapshot;
 use crate::chatwidget::ChatWidget;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::TurnStatus;
 
 pub(super) struct ReasoningReplay {
@@ -25,10 +25,10 @@ impl ReasoningReplay {
                 .iter_mut()
                 .find(|turn| turn.id == started.turn_id && turn.status == TurnStatus::InProgress)?;
             let index = turn.items.iter().position(
-                |item| matches!(item, ThreadItem::Reasoning { id, .. } if id == started.item.id()),
+                |item| matches!(&item.payload, ThreadItemPayload::Reasoning { id, .. } if id == started.item.id()),
             )?;
-            match turn.items.remove(index) {
-                ThreadItem::Reasoning {
+            match turn.items.remove(index).payload {
+                ThreadItemPayload::Reasoning {
                     summary, content, ..
                 } => Some((summary, content)),
                 _ => unreachable!("matched a reasoning item"),

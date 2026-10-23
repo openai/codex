@@ -9,7 +9,7 @@ use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::PlanDeltaNotification;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
@@ -63,7 +63,7 @@ async fn plan_mode_uses_proposed_plan_block_for_plan_item() -> Result<()> {
     assert_eq!(turn_completed.turn.id, turn.id);
     assert_eq!(turn_completed.turn.status, TurnStatus::Completed);
 
-    let expected_plan = ThreadItem::Plan {
+    let expected_plan = ThreadItemPayload::Plan {
         id: format!("{}-plan", turn.id),
         text: "# Final plan\n- first\n- second\n".to_string(),
     };
@@ -81,7 +81,7 @@ async fn plan_mode_uses_proposed_plan_block_for_plan_item() -> Result<()> {
     let plan_items = completed_items
         .iter()
         .filter_map(|item| match item {
-            ThreadItem::Plan { .. } => Some(item.clone()),
+            ThreadItemPayload::Plan { .. } => Some(item.clone()),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -89,7 +89,7 @@ async fn plan_mode_uses_proposed_plan_block_for_plan_item() -> Result<()> {
     assert!(
         completed_items
             .iter()
-            .any(|item| matches!(item, ThreadItem::AgentMessage { .. })),
+            .any(|item| matches!(item, ThreadItemPayload::AgentMessage { .. })),
         "agent message items should still be emitted alongside the plan item"
     );
 
@@ -123,7 +123,7 @@ async fn plan_mode_without_proposed_plan_does_not_emit_plan_item() -> Result<()>
 
     let has_plan_item = completed_items
         .iter()
-        .any(|item| matches!(item, ThreadItem::Plan { .. }));
+        .any(|item| matches!(item, ThreadItemPayload::Plan { .. }));
     assert!(!has_plan_item);
     assert!(plan_deltas.is_empty());
 
@@ -168,8 +168,8 @@ async fn start_plan_mode_turn(mcp: &mut TestAppServer) -> Result<codex_app_serve
 async fn collect_turn_notifications(
     mcp: &mut TestAppServer,
 ) -> Result<(
-    Vec<ThreadItem>,
-    Vec<ThreadItem>,
+    Vec<ThreadItemPayload>,
+    Vec<ThreadItemPayload>,
     Vec<PlanDeltaNotification>,
     TurnCompletedNotification,
 )> {
@@ -188,14 +188,14 @@ async fn collect_turn_notifications(
                     .params
                     .ok_or_else(|| anyhow!("item/started notifications must include params"))?;
                 let payload: ItemStartedNotification = serde_json::from_value(params)?;
-                started_items.push(payload.item);
+                started_items.push(payload.item.payload);
             }
             "item/completed" => {
                 let params = notification
                     .params
                     .ok_or_else(|| anyhow!("item/completed notifications must include params"))?;
                 let payload: ItemCompletedNotification = serde_json::from_value(params)?;
-                completed_items.push(payload.item);
+                completed_items.push(payload.item.payload);
             }
             "item/plan/delta" => {
                 let params = notification

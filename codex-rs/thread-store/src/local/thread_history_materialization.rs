@@ -236,7 +236,7 @@ fn read_projection_batches(
         let fallback_created_at_ms = if changes
             .changed_items
             .iter()
-            .any(|item| item.started_at_ms.is_none())
+            .any(|change| change.item.started_at_ms.is_none())
             || (!is_inherited_subagent_history
                 && matches!(&line.item, RolloutItem::RealtimeItem(_)))
         {

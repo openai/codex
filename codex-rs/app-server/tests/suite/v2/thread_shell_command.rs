@@ -20,7 +20,7 @@ use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadShellCommandParams;
@@ -86,9 +86,9 @@ async fn thread_shell_command_history_responses_exclude_persisted_command_execut
         .await?;
 
     let started = wait_for_command_execution_started(&mut mcp, /*expected_id*/ None).await?;
-    let ThreadItem::CommandExecution {
+    let ThreadItemPayload::CommandExecution {
         id, source, status, ..
-    } = &started.item
+    } = &started.item.payload
     else {
         unreachable!("helper returns command execution item");
     };
@@ -103,14 +103,14 @@ async fn thread_shell_command_history_responses_exclude_persisted_command_execut
     );
 
     let completed = wait_for_command_execution_completed(&mut mcp, Some(&command_id)).await?;
-    let ThreadItem::CommandExecution {
+    let ThreadItemPayload::CommandExecution {
         id,
         source,
         status,
         aggregated_output,
         exit_code,
         ..
-    } = &completed.item
+    } = &completed.item.payload
     else {
         unreachable!("helper returns command execution item");
     };
@@ -279,9 +279,9 @@ async fn check_thread_shell_command_in_active_turn(timeout_ms: Option<i64>) -> R
     let started: TurnStartedNotification = mcp.read_notification("turn/started").await?;
     assert_eq!(started.turn.id, turn.id);
     let agent_started = wait_for_command_execution_started(&mut mcp, Some("call-approve")).await?;
-    let ThreadItem::CommandExecution {
+    let ThreadItemPayload::CommandExecution {
         command, source, ..
-    } = &agent_started.item
+    } = &agent_started.item.payload
     else {
         unreachable!("helper returns command execution item");
     };
@@ -315,19 +315,19 @@ async fn check_thread_shell_command_in_active_turn(timeout_ms: Option<i64>) -> R
         wait_for_command_execution_started_by_source(&mut mcp, CommandExecutionSource::UserShell)
             .await?;
     assert_eq!(started.turn_id, turn.id);
-    let command_id = match &started.item {
-        ThreadItem::CommandExecution { id, .. } => id.clone(),
+    let command_id = match &started.item.payload {
+        ThreadItemPayload::CommandExecution { id, .. } => id.clone(),
         _ => unreachable!("helper returns command execution item"),
     };
     let completed = wait_for_command_execution_completed(&mut mcp, Some(&command_id)).await?;
     assert_eq!(completed.turn_id, turn.id);
-    let ThreadItem::CommandExecution {
+    let ThreadItemPayload::CommandExecution {
         source,
         aggregated_output,
         status,
         exit_code,
         ..
-    } = &completed.item
+    } = &completed.item.payload
     else {
         unreachable!("helper returns command execution item");
     };
@@ -443,12 +443,12 @@ async fn thread_shell_command_honors_optional_timeout() -> Result<()> {
         let completed =
             wait_for_command_execution_completed(&mut mcp, /*expected_id*/ None).await?;
         assert_eq!(completed.turn_id, started.turn.id);
-        let ThreadItem::CommandExecution {
+        let ThreadItemPayload::CommandExecution {
             status,
             exit_code,
             aggregated_output,
             ..
-        } = completed.item
+        } = completed.item.payload
         else {
             unreachable!("helper returns command execution item");
         };
@@ -544,11 +544,11 @@ fn current_shell_slow_command() -> Result<(String, String)> {
     Ok((format!("{command}{suffix}"), expected_output))
 }
 
-fn assert_no_command_executions(items: &[ThreadItem], context: &str) {
+fn assert_no_command_executions(items: &[codex_app_server_protocol::ThreadItem], context: &str) {
     assert!(
         items
             .iter()
-            .all(|item| !matches!(item, ThreadItem::CommandExecution { .. })),
+            .all(|entry| !matches!(&entry.payload, ThreadItemPayload::CommandExecution { .. })),
         "{context} should always exclude command executions from returned turns"
     );
 }
@@ -577,7 +577,7 @@ async fn wait_for_command_execution_started(
 ) -> Result<ItemStartedNotification> {
     loop {
         let started: ItemStartedNotification = mcp.read_notification("item/started").await?;
-        let ThreadItem::CommandExecution { id, .. } = &started.item else {
+        let ThreadItemPayload::CommandExecution { id, .. } = &started.item.payload else {
             continue;
         };
         if expected_id.is_none() || expected_id == Some(id.as_str()) {
@@ -592,7 +592,7 @@ async fn wait_for_command_execution_started_by_source(
 ) -> Result<ItemStartedNotification> {
     loop {
         let started = wait_for_command_execution_started(mcp, /*expected_id*/ None).await?;
-        let ThreadItem::CommandExecution { source, .. } = &started.item else {
+        let ThreadItemPayload::CommandExecution { source, .. } = &started.item.payload else {
             continue;
         };
         if source == &expected_source {
@@ -607,7 +607,7 @@ async fn wait_for_command_execution_completed(
 ) -> Result<ItemCompletedNotification> {
     loop {
         let completed: ItemCompletedNotification = mcp.read_notification("item/completed").await?;
-        let ThreadItem::CommandExecution { id, .. } = &completed.item else {
+        let ThreadItemPayload::CommandExecution { id, .. } = &completed.item.payload else {
             continue;
         };
         if expected_id.is_none() || expected_id == Some(id.as_str()) {

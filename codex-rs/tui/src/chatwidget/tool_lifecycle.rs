@@ -42,7 +42,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(super) fn on_file_change_completed(&mut self, item: ThreadItem) {
+    pub(super) fn on_file_change_completed(&mut self, item: ThreadItemPayload) {
         self.defer_or_handle(
             item,
             InterruptManager::push_item_completed,
@@ -50,7 +50,7 @@ impl ChatWidget {
         );
     }
 
-    pub(super) fn on_mcp_tool_call_started(&mut self, item: ThreadItem) {
+    pub(super) fn on_mcp_tool_call_started(&mut self, item: ThreadItemPayload) {
         self.defer_or_handle(
             item,
             InterruptManager::push_item_started,
@@ -58,7 +58,7 @@ impl ChatWidget {
         );
     }
 
-    pub(super) fn on_mcp_tool_call_completed(&mut self, item: ThreadItem) {
+    pub(super) fn on_mcp_tool_call_completed(&mut self, item: ThreadItemPayload) {
         self.defer_or_handle(
             item,
             InterruptManager::push_item_completed,
@@ -111,8 +111,8 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(super) fn on_collab_agent_tool_call(&mut self, item: ThreadItem) {
-        let ThreadItem::CollabAgentToolCall {
+    pub(super) fn on_collab_agent_tool_call(&mut self, item: ThreadItemPayload) {
+        let ThreadItemPayload::CollabAgentToolCall {
             id, tool, status, ..
         } = &item
         else {
@@ -142,7 +142,7 @@ impl ChatWidget {
         }
     }
 
-    pub(super) fn on_sub_agent_activity(&mut self, item: ThreadItem) {
+    pub(super) fn on_sub_agent_activity(&mut self, item: ThreadItemPayload) {
         // Background agents can finish while the parent answer is still streaming.
         // Keep that stream intact until its authoritative message completion.
         // After the turn stops, leftover prompts must not hold up late activity.
@@ -157,14 +157,14 @@ impl ChatWidget {
         }
     }
 
-    fn handle_sub_agent_activity_now(&mut self, item: ThreadItem) {
+    fn handle_sub_agent_activity_now(&mut self, item: ThreadItemPayload) {
         if let Some(cell) = multi_agents::sub_agent_activity_history_cell(&item) {
             self.on_collab_event(cell);
         }
     }
 
-    pub(crate) fn handle_file_change_completed_now(&mut self, item: ThreadItem) {
-        let ThreadItem::FileChange { status, .. } = item else {
+    pub(crate) fn handle_file_change_completed_now(&mut self, item: ThreadItemPayload) {
+        let ThreadItemPayload::FileChange { status, .. } = item else {
             return;
         };
         // If the patch was successful, just let the "Edited" block stand.
@@ -174,8 +174,8 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn handle_mcp_tool_call_started_now(&mut self, item: ThreadItem) {
-        let ThreadItem::McpToolCall {
+    pub(crate) fn handle_mcp_tool_call_started_now(&mut self, item: ThreadItemPayload) {
+        let ThreadItemPayload::McpToolCall {
             id,
             server,
             tool,
@@ -212,7 +212,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn handle_mcp_tool_call_completed_now(&mut self, item: ThreadItem) {
+    pub(crate) fn handle_mcp_tool_call_completed_now(&mut self, item: ThreadItemPayload) {
         self.flush_answer_stream_with_separator();
 
         let Some(McpHistory {
@@ -294,28 +294,38 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn handle_queued_item_started_now(&mut self, item: ThreadItem) {
+    pub(crate) fn handle_queued_item_started_now(&mut self, item: ThreadItemPayload) {
         match item {
-            item @ ThreadItem::CommandExecution { .. } => {
+            item @ ThreadItemPayload::CommandExecution { .. } => {
                 self.handle_command_execution_started_now(item);
             }
-            item @ ThreadItem::McpToolCall { .. } => {
+            item @ ThreadItemPayload::McpToolCall { .. } => {
                 self.handle_mcp_tool_call_started_now(item);
             }
-            item @ ThreadItem::DynamicToolCall { .. } => self.handle_dynamic_tool_item_now(item),
+            item @ ThreadItemPayload::DynamicToolCall { .. } => {
+                self.handle_dynamic_tool_item_now(item)
+            }
             _ => {}
         }
     }
 
-    pub(crate) fn handle_queued_item_completed_now(&mut self, item: ThreadItem) {
+    pub(crate) fn handle_queued_item_completed_now(&mut self, item: ThreadItemPayload) {
         match item {
-            item @ ThreadItem::CommandExecution { .. } => {
+            item @ ThreadItemPayload::CommandExecution { .. } => {
                 self.handle_command_execution_completed_now(item);
             }
-            item @ ThreadItem::FileChange { .. } => self.handle_file_change_completed_now(item),
-            item @ ThreadItem::McpToolCall { .. } => self.handle_mcp_tool_call_completed_now(item),
-            item @ ThreadItem::DynamicToolCall { .. } => self.handle_dynamic_tool_item_now(item),
-            item @ ThreadItem::SubAgentActivity { .. } => self.handle_sub_agent_activity_now(item),
+            item @ ThreadItemPayload::FileChange { .. } => {
+                self.handle_file_change_completed_now(item)
+            }
+            item @ ThreadItemPayload::McpToolCall { .. } => {
+                self.handle_mcp_tool_call_completed_now(item)
+            }
+            item @ ThreadItemPayload::DynamicToolCall { .. } => {
+                self.handle_dynamic_tool_item_now(item)
+            }
+            item @ ThreadItemPayload::SubAgentActivity { .. } => {
+                self.handle_sub_agent_activity_now(item)
+            }
             _ => {}
         }
     }

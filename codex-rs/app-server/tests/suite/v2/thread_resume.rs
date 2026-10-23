@@ -52,7 +52,7 @@ use codex_app_server_protocol::ThreadGoalGetResponse;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadHistoryMode;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
@@ -133,6 +133,7 @@ use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::HashMap;
 use std::fs::FileTimes;
 use std::io::Write;
 use std::path::Path;
@@ -2736,8 +2737,8 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
     let turn = &thread.turns[0];
     assert_eq!(turn.status, TurnStatus::Completed);
     assert_eq!(turn.items.len(), 1, "expected user message item");
-    match &turn.items[0] {
-        ThreadItem::UserMessage { content, .. } => {
+    match &turn.items[0].payload {
+        ThreadItemPayload::UserMessage { content, .. } => {
             assert_eq!(
                 content,
                 &vec![UserInput::Text {
@@ -2772,16 +2773,16 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
             let remote_mcp_item = remote_turn
                 .items
                 .iter()
-                .find(|item| matches!(item, ThreadItem::McpToolCall { .. }))
+                .find(|item| matches!(&item.payload, ThreadItemPayload::McpToolCall { .. }))
                 .expect("remote resume should include redacted MCP item");
-            let ThreadItem::McpToolCall {
+            let ThreadItemPayload::McpToolCall {
                 arguments,
                 app_context,
                 read_only_hint,
                 result,
                 error,
                 ..
-            } = remote_mcp_item
+            } = &remote_mcp_item.payload
             else {
                 unreachable!("matched MCP item");
             };
@@ -2812,7 +2813,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
                 !remote_turn
                     .items
                     .iter()
-                    .any(|item| matches!(item, ThreadItem::ImageGeneration(_))),
+                    .any(|item| matches!(&item.payload, ThreadItemPayload::ImageGeneration(_))),
                 "remote resume should drop image generation items for {client_name}"
             );
         }
@@ -2827,15 +2828,15 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
     let normal_mcp_item = normal_turn
         .items
         .iter()
-        .find(|item| matches!(item, ThreadItem::McpToolCall { .. }))
+        .find(|item| matches!(&item.payload, ThreadItemPayload::McpToolCall { .. }))
         .expect("normal resume should include MCP item");
-    let ThreadItem::McpToolCall {
+    let ThreadItemPayload::McpToolCall {
         arguments,
         app_context,
         read_only_hint,
         result,
         ..
-    } = normal_mcp_item
+    } = &normal_mcp_item.payload
     else {
         unreachable!("matched MCP item");
     };
@@ -2866,8 +2867,8 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
     assert_eq!(result.meta, Some(json!({"secret":"meta"})));
     assert!(
         normal_turn.items.iter().any(|item| matches!(
-            item,
-            ThreadItem::ImageGeneration(item)
+            &item.payload,
+            ThreadItemPayload::ImageGeneration(item)
                 if matches!(
                     &item.image,
                     GeneratedImageRef::Inline { result }
@@ -5364,6 +5365,8 @@ async fn thread_resume_rejoins_running_paginated_thread_with_initial_page() -> R
                 gate: None,
                 body: responses::sse(vec![
                     responses::ev_response_created("resp-2"),
+                    responses::ev_message_item_added("progress", ""),
+                    responses::ev_assistant_message("progress", "Checking"),
                     responses::ev_message_item_added("msg-2", ""),
                 ]),
             },
@@ -5438,17 +5441,17 @@ async fn thread_resume_rejoins_running_paginated_thread_with_initial_page() -> R
         primary.read_stream_until_notification_message("turn/started"),
     )
     .await??;
-    // An assistant item starts after the user message has reached live history.
-    // The gated remainder of the response keeps the turn running during resume.
+    // Starting the gated reply means the prompt and the progress message have completed.
+    let mut message_starts = HashMap::new();
     timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
             let started: ItemStartedNotification =
                 primary.read_notification("item/started").await?;
-            if started.turn_id == running_turn.id
-                && matches!(started.item, ThreadItem::AgentMessage { .. })
-            {
+            assert_eq!(started.turn_id, running_turn.id);
+            if started.item.id() == "msg-2" {
                 return Ok::<(), anyhow::Error>(());
             }
+            message_starts.insert(started.item.id().to_owned(), started.started_at_ms);
         }
     })
     .await??;
@@ -5550,7 +5553,18 @@ async fn thread_resume_rejoins_running_paginated_thread_with_initial_page() -> R
             page.data[0].items_view,
             items_view.unwrap_or(TurnItemsView::Summary)
         );
-        assert!(!page.data[0].items.is_empty());
+        assert!(matches!(
+            page.data[0].items.as_slice(),
+            [codex_app_server_protocol::ThreadItem { payload: ThreadItemPayload::UserMessage { .. }, .. }, codex_app_server_protocol::ThreadItem { payload: ThreadItemPayload::AgentMessage { text, .. }, .. }] if text == "Checking"
+        ));
+        assert_eq!(
+            page.data[0]
+                .items
+                .iter()
+                .filter_map(|item| Some((item.id().to_owned(), item.started_at_ms?)))
+                .collect::<std::collections::HashMap<_, _>>(),
+            message_starts
+        );
         if !exclude_turns {
             let full_turn = resumed.thread.turns.last().expect("full active turn");
             assert_eq!(full_turn.id, running_turn.id);
@@ -5899,14 +5913,14 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
                 .await?;
             let started: ItemStartedNotification =
                 serde_json::from_value(notification.params.clone().expect("item/started params"))?;
-            if let ThreadItem::FileChange { .. } = started.item {
-                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            if let ThreadItemPayload::FileChange { .. } = started.item.payload {
+                return Ok::<ThreadItemPayload, anyhow::Error>(started.item.payload);
             }
         }
     })
     .await??;
     let expected_readme_path = workspace.join("README.md");
-    let expected_file_change = ThreadItem::FileChange {
+    let expected_file_change = ThreadItemPayload::FileChange {
         id: "patch-call".to_string(),
         changes: vec![codex_app_server_protocol::FileUpdateChange {
             path: expected_readme_path.to_string_lossy().into_owned(),

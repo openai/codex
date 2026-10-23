@@ -611,6 +611,11 @@ execution and sandbox policies.
 
 # Item history anchors
 
+Live notifications and turn history return the same `ThreadItem`. Each item has
+`startedAtMs` and `completedAtMs` beside `type` and `id`. Each timestamp is in
+Unix milliseconds, or `null` when the producer has not recorded it. Clients
+reading older servers may also encounter items that omit these fields.
+
 `thread/items/list` accepts an optional nullable `cursor`: either an opaque string
 from a previous response or an item anchor such as
 `{"type":"item","itemId":"item-123"}`. An item anchor resumes exclusively after

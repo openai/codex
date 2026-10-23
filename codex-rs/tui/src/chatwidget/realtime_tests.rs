@@ -23,6 +23,7 @@ use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnItemsView;
@@ -69,8 +70,8 @@ pub(crate) fn activate_voice_for_thread(chat: &mut ChatWidget, thread_id: Thread
     chat.realtime_conversation.latest_input_was_voice = true;
 }
 
-fn user_item(text: &str) -> ThreadItem {
-    ThreadItem::UserMessage {
+fn user_item(text: &str) -> ThreadItemPayload {
+    ThreadItemPayload::UserMessage {
         id: format!("user-{text}"),
         client_id: None,
         content: vec![UserInput::Text {
@@ -80,8 +81,8 @@ fn user_item(text: &str) -> ThreadItem {
     }
 }
 
-fn agent_item(item_id: &str, text: &str, phase: Option<MessagePhase>) -> ThreadItem {
-    ThreadItem::AgentMessage {
+fn agent_item(item_id: &str, text: &str, phase: Option<MessagePhase>) -> ThreadItemPayload {
+    ThreadItemPayload::AgentMessage {
         id: item_id.to_string(),
         text: text.to_string(),
         phase,
@@ -91,26 +92,32 @@ fn agent_item(item_id: &str, text: &str, phase: Option<MessagePhase>) -> ThreadI
     }
 }
 
-fn start_item(chat: &mut ChatWidget, thread_id: ThreadId, turn_id: &str, item: ThreadItem) {
+fn start_item(chat: &mut ChatWidget, thread_id: ThreadId, turn_id: &str, item: ThreadItemPayload) {
     chat.handle_server_notification(
-        ServerNotification::ItemStarted(ItemStartedNotification {
-            thread_id: thread_id.to_string(),
-            turn_id: turn_id.to_string(),
+        ServerNotification::ItemStarted(ItemStartedNotification::new(
+            thread_id.to_string(),
+            turn_id.to_string(),
             item,
-            started_at_ms: 0,
-        }),
+            /*started_at_ms*/ 0,
+        )),
         /*replay_kind*/ None,
     );
 }
 
-fn complete_item(chat: &mut ChatWidget, thread_id: ThreadId, turn_id: &str, item: ThreadItem) {
+fn complete_item(
+    chat: &mut ChatWidget,
+    thread_id: ThreadId,
+    turn_id: &str,
+    item: ThreadItemPayload,
+) {
     chat.handle_server_notification(
-        ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: thread_id.to_string(),
-            turn_id: turn_id.to_string(),
+        ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+            thread_id.to_string(),
+            turn_id.to_string(),
             item,
-            completed_at_ms: 0,
-        }),
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 0,
+        )),
         /*replay_kind*/ None,
     );
 }
@@ -119,7 +126,7 @@ fn finish_turn(
     chat: &mut ChatWidget,
     thread_id: ThreadId,
     turn_id: &str,
-    items: Vec<ThreadItem>,
+    items: Vec<ThreadItemPayload>,
     status: TurnStatus,
 ) {
     chat.handle_server_notification(
@@ -128,7 +135,7 @@ fn finish_turn(
             turn: Turn {
                 id: turn_id.to_string(),
                 root_turn_id: None,
-                items,
+                items: items.into_iter().map(ThreadItem::untimed).collect(),
                 items_view: TurnItemsView::Summary,
                 status,
                 error: None,

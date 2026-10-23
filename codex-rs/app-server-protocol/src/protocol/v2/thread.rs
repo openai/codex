@@ -1845,6 +1845,16 @@ pub struct ThreadItemEntry {
     pub completed_at_ms: Option<i64>,
 }
 
+impl From<ThreadItemEntry> for ThreadItem {
+    fn from(entry: ThreadItemEntry) -> Self {
+        Self {
+            started_at_ms: entry.item.started_at_ms.or(entry.started_at_ms),
+            completed_at_ms: entry.item.completed_at_ms.or(entry.completed_at_ms),
+            ..entry.item
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

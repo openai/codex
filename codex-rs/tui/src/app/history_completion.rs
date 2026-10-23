@@ -1,15 +1,15 @@
 //! Separate older history at every turn boundary; only successful turns gain completion metadata.
 //! A page splitting a turn only adds completion metadata when it contains that turn's last item.
 
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use std::collections::HashMap;
 
 pub(super) fn group_completed_turn_items(
-    items: Vec<ThreadItem>,
+    items: Vec<ThreadItemPayload>,
     turns: &[Turn],
-) -> Vec<(Vec<ThreadItem>, Option<&Turn>)> {
+) -> Vec<(Vec<ThreadItemPayload>, Option<&Turn>)> {
     let boundaries: HashMap<_, _> = turns
         .iter()
         .filter_map(|turn| turn.items.last().map(|item| (item.id(), turn)))

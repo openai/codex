@@ -3,7 +3,7 @@
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use std::collections::HashSet;
 
 use super::ThreadBufferedEvent;
@@ -67,7 +67,7 @@ pub(super) fn omit_completed_agent_deltas(events: &mut Vec<ThreadBufferedEvent>)
         if let ThreadBufferedEvent::Notification(notification) = event {
             match notification.as_ref() {
                 ServerNotification::ItemCompleted(notification) => {
-                    if let ThreadItem::AgentMessage { id, .. } = &notification.item {
+                    if let ThreadItemPayload::AgentMessage { id, .. } = &notification.item.payload {
                         completed.insert((
                             notification.thread_id.clone(),
                             notification.turn_id.clone(),

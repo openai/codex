@@ -317,9 +317,9 @@ stream_max_retries = 0
         .expect("app-server remains open");
         let committed_id = if let AppServerEvent::ServerNotification(notification) = &event.event
             && let ServerNotification::ItemCompleted(item) = notification.as_ref()
-            && let ThreadItem::UserMessage {
+            && let ThreadItemPayload::UserMessage {
                 content, client_id, ..
-            } = &item.item
+            } = &item.item.payload
             && ChatWidget::user_message_display_from_inputs(content).message == COMMITTED_STEER
         {
             Some(client_id.clone().expect("receipt echoes the submission ID"))
@@ -457,9 +457,9 @@ fn user_message_count(thread: &Thread, prompt: &str) -> usize {
     thread
         .turns
         .iter()
-        .flat_map(|turn| &turn.items)
+        .flat_map(Turn::item_payloads)
         .filter_map(|item| match item {
-            ThreadItem::UserMessage { content, .. } => Some(content),
+            ThreadItemPayload::UserMessage { content, .. } => Some(content),
             _ => None,
         })
         .filter(|content| {

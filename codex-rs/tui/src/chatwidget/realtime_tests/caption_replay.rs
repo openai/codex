@@ -1,6 +1,7 @@
 //! Replay and captions reconcile once across thread and session changes.
 
 use super::*;
+use codex_app_server_protocol::ThreadItem;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -12,30 +13,30 @@ async fn replay_preserves_typed_updates_before_voice_steers_the_turn() {
             id: "typed-then-voice".into(),
             root_turn_id: None,
             items: vec![
-                user_item("Typed question"),
-                agent_item(
+                ThreadItem::untimed(user_item("Typed question")),
+                ThreadItem::untimed(agent_item(
                     "typed-update",
                     "Checking the typed request",
                     Some(MessagePhase::Commentary),
-                ),
-                ThreadItem::Reasoning {
+                )),
+                ThreadItem::untimed(ThreadItemPayload::Reasoning {
                     id: "typed-reasoning".into(),
                     summary: vec!["Typed reasoning summary".into()],
                     content: Vec::new(),
-                },
-                user_item(
+                }),
+                ThreadItem::untimed(user_item(
                     "<realtime_delegation><input>spoken correction</input></realtime_delegation>",
-                ),
-                agent_item(
+                )),
+                ThreadItem::untimed(agent_item(
                     "private-update",
                     "Private voice commentary",
                     Some(MessagePhase::Commentary),
-                ),
-                ThreadItem::Reasoning {
+                )),
+                ThreadItem::untimed(ThreadItemPayload::Reasoning {
                     id: "private-reasoning".into(),
                     summary: vec!["Private voice reasoning".into()],
                     content: Vec::new(),
-                },
+                }),
             ],
             items_view: TurnItemsView::Full,
             status: TurnStatus::Completed,
@@ -81,7 +82,7 @@ async fn in_progress_voice_replay_restores_the_late_reasoning_guard() {
         vec![Turn {
             id: "saved-voice-turn".into(),
             root_turn_id: None,
-            items: vec![voice_request.clone()],
+            items: vec![ThreadItem::untimed(voice_request.clone())],
             items_view: TurnItemsView::Full,
             status: TurnStatus::InProgress,
             error: None,
@@ -92,12 +93,12 @@ async fn in_progress_voice_replay_restores_the_late_reasoning_guard() {
         ReplayKind::ThreadSnapshot,
     );
     chat.handle_server_notification(
-        ServerNotification::ItemStarted(ItemStartedNotification {
-            thread_id: thread_id.to_string(),
-            turn_id: "buffered-voice-turn".into(),
-            item: voice_request,
-            started_at_ms: 0,
-        }),
+        ServerNotification::ItemStarted(ItemStartedNotification::new(
+            thread_id.to_string(),
+            "buffered-voice-turn".into(),
+            voice_request,
+            /*started_at_ms*/ 0,
+        )),
         Some(ReplayKind::ThreadSnapshot),
     );
     while events.try_recv().is_ok() {}
@@ -116,7 +117,7 @@ async fn in_progress_voice_replay_restores_the_late_reasoning_guard() {
             &mut chat,
             thread_id,
             turn_id,
-            ThreadItem::Reasoning {
+            ThreadItemPayload::Reasoning {
                 id: "late-reasoning".into(),
                 summary: vec!["private after switch".into()],
                 content: Vec::new(),

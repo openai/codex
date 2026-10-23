@@ -9,16 +9,16 @@ use crate::history_cell;
 use crate::history_cell::PlainHistoryCell;
 use crate::multi_agents;
 use codex_app_server_protocol::PatchApplyStatus;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::WebSearchAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use ratatui::style::Stylize as _;
 use std::sync::Arc;
 
-pub(super) fn cells(item: ThreadItem, cwd: &AbsolutePathBuf) -> TranscriptCells {
+pub(super) fn cells(item: ThreadItemPayload, cwd: &AbsolutePathBuf) -> TranscriptCells {
     let mut cells: TranscriptCells = Vec::new();
     match item {
-        ThreadItem::FileChange {
+        ThreadItemPayload::FileChange {
             id,
             changes,
             status,
@@ -50,15 +50,17 @@ pub(super) fn cells(item: ThreadItem, cwd: &AbsolutePathBuf) -> TranscriptCells 
                 )));
             }
         },
-        ThreadItem::WebSearch(item) => cells.push(Arc::new(history_cell::new_web_search_call(
-            item.id,
-            item.query,
-            item.action.unwrap_or(WebSearchAction::Other),
-        ))),
-        ThreadItem::ImageView { id, path } => {
+        ThreadItemPayload::WebSearch(item) => {
+            cells.push(Arc::new(history_cell::new_web_search_call(
+                item.id,
+                item.query,
+                item.action.unwrap_or(WebSearchAction::Other),
+            )))
+        }
+        ThreadItemPayload::ImageView { id, path } => {
             cells.push(Arc::new(history_cell::new_view_image_tool_call(id, path)))
         }
-        ThreadItem::ImageGeneration(item)
+        ThreadItemPayload::ImageGeneration(item)
             if !matches!(item.status.as_str(), "completed" | "failed") =>
         {
             let status = if item.status.is_empty() {
@@ -71,7 +73,7 @@ pub(super) fn cells(item: ThreadItem, cwd: &AbsolutePathBuf) -> TranscriptCells 
                 /*hint*/ None,
             )));
         }
-        ThreadItem::ImageGeneration(item) => {
+        ThreadItemPayload::ImageGeneration(item) => {
             cells.push(Arc::new(history_cell::new_image_generation_call(
                 item.id,
                 &item.status,
@@ -79,7 +81,7 @@ pub(super) fn cells(item: ThreadItem, cwd: &AbsolutePathBuf) -> TranscriptCells 
                 item.saved_path,
             )));
         }
-        item @ ThreadItem::CollabAgentToolCall { .. } => {
+        item @ ThreadItemPayload::CollabAgentToolCall { .. } => {
             if let Some(cell) = multi_agents::tool_call_history_cell(
                 &item,
                 /*cached_spawn_request*/ None,
@@ -88,29 +90,29 @@ pub(super) fn cells(item: ThreadItem, cwd: &AbsolutePathBuf) -> TranscriptCells 
                 cells.push(Arc::new(cell));
             }
         }
-        item @ ThreadItem::SubAgentActivity { .. } => {
+        item @ ThreadItemPayload::SubAgentActivity { .. } => {
             if let Some(cell) = multi_agents::sub_agent_activity_history_cell(&item) {
                 cells.push(Arc::new(cell));
             }
         }
-        ThreadItem::EnteredReviewMode { review, .. } => {
+        ThreadItemPayload::EnteredReviewMode { review, .. } => {
             cells.push(Arc::new(history_cell::new_review_status_line(format!(
                 ">> Code review started: {review} <<"
             ))));
         }
-        ThreadItem::ExitedReviewMode { review, .. } => {
+        ThreadItemPayload::ExitedReviewMode { review, .. } => {
             cells.push(Arc::new(history_cell::new_review_status_line(format!(
                 "<< Code review finished: {review} >>"
             ))));
         }
-        ThreadItem::ContextCompaction { .. } => {
+        ThreadItemPayload::ContextCompaction { .. } => {
             cells.push(Arc::new(history_cell::new_info_event(
                 "Context compacted".to_string(),
                 /*hint*/ None,
             )));
         }
         // These items do not have richer history-cell presentations yet.
-        ThreadItem::HookPrompt { fragments, .. } => {
+        ThreadItemPayload::HookPrompt { fragments, .. } => {
             if !fragments.is_empty() {
                 cells.push(Arc::new(PlainHistoryCell::new(
                     fragments
@@ -126,19 +128,19 @@ pub(super) fn cells(item: ThreadItem, cwd: &AbsolutePathBuf) -> TranscriptCells 
                 )));
             }
         }
-        item @ ThreadItem::DynamicToolCall { .. } => {
+        item @ ThreadItemPayload::DynamicToolCall { .. } => {
             if let Some(cell) = history_cell::DynamicToolCallCell::from_item(item) {
                 cells.push(Arc::new(cell));
             }
         }
-        ThreadItem::UserMessage { .. }
-        | ThreadItem::AgentMessage { .. }
-        | ThreadItem::FunctionCallOutput { .. }
-        | ThreadItem::Plan { .. }
-        | ThreadItem::Reasoning { .. }
-        | ThreadItem::CommandExecution { .. }
-        | ThreadItem::McpToolCall { .. }
-        | ThreadItem::Sleep(_) => {}
+        ThreadItemPayload::UserMessage { .. }
+        | ThreadItemPayload::AgentMessage { .. }
+        | ThreadItemPayload::FunctionCallOutput { .. }
+        | ThreadItemPayload::Plan { .. }
+        | ThreadItemPayload::Reasoning { .. }
+        | ThreadItemPayload::CommandExecution { .. }
+        | ThreadItemPayload::McpToolCall { .. }
+        | ThreadItemPayload::Sleep(_) => {}
     }
     cells
 }

@@ -1,6 +1,7 @@
 use super::CodexErrorInfo;
 use super::ThreadEnvironment;
 use super::ThreadItem;
+use super::ThreadItemPayload;
 use super::ThreadStatus;
 use super::TurnStatus;
 use crate::JsonSchema;
@@ -407,6 +408,15 @@ pub struct Turn {
     /// Duration between turn start and completion in milliseconds, if known.
     #[ts(type = "number | null")]
     pub duration_ms: Option<i64>,
+}
+
+impl Turn {
+    /// Iterates over the item payloads in this turn.
+    pub fn item_payloads(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &ThreadItemPayload> + ExactSizeIterator {
+        self.items.iter().map(|item| &item.payload)
+    }
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

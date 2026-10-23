@@ -2500,6 +2500,14 @@ impl Session {
 
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
+        if let Some((item_id, started_at_ms)) = msg.command_approval_start() {
+            // The client can see the command before execution. Keep its first start
+            // for the canonical lifecycle events that will be saved in history.
+            turn_context
+                .turn_timing_state
+                .record_item_started(item_id.to_owned(), started_at_ms)
+                .await;
+        }
         let legacy_source = msg.clone();
         if let EventMsg::Error(error) = &legacy_source
             && error

@@ -8,7 +8,7 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::write_models_cache;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ItemCompletedNotification;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -143,7 +143,8 @@ async fn fresh_context_subagent_inherits_disabled_view_image_and_mcp_tools() -> 
             mcp.read_notification("item/completed"),
         )
         .await??;
-        if matches!(&completed.item, ThreadItem::McpToolCall { id, .. } if id == MCP_CALL_ID) {
+        if matches!(&completed.item.payload, ThreadItemPayload::McpToolCall { id, .. } if id == MCP_CALL_ID)
+        {
             assert_ne!(completed.thread_id, thread.id);
             break completed.thread_id;
         }

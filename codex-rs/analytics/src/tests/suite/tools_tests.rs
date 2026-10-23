@@ -47,7 +47,7 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::McpToolCallAppContext;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::sandbox::SandboxType;
@@ -64,9 +64,9 @@ fn sample_command_execution_item_with_actions(
     plugin_id: Option<&str>,
     script_path: Option<&str>,
     sandbox_type: Option<SandboxType>,
-) -> ThreadItem {
+) -> ThreadItemPayload {
     let mut item = sample_command_execution_item(status, exit_code, duration_ms);
-    let ThreadItem::CommandExecution {
+    let ThreadItemPayload::CommandExecution {
         command_actions: item_command_actions,
         plugin_id: item_plugin_id,
         script_path: item_script_path,
@@ -233,7 +233,7 @@ async fn cua_tool_call_lifecycle_requires_a_start_and_deduplicates_replay() {
     .await;
     events.clear();
 
-    let item = |status| ThreadItem::McpToolCall {
+    let item = |status| ThreadItemPayload::McpToolCall {
         id: "cua-call".into(),
         server: "codex_apps".into(),
         tool: "js".into(),
@@ -254,18 +254,19 @@ async fn cua_tool_call_lifecycle_requires_a_start_and_deduplicates_replay() {
         error: None,
         duration_ms: None,
     };
-    let started = ServerNotification::ItemStarted(ItemStartedNotification {
-        thread_id: "thread-2".into(),
-        turn_id: "turn-2".into(),
-        started_at_ms: 1_000,
-        item: item(McpToolCallStatus::InProgress),
-    });
-    let completed = ServerNotification::ItemCompleted(ItemCompletedNotification {
-        thread_id: "thread-2".into(),
-        turn_id: "turn-2".into(),
-        completed_at_ms: 1_100,
-        item: item(McpToolCallStatus::Completed),
-    });
+    let started = ServerNotification::ItemStarted(ItemStartedNotification::new(
+        "thread-2".into(),
+        "turn-2".into(),
+        item(McpToolCallStatus::InProgress),
+        /*started_at_ms*/ 1_000,
+    ));
+    let completed = ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+        "thread-2".into(),
+        "turn-2".into(),
+        item(McpToolCallStatus::Completed),
+        Some(1_000),
+        /*completed_at_ms*/ 1_100,
+    ));
     for notification in [
         completed.clone(), // Missing start must not poison later deduplication.
         started.clone(),
@@ -330,17 +331,18 @@ async fn item_lifecycle_notifications_publish_command_execution_event() {
         reducer
             .ingest(
                 AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
-                    ItemStartedNotification {
-                        thread_id: "thread-1".to_string(),
-                        turn_id: "turn-1".to_string(),
-                        started_at_ms: 1_000,
-                        item: {
+                    ItemStartedNotification::new(
+                        "thread-1".to_string(),
+                        "turn-1".to_string(),
+                        {
                             let mut item = sample_command_execution_item(
                                 CommandExecutionStatus::InProgress,
                                 /*exit_code*/ None,
                                 /*duration_ms*/ None,
                             );
-                            if let ThreadItem::CommandExecution { model_context, .. } = &mut item {
+                            if let ThreadItemPayload::CommandExecution { model_context, .. } =
+                                &mut item
+                            {
                                 *model_context =
                                     Some(codex_protocol::items::ModelInvocationContext {
                                         model_slug: model.to_string(),
@@ -349,7 +351,8 @@ async fn item_lifecycle_notifications_publish_command_execution_event() {
                             }
                             item
                         },
-                    },
+                        /*started_at_ms*/ 1_000,
+                    ),
                 ))),
                 &mut events,
             )
@@ -363,11 +366,10 @@ async fn item_lifecycle_notifications_publish_command_execution_event() {
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(ServerNotification::ItemCompleted(
-                ItemCompletedNotification {
-                    thread_id: "thread-1".to_string(),
-                    turn_id: "turn-1".to_string(),
-                    completed_at_ms: 1_045,
-                    item: sample_command_execution_item_with_actions(
+                ItemCompletedNotification::new(
+                    "thread-1".to_string(),
+                    "turn-1".to_string(),
+                    sample_command_execution_item_with_actions(
                         CommandExecutionStatus::Completed,
                         Some(0),
                         Some(42),
@@ -394,7 +396,9 @@ async fn item_lifecycle_notifications_publish_command_execution_event() {
                         Some("scripts/run.py"),
                         Some(SandboxType::WindowsMxc),
                     ),
-                },
+                    /*started_at_ms*/ None,
+                    /*completed_at_ms*/ 1_045,
+                ),
             ))),
             &mut events,
         )
@@ -466,7 +470,7 @@ async fn collaborator_tool_events_keep_response_ids_when_completion_races_sampli
                 &mut events,
             )
             .await;
-        let item = ThreadItem::CollabAgentToolCall {
+        let item = ThreadItemPayload::CollabAgentToolCall {
             id: "call-1".into(),
             tool: CollabAgentTool::SendMessage,
             status: CollabAgentToolCallStatus::Failed,
@@ -480,12 +484,12 @@ async fn collaborator_tool_events_keep_response_ids_when_completion_races_sampli
         reducer
             .ingest(
                 AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
-                    ItemStartedNotification {
-                        thread_id: "thread-1".into(),
-                        turn_id: "turn-1".into(),
-                        started_at_ms: 1_000,
-                        item: item.clone(),
-                    },
+                    ItemStartedNotification::new(
+                        "thread-1".into(),
+                        "turn-1".into(),
+                        item.clone(),
+                        /*started_at_ms*/ 1_000,
+                    ),
                 ))),
                 &mut events,
             )
@@ -494,12 +498,13 @@ async fn collaborator_tool_events_keep_response_ids_when_completion_races_sampli
             sampling_response("turn-1", "response-1", &["call-1"]),
         ));
         let completion = AnalyticsFact::Notification(Box::new(ServerNotification::ItemCompleted(
-            ItemCompletedNotification {
-                thread_id: "thread-1".into(),
-                turn_id: "turn-1".into(),
-                completed_at_ms: 1_010,
+            ItemCompletedNotification::new(
+                "thread-1".into(),
+                "turn-1".into(),
                 item,
-            },
+                /*started_at_ms*/ None,
+                /*completed_at_ms*/ 1_010,
+            ),
         )));
         let facts = if response_first {
             [response, completion]
@@ -785,7 +790,7 @@ async fn mcp_elicitation_classification_survives_turn_completion_and_preserves_c
         ("retry", "calendar", None),
         ("denied", "drive", Some(ElicitationType::Approval)),
     ] {
-        let item = ThreadItem::McpToolCall {
+        let item = ThreadItemPayload::McpToolCall {
             id: item_id.to_string(),
             server: "server".to_string(),
             tool: "search".to_string(),
@@ -809,12 +814,12 @@ async fn mcp_elicitation_classification_survives_turn_completion_and_preserves_c
         reducer
             .ingest(
                 AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
-                    ItemStartedNotification {
-                        thread_id: "thread-2".to_string(),
-                        turn_id: "turn-2".to_string(),
-                        started_at_ms: 998,
-                        item: item.clone(),
-                    },
+                    ItemStartedNotification::new(
+                        "thread-2".to_string(),
+                        "turn-2".to_string(),
+                        item.clone(),
+                        /*started_at_ms*/ 998,
+                    ),
                 ))),
                 &mut events,
             )
@@ -851,12 +856,13 @@ async fn mcp_elicitation_classification_survives_turn_completion_and_preserves_c
         reducer
             .ingest(
                 AnalyticsFact::Notification(Box::new(ServerNotification::ItemCompleted(
-                    ItemCompletedNotification {
-                        thread_id: "thread-2".to_string(),
-                        turn_id: "turn-2".to_string(),
-                        completed_at_ms: 1_000,
+                    ItemCompletedNotification::new(
+                        "thread-2".to_string(),
+                        "turn-2".to_string(),
                         item,
-                    },
+                        /*started_at_ms*/ None,
+                        /*completed_at_ms*/ 1_000,
+                    ),
                 ))),
                 &mut events,
             )
@@ -966,7 +972,7 @@ async fn image_generation_events_preserve_transparent_background_metadata() {
         )
         .await;
 
-        let item = ThreadItem::ImageGeneration(ImageGenerationItem {
+        let item = ThreadItemPayload::ImageGeneration(ImageGenerationItem {
             id: "image-1".to_string(),
             status: status.to_string(),
             revised_prompt: None,
@@ -984,12 +990,12 @@ async fn image_generation_events_preserve_transparent_background_metadata() {
         reducer
             .ingest(
                 AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
-                    ItemStartedNotification {
-                        thread_id: "thread-2".to_string(),
-                        turn_id: "turn-2".to_string(),
-                        started_at_ms: 998,
-                        item: item.clone(),
-                    },
+                    ItemStartedNotification::new(
+                        "thread-2".to_string(),
+                        "turn-2".to_string(),
+                        item.clone(),
+                        /*started_at_ms*/ 998,
+                    ),
                 ))),
                 &mut out,
             )
@@ -997,12 +1003,13 @@ async fn image_generation_events_preserve_transparent_background_metadata() {
         reducer
             .ingest(
                 AnalyticsFact::Notification(Box::new(ServerNotification::ItemCompleted(
-                    ItemCompletedNotification {
-                        thread_id: "thread-2".to_string(),
-                        turn_id: "turn-2".to_string(),
-                        completed_at_ms: 1_000,
+                    ItemCompletedNotification::new(
+                        "thread-2".to_string(),
+                        "turn-2".to_string(),
                         item,
-                    },
+                        /*started_at_ms*/ None,
+                        /*completed_at_ms*/ 1_000,
+                    ),
                 ))),
                 &mut out,
             )

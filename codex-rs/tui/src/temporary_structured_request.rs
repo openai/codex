@@ -9,7 +9,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -216,7 +216,7 @@ pub(crate) async fn collect_structured_response(
     while let Some(notification) = notifications.recv().await {
         match notification {
             ServerNotification::ItemCompleted(completed) if completed.turn_id == turn_id => {
-                if let ThreadItem::AgentMessage { text, .. } = completed.item {
+                if let ThreadItemPayload::AgentMessage { text, .. } = completed.item.payload {
                     if text.len() > STRUCTURED_RESPONSE_MAX_BYTES {
                         return Err(eyre!(
                             "temporary structured response exceeds {STRUCTURED_RESPONSE_MAX_BYTES} bytes"

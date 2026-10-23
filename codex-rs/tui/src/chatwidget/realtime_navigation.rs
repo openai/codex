@@ -37,7 +37,7 @@ impl ChatWidget {
             .pending_speech
             .iter()
             .filter_map(|pending| match &pending.item {
-                codex_app_server_protocol::ThreadItem::AgentMessage { text, .. } => {
+                codex_app_server_protocol::ThreadItemPayload::AgentMessage { text, .. } => {
                     Some(text.as_str())
                 }
                 _ => None,

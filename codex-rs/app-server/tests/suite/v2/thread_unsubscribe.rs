@@ -12,7 +12,7 @@ use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadClosedNotification;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadReadParams;
@@ -611,7 +611,8 @@ async fn wait_for_dynamic_tool_started(
             continue;
         };
         let started: ItemStartedNotification = serde_json::from_value(params)?;
-        if matches!(&started.item, ThreadItem::DynamicToolCall { id, .. } if id == call_id) {
+        if matches!(&started.item.payload, ThreadItemPayload::DynamicToolCall { id, .. } if id == call_id)
+        {
             return Ok(started);
         }
     }

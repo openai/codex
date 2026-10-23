@@ -5,6 +5,7 @@ use crate::thread_transcript::RawReasoningVisibility;
 use crate::thread_transcript::thread_items_to_transcript_cells;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
+use codex_app_server_protocol::ThreadItem;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -12,7 +13,7 @@ async fn older_tool_projection_matches_initial_replay() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     drain_insert_history(&mut rx);
     let command = "cargo check";
-    let mut items = vec![AppServerThreadItem::CommandExecution {
+    let mut items = vec![AppServerThreadItemPayload::CommandExecution {
         id: "command".to_string(),
         plugin_id: None,
         script_path: None,
@@ -38,7 +39,7 @@ async fn older_tool_projection_matches_initial_replay() {
     // Completion-only replay must group consecutive exploration just like older-page projection.
     for name in ["one.rs", "two.rs"] {
         let command = format!("cat {name}");
-        items.push(AppServerThreadItem::CommandExecution {
+        items.push(AppServerThreadItemPayload::CommandExecution {
             id: name.to_string(),
             plugin_id: None,
             script_path: None,
@@ -69,13 +70,13 @@ async fn older_tool_projection_matches_initial_replay() {
         ("cua_repl", "5"),
     ] {
         if id == "2" {
-            items.push(AppServerThreadItem::Reasoning {
+            items.push(AppServerThreadItemPayload::Reasoning {
                 id: "computer-reasoning".to_string(),
                 summary: vec!["**Inspecting the page**".to_string()],
                 content: Vec::new(),
             });
         }
-        items.push(AppServerThreadItem::McpToolCall {
+        items.push(AppServerThreadItemPayload::McpToolCall {
             id: id.to_string(),
             server: server.to_string(),
             tool: "js".to_string(),
@@ -99,14 +100,14 @@ async fn older_tool_projection_matches_initial_replay() {
     // inside the active exploration group until the completed turn commits it.
     for (index, id) in [(1, "trailing-read-one"), (2, "trailing-read-two")] {
         if index == 2 {
-            items.push(AppServerThreadItem::Reasoning {
+            items.push(AppServerThreadItemPayload::Reasoning {
                 id: "exploration-reasoning".to_string(),
                 summary: vec!["**Checking the implementation**".to_string()],
                 content: Vec::new(),
             });
         }
         let mut read = items[index].clone();
-        if let AppServerThreadItem::CommandExecution { id: read_id, .. } = &mut read {
+        if let AppServerThreadItemPayload::CommandExecution { id: read_id, .. } = &mut read {
             *read_id = id.to_string();
         }
         items.push(read);
@@ -120,7 +121,7 @@ async fn older_tool_projection_matches_initial_replay() {
     );
     chat.replay_thread_turns(
         vec![AppServerTurn {
-            items,
+            items: items.into_iter().map(ThreadItem::untimed).collect(),
             ..app_server_turn(
                 "turn",
                 AppServerTurnStatus::Completed,
@@ -185,7 +186,7 @@ async fn snapshot_formatter_reasoning_matches_compact_and_detailed_replay() {
         let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
         drain_insert_history(&mut rx);
         chat.config.show_raw_agent_reasoning = visibility == RawReasoningVisibility::Visible;
-        let item = AppServerThreadItem::Reasoning {
+        let item = AppServerThreadItemPayload::Reasoning {
             id: "reasoning".to_string(),
             summary: vec![
                 "**Plan**\n\nRead [src/main.rs](src/main.rs:3).".to_string(),
@@ -222,7 +223,7 @@ async fn snapshot_formatter_reasoning_matches_compact_and_detailed_replay() {
         ));
         chat.replay_thread_turns(
             vec![AppServerTurn {
-                items: vec![item],
+                items: vec![ThreadItem::untimed(item)],
                 ..app_server_turn(
                     "turn",
                     AppServerTurnStatus::Completed,
@@ -250,7 +251,7 @@ fn raw_reasoning_keeps_its_own_heading() {
     let projected = thread_items_to_transcript_cells(
         /*thread_id*/ None,
         &codex_utils_absolute_path::AbsolutePathBuf::current_dir().unwrap(),
-        [AppServerThreadItem::Reasoning {
+        [AppServerThreadItemPayload::Reasoning {
             id: "raw".into(),
             summary: Vec::new(),
             content: vec!["**Raw investigation**\nKeep this heading and its details.".into()],
@@ -312,21 +313,22 @@ async fn snapshot_formatter_live_and_buffered_patch_notifications_render_once() 
         let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
         drain_insert_history(&mut rx);
         chat.handle_server_notification(
-            ServerNotification::ItemStarted(ItemStartedNotification {
-                thread_id: "thread".to_string(),
-                turn_id: "turn".to_string(),
-                item: patch_item(AppServerPatchApplyStatus::InProgress),
-                started_at_ms: 0,
-            }),
+            ServerNotification::ItemStarted(ItemStartedNotification::new(
+                "thread".to_string(),
+                "turn".to_string(),
+                patch_item(AppServerPatchApplyStatus::InProgress),
+                /*started_at_ms*/ 0,
+            )),
             replay_kind,
         );
         chat.handle_server_notification(
-            ServerNotification::ItemCompleted(ItemCompletedNotification {
-                thread_id: "thread".to_string(),
-                turn_id: "turn".to_string(),
-                item: patch_item(AppServerPatchApplyStatus::Completed),
-                completed_at_ms: 0,
-            }),
+            ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+                "thread".to_string(),
+                "turn".to_string(),
+                patch_item(AppServerPatchApplyStatus::Completed),
+                /*started_at_ms*/ None,
+                /*completed_at_ms*/ 0,
+            )),
             replay_kind,
         );
         let replayed = take_history_cells(&mut rx);
@@ -343,7 +345,7 @@ async fn snapshot_formatter_empty_success_and_failed_patch_keep_their_outcomes()
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     drain_insert_history(&mut rx);
     chat.replay_thread_item(
-        AppServerThreadItem::FileChange {
+        AppServerThreadItemPayload::FileChange {
             id: "empty".to_string(),
             changes: Vec::new(),
             status: AppServerPatchApplyStatus::Completed,
@@ -363,8 +365,8 @@ async fn snapshot_formatter_empty_success_and_failed_patch_keep_their_outcomes()
     ");
 }
 
-fn patch_item(status: AppServerPatchApplyStatus) -> AppServerThreadItem {
-    AppServerThreadItem::FileChange {
+fn patch_item(status: AppServerPatchApplyStatus) -> AppServerThreadItemPayload {
+    AppServerThreadItemPayload::FileChange {
         id: "patch".to_string(),
         changes: vec![FileUpdateChange {
             path: "sample.txt".to_string(),

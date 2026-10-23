@@ -38,7 +38,7 @@ async fn browsing_loads_before_the_oldest_prompt_after_a_partial_answer() -> Res
             .extend(crate::thread_transcript::thread_items_to_transcript_cells(
                 Some(thread_id),
                 &app.config.cwd,
-                started.turns.iter().flat_map(|turn| turn.items.clone()),
+                started.turns.iter().flat_map(Turn::item_payloads).cloned(),
                 crate::thread_transcript::RawReasoningVisibility::Hidden,
                 Some(&app.config),
             ));

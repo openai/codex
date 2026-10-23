@@ -4,7 +4,7 @@ use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::SortDirection;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadItemsListParams;
 use codex_app_server_protocol::ThreadItemsListResponse;
 use codex_app_server_protocol::ThreadRealtimeItemContent;
@@ -164,7 +164,9 @@ async fn timeline_pages_mix_items_and_resolve_the_opening_realtime_session() -> 
         &page.data[0],
         ThreadTimelineEntry::Item { turn_id, item, .. }
             if turn_id == "turn-1"
-                && matches!(item.as_ref(), ThreadItem::UserMessage { .. })
+                && matches!(&item.payload, ThreadItemPayload::UserMessage { .. })
+                && item.started_at_ms == Some(0)
+                && item.completed_at_ms == Some(1)
     ));
     assert!(matches!(
         &page.data[1],

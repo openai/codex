@@ -436,22 +436,29 @@ impl AnalyticsEventsClient {
         completed_at_ms: i64,
     ) {
         let thread_id = item.sender_thread_id.to_string();
-        let completed_item = TurnItem::CollabAgentToolCall(item.clone()).into();
+        let completed_item = codex_app_server_protocol::ThreadItemPayload::from(
+            TurnItem::CollabAgentToolCall(item.clone()),
+        );
         item.status = CollabAgentToolCallStatus::InProgress;
 
-        self.track_notification(&ServerNotification::ItemStarted(ItemStartedNotification {
-            item: TurnItem::CollabAgentToolCall(item).into(),
-            thread_id: thread_id.clone(),
-            turn_id: turn_id.clone(),
-            started_at_ms,
-        }));
+        self.track_notification(&ServerNotification::ItemStarted(
+            ItemStartedNotification::new(
+                thread_id.clone(),
+                turn_id.clone(),
+                codex_app_server_protocol::ThreadItemPayload::from(TurnItem::CollabAgentToolCall(
+                    item,
+                )),
+                started_at_ms,
+            ),
+        ));
         self.track_notification(&ServerNotification::ItemCompleted(
-            ItemCompletedNotification {
-                item: completed_item,
+            ItemCompletedNotification::new(
                 thread_id,
                 turn_id,
+                completed_item,
+                Some(started_at_ms),
                 completed_at_ms,
-            },
+            ),
         ));
     }
 
@@ -935,7 +942,7 @@ fn session_event_to_analytics_notification(
     match &notification {
         ServerNotification::ItemStarted(ItemStartedNotification { item, .. })
         | ServerNotification::ItemCompleted(ItemCompletedNotification { item, .. }) => {
-            tracked_tool_item_id(item)?;
+            tracked_tool_item_id(&item.payload)?;
         }
         _ => {}
     }

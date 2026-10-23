@@ -14,8 +14,9 @@ use crate::temporary_structured_request::run_temporary_structured_turn;
 use crate::temporary_structured_request::start_temporary_thread;
 use crate::temporary_structured_request::unsubscribe_temporary_thread;
 use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadSource;
+use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::ThreadId;
 use codex_protocol::models::MessagePhase;
@@ -215,7 +216,7 @@ impl App {
                 store
                     .turns
                     .iter()
-                    .flat_map(|turn| turn.items.iter())
+                    .flat_map(Turn::item_payloads)
                     .chain(store.buffer.iter().filter_map(|event| {
                         let ThreadBufferedEvent::Notification(notification) = event else {
                             return None;
@@ -226,7 +227,7 @@ impl App {
                             return None;
                         };
 
-                        Some(&notification.item)
+                        Some(&notification.item.payload)
                     }))
                     .filter(|item| seen.insert(item.id().to_string())),
             )
@@ -293,14 +294,14 @@ pub(super) fn thread_title_prompt(user_message: &str) -> String {
 /// Format recent substantive messages chronologically without trusting their markup.
 pub(super) fn recent_conversation_messages<'a, I>(items: I) -> Option<String>
 where
-    I: IntoIterator<Item = &'a ThreadItem>,
+    I: IntoIterator<Item = &'a ThreadItemPayload>,
     I::IntoIter: DoubleEndedIterator,
 {
     let mut messages = items
         .into_iter()
         .rev()
         .filter_map(|item| match item {
-            ThreadItem::UserMessage { content, .. } => {
+            ThreadItemPayload::UserMessage { content, .. } => {
                 let text = content
                     .iter()
                     .filter_map(|input| match input {
@@ -314,7 +315,7 @@ where
 
                 (!text.trim().is_empty()).then_some(("user", text))
             }
-            ThreadItem::AgentMessage { text, phase, .. }
+            ThreadItemPayload::AgentMessage { text, phase, .. }
                 if !matches!(phase, Some(MessagePhase::Commentary)) && !text.trim().is_empty() =>
             {
                 Some(("assistant", text.clone()))

@@ -231,11 +231,72 @@ impl CommandAction {
     }
 }
 
+/// A thread item and its recorded lifecycle times. The payload stays flat on the wire.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadItem {
+    #[serde(flatten)]
+    pub payload: ThreadItemPayload,
+    /// Unix timestamp in milliseconds when the item started, if recorded.
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub started_at_ms: Option<i64>,
+    /// Unix timestamp in milliseconds when the item completed, if recorded.
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub completed_at_ms: Option<i64>,
+}
+
+impl ThreadItem {
+    /// Creates an item with no recorded start or completion time.
+    pub fn untimed(payload: ThreadItemPayload) -> Self {
+        Self {
+            payload,
+            started_at_ms: None,
+            completed_at_ms: None,
+        }
+    }
+
+    fn completed(
+        payload: ThreadItemPayload,
+        started_at_ms: Option<i64>,
+        completed_at_ms: i64,
+    ) -> Self {
+        Self {
+            payload,
+            started_at_ms,
+            // Older rollout events default a missing completion time to zero.
+            completed_at_ms: (completed_at_ms != 0).then_some(completed_at_ms),
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        self.payload.id()
+    }
+}
+
+impl From<&codex_protocol::protocol::ItemCompletedEvent> for ThreadItem {
+    fn from(event: &codex_protocol::protocol::ItemCompletedEvent) -> Self {
+        ThreadItem::completed(
+            ThreadItemPayload::from(event.item.clone()),
+            event.started_at_ms,
+            event.completed_at_ms,
+        )
+    }
+}
+
+impl std::borrow::Borrow<ThreadItemPayload> for ThreadItem {
+    fn borrow(&self) -> &ThreadItemPayload {
+        &self.payload
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
-pub enum ThreadItem {
+pub enum ThreadItemPayload {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     UserMessage {
@@ -453,28 +514,28 @@ pub struct HookPromptFragment {
     pub hook_run_id: String,
 }
 
-impl ThreadItem {
+impl ThreadItemPayload {
     pub fn id(&self) -> &str {
         match self {
-            ThreadItem::UserMessage { id, .. }
-            | ThreadItem::HookPrompt { id, .. }
-            | ThreadItem::AgentMessage { id, .. }
-            | ThreadItem::FunctionCallOutput { id, .. }
-            | ThreadItem::Plan { id, .. }
-            | ThreadItem::Reasoning { id, .. }
-            | ThreadItem::CommandExecution { id, .. }
-            | ThreadItem::FileChange { id, .. }
-            | ThreadItem::McpToolCall { id, .. }
-            | ThreadItem::DynamicToolCall { id, .. }
-            | ThreadItem::CollabAgentToolCall { id, .. }
-            | ThreadItem::SubAgentActivity { id, .. }
-            | ThreadItem::ImageView { id, .. }
-            | ThreadItem::EnteredReviewMode { id, .. }
-            | ThreadItem::ExitedReviewMode { id, .. }
-            | ThreadItem::ContextCompaction { id, .. } => id,
-            ThreadItem::WebSearch(item) => &item.id,
-            ThreadItem::Sleep(item) => &item.id,
-            ThreadItem::ImageGeneration(item) => &item.id,
+            Self::UserMessage { id, .. }
+            | Self::HookPrompt { id, .. }
+            | Self::AgentMessage { id, .. }
+            | Self::FunctionCallOutput { id, .. }
+            | Self::Plan { id, .. }
+            | Self::Reasoning { id, .. }
+            | Self::CommandExecution { id, .. }
+            | Self::FileChange { id, .. }
+            | Self::McpToolCall { id, .. }
+            | Self::DynamicToolCall { id, .. }
+            | Self::CollabAgentToolCall { id, .. }
+            | Self::SubAgentActivity { id, .. }
+            | Self::ImageView { id, .. }
+            | Self::EnteredReviewMode { id, .. }
+            | Self::ExitedReviewMode { id, .. }
+            | Self::ContextCompaction { id, .. } => id,
+            Self::WebSearch(item) => &item.id,
+            Self::Sleep(item) => &item.id,
+            Self::ImageGeneration(item) => &item.id,
         }
     }
 }
@@ -872,15 +933,15 @@ pub(crate) fn web_search_action_from_core(
     }
 }
 
-impl From<CoreTurnItem> for ThreadItem {
+impl From<CoreTurnItem> for ThreadItemPayload {
     fn from(value: CoreTurnItem) -> Self {
         match value {
-            CoreTurnItem::UserMessage(user) => ThreadItem::UserMessage {
+            CoreTurnItem::UserMessage(user) => Self::UserMessage {
                 id: user.id,
                 client_id: user.client_id,
                 content: user.content.into_iter().map(UserInput::from).collect(),
             },
-            CoreTurnItem::HookPrompt(hook_prompt) => ThreadItem::HookPrompt {
+            CoreTurnItem::HookPrompt(hook_prompt) => Self::HookPrompt {
                 id: hook_prompt.id,
                 fragments: hook_prompt
                     .fragments
@@ -896,7 +957,7 @@ impl From<CoreTurnItem> for ThreadItem {
                         CoreAgentMessageContent::Text { text } => text,
                     })
                     .collect::<String>();
-                ThreadItem::AgentMessage {
+                Self::AgentMessage {
                     id: agent.id,
                     text,
                     phase: agent.phase,
@@ -905,17 +966,17 @@ impl From<CoreTurnItem> for ThreadItem {
                     questions: agent.questions,
                 }
             }
-            CoreTurnItem::FunctionCallOutput(output) => ThreadItem::FunctionCallOutput {
+            CoreTurnItem::FunctionCallOutput(output) => Self::FunctionCallOutput {
                 id: output.id,
                 name: output.name,
                 namespace: output.namespace,
                 output: output.output,
             },
-            CoreTurnItem::Plan(plan) => ThreadItem::Plan {
+            CoreTurnItem::Plan(plan) => Self::Plan {
                 id: plan.id,
                 text: plan.text,
             },
-            CoreTurnItem::Reasoning(reasoning) => ThreadItem::Reasoning {
+            CoreTurnItem::Reasoning(reasoning) => Self::Reasoning {
                 id: reasoning.id,
                 summary: reasoning.summary_text,
                 content: reasoning.raw_content,
@@ -926,7 +987,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     &command.parsed_cmd,
                     &command.cwd,
                 );
-                ThreadItem::CommandExecution {
+                Self::CommandExecution {
                     id: command.id,
                     model_context: command.model_context,
                     sandbox_type: command.sandbox_type,
@@ -947,7 +1008,7 @@ impl From<CoreTurnItem> for ThreadItem {
                         .and_then(|duration| i64::try_from(duration.as_millis()).ok()),
                 }
             }
-            CoreTurnItem::DynamicToolCall(call) => ThreadItem::DynamicToolCall {
+            CoreTurnItem::DynamicToolCall(call) => Self::DynamicToolCall {
                 id: call.id,
                 namespace: call.namespace,
                 tool: call.tool,
@@ -964,7 +1025,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     .duration
                     .and_then(|duration| i64::try_from(duration.as_millis()).ok()),
             },
-            CoreTurnItem::CollabAgentToolCall(call) => ThreadItem::CollabAgentToolCall {
+            CoreTurnItem::CollabAgentToolCall(call) => Self::CollabAgentToolCall {
                 id: call.id,
                 tool: call.tool.into(),
                 status: call.status.into(),
@@ -983,7 +1044,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     .map(|(thread_id, status)| (thread_id.to_string(), status.into()))
                     .collect(),
             },
-            CoreTurnItem::SubAgentActivity(activity) => ThreadItem::SubAgentActivity {
+            CoreTurnItem::SubAgentActivity(activity) => Self::SubAgentActivity {
                 model: activity.model,
                 reasoning_effort: activity.reasoning_effort,
                 id: activity.id,
@@ -991,46 +1052,44 @@ impl From<CoreTurnItem> for ThreadItem {
                 agent_thread_id: activity.agent_thread_id.to_string(),
                 agent_path: String::from(activity.agent_path),
             },
-            CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch(WebSearchItem {
+            CoreTurnItem::WebSearch(search) => Self::WebSearch(WebSearchItem {
                 id: search.id,
                 query: search.query,
                 action: Some(web_search_action_from_core(search.action)),
                 results: search.results,
             }),
-            CoreTurnItem::ImageView(image) => ThreadItem::ImageView {
+            CoreTurnItem::ImageView(image) => Self::ImageView {
                 id: image.id,
                 path: image.path.into(),
             },
             CoreTurnItem::Extension(extension) => match extension {
-                ExtensionItem::ImageGeneration(item) => ThreadItem::ImageGeneration(item),
-                ExtensionItem::Sleep(item) => ThreadItem::Sleep(item),
-                ExtensionItem::WebSearch(item) => ThreadItem::WebSearch(item),
+                ExtensionItem::ImageGeneration(item) => Self::ImageGeneration(item),
+                ExtensionItem::Sleep(item) => Self::Sleep(item),
+                ExtensionItem::WebSearch(item) => Self::WebSearch(item),
             },
-            CoreTurnItem::ImageGeneration(image) => {
-                ThreadItem::ImageGeneration(ImageGenerationItem {
-                    id: image.id,
-                    status: image.status,
-                    revised_prompt: image.revised_prompt,
-                    image: GeneratedImageRef::Inline {
-                        result: image.result,
-                    },
-                    transparent_background: None,
-                    failure: None,
-                    saved_path: image.saved_path,
-                    input_images: Vec::new(),
-                    imagegen_request_id: None,
-                    generation_id: None,
-                })
-            }
-            CoreTurnItem::EnteredReviewMode(review) => ThreadItem::EnteredReviewMode {
+            CoreTurnItem::ImageGeneration(image) => Self::ImageGeneration(ImageGenerationItem {
+                id: image.id,
+                status: image.status,
+                revised_prompt: image.revised_prompt,
+                image: GeneratedImageRef::Inline {
+                    result: image.result,
+                },
+                transparent_background: None,
+                failure: None,
+                saved_path: image.saved_path,
+                input_images: Vec::new(),
+                imagegen_request_id: None,
+                generation_id: None,
+            }),
+            CoreTurnItem::EnteredReviewMode(review) => Self::EnteredReviewMode {
                 id: review.id,
                 review: review.user_facing_hint,
             },
-            CoreTurnItem::ExitedReviewMode(review) => ThreadItem::ExitedReviewMode {
+            CoreTurnItem::ExitedReviewMode(review) => Self::ExitedReviewMode {
                 id: review.id,
                 review: review_output_text(review.review_output.as_ref()),
             },
-            CoreTurnItem::FileChange(file_change) => ThreadItem::FileChange {
+            CoreTurnItem::FileChange(file_change) => Self::FileChange {
                 id: file_change.id,
                 changes: convert_patch_changes(&file_change.changes),
                 status: file_change
@@ -1044,7 +1103,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     .duration
                     .and_then(|duration| i64::try_from(duration.as_millis()).ok());
 
-                ThreadItem::McpToolCall {
+                Self::McpToolCall {
                     id: mcp.id,
                     server: mcp.server,
                     tool: mcp.tool,
@@ -1067,7 +1126,7 @@ impl From<CoreTurnItem> for ThreadItem {
                 }
             }
             CoreTurnItem::ContextCompaction(compaction) => {
-                ThreadItem::ContextCompaction { id: compaction.id }
+                Self::ContextCompaction { id: compaction.id }
             }
         }
     }
@@ -1353,6 +1412,25 @@ pub struct ItemStartedNotification {
     #[ts(type = "number")]
     pub started_at_ms: i64,
 }
+impl ItemStartedNotification {
+    pub fn new(
+        thread_id: String,
+        turn_id: String,
+        payload: ThreadItemPayload,
+        started_at_ms: i64,
+    ) -> Self {
+        Self {
+            thread_id,
+            turn_id,
+            started_at_ms,
+            item: ThreadItem {
+                payload,
+                started_at_ms: Some(started_at_ms),
+                completed_at_ms: None,
+            },
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1430,6 +1508,22 @@ pub struct ItemCompletedNotification {
     /// Unix timestamp (in milliseconds) when this item lifecycle completed.
     #[ts(type = "number")]
     pub completed_at_ms: i64,
+}
+impl ItemCompletedNotification {
+    pub fn new(
+        thread_id: String,
+        turn_id: String,
+        payload: ThreadItemPayload,
+        started_at_ms: Option<i64>,
+        completed_at_ms: i64,
+    ) -> Self {
+        Self {
+            thread_id,
+            turn_id,
+            completed_at_ms,
+            item: ThreadItem::completed(payload, started_at_ms, completed_at_ms),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

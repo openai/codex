@@ -16,6 +16,8 @@ from openai_codex import (
     SkillInput,
     TextInput,
 )
+from openai_codex.generated.v2_all import FunctionCallOutputThreadItem
+from openai_codex.types import ThreadItem
 
 
 def _external_items(request) -> list[dict]:
@@ -49,7 +51,16 @@ def test_external_message_preserves_tool_authority_through_resume(tmp_path) -> N
         with Codex(config=harness.app_server_config()) as codex:
             resumed = codex.thread_resume(thread.id, include_turns=False)
             history = resumed.read(include_turns=True)
-            assert external_item in history.thread.turns[0].items
+            persisted = next(
+                item
+                for item in history.thread.turns[0].items
+                if item.root.id == external_item.root.id
+            )
+            assert isinstance(persisted, ThreadItem)
+            assert isinstance(persisted.root, FunctionCallOutputThreadItem)
+            assert persisted.root.started_at_ms is not None
+            assert persisted.root.completed_at_ms is not None
+            assert persisted == external_item
             resumed.run("Summarize the external update.")
         requests = harness.responses.requests()
 

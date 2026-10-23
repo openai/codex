@@ -3,7 +3,7 @@
 use super::tools::CommandHistory;
 use crate::exec_cell::ExecCell;
 use crate::history_cell::HistoryCell;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::Turn;
 use std::sync::Arc;
 
@@ -33,7 +33,7 @@ pub(crate) fn older_exploration_group(
     let items = adjacent_items(older, newer, turns)?;
     let older_items = items
         .iter()
-        .filter(|item| !matches!(item, ThreadItem::Reasoning { .. }))
+        .filter(|entry| !matches!(&entry.payload, ThreadItemPayload::Reasoning { .. }))
         .take(older.group.calls.len())
         .cloned()
         .collect::<Vec<_>>();
@@ -46,7 +46,7 @@ fn adjacent_items<'a>(
     older: &ExecCell,
     newer: &ExecCell,
     turns: &'a [Turn],
-) -> Option<&'a [ThreadItem]> {
+) -> Option<&'a [codex_app_server_protocol::ThreadItem]> {
     if !older.is_exploring_cell() || older.should_flush() || !newer.is_exploring_cell() {
         return None;
     }
@@ -58,10 +58,11 @@ fn adjacent_items<'a>(
     super::computer_groups::adjacent_activity_items(&ids, turns)
 }
 
-pub(super) fn completed_group(items: &[ThreadItem]) -> Option<ExecCell> {
+pub(super) fn completed_group(items: &[codex_app_server_protocol::ThreadItem]) -> Option<ExecCell> {
     let mut group: Option<ExecCell> = None;
-    for item in items {
-        if matches!(item, ThreadItem::Reasoning { .. }) {
+    for entry in items {
+        let item = &entry.payload;
+        if matches!(item, ThreadItemPayload::Reasoning { .. }) {
             continue;
         }
         let call = CommandHistory::from_item(item.clone())?.into_cell();

@@ -9,7 +9,7 @@ use crate::approval_events::ApplyPatchApprovalRequestEvent;
 use crate::approval_events::ExecApprovalRequestEvent;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 
@@ -25,8 +25,8 @@ pub(crate) enum QueuedInterrupt {
     },
     RequestPermissions(RequestPermissionsEvent),
     RequestUserInput(ToolRequestUserInputParams),
-    ItemStarted(ThreadItem),
-    ItemCompleted(ThreadItem),
+    ItemStarted(ThreadItemPayload),
+    ItemCompleted(ThreadItemPayload),
 }
 
 #[derive(Default)]
@@ -87,11 +87,11 @@ impl InterruptManager {
         self.queue.push_back(QueuedInterrupt::RequestUserInput(ev));
     }
 
-    pub(crate) fn push_item_started(&mut self, item: ThreadItem) {
+    pub(crate) fn push_item_started(&mut self, item: ThreadItemPayload) {
         self.queue.push_back(QueuedInterrupt::ItemStarted(item));
     }
 
-    pub(crate) fn push_item_completed(&mut self, item: ThreadItem) {
+    pub(crate) fn push_item_completed(&mut self, item: ThreadItemPayload) {
         self.queue.push_back(QueuedInterrupt::ItemCompleted(item));
     }
 
@@ -174,7 +174,7 @@ mod tests {
     use crate::approval_events::ExecApprovalRequestEvent;
     use codex_app_server_protocol::CommandExecutionSource;
     use codex_app_server_protocol::CommandExecutionStatus;
-    use codex_app_server_protocol::ThreadItem;
+    use codex_app_server_protocol::ThreadItemPayload;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
@@ -209,8 +209,8 @@ mod tests {
         }
     }
 
-    fn command_execution(call_id: &str) -> ThreadItem {
-        ThreadItem::CommandExecution {
+    fn command_execution(call_id: &str) -> ThreadItemPayload {
+        ThreadItemPayload::CommandExecution {
             model_context: None,
             sandbox_type: None,
             id: call_id.to_string(),

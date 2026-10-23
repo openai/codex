@@ -1695,6 +1695,34 @@ pub enum EventMsg {
     SubAgentActivity(SubAgentActivityEvent),
 }
 
+impl EventMsg {
+    /// Returns the ID and start time of the command this approval opens.
+    /// Stdin and network reviews have their own prompts for an existing operation.
+    pub fn command_approval_start(&self) -> Option<(&str, i64)> {
+        match self {
+            Self::ExecApprovalRequest(request)
+                if request.approval_id.is_none() && request.network_approval_context.is_none() =>
+            {
+                Some((&request.call_id, request.started_at_ms))
+            }
+            Self::GuardianAssessment(assessment)
+                if assessment.status == GuardianAssessmentStatus::InProgress
+                    && matches!(
+                        assessment.action,
+                        GuardianAssessmentAction::Command { .. }
+                            | GuardianAssessmentAction::Execve { .. }
+                    ) =>
+            {
+                Some((
+                    assessment.target_item_id.as_deref()?,
+                    assessment.started_at_ms,
+                ))
+            }
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, EnumIter)]
 #[serde(rename_all = "snake_case")]
 pub enum HookEventName {

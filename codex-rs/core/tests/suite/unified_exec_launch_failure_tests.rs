@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use codex_app_server_protocol::ThreadHistoryBuilder;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::TurnStatus;
 use codex_config::Constrained;
 use codex_config::test_support::CloudConfigBundleFixture;
@@ -203,14 +203,15 @@ async fn interrupted_one_shot_launch_failure_completes_and_persists() -> Result<
         .context("interrupted turn in persisted history")?;
     assert_eq!(turn.status, TurnStatus::Interrupted);
     let commands = turn
-        .items
-        .into_iter()
+        .item_payloads()
         .filter(|item| item.id() == CALL_ID)
         .collect::<Vec<_>>();
     // History reconstructs persisted fields; model_context is only present on live items.
     assert_eq!(
         commands,
-        vec![ThreadItem::from(persisted_completions[0].item.clone())]
+        vec![&ThreadItemPayload::from(
+            persisted_completions[0].item.clone()
+        )]
     );
     assert!(
         matches!(aborted, EventMsg::TurnAborted(event) if event.turn_id.as_deref() == Some(completed[0].turn_id.as_str()))

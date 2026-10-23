@@ -49,7 +49,7 @@ async fn quota_warnings_are_emitted_once_and_survive_native_replay() -> Result<(
 async fn settled_tool_precedes_queued_output_and_is_not_emitted_twice() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
     let mut tui = crate::tui::test_support::make_test_tui()?;
-    let item = |status| ThreadItem::DynamicToolCall {
+    let item = |status| ThreadItemPayload::DynamicToolCall {
         id: "lookup".into(),
         namespace: None,
         tool: "lookup".into(),

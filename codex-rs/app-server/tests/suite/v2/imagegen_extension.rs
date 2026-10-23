@@ -13,13 +13,14 @@ use codex_app_server_protocol::ImageGenerationInputImage;
 use codex_app_server_protocol::ImageGenerationItem;
 use codex_app_server_protocol::ImageReference as V2ImageReference;
 use codex_app_server_protocol::ItemCompletedNotification;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -161,14 +162,14 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model(
     )
     .await??;
 
-    let ThreadItem::ImageGeneration(ImageGenerationItem {
+    let ThreadItemPayload::ImageGeneration(ImageGenerationItem {
         status,
         revised_prompt,
         image,
         transparent_background,
         saved_path: Some(saved_path),
         ..
-    }) = completed.item
+    }) = completed.item.payload
     else {
         panic!("expected completed image generation item with saved path");
     };
@@ -353,13 +354,13 @@ async fn transparent_image_preserves_output_metadata_and_persisted_history(
     )
     .await??;
     let thread_id = completed.thread_id.clone();
-    let ThreadItem::ImageGeneration(ImageGenerationItem {
+    let ThreadItemPayload::ImageGeneration(ImageGenerationItem {
         status,
         image,
         transparent_background,
         input_images,
         ..
-    }) = completed.item
+    }) = completed.item.payload
     else {
         panic!("expected completed image-generation item");
     };
@@ -390,9 +391,9 @@ async fn transparent_image_preserves_output_metadata_and_persisted_history(
     let persisted_image = thread
         .turns
         .iter()
-        .flat_map(|turn| turn.items.iter())
+        .flat_map(Turn::item_payloads)
         .find_map(|item| match item {
-            ThreadItem::ImageGeneration(item) => Some(item),
+            ThreadItemPayload::ImageGeneration(item) => Some(item),
             _ => None,
         })
         .context("persisted legacy history should contain the generated image")?;
@@ -410,9 +411,9 @@ async fn transparent_image_preserves_output_metadata_and_persisted_history(
     let resumed_image = thread
         .turns
         .iter()
-        .flat_map(|turn| turn.items.iter())
+        .flat_map(Turn::item_payloads)
         .find_map(|item| match item {
-            ThreadItem::ImageGeneration(item) => Some(item),
+            ThreadItemPayload::ImageGeneration(item) => Some(item),
             _ => None,
         })
         .context("resumed legacy history should contain the generated image")?;
@@ -471,7 +472,7 @@ async fn automatic_image_background_preserves_unknown_transparency() -> Result<(
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
-    let ThreadItem::ImageGeneration(image) = completed.item else {
+    let ThreadItemPayload::ImageGeneration(image) = completed.item.payload else {
         panic!("expected completed image-generation item");
     };
     assert_eq!(image.transparent_background, None);
@@ -630,8 +631,8 @@ async fn standalone_image_generation_failure_emits_terminal_item(
     )
     .await??;
     assert_eq!(
-        completed.item,
-        ThreadItem::ImageGeneration(ImageGenerationItem {
+        completed.item.payload,
+        ThreadItemPayload::ImageGeneration(ImageGenerationItem {
             id: call_id.to_string(),
             status: "failed".to_string(),
             revised_prompt: Some("paint a blue whale".to_string()),
@@ -744,7 +745,7 @@ async fn image_generation_usage_limit_preserves_correlated_failure_metadata() ->
     )
     .await??;
     let thread_id = completed.thread_id.clone();
-    let ThreadItem::ImageGeneration(image) = completed.item else {
+    let ThreadItemPayload::ImageGeneration(image) = completed.item.payload else {
         panic!("expected failed image-generation item");
     };
     assert_eq!(image.status, "failed");
@@ -772,9 +773,9 @@ async fn image_generation_usage_limit_preserves_correlated_failure_metadata() ->
     let persisted_failure = thread
         .turns
         .iter()
-        .flat_map(|turn| turn.items.iter())
+        .flat_map(Turn::item_payloads)
         .find_map(|item| match item {
-            ThreadItem::ImageGeneration(item) => item.failure.as_ref(),
+            ThreadItemPayload::ImageGeneration(item) => item.failure.as_ref(),
             _ => None,
         });
     assert_eq!(
@@ -796,9 +797,9 @@ async fn image_generation_usage_limit_preserves_correlated_failure_metadata() ->
     let resumed_failure = thread
         .turns
         .iter()
-        .flat_map(|turn| turn.items.iter())
+        .flat_map(Turn::item_payloads)
         .find_map(|item| match item {
-            ThreadItem::ImageGeneration(item) => item.failure.as_ref(),
+            ThreadItemPayload::ImageGeneration(item) => item.failure.as_ref(),
             _ => None,
         });
     assert_eq!(
@@ -1157,7 +1158,7 @@ async fn run_image_edit_test(
         wait_for_image_generation_completed(&mut mcp),
     )
     .await??;
-    let ThreadItem::ImageGeneration(completed_image) = completed.item else {
+    let ThreadItemPayload::ImageGeneration(completed_image) = completed.item.payload else {
         panic!("expected completed image-generation item");
     };
     timeout(
@@ -1240,7 +1241,10 @@ async fn wait_for_image_generation_completed(
 ) -> Result<ItemCompletedNotification> {
     loop {
         let completed: ItemCompletedNotification = mcp.read_notification("item/completed").await?;
-        if matches!(&completed.item, ThreadItem::ImageGeneration(_)) {
+        if matches!(
+            &completed.item.payload,
+            ThreadItemPayload::ImageGeneration(_)
+        ) {
             return Ok(completed);
         }
     }

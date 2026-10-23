@@ -12,6 +12,7 @@ use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnItemsView;
@@ -45,8 +46,8 @@ fn voice_snapshot_directory_keeps_header_width_for_windows_paths() {
     );
 }
 
-fn test_agent_message(id: &str, text: &str) -> ThreadItem {
-    ThreadItem::AgentMessage {
+fn test_agent_message(id: &str, text: &str) -> ThreadItemPayload {
+    ThreadItemPayload::AgentMessage {
         id: id.into(),
         text: text.into(),
         phase: Some(MessagePhase::FinalAnswer),
@@ -56,8 +57,8 @@ fn test_agent_message(id: &str, text: &str) -> ThreadItem {
     }
 }
 
-fn test_user_message(id: &str, text: &str) -> ThreadItem {
-    ThreadItem::UserMessage {
+fn test_user_message(id: &str, text: &str) -> ThreadItemPayload {
+    ThreadItemPayload::UserMessage {
         id: id.into(),
         client_id: None,
         content: vec![UserInput::Text {
@@ -300,7 +301,7 @@ async fn switching_agent_threads_preserves_backend_voice_and_routes_pending_spee
             turn: Turn {
                 id: turn_id.into(),
                 root_turn_id: None,
-                items: vec![answer.clone()],
+                items: vec![ThreadItem::untimed(answer.clone())],
                 items_view: TurnItemsView::Summary,
                 status: TurnStatus::Completed,
                 error: None,
@@ -668,11 +669,11 @@ async fn replay_reconciles_only_matching_voice_captions_one_for_one() {
         id: "voice-turn".into(),
         root_turn_id: None,
         items: vec![
-            test_user_message(
+            ThreadItem::untimed(test_user_message(
                 "voice-user",
                 "<realtime_delegation><input>show &lt;code&gt; &amp; tests</input></realtime_delegation>",
-            ),
-            test_agent_message("voice-answer", "spoken answer"),
+            )),
+            ThreadItem::untimed(test_agent_message("voice-answer", "spoken answer")),
         ],
         items_view: TurnItemsView::Summary,
         status: TurnStatus::Completed,
@@ -683,7 +684,10 @@ async fn replay_reconciles_only_matching_voice_captions_one_for_one() {
     };
     let typed = Turn {
         id: "typed-turn".into(),
-        items: vec![test_user_message("typed-user", "typed words")],
+        items: vec![ThreadItem::untimed(test_user_message(
+            "typed-user",
+            "typed words",
+        ))],
         ..voice.clone()
     };
     app.replay_thread_snapshot(
@@ -738,7 +742,7 @@ async fn retained_caption_consumes_only_one_matching_answer_fallback_on_reattach
         }]
         .into(),
     );
-    let answer = |id: &str, text: &str| ThreadItem::AgentMessage {
+    let answer = |id: &str, text: &str| ThreadItemPayload::AgentMessage {
         id: id.into(),
         text: text.into(),
         phase: Some(MessagePhase::FinalAnswer),
@@ -838,7 +842,7 @@ async fn buffered_voice_items_reconcile_captions_after_thread_switch() {
         .collect(),
     );
     let items = [
-        ThreadItem::UserMessage {
+        ThreadItemPayload::UserMessage {
             id: "user-item".into(),
             client_id: None,
             content: vec![UserInput::Text {
@@ -853,12 +857,13 @@ async fn buffered_voice_items_reconcile_captions_after_thread_switch() {
         .into_iter()
         .map(|item| {
             ThreadBufferedEvent::Notification(Box::new(ServerNotification::ItemCompleted(
-                ItemCompletedNotification {
+                ItemCompletedNotification::new(
+                    source.to_string(),
+                    "buffered-turn".into(),
                     item,
-                    thread_id: source.to_string(),
-                    turn_id: "buffered-turn".into(),
-                    completed_at_ms: 0,
-                },
+                    /*started_at_ms*/ None,
+                    /*completed_at_ms*/ 0,
+                ),
             )))
         })
         .collect();
@@ -917,7 +922,7 @@ async fn unrendered_buffered_items_do_not_consume_retained_captions() {
         })
         .collect(),
     );
-    let user_item = |id: &str, text: &str| ThreadItem::UserMessage {
+    let user_item = |id: &str, text: &str| ThreadItemPayload::UserMessage {
         id: id.into(),
         client_id: None,
         content: vec![UserInput::Text {
@@ -925,14 +930,14 @@ async fn unrendered_buffered_items_do_not_consume_retained_captions() {
             text_elements: Vec::new(),
         }],
     };
-    let completion = |turn_id: &str, status: TurnStatus, items: Vec<ThreadItem>| {
+    let completion = |turn_id: &str, status: TurnStatus, items: Vec<ThreadItemPayload>| {
         ThreadBufferedEvent::Notification(Box::new(ServerNotification::TurnCompleted(
             TurnCompletedNotification {
                 thread_id: source.to_string(),
                 turn: Turn {
                     id: turn_id.into(),
                     root_turn_id: None,
-                    items,
+                    items: items.into_iter().map(ThreadItem::untimed).collect(),
                     items_view: TurnItemsView::Summary,
                     status,
                     error: None,
@@ -950,12 +955,12 @@ async fn unrendered_buffered_items_do_not_consume_retained_captions() {
             turns: Vec::new(),
             events: vec![
                 ThreadBufferedEvent::Notification(Box::new(ServerNotification::ItemStarted(
-                    ItemStartedNotification {
-                        item: user_item("started-user", "started only"),
-                        thread_id: source.to_string(),
-                        turn_id: "started".into(),
-                        started_at_ms: 0,
-                    },
+                    ItemStartedNotification::new(
+                        source.to_string(),
+                        "started".into(),
+                        user_item("started-user", "started only"),
+                        /*started_at_ms*/ 0,
+                    ),
                 ))),
                 completion(
                     "evicted",
@@ -1064,7 +1069,10 @@ async fn completed_voice_caption_survives_repeated_thread_replacement() {
         let mut snapshot = empty_thread_snapshot(&app, source);
         snapshot.turns.push(Turn {
             id: "earlier-typed-turn".into(),
-            items: vec![test_agent_message("earlier-answer", "Earlier answer")],
+            items: vec![ThreadItem::untimed(test_agent_message(
+                "earlier-answer",
+                "Earlier answer",
+            ))],
             ..typed.clone()
         });
         snapshot.turns.push(typed.clone());
@@ -1216,7 +1224,7 @@ async fn rejected_realtime_speech_restores_the_delegated_final_answer() -> Resul
             turn: Turn {
                 id: "rejected-turn".to_string(),
                 root_turn_id: None,
-                items: vec![answer],
+                items: vec![ThreadItem::untimed(answer)],
                 items_view: TurnItemsView::Summary,
                 status: TurnStatus::Completed,
                 error: None,
@@ -1316,7 +1324,7 @@ async fn switching_threads_retains_undelivered_voice_answer_after_replay_evictio
             turn: Turn {
                 id: "switched-turn".to_string(),
                 root_turn_id: None,
-                items: vec![answer],
+                items: vec![ThreadItem::untimed(answer)],
                 items_view: TurnItemsView::Summary,
                 status: TurnStatus::Completed,
                 error: None,
@@ -1385,7 +1393,7 @@ async fn switching_threads_retains_undelivered_voice_answer_after_replay_evictio
     assert_eq!(restored, 1);
     let replayed_item = test_agent_message("replayed-final", "Already in the thread snapshot.");
     let mut older_item = replayed_item.clone();
-    if let ThreadItem::AgentMessage { text, .. } = &mut older_item {
+    if let ThreadItemPayload::AgentMessage { text, .. } = &mut older_item {
         *text = "Older pending text.".to_string();
     }
     app.pending_realtime_speech_replay
@@ -1397,7 +1405,7 @@ async fn switching_threads_retains_undelivered_voice_answer_after_replay_evictio
             turns: vec![Turn {
                 id: "replayed-turn".to_string(),
                 root_turn_id: None,
-                items: vec![replayed_item],
+                items: vec![ThreadItem::untimed(replayed_item)],
                 items_view: TurnItemsView::Summary,
                 status: TurnStatus::Completed,
                 error: None,
@@ -1518,22 +1526,25 @@ fn send_item(
     app: &mut App,
     thread_id: ThreadId,
     turn_id: &str,
-    item: ThreadItem,
+    item: ThreadItemPayload,
     kind: ItemEventKind,
 ) {
     let notification = match kind {
-        ItemEventKind::Started => ServerNotification::ItemStarted(ItemStartedNotification {
-            thread_id: thread_id.to_string(),
-            turn_id: turn_id.to_string(),
+        ItemEventKind::Started => ServerNotification::ItemStarted(ItemStartedNotification::new(
+            thread_id.to_string(),
+            turn_id.to_string(),
             item,
-            started_at_ms: 0,
-        }),
-        ItemEventKind::Completed => ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: thread_id.to_string(),
-            turn_id: turn_id.to_string(),
-            item,
-            completed_at_ms: 0,
-        }),
+            /*started_at_ms*/ 0,
+        )),
+        ItemEventKind::Completed => {
+            ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+                thread_id.to_string(),
+                turn_id.to_string(),
+                item,
+                /*started_at_ms*/ None,
+                /*completed_at_ms*/ 0,
+            ))
+        }
     };
     app.handle_thread_event_now(ThreadBufferedEvent::Notification(Box::new(notification)));
 }
@@ -1600,7 +1611,7 @@ async fn delegated_final_speech_reaches_app_server_once_and_stale_speech_is_reje
             turn: Turn {
                 id: turn_id.to_string(),
                 root_turn_id: None,
-                items: vec![answer],
+                items: vec![ThreadItem::untimed(answer)],
                 items_view: TurnItemsView::Summary,
                 status: TurnStatus::Completed,
                 error: None,
@@ -1678,7 +1689,7 @@ async fn delegated_final_speech_reaches_app_server_once_and_stale_speech_is_reje
             turn: Turn {
                 id: second_turn.to_string(),
                 root_turn_id: None,
-                items: vec![second_answer],
+                items: vec![ThreadItem::untimed(second_answer)],
                 items_view: TurnItemsView::Summary,
                 status: TurnStatus::Completed,
                 error: None,

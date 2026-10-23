@@ -180,7 +180,7 @@ async fn delegated_async_question_stays_local_and_expires_when_its_turn_ends() {
         turn_id,
         user_item("<realtime_delegation><input>choose</input></realtime_delegation>"),
     );
-    let answer = ThreadItem::AgentMessage {
+    let answer = ThreadItemPayload::AgentMessage {
         id: "question-answer".into(),
         text: "Which option?".into(),
         phase: Some(MessagePhase::FinalAnswer),

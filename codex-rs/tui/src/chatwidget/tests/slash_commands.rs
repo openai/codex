@@ -1626,11 +1626,10 @@ async fn slash_copy_picker_uses_completed_commentary_during_active_turn() {
     let commentary = "Here is the command:\n\n```sh\necho current\n```";
     let current_thread_id = chat.thread_id.map(|id| id.to_string()).unwrap_or_default();
     chat.handle_server_notification(
-        ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: current_thread_id,
-            turn_id: "active".to_string(),
-            completed_at_ms: 0,
-            item: AppServerThreadItem::AgentMessage {
+        ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+            current_thread_id,
+            "active".to_string(),
+            AppServerThreadItemPayload::AgentMessage {
                 id: "active-commentary".to_string(),
                 text: commentary.to_string(),
                 phase: Some(MessagePhase::Commentary),
@@ -1638,7 +1637,9 @@ async fn slash_copy_picker_uses_completed_commentary_during_active_turn() {
                 delivery: None,
                 questions: None,
             },
-        }),
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 0,
+        )),
         /*replay_kind*/ None,
     );
     while rx.try_recv().is_ok() {}
@@ -1660,15 +1661,16 @@ async fn slash_copy_state_tracks_plan_item_completion() {
     let plan_text = "## Plan\n\n1. Build it\n2. Test it\n\n```sh\r\njust test  \r\n```".to_string();
 
     chat.handle_server_notification(
-        ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: String::new(),
-            turn_id: "turn-1".to_string(),
-            completed_at_ms: 0,
-            item: AppServerThreadItem::Plan {
+        ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+            String::new(),
+            "turn-1".to_string(),
+            AppServerThreadItemPayload::Plan {
                 id: "plan-1".to_string(),
                 text: plan_text.clone(),
             },
-        }),
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 0,
+        )),
         /*replay_kind*/ None,
     );
     handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);

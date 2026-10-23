@@ -529,6 +529,13 @@ def _normalized_schema_bundle_text(schema_dir: Path) -> str:
     _preserve_guardian_approval_path_wrappers(schema)
     definitions = schema.get("definitions", {})
     if isinstance(definitions, dict):
+        # Pydantic represents the tagged item union as its existing nominal variant classes.
+        # Give each variant the shared fields so live and persisted items parse identically.
+        thread_item = definitions.get("ThreadItem", {})
+        timing = thread_item.pop("properties", {})
+        for variant in thread_item.get("oneOf", []):
+            variant["properties"].update(timing)
+
         # Older SDKs accept omission for these nullable project and section IDs.
         for model, field in (
             ("Thread", "projectId"),

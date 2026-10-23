@@ -154,7 +154,7 @@ async fn unavailable_thread_new_and_clear_start_a_writable_session() -> Result<(
                 vec![test_turn(
                     "review",
                     TurnStatus::InProgress,
-                    vec![ThreadItem::EnteredReviewMode {
+                    vec![ThreadItemPayload::EnteredReviewMode {
                         id: "review-start".into(),
                         review: "changes against main".into(),
                     }],

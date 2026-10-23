@@ -25,7 +25,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadSource;
@@ -469,10 +469,10 @@ impl App {
             ServerNotificationThreadTarget::Thread(thread_id) => {
                 if self.current_displayed_thread_id() != Some(thread_id)
                     && let ServerNotification::ItemCompleted(item) = &notification
-                    && let ThreadItem::UserMessage {
+                    && let ThreadItemPayload::UserMessage {
                         client_id: Some(client_id),
                         ..
-                    } = &item.item
+                    } = &item.item.payload
                 {
                     // Acknowledge by ID before routing can discard the receipt. ID-less receipts
                     // cannot safely distinguish identical pending submissions.

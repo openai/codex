@@ -34,7 +34,7 @@ use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadReadParams;
@@ -645,10 +645,10 @@ source = {:?}
     let response: ThreadReadResponse =
         timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
     assert_eq!(response.thread.turns.len(), 1);
-    let imported_items = &response.thread.turns[0].items;
+    let mut imported_items = response.thread.turns[0].item_payloads();
     assert_eq!(imported_items.len(), 3);
-    match &imported_items[0] {
-        ThreadItem::UserMessage { content, .. } => assert_eq!(
+    match imported_items.next() {
+        Some(ThreadItemPayload::UserMessage { content, .. }) => assert_eq!(
             content,
             &vec![UserInput::Text {
                 text: "first request".to_string(),
@@ -657,8 +657,8 @@ source = {:?}
         ),
         other => panic!("expected user message item, got {other:?}"),
     }
-    match &imported_items[1] {
-        ThreadItem::AgentMessage { text, .. } => assert_eq!(text, "first answer"),
+    match imported_items.next() {
+        Some(ThreadItemPayload::AgentMessage { text, .. }) => assert_eq!(text, "first answer"),
         other => panic!("expected agent message item, got {other:?}"),
     }
 
@@ -2108,10 +2108,10 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     let response: ThreadReadResponse =
         timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
     assert_eq!(response.thread.turns.len(), 2);
-    let control_items = &response.thread.turns[0].items;
+    let mut control_items = response.thread.turns[0].item_payloads();
     assert_eq!(control_items.len(), 1);
-    match &control_items[0] {
-        ThreadItem::UserMessage { content, .. } => {
+    match control_items.next() {
+        Some(ThreadItemPayload::UserMessage { content, .. }) => {
             assert_eq!(
                 content,
                 &vec![UserInput::Text {
@@ -2122,10 +2122,10 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         }
         other => panic!("expected user message item, got {other:?}"),
     }
-    let imported_items = &response.thread.turns[1].items;
+    let mut imported_items = response.thread.turns[1].item_payloads();
     assert_eq!(imported_items.len(), 3);
-    match &imported_items[0] {
-        ThreadItem::UserMessage { content, .. } => {
+    match imported_items.next() {
+        Some(ThreadItemPayload::UserMessage { content, .. }) => {
             assert_eq!(
                 content,
                 &vec![UserInput::Text {
@@ -2137,8 +2137,8 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         other => panic!("expected user message item, got {other:?}"),
     }
     assert_eq!(
-        imported_items.last(),
-        Some(&ThreadItem::AgentMessage {
+        imported_items.next_back(),
+        Some(&ThreadItemPayload::AgentMessage {
             id: "item-4".into(),
             text: "<EXTERNAL SESSION IMPORTED>".into(),
             phase: None,
@@ -2183,8 +2183,8 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     let response: ThreadReadResponse =
         timeout(DEFAULT_TIMEOUT, mcp.read_response(request_id)).await??;
     assert_eq!(response.thread.turns.len(), 3);
-    match &response.thread.turns[2].items[1] {
-        ThreadItem::AgentMessage { text, .. } => assert_eq!(text, "follow-up answer"),
+    match response.thread.turns[2].item_payloads().nth(/*n*/ 1) {
+        Some(ThreadItemPayload::AgentMessage { text, .. }) => assert_eq!(text, "follow-up answer"),
         other => panic!("expected agent message item, got {other:?}"),
     }
 

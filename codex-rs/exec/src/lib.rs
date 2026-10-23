@@ -39,7 +39,6 @@ use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
-use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadReadParams;
@@ -1793,7 +1792,7 @@ fn should_backfill_turn_completed_items(
 fn turn_items_for_thread(
     thread: &AppServerThread,
     turn_id: &str,
-) -> Option<Vec<AppServerThreadItem>> {
+) -> Option<Vec<codex_app_server_protocol::ThreadItem>> {
     thread
         .turns
         .iter()
