@@ -92,8 +92,8 @@ impl<T: HttpTransport> ModelsClient<T> {
 
     /// Fetches a catalog using the provider's auth and retry policy without decoding it.
     ///
-    /// Callers accepting provider-controlled catalogs must set a response-body limit
-    /// and validate the native response without including raw values in diagnostics.
+    /// Callers accepting provider-controlled catalogs must validate the native response
+    /// without including raw values in diagnostics.
     pub async fn list_models_raw(
         &self,
         request_url: String,
