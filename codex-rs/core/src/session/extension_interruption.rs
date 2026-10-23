@@ -13,6 +13,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
+use tracing::Instrument;
 
 #[cfg(test)]
 #[path = "extension_interruption_tests.rs"]
@@ -108,16 +109,21 @@ impl Session {
         let runtime = self.services.runtime_handle.clone();
         let session = Arc::clone(self);
         let turn_id = turn_id.to_owned();
-        drop(runtime.spawn(async move {
-            if session
-                .abort_turn_if_active(&turn_id, TurnAbortReason::Interrupted, error)
-                .await
-            {
-                // Extension aborts bypass normal task completion; user interrupts do not.
-                session
-                    .emit_thread_idle_lifecycle_if_idle(ThreadIdleCause::Interrupted)
-                    .await;
-            }
-        }));
+        drop(
+            runtime.spawn(
+                async move {
+                    if session
+                        .abort_turn_if_active(&turn_id, TurnAbortReason::Interrupted, error)
+                        .await
+                    {
+                        // Extension aborts bypass normal task completion; user interrupts do not.
+                        session
+                            .emit_thread_idle_lifecycle_if_idle(ThreadIdleCause::Interrupted)
+                            .await;
+                    }
+                }
+                .in_current_span(),
+            ),
+        );
     }
 }

@@ -23,6 +23,7 @@ use super::InstallationLocation;
 use super::InstallationSource;
 use super::MAX_HANDLE_BYTES;
 use super::MAX_SKILL_RESPONSE_BYTES;
+use super::SKILLS_NAMESPACE;
 use super::SkillToolAuthority;
 use super::SkillToolAuthoritySelector;
 use super::SkillToolContext;
@@ -161,6 +162,32 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                     .bind_environment_package_resource(&package, resource.clone())
                     .unwrap_or_else(|| SkillResourceId::new(resource)),
             };
+            // Record the selected route before either cache or provider can serve the read.
+            // This is an attempted read, not a successful invocation or a backend RPC.
+            tracing::event!(
+                name: "codex.skill_read.source_selected",
+                target: "codex_otel.trace_safe",
+                tracing::Level::INFO,
+                event.name = "codex.skill_read.source_selected",
+                conversation.id = %self.context.thread_id,
+                turn_id = %call.turn_id,
+                call_id = %call.call_id,
+                tool_namespace = SKILLS_NAMESPACE,
+                tool_name = TOOL_NAME,
+                skill_source = match output_authority {
+                    SkillToolAuthoritySelector::Cloud => "cloud",
+                    SkillToolAuthoritySelector::Executor => "executor",
+                },
+                skill_name = %skill_entry.name,
+                skill_plugin_id = selected_source.plugin_id.as_deref(),
+                skill_resource_kind = if requested_resource == main_prompt {
+                    "main_prompt"
+                } else {
+                    "supporting_resource"
+                },
+                is_continuation = args.cursor.is_some(),
+                "Selected skill read source"
+            );
             let (context, access_key) = match output_authority {
                 SkillToolAuthoritySelector::Cloud => (
                     SkillReadContext::Cloud {

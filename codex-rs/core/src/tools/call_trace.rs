@@ -2,6 +2,8 @@
 //! These events contain call identifiers and names, never arguments or output.
 //! Code-mode calls reach the broker before the dispatching turn is known.
 
+use std::time::Duration;
+
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::ThreadId;
 use codex_tools::ToolName;
@@ -13,7 +15,7 @@ pub(crate) enum Source {
 }
 
 impl Source {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Direct => "direct",
             Self::CodeMode => "code_mode",
@@ -58,18 +60,24 @@ pub(crate) fn received(
     );
 }
 
+// Record the measured duration on the terminal event so a retained completion
+// remains useful even when its receipt event or dispatch span was not retained.
+// This includes runtime admission and handler work, but excludes broker queuing
+// before dispatch and the sampling loop's later result collection.
 pub(crate) fn result_ready(
     thread_id: ThreadId,
     turn_id: &str,
     tool_name: &ToolName,
     call_id: &str,
     source: Source,
+    dispatch_to_result_ready: Duration,
 ) {
     tracing::event!(
         name: "codex.tool_result_ready",
         target: "codex_otel.trace_safe",
         tracing::Level::INFO,
         event.name = "codex.tool_result_ready",
+        dispatch_to_result_ready_ms = dispatch_to_result_ready.as_secs_f64() * 1000.0,
         conversation.id = %thread_id,
         turn_id,
         call_id,
@@ -79,7 +87,7 @@ pub(crate) fn result_ready(
     );
 }
 
-fn namespace(tool_name: &ToolName) -> &str {
+pub(crate) fn namespace(tool_name: &ToolName) -> &str {
     tool_name
         .namespace
         .as_deref()

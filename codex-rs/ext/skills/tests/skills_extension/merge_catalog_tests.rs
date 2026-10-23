@@ -13,6 +13,9 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 
+#[path = "source_telemetry_tests.rs"]
+mod source_telemetry_tests;
+
 fn cloud_skill(name: &str) -> SkillCatalogEntry {
     let package = format!("skill://Plugin_123/{name}");
     SkillCatalogEntry::new(

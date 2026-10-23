@@ -8,6 +8,7 @@ use std::time::UNIX_EPOCH;
 
 use codex_analytics::TurnProfile;
 use codex_otel::TURN_TTFM_DURATION_METRIC;
+use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use tokio::sync::Mutex;
@@ -15,6 +16,22 @@ use tokio::sync::Mutex;
 use crate::ResponseEvent;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
+
+// Reuse the finalized analytics counters instead of counting sampled child spans.
+// Recovery can complete the same turn ID again, so consumers must retain the
+// completion event's trace and timestamp rather than deduplicating by turn alone.
+pub(crate) fn record_turn_profile_trace(thread_id: ThreadId, turn_id: &str, profile: &TurnProfile) {
+    tracing::event!(
+        name: "codex.turn_profile",
+        target: "codex_otel.trace_safe",
+        tracing::Level::INFO,
+        event.name = "codex.turn_profile",
+        conversation.id = %thread_id,
+        turn_id,
+        sampling_request_count = profile.sampling_request_count,
+        sampling_retry_count = profile.sampling_retry_count,
+    );
+}
 
 pub(crate) async fn record_turn_ttft_metric(turn_context: &TurnContext, event: &ResponseEvent) {
     let Some(duration) = turn_context

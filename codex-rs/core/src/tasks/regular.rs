@@ -44,7 +44,11 @@ impl SessionTask for RegularTask {
         input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
-        let run_turn_span = trace_span!("run_turn");
+        let run_turn_span = trace_span!(
+            "run_turn",
+            conversation.id = %sess.thread_id,
+            turn.id = %ctx.sub_id,
+        );
         // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
         // not wait on startup prewarm resolution.
         let prewarmed_client_session = async {

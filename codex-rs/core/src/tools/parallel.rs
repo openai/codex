@@ -194,7 +194,10 @@ impl ToolCallRuntime {
             otel.name = %call.tool_name,
             tool_name = %call.tool_name,
             thread.id = %session.thread_id,
+            conversation.id = %session.thread_id,
+            turn.id = %turn.sub_id,
             turn_id = %turn.sub_id,
+            tool_source = trace_source.as_str(),
             call_id = call.call_id.as_str(),
             codex.tool.phase = "dispatch",
             aborted = false,
@@ -259,6 +262,7 @@ impl ToolCallRuntime {
                         &dispatch_tool_name,
                         &dispatch_call_id,
                         trace_source,
+                        started.elapsed(),
                     );
                 }
                 result
@@ -291,6 +295,7 @@ impl ToolCallRuntime {
                                     &call.tool_name,
                                     &call.call_id,
                                     trace_source,
+                                    started.elapsed(),
                                 );
                                 call_state.terminal_outcome_reached.store(true, Ordering::Release);
                                 notify_tool_aborted(

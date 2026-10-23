@@ -269,7 +269,22 @@ async fn steer_joins_existing_turn_without_extending_sampling(
         })
     })
     .await?;
+    let run_turn = wait_for_span(&exported, |span| span.name == "run_turn").await?;
     let spans = exported.get_finished_spans()?;
+    let dispatch = spans
+        .iter()
+        .find(|span| {
+            attribute(&span.attributes, "call_id").as_deref() == Some(call.call_id.as_str())
+                && attribute(&span.attributes, "tool_source").as_deref() == Some("direct")
+        })
+        .expect("tool dispatch can be joined without following parent spans");
+    assert_eq!(
+        [&run_turn.attributes, &dispatch.attributes].map(|attributes| (
+            attribute(attributes, "conversation.id"),
+            attribute(attributes, "turn.id"),
+        )),
+        std::array::from_fn::<_, 2, _>(|_| (Some(thread_id.clone()), Some(call.turn_id.clone())))
+    );
     let steer = spans
         .iter()
         .find(|span| span.name == "steer_request")
@@ -315,7 +330,42 @@ async fn steer_joins_existing_turn_without_extending_sampling(
                 && attribute(&event.attributes, "call_id").as_deref() == Some(call.call_id.as_str())
         })
         .expect("gated tool result-ready event exported");
+    let dispatch_to_ready_ms = attribute(&ready.attributes, "dispatch_to_result_ready_ms")
+        .expect("completion carries its own timing")
+        .parse::<f64>()?;
+    assert!(dispatch_to_ready_ms.is_finite() && dispatch_to_ready_ms >= 0.0);
     assert!(accepted.end_time <= ready.timestamp);
     assert!(ready.timestamp <= blocking.end_time);
+    let mut profiles: Vec<_> = spans
+        .iter()
+        .flat_map(|span| span.events.events.iter())
+        .filter(|event| {
+            event.name == "codex.turn_profile"
+                && attribute(&event.attributes, "turn_id").as_deref() == Some(call.turn_id.as_str())
+        })
+        .map(|event| {
+            (
+                attribute(&event.attributes, "conversation.id"),
+                attribute(&event.attributes, "sampling_request_count"),
+                attribute(&event.attributes, "sampling_retry_count"),
+            )
+        })
+        .collect();
+    profiles.sort();
+    let expected_counts = match finish {
+        Finish::Reply => vec!["2"],
+        Finish::Interrupt => vec!["1", "1"],
+    };
+    assert_eq!(
+        profiles,
+        expected_counts
+            .into_iter()
+            .map(|count| (
+                Some(thread_id.clone()),
+                Some(count.to_string()),
+                Some("0".to_string())
+            ))
+            .collect::<Vec<_>>()
+    );
     Ok(())
 }

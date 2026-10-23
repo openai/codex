@@ -74,6 +74,7 @@ pub(crate) fn skill_tools(
         .and_then(|state| state.mcp_resources.clone());
     let analytics = SkillAnalytics::from_stores(session_store, thread_store);
     let context = SkillToolContext {
+        thread_id: thread_store.level_id().to_string(),
         providers,
         mcp_resources,
         thread_state,
@@ -204,6 +205,7 @@ impl SkillAnalytics {
 
 #[derive(Clone)]
 struct SkillToolContext {
+    thread_id: String,
     providers: SkillProviders,
     mcp_resources: Option<Arc<McpResourceClient>>,
     thread_state: Arc<SkillsThreadState>,
