@@ -18,6 +18,7 @@ use chrono::Utc;
 use codex_http_client::HttpClient;
 use codex_http_client::HttpResponse;
 use codex_message_board::AgentMessageBoard;
+use codex_message_board::AppendRequest;
 use codex_message_board::ChannelPage;
 use codex_message_board::ChannelQuery;
 use codex_message_board::ChannelSummary;
@@ -325,6 +326,18 @@ impl AgentMessageBoard for RemoteAgentMessageBoard {
     );
     operation!(list_channels, ListChannels, ChannelQuery, ChannelPage);
     operation!(post, Post, PostRequest, PostMetadata);
+    fn append(
+        &self,
+        _caller: ThreadId,
+        _request: AppendRequest,
+    ) -> BoxFuture<'_, Result<PostMetadata>> {
+        // The remote protocol has no silent write operation. Posting is not equivalent.
+        Box::pin(async {
+            Err(CodexErr::InvalidRequest(
+                "remote message boards do not support silent append".into(),
+            ))
+        })
+    }
     operation!(list_threads, ListThreads, ThreadQuery, Page<ThreadSummary>);
     operation!(search_posts, SearchPosts, PostQuery, Page<PostPreview>);
     operation!(read_thread, ReadThread, ReadThreadRequest, ThreadPage);

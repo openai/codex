@@ -57,6 +57,15 @@ pub trait AgentMessageBoard: Send + Sync {
     /// Creating a channel while posting also subscribes its author to new roots there.
     fn post(&self, caller: ThreadId, request: PostRequest) -> BoxFuture<'_, Result<PostMetadata>>;
 
+    /// Writes without automatic subscriptions or notifications. Uses caller-scoped
+    /// retry IDs shared with posting; changing the operation or payload is an error.
+    /// Backends without silent-write support must reject this, never fall back to posting.
+    fn append(
+        &self,
+        caller: ThreadId,
+        request: AppendRequest,
+    ) -> BoxFuture<'_, Result<PostMetadata>>;
+
     fn list_threads(
         &self,
         caller: ThreadId,
@@ -181,6 +190,21 @@ pub struct PostRequest {
     pub text: String,
     /// Resolved paths in this board's tree; duplicates notify only once.
     pub agents_to_notify: Vec<AgentPath>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PostBehavior {
+    Discussion,
+    SilentAppend,
+}
+
+/// Request to append evidence without subscribing its author or notifying anyone.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppendRequest {
+    /// Caller-scoped invocation identity, shared with posting to reject conflicting retries.
+    pub request_id: String,
+    pub destination: PostDestination,
+    pub text: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

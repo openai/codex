@@ -1,7 +1,9 @@
 //! Tree-owned message boards for training. Agent handles share state; nothing is written to disk.
 //! Mutations and recipient selection are atomic. Host callbacks run outside the state lock.
+//! Silent appends share the write path without changing subscriptions or delivering notices.
 //! Opening a board prunes registry entries whose state has been released.
 
+use crate::AppendRequest;
 use crate::ChannelSummary;
 use crate::CreateChannelRequest;
 use crate::MessageBoardHost;
@@ -13,6 +15,7 @@ use crate::SubscriptionChange;
 use crate::SubscriptionRequest;
 use crate::SubscriptionState;
 use crate::SubscriptionTarget;
+use crate::api::PostBehavior;
 use caseless::default_case_fold_str;
 use chrono::DateTime;
 use chrono::Utc;
@@ -92,6 +95,7 @@ struct Channel {
 struct Post {
     metadata: PostMetadata,
     request: PostRequest,
+    behavior: PostBehavior,
     search: String,
     n_chars: usize,
     replies: Vec<usize>,
@@ -136,12 +140,13 @@ impl State {
         &self,
         caller: ThreadId,
         request: &PostRequest,
+        behavior: PostBehavior,
     ) -> Result<Option<PostMetadata>> {
         self.requests
             .get(&(caller, request.request_id.clone()))
             .map(|index| {
                 let post = &self.posts[*index];
-                if post.request != *request {
+                if post.request != *request || post.behavior != behavior {
                     return Err(invalid("request ID was already used for a different post"));
                 }
                 Ok(post.metadata.clone())
@@ -230,14 +235,42 @@ impl InMemoryAgentMessageBoard {
     }
 
     async fn post(&self, caller: ThreadId, request: PostRequest) -> Result<PostMetadata> {
+        self.write(caller, request, PostBehavior::Discussion).await
+    }
+
+    async fn append(&self, caller: ThreadId, request: AppendRequest) -> Result<PostMetadata> {
+        self.write(
+            caller,
+            PostRequest {
+                request_id: request.request_id,
+                destination: request.destination,
+                text: request.text,
+                agents_to_notify: Vec::new(),
+            },
+            PostBehavior::SilentAppend,
+        )
+        .await
+    }
+
+    async fn write(
+        &self,
+        caller: ThreadId,
+        request: PostRequest,
+        behavior: PostBehavior,
+    ) -> Result<PostMetadata> {
         // Accepted writes and their one-time fanout outlive cancellation of the tool call.
         let board = self.clone();
-        tokio::spawn(async move { board.post_inner(caller, request).await })
+        tokio::spawn(async move { board.post_inner(caller, request, behavior).await })
             .await
             .map_err(|error| CodexErr::Io(std::io::Error::other(error)))?
     }
 
-    async fn post_inner(&self, caller: ThreadId, request: PostRequest) -> Result<PostMetadata> {
+    async fn post_inner(
+        &self,
+        caller: ThreadId,
+        request: PostRequest,
+        behavior: PostBehavior,
+    ) -> Result<PostMetadata> {
         if request.text.is_empty()
             || request.text.len() > 64 * 1024
             || request.request_id.is_empty()
@@ -249,7 +282,12 @@ impl InMemoryAgentMessageBoard {
             ));
         }
         let author = self.host.agent_path(caller).await?;
-        if let Some(post) = self.state.lock().await.existing_post(caller, &request)? {
+        if let Some(post) = self
+            .state
+            .lock()
+            .await
+            .existing_post(caller, &request, behavior)?
+        {
             return Ok(post);
         }
         let mut recipients = HashSet::new();
@@ -259,7 +297,7 @@ impl InMemoryAgentMessageBoard {
         let now = self.host.current_time(caller).await?;
         let (metadata, notice) = {
             let mut state = self.state.lock().await;
-            if let Some(post) = state.existing_post(caller, &request)? {
+            if let Some(post) = state.existing_post(caller, &request, behavior)? {
                 return Ok(post);
             }
             let id = Uuid::now_v7();
@@ -272,7 +310,9 @@ impl InMemoryAgentMessageBoard {
                 }
                 PostDestination::NewChannel(name) => {
                     state.insert_channel(name, /*description*/ None, author.clone(), now)?;
-                    state.subscribe(SubscriptionTarget::Channel(name.clone()), caller);
+                    if behavior == PostBehavior::Discussion {
+                        state.subscribe(SubscriptionTarget::Channel(name.clone()), caller);
+                    }
                     (name.clone(), id, SubscriptionTarget::Channel(name.clone()))
                 }
                 PostDestination::Thread(root) => {
@@ -284,7 +324,9 @@ impl InMemoryAgentMessageBoard {
                     )
                 }
             };
-            if let Some(subscribers) = state.subscriptions.get(&target) {
+            if behavior == PostBehavior::Discussion
+                && let Some(subscribers) = state.subscriptions.get(&target)
+            {
                 recipients.extend(subscribers.iter().filter_map(|(agent, change)| {
                     (*change == SubscriptionChange::Subscribe).then_some(*agent)
                 }));
@@ -307,6 +349,7 @@ impl InMemoryAgentMessageBoard {
                 search: default_case_fold_str(&request.text),
                 n_chars: request.text.chars().count(),
                 request,
+                behavior,
                 replies: Vec::new(),
                 latest_reply: None,
             });
@@ -338,7 +381,9 @@ impl InMemoryAgentMessageBoard {
                     thread.latest_reply = Some(index);
                 }
             }
-            state.subscribe(SubscriptionTarget::Thread(root), caller);
+            if behavior == PostBehavior::Discussion {
+                state.subscribe(SubscriptionTarget::Thread(root), caller);
+            }
             if recipients.is_empty() {
                 return Ok(metadata);
             }

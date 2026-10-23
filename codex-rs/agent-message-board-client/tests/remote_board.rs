@@ -7,6 +7,7 @@ use codex_agent_message_board_client::BoardNotification;
 use codex_agent_message_board_client::RemoteAgentMessageBoard;
 use codex_http_client::HttpClientBuilder;
 use codex_message_board::AgentMessageBoard;
+use codex_message_board::AppendRequest;
 use codex_message_board::PostContent;
 use codex_message_board::PostDestination;
 use codex_message_board::PostMetadata;
@@ -129,6 +130,26 @@ async fn remote_board_preserves_the_host_contract() -> anyhow::Result<()> {
         .await;
     let board_handle: &dyn AgentMessageBoard = &client;
     assert_eq!(board_handle.identity(), board);
+    let requests_before = server.received_requests().await.unwrap().len();
+    let unsupported = board_handle
+        .append(
+            caller,
+            AppendRequest {
+                request_id: post.request_id.clone(),
+                destination: post.destination.clone(),
+                text: post.text.clone(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        unsupported.details(),
+        CodexErrorDetails::InvalidRequest(_)
+    ));
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        requests_before
+    );
     assert!(board_handle.post(caller, post.clone()).await.is_err());
     clock_available.store(false, Ordering::Relaxed);
     Mock::given(method("POST"))

@@ -1220,8 +1220,10 @@ async fn check_tools_validate_arguments_deduplicate_calls_and_bound_unicode_resu
         notifications: Mutex::default(),
     });
     let board = backend.open(&sqlite, root.into(), host.clone()).await;
+    let mut selected = MessageBoardTool::DISCUSSION.to_vec();
+    selected.push(MessageBoardTool::Append);
     let tools = message_board_tools(
-        &MessageBoardTool::DISCUSSION,
+        &selected,
         board.clone(),
         root,
         AgentPath::root(),
@@ -1240,6 +1242,10 @@ async fn check_tools_validate_arguments_deduplicate_calls_and_bound_unicode_resu
         (
             "post",
             json!({"new_channel_name":"low-budget","text":"must not be stored"}),
+        ),
+        (
+            "append",
+            json!({"new_channel_name":"low-budget-append","text":"must not be stored"}),
         ),
         ("create_channel", json!({"channel_name":"low-budget"})),
     ] {
@@ -1263,15 +1269,23 @@ async fn check_tools_validate_arguments_deduplicate_calls_and_bound_unicode_resu
     );
     small_budget.truncation_policy = TruncationPolicy::Bytes(4096);
     assert!(tool("create_channel").handle(small_budget).await.is_err());
-    assert!(
-        tool("post")
-            .handle(call(
-                "post",
-                json!({"text":"invalid","channel_name":"a","new_channel_name":"b"})
-            ))
-            .await
-            .is_err()
-    );
+    for name in ["post", "append"] {
+        assert!(
+            tool(name)
+                .handle(call(
+                    name,
+                    json!({"text":"invalid","channel_name":"a","new_channel_name":"b"})
+                ))
+                .await
+                .is_err()
+        );
+    }
+    for args in [
+        json!({"text":"no destination"}),
+        json!({"text":"invalid recipient","new_channel_name":"evidence","agents_to_notify":["worker"]}),
+    ] {
+        assert!(tool("append").handle(call("append", args)).await.is_err());
+    }
     assert!(
         tool("get_channels")
             .handle(call("get_channels", json!({"limit":0})))
@@ -1424,6 +1438,83 @@ async fn check_tools_validate_arguments_deduplicate_calls_and_bound_unicode_resu
             .len()
             <= 8000
     );
+
+    // Explicitly selected Append stores readable evidence, without delivery side effects.
+    host.notifications.lock().unwrap().clear();
+    let append_call = call(
+        "append",
+        json!({"text":"Permission revoked.","new_channel_name":"evidence"}),
+    );
+    let result = tool("append").handle(append_call.clone()).await.unwrap();
+    let appended: PostMetadata = serde_json::from_str(&result.log_output()).unwrap();
+    assert_eq!(
+        tool("append")
+            .handle(append_call)
+            .await
+            .unwrap()
+            .log_output(),
+        result.log_output()
+    );
+    let read = tool("read_post")
+        .handle(call("read_post", json!({"message_id":appended.message_id})))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<PostContent>(&read.log_output()).unwrap(),
+        PostContent {
+            metadata: appended.clone(),
+            text: "Permission revoked.".into(),
+            n_chars: 19,
+            next_offset_chars: 19,
+        }
+    );
+    let mut conflict = call(
+        "post",
+        json!({"text":"Permission revoked.","new_channel_name":"evidence"}),
+    );
+    conflict.call_id = "append".into();
+    assert!(tool("post").handle(conflict).await.is_err());
+    tool("subscribe")
+        .handle(call(
+            "subscribe",
+            json!({"channel_name":"evidence","target_agent":"worker"}),
+        ))
+        .await
+        .unwrap();
+    for (index, args) in [
+        json!({"text":"Later evidence.","channel_name":"evidence"}),
+        json!({"text":"Related evidence.","thread_id":appended.thread_id}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut append = call("append", args);
+        append.call_id = format!("later-append-{index}");
+        tool("append").handle(append).await.unwrap();
+    }
+    // Normal discussion still does not notify the append author: Append created
+    // neither a channel subscription nor a thread subscription for that author.
+    for (index, destination) in [
+        PostDestination::Channel("evidence".into()),
+        PostDestination::Thread(appended.thread_id),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        board
+            .post(
+                child,
+                PostRequest {
+                    request_id: format!("ordinary-reply-{index}"),
+                    destination,
+                    text: "Discuss this evidence.".into(),
+                    agents_to_notify: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(*host.notifications.lock().unwrap(), Vec::new());
 }
 
 #[test]
@@ -1532,6 +1623,166 @@ async fn channel_descriptions_migrate_legacy_storage_and_survive_reopen() {
             next_cursor: None
         }
     );
+}
+
+#[tokio::test]
+async fn silent_appends_preserve_evidence_and_explicit_subscriptions()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
+    let root = ThreadId::new();
+    let child = ThreadId::new();
+    let host = Arc::new(Host {
+        clock: AtomicI64::default(),
+        agent_path_calls: AtomicUsize::default(),
+        members: [
+            (root, AgentPath::root()),
+            (child, AgentPath::root().join("worker")?),
+        ]
+        .into(),
+        active: AtomicBool::new(true),
+        fail_notifications: AtomicBool::new(false),
+        notifications: Mutex::default(),
+    });
+    let options = LocalBoardOptions {
+        storage_namespace: "evidence_records".into(),
+    };
+    let descriptor = LocalBoard::new(sqlite.clone(), root.into()).with_options(options);
+    let writer = descriptor.read_write().open(host.clone()).await?;
+    let reader = descriptor.read_only().open(host.clone()).await?;
+    // Include characters requiring JSON escaping in the persisted subscription target.
+    let channel = "audit\"\\é";
+    let request = AppendRequest {
+        request_id: "original".into(),
+        destination: PostDestination::NewChannel(channel.into()),
+        text: "Deployment was revoked.".into(),
+    };
+    let original = writer.append(root, request.clone()).await?;
+    assert_eq!(writer.append(root, request.clone()).await?, original);
+    assert!(
+        reader
+            .append(
+                child,
+                AppendRequest {
+                    request_id: "reader".into(),
+                    destination: PostDestination::Channel(channel.into()),
+                    ..request.clone()
+                },
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        writer
+            .append(
+                root,
+                AppendRequest {
+                    text: "A different decision".into(),
+                    ..request.clone()
+                },
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        reader
+            .read_post(
+                child,
+                ReadPostRequest {
+                    message_id: original.message_id,
+                    offset_chars: 0,
+                    limit_chars: NonZeroU32::MAX,
+                }
+            )
+            .await?,
+        PostContent {
+            metadata: original.clone(),
+            text: request.text.clone(),
+            n_chars: request.text.chars().count(),
+            next_offset_chars: request.text.chars().count(),
+        }
+    );
+    writer
+        .create_channel(
+            root,
+            CreateChannelRequest {
+                channel_name: "release".into(),
+                description: Some("Release evidence".to_owned().try_into()?),
+                subscription: SubscriptionChange::Unsubscribe,
+            },
+        )
+        .await?;
+    for name in [channel, "release"] {
+        reader
+            .set_subscription(
+                child,
+                SubscriptionRequest {
+                    target: SubscriptionTarget::Channel(name.into()),
+                    change: SubscriptionChange::Subscribe,
+                    target_agent: None,
+                },
+            )
+            .await?;
+    }
+    let later_request = AppendRequest {
+        request_id: "later".into(),
+        destination: PostDestination::Channel(channel.into()),
+        ..request.clone()
+    };
+    let later = writer.append(root, later_request.clone()).await?;
+    // Retry keys belong to the caller, so another author may use the same ID.
+    assert_ne!(writer.append(child, later_request).await?, later);
+    assert!(host.notifications.lock().unwrap().is_empty());
+    let pool = sqlite
+        .open_read_only_pool(
+            &dir.path().join("message_board_evidence_records_1.sqlite"),
+            /*busy_timeout*/ None,
+        )
+        .await?;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM subscriptions WHERE agent=?")
+            .bind(root.to_string())
+            .fetch_one(&pool)
+            .await?,
+        0
+    );
+    // Normal posts on this same board still subscribe their author and notify once.
+    let discussion = PostRequest {
+        request_id: "discussion".into(),
+        destination: PostDestination::Channel(channel.into()),
+        text: "Discuss the latest evidence.".into(),
+        agents_to_notify: Vec::new(),
+    };
+    let posted = writer.post(root, discussion.clone()).await?;
+    assert_eq!(writer.post(root, discussion.clone()).await?, posted);
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT target FROM subscriptions WHERE agent=?")
+            .bind(root.to_string())
+            .fetch_all(&pool)
+            .await?,
+        vec![serde_json::to_string(&SubscriptionTarget::Thread(
+            posted.thread_id
+        ))?]
+    );
+    assert!(
+        writer
+            .append(
+                root,
+                AppendRequest {
+                    request_id: discussion.request_id.clone(),
+                    destination: discussion.destination.clone(),
+                    text: discussion.text.clone(),
+                },
+            )
+            .await
+            .is_err()
+    );
+    drop((writer, reader));
+    let reopened = descriptor.read_write().open(host.clone()).await?;
+    assert_eq!(reopened.append(root, request).await?, original);
+    assert_eq!(reopened.post(root, discussion).await?, posted);
+    assert_eq!(*host.notifications.lock().unwrap(), vec![(child, posted)]);
+    Ok(())
 }
 
 #[tokio::test]

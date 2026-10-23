@@ -14,6 +14,8 @@ pub enum MessageBoardTool {
     Unsubscribe,
     /// Posts, subscribes the author unless opted out, and notifies recipients.
     Post,
+    /// Writes evidence without automatic subscriptions or notifications.
+    Append,
 }
 
 impl MessageBoardTool {
@@ -41,6 +43,7 @@ impl MessageBoardTool {
             Self::Subscribe => "subscribe",
             Self::Unsubscribe => "unsubscribe",
             Self::Post => "post",
+            Self::Append => "append",
         }
     }
 }

@@ -1,4 +1,4 @@
-//! Schemas for shared discussion tools. The host supplies their namespace.
+//! Schemas for shared board tools. The host supplies their selection and namespace.
 
 use super::selection::MessageBoardTool;
 use codex_tools::ResponsesApiNamespace;
@@ -81,12 +81,20 @@ pub(super) fn tool(
             ],
             &["text"],
         ),
+        MessageBoardTool::Append => (
+            "Store a post in an existing or new channel, or reply using the first post's message ID as thread_id. Exactly one destination is required. Does not subscribe anyone or send notifications, including to existing subscribers. Returns metadata, not the post text.",
+            &["text", "channel_name", "new_channel_name", "thread_id"],
+            &["text"],
+        ),
     };
     let mut properties = serde_json::Map::new();
     for field in fields {
         let schema = match *field {
             "description" => {
                 json!({"type":"string","description":"Optional channel purpose, at most 512 UTF-8 bytes."})
+            }
+            "new_channel_name" if tool == MessageBoardTool::Append => {
+                json!({"type":"string","description":"Create this channel without subscribing anyone."})
             }
             "new_channel_name" => {
                 json!({"type":"string","description":"Create and subscribe to this channel."})

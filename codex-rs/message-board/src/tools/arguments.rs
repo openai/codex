@@ -80,3 +80,12 @@ pub(super) struct Post {
     pub(super) thread_id: Option<Uuid>,
     pub(super) agents_to_notify: Option<Vec<String>>,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Append {
+    pub(super) text: String,
+    pub(super) channel_name: Option<String>,
+    pub(super) new_channel_name: Option<String>,
+    pub(super) thread_id: Option<Uuid>,
+}

@@ -3,6 +3,7 @@
 use super::InMemoryAgentMessageBoard;
 use super::invalid;
 use crate::AgentMessageBoard;
+use crate::AppendRequest;
 use crate::ChannelPage;
 use crate::ChannelQuery;
 use crate::ChannelSummary;
@@ -47,6 +48,14 @@ impl AgentMessageBoard for InMemoryAgentMessageBoard {
 
     fn post(&self, caller: ThreadId, request: PostRequest) -> BoxFuture<'_, Result<PostMetadata>> {
         Box::pin(self.post(caller, request))
+    }
+
+    fn append(
+        &self,
+        caller: ThreadId,
+        request: AppendRequest,
+    ) -> BoxFuture<'_, Result<PostMetadata>> {
+        Box::pin(self.append(caller, request))
     }
 
     fn set_subscription(

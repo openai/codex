@@ -11,6 +11,7 @@ use super::paging::direction;
 use super::paging::preview;
 use super::storage_error;
 use crate::AgentMessageBoard;
+use crate::AppendRequest;
 use crate::BoardPermissions;
 use crate::ChannelPage;
 use crate::ChannelQuery;
@@ -54,6 +55,14 @@ impl AgentMessageBoard for LocalAgentMessageBoard {
 
     fn post(&self, caller: ThreadId, request: PostRequest) -> BoxFuture<'_, Result<PostMetadata>> {
         Box::pin(LocalAgentMessageBoard::post(self, caller, request))
+    }
+
+    fn append(
+        &self,
+        caller: ThreadId,
+        request: AppendRequest,
+    ) -> BoxFuture<'_, Result<PostMetadata>> {
+        Box::pin(LocalAgentMessageBoard::append(self, caller, request))
     }
 
     fn set_subscription(
