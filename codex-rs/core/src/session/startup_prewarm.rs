@@ -286,6 +286,7 @@ impl Session {
         ));
     }
 
+    #[tracing::instrument(level = "trace", skip_all)]
     pub(crate) async fn consume_startup_prewarm_for_regular_turn(
         &self,
         cancellation_token: &CancellationToken,

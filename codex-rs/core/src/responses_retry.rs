@@ -54,6 +54,7 @@ pub(crate) struct ExhaustedResponseRetry {
 
 /// Returns `Ok(())` when the caller should retry the request loop, or the original error when
 /// it is terminal or the retry budget is exhausted.
+#[tracing::instrument(level = "trace", skip_all, fields(request = ?request))]
 pub(crate) async fn handle_response_stream_error(
     retry_state: &mut ResponsesStreamRetryState,
     max_retries: u64,
