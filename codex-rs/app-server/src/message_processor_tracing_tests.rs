@@ -273,6 +273,7 @@ pub(super) async fn build_test_processor(
         log_db: None,
         state_db: None,
         config_warnings: Vec::new(),
+        startup_warnings_tx: mpsc::unbounded_channel().0,
         session_source: SessionSource::VSCode,
         user_verification: Arc::new(crate::user_verification::Service::new(Arc::clone(
             &auth_manager,

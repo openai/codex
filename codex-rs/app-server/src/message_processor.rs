@@ -55,6 +55,7 @@ use crate::request_serialization::QueuedInitializedRequest;
 use crate::request_serialization::RequestSerializationQueueKey;
 use crate::request_serialization::RequestSerializationQueues;
 use crate::skills_watcher::SkillsWatcher;
+use crate::startup_warnings::StartupWarnings;
 use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadStateManager;
 use crate::transport::AppServerTransport;
@@ -99,6 +100,7 @@ use codex_thread_store::QueueStore;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::timeout;
@@ -145,6 +147,7 @@ pub(crate) struct MessageProcessor {
     pub(crate) turn_admission: TurnAdmission,
     user_verification: Arc<crate::user_verification::Service>,
     outgoing: Arc<OutgoingMessageSender>,
+    startup_warnings: StartupWarnings,
     models_refresh_worker: ModelsRefreshWorker,
     turn_cost_worker: Option<TurnCostWorker>,
     skills_watcher: Arc<SkillsWatcher>,
@@ -262,6 +265,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
+    pub(crate) startup_warnings_tx: mpsc::UnboundedSender<String>,
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) user_verification: Arc<crate::user_verification::Service>,
@@ -290,6 +294,7 @@ impl MessageProcessor {
             log_db,
             state_db,
             config_warnings,
+            startup_warnings_tx,
             session_source,
             auth_manager,
             user_verification,
@@ -473,15 +478,6 @@ impl MessageProcessor {
             state_db.clone(),
         );
         let git_processor = GitRequestProcessor::new();
-        let initialize_processor = InitializeRequestProcessor::new(
-            gateway_login_control,
-            outgoing.clone(),
-            analytics_events_client.clone(),
-            Arc::clone(&config),
-            config_warnings.clone(),
-            rpc_transport,
-            Arc::clone(&user_verification),
-        );
         let marketplace_processor =
             MarketplaceRequestProcessor::new(config_manager.clone(), Arc::clone(&thread_manager));
         let mcp_processor = McpRequestProcessor::new(
@@ -540,7 +536,7 @@ impl MessageProcessor {
             log_db,
             Arc::clone(&skills_watcher),
             turn_cost_worker.as_ref().map(TurnCostWorker::handle),
-            config_warnings,
+            config_warnings.clone(),
             sample_responses,
         );
         let turn_processor = TurnRequestProcessor::new(
@@ -574,8 +570,17 @@ impl MessageProcessor {
                     &config.plugins_config_input(),
                     reload_config,
                     Some(on_effective_plugins_changed),
+                    startup_warnings_tx,
                 );
         }
+        let initialize_processor = InitializeRequestProcessor::new(
+            gateway_login_control,
+            outgoing.clone(),
+            analytics_events_client.clone(),
+            Arc::clone(&config),
+            rpc_transport,
+            Arc::clone(&user_verification),
+        );
         let external_agent_config_processor =
             ExternalAgentConfigRequestProcessor::new(ExternalAgentConfigRequestProcessorArgs {
                 outgoing: outgoing.clone(),
@@ -604,6 +609,9 @@ impl MessageProcessor {
             turn_admission,
             user_verification,
             outgoing,
+            startup_warnings: StartupWarnings {
+                config: config_warnings,
+            },
             models_refresh_worker,
             turn_cost_worker,
             skills_watcher,
@@ -822,8 +830,8 @@ impl MessageProcessor {
         &self,
         connection_id: ConnectionId,
     ) {
-        self.initialize_processor
-            .send_initialize_notifications_to_connection(connection_id)
+        self.startup_warnings
+            .send_config_to_connections(&self.outgoing, &[connection_id])
             .await;
     }
 
@@ -845,8 +853,8 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn send_initialize_notifications(&self) {
-        self.initialize_processor
-            .send_initialize_notifications()
+        self.startup_warnings
+            .send_config_to_connections(&self.outgoing, &[])
             .await;
     }
 

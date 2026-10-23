@@ -500,6 +500,7 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
+            let (startup_warnings_tx, mut startup_warnings_rx) = mpsc::unbounded_channel();
             let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
                 cloud_skill_provider: None,
                 outgoing: Arc::clone(&processor_outgoing),
@@ -513,6 +514,7 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
                 log_db: args.log_db,
                 state_db: args.state_db,
                 config_warnings: args.config_warnings,
+                startup_warnings_tx,
                 session_source: args.session_source,
                 user_verification: Arc::new(crate::user_verification::Service::new(Arc::clone(
                     &auth_manager,
@@ -573,6 +575,9 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
                                 break;
                             }
                         }
+                    }
+                    Some(message) = startup_warnings_rx.recv(), if session.initialized() => {
+                        crate::startup_warnings::send_warning(&processor_outgoing, message).await;
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {

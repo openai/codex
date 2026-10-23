@@ -1,0 +1,57 @@
+---
+source: tui/src/app/tests/marketplace_upgrade_tests.rs
+expression: "normalize_snapshot_paths(format!(\"Warning notice:\\n{notice}\\n\\nFirst warning details:\\n{first_details}\\n\\nSecond warning details:\\n{second_details}\"))"
+---
+Warning notice:
+
+
+
+
+
+
+
+
+
+
+
+
+› Ask Codex to do anything
+
+  GPT-5.6-Sol default · /tmp/project
+  ? for shortcuts                                     ⚠ 2 warnings · f2 to view
+
+First warning details:
+
+
+
+
+  Warnings · 1 of 2 · Startup
+
+  Codex could not update marketplace `team`: upgraded marketplace name `other`
+  does not match configured marketplace `team`
+
+
+
+
+
+
+
+  k keep & next · esc dismiss & close · ⌃o copy · ←/→ warning · ↓ scroll
+
+Second warning details:
+
+
+
+
+  Warnings · 2 of 2 · Startup
+
+  Codex could not update marketplace `work`: upgraded marketplace name `other`
+  does not match configured marketplace `work`
+
+
+
+
+
+
+
+  k keep & next · esc dismiss & close · ⌃o copy · ←/→ warning · ↓ scroll

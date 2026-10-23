@@ -76,6 +76,7 @@ async fn background_routing_call_sites_skip_config(api_key: Option<&str>) -> any
         log_db: None,
         state_db: None,
         config_warnings: Vec::new(),
+        startup_warnings_tx: mpsc::unbounded_channel().0,
         session_source: SessionSource::VSCode,
         user_verification: Arc::new(crate::user_verification::Service::new(Arc::clone(
             &auth_manager,
