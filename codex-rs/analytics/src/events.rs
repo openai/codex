@@ -85,6 +85,7 @@ pub(crate) enum TrackEventRequest {
     CommandExecution(CodexCommandExecutionEventRequest),
     PluginMeasurement(CodexPluginMeasurementEventRequest),
     FileChange(CodexFileChangeEventRequest),
+    CuaToolCallStarted(CodexCuaToolCallStartedEventRequest),
     McpToolCall(CodexMcpToolCallEventRequest),
     DynamicToolCall(CodexDynamicToolCallEventRequest),
     ControlToolCall(CodexControlToolCallEventRequest),
@@ -167,6 +168,7 @@ impl TrackEventRequest {
         match self {
             Self::PluginUsed(event) => event.event_params.plugin.plugin_id.is_some(),
             Self::SkillInvocation(event) => event.event_params.plugin_id.is_some(),
+            Self::CuaToolCallStarted(event) => event.event_params.plugin_id.is_some(),
             Self::McpToolCall(event) => event.event_params.plugin_id.is_some(),
             Self::ArtifactOperation(event) => !event.event_params.plugin_id.is_empty(),
             Self::PluginMeasurement(event) => !event.event_params.plugin_id.is_empty(),
@@ -712,6 +714,35 @@ pub(crate) struct CodexToolItemEventBase {
     pub(crate) failure_kind: Option<ToolItemFailureKind>,
     pub(crate) requested_additional_permissions: bool,
     pub(crate) requested_network_access: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexCuaToolCallStartedEventParams {
+    pub(crate) thread_id: String,
+    pub(crate) session_id: String,
+    pub(crate) turn_id: String,
+    pub(crate) root_turn_id: Option<String>,
+    pub(crate) item_id: String,
+    pub(crate) cell_id: Option<String>,
+    pub(crate) parent_call_id: Option<String>,
+    pub(crate) originating_response_id: Option<String>,
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) thread_source: Option<ThreadSource>,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
+    pub(crate) tool_event_type: Option<ToolEventType>,
+    pub(crate) started_at_ms: u64,
+    pub(crate) mcp_server_name: String,
+    pub(crate) mcp_tool_name: String,
+    pub(crate) plugin_id: Option<String>,
+    pub(crate) connector_id: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexCuaToolCallStartedEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexCuaToolCallStartedEventParams,
 }
 
 #[allow(dead_code)]

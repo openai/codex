@@ -88,6 +88,7 @@ fn event_thread_id(event: &TrackEventRequest) -> Option<&str> {
         TrackEventRequest::CommandExecution(event) => Some(&event.event_params.base.thread_id),
         TrackEventRequest::PluginMeasurement(event) => Some(&event.event_params.thread_id),
         TrackEventRequest::FileChange(event) => Some(&event.event_params.base.thread_id),
+        TrackEventRequest::CuaToolCallStarted(event) => Some(&event.event_params.thread_id),
         TrackEventRequest::McpToolCall(event) => Some(&event.event_params.base.thread_id),
         TrackEventRequest::DynamicToolCall(event) => Some(&event.event_params.base.thread_id),
         TrackEventRequest::ControlToolCall(event) => Some(&event.event_params.base.thread_id),

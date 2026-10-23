@@ -219,6 +219,100 @@ fn command_execution_event_serializes_expected_shape() {
 }
 
 #[tokio::test]
+async fn cua_tool_call_lifecycle_requires_a_start_and_deduplicates_replay() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut events,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ false,
+    )
+    .await;
+    events.clear();
+
+    let item = |status| ThreadItem::McpToolCall {
+        id: "cua-call".into(),
+        server: "codex_apps".into(),
+        tool: "js".into(),
+        status,
+        arguments: json!({"script": "synthetic-private-input"}),
+        app_context: Some(McpToolCallAppContext {
+            connector_id: "connector_openai_browser".into(),
+            link_id: None,
+            resource_uri: None,
+            app_name: None,
+            action_name: None,
+        }),
+        mcp_app_resource_uri: None,
+        mcp_app_ui: None,
+        plugin_id: Some("browser@openai-curated".into()),
+        read_only_hint: None,
+        result: None,
+        error: None,
+        duration_ms: None,
+    };
+    let started = ServerNotification::ItemStarted(ItemStartedNotification {
+        thread_id: "thread-2".into(),
+        turn_id: "turn-2".into(),
+        started_at_ms: 1_000,
+        item: item(McpToolCallStatus::InProgress),
+    });
+    let completed = ServerNotification::ItemCompleted(ItemCompletedNotification {
+        thread_id: "thread-2".into(),
+        turn_id: "turn-2".into(),
+        completed_at_ms: 1_100,
+        item: item(McpToolCallStatus::Completed),
+    });
+    for notification in [
+        completed.clone(), // Missing start must not poison later deduplication.
+        started.clone(),
+        started.clone(),
+        completed.clone(),
+        started, // Replay after a valid terminal.
+        completed,
+    ] {
+        reducer
+            .ingest(
+                AnalyticsFact::Notification(Box::new(notification)),
+                &mut events,
+            )
+            .await;
+    }
+
+    let [
+        TrackEventRequest::CuaToolCallStarted(start),
+        TrackEventRequest::McpToolCall(terminal),
+    ] = events.as_slice()
+    else {
+        panic!("expected exactly one CUA start and one terminal");
+    };
+    assert_eq!(
+        (
+            start.event_type,
+            start.event_params.connector_id.as_deref(),
+            start.event_params.plugin_id.as_deref(),
+            start.event_params.started_at_ms,
+            terminal.event_params.base.started_at_ms,
+        ),
+        (
+            "codex_cua_tool_call_started",
+            Some("connector_openai_browser"),
+            Some("browser@openai-curated"),
+            1_000,
+            1_000,
+        )
+    );
+    assert!(
+        !serde_json::to_string(&events)
+            .expect("serialize CUA lifecycle events")
+            .contains("synthetic-private-input")
+    );
+}
+
+#[tokio::test]
 async fn item_lifecycle_notifications_publish_command_execution_event() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
