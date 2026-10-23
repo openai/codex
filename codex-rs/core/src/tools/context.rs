@@ -4,6 +4,7 @@ use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::unified_exec::output::CapturedStream;
 use crate::unified_exec::resolve_max_tokens;
 use codex_protocol::ResponseItemId;
 use codex_protocol::mcp::CallToolResult;
@@ -16,16 +17,11 @@ use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_tools::LoadableToolSpec;
 use codex_tools::ToolName;
 use codex_utils_audio::estimate_audio_token_count;
-use codex_utils_head_tail_buffer::format_output_omission_marker;
 use codex_utils_output_truncation::TruncationPolicy;
-use codex_utils_output_truncation::approx_token_count;
-use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_output_truncation::truncate_function_output_payload;
-use codex_utils_output_truncation::truncate_text;
 use codex_utils_output_truncation::with_serialization_allowance;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
@@ -425,28 +421,22 @@ pub struct ExecCommandToolOutput {
     pub event_call_id: String,
     pub chunk_id: String,
     pub wall_time: Duration,
-    /// Raw bytes returned for this unified exec call before any truncation.
-    pub raw_output: Vec<u8>,
+    /// Output retained by collection, before model-facing truncation.
+    pub(crate) raw_output: CapturedStream,
     pub truncation_policy: TruncationPolicy,
     pub max_output_tokens: Option<usize>,
     pub process_id: Option<i32>,
     pub exit_code: Option<i32>,
     pub original_token_count: Option<usize>,
-    /// Bytes omitted by the output collection cap before model-facing truncation.
-    pub output_omitted_bytes: Option<NonZeroUsize>,
     pub hook_command: Option<String>,
 }
 
 impl ToolOutput for ExecCommandToolOutput {
     fn log_output(&self) -> String {
         // The telemetry budget must not inherit the model's output-token limit.
-        let mut output = String::from_utf8_lossy(&self.raw_output).into_owned();
-        if let Some(omitted_bytes) = self.output_omitted_bytes {
-            let marker = format_output_omission_marker(omitted_bytes.get());
-            if !output.contains(&marker) {
-                output = format!("{marker}\n{output}");
-            }
-        }
+        let output = self
+            .raw_output
+            .render(/*policy*/ None, self.original_token_count);
         format!("{}\n{output}", self.response_header())
     }
 
@@ -512,7 +502,7 @@ impl ToolOutput for ExecCommandToolOutput {
             original_token_count: self.original_token_count,
             output: match self.max_output_tokens {
                 Some(max_tokens) => self.truncated_output(max_tokens),
-                None => String::from_utf8_lossy(&self.raw_output).to_string(),
+                None => self.raw_output.text.clone(),
             },
         };
 
@@ -537,32 +527,8 @@ impl ExecCommandToolOutput {
     }
 
     fn truncated_output_with_policy(&self, policy: TruncationPolicy) -> String {
-        let text = String::from_utf8_lossy(&self.raw_output).to_string();
-        let Some(omitted_bytes) = self.output_omitted_bytes else {
-            return formatted_truncate_text(&text, policy);
-        };
-
-        let marker = format_output_omission_marker(omitted_bytes.get());
-        if text.len() <= policy.byte_budget() {
-            return if text.contains(&marker) {
-                text
-            } else {
-                format!("{marker}\n{text}")
-            };
-        }
-
-        let original_token_count = self
-            .original_token_count
-            .unwrap_or_else(|| approx_token_count(&text));
-        let truncated = truncate_text(&text, policy);
-        let omission_notice = if truncated.contains(&marker) {
-            String::new()
-        } else {
-            format!("{marker}\n")
-        };
-        format!(
-            "Warning: truncated output (original token count: {original_token_count})\n{omission_notice}\n{truncated}"
-        )
+        self.raw_output
+            .render(Some(policy), self.original_token_count)
     }
 
     fn response_header(&self) -> String {

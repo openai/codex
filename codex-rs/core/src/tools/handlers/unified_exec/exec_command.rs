@@ -34,6 +34,7 @@ use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::generate_chunk_id;
+use crate::unified_exec::output::CapturedStream;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
@@ -374,13 +375,15 @@ impl ExecCommandHandler {
                 event_call_id: String::new(),
                 chunk_id: String::new(),
                 wall_time: std::time::Duration::ZERO,
-                raw_output: output.into_text().into_bytes(),
+                raw_output: CapturedStream {
+                    text: output.into_text(),
+                    omitted_bytes: 0,
+                },
                 truncation_policy: step_context.settings.model_info.truncation_policy.into(),
                 max_output_tokens,
                 process_id: None,
                 exit_code: None,
                 original_token_count: None,
-                output_omitted_bytes: None,
                 hook_command: None,
             }));
         }
@@ -438,7 +441,10 @@ impl ExecCommandHandler {
                     event_call_id: context.call_id.clone(),
                     chunk_id: generate_chunk_id(),
                     wall_time: output.duration,
-                    raw_output: output_text.into_bytes(),
+                    raw_output: CapturedStream {
+                        text: output_text,
+                        omitted_bytes: output_omitted_bytes.map_or(0, std::num::NonZeroUsize::get),
+                    },
                     truncation_policy: step_context.settings.model_info.truncation_policy.into(),
                     max_output_tokens,
                     // Sandbox denial is terminal, so there is no live
@@ -446,7 +452,6 @@ impl ExecCommandHandler {
                     process_id: None,
                     exit_code: Some(output.exit_code),
                     original_token_count: Some(original_token_count),
-                    output_omitted_bytes,
                     hook_command: Some(hook_command),
                 }))
             }

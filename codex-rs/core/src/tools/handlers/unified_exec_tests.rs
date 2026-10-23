@@ -524,13 +524,12 @@ async fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_s
         event_call_id: "call-43".to_string(),
         chunk_id: "chunk-1".to_string(),
         wall_time: std::time::Duration::from_millis(498),
-        raw_output: b"three".to_vec(),
+        raw_output: "three".into(),
         truncation_policy: TEST_TRUNCATION_POLICY,
         max_output_tokens: None,
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
-        output_omitted_bytes: None,
         hook_command: Some("echo three".to_string()),
     };
     let invocation = invocation_for_payload("exec_command", "call-43", payload).await;
@@ -555,13 +554,12 @@ async fn exec_command_post_tool_use_payload_uses_output_for_interactive_completi
         event_call_id: "call-44".to_string(),
         chunk_id: "chunk-1".to_string(),
         wall_time: std::time::Duration::from_millis(498),
-        raw_output: b"three".to_vec(),
+        raw_output: "three".into(),
         truncation_policy: TEST_TRUNCATION_POLICY,
         max_output_tokens: None,
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
-        output_omitted_bytes: None,
         hook_command: Some("echo three".to_string()),
     };
     let invocation = invocation_for_payload("exec_command", "call-44", payload).await;
@@ -587,13 +585,12 @@ async fn exec_command_post_tool_use_payload_skips_running_sessions() {
         event_call_id: "event-45".to_string(),
         chunk_id: "chunk-1".to_string(),
         wall_time: std::time::Duration::from_millis(498),
-        raw_output: b"three".to_vec(),
+        raw_output: "three".into(),
         truncation_policy: TEST_TRUNCATION_POLICY,
         max_output_tokens: None,
         process_id: Some(45),
         exit_code: None,
         original_token_count: None,
-        output_omitted_bytes: None,
         hook_command: Some("echo three".to_string()),
     };
     let invocation = invocation_for_payload("exec_command", "call-45", payload).await;
@@ -614,13 +611,12 @@ async fn write_stdin_post_tool_use_payload_uses_original_exec_call_id_and_comman
         event_call_id: "exec-call-45".to_string(),
         chunk_id: "chunk-2".to_string(),
         wall_time: std::time::Duration::from_millis(498),
-        raw_output: b"finished\n".to_vec(),
+        raw_output: "finished\n".into(),
         truncation_policy: TEST_TRUNCATION_POLICY,
         max_output_tokens: None,
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
-        output_omitted_bytes: None,
         hook_command: Some("sleep 1; echo finished".to_string()),
     };
     let invocation = invocation_for_payload("write_stdin", "write-stdin-call", payload).await;
@@ -646,26 +642,24 @@ async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separ
         event_call_id: "exec-call-a".to_string(),
         chunk_id: "chunk-a".to_string(),
         wall_time: std::time::Duration::from_millis(498),
-        raw_output: b"alpha\n".to_vec(),
+        raw_output: "alpha\n".into(),
         truncation_policy: TEST_TRUNCATION_POLICY,
         max_output_tokens: None,
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
-        output_omitted_bytes: None,
         hook_command: Some("sleep 2; echo alpha".to_string()),
     };
     let output_b = ExecCommandToolOutput {
         event_call_id: "exec-call-b".to_string(),
         chunk_id: "chunk-b".to_string(),
         wall_time: std::time::Duration::from_millis(498),
-        raw_output: b"beta\n".to_vec(),
+        raw_output: "beta\n".into(),
         truncation_policy: TEST_TRUNCATION_POLICY,
         max_output_tokens: None,
         process_id: None,
         exit_code: Some(0),
         original_token_count: None,
-        output_omitted_bytes: None,
         hook_command: Some("sleep 1; echo beta".to_string()),
     };
     let invocation_b = invocation_for_payload("write_stdin", "write-call-b", payload.clone()).await;

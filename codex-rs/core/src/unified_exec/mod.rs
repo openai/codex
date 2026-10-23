@@ -49,6 +49,7 @@ use codex_core_plugins::PluginMetricsSidecar;
 mod async_watcher;
 mod errors;
 mod oneshot;
+pub(crate) mod output;
 mod process;
 mod process_manager;
 pub(crate) use process_manager::exec_env_policy_from_shell_policy;
