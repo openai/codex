@@ -23,6 +23,7 @@ use crate::payload::RawPayloadRef;
 /// single reducer decision instead of something the parser has to know about.
 #[derive(Clone)]
 pub(super) struct NormalizedConversationItem {
+    pub(super) responses_item_id: Option<String>,
     pub(super) role: ConversationRole,
     pub(super) channel: Option<ConversationChannel>,
     pub(super) kind: ConversationItemKind,
@@ -70,11 +71,12 @@ fn normalize_model_item(
             raw_payload.raw_payload_id
         );
     };
-    match item_type {
+    let mut normalized = match item_type {
         "message" => normalize_message_item(item, raw_payload),
         "agent_message" => normalize_agent_message_item(item, raw_payload),
         "reasoning" => normalize_reasoning_item(item, raw_payload),
         "function_call" => Ok(NormalizedConversationItem {
+            responses_item_id: None,
             role: ConversationRole::Assistant,
             channel: Some(ConversationChannel::Commentary),
             kind: ConversationItemKind::FunctionCall,
@@ -86,6 +88,7 @@ fn normalize_model_item(
                 .map(ToString::to_string),
         }),
         "function_call_output" => Ok(NormalizedConversationItem {
+            responses_item_id: None,
             role: ConversationRole::Tool,
             channel: Some(ConversationChannel::Commentary),
             kind: ConversationItemKind::FunctionCallOutput,
@@ -97,6 +100,7 @@ fn normalize_model_item(
                 .map(ToString::to_string),
         }),
         "custom_tool_call" => Ok(NormalizedConversationItem {
+            responses_item_id: None,
             role: ConversationRole::Assistant,
             channel: Some(ConversationChannel::Commentary),
             kind: ConversationItemKind::CustomToolCall,
@@ -108,6 +112,7 @@ fn normalize_model_item(
                 .map(ToString::to_string),
         }),
         "custom_tool_call_output" => Ok(NormalizedConversationItem {
+            responses_item_id: None,
             role: ConversationRole::Tool,
             channel: Some(ConversationChannel::Commentary),
             kind: ConversationItemKind::CustomToolCallOutput,
@@ -120,6 +125,7 @@ fn normalize_model_item(
         }),
         "tool_search_call" | "web_search_call" | "image_generation_call" | "local_shell_call" => {
             Ok(NormalizedConversationItem {
+                responses_item_id: None,
                 role: ConversationRole::Assistant,
                 channel: Some(ConversationChannel::Commentary),
                 kind: ConversationItemKind::FunctionCall,
@@ -132,6 +138,7 @@ fn normalize_model_item(
             })
         }
         "tool_search_output" | "mcp_tool_call_output" => Ok(NormalizedConversationItem {
+            responses_item_id: None,
             role: ConversationRole::Tool,
             channel: Some(ConversationChannel::Commentary),
             kind: ConversationItemKind::FunctionCallOutput,
@@ -144,6 +151,7 @@ fn normalize_model_item(
         }),
         "compaction" | "compaction_summary" | "context_compaction" => {
             Ok(NormalizedConversationItem {
+                responses_item_id: None,
                 role: ConversationRole::Assistant,
                 channel: Some(ConversationChannel::Summary),
                 kind: ConversationItemKind::Message,
@@ -156,7 +164,9 @@ fn normalize_model_item(
             "unsupported model item type {item_type} in payload {}",
             raw_payload.raw_payload_id
         ),
-    }
+    }?;
+    normalized.responses_item_id = item.get("id").and_then(Value::as_str).map(str::to_string);
+    Ok(normalized)
 }
 
 fn normalize_message_item(
@@ -176,6 +186,7 @@ fn normalize_message_item(
         );
     };
     Ok(NormalizedConversationItem {
+        responses_item_id: None,
         role,
         channel: item
             .get("phase")
@@ -225,6 +236,7 @@ fn normalize_agent_message_item(
     }
 
     Ok(NormalizedConversationItem {
+        responses_item_id: None,
         role: ConversationRole::Assistant,
         channel: Some(ConversationChannel::Analysis),
         kind: ConversationItemKind::Message,
@@ -281,6 +293,7 @@ fn normalize_reasoning_item(
     }
 
     Ok(NormalizedConversationItem {
+        responses_item_id: None,
         role: ConversationRole::Assistant,
         channel: Some(ConversationChannel::Analysis),
         kind: ConversationItemKind::Reasoning,

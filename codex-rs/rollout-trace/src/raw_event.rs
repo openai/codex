@@ -23,7 +23,7 @@ use serde_json::Value;
 pub type RawEventSeq = u64;
 
 /// Current raw event envelope schema version.
-pub(crate) const RAW_TRACE_EVENT_SCHEMA_VERSION: u32 = 1;
+pub(crate) const RAW_TRACE_EVENT_SCHEMA_VERSION: u32 = 2;
 
 /// One append-only raw trace event.
 ///
@@ -91,6 +91,11 @@ pub enum RawTraceEventPayload {
     CodexTurnEnded {
         codex_turn_id: CodexTurnId,
         status: ExecutionStatus,
+    },
+    /// The harness appended this Responses item to its history. This is not
+    /// evidence of its rendered content, which may be truncated before sampling.
+    HistoryItemAccepted {
+        item_id: String,
     },
     InferenceStarted {
         inference_call_id: InferenceCallId,
@@ -245,6 +250,7 @@ impl RawTraceEventPayload {
             | RawTraceEventPayload::ThreadEnded { .. }
             | RawTraceEventPayload::CodexTurnStarted { .. }
             | RawTraceEventPayload::CodexTurnEnded { .. }
+            | RawTraceEventPayload::HistoryItemAccepted { .. }
             | RawTraceEventPayload::CompactionRequestFailed { .. }
             | RawTraceEventPayload::CodeCellStarted { .. }
             | RawTraceEventPayload::McpToolCallCorrelationAssigned { .. }

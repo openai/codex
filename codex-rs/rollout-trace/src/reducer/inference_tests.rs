@@ -10,10 +10,11 @@ use crate::reducer::test_support::append_inference_start;
 use crate::reducer::test_support::create_started_writer;
 use crate::reducer::test_support::message;
 use crate::reducer::test_support::start_turn;
+use crate::reducer::test_support::trace_context;
 use crate::replay_bundle;
 
 #[test]
-fn cancelled_inference_reduces_partial_response_items() -> anyhow::Result<()> {
+fn cancelled_inference_retains_accepted_partial_output() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;
     start_turn(&writer, "turn-1")?;
@@ -26,6 +27,12 @@ fn cancelled_inference_reduces_partial_response_items() -> anyhow::Result<()> {
     )?;
     append_inference_start(&writer, "inference-1", "turn-1", request)?;
 
+    writer.append_with_context(
+        trace_context("turn-1"),
+        RawTraceEventPayload::HistoryItemAccepted {
+            item_id: "msg-partial".into(),
+        },
+    )?;
     let partial_response = writer.write_json_payload(
         RawPayloadKind::InferenceResponse,
         &json!({
@@ -33,6 +40,7 @@ fn cancelled_inference_reduces_partial_response_items() -> anyhow::Result<()> {
             "token_usage": null,
             "output_items": [{
                 "type": "message",
+                "id": "msg-partial",
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": "partial"}]
             }]
@@ -64,6 +72,12 @@ fn cancelled_inference_reduces_partial_response_items() -> anyhow::Result<()> {
         vec![crate::model::ProducerRef::Inference {
             inference_call_id: "inference-1".to_string(),
         }],
+    );
+    let mut expected = inference.request_item_ids.clone();
+    expected.extend(inference.response_item_ids.clone());
+    assert_eq!(
+        rollout.threads["thread-root"].conversation_item_ids,
+        expected
     );
 
     Ok(())

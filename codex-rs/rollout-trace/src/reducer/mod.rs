@@ -1,6 +1,7 @@
 //! Deterministic replay from raw trace events to `RolloutTrace`.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -10,15 +11,18 @@ use std::path::PathBuf;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use anyhow::ensure;
 use serde_json::Value;
 
 use crate::bundle::MANIFEST_FILE_NAME;
 use crate::bundle::RAW_EVENT_LOG_FILE_NAME;
 use crate::bundle::REDUCED_TRACE_SCHEMA_VERSION;
+use crate::bundle::TRACE_MANIFEST_SCHEMA_VERSION;
 use crate::bundle::TraceBundleManifest;
 use crate::model::ExecutionStatus;
 use crate::model::RolloutTrace;
 use crate::payload::RawPayloadRef;
+use crate::raw_event::RAW_TRACE_EVENT_SCHEMA_VERSION;
 use crate::raw_event::RawTraceEvent;
 use crate::raw_event::RawTraceEventPayload;
 
@@ -30,6 +34,10 @@ mod inference;
 pub(crate) mod test_support;
 mod thread;
 mod tool;
+
+#[cfg(test)]
+#[path = "acceptance_tests.rs"]
+mod acceptance_tests;
 
 use self::code_cell::PendingCodeCellLifecycleEvent;
 use self::code_cell::PendingCodeCellStart;
@@ -46,6 +54,12 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
     let manifest: TraceBundleManifest =
         serde_json::from_reader(File::open(bundle_dir.join(MANIFEST_FILE_NAME))?)
             .with_context(|| format!("read {}", bundle_dir.join(MANIFEST_FILE_NAME).display()))?;
+    // Earlier bundles cannot distinguish accepted output from transport output.
+    ensure!(
+        manifest.schema_version == TRACE_MANIFEST_SCHEMA_VERSION,
+        "trace schema {} cannot establish accepted history; use its matching reducer or record a new bundle",
+        manifest.schema_version
+    );
     let mut reducer = TraceReducer {
         rollout: RolloutTrace::new(
             REDUCED_TRACE_SCHEMA_VERSION,
@@ -65,6 +79,7 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
         pending_code_cell_starts: BTreeMap::new(),
         pending_code_cell_lifecycle_events: BTreeMap::new(),
         pending_agent_interaction_edges: Vec::new(),
+        accepted_item_ids: BTreeMap::new(),
     };
 
     let event_log_path = bundle_dir.join(RAW_EVENT_LOG_FILE_NAME);
@@ -77,6 +92,12 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
         }
         let event: RawTraceEvent = serde_json::from_str(&line)
             .with_context(|| format!("parse trace event line {}", line_index + 1))?;
+        ensure!(
+            event.schema_version == RAW_TRACE_EVENT_SCHEMA_VERSION,
+            "unsupported trace event schema {} at line {}",
+            event.schema_version,
+            line_index + 1
+        );
         reducer.apply_event(event)?;
     }
     // Spawn edges prefer the child task message as their target, but a child can
@@ -84,24 +105,52 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
     // bundle do we know which spawn deliveries need the child-thread fallback.
     reducer.resolve_pending_spawn_edge_fallbacks()?;
 
+    // Acceptance and response records can arrive in either order. Select history
+    // after replay, retaining discarded attempts elsewhere in the graph.
+    // Request/checkpoint items include inherited context without local acceptance.
+    let context_item_ids: BTreeSet<_> = reducer
+        .rollout
+        .inference_calls
+        .values()
+        .flat_map(|call| call.request_item_ids.iter())
+        .chain(reducer.rollout.compactions.values().flat_map(|checkpoint| {
+            checkpoint
+                .input_item_ids
+                .iter()
+                .chain(&checkpoint.replacement_item_ids)
+                .chain(std::iter::once(&checkpoint.marker_item_id))
+        }))
+        .collect();
+    for thread in reducer.rollout.threads.values_mut() {
+        let accepted_ids = reducer
+            .accepted_item_ids
+            .remove(&thread.thread_id)
+            .unwrap_or_default();
+        thread.conversation_item_ids.retain(|id| {
+            let item = &reducer.rollout.conversation_items[id];
+            context_item_ids.contains(id)
+                || item
+                    .responses_item_id
+                    .as_ref()
+                    .is_some_and(|source_id| accepted_ids.contains(source_id))
+        });
+    }
+
     Ok(reducer.rollout)
 }
 
 struct TraceReducer {
     rollout: RolloutTrace,
     bundle_dir: PathBuf,
+    /// Responses IDs accepted by the harness, scoped to the receiving thread.
+    accepted_item_ids: BTreeMap<String, BTreeSet<String>>,
     next_conversation_item_ordinal: u64,
     next_terminal_operation_ordinal: u64,
     /// Latest session for each thread-local runtime handle; each exec replaces it.
     terminal_ids_by_process: BTreeMap<(String, String), String>,
     /// Retains the begin/end consistency check when a handle is later reused.
     process_ids_by_terminal: BTreeMap<String, String>,
-    /// Last model-visible conversation snapshot per thread.
-    ///
-    /// Requests and responses both advance this sequence because both are
-    /// model-facing payloads. Repeated request snapshots reuse item IDs only
-    /// when the same normalized item appears at the same position; identical
-    /// content at a new position must remain a distinct conversation item.
+    /// Latest request and its response items, used to reconcile the next request.
     thread_conversation_snapshots: BTreeMap<String, Vec<String>>,
     /// Replacement snapshot installed by compaction but not yet seen in a sampling request.
     ///
@@ -210,6 +259,16 @@ impl TraceReducer {
                     codex_turn_id,
                     status,
                 )?;
+            }
+            RawTraceEventPayload::HistoryItemAccepted { item_id } => {
+                let thread_id = event
+                    .thread_id
+                    .context("history acceptance has no thread")?;
+                self.thread_mut(&thread_id)?;
+                self.accepted_item_ids
+                    .entry(thread_id)
+                    .or_default()
+                    .insert(item_id);
             }
             RawTraceEventPayload::InferenceStarted {
                 inference_call_id,

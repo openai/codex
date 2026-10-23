@@ -10,8 +10,8 @@ pub(crate) const RAW_EVENT_LOG_FILE_NAME: &str = "trace.jsonl";
 pub(crate) const PAYLOADS_DIR_NAME: &str = "payloads";
 /// Conventional file name for a reducer-written `RolloutTrace` cache.
 pub const REDUCED_STATE_FILE_NAME: &str = "state.json";
-pub(crate) const TRACE_MANIFEST_SCHEMA_VERSION: u32 = 1;
-pub(crate) const REDUCED_TRACE_SCHEMA_VERSION: u32 = 1;
+pub(crate) const TRACE_MANIFEST_SCHEMA_VERSION: u32 = 2;
+pub(crate) const REDUCED_TRACE_SCHEMA_VERSION: u32 = 2;
 
 /// Manifest stored at the root of a trace bundle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

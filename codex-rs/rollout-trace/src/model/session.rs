@@ -45,7 +45,8 @@ pub struct AgentThread {
     pub execution: ExecutionWindow,
     /// Configured model presentation hint. Individual inference calls carry the actual upstream model.
     pub default_model: Option<String>,
-    /// Logical conversation items first observed for this thread, in transcript order.
+    /// Accepted model-visible conversation in transcript order. Unaccepted
+    /// response items remain in the graph, reachable through their inference call.
     pub conversation_item_ids: Vec<ConversationItemId>,
 }
 

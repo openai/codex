@@ -213,7 +213,7 @@ impl ThreadTraceContext {
         });
     }
 
-    /// Emits typed Codex turn lifecycle events from protocol lifecycle events.
+    /// Records turn lifecycle and history acceptance from existing protocol events.
     pub fn record_codex_turn_event(&self, default_turn_id: &str, event: &EventMsg) {
         let ThreadTraceContextState::Enabled(context) = &self.state else {
             return;
