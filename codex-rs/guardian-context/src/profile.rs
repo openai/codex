@@ -335,9 +335,8 @@ fn prepare_sync_content<'a>(
         ConversationTranscriptEntryKind::Assistant
         | ConversationTranscriptEntryKind::ProtectedAssistant
         | ConversationTranscriptEntryKind::Reasoning => limits.message_tokens,
-        ConversationTranscriptEntryKind::User
-        | ConversationTranscriptEntryKind::Developer
-        | ConversationTranscriptEntryKind::NodeReplToolOutput(_) => {
+        ConversationTranscriptEntryKind::NodeReplToolOutput(_) => limits.node_repl_output_tokens,
+        ConversationTranscriptEntryKind::User | ConversationTranscriptEntryKind::Developer => {
             return std::borrow::Cow::Borrowed(&entry.content);
         }
     };
