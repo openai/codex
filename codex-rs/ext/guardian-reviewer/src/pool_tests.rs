@@ -2,6 +2,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use tokio::time::Instant;
 
 #[tokio::test]
 async fn tracked_review_stays_reserved_until_cleanup_finishes() {
@@ -109,8 +110,8 @@ impl ReviewerRequest for Request {
     fn requires_fresh_session(&self) -> bool {
         self.fresh
     }
-    fn deadline(&self) -> Instant {
-        Instant::now() + std::time::Duration::from_secs(5)
+    fn deadline(&self) -> crate::ReviewDeadline {
+        crate::ReviewDeadline::At(Instant::now() + std::time::Duration::from_secs(5))
     }
     fn cancellation(&self) -> Option<&CancellationToken> {
         None

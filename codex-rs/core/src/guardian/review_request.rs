@@ -4,6 +4,7 @@
 use super::*;
 use crate::codex_thread::GuardianAuthorizationVersion;
 use codex_config::config_toml::CircuitBreakAction;
+use codex_guardian_reviewer::ReviewDeadline;
 use codex_guardian_reviewer::ReviewHost;
 use codex_protocol::approvals::GuardianReviewReason;
 use codex_protocol::protocol::ErrorEvent;
@@ -118,7 +119,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         &self,
         review_id: &str,
         review_reason: GuardianReviewReason,
-        deadline: Instant,
+        deadline: ReviewDeadline,
         cancellation: &CancellationToken,
     ) -> Result<(PreparedApproval, codex_guardian_reviewer::ReviewReport), ReviewDecision> {
         let super::super::runtime::ReviewRuntime {
@@ -148,10 +149,8 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         let plugin_attribution = match plugin_attribution_override {
             Some(attribution) => Some(attribution),
             None if matches!(&request, GuardianApprovalRequest::ExecCommand { .. }) => {
-                let attribution_deadline = std::cmp::min(
-                    deadline,
-                    Instant::now() + GUARDIAN_PLUGIN_ATTRIBUTION_TIMEOUT,
-                );
+                let attribution_deadline =
+                    deadline.cap(Instant::now() + GUARDIAN_PLUGIN_ATTRIBUTION_TIMEOUT);
                 let attribution = tokio::select! {
                     biased;
                     _ = cancellation.cancelled() => return Err(ReviewDecision::Abort),
@@ -190,6 +189,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
                 action: guardian_assessment_action(&request),
                 review_reason,
                 model_context,
+                timeout: turn.config.guardian_review_timeout,
             });
         let root_history = session
             .services
@@ -211,7 +211,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
     async fn attempt(
         &self,
         prepared: &PreparedApproval,
-        deadline: Instant,
+        deadline: ReviewDeadline,
         cancellation: &CancellationToken,
     ) -> (
         GuardianReviewOutcome,

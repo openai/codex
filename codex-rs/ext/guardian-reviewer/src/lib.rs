@@ -41,8 +41,10 @@ pub use retry::GuardianReviewSessionLimits;
 pub use retry::run_with_retry;
 
 pub const MAX_REVIEW_ATTEMPTS: i64 = 3;
+/// Default overall review budget when `auto_review.timeout_ms` is omitted.
 pub const REVIEW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
+pub use deadline::ReviewDeadline;
 pub use deadline::run_before_review_deadline;
 pub use pool::ReviewSessionResult;
 pub use pool::ReviewerPool;

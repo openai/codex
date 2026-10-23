@@ -130,8 +130,10 @@ fn guardian_review_retry_only_retries_recoverable_errors() {
     }
 }
 
+#[test_case::test_case(Some(Duration::from_secs(1)); "finite")]
+#[test_case::test_case(None; "unlimited")]
 #[tokio::test]
-async fn guardian_review_retry_wait_honors_cancellation() {
+async fn guardian_review_retry_wait_honors_cancellation(timeout: Option<Duration>) {
     let cancel_token = CancellationToken::new();
     cancel_token.cancel();
 
@@ -140,7 +142,7 @@ async fn guardian_review_retry_wait_honors_cancellation() {
         /*max_attempts*/ 3,
         &GuardianReviewOutcome::Error(GuardianReviewError::StaleAuthorization),
         /*retry_not_before*/ None,
-        Instant::now() + Duration::from_secs(/*secs*/ 1),
+        ReviewDeadline::from_timeout(timeout),
         Some(&cancel_token),
     )
     .await;
@@ -155,7 +157,7 @@ async fn guardian_review_retry_wait_honors_deadline() {
         /*max_attempts*/ 3,
         &GuardianReviewOutcome::Error(GuardianReviewError::StaleAuthorization),
         /*retry_not_before*/ None,
-        Instant::now(),
+        ReviewDeadline::At(Instant::now()),
         /*external_cancel*/ None,
     )
     .await;
@@ -163,13 +165,17 @@ async fn guardian_review_retry_wait_honors_deadline() {
     assert!(matches!(error, Some(GuardianReviewError::Timeout)));
 }
 
-#[test_case::test_case(2; "recovers with fresh evidence")]
-#[test_case::test_case(4; "exhausts the shared budget")]
+#[test_case::test_case(2, Some(Duration::from_secs(90)); "recovers with fresh evidence")]
+#[test_case::test_case(4, Some(Duration::from_secs(90)); "exhausts the shared budget")]
+#[test_case::test_case(4, None; "unlimited exhausts attempt budget")]
 #[tokio::test(start_paused = true)]
-async fn stale_authorization_uses_the_shared_attempt_budget(success_on_attempt: i64) {
+async fn stale_authorization_uses_the_shared_attempt_budget(
+    success_on_attempt: i64,
+    timeout: Option<Duration>,
+) {
     let mut attempts = 0;
     let started_at = Instant::now();
-    let deadline = started_at + Duration::from_secs(/*secs*/ 90);
+    let deadline = ReviewDeadline::from_timeout(timeout);
     let (outcome, analytics, evidence) = run_with_retry(
         GuardianReviewSessionLimits {
             max_attempts: 3,
@@ -221,7 +227,7 @@ async fn stale_authorization_uses_the_shared_attempt_budget(success_on_attempt: 
 
 #[tokio::test]
 async fn stale_authorization_does_not_extend_the_deadline() {
-    let deadline = Instant::now() + Duration::from_secs(/*secs*/ 1);
+    let deadline = ReviewDeadline::At(Instant::now() + Duration::from_secs(/*secs*/ 1));
     let mut attempts = 0;
     let (outcome, analytics, _) = run_with_retry(
         GuardianReviewSessionLimits {
@@ -234,7 +240,7 @@ async fn stale_authorization_does_not_extend_the_deadline() {
             attempts += 1;
             assert_eq!(attempt_deadline, deadline);
             async move {
-                tokio::time::sleep_until(deadline).await;
+                deadline.wait().await;
                 (
                     GuardianReviewOutcome::Error(GuardianReviewError::StaleAuthorization),
                     GuardianReviewAnalyticsResult::without_session(),

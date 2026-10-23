@@ -101,6 +101,7 @@ pub(crate) async fn decide_approval(
         escalated_exec: matches!(&request.request, Ok(GuardianApprovalRequest::ExecCommand { sandbox_permissions, .. }) if sandbox_permissions.requires_escalated_permissions()),
         full_access,
         cancellation: cancellation.clone(),
+        timeout: turn.config.guardian_review_timeout,
         // Keep the existing turn-level reporting policy during this ownership move.
         model: turn.model_info(),
         telemetry: &turn.session_telemetry,

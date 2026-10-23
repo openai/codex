@@ -5,6 +5,7 @@
 use crate::GuardianReviewError;
 use crate::GuardianReviewOutcome;
 use crate::GuardianReviewSessionLimits;
+use crate::ReviewDeadline;
 use crate::ReviewDenials;
 use crate::ReviewReport;
 use crate::ReviewRequest;
@@ -24,7 +25,6 @@ use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
-use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 /// Operations bound to one immutable action and its issuing context.
@@ -46,14 +46,14 @@ pub trait ReviewHost: Clone + Send + Sync + 'static {
         &self,
         approval_id: &str,
         reason: GuardianReviewReason,
-        deadline: Instant,
+        deadline: ReviewDeadline,
         cancellation: &CancellationToken,
     ) -> impl Future<Output = Result<(Self::Prepared, ReviewReport), ReviewDecision>> + Send;
     /// Captures fresh authorization evidence and rejects stale approvals for each attempt.
     fn attempt(
         &self,
         prepared: &Self::Prepared,
-        deadline: Instant,
+        deadline: ReviewDeadline,
         cancellation: &CancellationToken,
     ) -> impl Future<
         Output = (
@@ -106,7 +106,7 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
                     &[("route", "required_sync"), ("reason", reason.into())],
                 );
             }
-            let deadline = Instant::now() + crate::REVIEW_TIMEOUT;
+            let deadline = ReviewDeadline::from_timeout(self.timeout);
             let (prepared, report) = match self
                 .host
                 .prepare(self.approval_id, reason, deadline, &self.cancellation)
@@ -166,7 +166,7 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
                         let outcome = if !self.host.cached_approval_is_current(&prepared).await
                             || self.cancellation.is_cancelled() {
                             GuardianReviewOutcome::Error(GuardianReviewError::Cancelled)
-                        } else if Instant::now() >= deadline {
+                        } else if deadline.is_elapsed() {
                             GuardianReviewOutcome::Error(GuardianReviewError::Timeout)
                         } else {
                             GuardianReviewOutcome::CachedApproval

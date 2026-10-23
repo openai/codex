@@ -274,6 +274,7 @@ async fn new_config(
         guardian_conversation_history_prompt: None,
         guardian_conversation_history_max_output_tokens: None,
         guardian_circuit_break_action: Default::default(),
+        guardian_review_timeout: Some(std::time::Duration::from_secs(90)),
         include_permissions_instructions: false,
         include_apps_instructions: false,
         include_collaboration_mode_instructions: false,

@@ -4,6 +4,7 @@
 
 use crate::GuardianReviewError;
 use crate::GuardianReviewOutcome;
+use crate::ReviewDeadline;
 use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_protocol::protocol::CodexErrorInfo;
 use rand::Rng;
@@ -15,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 pub struct GuardianReviewSessionLimits {
     pub max_attempts: i64,
-    pub deadline: Instant,
+    pub deadline: ReviewDeadline,
 }
 
 /// Retries only recoverable review failures within one shared deadline.
@@ -31,7 +32,7 @@ pub async fn run_with_retry<Evidence, F, Attempt>(
     Option<Evidence>,
 )
 where
-    F: FnMut(Instant) -> Attempt,
+    F: FnMut(ReviewDeadline) -> Attempt,
     Attempt: Future<
         Output = (
             GuardianReviewOutcome,
@@ -107,7 +108,7 @@ async fn wait_before_guardian_retry(
     max_attempts: i64,
     outcome: &GuardianReviewOutcome,
     retry_not_before: Option<Instant>,
-    deadline: Instant,
+    deadline: ReviewDeadline,
     external_cancel: Option<&CancellationToken>,
 ) -> Option<GuardianReviewError> {
     if matches!(
@@ -119,7 +120,7 @@ async fn wait_before_guardian_retry(
         tokio::task::yield_now().await;
         return if external_cancel.is_some_and(CancellationToken::is_cancelled) {
             Some(GuardianReviewError::Cancelled)
-        } else if Instant::now() >= deadline {
+        } else if deadline.is_elapsed() {
             Some(GuardianReviewError::Timeout)
         } else {
             None
@@ -130,7 +131,7 @@ async fn wait_before_guardian_retry(
     let retry_delay = Duration::from_millis((exponential_delay * jitter) as u64);
     let now = Instant::now();
     let requested_retry_at = (now + retry_delay).max(retry_not_before.unwrap_or(now));
-    let retry_at = requested_retry_at.min(deadline);
+    let retry_at = deadline.cap(requested_retry_at);
     let (failure_reason, error_info) = match outcome {
         GuardianReviewOutcome::Error(error) => (
             Some(error.failure_reason()),
@@ -152,13 +153,16 @@ async fn wait_before_guardian_retry(
         backoff_ms = retry_delay.as_millis() as u64,
         retry_not_before_ms = retry_not_before
             .map(|instant| instant.saturating_duration_since(now).as_millis() as u64),
-        remaining_budget_ms = deadline.saturating_duration_since(now).as_millis() as u64,
-        deadline_limited = requested_retry_at >= deadline,
+        remaining_budget_ms = match deadline {
+            ReviewDeadline::At(at) => Some(at.saturating_duration_since(now).as_millis() as u64),
+            ReviewDeadline::Unlimited => None,
+        },
+        deadline_limited = matches!(deadline, ReviewDeadline::At(at) if requested_retry_at >= at),
         "Guardian review retry scheduled"
     );
     tokio::select! {
         _ = sleep_until(retry_at) => {
-            (Instant::now() >= deadline).then_some(GuardianReviewError::Timeout)
+            deadline.is_elapsed().then_some(GuardianReviewError::Timeout)
         }
         _ = async {
             if let Some(cancel_token) = external_cancel {

@@ -50,7 +50,7 @@ impl ReviewHost for GatedHost {
         &self,
         approval_id: &str,
         reason: GuardianReviewReason,
-        _: Instant,
+        _: ReviewDeadline,
         _: &CancellationToken,
     ) -> Result<((), ReviewReport), ReviewDecision> {
         Ok((
@@ -69,6 +69,7 @@ impl ReviewHost for GatedHost {
                     permissions: Default::default(),
                 },
                 review_reason: reason,
+                timeout: Some(crate::REVIEW_TIMEOUT),
                 model_context: ModelInvocationContext {
                     model_slug: "test".into(),
                     reasoning_effort: None,
@@ -79,7 +80,7 @@ impl ReviewHost for GatedHost {
     async fn attempt(
         &self,
         _: &(),
-        _: Instant,
+        _: ReviewDeadline,
         cancellation: &CancellationToken,
     ) -> (
         GuardianReviewOutcome,
@@ -176,6 +177,7 @@ async fn async_approval_revalidates_without_waiting_for_tracked_cleanup(state: A
         escalated_exec: false,
         full_access: false,
         cancellation: CancellationToken::new(),
+        timeout: Some(crate::REVIEW_TIMEOUT),
         model: &model,
         telemetry: &telemetry,
         log_assessments: false,

@@ -42,6 +42,8 @@ pub struct ReviewMetadata {
     pub action: GuardianAssessmentAction,
     pub review_reason: GuardianReviewReason,
     pub model_context: ModelInvocationContext,
+    /// Configured review budget; None is reported as zero (unlimited).
+    pub timeout: Option<Duration>,
 }
 
 pub struct ReviewReport {
@@ -62,7 +64,9 @@ impl ReviewReport {
             metadata.target_item_id.clone(),
             metadata.approval_request_source,
             metadata.reviewed_action.clone(),
-            crate::REVIEW_TIMEOUT.as_millis() as u64,
+            metadata
+                .timeout
+                .map_or(0, |timeout| timeout.as_millis() as u64),
         );
         let started = GuardianAssessmentEvent {
             review_reason: Some(metadata.review_reason),

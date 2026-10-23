@@ -55,6 +55,7 @@ fn review_completion_uses_one_monotonic_duration() {
             port: 443,
         },
         review_reason: GuardianReviewReason::Policy,
+        timeout: Some(crate::REVIEW_TIMEOUT),
         model_context: ModelInvocationContext {
             model_slug: "test-model".to_string(),
             reasoning_effort: None,

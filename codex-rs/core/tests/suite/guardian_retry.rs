@@ -31,11 +31,14 @@ enum ReviewInterruption {
     Timeout,
 }
 
-#[test_case(ReviewInterruption::Cancellation; "cancellation")]
-#[test_case(ReviewInterruption::Timeout; "timeout")]
+#[test_case(ReviewInterruption::Cancellation, None; "cancellation")]
+#[test_case(ReviewInterruption::Cancellation, Some(0); "unlimited_cancellation")]
+#[test_case(ReviewInterruption::Timeout, None; "timeout")]
+#[test_case(ReviewInterruption::Timeout, Some(180_000); "configured_timeout")]
 #[tokio::test]
 async fn interrupted_guardian_review_preserves_evidence_once(
     interruption: ReviewInterruption,
+    timeout_ms: Option<u32>,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_wine_exec!(
@@ -93,9 +96,18 @@ async fn interrupted_guardian_review_preserves_evidence_once(
     let server = start_mock_server().await;
     let base_url = format!("{}/v1", model.uri());
     let test = test_codex()
+        .with_pre_build_hook(move |home| {
+            if let Some(timeout_ms) = timeout_ms {
+                std::fs::write(
+                    home.join("config.toml"),
+                    format!("[auto_review]\ntimeout_ms = {timeout_ms}\n"),
+                )
+                .expect("write timeout config");
+            }
+        })
         .with_config(move |config| {
             config.model_provider.base_url = Some(base_url);
-            config.model_provider.stream_idle_timeout_ms = Some(180_000);
+            config.model_provider.stream_idle_timeout_ms = Some(600_000);
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             config
@@ -136,12 +148,20 @@ async fn interrupted_guardian_review_preserves_evidence_once(
     .context("wait for pending Guardian review")?;
     match interruption {
         ReviewInterruption::Cancellation => {
+            if timeout_ms == Some(0) {
+                tokio::time::pause();
+                tokio::time::advance(Duration::from_secs(120)).await;
+                tokio::time::resume();
+            }
             test.codex.submit(Op::Interrupt).await?;
         }
         ReviewInterruption::Timeout => {
             tokio::time::pause();
-            tokio::time::advance(codex_guardian_reviewer::REVIEW_TIMEOUT + Duration::from_secs(1))
-                .await;
+            tokio::time::advance(
+                Duration::from_millis(u64::from(timeout_ms.unwrap_or(90_000)))
+                    + Duration::from_secs(1),
+            )
+            .await;
             tokio::time::resume();
         }
     }

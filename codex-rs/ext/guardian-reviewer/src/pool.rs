@@ -4,6 +4,7 @@
 //! performs cleanup and tracks its completion. The pool never runs a second shutdown protocol.
 //! Startup and fork futures stay boxed to bound the orchestration stack frames.
 
+use crate::ReviewDeadline;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -14,7 +15,6 @@ use codex_analytics::GuardianReviewSessionKind;
 use codex_extension_api::ExtensionFuture;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
-use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::GuardianReviewSessionOutcome;
@@ -55,7 +55,7 @@ pub trait ReviewerRequest: Send + Sync {
     fn requires_fresh_session(&self) -> bool {
         false
     }
-    fn deadline(&self) -> Instant;
+    fn deadline(&self) -> ReviewDeadline;
     fn cancellation(&self) -> Option<&CancellationToken>;
     fn run(
         &self,

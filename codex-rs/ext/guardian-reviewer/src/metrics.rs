@@ -554,7 +554,9 @@ mod tests {
         let (_, result, _) = crate::run_with_retry(
             crate::GuardianReviewSessionLimits {
                 max_attempts: 2,
-                deadline: start + Duration::from_secs(if outcome == "deadline" { 1 } else { 10 }),
+                deadline: crate::ReviewDeadline::At(
+                    start + Duration::from_secs(if outcome == "deadline" { 1 } else { 10 }),
+                ),
             },
             Some(&cancellation),
             Some(&telemetry),

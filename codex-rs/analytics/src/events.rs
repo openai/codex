@@ -425,6 +425,7 @@ pub struct GuardianReviewEventParams {
     pub guardian_review_model_override: Option<String>,
     pub guardian_model_provider_id: Option<String>,
     pub had_prior_review_context: Option<bool>,
+    /// Configured overall review budget in milliseconds; zero means unlimited.
     pub review_timeout_ms: u64,
     pub tool_call_count: Option<u64>,
     pub time_to_first_token_ms: Option<u64>,

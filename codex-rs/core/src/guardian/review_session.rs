@@ -10,6 +10,7 @@ pub(crate) use setup::run_guardian_review_session;
 
 #[path = "review_session_context.rs"]
 mod context_policy;
+use codex_guardian_reviewer::ReviewDeadline;
 use context_policy::ReviewContextPolicy;
 
 use std::borrow::Cow;
@@ -117,7 +118,7 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) personality: Option<Personality>,
     pub(crate) external_cancel: Option<CancellationToken>,
-    pub(crate) deadline: tokio::time::Instant,
+    pub(crate) deadline: ReviewDeadline,
 }
 
 pub(crate) type GuardianReviewSessionManager =
@@ -331,7 +332,7 @@ async fn run_review_on_session(
     review_session: &GuardianReviewSession,
     params: &GuardianReviewSessionParams,
     guardian_session_kind: GuardianReviewSessionKind,
-    deadline: tokio::time::Instant,
+    deadline: ReviewDeadline,
 ) -> ReviewSessionResult {
     let review_model = &params.review_model;
     let model_info = params

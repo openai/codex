@@ -4,6 +4,7 @@
 //! Checkpoints are captured before final authorization validation and published without yielding.
 //! Recorded reviewer items and interruptions are forwarded to the parent's raw-event subscription.
 
+use codex_guardian_reviewer::ReviewDeadline;
 use std::sync::atomic::AtomicBool;
 
 use super::*;
@@ -254,7 +255,7 @@ impl ReviewerRequest for PreparedReview {
     fn requires_fresh_session(&self) -> bool {
         self.context.reviewer_selection == ReviewerSelection::FreshParentCheckpoint
     }
-    fn deadline(&self) -> tokio::time::Instant {
+    fn deadline(&self) -> ReviewDeadline {
         self.params.deadline
     }
     fn cancellation(&self) -> Option<&CancellationToken> {

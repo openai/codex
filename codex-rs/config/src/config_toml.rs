@@ -581,6 +581,10 @@ pub enum ThreadStoreToml {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 pub struct AutoReviewToml {
+    /// Overall Guardian review budget in milliseconds, including setup and retries.
+    /// Defaults to 90,000. Set to 0 to wait without a review deadline; cancellation
+    /// and independent transport timeouts still apply.
+    pub timeout_ms: Option<u32>,
     /// Controls whether circuit-breaker interruptions include a structured error.
     /// Strict mode writes structured errors that older clients may not
     /// recognize when reading shared history. Defaults to `default`.

@@ -43,6 +43,8 @@ pub struct ReviewRequest<'a, H> {
     pub escalated_exec: bool,
     pub full_access: bool,
     pub cancellation: CancellationToken,
+    /// Overall review budget; None disables only the review deadline.
+    pub timeout: Option<std::time::Duration>,
     pub model: &'a ModelInfo,
     pub telemetry: &'a SessionTelemetry,
     /// The host verified the assessment opt-in and an explicit OTLP log destination.
