@@ -11,11 +11,11 @@ pub(crate) fn validate_bundle(
     base_dir: &AbsolutePathBuf,
 ) -> Result<(), CloudConfigBundleLoadError> {
     let bundle_layers =
-        CloudConfigBundleLayers::from_bundle(bundle.clone(), base_dir).map_err(|err| {
+        CloudConfigBundleLayers::from_bundle(bundle.clone(), base_dir).map_err(|_| {
             CloudConfigBundleLoadError::new(
                 CloudConfigBundleLoadErrorCode::InvalidBundle,
                 /*status_code*/ None,
-                format!("invalid cloud config bundle: {err}"),
+                "invalid cloud config bundle: invalid TOML",
             )
         })?;
     let CloudConfigBundleLayers {
@@ -23,19 +23,19 @@ pub(crate) fn validate_bundle(
         enterprise_managed_requirements,
     } = bundle_layers;
 
-    let requirements = compose_requirements(enterprise_managed_requirements).map_err(|err| {
+    let requirements = compose_requirements(enterprise_managed_requirements).map_err(|_| {
         CloudConfigBundleLoadError::new(
             CloudConfigBundleLoadErrorCode::InvalidBundle,
             /*status_code*/ None,
-            format!("invalid cloud config bundle: {err}"),
+            "invalid cloud config bundle: invalid requirements",
         )
     })?;
     if let Some(providers) = requirements.and_then(|requirements| requirements.model_providers) {
-        validate_model_providers(&providers).map_err(|err| {
+        validate_model_providers(&providers).map_err(|_| {
             CloudConfigBundleLoadError::new(
                 CloudConfigBundleLoadErrorCode::InvalidBundle,
                 /*status_code*/ None,
-                format!("invalid cloud config bundle: {err}"),
+                "invalid cloud config bundle: invalid model provider configuration",
             )
         })?;
     }

@@ -183,5 +183,6 @@ fn test_client(base_url: &str, path_style: PathStyle) -> Client {
         chatgpt_account_id: None,
         chatgpt_account_is_fedramp: false,
         path_style,
+        config_server_base_url: None,
     }
 }

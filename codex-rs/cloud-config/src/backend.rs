@@ -98,9 +98,6 @@ pub(crate) async fn fetch_bundle(
     client
         .get_config_bundle()
         .await
-        .inspect_err(|err| {
-            tracing::warn!(error = %err, "Failed to fetch cloud config bundle");
-        })
         .map(bundle_from_response)
         .map_err(bundle_request_error)
 }

@@ -165,6 +165,7 @@ pub struct Client {
     chatgpt_account_id: Option<String>,
     chatgpt_account_is_fedramp: bool,
     path_style: PathStyle,
+    config_server_base_url: Option<String>,
 }
 
 impl fmt::Debug for Client {
@@ -205,6 +206,22 @@ impl Client {
         Self::with_http(base_url.into(), http)
     }
 
+    pub fn for_config_endpoint(
+        base_url: impl Into<String>,
+        http_client_factory: HttpClientFactory,
+    ) -> Self {
+        let base_url = base_url.into();
+        let mut client = Self::with_http(
+            base_url.clone(),
+            RouteAwareClientPool::new_without_redirects_or_request_logging(
+                http_client_factory,
+                ClientRouteClass::Api,
+            ),
+        );
+        client.config_server_base_url = Some(base_url);
+        client
+    }
+
     fn with_http(mut base_url: String, http: RouteAwareClientPool) -> Self {
         // Normalize common ChatGPT hostnames to include /backend-api so we hit the WHAM paths.
         // Also trim trailing slashes for consistent URL building.
@@ -226,6 +243,7 @@ impl Client {
             chatgpt_account_id: None,
             chatgpt_account_is_fedramp: false,
             path_style,
+            config_server_base_url: None,
         }
     }
 
@@ -242,6 +260,12 @@ impl Client {
     pub fn with_auth_provider(mut self, auth: SharedAuthProvider) -> Self {
         self.auth_provider = auth;
         self
+    }
+
+    pub fn with_bearer_token(self, token: String) -> Self {
+        self.with_auth_provider(std::sync::Arc::new(
+            codex_model_provider::BearerAuthProvider::new(token),
+        ))
     }
 
     pub fn with_user_agent(mut self, ua: impl Into<String>) -> Self {
@@ -523,10 +547,9 @@ impl Client {
         self.decode_json::<TurnAttemptsSiblingTurnsResponse>(&url, &ct, &body)
     }
 
-    /// Fetch the selected cloud-managed config bundle from codex-backend.
-    ///
     /// `GET /api/codex/config/bundle` (Codex API style) or
-    /// `GET /wham/config/bundle` (ChatGPT backend-api style).
+    /// `GET /wham/config/bundle` (ChatGPT backend-api style), or
+    /// `GET /codex/config/bundle` beneath a custom config server's base URL.
     pub async fn get_config_bundle(
         &self,
     ) -> std::result::Result<ConfigBundleResponse, RequestError> {
@@ -538,6 +561,10 @@ impl Client {
 
     /// Returns the normalized discovery endpoint used by this client.
     pub fn config_bundle_url(&self) -> String {
+        if let Some(base_url) = &self.config_server_base_url {
+            let base_url = base_url.strip_suffix('/').unwrap_or(base_url);
+            return format!("{base_url}/codex/config/bundle");
+        }
         match self.path_style {
             PathStyle::CodexApi => format!("{}/api/codex/config/bundle", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/config/bundle", self.base_url),
@@ -1282,6 +1309,7 @@ mod tests {
             chatgpt_account_id: None,
             chatgpt_account_is_fedramp: false,
             path_style,
+            config_server_base_url: None,
         }
     }
 }

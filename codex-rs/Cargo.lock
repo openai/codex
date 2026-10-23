@@ -2650,6 +2650,7 @@ dependencies = [
  "codex-config",
  "codex-core",
  "codex-http-client",
+ "codex-keyring-store",
  "codex-login",
  "codex-otel",
  "codex-protocol",
@@ -2662,6 +2663,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]

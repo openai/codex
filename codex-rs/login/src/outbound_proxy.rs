@@ -30,22 +30,34 @@ impl AuthRouteConfig {
     }
 
     /// Installs the configuration owner's local-only policy for auth discovery.
-    /// Only auth-owned endpoint constructors can access this factory.
+    /// Endpoint constructors access it through destination-restricted factories.
     pub fn with_local_bootstrap_factory(mut self, factory: HttpClientFactory) -> Self {
         self.local_bootstrap_factory = Some(factory);
         self
     }
 
     pub(crate) fn authentication_factory(&self, endpoint: &str) -> HttpClientFactory {
-        let Some(factory) = &self.local_bootstrap_factory else {
+        if self.local_bootstrap_factory.is_none() {
             return self.http_client_factory.clone();
-        };
-        let endpoints = endpoint.parse().into_iter().collect();
+        }
+        self.http_client_factory_for_bootstrap(endpoint.parse::<url::Url>())
+    }
+
+    /// Uses local administrator network rules when available, limited to the supplied endpoints.
+    /// Fetched policy must not block the sign-in and configuration requests needed to refresh it.
+    pub fn http_client_factory_for_bootstrap(
+        &self,
+        endpoints: impl IntoIterator<Item = url::Url>,
+    ) -> HttpClientFactory {
+        let factory = self
+            .local_bootstrap_factory
+            .as_ref()
+            .unwrap_or(&self.http_client_factory);
         factory.clone().with_network_policy(
             factory
                 .network_policy()
                 .clone()
-                .restrict_to_endpoints(endpoints),
+                .restrict_to_endpoints(endpoints.into_iter().collect()),
         )
     }
 

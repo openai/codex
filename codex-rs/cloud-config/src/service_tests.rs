@@ -666,7 +666,10 @@ async fn get_bundle_skips_team_like_business_plans() {
 #[tokio::test]
 async fn get_bundle_rejects_invalid_remote_bundle_before_cache_write() {
     let codex_home = tempdir().expect("tempdir");
-    let fetcher = Arc::new(StaticBundleClient::new(invalid_config_bundle()));
+    let mut invalid = invalid_config_bundle();
+    invalid.config_toml.enterprise_managed[0].contents =
+        "secret_credential = [secret-token".to_string();
+    let fetcher = Arc::new(StaticBundleClient::new(invalid));
     let service = CloudConfigBundleService::new(
         auth_manager_with_plan("business").await,
         fetcher.clone(),
@@ -681,6 +684,8 @@ async fn get_bundle_rejects_invalid_remote_bundle_before_cache_write() {
 
     assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::InvalidBundle);
     assert!(err.to_string().contains("invalid cloud config bundle"));
+    assert!(!err.to_string().contains("secret"));
+    assert!(!format!("{err:?}").contains("secret"));
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     assert!(
         !codex_home
@@ -691,15 +696,16 @@ async fn get_bundle_rejects_invalid_remote_bundle_before_cache_write() {
 }
 
 #[tokio::test]
-async fn invalid_cloud_provider_does_not_replace_cached_bundle() {
+async fn invalid_requirements_do_not_replace_cached_bundle() {
     let codex_home = tempdir().expect("tempdir");
     let cache = create_test_cache(codex_home.path());
     let previous = test_bundle();
     write_test_cache(&cache, previous.clone()).await;
 
     for contents in [
+        "allowed_approval_policies = ['secret-policy']",
         "[model_providers.openai]\nname = 'Reserved'",
-        "[model_providers.gateway]\nname = '   '",
+        "[model_providers.secret-provider]\nname = '   '",
         "[model_providers.gateway]\nbase_url = 'https://gateway.example/v1'",
         "[model_providers.amazon-bedrock]\nname = 'Managed Bedrock'",
         "[model_providers.amazon-bedrock-runtime]\nname = 'Managed Bedrock Runtime'",
@@ -719,8 +725,10 @@ async fn invalid_cloud_provider_does_not_replace_cached_bundle() {
         let error = service
             .validate_and_cache_remote_bundle(&auth, "refresh", /*attempt*/ 1, invalid)
             .await
-            .expect_err("invalid provider must fail before cache write");
+            .expect_err("invalid requirements must fail before cache write");
         assert_eq!(error.code(), CloudConfigBundleLoadErrorCode::InvalidBundle);
+        assert!(!error.to_string().contains("secret"));
+        assert!(!format!("{error:?}").contains("secret"));
         assert_eq!(
             cache
                 .load(Some("user-12345"), Some("account-12345"))
