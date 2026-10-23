@@ -447,6 +447,19 @@ async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy(
         "sandboxed fs helper must not create blocked file after error: {error}"
     );
 
+    let mut writable_sandbox = workspace_write_sandbox(readonly_dir.clone());
+    writable_sandbox.windows_sandbox_selection = sandbox.windows_sandbox_selection;
+    let allowed_file = readonly_dir.join("allowed.txt");
+    file_system
+        .write_file(
+            &PathUri::from_host_native_path(&allowed_file)?,
+            b"allowed".to_vec(),
+            WriteFileOptions::default(),
+            Some(&writable_sandbox),
+        )
+        .await?;
+    assert_eq!(std::fs::read(&allowed_file)?, b"allowed");
+
     Ok(())
 }
 
