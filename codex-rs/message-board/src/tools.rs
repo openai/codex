@@ -169,6 +169,11 @@ impl BoardTool {
             }
         };
         match self.tool {
+            MessageBoardTool::UpsertChannel => {
+                let request = serde_json::from_str(raw).map_err(model_error)?;
+                self.check_mutation_budget(budget, /*target_path_bytes*/ 0)?;
+                encode(board.upsert_channel(caller, request).await)
+            }
             MessageBoardTool::CreateChannel => {
                 let arguments::CreateChannel {
                     channel_name,

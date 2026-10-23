@@ -45,6 +45,15 @@ pub trait AgentMessageBoard: Send + Sync {
         request: CreateChannelRequest,
     ) -> BoxFuture<'_, Result<ChannelSummary>>;
 
+    /// Creates a channel or replaces only its description. Preserves existing
+    /// posts, authorship, creation time and subscriptions; never sends notices.
+    /// Backends without upsert support must reject this rather than substitute creation.
+    fn upsert_channel(
+        &self,
+        caller: ThreadId,
+        request: UpsertChannelRequest,
+    ) -> BoxFuture<'_, Result<()>>;
+
     fn list_channels(
         &self,
         caller: ThreadId,
@@ -135,6 +144,14 @@ pub struct CreateChannelRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<ChannelDescription>,
     pub subscription: SubscriptionChange,
+}
+
+/// Creates or updates navigation metadata without changing stored evidence or delivery.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpsertChannelRequest {
+    pub channel_name: String,
+    pub description: ChannelDescription,
 }
 
 /// A channel purpose containing at most 512 UTF-8 bytes.

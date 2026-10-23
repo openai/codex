@@ -1,6 +1,7 @@
 //! Tree-owned message boards for training. Agent handles share state; nothing is written to disk.
 //! Mutations and recipient selection are atomic. Host callbacks run outside the state lock.
 //! Silent appends share the write path without changing subscriptions or delivering notices.
+//! Channel upserts only change descriptions of existing channels.
 //! Opening a board prunes registry entries whose state has been released.
 
 use crate::AppendRequest;
@@ -15,6 +16,7 @@ use crate::SubscriptionChange;
 use crate::SubscriptionRequest;
 use crate::SubscriptionState;
 use crate::SubscriptionTarget;
+use crate::UpsertChannelRequest;
 use crate::api::PostBehavior;
 use caseless::default_case_fold_str;
 use chrono::DateTime;
@@ -161,15 +163,7 @@ impl State {
         author: AgentPath,
         now: DateTime<Utc>,
     ) -> Result<()> {
-        if name.is_empty()
-            || name.len() > 128
-            || name.trim() != name
-            || name.chars().any(char::is_control)
-        {
-            return Err(invalid(
-                "channel names must contain 1–128 bytes without edge whitespace or control characters",
-            ));
-        }
+        validate_channel(name)?;
         if self.channels.contains_key(name) {
             return Err(invalid("channel already exists"));
         }
@@ -232,6 +226,33 @@ impl InMemoryAgentMessageBoard {
             );
         }
         Ok(state.channels[&request.channel_name].summary.clone())
+    }
+
+    async fn upsert_channel(&self, caller: ThreadId, request: UpsertChannelRequest) -> Result<()> {
+        validate_channel(&request.channel_name)?;
+        let author = self.host.agent_path(caller).await?;
+        {
+            let mut state = self.state.lock().await;
+            if let Some(channel) = state.channels.get_mut(&request.channel_name) {
+                channel.summary.description = Some(request.description.into());
+                return Ok(());
+            }
+        }
+        // Fetch insertion metadata without holding the state lock, then recheck
+        // in case another caller created the channel while the clock was pending.
+        let now = self.host.current_time(caller).await?;
+        let mut state = self.state.lock().await;
+        if let Some(channel) = state.channels.get_mut(&request.channel_name) {
+            channel.summary.description = Some(request.description.into());
+            Ok(())
+        } else {
+            state.insert_channel(
+                &request.channel_name,
+                Some(request.description.into()),
+                author,
+                now,
+            )
+        }
     }
 
     async fn post(&self, caller: ThreadId, request: PostRequest) -> Result<PostMetadata> {
@@ -444,6 +465,19 @@ impl InMemoryAgentMessageBoard {
             last_message_id,
         })
     }
+}
+
+fn validate_channel(name: &str) -> Result<()> {
+    if name.is_empty()
+        || name.len() > 128
+        || name.trim() != name
+        || name.chars().any(char::is_control)
+    {
+        return Err(invalid(
+            "channel names must contain 1–128 bytes without edge whitespace or control characters",
+        ));
+    }
+    Ok(())
 }
 
 fn invalid(message: impl Into<String>) -> CodexErr {

@@ -28,6 +28,7 @@ pub use api::SubscriptionRequest;
 pub use api::SubscriptionTarget;
 pub use api::ThreadQuery;
 pub use api::ThreadSort;
+pub use api::UpsertChannelRequest;
 pub use host::MessageBoardHost;
 pub use host::NotificationDelivery;
 pub use in_memory::InMemoryAgentMessageBoard;

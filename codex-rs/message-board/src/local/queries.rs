@@ -1,4 +1,4 @@
-//! Implements the board contract using bounded SQLite queries with ordinary offset pagination.
+//! Bounded board queries and channel-description updates that preserve existing evidence.
 
 use super::LocalAgentMessageBoard;
 use super::MAX_READ_CHARS;
@@ -10,6 +10,7 @@ use super::paging::decode_posts;
 use super::paging::direction;
 use super::paging::preview;
 use super::storage_error;
+use super::validate_channel;
 use crate::AgentMessageBoard;
 use crate::AppendRequest;
 use crate::BoardPermissions;
@@ -31,6 +32,7 @@ use crate::ThreadPage;
 use crate::ThreadQuery;
 use crate::ThreadSort;
 use crate::ThreadSummary;
+use crate::UpsertChannelRequest;
 use caseless::default_case_fold_str;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
@@ -38,9 +40,61 @@ use codex_protocol::error::Result;
 use futures::future::BoxFuture;
 use sqlx::QueryBuilder;
 
+impl LocalAgentMessageBoard {
+    /// Creates a channel or updates its navigation description without replacing posts,
+    /// its original author, or its creation time. Only writable connections may call this.
+    pub async fn upsert_channel(
+        &self,
+        caller: ThreadId,
+        request: UpsertChannelRequest,
+    ) -> Result<()> {
+        if let Some(access) = self.access {
+            access.require_write(self.identity, "channel.edit_metadata")?;
+        }
+        let UpsertChannelRequest {
+            channel_name,
+            description,
+        } = request;
+        validate_channel(&channel_name)?;
+        let author = self.host.agent_path(caller).await?;
+        let mut tx = self.begin_write().await?;
+        let updated = sqlx::query("UPDATE channels SET description=? WHERE board=? AND name=?")
+            .bind(description.as_str())
+            .bind(self.identity.to_string())
+            .bind(&channel_name)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_error)?
+            .rows_affected();
+        if updated != 0 {
+            return tx.commit().await.map_err(storage_error);
+        }
+        tx.rollback().await.map_err(storage_error)?;
+        // Only creation needs a timestamp. Do not hold a write transaction across
+        // the host clock call; a concurrent creator is handled by the upsert below.
+        let now = self.host.current_time(caller).await?;
+        let mut tx = self.begin_write().await?;
+        sqlx::query("INSERT INTO channels(board,name,name_search,created_at,timestamp,author,description) VALUES(?,?,?,?,?,?,?) ON CONFLICT(board,name) DO UPDATE SET description=excluded.description")
+            .bind(self.identity.to_string()).bind(&channel_name).bind(default_case_fold_str(&channel_name))
+            .bind(now.to_rfc3339()).bind(now.timestamp_micros()).bind(author.to_string()).bind(description.as_str())
+            .execute(&mut *tx).await.map_err(storage_error)?;
+        tx.commit().await.map_err(storage_error)
+    }
+}
+
 impl AgentMessageBoard for LocalAgentMessageBoard {
     fn identity(&self) -> SessionId {
         self.identity
+    }
+
+    fn upsert_channel(
+        &self,
+        caller: ThreadId,
+        request: UpsertChannelRequest,
+    ) -> BoxFuture<'_, Result<()>> {
+        Box::pin(LocalAgentMessageBoard::upsert_channel(
+            self, caller, request,
+        ))
     }
 
     fn create_channel(

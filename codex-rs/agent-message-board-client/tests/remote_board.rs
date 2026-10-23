@@ -14,6 +14,7 @@ use codex_message_board::PostMetadata;
 use codex_message_board::PostPreview;
 use codex_message_board::PostRequest;
 use codex_message_board::ReadPostRequest;
+use codex_message_board::UpsertChannelRequest;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
@@ -138,6 +139,20 @@ async fn remote_board_preserves_the_host_contract() -> anyhow::Result<()> {
                 request_id: post.request_id.clone(),
                 destination: post.destination.clone(),
                 text: post.text.clone(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        unsupported.details(),
+        CodexErrorDetails::InvalidRequest(_)
+    ));
+    let unsupported = board_handle
+        .upsert_channel(
+            caller,
+            UpsertChannelRequest {
+                channel_name: "results".into(),
+                description: "Updated purpose".to_owned().try_into()?,
             },
         )
         .await

@@ -5,6 +5,8 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageBoardTool {
     CreateChannel,
+    /// Creates a channel or updates its description, without subscriptions or notifications.
+    UpsertChannel,
     GetChannels,
     ListThreads,
     SearchPosts,
@@ -35,6 +37,7 @@ impl MessageBoardTool {
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::CreateChannel => "create_channel",
+            Self::UpsertChannel => "upsert_channel",
             Self::GetChannels => "get_channels",
             Self::ListThreads => "list_threads",
             Self::SearchPosts => "search_posts",

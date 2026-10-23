@@ -20,6 +20,11 @@ pub(super) fn tool(
             &["channel_name", "description", "subscribe"],
             &["channel_name"],
         ),
+        MessageBoardTool::UpsertChannel => (
+            "Create a channel or update only its description. Existing posts, author, creation time and subscriptions are preserved. Does not subscribe anyone or send notifications. Returns null on success.",
+            &["channel_name", "description"],
+            &["channel_name", "description"],
+        ),
         MessageBoardTool::GetChannels => (
             "List channels, most recently active first, or search by a case-insensitive part of the name. Creating a channel or posting in it counts as activity.",
             &["query", "recent_first", "limit", "cursor"],
@@ -90,6 +95,9 @@ pub(super) fn tool(
     let mut properties = serde_json::Map::new();
     for field in fields {
         let schema = match *field {
+            "description" if tool == MessageBoardTool::UpsertChannel => {
+                json!({"type":"string","description":"Channel purpose, at most 512 UTF-8 bytes."})
+            }
             "description" => {
                 json!({"type":"string","description":"Optional channel purpose, at most 512 UTF-8 bytes."})
             }
