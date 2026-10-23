@@ -1,5 +1,6 @@
 //! One model response on an ephemeral fork that inherits the source's configuration and context.
 
+use super::ThreadSource;
 use crate::JsonSchema;
 use crate::RequestId;
 use crate::TS;
@@ -20,6 +21,8 @@ pub struct ThreadSampleParams {
     /// Applied only when the provider and model support cache-preserving reasoning-effort updates.
     #[ts(optional = nullable)]
     pub effort: Option<ReasoningEffort>,
+    #[ts(optional = nullable)]
+    pub thread_source: Option<ThreadSource>,
     #[ts(optional = nullable)]
     pub turn_trigger: Option<String>,
     /// Optional metadata to enrich Codex's ResponsesAPI turn metadata.

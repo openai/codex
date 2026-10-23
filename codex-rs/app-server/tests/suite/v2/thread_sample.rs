@@ -16,6 +16,7 @@ use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadSampleCancelResponse;
 use codex_app_server_protocol::ThreadSampleParams;
 use codex_app_server_protocol::ThreadSampleResponse;
+use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -304,6 +305,7 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
             expected_turn_id: completed.turn.id.clone(),
             prompt: "Continue identically".to_string(),
             effort: Some(ReasoningEffort::Medium),
+            thread_source: Some(ThreadSource::Feature("composer_predictions".to_string())),
             turn_trigger: Some("composer_predictions".to_string()),
             responsesapi_client_metadata: Some(HashMap::from([
                 (
@@ -390,6 +392,7 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
             .header("x-codex-turn-metadata")
             .expect("turn metadata"),
     )?;
+    assert_eq!(metadata["thread_source"], "composer_predictions");
     assert_eq!(metadata["turn_trigger"], "composer_predictions");
     assert_eq!(metadata["generation_trigger"], "composer_prediction");
     let body_metadata: Value = serde_json::from_str(
@@ -513,6 +516,7 @@ async fn sample_preserves_effort_baseline(
             .header("x-codex-turn-metadata")
             .expect("turn metadata"),
     )?;
+    assert_eq!(metadata["thread_source"], "thread_sample");
     assert!(metadata.get("turn_trigger").is_none());
     Ok(())
 }

@@ -213,7 +213,12 @@ impl SampleTask {
             model.supports_reasoning_effort_updates && options.config.model_provider.is_openai()
         });
         options.session_source = Some(SessionSource::Custom("thread_sample".to_string()));
-        options.thread_source = Some(ThreadSource::Feature("thread_sample".to_string()));
+        options.thread_source = Some(
+            params
+                .thread_source
+                .map(Into::into)
+                .unwrap_or_else(|| ThreadSource::Feature("thread_sample".to_string())),
+        );
         options.parent_trace = trace.clone();
         if cancellation.is_cancelled() {
             return Err(internal_error("sample canceled"));
