@@ -2161,6 +2161,7 @@ fn thread_list_params(
 ) -> ThreadListParams {
     ThreadListParams {
         excluded_thread_ids: None,
+        attached_to_thread_id: None,
         originators: None,
         cursor,
         limit: Some(PAGE_SIZE as u32),

@@ -40,6 +40,16 @@ impl ThreadRequestProcessor {
 
         self.validate_root_thread_delete(thread_id, thread_ids.len() > 1)
             .await?;
+        if let Some(store) = self
+            .thread_store
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()
+        {
+            store
+                .ensure_no_attached_threads(&thread_ids)
+                .await
+                .map_err(thread_store_delete_error)?;
+        }
         for thread_id_to_delete in thread_ids.iter().copied() {
             self.prepare_thread_for_delete(thread_id_to_delete).await?;
         }

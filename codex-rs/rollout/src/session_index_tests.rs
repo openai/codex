@@ -35,6 +35,7 @@ fn write_rollout_with_source_and_provider(
         ordinal: None,
         item: RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
+                attached_thread: false,
                 creator_user_id: None,
                 creator_account_id: None,
                 session_id: thread_id.into(),

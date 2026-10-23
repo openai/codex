@@ -28,11 +28,45 @@ pub(super) async fn create_thread(
     params: CreateThreadParams,
 ) -> ThreadStoreResult<()> {
     let thread_id = params.thread_id;
+    let attachment = if params.attached_thread {
+        let parent = params
+            .forked_from_id
+            .filter(|parent| *parent != thread_id)
+            .ok_or_else(|| ThreadStoreError::InvalidRequest {
+                message: "attached threads require a distinct fork source".to_string(),
+            })?;
+        let state = store
+            .state_db
+            .as_ref()
+            .ok_or(ThreadStoreError::Unsupported {
+                operation: "attached_threads",
+            })?;
+        // Keep parent deletion out until the child's canonical metadata is durable.
+        let source_ownership = (
+            store.live_writer_locks.lock(parent).await,
+            store.acquire_writer_locks(&[parent]).await?,
+        );
+        super::thread_rollout_resolver::resolve_current_including_archived(store, parent)
+            .await?
+            .ok_or(ThreadStoreError::ThreadNotFound { thread_id: parent })?;
+        Some((state, source_ownership))
+    } else {
+        None
+    };
     let _live_writer_guard = store.live_writer_locks.lock(thread_id).await;
     let history_mode = params.history_mode;
     store.ensure_live_recorder_absent(thread_id).await?;
     let writer_lock = store.acquire_writer_lock(thread_id)?;
     let recorder = create_thread::create_thread(store, params, writer_lock.clone()).await?;
+    if let Some((state, _source_ownership)) = attachment {
+        recorder.persist().await.map_err(thread_store_io_error)?;
+        if let Err(error) = index_attached_thread(store, state, recorder.rollout_path()).await {
+            recorder.discard().await.map_err(thread_store_io_error)?;
+            super::delete_thread::delete_rollout_file(store, recorder.rollout_path())?;
+            super::delete_thread::delete_state_rows(store, &[thread_id]).await?;
+            return Err(error);
+        }
+    }
     store
         .insert_live_recorder(thread_id, recorder, thread_id, history_mode, writer_lock)
         .await
@@ -233,6 +267,40 @@ pub(super) async fn discard_thread(
         .discard()
         .await
         .map_err(thread_store_io_error)
+}
+
+async fn index_attached_thread(
+    store: &LocalThreadStore,
+    state: &codex_state::StateRuntime,
+    path: &std::path::Path,
+) -> ThreadStoreResult<()> {
+    let meta = codex_rollout::read_session_meta_line(path)
+        .await
+        .map_err(thread_store_io_error)?;
+    let memory_mode = meta.meta.memory_mode.clone();
+    let items = [RolloutItem::SessionMeta(Box::new(meta))];
+    let mut builder = codex_rollout::builder_from_items(&items, path).ok_or_else(|| {
+        ThreadStoreError::Internal {
+            message: format!("invalid attached thread metadata at {}", path.display()),
+        }
+    })?;
+    if super::helpers::rollout_path_is_archived(&store.config.codex_home, path) {
+        builder.archived_at = Some(builder.updated_at.unwrap_or(builder.created_at));
+    }
+    state
+        .apply_rollout_items(
+            &builder,
+            &items,
+            memory_mode.as_deref(),
+            /*updated_at_override*/ None,
+        )
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!(
+                "failed to index attached thread at {}: {err}",
+                path.display()
+            ),
+        })
 }
 
 pub(super) async fn rollout_path(

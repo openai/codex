@@ -676,7 +676,9 @@ async fn metadata_for_missing_sqlite_row(
         patch.source.clone().unwrap_or(SessionSource::Unknown),
     );
     builder.model_provider = patch.model_provider.clone();
-    builder.history_mode = canonical_history_mode(store, thread_id, rollout_path).await?;
+    let (history_mode, attached_thread_parent_id) =
+        canonical_history_mode_and_attachment(store, thread_id, rollout_path).await?;
+    builder.history_mode = history_mode;
     builder.thread_source = patch.thread_source.clone().flatten();
     builder.agent_nickname = patch.agent_nickname.clone().flatten();
     builder.agent_role = patch.agent_role.clone().flatten();
@@ -684,21 +686,25 @@ async fn metadata_for_missing_sqlite_row(
     builder.cwd = patch.cwd.clone().map(normalize_cwd).unwrap_or_default();
     builder.cli_version = patch.cli_version.clone();
     let mut metadata = builder.build(store.config.default_model_provider_id.as_str());
+    metadata.attached_thread_parent_id = attached_thread_parent_id;
     if rollout_path_archived {
         metadata.archived_at = Some(metadata.updated_at);
     }
     Ok(metadata)
 }
 
-async fn canonical_history_mode(
+async fn canonical_history_mode_and_attachment(
     store: &LocalThreadStore,
     thread_id: ThreadId,
     rollout_path: &Path,
-) -> ThreadStoreResult<ThreadHistoryMode> {
+) -> ThreadStoreResult<(ThreadHistoryMode, Option<ThreadId>)> {
     if let Some((path, meta)) = live_writer::unpersisted_session_meta(store, thread_id).await
         && path == rollout_path
     {
-        return Ok(meta.history_mode);
+        return Ok((
+            meta.history_mode,
+            meta.forked_from_id.filter(|_| meta.attached_thread),
+        ));
     }
     let session_meta = match read_session_meta_line(rollout_path).await {
         Ok(session_meta) => session_meta,
@@ -715,7 +721,7 @@ async fn canonical_history_mode(
             {
                 // The live writer retains the canonical mode selected before its deferred
                 // SessionMeta reaches JSONL.
-                return Ok(history_mode);
+                return Ok((history_mode, None));
             }
             return Err(ThreadStoreError::Internal {
                 message: format!(
@@ -732,7 +738,13 @@ async fn canonical_history_mode(
             ),
         });
     }
-    Ok(session_meta.meta.history_mode)
+    Ok((
+        session_meta.meta.history_mode,
+        session_meta
+            .meta
+            .forked_from_id
+            .filter(|_| session_meta.meta.attached_thread),
+    ))
 }
 
 fn requires_rollout_compatibility_update(patch: &ThreadMetadataPatch) -> bool {

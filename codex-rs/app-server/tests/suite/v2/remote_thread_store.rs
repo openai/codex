@@ -27,6 +27,7 @@ use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::RequestId;
@@ -191,6 +192,53 @@ async fn thread_start_defaults_to_legacy_without_history_list_support() -> Resul
 }
 
 #[tokio::test]
+async fn attached_threads_require_store_owned_persistence() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let store_id = Uuid::new_v4().to_string();
+    create_config_toml_with_thread_store(codex_home.path(), "http://127.0.0.1:1", &store_id)?;
+    let _in_memory_store = InMemoryThreadStoreId { store_id };
+    let client = start_in_process_server_with_capabilities(
+        codex_home.path(),
+        Some(InitializeCapabilities {
+            experimental_api: true,
+            ..Default::default()
+        }),
+    )
+    .await?;
+    // The store, not the experiment gate, must reject it without writing to local storage.
+    for request in [
+        ClientRequest::ThreadFork {
+            request_id: RequestId::Integer(1),
+            params: codex_app_server_protocol::ThreadForkParams {
+                thread_id: Uuid::new_v4().to_string(),
+                attach_to_source: true,
+                ..Default::default()
+            },
+        },
+        ClientRequest::ThreadList {
+            request_id: RequestId::Integer(2),
+            params: serde_json::from_value(serde_json::json!({
+                "attachedToThreadId": Uuid::new_v4().to_string()
+            }))?,
+        },
+    ] {
+        let error = client
+            .request(request)
+            .await?
+            .expect_err("attached threads require local storage");
+        assert_eq!(error.code, -32601);
+        assert!(
+            error.message.contains("attached threads"),
+            "{}",
+            error.message
+        );
+    }
+    client.shutdown().await?;
+    assert_no_local_persistence_artifacts(codex_home.path())?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_repeated_cursor_returns_internal_error() -> Result<()> {
     let codex_home = TempDir::new()?;
     let store_id = Uuid::new_v4().to_string();
@@ -207,6 +255,7 @@ async fn thread_list_repeated_cursor_returns_internal_error() -> Result<()> {
             request_id: RequestId::Integer(1),
             params: ThreadListParams {
                 excluded_thread_ids: None,
+                attached_to_thread_id: None,
                 originators: None,
                 cursor: None,
                 limit: Some(1),
@@ -232,6 +281,7 @@ async fn thread_list_repeated_cursor_returns_internal_error() -> Result<()> {
     let thread_id = ThreadId::new();
     thread_store
         .create_thread(StoreCreateThreadParams {
+            attached_thread: false,
             creator_user_id: None,
             creator_account_id: None,
             session_id: thread_id.into(),
@@ -264,6 +314,7 @@ async fn thread_list_repeated_cursor_returns_internal_error() -> Result<()> {
             request_id: RequestId::Integer(2),
             params: ThreadListParams {
                 excluded_thread_ids: None,
+                attached_to_thread_id: None,
                 originators: None,
                 cursor: Some("repeated-cursor".to_string()),
                 limit: Some(1),
@@ -446,6 +497,7 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
             request_id: RequestId::Integer(3),
             params: ThreadListParams {
                 excluded_thread_ids: None,
+                attached_to_thread_id: None,
                 originators: None,
                 cursor: None,
                 limit: Some(10),
@@ -475,6 +527,7 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
     let unloaded_thread_id = ThreadId::from_string(&Uuid::new_v4().to_string())?;
     thread_store
         .create_thread(StoreCreateThreadParams {
+            attached_thread: false,
             creator_user_id: None,
             creator_account_id: None,
             session_id: unloaded_thread_id.into(),
@@ -547,7 +600,12 @@ async fn cold_thread_resume_rechecks_non_local_history_after_config_load() -> Re
     let thread_store = InMemoryThreadStore::for_id(store_id.clone());
     let _in_memory_store = InMemoryThreadStoreId { store_id };
 
-    let mut client = start_in_process_client(config.clone(), loader_overrides.clone()).await?;
+    let mut client = start_in_process_client(
+        config.clone(),
+        loader_overrides.clone(),
+        /*capabilities*/ None,
+    )
+    .await?;
     let response = client
         .request(ClientRequest::ThreadStart {
             request_id: RequestId::Integer(1),
@@ -588,7 +646,7 @@ async fn cold_thread_resume_rechecks_non_local_history_after_config_load() -> Re
     .await??;
     client.shutdown().await?;
 
-    let client = start_in_process_client(config, loader_overrides).await?;
+    let client = start_in_process_client(config, loader_overrides, /*capabilities*/ None).await?;
     let reads_before_resume = thread_store.calls().await.read_thread_with_history;
     // The in-memory store is pathless, so resume currently fails later while
     // assembling the response. Reuse the probe within each attempt, but read it
@@ -610,6 +668,13 @@ async fn cold_thread_resume_rechecks_non_local_history_after_config_load() -> Re
 }
 
 async fn start_in_process_server(codex_home: &Path) -> Result<InProcessClientHandle> {
+    start_in_process_server_with_capabilities(codex_home, /*capabilities*/ None).await
+}
+
+async fn start_in_process_server_with_capabilities(
+    codex_home: &Path,
+    capabilities: Option<InitializeCapabilities>,
+) -> Result<InProcessClientHandle> {
     let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
     let config = Arc::new(
         ConfigBuilder::default()
@@ -620,12 +685,13 @@ async fn start_in_process_server(codex_home: &Path) -> Result<InProcessClientHan
             .await?,
     );
 
-    Ok(start_in_process_client(config, loader_overrides).await?)
+    Ok(start_in_process_client(config, loader_overrides, capabilities).await?)
 }
 
 async fn start_in_process_client(
     config: Arc<Config>,
     loader_overrides: LoaderOverrides,
+    capabilities: Option<InitializeCapabilities>,
 ) -> std::io::Result<InProcessClientHandle> {
     in_process::start(InProcessStartArgs {
         arg0_paths: Arg0DispatchPaths::default(),
@@ -649,7 +715,7 @@ async fn start_in_process_client(
                 title: None,
                 version: "0.1.0".to_string(),
             },
-            capabilities: None,
+            capabilities,
         },
         channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     })

@@ -407,6 +407,7 @@ async fn paginated_stored_thread_routes_projected_turns() -> Result<()> {
     let list_id = mcp
         .send_thread_list_request(ThreadListParams {
             excluded_thread_ids: None,
+            attached_to_thread_id: None,
             originators: None,
             cursor: None,
             limit: Some(50),
@@ -627,6 +628,7 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
     );
     store
         .create_thread(CreateThreadParams {
+            attached_thread: false,
             creator_user_id: None,
             creator_account_id: None,
             session_id: thread_id.into(),
@@ -1138,6 +1140,7 @@ async fn thread_list_includes_store_thread_without_rollout_path() -> Result<()> 
             request_id: RequestId::Integer(1),
             params: ThreadListParams {
                 excluded_thread_ids: None,
+                attached_to_thread_id: None,
                 originators: None,
                 cursor: None,
                 limit: Some(10),
@@ -1520,6 +1523,7 @@ async fn paginated_thread_name_set_is_reflected_in_read_list_and_metadata_resume
     let list_id = mcp
         .send_thread_list_request(ThreadListParams {
             excluded_thread_ids: None,
+            attached_to_thread_id: None,
             originators: None,
             cursor: None,
             limit: Some(50),
@@ -1726,6 +1730,7 @@ async fn paginated_history_lists_and_legacy_reads_use_projected_turns_and_items(
     );
     store
         .create_thread(CreateThreadParams {
+            attached_thread: false,
             creator_user_id: None,
             creator_account_id: None,
             session_id: thread_id.into(),
@@ -2631,6 +2636,7 @@ async fn seed_pathless_store_thread(
 ) -> Result<()> {
     store
         .create_thread(CreateThreadParams {
+            attached_thread: false,
             creator_user_id: None,
             creator_account_id: None,
             session_id: thread_id.into(),

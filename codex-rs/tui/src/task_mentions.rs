@@ -91,6 +91,7 @@ pub(crate) fn spawn_search(
                     )),
                     params: ThreadListParams {
                         excluded_thread_ids: None,
+                        attached_to_thread_id: None,
                         originators: None,
                         cursor: None,
                         limit: Some(MAX_SEARCH_RESULTS),

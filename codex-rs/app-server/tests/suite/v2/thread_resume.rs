@@ -4642,6 +4642,7 @@ async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Res
     let rollout_dir = rollout_path.parent().expect("rollout parent directory");
     std::fs::create_dir_all(rollout_dir)?;
     let session_meta = SessionMeta {
+        attached_thread: false,
         creator_user_id: None,
         creator_account_id: None,
         session_id: conversation_id.into(),

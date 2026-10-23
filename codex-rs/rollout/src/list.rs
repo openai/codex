@@ -122,6 +122,7 @@ pub type ConversationsPage = ThreadsPage;
 struct HeadTailSummary {
     originator: Option<String>,
     saw_session_meta: bool,
+    attached_to_parent: bool,
     thread_id: Option<ThreadId>,
     first_user_message: Option<String>,
     preview: Option<String>,
@@ -290,6 +291,7 @@ impl<'a> RolloutFileVisitor for FilesByCreatedAtVisitor<'a> {
             self.cwd_filters,
             updated_at,
             PreviewFilter::RequirePreview,
+            /*include_attached_threads*/ false,
         )
         .await
         {
@@ -584,6 +586,7 @@ async fn traverse_directories_for_paths_updated(
             cwd_filters,
             updated_at_fallback,
             PreviewFilter::RequirePreview,
+            /*include_attached_threads*/ false,
         )
         .await
         {
@@ -642,6 +645,7 @@ async fn traverse_flat_paths_created(
             cwd_filters,
             updated_at,
             PreviewFilter::IncludeEmpty,
+            /*include_attached_threads*/ false,
         )
         .await
         {
@@ -704,6 +708,7 @@ async fn traverse_flat_paths_updated(
             cwd_filters,
             updated_at_fallback,
             PreviewFilter::IncludeEmpty,
+            /*include_attached_threads*/ false,
         )
         .await
         {
@@ -785,12 +790,16 @@ async fn build_thread_item(
     cwd_filters: Option<&[PathBuf]>,
     updated_at: Option<String>,
     preview_filter: PreviewFilter,
+    include_attached_threads: bool,
 ) -> Option<ThreadItem> {
     // Read head and detect preview-bearing events; goal previews can appear before
     // the first normal user message.
     let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
         .await
         .unwrap_or_default();
+    if summary.attached_to_parent && !include_attached_threads {
+        return None;
+    }
     if !allowed_sources.is_empty()
         && !summary
             .source
@@ -882,6 +891,7 @@ pub async fn read_thread_item_from_rollout(path: PathBuf) -> Option<ThreadItem> 
         /*cwd_filters*/ None,
         /*updated_at*/ None,
         PreviewFilter::RequirePreview,
+        /*include_attached_threads*/ true,
     )
     .await
 }
@@ -1004,6 +1014,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     summary.originator = (!session_meta_line.meta.originator.is_empty())
                         .then(|| session_meta_line.meta.originator.clone());
                     summary.source = Some(session_meta_line.meta.source.clone());
+                    summary.attached_to_parent = session_meta_line.meta.attached_thread;
                     summary.history_mode = session_meta_line.meta.history_mode;
                     summary.parent_thread_id = session_meta_line.meta.parent_thread_id;
                     summary.agent_nickname = session_meta_line.meta.agent_nickname.clone();

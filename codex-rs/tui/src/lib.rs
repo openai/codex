@@ -915,6 +915,7 @@ fn latest_session_lookup_params(
 ) -> ThreadListParams {
     ThreadListParams {
         excluded_thread_ids: None,
+        attached_to_thread_id: None,
         originators: None,
         cursor: None,
         limit: Some(1),

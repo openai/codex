@@ -1603,6 +1603,120 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn attached_creation_and_deletion_coordinate_across_stores() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("initialize state db");
+        let first = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let second = LocalThreadStore::new(config, Some(runtime.clone()));
+        let parent_uuid = uuid::Uuid::new_v4();
+        let parent = ThreadId::from_u128(parent_uuid.as_u128());
+        let parent_path = write_session_file(home.path(), "2025-01-03T00-00-00", parent_uuid)
+            .expect("write parent");
+        let child = ThreadId::new();
+        let mut params = create_thread_params(child);
+        params.attached_thread = true;
+        assert!(matches!(
+            second.create_thread(params.clone()).await,
+            Err(ThreadStoreError::InvalidRequest { .. })
+        ));
+        params.forked_from_id = Some(parent);
+        let parent_guard = first.acquire_writer_lock(parent).expect("lock parent");
+        assert!(matches!(
+            second.create_thread(params.clone()).await,
+            Err(ThreadStoreError::Conflict { .. })
+        ));
+        drop(parent_guard);
+        let pool = runtime
+            .sqlite()
+            .open_read_write_pool(&runtime.sqlite().state_db_path())
+            .await
+            .expect("open state db");
+        sqlx::query(
+            "CREATE TRIGGER fail_attached_index BEFORE UPDATE OF memory_mode ON threads WHEN NEW.attached_thread_parent_id IS NOT NULL BEGIN SELECT RAISE(ABORT, 'index failed'); END",
+        )
+        .execute(&pool)
+        .await
+        .expect("inject index failure");
+        let mut failing_params = params.clone();
+        failing_params.metadata.memory_mode = ThreadMemoryMode::Disabled;
+        second
+            .create_thread(failing_params)
+            .await
+            .expect_err("indexing must fail");
+        first
+            .ensure_no_attached_threads(&[parent])
+            .await
+            .expect("failed creation must not leave an attached rollout");
+        assert!(
+            runtime
+                .get_thread(child)
+                .await
+                .expect("read index")
+                .is_none()
+        );
+        sqlx::query("DROP TRIGGER fail_attached_index")
+            .execute(&pool)
+            .await
+            .expect("remove index failure");
+        second
+            .create_thread(params.clone())
+            .await
+            .expect("create child");
+        assert_eq!(
+            runtime
+                .delete_thread(child)
+                .await
+                .expect("remove index row"),
+            1
+        );
+        assert!(matches!(
+            first
+                .delete_threads(DeleteThreadsParams {
+                    thread_ids: vec![parent]
+                })
+                .await,
+            Err(ThreadStoreError::InvalidRequest { .. })
+        ));
+        assert!(
+            parent_path.exists(),
+            "refused deletion must preserve parent"
+        );
+        second
+            .discard_thread(child)
+            .await
+            .expect("release child writer");
+        assert!(matches!(
+            first
+                .delete_threads(DeleteThreadsParams {
+                    thread_ids: vec![parent]
+                })
+                .await,
+            Err(ThreadStoreError::InvalidRequest { .. })
+        ));
+        first
+            .delete_thread(DeleteThreadParams { thread_id: child })
+            .await
+            .expect("delete child");
+        first
+            .delete_threads(DeleteThreadsParams {
+                thread_ids: vec![parent],
+            })
+            .await
+            .expect("parent can be deleted after its child");
+        assert!(!parent_path.exists());
+        assert!(matches!(
+            second.create_thread(params).await,
+            Err(ThreadStoreError::ThreadNotFound { thread_id }) if thread_id == parent
+        ));
+    }
+
+    #[tokio::test]
     async fn resume_thread_reopens_live_writer_and_appends_with_stale_sqlite_path() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
@@ -2246,6 +2360,7 @@ mod tests {
 
     fn create_thread_params(thread_id: ThreadId) -> CreateThreadParams {
         CreateThreadParams {
+            attached_thread: false,
             creator_user_id: None,
             creator_account_id: None,
             session_id: thread_id.into(),

@@ -214,6 +214,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
 
     let session_meta_line = SessionMetaLine {
         meta: SessionMeta {
+            attached_thread: false,
             creator_user_id: None,
             creator_account_id: None,
             session_id: thread_id.into(),
@@ -1272,13 +1273,58 @@ async fn append_rollout_item_to_path_assigns_next_paginated_ordinal() -> std::io
 }
 
 #[tokio::test]
-async fn list_threads_db_disabled_does_not_skip_paginated_items() -> std::io::Result<()> {
+async fn discovery_without_database_skips_attached_threads_before_pagination() -> std::io::Result<()>
+{
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
 
     let newest = write_session_file(home.path(), "2025-01-03T12-00-00", Uuid::from_u128(9001))?;
     let middle = write_session_file(home.path(), "2025-01-02T12-00-00", Uuid::from_u128(9002))?;
     let _oldest = write_session_file(home.path(), "2025-01-01T12-00-00", Uuid::from_u128(9003))?;
+    let parent = ThreadId::from_string(&Uuid::from_u128(9001).to_string()).unwrap();
+    crate::append_thread_name(home.path(), parent, "shared title").await?;
+    for (timestamp, uuid, mode) in [
+        (
+            "2025-01-04T12-00-00",
+            Uuid::from_u128(9004),
+            ThreadHistoryMode::Legacy,
+        ),
+        (
+            "2025-01-03T06-00-00",
+            Uuid::from_u128(9005),
+            ThreadHistoryMode::Paginated,
+        ),
+    ] {
+        let path = write_session_file(home.path(), timestamp, uuid)?;
+        let mut lines = read_rollout_lines(&path)?;
+        let RolloutItem::SessionMeta(meta) = &mut lines[0].item else {
+            panic!("fixture must start with session metadata");
+        };
+        meta.meta.attached_thread = true;
+        meta.meta.forked_from_id = Some(parent);
+        meta.meta.history_mode = mode;
+        let mut file = File::create(&path)?;
+        for line in lines {
+            writeln!(file, "{}", serde_json::to_string(&line)?)?;
+        }
+        let child = ThreadId::from_string(&uuid.to_string()).unwrap();
+        crate::append_thread_name(home.path(), child, "shared title").await?;
+        // Hiding discovery must not prevent opening an explicitly selected attached thread.
+        assert_eq!(
+            crate::read_thread_item_from_rollout(path)
+                .await
+                .unwrap()
+                .thread_id,
+            Some(child)
+        );
+    }
+    let named = crate::session_index::find_thread_meta_by_name_str(
+        home.path(),
+        "shared title",
+        /*state_db_ctx*/ None,
+    )
+    .await?;
+    assert_eq!(named.map(|(_, meta)| meta.meta.id), Some(parent));
 
     let default_provider = config.model_provider_id.clone();
     let page1 = RolloutRecorder::list_threads(

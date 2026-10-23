@@ -36,6 +36,7 @@ pub(crate) async fn list_pinned_threads(
                         originators: None,
                         cursor: cursor.clone(),
                         limit: Some(100),
+                        attached_to_thread_id: None,
                         sort_key: Some(ThreadSortKey::SectionPosition),
                         sort_direction: None,
                         model_providers: Some(Vec::new()),
@@ -171,6 +172,7 @@ impl SourcePage {
                     request_id: RequestId::String(Uuid::new_v4().to_string()),
                     params: ThreadListParams {
                         excluded_thread_ids: None,
+                        attached_to_thread_id: None,
                         originators: None,
                         cursor: self.cursor.clone(),
                         limit: Some(PAGE_SIZE),

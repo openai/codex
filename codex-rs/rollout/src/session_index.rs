@@ -224,6 +224,7 @@ pub async fn find_thread_meta_candidates_by_name_str(
         )
         .await?
             && let Ok(session_meta) = super::list::read_session_meta_line(&path).await
+            && !session_meta.meta.attached_thread
             && (allowed_sources.is_empty() || allowed_sources.contains(&session_meta.meta.source))
             && session_meta
                 .meta

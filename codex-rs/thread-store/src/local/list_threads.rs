@@ -198,23 +198,10 @@ async fn list_section_threads(
         },
         search_term: params.search_term.as_deref(),
     };
-    let page = match params.relation_filter {
-        Some(ThreadRelationFilter::DirectChildrenOf(thread_id)) => {
+    let page = match params.relation_filter.map(state_relation_filter) {
+        Some(relation_filter) => {
             state_db
-                .list_threads_by_relation(
-                    params.page_size,
-                    codex_state::ThreadRelationFilter::DirectChildrenOf(thread_id),
-                    filters,
-                )
-                .await
-        }
-        Some(ThreadRelationFilter::DescendantsOf(thread_id)) => {
-            state_db
-                .list_threads_by_relation(
-                    params.page_size,
-                    codex_state::ThreadRelationFilter::DescendantsOf(thread_id),
-                    filters,
-                )
+                .list_threads_by_relation(params.page_size, relation_filter, filters)
                 .await
         }
         None => state_db.list_threads(params.page_size, filters).await,
@@ -255,16 +242,6 @@ pub(super) async fn list_rollout_threads(
     sort_direction: codex_rollout::SortDirection,
 ) -> ThreadStoreResult<codex_rollout::ThreadsPage> {
     if params.relation_filter.is_some() || params.section.is_some() || params.project_id.is_some() {
-        let relation_filter = params
-            .relation_filter
-            .map(|relation_filter| match relation_filter {
-                ThreadRelationFilter::DirectChildrenOf(parent_thread_id) => {
-                    codex_state::ThreadRelationFilter::DirectChildrenOf(parent_thread_id)
-                }
-                ThreadRelationFilter::DescendantsOf(ancestor_thread_id) => {
-                    codex_state::ThreadRelationFilter::DescendantsOf(ancestor_thread_id)
-                }
-            });
         let page = codex_rollout::state_db::list_threads_db(
             state_db.as_deref(),
             &config.sqlite,
@@ -275,7 +252,7 @@ pub(super) async fn list_rollout_threads(
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             params.cwd_filters.as_deref(),
-            relation_filter,
+            params.relation_filter.map(state_relation_filter),
             params.archived,
             params.section.as_ref().map(Option::as_deref),
             params.project_id.as_ref().map(Option::as_deref),
@@ -352,6 +329,20 @@ pub(super) async fn list_rollout_threads(
     page.map_err(|err| ThreadStoreError::Internal {
         message: format!("failed to list threads: {err}"),
     })
+}
+
+fn state_relation_filter(filter: ThreadRelationFilter) -> codex_state::ThreadRelationFilter {
+    match filter {
+        ThreadRelationFilter::DirectChildrenOf(id) => {
+            codex_state::ThreadRelationFilter::DirectChildrenOf(id)
+        }
+        ThreadRelationFilter::DescendantsOf(id) => {
+            codex_state::ThreadRelationFilter::DescendantsOf(id)
+        }
+        ThreadRelationFilter::AttachedThreadsOf(id) => {
+            codex_state::ThreadRelationFilter::AttachedThreadsOf(id)
+        }
+    }
 }
 
 #[cfg(test)]
