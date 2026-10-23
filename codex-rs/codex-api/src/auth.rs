@@ -47,6 +47,19 @@ pub trait AuthProvider: Send + Sync {
         Ok(headers)
     }
 
+    /// Describes headers expected on a successful request without refreshing or registering auth.
+    /// Async providers should override this rather than resolving credentials for telemetry.
+    fn auth_header_telemetry(&self) -> Result<AuthHeaderTelemetry, AuthError> {
+        let headers = self.to_auth_headers()?;
+        let name = headers
+            .contains_key(http::header::AUTHORIZATION)
+            .then_some("authorization");
+        Ok(AuthHeaderTelemetry {
+            attached: name.is_some(),
+            name,
+        })
+    }
+
     /// Resolves auth headers for an outbound request.
     ///
     /// Unlike [`Self::to_auth_headers`], implementations may perform asynchronous work to refresh
@@ -63,6 +76,15 @@ pub trait AuthProvider: Send + Sync {
         Box::pin(async { false })
     }
 
+    /// Authenticates a header-only request, including removing credentials it supersedes.
+    /// WebSocket handshakes must use the returned map rather than overlaying resolved headers.
+    fn apply_auth_headers(&self, mut headers: HeaderMap) -> AuthHeadersFuture<'_> {
+        Box::pin(async move {
+            headers.extend(self.resolve_auth_headers().await?);
+            Ok(headers)
+        })
+    }
+
     /// Applies auth to a complete outbound request and returns the request to send.
     ///
     /// The input `request` is moved into this method. Implementations may mutate
@@ -77,7 +99,7 @@ pub trait AuthProvider: Send + Sync {
     fn apply_auth(&self, request: Request) -> AuthProviderFuture<'_> {
         Box::pin(async move {
             let mut request = request;
-            request.headers.extend(self.resolve_auth_headers().await?);
+            request.headers = self.apply_auth_headers(request.headers).await?;
             Ok(request)
         })
     }
@@ -107,13 +129,5 @@ pub struct AuthHeaderTelemetry {
 }
 
 pub fn auth_header_telemetry(auth: &dyn AuthProvider) -> Result<AuthHeaderTelemetry, AuthError> {
-    let mut headers = HeaderMap::new();
-    auth.add_auth_headers(&mut headers)?;
-    let name = headers
-        .contains_key(http::header::AUTHORIZATION)
-        .then_some("authorization");
-    Ok(AuthHeaderTelemetry {
-        attached: name.is_some(),
-        name,
-    })
+    auth.auth_header_telemetry()
 }

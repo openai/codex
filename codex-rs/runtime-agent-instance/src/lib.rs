@@ -9,7 +9,6 @@ mod runtime;
 
 pub use actor::AgentHost;
 pub use actor::AuthenticatedActor;
-pub use auth::RuntimeAuthProvider;
 pub use bootstrap::ActorInfo;
 pub use bootstrap::AgentHostAuthorization;
 pub use bootstrap::AuthenticatedActorAuthorization;

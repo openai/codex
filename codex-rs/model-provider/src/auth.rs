@@ -9,6 +9,7 @@ use codex_api::AuthError;
 use codex_api::AuthHeadersFuture;
 use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
+use codex_http_client::CHATGPT_ACCOUNT_ID_HEADER;
 use codex_login::AuthHeaders;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -103,7 +104,7 @@ impl AuthProvider for AgentIdentityAuthProvider {
         }
 
         if let Ok(header) = HeaderValue::from_str(self.auth.account_id()) {
-            let _ = headers.insert("ChatGPT-Account-ID", header);
+            let _ = headers.insert(CHATGPT_ACCOUNT_ID_HEADER, header);
         }
 
         if self.auth.is_fedramp_account() {

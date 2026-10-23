@@ -464,9 +464,8 @@ impl ResponsesWebsocketClient {
             .websocket_url_for_path("/responses")
             .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
 
-        let mut headers =
-            merge_request_headers(&self.provider.headers, extra_headers, default_headers);
-        self.auth.add_auth_headers(&mut headers)?;
+        let headers = merge_request_headers(&self.provider.headers, extra_headers, default_headers);
+        let headers = self.auth.apply_auth_headers(headers).await?;
 
         let connector = WebSocketConnector::new(http_client_factory)
             .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?;

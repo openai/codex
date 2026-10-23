@@ -1,5 +1,6 @@
 //! Secondary OAuth credentials delivered alongside the provider's primary authentication.
 
+use codex_client::CHATGPT_ACCOUNT_ID_HEADER;
 use std::fmt;
 
 use codex_http_client::validate_endpoint_url;
@@ -20,7 +21,7 @@ const RESERVED_GATEWAY_OAUTH_HEADERS: &[&str] = &[
     "transfer-encoding",
     "connection",
     "upgrade",
-    "chatgpt-account-id",
+    CHATGPT_ACCOUNT_ID_HEADER,
 ];
 const RESERVED_GATEWAY_OAUTH_HEADER_PREFIXES: &[&str] =
     &["x-codex-", "x-openai-", "sec-websocket-"];

@@ -147,4 +147,17 @@ impl AuthProvider for CombinedAuth {
             Ok(request)
         })
     }
+
+    fn apply_auth_headers(&self, headers: HeaderMap) -> AuthHeadersFuture<'_> {
+        Box::pin(async move {
+            let mut headers = self.primary.apply_auth_headers(headers).await?;
+            if headers.contains_key(&self.name) {
+                return Err(AuthError::Build(
+                    "gateway OAuth conflicts with request headers".into(),
+                ));
+            }
+            headers.insert(self.name.clone(), self.value.clone());
+            Ok(headers)
+        })
+    }
 }

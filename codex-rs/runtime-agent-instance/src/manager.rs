@@ -43,7 +43,18 @@ enum RuntimeState {
     },
 }
 
+impl std::fmt::Debug for RuntimeAuthManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimeAuthManager").finish_non_exhaustive()
+    }
+}
+
 impl RuntimeAuthManager {
+    /// Check that a consumer uses this owner's credential provider, not an ambient fallback.
+    pub fn uses_credentials(&self, credentials: &Arc<AuthManager>) -> bool {
+        Arc::ptr_eq(&self.credentials, credentials)
+    }
+
     pub fn new(
         credentials: Arc<AuthManager>,
         host: AgentHostAuthorization,

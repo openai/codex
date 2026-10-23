@@ -1,5 +1,7 @@
 use super::Client;
 use super::RequestError;
+use codex_http_client::OPENAI_ORGANIZATION_HEADER;
+use codex_http_client::OPENAI_PROJECT_HEADER;
 use http::HeaderMap;
 use http::Method;
 use http::header::CONTENT_TYPE;
@@ -65,7 +67,7 @@ impl Client {
         let provider_scope_headers = provider_headers
             .iter()
             .filter(|(name, _)| {
-                ["openai-organization", "openai-project"]
+                [OPENAI_ORGANIZATION_HEADER, OPENAI_PROJECT_HEADER]
                     .iter()
                     .any(|allowed| name.as_str().eq_ignore_ascii_case(allowed))
             })

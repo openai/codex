@@ -1,6 +1,7 @@
 //! Caller-facing native gRPC types. Diagnostics never include credentials or server payloads.
 
 use bytes::Bytes;
+use codex_http_client::CHATGPT_ACCOUNT_ID_HEADER;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::header::AUTHORIZATION;
@@ -21,7 +22,7 @@ impl Credentials {
         for (name, value) in [
             (AUTHORIZATION, format!("Bearer {bearer_token}")),
             (
-                http::HeaderName::from_static("chatgpt-account-id"),
+                http::HeaderName::from_static(CHATGPT_ACCOUNT_ID_HEADER),
                 account_id.to_owned(),
             ),
         ] {

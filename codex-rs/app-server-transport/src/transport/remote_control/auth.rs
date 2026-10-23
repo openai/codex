@@ -61,7 +61,7 @@ impl RemoteControlAuth {
     }
 }
 
-pub(super) const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
+pub(super) use codex_http_client::CHATGPT_ACCOUNT_ID_HEADER as REMOTE_CONTROL_ACCOUNT_ID_HEADER;
 
 pub(super) struct RemoteControlConnectionAuth {
     pub(super) http_client_factory: codex_http_client::HttpClientFactory,

@@ -10,6 +10,7 @@ use crate::types::TokenUsageProfile;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_api::SharedAuthProvider;
+use codex_http_client::CHATGPT_ACCOUNT_ID_HEADER;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
@@ -299,10 +300,9 @@ impl Client {
         }
         self.auth_provider.add_auth_headers(&mut h)?;
         if let Some(acc) = &self.chatgpt_account_id
-            && let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id")
             && let Ok(hv) = HeaderValue::from_str(acc)
         {
-            h.insert(name, hv);
+            h.insert(CHATGPT_ACCOUNT_ID_HEADER, hv);
         }
         if self.chatgpt_account_is_fedramp
             && let Ok(name) = HeaderName::from_bytes(b"X-OpenAI-Fedramp")

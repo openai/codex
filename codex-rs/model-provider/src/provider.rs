@@ -212,32 +212,45 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     fn api_provider(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Provider>> {
         Box::pin(async move {
             let auth = self.auth().await;
-            self.info()
-                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))
+            self.api_provider_for_auth(auth.as_ref())
         })
     }
 
     /// Resolves routing for Responses HTTP, compaction, and WebSocket handshakes.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "serialize discovery and the session's first successful routing transition"
-    )]
     fn responses_api_provider<'a>(
         &'a self,
         routing_context: &'a WorkspaceRoutingContext,
     ) -> ModelProviderFuture<'a, codex_protocol::error::Result<ResolvedResponsesProvider>> {
         Box::pin(async move {
-            let mut provider = self.api_provider().await?;
+            let provider = self.api_provider().await?;
+            let auth = self.auth().await;
+            self.route_responses_api_provider(provider, auth.as_ref(), routing_context)
+                .await
+        })
+    }
+
+    /// Applies workspace routing using the credentials already selected for this request.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "serialize discovery and the session's first successful routing transition"
+    )]
+    fn route_responses_api_provider<'a>(
+        &'a self,
+        mut provider: Provider,
+        auth: Option<&'a CodexAuth>,
+        routing_context: &'a WorkspaceRoutingContext,
+    ) -> ModelProviderFuture<'a, codex_protocol::error::Result<ResolvedResponsesProvider>> {
+        Box::pin(async move {
             let mut redirect_policy = ClientRedirectPolicy::Default;
             if provider_uses_first_party_auth_path(self.info())
                 && self.info().supports_codex_backend_routes()
-                && let Some(auth) = self.auth().await.filter(CodexAuth::is_chatgpt_auth)
+                && let Some(auth) = auth.filter(|auth| auth.is_chatgpt_auth())
                 && let Some(auth_manager) = self.auth_manager()
             {
                 let mut previously_routed = routing_context.previously_routed.lock().await;
                 if let Some(routing) = auth_manager
                     .workspace_routing(
-                        &auth,
+                        auth,
                         WorkspaceRoutingRequest {
                             provider_base_url: provider.base_url.clone(),
                             chatgpt_base_url: routing_context.chatgpt_base_url.clone(),
@@ -259,6 +272,14 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         })
     }
 
+    /// Adapt routing from the same frozen credential selected for the request.
+    fn api_provider_for_auth(
+        &self,
+        auth: Option<&CodexAuth>,
+    ) -> codex_protocol::error::Result<Provider> {
+        self.info().to_api_provider(auth.map(CodexAuth::auth_mode))
+    }
+
     /// Returns the provider base URL that will be used at request time.
     fn runtime_base_url(
         &self,
@@ -274,6 +295,14 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
             let auth = self.auth().await;
             resolve_provider_auth(auth.as_ref(), self.info())
         })
+    }
+
+    /// Adds provider-owned credentials, such as gateway OAuth, to already selected primary auth.
+    fn compose_auth(
+        &self,
+        resolved: ResolvedProviderAuth,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ResolvedProviderAuth>> {
+        Box::pin(async move { Ok(resolved) })
     }
 
     /// Returns request credentials, optionally scoped to a Codex session task.
@@ -487,14 +516,22 @@ impl ModelProvider for ConfiguredModelProvider {
         Box::pin(async move {
             let auth = self.auth().await;
             let primary = resolve_provider_auth(auth.as_ref(), &self.info)?;
-            Ok(compose_auth(
-                &self.info,
-                self.gateway_auth_manager.as_ref(),
-                ResolvedProviderAuth::new(primary),
-            )
-            .await?
-            .auth)
+            Ok(self
+                .compose_auth(ResolvedProviderAuth::new(primary))
+                .await?
+                .auth)
         })
+    }
+
+    fn compose_auth(
+        &self,
+        resolved: ResolvedProviderAuth,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ResolvedProviderAuth>> {
+        Box::pin(compose_auth(
+            &self.info,
+            self.gateway_auth_manager.as_ref(),
+            resolved,
+        ))
     }
 
     fn api_auth_for_scope(
@@ -515,7 +552,7 @@ impl ModelProvider for ConfiguredModelProvider {
                 let auth = self.auth().await;
                 ResolvedProviderAuth::new(resolve_provider_auth(auth.as_ref(), &self.info)?)
             };
-            compose_auth(&self.info, self.gateway_auth_manager.as_ref(), resolved).await
+            self.compose_auth(resolved).await
         })
     }
 

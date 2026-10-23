@@ -4,14 +4,13 @@ use crate::ActorInfo;
 use crate::RegistrationError;
 use crate::RuntimeAgentInstance;
 use crate::RuntimeAuthError;
-use crate::RuntimeAuthManager;
 use codex_api::AuthError;
+use codex_api::AuthHeaderTelemetry;
 use codex_api::AuthHeadersFuture;
 use codex_api::AuthProvider;
-use codex_api::AuthProviderFuture;
 use codex_features::RuntimeAuthMode;
+use codex_http_client::CHATGPT_ACCOUNT_ID_HEADER;
 use codex_http_client::HttpClientFactory;
-use codex_http_client::Request;
 use codex_login::AuthChangeState;
 use codex_login::CodexAuth;
 use http::HeaderMap;
@@ -41,48 +40,10 @@ impl std::fmt::Debug for RuntimeAuth {
     }
 }
 
-/// Auth adapter for OpenAI clients. Share its manager across requests and threads;
-/// never select this provider for a third-party endpoint.
-pub struct RuntimeAuthProvider {
-    manager: Arc<RuntimeAuthManager>,
+/// Request-scoped provider: retries sign fresh assertions from the same selected runtime/credential.
+struct RuntimeRequestAuth {
+    auth: RuntimeAuth,
     mode: RuntimeAuthMode,
-}
-
-impl RuntimeAuthProvider {
-    pub fn new(manager: Arc<RuntimeAuthManager>, mode: RuntimeAuthMode) -> Self {
-        Self { manager, mode }
-    }
-}
-
-impl AuthProvider for RuntimeAuthProvider {
-    fn add_auth_headers(&self, _headers: &mut HeaderMap) -> Result<(), AuthError> {
-        Err(AuthError::Build(
-            "authentication requires async header resolution".to_string(),
-        ))
-    }
-
-    fn resolve_auth_headers(&self) -> AuthHeadersFuture<'_> {
-        Box::pin(async move {
-            let auth = self.manager.auth().await?;
-            auth.auth_headers(self.mode)
-        })
-    }
-
-    fn apply_auth(&self, mut request: Request) -> AuthProviderFuture<'_> {
-        Box::pin(async move {
-            let headers = self.resolve_auth_headers().await?;
-            for name in [
-                AUTHORIZATION.as_str(),
-                AGENT_ASSERTION,
-                "chatgpt-account-id",
-                "x-openai-fedramp",
-            ] {
-                request.headers.remove(name);
-            }
-            request.headers.extend(headers);
-            Ok(request)
-        })
-    }
 }
 
 impl RuntimeAuth {
@@ -100,6 +61,11 @@ impl RuntimeAuth {
 
     pub fn change_state(&self) -> AuthChangeState {
         self.change_state
+    }
+
+    /// Use this selection for a request and its retries; select auth again for the next request.
+    pub fn into_auth_provider(self, mode: RuntimeAuthMode) -> codex_api::SharedAuthProvider {
+        Arc::new(RuntimeRequestAuth { auth: self, mode })
     }
 
     fn auth_headers(&self, mode: RuntimeAuthMode) -> Result<HeaderMap, AuthError> {
@@ -125,7 +91,7 @@ impl RuntimeAuth {
         }
         if let ActorInfo::Chatgpt { account_id, .. } = self.runtime().actor().info() {
             headers.insert(
-                "chatgpt-account-id",
+                CHATGPT_ACCOUNT_ID_HEADER,
                 HeaderValue::from_str(account_id)
                     .map_err(|_| AuthError::Build("invalid runtime account header".to_string()))?,
             );
@@ -134,6 +100,29 @@ impl RuntimeAuth {
             headers.insert("x-openai-fedramp", HeaderValue::from_static("true"));
         }
         Ok(headers)
+    }
+}
+
+impl AuthProvider for RuntimeRequestAuth {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), AuthError> {
+        headers.extend(self.auth.auth_headers(self.mode)?);
+        Ok(())
+    }
+
+    fn auth_header_telemetry(&self) -> Result<AuthHeaderTelemetry, AuthError> {
+        Ok(AuthHeaderTelemetry {
+            attached: true,
+            name: Some("authorization"),
+        })
+    }
+
+    fn apply_auth_headers(&self, headers: HeaderMap) -> AuthHeadersFuture<'_> {
+        Box::pin(async move {
+            Ok(replace_auth_headers(
+                headers,
+                self.resolve_auth_headers().await?,
+            ))
+        })
     }
 }
 
@@ -172,4 +161,17 @@ impl From<RuntimeAuthError> for AuthError {
             Self::Build(error.to_string())
         }
     }
+}
+
+fn replace_auth_headers(mut headers: HeaderMap, auth: HeaderMap) -> HeaderMap {
+    for name in [
+        AUTHORIZATION.as_str(),
+        AGENT_ASSERTION,
+        CHATGPT_ACCOUNT_ID_HEADER,
+        "x-openai-fedramp",
+    ] {
+        headers.remove(name);
+    }
+    headers.extend(auth);
+    headers
 }
