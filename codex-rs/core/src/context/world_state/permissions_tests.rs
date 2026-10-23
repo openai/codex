@@ -269,6 +269,7 @@ fn permissions_state(
         workspace_write: Some("Workspace write.".to_string()),
         read_only: Some("Read only.".to_string()),
         approved_prefixes: None,
+        ..PermissionMessages::default()
     };
     let mut model = model_info_from_slug("test-model");
     model.model_messages = Some(ModelMessages {

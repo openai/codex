@@ -236,10 +236,12 @@ impl Session {
             let cwd = environment
                 .and_then(|environment| environment.cwd().to_abs_path().ok())
                 .unwrap_or_else(|| turn_context.cwd.clone());
+            let approval_context =
+                ApprovalPromptContext::new(settings.approvals_reviewer(), model_messages);
             world_state.add_section(PermissionsState::new(
                 &permission_profile,
                 settings.approval_policy(),
-                ApprovalPromptContext::new(settings.approvals_reviewer(), model_messages),
+                approval_context,
                 exec_policy.as_ref(),
                 &cwd,
                 paths.as_ref(),

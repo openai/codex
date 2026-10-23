@@ -779,7 +779,7 @@ pub struct AutoReviewMessages {
     pub timeout_instructions: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct PermissionMessages {
     pub danger_full_access: Option<String>,
     pub workspace_write: Option<String>,
@@ -788,6 +788,14 @@ pub struct PermissionMessages {
     /// an empty string suppresses the approved-prefix section.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_prefixes: Option<String>,
+    /// Single writable-root sentence with exactly one `{{ roots }}` placeholder.
+    /// Missing, null, empty, invalid, or oversized templates use the bundled sentence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writable_root: Option<String>,
+    /// Multiple writable-roots sentence with exactly one `{{ roots }}` placeholder.
+    /// Missing, null, empty, invalid, or oversized templates use the bundled sentence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writable_roots: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
@@ -1315,8 +1323,31 @@ mod tests {
                 workspace_write: Some(String::new()),
                 read_only: None,
                 approved_prefixes: None,
+                ..PermissionMessages::default()
             })
         );
+    }
+
+    #[test]
+    fn writable_root_messages_preserve_sparse_wire_values() {
+        for input in [
+            serde_json::json!({}),
+            serde_json::json!({"writable_root": null, "writable_roots": null}),
+            serde_json::json!({"writable_root": "", "writable_roots": "Roots: {{ roots }}."}),
+        ] {
+            let messages: PermissionMessages = serde_json::from_value(input.clone()).unwrap();
+            let mut expected = serde_json::json!({
+                "danger_full_access": null,
+                "workspace_write": null,
+                "read_only": null,
+            });
+            for key in ["writable_root", "writable_roots"] {
+                if let Some(value) = input.get(key).filter(|value| !value.is_null()) {
+                    expected[key] = value.clone();
+                }
+            }
+            assert_eq!(serde_json::to_value(messages).unwrap(), expected);
+        }
     }
 
     #[test]
@@ -1560,6 +1591,7 @@ mod tests {
                 workspace_write: Some("workspace".to_string()),
                 read_only: None,
                 approved_prefixes: None,
+                ..PermissionMessages::default()
             }),
             multi_agent: None,
             token_budget: None,

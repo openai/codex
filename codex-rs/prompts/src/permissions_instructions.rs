@@ -27,6 +27,9 @@ use codex_utils_template::Template;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::LazyLock;
+use writable_roots::writable_roots_text;
+
+mod writable_roots;
 
 const REQUEST_PERMISSION_RULE: &str =
     include_str!("../templates/permissions/approval_policy/on_request_rule_request_permission.md");
@@ -139,7 +142,9 @@ impl PermissionsInstructions {
                 context.request_permissions_tool_enabled,
             ),
         );
-        if let Some(writable_roots) = writable_roots_text(&writable_roots) {
+        if let Some(writable_roots) =
+            writable_roots_text(&writable_roots, approval_context.permission_messages)
+        {
             append_section(&mut text, &writable_roots);
         }
         if let Some(denied_reads) = denied_reads_text(&denied_read_paths, &denied_read_globs) {
@@ -375,22 +380,6 @@ fn sandbox_text(
             .render([("network_access", network_access.as_str())])
             .unwrap_or_else(|err| panic!("sandbox template must render: {err}")),
     }
-}
-
-fn writable_roots_text(writable_roots: &[String]) -> Option<String> {
-    if writable_roots.is_empty() {
-        return None;
-    }
-
-    let roots_list: Vec<String> = writable_roots
-        .iter()
-        .map(|root| format!("`{root}`"))
-        .collect();
-    Some(if roots_list.len() == 1 {
-        format!(" The writable root is {}.", roots_list[0])
-    } else {
-        format!(" The writable roots are {}.", roots_list.join(", "))
-    })
 }
 
 fn denied_reads_text(paths: &[String], globs: &[String]) -> Option<String> {

@@ -52,6 +52,7 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
         workspace_write: Some(String::new()),
         read_only: None,
         approved_prefixes: None,
+        ..PermissionMessages::default()
     };
     let multi_agent = MultiAgentMessages {
         role: Some(MultiAgentRoleMessages {

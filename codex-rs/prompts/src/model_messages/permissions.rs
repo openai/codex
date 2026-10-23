@@ -19,6 +19,8 @@ pub(crate) const WORKSPACE_WRITE_TEMPLATE: &str =
     include_str!("../../templates/permissions/sandbox_mode/workspace_write.md");
 pub(crate) const READ_ONLY_TEMPLATE: &str =
     include_str!("../../templates/permissions/sandbox_mode/read_only.md");
+pub(crate) const WRITABLE_ROOT_TEMPLATE: &str = " The writable root is {{ roots }}.";
+pub(crate) const WRITABLE_ROOTS_TEMPLATE: &str = " The writable roots are {{ roots }}.";
 
 /// Resolved approval-policy text; policy and tool selection remain with the consumer.
 #[derive(Debug, Clone, Copy)]
@@ -59,6 +61,8 @@ pub(crate) struct ResolvedPermissionMessages<'a> {
     pub(crate) danger_full_access: ResolvedMessage<'a>,
     pub(crate) workspace_write: ResolvedMessage<'a>,
     pub(crate) read_only: ResolvedMessage<'a>,
+    pub(crate) writable_root: ResolvedMessage<'a>,
+    pub(crate) writable_roots: ResolvedMessage<'a>,
 }
 
 impl<'a> ResolvedPermissionMessages<'a> {
@@ -79,6 +83,14 @@ impl<'a> ResolvedPermissionMessages<'a> {
             read_only: ResolvedMessage::new(
                 messages.and_then(|m| m.read_only.as_deref()),
                 READ_ONLY_TEMPLATE,
+            ),
+            writable_root: ResolvedMessage::new(
+                messages.and_then(|m| m.writable_root.as_deref()),
+                WRITABLE_ROOT_TEMPLATE,
+            ),
+            writable_roots: ResolvedMessage::new(
+                messages.and_then(|m| m.writable_roots.as_deref()),
+                WRITABLE_ROOTS_TEMPLATE,
             ),
         }
     }
