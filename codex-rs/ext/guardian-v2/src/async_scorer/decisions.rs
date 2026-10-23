@@ -6,10 +6,6 @@
 //! Evidence preserves message roles, content order, and boundaries.
 //! The caller records measurements after baseline publication; dropping its task aborts Decisions work.
 
-#[cfg(test)]
-use super::sampler::LunaSampler;
-#[cfg(test)]
-use super::sampler::LunaSamplingRequest;
 use codex_history::ResponseItemEnvelope;
 use codex_http_client::HttpClient;
 use codex_protocol::models::ContentItem;
@@ -120,38 +116,6 @@ impl DecisionsSampler {
             slots: Semaphore::new(MAX_CONCURRENT_REQUESTS),
             active_requests: Mutex::new(VecDeque::new()),
         })
-    }
-
-    #[cfg(test)]
-    pub(super) fn start_snapshot_comparison(
-        self: &Arc<Self>,
-        request: &LunaSamplingRequest,
-        max_input_tokens: usize,
-    ) -> DecisionsTask {
-        let started = Instant::now();
-        let body = request_body(
-            request.instructions.annotated_content().content(),
-            &request.input,
-        )
-        .and_then(|body| {
-            // Reuse Guardian's complete budget without changing its sampling path.
-            // The temporary copy is dropped before admission; Responses prepares again.
-            let (_, tokens) = LunaSampler::prepare_input(
-                request,
-                /*history*/ None,
-                request
-                    .input
-                    .iter()
-                    .cloned()
-                    .map(ResponseItemEnvelope::new)
-                    .collect(),
-            );
-            if tokens > max_input_tokens.saturating_sub(/*rhs*/ 256) {
-                return Err(DecisionsError::InputTooLarge);
-            }
-            Ok(body)
-        });
-        self.spawn_request(body, started)
     }
 
     pub(super) fn start_conversation_comparison(

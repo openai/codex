@@ -25,6 +25,19 @@ use super::MAX_TOOL_TRANSCRIPT_TOKENS;
 use super::TranscriptConfig;
 use super::TranscriptSource;
 
+// Existing rendering tests exercise the same fresh-conversation preparation and
+// delivery filtering as the classifier, without retaining the snapshot formatter.
+impl super::TranscriptConfig {
+    fn build_context(
+        &self,
+        input: ContextInput<'_>,
+    ) -> Result<codex_guardian_context::ComposedContext, codex_guardian_context::SectionError> {
+        let (mut context, _) = self.collect_context(input)?.compose(/*cursor*/ None, &[])?;
+        context.retain_new_instructions(&[]);
+        Ok(context)
+    }
+}
+
 struct TestConversationHistory<'a>(&'a [ResponseItem]);
 
 impl ConversationHistorySnapshot for TestConversationHistory<'_> {
@@ -1354,7 +1367,7 @@ trait TranscriptEntries {
     fn transcript_entries(self) -> Vec<String>;
 }
 
-impl TranscriptEntries for super::RenderedContext {
+impl TranscriptEntries for codex_guardian_context::ComposedContext {
     fn transcript_entries(self) -> Vec<String> {
         let messages = self.into_messages();
         let [ResponseItem::Message { role, content, .. }] = messages.as_slice() else {
