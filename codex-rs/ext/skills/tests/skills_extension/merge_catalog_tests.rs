@@ -64,6 +64,7 @@ fn provider(entries: Vec<SkillCatalogEntry>) -> StaticSkillProvider {
 
 struct MergeHarness {
     registry: codex_extension_api::ExtensionRegistry<TestConfig>,
+    catalog_metrics: Arc<RecordingMetrics>,
     session_store: ExtensionData,
     thread_store: ExtensionData,
     turn_store: ExtensionData,
@@ -100,6 +101,7 @@ impl MergeHarness {
         );
         let harness = Self {
             registry: builder.build(),
+            catalog_metrics: Arc::default(),
             session_store: ExtensionData::new("session"),
             thread_store: ExtensionData::new("thread"),
             turn_store: ExtensionData::new("turn-1"),
@@ -124,7 +126,7 @@ impl MergeHarness {
                 persistent_thread_state_available: true,
                 environments: &[],
                 mcp_resource_client: None,
-                extension_metrics: None,
+                extension_metrics: Some(harness.catalog_metrics.clone()),
                 session_store: &harness.session_store,
                 thread_store: &harness.thread_store,
             })
@@ -405,6 +407,13 @@ async fn v2_merged_skills_preserve_cloud_metadata_and_accepted_plugin_routes() -
             assert_matches!(result, Err(FunctionCallError::RespondToModel(message)) if message == "skill package is not available");
         }
     }
+    assert_eq!(
+        harness.catalog_metrics.samples(),
+        vec![
+            expected_catalog_entries("cloud", "warning", /*count*/ 2),
+            expected_catalog_entries("executor", "warning", /*count*/ 6),
+        ]
+    );
     Ok(())
 }
 
@@ -646,7 +655,7 @@ async fn v2_only_complete_cloud_catalog_excludes_unmatched_remote_skills() -> Te
     unavailable.fail_first_list = true;
     let mut partial = provider(Vec::new());
     partial.catalog.is_partial = true;
-    for (cloud, config, keeps_remote) in [
+    for (cloud, config, keeps_remote, cloud_status) in [
         (
             provider(vec![cloud_skill("work")]),
             TestConfig {
@@ -654,10 +663,16 @@ async fn v2_only_complete_cloud_catalog_excludes_unmatched_remote_skills() -> Te
                 ..default_config()
             },
             true,
+            None,
         ),
-        (unavailable, default_config(), true),
-        (partial, default_config(), true),
-        (provider(Vec::new()), default_config(), false),
+        (unavailable, default_config(), true, None),
+        (partial, default_config(), true, Some("partial")),
+        (
+            provider(Vec::new()),
+            default_config(),
+            false,
+            Some("complete"),
+        ),
     ] {
         let harness = MergeHarness::new(
             provider(vec![
@@ -677,6 +692,14 @@ async fn v2_only_complete_cloud_catalog_excludes_unmatched_remote_skills() -> Te
         assert_eq!(rendered.contains("- deploy:work:"), keeps_remote);
         assert!(rendered.contains("- deploy:local:"));
         assert!(!rendered.contains("Cloud work description"));
+        let mut expected = Vec::new();
+        if let Some(status) = cloud_status {
+            expected.push(expected_catalog_entries("cloud", status, /*count*/ 0));
+        }
+        expected.push(expected_catalog_entries(
+            "executor", "complete", /*count*/ 2,
+        ));
+        assert_eq!(harness.catalog_metrics.samples(), expected);
     }
     Ok(())
 }

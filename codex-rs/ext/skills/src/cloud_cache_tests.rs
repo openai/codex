@@ -100,6 +100,7 @@ fn state() -> SkillsThreadState {
             shadow_selection_enabled: false,
         },
         /*cloud_skills_available*/ true,
+        /*extension_metrics*/ None,
     )
 }
 

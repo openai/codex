@@ -8,6 +8,7 @@ pub use events::ExtensionEventSink;
 pub use events::ExtensionWarning;
 pub use events::NoopExtensionEventSink;
 pub use metrics::ExtensionMetrics;
+pub use metrics::record_catalog_entries;
 pub use response_items::NoopResponseItemInjector;
 pub use response_items::ResponseItemInjectionFuture;
 pub use response_items::ResponseItemInjector;

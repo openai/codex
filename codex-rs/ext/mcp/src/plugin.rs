@@ -324,7 +324,7 @@ impl McpServerContributor<Config> for PluginContributor {
                 }
                 return plugins;
             }
-            state.contributor_state().update_executor_catalog(&[]);
+            state.contributor_state().clear_executor_catalog();
 
             if let Some(snapshot) = context.executor_capability_discovery() {
                 for root in snapshot.roots() {

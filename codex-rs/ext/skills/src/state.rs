@@ -22,6 +22,7 @@ use crate::catalog::SkillProviderError;
 use crate::catalog::SkillProviderResult;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillSourceKind;
+use crate::catalog_observability::record_catalog;
 use crate::catalog_state::CachedExecutorCatalog;
 use crate::catalog_state::CachedExecutorDiscoveryCatalog;
 use crate::catalog_state::CachedExecutorV2Catalog;
@@ -58,6 +59,7 @@ pub struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
     cloud_skills_available: bool,
     catalog_state: Mutex<SkillCatalogState>,
+    extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
     aliases: SkillAliasState,
     shadow_selection_turn: Mutex<Option<ShadowSelectionTurn>>,
     pub(crate) executor_read_snapshot: Mutex<Option<ExecutorReadSnapshot>>,
@@ -66,12 +68,17 @@ pub struct SkillsThreadState {
 }
 
 impl SkillsThreadState {
-    pub(crate) fn new(config: SkillsExtensionConfig, cloud_skills_available: bool) -> Self {
+    pub(crate) fn new(
+        config: SkillsExtensionConfig,
+        cloud_skills_available: bool,
+        extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
+    ) -> Self {
         Self {
             cloud_refresh_lock: AsyncMutex::new(false),
             config: Mutex::new(config),
             cloud_skills_available,
             catalog_state: Mutex::new(SkillCatalogState::default()),
+            extension_metrics,
             aliases: SkillAliasState::default(),
             shadow_selection_turn: Mutex::new(None),
             executor_read_snapshot: Mutex::new(None),
@@ -144,18 +151,32 @@ impl SkillsThreadState {
     ) -> SkillCatalog {
         if let Some(snapshots) = &query.executor_capability_discovery_v2 {
             let snapshots = snapshots.clone();
-            let cached = self
-                .catalog_state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .executor_v2_cache
-                .as_ref()
-                .filter(|cached| cached.matches(&snapshots))
-                .map(|cached| cached.catalog.clone());
+            let (cached, already_observed) = {
+                let state = self
+                    .catalog_state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let cached = state.executor_v2_cache.as_ref();
+                let already_observed =
+                    cached.is_some_and(|cached| cached.same_discovery(&snapshots));
+                (
+                    cached
+                        .filter(|_| {
+                            already_observed
+                                && snapshots.iter().all(|snapshot| snapshot.result.is_ok())
+                        })
+                        .map(|cached| cached.catalog.clone()),
+                    already_observed,
+                )
+            };
             match cached {
                 Some(catalog) => catalog,
                 None => {
                     let catalog = providers.list_executor_for_turn(query).await;
+                    // Failed snapshots are rebuilt for callers, but each is still one observation.
+                    if !already_observed {
+                        record_catalog(self.extension_metrics.as_deref(), "executor", &catalog);
+                    }
                     self.catalog_state
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -191,6 +212,7 @@ impl SkillsThreadState {
             } else {
                 providers.list_executor_for_turn(query).await
             };
+            record_catalog(self.extension_metrics.as_deref(), "executor", &catalog);
             self.catalog_state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -217,27 +239,30 @@ impl SkillsThreadState {
                     .is_none_or(|discovered| discovered.error.is_some())
             })
         });
-        if !discovery_failed
-            && let Some(cached) = self
+        let already_observed = {
+            let state = self
                 .catalog_state
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .executor_discovery_cache
-                .as_ref()
-                .filter(|cached| {
-                    cached.matches(
-                        &query.executor_roots,
-                        discovery.as_ref(),
-                        query.include_bundled_skills,
-                    )
-                })
-        {
-            return cached.catalog.clone();
-        }
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let cached = state.executor_discovery_cache.as_ref().filter(|cached| {
+                cached.matches(
+                    &query.executor_roots,
+                    discovery.as_ref(),
+                    query.include_bundled_skills,
+                )
+            });
+            if !discovery_failed && let Some(cached) = cached {
+                return cached.catalog.clone();
+            }
+            cached.is_some()
+        };
 
         let roots = query.executor_roots.clone();
         let include_bundled_skills = query.include_bundled_skills;
         let discovered = providers.list_executor_for_turn(query).await;
+        if !already_observed {
+            record_catalog(self.extension_metrics.as_deref(), "executor", &discovered);
+        }
         let mut state = self
             .catalog_state
             .lock()
@@ -369,6 +394,7 @@ impl SkillsThreadState {
         } else {
             catalogs.cloud_resources = CloudResourceCache::default();
         }
+        record_catalog(self.extension_metrics.as_deref(), "cloud", &catalog);
         let generation = Arc::new(CloudSkillGeneration {
             auth_cache_key: cache.auth_cache_key.clone(),
             resource_cache_key,

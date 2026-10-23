@@ -213,12 +213,14 @@ impl ExecutorSkillProvider {
             let discovery = match &root.result {
                 Ok(discovery) => discovery.as_ref(),
                 Err(error) => {
+                    catalog.is_partial = true;
                     catalog.warnings.push(format!(
                         "Selected capability root `{selected_root_id}` discovery failed: {error}"
                     ));
                     continue;
                 }
             };
+            catalog.is_partial |= discovery.error.is_some();
             let outcome =
                 load_environment_skills_from_discovery(discovery, self.restriction_product);
             catalog.warnings.extend(outcome.warnings);

@@ -183,6 +183,7 @@ async fn v2_steps_refresh_metadata_and_preserve_separate_environments() -> TestR
     let mut builder = ExtensionRegistryBuilder::new();
     install_with_providers(&mut builder, providers, skills_extension_config);
     let registry = builder.build();
+    let metrics = Arc::new(RecordingMetrics::default());
     let session_store = ExtensionData::new("session");
     let thread_store = ExtensionData::new("thread");
     registry.thread_lifecycle_contributors()[0]
@@ -192,73 +193,90 @@ async fn v2_steps_refresh_metadata_and_preserve_separate_environments() -> TestR
             persistent_thread_state_available: true,
             environments: &[],
             mcp_resource_client: None,
-            extension_metrics: None,
+            extension_metrics: Some(metrics.clone()),
             session_store: &session_store,
             thread_store: &thread_store,
         })
         .await;
     let turn_store = ExtensionData::new("turn-1");
-    for description in [Some("original"), Some("updated"), None] {
+    let mut expected_metrics = Vec::new();
+    for (description, failed_environment, count, status) in [
+        (Some("original"), None, 4, "complete"),
+        (Some("updated"), None, 4, "complete"),
+        // A replacement executor can return a fresh discovery with identical inventory.
+        (Some("updated"), None, 4, "complete"),
+        (Some("updated"), Some("remote-b"), 2, "partial"),
+        (None, None, 0, "complete"),
+    ] {
         if let Some(description) = description {
             for snapshot in &mut snapshots {
-                Arc::make_mut(snapshot.result.as_mut().unwrap()).plugins[0].skills[0].description =
-                    description.to_string();
+                if Some(snapshot.environment_id.as_str()) == failed_environment {
+                    snapshot.result = Err("discovery unavailable".to_string());
+                } else {
+                    let mut response = snapshot.result.as_ref().unwrap().as_ref().clone();
+                    response.plugins[0].skills[0].description = description.to_string();
+                    snapshot.result = Ok(Arc::new(response));
+                }
             }
         } else {
             snapshots.clear();
         }
-        let step_store = ExtensionData::new("step");
-        step_store.insert(snapshots.clone());
-        step_store.insert(SelectedPluginSnapshot {
-            plugins: snapshots
+        expected_metrics.push(expected_catalog_entries("executor", status, count));
+        for _ in 0..2 {
+            let step_store = ExtensionData::new("step");
+            step_store.insert(snapshots.clone());
+            step_store.insert(SelectedPluginSnapshot {
+                plugins: snapshots
+                    .iter()
+                    .map(|snapshot| codex_extension_api::SelectedPluginIdentity {
+                        selected_root_id: Some(format!(
+                            "{}:local-name@marketplace",
+                            snapshot.environment_id
+                        )),
+                        plugin_id: codex_core_plugin_common::PluginIdentity::Remote {
+                            remote_plugin_id: "Plugin_123".into(),
+                        },
+                    })
+                    .collect(),
+                ..Default::default()
+            });
+            let sections = prepared_world_state(
+                &registry,
+                &[],
+                WorldStateContributionInput {
+                    previous_world_state: None,
+                    step_store: &step_store,
+                    model_info: &catalog_model_info(),
+                    thread_id: codex_protocol::ThreadId::new(),
+                    turn_id: "turn-1",
+                    environments: &[],
+                    extension_metrics: None,
+                    session_store: &session_store,
+                    thread_store: &thread_store,
+                    turn_store: &turn_store,
+                },
+            )
+            .await;
+            let rendered = sections
                 .iter()
-                .map(|snapshot| codex_extension_api::SelectedPluginIdentity {
-                    selected_root_id: Some(format!(
-                        "{}:local-name@marketplace",
-                        snapshot.environment_id
-                    )),
-                    plugin_id: codex_core_plugin_common::PluginIdentity::Remote {
-                        remote_plugin_id: "Plugin_123".into(),
-                    },
-                })
-                .collect(),
-            ..Default::default()
-        });
-        let sections = prepared_world_state(
-            &registry,
-            &[],
-            WorldStateContributionInput {
-                previous_world_state: None,
-                step_store: &step_store,
-                model_info: &catalog_model_info(),
-                thread_id: codex_protocol::ThreadId::new(),
-                turn_id: "turn-1",
-                environments: &[],
-                extension_metrics: None,
-                session_store: &session_store,
-                thread_store: &thread_store,
-                turn_store: &turn_store,
-            },
-        )
-        .await;
-        let rendered = sections
-            .iter()
-            .filter_map(|section| section.render_diff(PreviousWorldStateSection::Absent).1)
-            .map(|fragment| fragment.body().clone().expect_text())
-            .collect::<Vec<_>>()
-            .join("\n");
-        if let Some(description) = description {
-            assert!(
-                rendered.contains("skill://local-name@marketplace/"),
-                "{rendered}"
-            );
-            assert!(
-                rendered.contains(&format!("- local-name:work: {description}")),
-                "{rendered}"
-            );
-            assert!(!rendered.contains("- dashboard:"), "{rendered}");
-        } else {
-            assert!(!rendered.contains("- local-name:work:"), "{rendered}");
+                .filter_map(|section| section.render_diff(PreviousWorldStateSection::Absent).1)
+                .map(|fragment| fragment.body().clone().expect_text())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if let Some(description) = description {
+                assert!(
+                    rendered.contains("skill://local-name@marketplace/"),
+                    "{rendered}"
+                );
+                assert!(
+                    rendered.contains(&format!("- local-name:work: {description}")),
+                    "{rendered}"
+                );
+                assert!(!rendered.contains("- dashboard:"), "{rendered}");
+            } else {
+                assert!(!rendered.contains("- local-name:work:"), "{rendered}");
+            }
+            assert_eq!(metrics.samples(), expected_metrics);
         }
     }
     Ok(())

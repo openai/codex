@@ -353,10 +353,10 @@ async fn projection_respects_discovery_mode_and_preserves_enabled_plugins() -> a
                 "{case}, V2={v2_enabled}, V1={}",
                 legacy_snapshot.is_some()
             );
-            let expected_catalog = catalog_from_snapshots(snapshots.unwrap_or_default());
+            let expected_catalog = snapshots.map(catalog_from_snapshots);
             assert_eq!(
                 state.contributor_state().executor_catalog.as_ref(),
-                Some(&expected_catalog),
+                expected_catalog.as_ref(),
                 "{case}"
             );
         }

@@ -454,7 +454,10 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
     let published_snapshot = published_snapshot.unwrap();
     assert!(fragment.is_some());
     let mut expected = expected_catalog_metric_samples("host_world_state", /*count*/ 1);
-    assert!(startup_metrics.samples().is_empty());
+    let expected_discovery = vec![expected_catalog_entries(
+        "executor", "complete", /*count*/ 0,
+    )];
+    assert_eq!(startup_metrics.samples(), expected_discovery);
     assert_eq!(turn_metrics.samples(), expected);
 
     let sections = prepared_world_state(
@@ -480,7 +483,7 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
             .1
             .is_none()
     );
-    assert!(startup_metrics.samples().is_empty());
+    assert_eq!(startup_metrics.samples(), expected_discovery);
     assert_eq!(turn_metrics.samples(), expected);
 
     let second_skill_path =
@@ -525,7 +528,7 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
         "host_world_state",
         /*count*/ 2,
     ));
-    assert!(startup_metrics.samples().is_empty());
+    assert_eq!(startup_metrics.samples(), expected_discovery);
     assert_eq!(turn_metrics.samples(), expected);
 
     Ok(())
@@ -3504,6 +3507,17 @@ impl ExtensionMetrics for RecordingMetrics {
                     .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
                     .collect(),
             });
+    }
+}
+
+fn expected_catalog_entries(stage: &str, status: &str, count: i64) -> RecordedHistogram {
+    RecordedHistogram {
+        name: "codex.skills.catalog.entries".to_string(),
+        value: count,
+        tags: vec![
+            ("stage".to_string(), stage.to_string()),
+            ("status".to_string(), status.to_string()),
+        ],
     }
 }
 

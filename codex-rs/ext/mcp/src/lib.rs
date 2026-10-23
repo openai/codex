@@ -7,6 +7,7 @@ use codex_extension_api::McpServerContributor;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::hosted_plugin_runtime_mcp_server_config;
 
+mod catalog_observability;
 mod cloud_plugin;
 mod plugin;
 mod plugin_contributor;
