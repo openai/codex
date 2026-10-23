@@ -37,6 +37,15 @@ async fn tls_origin(
     service: &str,
     alpn: &[u8],
 ) -> (MitmRequestContext, TcpListener, TlsAcceptor) {
+    tls_origin_with_hook(dir, service, alpn, |_, _| {}).await
+}
+
+async fn tls_origin_with_hook(
+    dir: &Path,
+    service: &str,
+    alpn: &[u8],
+    configure: impl FnOnce(&mut MitmHookConfig, u16),
+) -> (MitmRequestContext, TcpListener, TlsAcceptor) {
     ensure_rustls_crypto_provider();
     let key = KeyPair::generate().expect("generate origin key");
     let cert = CertificateParams::new(vec!["localhost".to_string()])
@@ -94,6 +103,7 @@ async fn tls_origin(
         }],
         ..Default::default()
     };
+    configure(&mut config.mitm_hooks[0], port);
     config.set_credential_broker_enabled(/*enabled*/ true);
     config.set_allowed_domains(vec!["localhost".to_string()]);
     let app_state = Arc::new(network_proxy_state_for_policy(config));
@@ -478,4 +488,106 @@ async fn drained_signed_bodies_release_capacity_before_response_headers() {
         .expect("ninth forwarding deadline")
         .expect("drained bodies must release buffer slots before response headers");
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn forwards_substituted_body_before_signing() {
+    let marker = b"codex-secret-0123456789abcdef";
+    let dir = tempdir().expect("TLS fixture directory");
+    let secret = dir.path().join("body-secret");
+    std::fs::write(&secret, "expanded-payload").unwrap();
+    let configure = |hook: &mut MitmHookConfig, port| {
+        hook.matcher.path_prefixes = vec!["/allowed/".into()];
+        hook.actions.strip_request_headers.push("digest".into());
+        hook.actions.body_secret_substitution = Some(crate::BodySecretSubstitutionConfig {
+            replacements: vec![crate::BodySecretReplacement {
+                placeholder: String::from_utf8(marker.to_vec()).unwrap(),
+                secret: ProxySecretSource::File(secret.display().to_string()),
+            }],
+            port,
+            max_body_bytes: 64,
+        });
+    };
+    let (context, listener, acceptor) =
+        tls_origin_with_hook(dir.path(), "s3", b"http/1.1", configure).await;
+    let context = Arc::new(context);
+    let signed_headers = "content-length;cookie;host;x-amz-date";
+    let make_request = |path: &str| {
+        let mut req = request(&context, "s3", "POST", path, marker);
+        *req.version_mut() = rama_http::Version::HTTP_2;
+        let headers = req.headers_mut();
+        headers.remove("x-amz-content-sha256");
+        headers.insert(
+            "authorization",
+            HeaderValue::from_str(&guest_authorization("s3", signed_headers)).unwrap(),
+        );
+        headers.insert("content-length", HeaderValue::from(marker.len()));
+        headers.append("cookie", HeaderValue::from_static("a=1"));
+        headers.append("cookie", HeaderValue::from_static("b=2"));
+        req
+    };
+    let denied = handle_mitm_request(make_request("/denied"), context.clone())
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let mut invalid = make_request("/allowed/item");
+    invalid
+        .headers_mut()
+        .insert("digest", HeaderValue::from_static("sha-256=guest"));
+    let denied = handle_mitm_request(invalid, context.clone()).await.unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let origin = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut stream = acceptor.accept(socket).await.unwrap();
+        let wire = read_request(&mut stream).await;
+        stream.write_all(RESPONSE).await.unwrap();
+        wire
+    });
+    let req = make_request("/allowed/item");
+    let response = timeout(FORWARD_TIMEOUT, handle_mitm_request(req, context))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let wire = origin.await.unwrap();
+    assert_eq!(wire.body.as_slice(), b"expanded-payload");
+    assert_eq!(wire.path, "/allowed/item");
+    let headers = wire.headers;
+    assert_eq!(headers["cookie"], "a=1; b=2");
+    let expected_hash = format!("{:x}", sha2::Sha256::digest(&wire.body));
+    assert_eq!(headers["x-amz-content-sha256"], expected_hash);
+    // Rebuild the canonical request from the received HTTP/1.1 headers, without
+    // the signer's request preparation or the SDK's header canonicalization.
+    let canonical_headers = signed_headers
+        .split(';')
+        .map(|name| format!("{name}:{}\n", headers[name]))
+        .collect::<String>();
+    let canonical_request =
+        format!("POST\n/allowed/item\n\n{canonical_headers}\n{signed_headers}\n{expected_hash}");
+    let timestamp = &headers["x-amz-date"];
+    let signing_time = chrono::NaiveDateTime::parse_from_str(timestamp, "%Y%m%dT%H%M%SZ")
+        .unwrap()
+        .and_utc();
+    let scope = format!(
+        "{}/us-east-1/s3/aws4_request",
+        signing_time.format("%Y%m%d")
+    );
+    let string_to_sign = format!(
+        "AWS4-HMAC-SHA256\n{timestamp}\n{scope}\n{:x}",
+        sha2::Sha256::digest(canonical_request.as_bytes())
+    );
+    let signing_key = aws_sigv4::sign::v4::generate_signing_key(
+        "test-secret-key",
+        signing_time.into(),
+        "us-east-1",
+        "s3",
+    );
+    let signature =
+        aws_sigv4::sign::v4::calculate_signature(signing_key, string_to_sign.as_bytes());
+    assert_eq!(
+        headers["authorization"],
+        format!(
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/{scope}, SignedHeaders={signed_headers}, Signature={signature}"
+        )
+    );
 }

@@ -1683,6 +1683,7 @@ strip_request_headers = ["authorization"]
                             actions: Some(IndexMap::from([(
                                 "strip_auth".to_string(),
                                 NetworkMitmActionToml {
+                                    body_secret_substitution: None,
                                     aws_sigv4: None,
                                     strip_request_headers: vec!["authorization".to_string()],
                                     inject_request_headers: Vec::new(),
@@ -1766,6 +1767,7 @@ fn permissions_profile_network_to_proxy_config_preserves_mitm_hooks() {
             actions: Some(IndexMap::from([(
                 "strip_auth".to_string(),
                 NetworkMitmActionToml {
+                    body_secret_substitution: None,
                     aws_sigv4: None,
                     strip_request_headers: vec!["authorization".to_string()],
                     inject_request_headers: Vec::new(),

@@ -19,13 +19,18 @@ name = "x-api-key"
 secret_env_var = "PROXY_API_KEY"
 placeholder = "dummy-key"
 
+[actions.body.body_secret_substitution]
+port = 443
+max_body_bytes = 1024
+replacements = [{ placeholder = "codex-secret-0123456789abcdef", secret = { env_var = "BODY_SECRET" } }]
+
 [hooks.bucket]
 host = "bucket.s3.amazonaws.com"
 schemes = ["https"]
 ports = [443]
 methods = ["PUT"]
 path_prefixes = ["/workspace/"]
-action = ["substitute", "aws"]
+action = ["substitute", "body", "aws"]
 "#;
 
 #[test]
@@ -35,6 +40,16 @@ fn resolves_native_signing_and_substitution_actions_from_toml() {
     assert_eq!(hooks[0].matcher.schemes, vec!["https"]);
     assert_eq!(hooks[0].matcher.ports, vec![443]);
     let signer = hooks[0].actions.aws_sigv4.as_ref().unwrap();
+    assert_eq!(
+        hooks[0]
+            .actions
+            .body_secret_substitution
+            .as_ref()
+            .unwrap()
+            .replacements[0]
+            .secret,
+        ProxySecretSource::EnvVar("BODY_SECRET".into())
+    );
     assert_eq!(
         signer.access_key_id,
         ProxySecretSource::EnvVar("PROXY_ACCESS_KEY".into())
@@ -110,7 +125,7 @@ fn rejects_misspelled_header_placeholder() {
 fn rejects_multiple_signing_actions_and_unknown_signing_parameters() {
     assert!(
         toml::from_str::<NetworkMitmToml>(&SIGNING.replace(
-            "action = [\"substitute\", \"aws\"]",
+            "action = [\"substitute\", \"body\", \"aws\"]",
             "action = [\"aws\", \"aws\"]"
         ))
         .is_err()

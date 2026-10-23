@@ -566,6 +566,50 @@
       ],
       "type": "object"
     },
+    "BodySecretReplacement": {
+      "additionalProperties": false,
+      "properties": {
+        "placeholder": {
+          "type": "string"
+        },
+        "secret": {
+          "$ref": "#/definitions/ProxySecretSource"
+        }
+      },
+      "required": [
+        "placeholder",
+        "secret"
+      ],
+      "type": "object"
+    },
+    "BodySecretSubstitutionConfig": {
+      "additionalProperties": false,
+      "description": "Exact opaque placeholders scoped by their enclosing host/method/path MITM hook.",
+      "properties": {
+        "max_body_bytes": {
+          "default": 8388608,
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "port": {
+          "default": 443,
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "replacements": {
+          "items": {
+            "$ref": "#/definitions/BodySecretReplacement"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "replacements"
+      ],
+      "type": "object"
+    },
     "BrowserUseConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -3212,6 +3256,14 @@
           "allOf": [
             {
               "$ref": "#/definitions/AwsSigV4Config"
+            }
+          ],
+          "default": null
+        },
+        "body_secret_substitution": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/BodySecretSubstitutionConfig"
             }
           ],
           "default": null

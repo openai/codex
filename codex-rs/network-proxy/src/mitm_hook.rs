@@ -5,6 +5,8 @@ use crate::aws_sigv4::AwsSigV4Config;
 use crate::aws_sigv4::AwsSigV4Signer;
 use crate::config::NetworkProxyConfig;
 use crate::policy::normalize_host;
+use crate::secret_substitution::BodySecretSubstitution;
+use crate::secret_substitution::BodySecretSubstitutionConfig;
 use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -52,6 +54,7 @@ pub struct MitmHookMatchConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct MitmHookActionsConfig {
+    pub body_secret_substitution: Option<BodySecretSubstitutionConfig>,
     pub aws_sigv4: Option<AwsSigV4Config>,
     pub strip_request_headers: Vec<String>,
     pub inject_request_headers: Vec<InjectedHeaderConfig>,
@@ -104,6 +107,7 @@ pub struct HeaderConstraint {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MitmHookActions {
+    pub(crate) body_secret_substitution: Option<Arc<BodySecretSubstitution>>,
     pub(crate) aws_sigv4: Option<Arc<AwsSigV4Signer>>,
     pub strip_request_headers: Vec<HeaderName>,
     pub inject_request_headers: Vec<ResolvedInjectedHeader>,
@@ -245,6 +249,9 @@ pub(crate) fn validate_mitm_hook_config(config: &NetworkProxyConfig) -> Result<(
         if let Some(signing) = &hook.actions.aws_sigv4 {
             signing.validate()?;
         }
+        if let Some(substitution) = &hook.actions.body_secret_substitution {
+            substitution.validate()?;
+        }
         validate_injected_headers(&hook.actions.inject_request_headers).with_context(|| {
             format!("invalid network.mitm_hooks[{hook_index}].actions.inject_request_headers")
         })?;
@@ -373,6 +380,16 @@ where
                     body: None,
                 },
                 actions: MitmHookActions {
+                    body_secret_substitution: hook
+                        .actions
+                        .body_secret_substitution
+                        .as_ref()
+                        .map(|substitution| {
+                            substitution
+                                .compile(&resolve_env_var, &read_secret_file)
+                                .map(Arc::new)
+                        })
+                        .transpose()?,
                     aws_sigv4: hook
                         .actions
                         .aws_sigv4
@@ -803,6 +820,7 @@ mod tests {
                 ..MitmHookMatchConfig::default()
             },
             actions: MitmHookActionsConfig {
+                body_secret_substitution: None,
                 aws_sigv4: None,
                 strip_request_headers: vec!["authorization".to_string()],
                 inject_request_headers: vec![InjectedHeaderConfig {
