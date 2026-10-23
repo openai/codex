@@ -10,6 +10,7 @@ use codex_exec_server::ExecutorCapabilityDiscoveryV2Cache;
 use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
 use codex_exec_server::MAX_SELECTED_CAPABILITY_ROOTS;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
+use codex_exec_server::supports_capability_discovery_v2;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
@@ -133,6 +134,7 @@ impl Session {
                 config,
                 &selected_capability_roots,
                 &environments,
+                executor_capability_discovery_v2.as_deref(),
             )
             .await;
         if inventory_changed || discovery_recovered {
@@ -247,6 +249,7 @@ impl Session {
                     &desired.config,
                     &selected_capability_roots,
                     &desired.environments,
+                    executor_capability_discovery_v2.as_deref(),
                 )
                 .await;
             let mcp_projection = self
@@ -329,6 +332,7 @@ impl Session {
                 &desired.config,
                 &selected_capability_roots,
                 &desired.environments,
+                executor_capability_discovery_v2.as_deref(),
             )
             .await;
         let mcp_projection = self
@@ -481,11 +485,9 @@ impl Session {
         config: &Config,
         resolved_roots: &[ResolvedSelectedCapabilityRoot],
         environments: &TurnEnvironmentSnapshot,
+        v2_snapshots: Option<&[ExecutorCapabilityDiscoveryV2Snapshot]>,
     ) -> (Option<Arc<ExecutorCapabilityDiscoverySnapshot>>, bool) {
-        if config
-            .features
-            .enabled(Feature::ExecutorCapabilityDiscoveryV2)
-        {
+        if v2_snapshots.is_some() {
             return (None, false);
         }
         let restricted_file_system = environments.primary().map_or_else(
@@ -577,6 +579,7 @@ impl Session {
             .count();
         cache.ensure_capacity(remote_environment_count);
         let mut snapshots = Vec::new();
+        let mut skipped_incompatible_executor = false;
         for selected in environments.turn_environments() {
             if !selected.environment.is_remote() {
                 continue;
@@ -592,7 +595,8 @@ impl Session {
                     continue;
                 }
             };
-            if !info.capabilities.capability_discovery_v2 {
+            if !supports_capability_discovery_v2(&info) {
+                skipped_incompatible_executor = true;
                 continue;
             }
             let request = DiscoverV2CapabilitiesRequest {
@@ -606,6 +610,14 @@ impl Session {
                 environment_id: environment_id.clone(),
                 result,
             });
+        }
+        if snapshots.is_empty() && skipped_incompatible_executor {
+            let changed = self
+                .services
+                .thread_extension_data
+                .remove::<Vec<ExecutorCapabilityDiscoveryV2Snapshot>>()
+                .is_some();
+            return (None, changed);
         }
         let previous = self
             .services
@@ -870,6 +882,7 @@ impl Session {
                 &desired.config,
                 &selected_capability_roots,
                 &desired.environments,
+                executor_capability_discovery_v2.as_deref(),
             )
             .await;
         let mcp_projection = self

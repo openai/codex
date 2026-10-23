@@ -3,7 +3,16 @@
 use super::Environment;
 use crate::DiscoverV2CapabilitiesRequest;
 use crate::DiscoverV2CapabilitiesResponse;
+use crate::EnvironmentInfo;
 use crate::ExecServerError;
+use codex_build_info::BuildInfo;
+
+/// The final DiscoveryV2 contract starts at stable 0.164.0.
+pub fn supports_capability_discovery_v2(info: &EnvironmentInfo) -> bool {
+    let build = BuildInfo::from_version(&info.executor_version);
+    let minimum = BuildInfo::from_version("0.164.0");
+    info.capabilities.capability_discovery_v2 && build.version() >= minimum.version()
+}
 
 impl Environment {
     /// Identifies the initialized executor session; transport recovery preserves this ID.
@@ -28,12 +37,8 @@ impl Environment {
         let connection_state = client.subscribe_connection_state();
         let client = client.get().await?;
         let discover = || async {
-            if !client
-                .environment_info()
-                .await?
-                .capabilities
-                .capability_discovery_v2
-            {
+            let info = client.environment_info().await?;
+            if !supports_capability_discovery_v2(&info) {
                 return Err(ExecServerError::Protocol(
                     "capabilities/discoverV2 is unavailable in this environment session"
                         .to_string(),

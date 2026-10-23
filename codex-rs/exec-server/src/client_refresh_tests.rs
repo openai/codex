@@ -135,7 +135,13 @@ impl NoiseStreamHandler for NotifyingProcessor {
         ConnectionProcessor::decode(payload)
     }
 
-    fn encode(message: Self::Outgoing) -> Result<NoiseOutboundMessage, ExecServerError> {
+    fn encode(mut message: Self::Outgoing) -> Result<NoiseOutboundMessage, ExecServerError> {
+        // Advertise the stable contract implemented by this test executor.
+        if let codex_exec_server_protocol::JSONRPCMessage::Response(response) = &mut message
+            && let Some(info) = response.result.get_mut("environmentInfo")
+        {
+            info["executorVersion"] = serde_json::json!("0.164.0");
+        }
         ConnectionProcessor::encode(message)
     }
 

@@ -209,6 +209,14 @@ enum DiscoveryFailure {
 
 impl Executor {
     async fn start(supports_v2: bool, failure: DiscoveryFailure) -> Result<Self> {
+        Self::start_with_version(supports_v2, failure, "0.164.0").await
+    }
+
+    async fn start_with_version(
+        supports_v2: bool,
+        failure: DiscoveryFailure,
+        version: &'static str,
+    ) -> Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("ws://{}", listener.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -267,15 +275,23 @@ impl Executor {
                         let result = match request["method"].as_str() {
                             Some("initialize") => Some(json!({"sessionId":"acquisition-only", "environmentInfo": {
                                 "shell":{"name":"bash","path":"/bin/bash"},
+                                "executorVersion":version,
                                 "capabilities":{"sandboxedFileStreaming":true,"capabilityDiscoveryV2":supports_v2}
                             }})),
                             Some("environment/info") => Some(json!({
                                 "shell":{"name":"bash","path":"/bin/bash"},
+                                "executorVersion":version,
                                 "capabilities":{"sandboxedFileStreaming":true,"capabilityDiscoveryV2":supports_v2}
                             })),
                             Some("capabilityRoots/discoverV1") => Some(json!({
                                 "roots": request["params"]["roots"].as_array().context("V1 roots")?
-                                    .iter().map(|root| json!({"id":root["id"],"path":root["path"]})).collect::<Vec<_>>()
+                                    .iter().map(|root| json!({
+                                        "id":root["id"],"path":root["path"],
+                                        "skills":[{"instructions":{
+                                            "path":format!("{}/inert-sentinel/SKILL.md", root["path"].as_str().expect("root URI").trim_end_matches('/')),
+                                            "contents":"---\nname: inert-sentinel\ndescription: Executor skill used by the acquisition test\n---\n# Sentinel instructions from the captured executor"
+                                        }}]
+                                    })).collect::<Vec<_>>()
                             })),
                             Some("capabilities/discoverV2") => Some(inventory.lock().await.clone().unwrap_or_else(|| json!({
                                 "plugins":[{"id":"inert-sentinel@market","displayName":"inert-sentinel","remotePluginId":null,
@@ -322,12 +338,12 @@ impl Executor {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_disabled_skips_inventory_discovery() -> Result<()> {
-    check_acquisition(/*enabled*/ false, /*supported*/ true).await
+    check_acquisition(/*enabled*/ false, "0.164.0").await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_shares_inventory_with_mcp_and_skills_until_next_turn() -> Result<()> {
-    check_acquisition(/*enabled*/ true, /*supported*/ true).await
+    check_acquisition(/*enabled*/ true, "0.164.0").await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -537,9 +553,15 @@ async fn v2_discovery_failures_retry_or_remain_cached_by_error_kind() -> Result<
     Ok(())
 }
 
-async fn check_acquisition(enabled: bool, supported: bool) -> Result<()> {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_old_executor_retains_v1_selected_roots() -> Result<()> {
+    check_acquisition(/*enabled*/ true, "0.163.0").await
+}
+
+async fn check_acquisition(enabled: bool, version: &'static str) -> Result<()> {
     skip_if_no_network!(Ok(()));
-    let executor = Executor::start(supported, DiscoveryFailure::None).await?;
+    let executor =
+        Executor::start_with_version(/*supports_v2*/ true, DiscoveryFailure::None, version).await?;
     let model = responses::start_mock_server().await;
     let observed = Arc::new(Mutex::new(Vec::new()));
     let selected_plugins = Arc::new(Mutex::new(None));
@@ -601,7 +623,7 @@ async fn check_acquisition(enabled: bool, supported: bool) -> Result<()> {
             .filter(|request| request["method"] == "capabilities/discoverV2")
             .count()
     };
-    let acquires_v2 = enabled && supported;
+    let acquires_v2 = enabled && version == "0.164.0";
     if acquires_v2 {
         observed.lock().await.clear();
         mcp_snapshots_per_step.lock().await.clear();
@@ -678,13 +700,11 @@ async fn check_acquisition(enabled: bool, supported: bool) -> Result<()> {
         for body in bodies {
             responses.push(responses::mount_sse_once(&model, body).await);
         }
-        let prompt = if acquires_v2 {
-            "Use $inert-sentinel to say hello."
-        } else {
-            "Say hello."
-        };
-        test.submit_turn_with_environments(prompt, Some(vec![selection.clone()]))
-            .await?;
+        test.submit_turn_with_environments(
+            "Use $inert-sentinel to say hello.",
+            Some(vec![selection.clone()]),
+        )
+        .await?;
         if acquires_v2 {
             let counts = mcp_snapshots_per_step.lock().await;
             let first = counts
@@ -708,7 +728,7 @@ async fn check_acquisition(enabled: bool, supported: bool) -> Result<()> {
             plugin_id: "inert-sentinel@market".to_string(),
         };
         // Both paths publish accepted Cloud packages and available installations only.
-        let mut expected_plugins = vec![
+        let expected_plugins = vec![
             (Some(executor_root), local_identity),
             (
                 None,
@@ -717,9 +737,6 @@ async fn check_acquisition(enabled: bool, supported: bool) -> Result<()> {
                 },
             ),
         ];
-        if enabled && !supported {
-            expected_plugins.retain(|(root, _)| root.is_none());
-        }
         {
             let selected_plugins = selected_plugins.lock().await;
             let snapshot = selected_plugins.as_ref().context("step plugin snapshot")?;
@@ -739,20 +756,17 @@ async fn check_acquisition(enabled: bool, supported: bool) -> Result<()> {
             .collect::<Vec<_>>();
         assert_eq!(model_requests.len(), if acquires_v2 { 2 } else { 1 });
         for request in model_requests {
-            if acquires_v2 {
-                assert!(
-                    request
-                        .body_json()
-                        .to_string()
-                        .contains("Sentinel instructions from the captured executor")
-                );
-            }
+            assert!(
+                request
+                    .body_json()
+                    .to_string()
+                    .contains("Sentinel instructions from the captured executor")
+            );
             let developer_text = request.message_input_texts("developer").join("\n");
-            assert_eq!(
+            assert!(
                 developer_text
                     .contains("- inert-sentinel: Executor skill used by the acquisition test"),
-                acquires_v2,
-                "only a successful V2 inventory renders the skill catalog",
+                "both discovery modes must render the skill catalog",
             );
         }
         let turn_calls = calls().await;
@@ -796,8 +810,8 @@ async fn check_acquisition(enabled: bool, supported: bool) -> Result<()> {
         requests
             .iter()
             .any(|request| request["method"] == "capabilityRoots/discoverV1"),
-        !enabled,
-        "the V2 flag selects one protocol, including when no executor supplies a V2 snapshot",
+        !acquires_v2,
+        "incompatible executors retain V1 discovery even with the V2 flag enabled",
     );
     if acquires_v2 {
         let reads = requests

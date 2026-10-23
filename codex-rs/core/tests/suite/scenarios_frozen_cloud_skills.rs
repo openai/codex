@@ -86,7 +86,8 @@ async fn frozen_cloud_skills_with_named_executor_request_history() -> Result<()>
         })
         .build(&server)
         .await?;
-    let executor = core_test_support::exec_server::ExecServerProcess::start().await?;
+    let executor =
+        core_test_support::exec_server::ExecServerProcess::start_with_version("0.164.0").await?;
     test.thread_manager
         .environment_manager()
         .upsert_environment(

@@ -4059,6 +4059,7 @@ impl Session {
                     &turn_context.config,
                     &selected_capability_roots,
                     &environments,
+                    executor_capability_discovery_v2.as_deref(),
                 )
                 .await
             };

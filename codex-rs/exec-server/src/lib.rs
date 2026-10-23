@@ -125,6 +125,7 @@ pub use environment::LOCAL_ENVIRONMENT_ID;
 pub use environment::MAX_SELECTED_CAPABILITY_ROOTS;
 pub use environment::REMOTE_ENVIRONMENT_ID;
 pub use environment::RemoteEnvironmentOptions;
+pub use environment::supports_capability_discovery_v2;
 pub use environment_bootstrap::PreparedEnvironmentManager;
 pub use environment_provider::DefaultEnvironmentProvider;
 pub use environment_provider::EnvironmentProvider;

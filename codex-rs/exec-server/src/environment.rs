@@ -1,6 +1,7 @@
 mod connect_options;
 mod discovery_recovery;
 mod discovery_v2;
+pub use discovery_v2::supports_capability_discovery_v2;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
