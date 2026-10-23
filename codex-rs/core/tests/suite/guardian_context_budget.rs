@@ -808,6 +808,9 @@ async fn oversized_action_preserves_review_policy_and_next_review(
         .message_input_texts("user")
         .concat();
     assert!(context.contains("echo complete-action-review"));
+    let historical_arguments =
+        codex_guardian_context::truncate_text(&oversized, /*max_tokens*/ 1_000);
+    assert!(context.contains(&format!("tool exec_command call: {historical_arguments}\n")));
     assert!(
         requests
             .last()

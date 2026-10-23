@@ -2,7 +2,7 @@
 //!
 //! Both Guardian consumers receive the same role and tool-source attribution,
 //! with generated compaction summaries attributed to the assistant, complete user
-//! messages and capped non-user entries. Resolved context profiles
+//! messages and capped non-user entries, except sync tool calls prepared later. Resolved context profiles
 //! apply aggregate retention after the host selects its full/delta slice. Tool outputs with a
 //! call ID retain their generic label when the call is unavailable. Outputs
 //! without a call ID require an explicit name.
@@ -118,7 +118,7 @@ impl SectionContributor for ConversationTranscriptSection {
 
     fn contribute(&self, input: &SectionInput<'_>) -> Result<Option<ContextSection>, SectionError> {
         Ok(Some(ContextSection::ConversationTranscript {
-            items: collect_transcript(input.history, input.transcript),
+            items: collect_transcript_for_target(input.history, input.transcript, input.target),
         }))
     }
 }
@@ -130,6 +130,14 @@ impl SectionContributor for ConversationTranscriptSection {
 pub fn collect_transcript(
     history: &dyn SectionHistory,
     config: &ConversationTranscriptConfig,
+) -> Vec<ConversationTranscriptEntry> {
+    collect_transcript_for_target(history, config, crate::ContextTarget::Async)
+}
+
+fn collect_transcript_for_target(
+    history: &dyn SectionHistory,
+    config: &ConversationTranscriptConfig,
+    target: crate::ContextTarget,
 ) -> Vec<ConversationTranscriptEntry> {
     let mut entries = Vec::new();
     let mut tool_names_by_call_id = HashMap::new();
@@ -401,6 +409,11 @@ pub fn collect_transcript(
             | ConversationTranscriptEntryKind::ProtectedAssistant
             | ConversationTranscriptEntryKind::Reasoning => {
                 truncate_text(&text, config.entry_limits.message_tokens)
+            }
+            ConversationTranscriptEntryKind::ToolCall(_)
+                if target == crate::ContextTarget::Sync =>
+            {
+                text
             }
             ConversationTranscriptEntryKind::ToolCall(_)
             | ConversationTranscriptEntryKind::ToolOutput(_) => {

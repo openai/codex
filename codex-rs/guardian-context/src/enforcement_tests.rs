@@ -294,17 +294,15 @@ fn planned_action_budget_omits_descriptions_without_changing_arguments() {
             )
         });
         let required = bounded.render(action_presentation);
-        let context = (crate::CollectedContext {
-            sections: vec![crate::ContextSection::PlannedAction(action.clone())],
-        })
-        .compose(
-            presentation,
-            crate::PreparedTranscript {
-                items: Vec::new(),
-                omission_note: None,
-                truncations: Vec::new(),
-            },
-        )
+        let context = {
+            let context = crate::CollectedContext {
+                sections: vec![crate::ContextSection::PlannedAction(action.clone())],
+            };
+            let profile = &crate::ContextProfile::synchronous();
+            let transcript = profile
+                .prepare_transcript(context.transcript_entries(), /*entry_number_offset*/ 0);
+            context.compose(presentation, transcript)
+        }
         .unwrap();
         let mut required_items = required.iter().map(|item| text(item)).collect::<Vec<_>>();
         required_items.push(text("evidence omitted"));

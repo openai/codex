@@ -1,4 +1,4 @@
-//! Resolved Guardian evidence profiles and pure transcript retention.
+//! Resolved Guardian evidence profiles, transcript admission and retention.
 //! Sync keeps recent entries; async protects approvals/final answers and evicts
 //! in cacheable chunks. Hosts still own history snapshots and delivery cursors.
 //! User messages and manual approvals stay complete until whole-request admission.
@@ -148,17 +148,38 @@ impl ContextProfile {
                     .as_ref()
                     .filter(|_| entry.kind == ConversationTranscriptEntryKind::User);
                 let prepare_text = |text: &str| {
+                    let text = match self.target {
+                        ContextTarget::Sync => match &entry.kind {
+                            ConversationTranscriptEntryKind::ToolCall(_) => {
+                                std::borrow::Cow::Owned(crate::truncate_text(
+                                    text,
+                                    self.transcript.entry_limits.tool_tokens,
+                                ))
+                            }
+                            ConversationTranscriptEntryKind::User
+                            | ConversationTranscriptEntryKind::Developer
+                            | ConversationTranscriptEntryKind::Assistant
+                            | ConversationTranscriptEntryKind::ProtectedAssistant
+                            | ConversationTranscriptEntryKind::Reasoning
+                            | ConversationTranscriptEntryKind::ToolOutput(_)
+                            | ConversationTranscriptEntryKind::NodeReplToolOutput(_) => {
+                                std::borrow::Cow::Borrowed(text)
+                            }
+                        },
+                        ContextTarget::Async => std::borrow::Cow::Borrowed(text),
+                    };
+                    let retained_bytes = text.len();
                     let record = TranscriptRecord::new(
                         &entry.kind,
                         number,
-                        text.to_owned(),
+                        text.into_owned(),
                         retained_source.map(|retained| retained.order.clone()),
                         self.transcript_format,
                         suffix,
                     );
                     let tokens =
                         TruncationPolicy::Bytes(record.rendered().text_bytes).token_budget();
-                    (TranscriptContent::Record(record), tokens, text.len())
+                    (TranscriptContent::Record(record), tokens, retained_bytes)
                 };
                 let (content, tokens, retained_bytes) = match &entry.content {
                     TranscriptContent::Text(text) => prepare_text(text),
