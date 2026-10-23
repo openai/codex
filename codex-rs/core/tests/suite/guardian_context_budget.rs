@@ -697,11 +697,26 @@ async fn oversized_action_preserves_review_policy_and_next_review(
         "justification": "Run the requested command.",
     })
     .to_string();
+    let assistant_evidence = [
+        "commentary evidence ".repeat(/*n*/ 1_300),
+        "final evidence ".repeat(/*n*/ 1_600),
+    ];
+    let mut parent_events = Vec::new();
+    if matches!(review, OversizedActionReview::Fits) {
+        let mut commentary = ev_assistant_message("history-commentary", &assistant_evidence[0]);
+        commentary["item"]["phase"] = json!("commentary");
+        parent_events.push(commentary);
+        parent_events.push(ev_assistant_message(
+            "history-final",
+            &assistant_evidence[1],
+        ));
+    }
+    parent_events.extend([
+        ev_function_call("oversized", "exec_command", &oversized),
+        ev_completed("oversized"),
+    ]);
     let mut events = vec![
-        sse(vec![
-            ev_function_call("oversized", "exec_command", &oversized),
-            ev_completed("oversized"),
-        ]),
+        sse(parent_events),
         sse(vec![
             ev_function_call("next", "exec_command", &next),
             ev_completed("next"),
@@ -799,8 +814,20 @@ async fn oversized_action_preserves_review_policy_and_next_review(
     assert_eq!(reviews.len(), if fits { 2 } else { 1 });
     if fits {
         let parts = reviews[0].message_input_texts("user");
-        assert!(parts.concat().contains(&oversized_command));
+        let context = parts.concat();
+        assert!(context.contains(&oversized_command));
         assert!(parts.iter().all(|part| part.len() <= 36_000));
+        let transcript = context
+            .split_once(">>> TRANSCRIPT START\n")
+            .expect("full transcript")
+            .1
+            .split_once(">>> TRANSCRIPT END\n")
+            .expect("full transcript end")
+            .0;
+        for text in &assistant_evidence {
+            let capped = codex_guardian_context::truncate_text(text, /*max_tokens*/ 5_000);
+            assert!(transcript.contains(&format!("assistant: {capped}\n")));
+        }
     }
     let context = reviews
         .last()

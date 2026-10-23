@@ -622,5 +622,40 @@ fn encrypted_messages_preserve_order_and_budget_for_both_reviewers() {
         assert!(
             matches!(&entries[1].content, crate::TranscriptContent::Text(text) if text.contains("omitted"))
         );
+        if profile.target == ContextTarget::Sync {
+            let mut limited_profile = profile;
+            limited_profile.transcript = limited;
+            let raw = super::collect_transcript_for_target(&history, &limited, ContextTarget::Sync);
+            let actual = {
+                let context = crate::CollectedContext {
+                    sections: vec![ContextSection::ConversationTranscript { items: raw }],
+                };
+                let profile = &limited_profile;
+                let transcript = profile.prepare_transcript(
+                    context.transcript_entries(),
+                    /*entry_number_offset*/ 0,
+                );
+                context.compose(
+                    ContextPresentation::SyncFull {
+                        session_id: "worker",
+                    },
+                    transcript,
+                )
+            }
+            .unwrap();
+            let expected = crate::CollectedContext {
+                sections: vec![ContextSection::ConversationTranscript {
+                    items: entries.clone(),
+                }],
+            }
+            .compose(
+                ContextPresentation::SyncFull {
+                    session_id: "worker",
+                },
+                limited_profile.prepare_transcript(&entries, /*entry_number_offset*/ 0),
+            )
+            .unwrap();
+            assert_eq!(actual.into_messages(), expected.into_messages());
+        }
     }
 }

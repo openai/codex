@@ -148,40 +148,25 @@ impl ContextProfile {
                     .as_ref()
                     .filter(|_| entry.kind == ConversationTranscriptEntryKind::User);
                 let prepare_text = |text: &str| {
-                    let text = match self.target {
-                        ContextTarget::Sync => match &entry.kind {
-                            ConversationTranscriptEntryKind::ToolCall(_)
-                            | ConversationTranscriptEntryKind::ToolOutput(_) => {
-                                std::borrow::Cow::Owned(crate::truncate_text(
-                                    text,
-                                    self.transcript.entry_limits.tool_tokens,
-                                ))
-                            }
-                            ConversationTranscriptEntryKind::User
-                            | ConversationTranscriptEntryKind::Developer
-                            | ConversationTranscriptEntryKind::Assistant
-                            | ConversationTranscriptEntryKind::ProtectedAssistant
-                            | ConversationTranscriptEntryKind::Reasoning
-                            | ConversationTranscriptEntryKind::NodeReplToolOutput(_) => {
-                                std::borrow::Cow::Borrowed(text)
-                            }
-                        },
-                        ContextTarget::Async => std::borrow::Cow::Borrowed(text),
-                    };
-                    let retained_bytes = text.len();
                     let record = TranscriptRecord::new(
                         &entry.kind,
                         number,
-                        text.into_owned(),
+                        text.to_owned(),
                         retained_source.map(|retained| retained.order.clone()),
                         self.transcript_format,
                         suffix,
                     );
                     let tokens =
                         TruncationPolicy::Bytes(record.rendered().text_bytes).token_budget();
-                    (TranscriptContent::Record(record), tokens, retained_bytes)
+                    (TranscriptContent::Record(record), tokens, text.len())
                 };
-                let (content, tokens, retained_bytes) = match &entry.content {
+                let content = match self.target {
+                    ContextTarget::Sync => {
+                        prepare_sync_content(entry, &self.transcript.entry_limits)
+                    }
+                    ContextTarget::Async => std::borrow::Cow::Borrowed(&entry.content),
+                };
+                let (content, tokens, retained_bytes) = match content.as_ref() {
                     TranscriptContent::Text(text) => prepare_text(text),
                     TranscriptContent::Record(record) => prepare_text(record.text()),
                     TranscriptContent::AgentMessage(message) => (
@@ -319,6 +304,44 @@ impl ContextProfile {
             truncations,
         }
     }
+}
+
+/// Bounds sync content before rendering or calculating retention costs.
+fn prepare_sync_content<'a>(
+    entry: &'a crate::ConversationTranscriptEntry,
+    limits: &crate::TranscriptEntryLimits,
+) -> std::borrow::Cow<'a, TranscriptContent> {
+    let text = match &entry.content {
+        TranscriptContent::Text(text) => text.as_str(),
+        TranscriptContent::Record(record) => record.text(),
+        TranscriptContent::AgentMessage(_) => {
+            // Native ciphertext stays whole, or leaves an omission at the same position.
+            let limit = codex_protocol::protocol::TruncationPolicy::Tokens(
+                limits.message_tokens.min(/*other*/ 9_000),
+            )
+            .byte_budget();
+            return if entry.original_bytes > limit {
+                std::borrow::Cow::Owned(TranscriptContent::Text(
+                    crate::transcript::TRANSCRIPT_OMISSION_NOTICE.to_owned(),
+                ))
+            } else {
+                std::borrow::Cow::Borrowed(&entry.content)
+            };
+        }
+    };
+    let tokens = match &entry.kind {
+        ConversationTranscriptEntryKind::ToolCall(_)
+        | ConversationTranscriptEntryKind::ToolOutput(_) => limits.tool_tokens,
+        ConversationTranscriptEntryKind::Assistant
+        | ConversationTranscriptEntryKind::ProtectedAssistant
+        | ConversationTranscriptEntryKind::Reasoning => limits.message_tokens,
+        ConversationTranscriptEntryKind::User
+        | ConversationTranscriptEntryKind::Developer
+        | ConversationTranscriptEntryKind::NodeReplToolOutput(_) => {
+            return std::borrow::Cow::Borrowed(&entry.content);
+        }
+    };
+    std::borrow::Cow::Owned(TranscriptContent::Text(crate::truncate_text(text, tokens)))
 }
 
 #[cfg(test)]
