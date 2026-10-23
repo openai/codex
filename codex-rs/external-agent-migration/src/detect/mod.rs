@@ -59,7 +59,11 @@ impl ExternalAgentConfigService {
         if params.include_home
             && params.include_memory
             && self.source.supports_memory()
-            && let Some(item) = memory::detect(&self.codex_home, &self.external_agent_home)?
+            && let Some(item) = memory::detect(
+                &self.codex_home,
+                &self.external_agent_home,
+                self.memory_version,
+            )?
         {
             items.push(item);
             emit_migration_metric(

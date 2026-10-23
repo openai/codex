@@ -44,6 +44,7 @@ use codex_core::config::Config;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_login::AuthManager;
+use codex_protocol::MemoryVersion;
 use codex_protocol::protocol::Product;
 use codex_rollout::StateDbHandle;
 use serde_json::Value as JsonValue;
@@ -74,6 +75,7 @@ pub struct ExternalAgentConfigService {
     pub(crate) source: ExternalAgentSource,
     pub(crate) session_import_limits: ExternalAgentSessionImportLimits,
     state_db: Option<StateDbHandle>,
+    pub(crate) memory_version: MemoryVersion,
 }
 
 impl ExternalAgentConfigService {
@@ -95,6 +97,7 @@ impl ExternalAgentConfigService {
             source,
             session_import_limits: ExternalAgentSessionImportLimits::default(),
             state_db,
+            memory_version: MemoryVersion::V1,
         }
     }
 
@@ -111,7 +114,14 @@ impl ExternalAgentConfigService {
             source,
             session_import_limits: self.session_import_limits,
             state_db: self.state_db.clone(),
+            memory_version: self.memory_version,
         }
+    }
+
+    pub fn with_memory_version(&self, selection: MemoryVersion) -> Self {
+        let mut service = self.clone();
+        service.memory_version = selection;
+        service
     }
 
     pub fn with_session_import_limits(&self, limits: ExternalAgentSessionImportLimits) -> Self {
@@ -169,6 +179,7 @@ impl ExternalAgentConfigService {
             source,
             session_import_limits: ExternalAgentSessionImportLimits::default(),
             state_db: None,
+            memory_version: MemoryVersion::V1,
         }
     }
 
@@ -402,6 +413,7 @@ impl ExternalAgentConfigService {
                             &self.codex_home,
                             &self.external_agent_home,
                             self.state_db.as_ref(),
+                            self.memory_version,
                             selected_memory,
                         )
                         .await?;
@@ -410,7 +422,9 @@ impl ExternalAgentConfigService {
                             ExternalAgentConfigMigrationItemType::Memory,
                             /*skills_count*/ None,
                         );
-                        let target_path = memory_import::resources_root(&self.codex_home);
+                        let target_path = memory_import::resources_root(
+                            &self.codex_home.join(MemoryVersion::V2.directory_name()),
+                        );
                         for project_key in memory_outcome.synchronized_projects {
                             item_result.record_success(
                                 Some(project_key),

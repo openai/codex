@@ -20,7 +20,7 @@ fn write_project_session(project_root: &Path, project_cwd: &Path) {
 #[test]
 fn copies_only_selected_projects_and_recopies_changed_content() {
     let root = TempDir::new().expect("create tempdir");
-    let codex_home = root.path().join(".codex");
+    let codex_home = root.path().join(".codex/memories");
     let source_home = root.path().join(".external-agent");
     let project_a_memory = source_home.join("projects/project-a/memory");
     let project_b_memory = source_home.join("projects/project-b/memory");
@@ -105,7 +105,7 @@ fn copies_only_selected_projects_and_recopies_changed_content() {
 #[test]
 fn preserves_project_successes_and_reports_each_failed_selection() {
     let root = TempDir::new().expect("create tempdir");
-    let codex_home = root.path().join(".codex");
+    let codex_home = root.path().join(".codex/memories");
     let source_home = root.path().join(".external-agent");
     let project_a_memory = source_home.join("projects/project-a/memory");
     let project_b_memory = source_home.join("projects/project-b/memory");
@@ -126,7 +126,7 @@ fn preserves_project_successes_and_reports_each_failed_selection() {
 
     let memory_files = discover_external_memory_files(&source_home).expect("discover memories");
     fs::remove_file(project_b_source).expect("remove project B source after discovery");
-    let selected_memory = BTreeSet::from(["missing-project", "project-a", "project-b"]);
+    let selected_memory = BTreeSet::from(["project-a", "project-b"]);
     let outcome = copy_resources(&codex_home, &memory_files, &selected_memory)
         .expect("copy selected memories");
 
@@ -137,14 +137,10 @@ fn preserves_project_successes_and_reports_each_failed_selection() {
             .iter()
             .map(|failure| failure.project_key.as_str())
             .collect::<Vec<_>>(),
-        vec!["missing-project", "project-b"]
-    );
-    assert_eq!(
-        outcome.failures[0].message,
-        "selected memory was not found: missing-project"
+        vec!["project-b"]
     );
     assert!(
-        outcome.failures[1]
+        outcome.failures[0]
             .message
             .starts_with("failed to synchronize selected memory project-b:")
     );
@@ -159,7 +155,7 @@ fn preserves_project_successes_and_reports_each_failed_selection() {
 #[test]
 fn removes_project_resources_when_the_source_project_disappears() {
     let root = TempDir::new().expect("create tempdir");
-    let codex_home = root.path().join(".codex");
+    let codex_home = root.path().join(".codex/memories");
     let source_home = root.path().join(".external-agent");
     let project_root = source_home.join("projects/project-a");
     let project_memory = project_root.join("memory");
@@ -183,7 +179,6 @@ fn removes_project_resources_when_the_source_project_disappears() {
         MemoryImportOutcome {
             synchronized_projects: vec!["project-a".to_string()],
             failures: Vec::new(),
-            workspace_changed: true,
         }
     );
     assert!(!resources_root(&codex_home).join("project-a").exists());
@@ -192,7 +187,7 @@ fn removes_project_resources_when_the_source_project_disappears() {
 #[test]
 fn uses_scope_file_to_identify_owned_projects() {
     let root = TempDir::new().expect("create tempdir");
-    let codex_home = root.path().join(".codex");
+    let codex_home = root.path().join(".codex/memories");
     let resources_root = resources_root(&codex_home);
     fs::create_dir_all(resources_root.join("project-a")).expect("create project resources");
     fs::write(resources_root.join("project-a/scope.json"), b"{}").expect("write project scope");
@@ -212,7 +207,7 @@ fn uses_scope_file_to_identify_owned_projects() {
 #[test]
 fn project_rename_removes_the_old_target_and_imports_the_new_target() {
     let root = TempDir::new().expect("create tempdir");
-    let codex_home = root.path().join(".codex");
+    let codex_home = root.path().join(".codex/memories");
     let source_home = root.path().join(".external-agent");
     let project_a_root = source_home.join("projects/project-a");
     let project_a_memory = project_a_root.join("memory");
@@ -238,7 +233,6 @@ fn project_rename_removes_the_old_target_and_imports_the_new_target() {
         MemoryImportOutcome {
             synchronized_projects: vec!["project-a".to_string(), "project-b".to_string()],
             failures: Vec::new(),
-            workspace_changed: true,
         }
     );
     assert!(!resources_root(&codex_home).join("project-a").exists());
@@ -252,7 +246,7 @@ fn project_rename_removes_the_old_target_and_imports_the_new_target() {
 #[test]
 fn does_not_import_a_new_project_without_a_reliable_cwd() {
     let root = TempDir::new().expect("create tempdir");
-    let codex_home = root.path().join(".codex");
+    let codex_home = root.path().join(".codex/memories");
     let source_home = root.path().join(".external-agent");
     let project_memory = source_home.join("projects/project-a/memory");
     fs::create_dir_all(&project_memory).expect("create project memory");
@@ -270,11 +264,7 @@ fn does_not_import_a_new_project_without_a_reliable_cwd() {
         outcome,
         MemoryImportOutcome {
             synchronized_projects: Vec::new(),
-            failures: vec![MemoryImportFailure {
-                project_key: "project-a".to_string(),
-                message: "failed to synchronize selected memory project-a: selected memory project has no reliable cwd: project-a".to_string(),
-            }],
-            workspace_changed: false,
+            failures: Vec::new(),
         }
     );
     assert!(!resources_root(&codex_home).join("project-a").exists());
@@ -283,7 +273,7 @@ fn does_not_import_a_new_project_without_a_reliable_cwd() {
 #[test]
 fn missing_cwd_does_not_make_an_existing_scoped_project_look_deleted() {
     let root = TempDir::new().expect("create tempdir");
-    let codex_home = root.path().join(".codex");
+    let codex_home = root.path().join(".codex/memories");
     let source_home = root.path().join(".external-agent");
     let project_root = source_home.join("projects/project-a");
     let project_memory = project_root.join("memory");
@@ -307,7 +297,7 @@ fn missing_cwd_does_not_make_an_existing_scoped_project_look_deleted() {
 #[test]
 fn removes_an_existing_unscoped_target_when_cwd_is_unavailable() {
     let root = TempDir::new().expect("create tempdir");
-    let codex_home = root.path().join(".codex");
+    let codex_home = root.path().join(".codex/memories");
     let source_home = root.path().join(".external-agent");
     let project_memory = source_home.join("projects/project-a/memory");
     fs::create_dir_all(&project_memory).expect("create project memory");
@@ -328,7 +318,6 @@ fn removes_an_existing_unscoped_target_when_cwd_is_unavailable() {
         MemoryImportOutcome {
             synchronized_projects: vec!["project-a".to_string()],
             failures: Vec::new(),
-            workspace_changed: true,
         }
     );
     assert!(!target_root.exists());

@@ -80,7 +80,7 @@ async fn memory_reset_clears_memory_files_and_rows_preserves_threads() -> Result
     Ok(())
 }
 
-async fn seed_stage1_output(
+pub(super) async fn seed_stage1_output(
     state_db: &Arc<StateRuntime>,
     codex_home: &Path,
     version: MemoryVersion,
@@ -134,7 +134,7 @@ async fn seed_stage1_output(
     Ok(thread_id)
 }
 
-async fn init_state_db(codex_home: &Path) -> Result<Arc<StateRuntime>> {
+pub(super) async fn init_state_db(codex_home: &Path) -> Result<Arc<StateRuntime>> {
     let state_db = StateRuntime::init(
         codex_state::SqliteConfig::new_for_testing(codex_home.abs()),
         "mock_provider".into(),
