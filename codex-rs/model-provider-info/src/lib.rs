@@ -165,6 +165,12 @@ pub struct ModelProviderInfo {
     pub gateway_oauth: Option<GatewayOAuthConfig>,
     /// AWS SigV4 auth configuration for this provider.
     pub aws: Option<ModelProviderAwsAuthInfo>,
+    /// Google Cloud project ID for the built-in GCP provider. Takes precedence
+    /// over `GOOGLE_CLOUD_PROJECT` when deriving the Vertex AI endpoint.
+    pub project_id: Option<String>,
+    /// Google Cloud location for the built-in GCP provider. Takes precedence
+    /// over `GOOGLE_CLOUD_LOCATION`; defaults to `global` when neither is set.
+    pub location: Option<String>,
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
@@ -565,6 +571,8 @@ other non-default provider fields are not supported"
             supports_websockets: true,
             supports_standalone_web_search: true,
             capabilities: None,
+            project_id: None,
+            location: None,
             include_internal_metadata: true,
         }
     }
@@ -605,6 +613,8 @@ other non-default provider fields are not supported"
             supports_websockets: false,
             supports_standalone_web_search: false,
             capabilities: None,
+            project_id: None,
+            location: None,
             include_internal_metadata: false,
         }
     }
@@ -641,6 +651,8 @@ other non-default provider fields are not supported"
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+            project_id: None,
+            location: None,
             include_internal_metadata: false,
         }
     }
@@ -765,14 +777,18 @@ pub fn merge_configured_model_providers(
             let base_url_override = provider.base_url.take();
             let auth_override = provider.auth.take();
             let http_headers_override = provider.http_headers.take();
+            let project_id_override = provider.project_id.take();
+            let location_override = provider.location.take();
             if provider != ModelProviderInfo::default() {
                 return Err(format!(
                     "model_providers.{GCP_PROVIDER_ID} only supports changing \
-`base_url`, `auth`, and `http_headers`; other non-default provider fields are not supported"
+`base_url`, `auth`, `http_headers`, `project_id`, and `location`; other non-default provider fields are not supported"
                 ));
             }
 
             if let Some(built_in_provider) = model_providers.get_mut(GCP_PROVIDER_ID) {
+                built_in_provider.project_id = project_id_override;
+                built_in_provider.location = location_override;
                 if let Some(base_url_override) = base_url_override {
                     built_in_provider.base_url = Some(base_url_override);
                 }
@@ -836,6 +852,8 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         supports_websockets: false,
         supports_standalone_web_search: false,
         capabilities: None,
+        project_id: None,
+        location: None,
         include_internal_metadata: false,
     }
 }

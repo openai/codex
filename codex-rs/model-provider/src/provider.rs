@@ -667,6 +667,8 @@ mod tests {
             supports_websockets: false,
             supports_standalone_web_search: false,
             capabilities: None,
+            project_id: None,
+            location: None,
             include_internal_metadata: false,
         }
     }

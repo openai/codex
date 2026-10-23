@@ -25,6 +25,7 @@ use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
 use codex_config::ThreadConfigLoader;
+use codex_config::apply_default_gcp_auth;
 use codex_config::config_toml::CircuitBreakAction;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
@@ -101,7 +102,6 @@ use codex_protocol::MemoryVersion;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
@@ -3995,21 +3995,8 @@ impl Config {
             merge_configured_model_providers(built_in_model_providers(openai_base_url), cfg.model_providers)
                 .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;
 
-        if let Some(provider) = model_providers.get_mut(GCP_PROVIDER_ID)
-            && provider.auth.is_none()
-        {
-            // Registry construction must not depend on the process cwd, which may be deleted.
-            provider.auth = Some(ModelProviderAuthInfo {
-                command: if cfg!(windows) { "gcloud.cmd" } else { "gcloud" }.to_string(),
-                args: vec![
-                    "auth".into(),
-                    "application-default".into(),
-                    "print-access-token".into(),
-                ],
-                timeout_ms: std::num::NonZeroU64::new(30_000).unwrap_or(std::num::NonZeroU64::MIN),
-                refresh_interval_ms: 3_000_000,
-                cwd: resolved_cwd.clone(),
-            });
+        if let Some(provider) = model_providers.get_mut(GCP_PROVIDER_ID) {
+            apply_default_gcp_auth(provider, &resolved_cwd);
         }
 
         let model_provider_id = config_layer_stack.required_model_provider().map(str::to_string)

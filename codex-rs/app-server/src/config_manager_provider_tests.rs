@@ -14,13 +14,22 @@ use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 use test_case::test_case;
 
-#[test_case(AMAZON_BEDROCK_PROVIDER_ID; "bedrock")]
-#[test_case(AMAZON_BEDROCK_RUNTIME_PROVIDER_ID; "bedrock_runtime")]
+#[test_case(AMAZON_BEDROCK_PROVIDER_ID, "aws.region = 'us-west-2'", "us-west-2", "us-east-1"; "bedrock")]
+#[test_case(AMAZON_BEDROCK_RUNTIME_PROVIDER_ID, "aws.region = 'us-west-2'", "us-west-2", "us-east-1"; "bedrock_runtime")]
+#[test_case(GCP_PROVIDER_ID, "project_id = 'example-project'\nlocation = 'us-central1'", "example-project", "other-project"; "gcp_project")]
+#[test_case(GCP_PROVIDER_ID, "project_id = 'example-project'\nlocation = 'us-central1'", "us-central1", "us-east4"; "gcp_location")]
+#[test_case(GCP_PROVIDER_ID, "project_id = 'example-project'\nauth.command = 'print-token'", "print-token", "other-token"; "gcp_auth")]
 #[tokio::test]
-async fn provider_requirements_resolve_bedrock_overrides(provider_id: &str) -> Result<()> {
+async fn provider_requirements_resolve_builtin_overrides(
+    provider_id: &str,
+    provider_config: &str,
+    original: &str,
+    replacement: &str,
+) -> Result<()> {
     let home = tempdir()?;
+    let workspace = tempdir()?;
     let requirements = format!(
-        "model_provider = '{provider_id}'\n[model_providers.{provider_id}.aws]\nregion = 'us-west-2'"
+        "model_provider = '{provider_id}'\n[model_providers.{provider_id}]\n{provider_config}"
     );
     let manager = ConfigManager::new_for_tests(
         home.path().to_path_buf(),
@@ -28,7 +37,9 @@ async fn provider_requirements_resolve_bedrock_overrides(provider_id: &str) -> R
         LoaderOverrides::without_managed_config_for_tests(),
         CloudConfigBundleFixture::loader_with_enterprise_requirement(&requirements),
     );
-    let current = manager.load_latest_config(/*fallback_cwd*/ None).await?;
+    let current = manager
+        .load_latest_config(Some(workspace.path().to_path_buf()))
+        .await?;
     manager.check_thread_model_provider(&current).await?;
 
     let changed = ConfigManager::new_for_tests(
@@ -36,7 +47,7 @@ async fn provider_requirements_resolve_bedrock_overrides(provider_id: &str) -> R
         Vec::new(),
         LoaderOverrides::without_managed_config_for_tests(),
         CloudConfigBundleFixture::loader_with_enterprise_requirement(
-            requirements.replace("us-west-2", "us-east-1"),
+            requirements.replace(original, replacement),
         ),
     );
     assert_eq!(

@@ -93,6 +93,8 @@ async fn responses_stream_includes_subagent_header_on_review() {
         supports_websockets: false,
         supports_standalone_web_search: false,
         capabilities: None,
+        project_id: None,
+        location: None,
         include_internal_metadata: false,
     };
 
@@ -240,6 +242,8 @@ async fn responses_stream_includes_subagent_header_on_other() {
         supports_websockets: false,
         supports_standalone_web_search: false,
         capabilities: None,
+        project_id: None,
+        location: None,
         include_internal_metadata: false,
     };
 
@@ -368,6 +372,8 @@ async fn responses_respects_model_info_overrides_from_config() {
         supports_websockets: false,
         supports_standalone_web_search: false,
         capabilities: None,
+        project_id: None,
+        location: None,
         include_internal_metadata: false,
     };
 

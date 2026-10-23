@@ -48,6 +48,32 @@ async fn list_models(server: &mut TestAppServer) -> Result<ModelListResponse> {
         .await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_list_accepts_unchanged_gcp_requirements() -> Result<()> {
+    let home = TempDir::new()?;
+    std::fs::write(home.path().join("config.toml"), "")?;
+    std::fs::write(
+        home.path().join("requirements.toml"),
+        r#"
+model_provider = "gcp"
+[model_providers.gcp]
+project_id = "managed-project"
+location = "us-central1"
+"#,
+    )?;
+    let mut server = TestAppServer::builder()
+        .with_mock_chatgpt_backend()
+        .with_codex_home(home.path())
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build_initialized()
+        .await?;
+
+    let initial = list_models(&mut server).await?;
+    assert!(!initial.data.is_empty());
+    assert_eq!(list_models(&mut server).await?, initial);
+    Ok(())
+}
+
 async fn sign_in(server: &mut TestAppServer) -> Result<()> {
     let id = server
         .send_login_account_api_key_request("sk-catalog-test")

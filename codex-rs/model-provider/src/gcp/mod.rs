@@ -69,7 +69,7 @@ impl GcpModelProvider {
 
         let project = std::env::var(GOOGLE_CLOUD_PROJECT_ENV_VAR).ok();
         let location = std::env::var(GOOGLE_CLOUD_LOCATION_ENV_VAR).ok();
-        vertex_base_url(project.as_deref(), location.as_deref()).map(Some)
+        vertex_base_url(&self.info, project.as_deref(), location.as_deref()).map(Some)
     }
 }
 
@@ -172,35 +172,66 @@ impl ModelProvider for GcpModelProvider {
     }
 }
 
-fn vertex_base_url(project: Option<&str>, location: Option<&str>) -> Result<String> {
-    let project = project
+fn vertex_base_url(
+    info: &ModelProviderInfo,
+    environment_project: Option<&str>,
+    environment_location: Option<&str>,
+) -> Result<String> {
+    let project = info
+        .project_id
+        .as_deref()
         .map(str::trim)
-        .filter(|project| !project.is_empty())
+        .or_else(|| {
+            environment_project
+                .map(str::trim)
+                .filter(|project| !project.is_empty())
+        })
         .ok_or_else(|| {
             CodexErr::EnvVar(EnvVarError {
                 var: GOOGLE_CLOUD_PROJECT_ENV_VAR.to_string(),
                 instructions: Some(
-                    "Set GOOGLE_CLOUD_PROJECT to your Google Cloud project ID, or configure \
-model_providers.gcp.base_url."
+                    "Set model_providers.gcp.project_id or GOOGLE_CLOUD_PROJECT to your Google \
+Cloud project ID, or configure model_providers.gcp.base_url."
                         .to_string(),
                 ),
             })
         })?;
-    let location = location
+    let location = info
+        .location
+        .as_deref()
         .map(str::trim)
-        .filter(|location| !location.is_empty())
+        .or_else(|| {
+            environment_location
+                .map(str::trim)
+                .filter(|location| !location.is_empty())
+        })
         .unwrap_or(DEFAULT_GOOGLE_CLOUD_LOCATION);
 
     for (name, value) in [
-        (GOOGLE_CLOUD_PROJECT_ENV_VAR, project),
-        (GOOGLE_CLOUD_LOCATION_ENV_VAR, location),
+        (
+            if info.project_id.is_some() {
+                "model_providers.gcp.project_id"
+            } else {
+                GOOGLE_CLOUD_PROJECT_ENV_VAR
+            },
+            project,
+        ),
+        (
+            if info.location.is_some() {
+                "model_providers.gcp.location"
+            } else {
+                GOOGLE_CLOUD_LOCATION_ENV_VAR
+            },
+            location,
+        ),
     ] {
-        if !value
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        if value.is_empty()
+            || !value
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '-')
         {
             return Err(CodexErr::InvalidRequest(format!(
-                "{name} must contain only ASCII letters, digits, and hyphens"
+                "{name} must be non-empty and contain only ASCII letters, digits, and hyphens"
             )));
         }
     }
