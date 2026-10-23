@@ -1461,6 +1461,72 @@ fn unreadable_globs_add_canonical_targets_for_symlink_matches() {
 }
 
 #[test]
+fn unreadable_glob_root_metadata_errors_fail_before_scanning() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let root = temp_dir.path().join("loop");
+    std::os::unix::fs::symlink(&root, &root).expect("create symlink loop");
+    let error = expand_unreadable_globs_with_ripgrep(
+        &[format!("{}/**/.env", root.display())],
+        temp_dir.path(),
+        || Some(temp_dir.path().join("scanner-must-not-run")),
+        /*max_depth*/ None,
+        |_| panic!("scanner must not run after a root metadata error"),
+    )
+    .expect_err("metadata errors must reject deny-glob expansion")
+    .to_string();
+
+    assert!(error.contains(&root.display().to_string()));
+    assert!(error.contains(&io::Error::from_raw_os_error(libc::ELOOP).to_string()));
+}
+
+#[test]
+fn unreadable_globs_skip_absent_and_non_directory_roots() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let missing = temp_dir.path().join("missing");
+    let file = temp_dir.path().join("file");
+    fs::write(&file, "ordinary file").expect("write file");
+
+    for root in [missing, file.join("child"), file] {
+        let paths = expand_unreadable_globs_with_ripgrep(
+            &[format!("{}/**/.env", root.display())],
+            temp_dir.path(),
+            || None,
+            /*max_depth*/ None,
+            |_| {},
+        )
+        .expect("roots without possible matches should be skipped");
+
+        assert_eq!(paths, Vec::<AbsolutePathBuf>::new());
+    }
+}
+
+#[test]
+fn unreadable_globs_follow_symlink_roots_without_ripgrep() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let root = temp_dir.path().join("data");
+    fs::create_dir(&root).expect("create directory");
+    let secret = root.join(".env");
+    fs::write(&secret, "secret").expect("write secret");
+    let link = temp_dir.path().join("link");
+    std::os::unix::fs::symlink(&root, &link).expect("create directory symlink");
+
+    let paths = expand_unreadable_globs_with_ripgrep(
+        &[format!("{}/**/.env", link.display())],
+        temp_dir.path(),
+        || None,
+        /*max_depth*/ None,
+        |_| panic!("fallback scanner must not launch ripgrep"),
+    )
+    .expect("expand deny glob");
+    let expected = [secret, link.join(".env")]
+        .into_iter()
+        .map(|path| AbsolutePathBuf::from_absolute_path_checked(path).expect("absolute path"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(paths, expected);
+}
+
+#[test]
 fn root_prefix_unreadable_globs_fail_closed_on_linux() {
     let policy = default_policy_with_unreadable_glob("/**/*.env".to_string());
     let error = create_bwrap_command_args(

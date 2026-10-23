@@ -899,11 +899,27 @@ fn expand_unreadable_globs_with_ripgrep(
                 "unreadable glob `{pattern}` cannot be safely expanded; use a pattern with a non-root directory prefix"
             )));
         };
-        if search_root.as_path().is_dir() {
-            patterns_by_search_root
-                .entry(search_root)
-                .or_default()
-                .push(glob);
+        // Follow symlink roots, but never discard a deny because inspecting its
+        // search root failed. Only absent or non-directory roots have no matches.
+        match fs::metadata(search_root.as_path()) {
+            Ok(metadata) if metadata.is_dir() => {
+                patterns_by_search_root
+                    .entry(search_root)
+                    .or_default()
+                    .push(glob);
+            }
+            Ok(_) => {}
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) => {}
+            Err(err) => {
+                return Err(CodexErr::Fatal(format!(
+                    "failed to inspect unreadable glob search root {}: {err}",
+                    search_root.display()
+                )));
+            }
         }
     }
 
