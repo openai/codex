@@ -19,8 +19,10 @@ async fn configured_log_directory_is_initialized_on_use_and_retries_after_failur
     let logs_home = sqlite_home.join("logs");
     tokio::fs::write(&logs_home, "not a directory").await?;
     let sqlite = SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    sqlite.is_nfs.set(/*value*/ true)?;
     let fallback_logs_path = sqlite.logs_db_path();
     let sqlite = sqlite.with_local_logs_home(logs_home.clone());
+    sqlite.logs_is_nfs.set(/*value*/ false)?;
 
     // Opening unrelated state must not require the configured logs directory.
     let pool = sqlite.open_read_write_pool(&sqlite.state_db_path()).await?;
@@ -38,6 +40,20 @@ async fn configured_log_directory_is_initialized_on_use_and_retries_after_failur
     assert!(sqlite.logs_db_path().is_file());
     assert!(!fallback_logs_path.exists());
     runtime.close().await;
+    // The configured logs directory has its own filesystem, independent of the NFS state home.
+    let mut modes = Vec::new();
+    for path in [sqlite.state_db_path(), sqlite.logs_db_path()] {
+        let pool = sqlite
+            .open_read_only_pool(&path, /*busy_timeout*/ None)
+            .await?;
+        modes.push(
+            sqlx::query_scalar::<_, String>("PRAGMA journal_mode")
+                .fetch_one(&pool)
+                .await?,
+        );
+        pool.close().await;
+    }
+    assert_eq!(modes, vec!["delete".to_string(), "wal".to_string()]);
     Ok(())
 }
 
@@ -147,42 +163,96 @@ async fn failed_sqlite_home_filesystem_probe_recovers_after_home_creation() -> a
 
 #[tokio::test]
 async fn open_read_write_pool_initializes_fresh_database_settings() -> anyhow::Result<()> {
-    for interrupted in [false, true] {
+    for (nfs, partial_journal) in [
+        (false, None),
+        (false, Some(SqliteJournalMode::Delete)),
+        (true, None),
+        (true, Some(SqliteJournalMode::Delete)),
+        (true, Some(SqliteJournalMode::Wal)),
+    ] {
         let sqlite_home = crate::runtime::test_support::unique_temp_dir();
         tokio::fs::create_dir_all(&sqlite_home).await?;
         let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
             let _ = std::fs::remove_dir_all(sqlite_home);
         });
         let sqlite = SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+        sqlite.is_nfs.set(nfs)?;
         let path = sqlite.logs_db_path();
-        if interrupted {
-            // Auto-vacuum writes a header before WAL setup.
-            // Startup must initialize the database even if the file is not empty.
+        if let Some(journal_mode) = partial_journal {
+            // Startup must finish initialization when settings were written before the schema.
             let partial = SqlitePoolOptions::new()
                 .max_connections(/*max*/ 1)
                 .connect_with(
                     SqliteConnectOptions::new()
                         .filename(&path)
                         .create_if_missing(/*create*/ true)
-                        .auto_vacuum(SqliteAutoVacuum::Incremental),
+                        .auto_vacuum(SqliteAutoVacuum::Incremental)
+                        .journal_mode(journal_mode),
                 )
                 .await?;
             partial.close().await;
             assert!(tokio::fs::metadata(&path).await?.len() > 0);
         }
         let pool = sqlite.open_read_write_pool(&path).await?;
-        let journal_mode = sqlx::query_scalar::<_, String>("PRAGMA journal_mode")
-            .fetch_one(&pool)
+        // Hold connections open so the assertions cover lazy pool connections too.
+        let mut connections = Vec::new();
+        let mut settings = Vec::new();
+        for _ in 0..5 {
+            let mut connection = pool.acquire().await?;
+            let current: (String, i64, i64) = sqlx::query_as(
+                "SELECT journal_mode, auto_vacuum, synchronous
+                 FROM pragma_journal_mode, pragma_auto_vacuum, pragma_synchronous",
+            )
+            .fetch_one(&mut *connection)
             .await?;
-        let auto_vacuum = sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
-            .fetch_one(&pool)
-            .await?;
-        let synchronous = sqlx::query_scalar::<_, i64>("PRAGMA synchronous")
-            .fetch_one(&pool)
-            .await?;
+            settings.push(current);
+            connections.push(connection);
+        }
         assert_eq!(
-            (journal_mode, auto_vacuum, synchronous),
-            ("wal".to_string(), SqliteAutoVacuum::Incremental as i64, 1)
+            settings,
+            vec![
+                (
+                    if nfs { "delete" } else { "wal" }.to_string(),
+                    SqliteAutoVacuum::Incremental as i64,
+                    if nfs { 3 } else { 1 },
+                );
+                5
+            ]
+        );
+        drop(connections);
+        pool.close().await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn open_read_write_pool_uses_database_directory_for_filesystem_probe() -> anyhow::Result<()> {
+    let directory = crate::runtime::test_support::unique_temp_dir();
+    tokio::fs::create_dir_all(&directory).await?;
+    let _cleanup = scopeguard::guard(directory.clone(), |directory| {
+        let _ = std::fs::remove_dir_all(directory);
+    });
+    let nfs = codex_file_system::is_nfs(&directory)?;
+    let missing_home = directory.join("absent");
+    for (index, cached_home_nfs) in [None, Some(!nfs)].into_iter().enumerate() {
+        let sqlite = SqliteConfig::new_for_testing(missing_home.as_path().abs());
+        if let Some(nfs) = cached_home_nfs {
+            sqlite.is_nfs.set(nfs)?;
+        }
+        // An unrelated missing home or its cached filesystem must not affect this database.
+        let path = directory.join(format!("database-{index}.sqlite"));
+        let pool = sqlite.open_read_write_pool(&path).await?;
+        let settings: (String, i64) = sqlx::query_as(
+            "SELECT journal_mode, synchronous FROM pragma_journal_mode, pragma_synchronous",
+        )
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(
+            settings,
+            (
+                if nfs { "delete" } else { "wal" }.to_string(),
+                if nfs { 3 } else { 1 },
+            )
         );
         pool.close().await;
     }
@@ -197,6 +267,7 @@ async fn open_read_write_pool_preserves_existing_settings_under_write_lock() -> 
         let _ = std::fs::remove_dir_all(sqlite_home);
     });
     let sqlite = SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    sqlite.is_nfs.set(/*value*/ true)?;
     let database_path = sqlite.logs_db_path();
     let existing_pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -218,11 +289,14 @@ async fn open_read_write_pool_preserves_existing_settings_under_write_lock() -> 
         .await?;
 
     let pool = sqlite.open_read_write_pool(&database_path).await?;
-    let auto_vacuum = sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
-        .fetch_one(&pool)
-        .await?;
+    let settings: (String, i64, i64) = sqlx::query_as(
+        "SELECT journal_mode, auto_vacuum, synchronous
+         FROM pragma_journal_mode, pragma_auto_vacuum, pragma_synchronous",
+    )
+    .fetch_one(&pool)
+    .await?;
 
-    assert_eq!(auto_vacuum, SqliteAutoVacuum::Full as i64);
+    assert_eq!(settings, ("wal".into(), SqliteAutoVacuum::Full as i64, 1));
     sqlx::query("ROLLBACK").execute(&mut *lock_holder).await?;
     drop(lock_holder);
     pool.close().await;

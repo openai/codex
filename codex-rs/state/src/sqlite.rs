@@ -1,4 +1,5 @@
 //! Shared SQLite connection configuration.
+//! New databases use DELETE on NFS and WAL elsewhere.
 //! Writable pools preserve the journal and vacuum modes of initialized databases.
 //! Startup retries SQLITE_BUSY and reports other errors to callers.
 //! The configured logs directory is created and locked only when opening its database.
@@ -416,6 +417,22 @@ impl SqliteConfig {
         telemetry_override: Option<&dyn DbTelemetry>,
     ) -> anyhow::Result<SqlitePool> {
         self.prepare_logs_directory(path).await?;
+        let directory = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let is_nfs = if self.local_logs_dir.is_some() && directory == self.logs_home() {
+            self.logs_are_on_nfs().await?
+        } else if directory == self.home() {
+            self.is_nfs().await?
+        } else {
+            probe_nfs(directory, &OnceCell::new()).await?
+        };
+        let journal_mode_policy = if is_nfs {
+            JournalModePolicy::InitializeDelete
+        } else {
+            JournalModePolicy::InitializeWal
+        };
         let recovery = recover_spec.map_or(RecoveryMode::Unavailable, |spec| spec.recovery);
         let options = SqliteConnectOptions::new()
             .filename(path)
@@ -424,7 +441,11 @@ impl SqliteConfig {
             .busy_timeout(DEFAULT_BUSY_TIMEOUT)
             .log_statements(LevelFilter::Off);
         // Each failed attempt closes its pool before initialization is retried.
-        let connect = || async { connect_once(&options).await.map_err(anyhow::Error::from) };
+        let connect = || async {
+            connect_once(&options, journal_mode_policy)
+                .await
+                .map_err(anyhow::Error::from)
+        };
         let pool = retry_on_busy(connect).await?;
         let validation_result = self
             .quick_check_manager
@@ -518,7 +539,16 @@ impl SqliteConfig {
     }
 }
 
-async fn connect_once(options: &SqliteConnectOptions) -> Result<SqlitePool, Error> {
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum JournalModePolicy {
+    InitializeWal,
+    InitializeDelete,
+}
+
+async fn connect_once(
+    options: &SqliteConnectOptions,
+    journal_mode_policy: JournalModePolicy,
+) -> Result<SqlitePool, Error> {
     // SQLx retries after_connect errors, eventually replacing them with PoolTimedOut.
     // Return the first initialization error directly while opening this pool.
     let (init_error_tx, mut init_error_rx) = tokio::sync::mpsc::channel(/*buffer*/ 1);
@@ -575,17 +605,23 @@ async fn connect_once(options: &SqliteConnectOptions) -> Result<SqlitePool, Erro
                     .execute(&mut *connection)
                     .await?;
             }
-            sqlx::query("PRAGMA journal_mode = WAL")
-                .execute(&mut *connection)
-                .await?;
+            let pragma = match journal_mode_policy {
+                JournalModePolicy::InitializeWal => "PRAGMA journal_mode = WAL",
+                JournalModePolicy::InitializeDelete => "PRAGMA journal_mode = DELETE",
+            };
+            sqlx::query(pragma).execute(&mut *connection).await?;
         }
-        // Another process can initialize WAL after this connection selects EXTRA.
-        // Apply NORMAL to WAL even if that process already created the schema.
+        // Initialization or another process can change the journal mode after after_connect.
+        // Match this connection's synchronization setting to the resulting journal mode.
         let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
             .fetch_one(&mut *connection)
             .await?;
         if journal == "wal" {
             sqlx::query("PRAGMA synchronous = NORMAL")
+                .execute(&mut *connection)
+                .await?;
+        } else if journal == "delete" {
+            sqlx::query("PRAGMA synchronous = EXTRA")
                 .execute(&mut *connection)
                 .await?;
         }
