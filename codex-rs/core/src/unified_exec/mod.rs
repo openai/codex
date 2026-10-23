@@ -48,7 +48,6 @@ use codex_core_plugins::PluginMetricsSidecar;
 
 mod async_watcher;
 mod errors;
-mod head_tail_buffer;
 mod oneshot;
 mod process;
 mod process_manager;
@@ -230,10 +229,6 @@ pub(crate) fn clamp_yield_time(yield_time_ms: u64) -> u64 {
 
 pub(crate) fn resolve_max_tokens(max_tokens: Option<usize>) -> usize {
     max_tokens.unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
-}
-
-pub(crate) fn format_output_omission_marker(omitted_bytes: usize) -> String {
-    format!("... {omitted_bytes} bytes omitted ...")
 }
 
 pub(crate) fn generate_chunk_id() -> String {

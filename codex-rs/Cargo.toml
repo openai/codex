@@ -130,6 +130,7 @@ members = [
     "utils/cache",
     "utils/critical-path",
     "utils/git-discovery",
+    "utils/head-tail-buffer",
     "utils/image",
     "utils/json-to-toml",
     "utils/home-dir",
@@ -305,6 +306,7 @@ codex-utils-critical-path = { path = "utils/critical-path" }
 codex-utils-elapsed = { path = "utils/elapsed" }
 codex-utils-fuzzy-match = { path = "utils/fuzzy-match" }
 codex-utils-git-discovery = { path = "utils/git-discovery" }
+codex-utils-head-tail-buffer = { path = "utils/head-tail-buffer" }
 codex-utils-home-dir = { path = "utils/home-dir" }
 codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
