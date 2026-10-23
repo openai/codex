@@ -455,10 +455,14 @@ fn parse_dispatch_terminal_request(value: JsonValue) -> Result<Option<ParsedTerm
         .payload
         .arguments
         .context("write_stdin dispatch payload omitted function arguments")?;
-    let args: DispatchedWriteStdinArgs = serde_json::from_str(&arguments)
-        .context("parse write_stdin dispatch function arguments")?;
-    let process_id = process_id_from_json(&args.session_id)
-        .context("write_stdin dispatch payload omitted session_id")?;
+    // Invalid model arguments are a tool failure, not a corrupt trace. Keep the
+    // generic call and its error without inventing a terminal operation.
+    let Ok(args) = serde_json::from_str::<DispatchedWriteStdinArgs>(&arguments) else {
+        return Ok(None);
+    };
+    let Some(process_id) = process_id_from_json(&args.session_id) else {
+        return Ok(None);
+    };
 
     Ok(Some(ParsedTerminalRequest {
         process_id: Some(process_id),

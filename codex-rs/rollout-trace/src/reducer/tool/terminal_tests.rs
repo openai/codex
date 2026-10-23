@@ -1,7 +1,12 @@
+use std::sync::Arc;
+
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
 
+use crate::ToolDispatchInvocation;
+use crate::ToolDispatchPayload;
+use crate::ToolDispatchRequester;
 use crate::model::ExecutionStatus;
 use crate::model::ExecutionWindow;
 use crate::model::TerminalModelObservation;
@@ -15,6 +20,7 @@ use crate::model::ToolCallKind;
 use crate::model::ToolCallSummary;
 use crate::payload::RawPayloadKind;
 use crate::raw_event::RawTraceEventPayload;
+use crate::reducer::test_support::ROOT_THREAD_ID;
 use crate::reducer::test_support::create_started_writer;
 use crate::reducer::test_support::generic_summary;
 use crate::reducer::test_support::message;
@@ -24,6 +30,7 @@ use crate::reducer::test_support::start_turn_for_thread;
 use crate::reducer::test_support::trace_context;
 use crate::reducer::test_support::trace_context_for_thread;
 use crate::replay_bundle;
+use crate::tool_dispatch::ToolDispatchTraceContext;
 use crate::writer::TraceWriter;
 
 #[test]
@@ -488,6 +495,58 @@ fn dispatch_write_stdin_payload_reduces_to_terminal_operation() -> anyhow::Resul
         },
     );
 
+    Ok(())
+}
+
+#[test]
+fn invalid_write_stdin_arguments_remain_failed_tool_calls() -> anyhow::Result<()> {
+    for arguments in [r#"{"session_id": "#, "{}", r#"{"session_id": null}"#] {
+        let temp = TempDir::new()?;
+        let writer = Arc::new(create_started_writer(&temp)?);
+        start_turn(&writer, "turn-1")?;
+        let dispatch = ToolDispatchTraceContext::start(
+            Arc::clone(&writer),
+            ToolDispatchInvocation {
+                thread_id: ROOT_THREAD_ID.to_string(),
+                codex_turn_id: "turn-1".to_string(),
+                tool_call_id: "call-stdin".to_string(),
+                tool_name: "write_stdin".to_string(),
+                tool_namespace: None,
+                requester: ToolDispatchRequester::Model {
+                    model_visible_call_id: "call-stdin".to_string(),
+                },
+                payload: ToolDispatchPayload::Function {
+                    arguments: arguments.to_string(),
+                },
+            },
+        );
+        dispatch.record_failed("invalid arguments");
+
+        let rollout = replay_bundle(temp.path())?;
+        let call = &rollout.tool_calls["call-stdin"];
+        assert_eq!(call.execution.status, ExecutionStatus::Failed);
+        assert_eq!(call.terminal_operation_id, None);
+        assert!(rollout.terminal_operations.is_empty());
+        assert!(rollout.terminal_sessions.is_empty());
+        // The failed call still retains its original arguments and error.
+        for (id, expected) in [
+            (
+                call.raw_invocation_payload_id.as_ref().unwrap(),
+                json!({"tool_name": "write_stdin", "tool_namespace": null,
+                    "payload": {"type": "function", "arguments": arguments}}),
+            ),
+            (
+                call.raw_result_payload_id.as_ref().unwrap(),
+                json!({"type": "error", "error": "invalid arguments"}),
+            ),
+        ] {
+            let payload = std::fs::read(temp.path().join(&rollout.raw_payloads[id].path))?;
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&payload)?,
+                expected
+            );
+        }
+    }
     Ok(())
 }
 
