@@ -725,6 +725,38 @@ impl Session {
         Some((Arc::clone(&active_turn.turn_state), previous_options))
     }
 
+    /// Revalidates a reserved wake and selects its settings before any mail is consumed.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "capture wake settings and cancel rejected reservations under the admission lock"
+    )]
+    pub(crate) async fn pending_work_turn_configuration(
+        &self,
+        turn_state: &Arc<tokio::sync::Mutex<TurnState>>,
+    ) -> Option<SessionConfiguration> {
+        // Discovery can outlive an interrupt or a settings update. Keep cancellation
+        // atomic with admission so newly arriving mail can retry a rejected wake.
+        let mut active = self.active_turn.lock().await;
+        if active
+            .as_ref()
+            .is_none_or(|turn| !Arc::ptr_eq(&turn.turn_state, turn_state))
+        {
+            return None;
+        }
+        let has_trigger_turn = self.input_queue.has_trigger_turn_mailbox_items().await;
+        let state = self.state.lock().await;
+        let configuration = &state.session_configuration;
+        if !has_trigger_turn
+            && !self.has_outstanding_durable_sleep()
+            && !TurnStartKind::Automatic
+                .permits_mode(configuration.step_settings.collaboration_mode.mode)
+        {
+            *active = None;
+            return None;
+        }
+        Some(configuration.clone())
+    }
+
     async fn should_wake_on_agent_messages(&self) -> bool {
         if !self.features.enabled(Feature::WakeOnAgentMessages)
             || self.is_interrupted()

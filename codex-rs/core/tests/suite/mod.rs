@@ -43,6 +43,7 @@ mod additional_context;
 #[path = "agent_control_tests.rs"]
 mod agent_control;
 mod agent_execution;
+mod agent_message_wake;
 mod agent_websocket;
 mod agents_md;
 mod app_tool_exposure;
