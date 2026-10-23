@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests/skills_summary_tests.rs
+expression: "summaries.join(\"\\n\")"
+---
+enable: • Enabled 2 skills
+disable: • Disabled 1 skill
+mixed: • Enabled 2 skills, disabled 1 skill
+no changes:

@@ -289,6 +289,8 @@ mod review_picker_tests;
 #[path = "tests/session_model_selection_tests.rs"]
 mod session_model_selection_tests;
 mod side;
+#[path = "tests/skills_summary_tests.rs"]
+mod skills_summary_tests;
 mod slash_commands;
 #[path = "tests/sparkle_submission_tests.rs"]
 mod sparkle_submission_tests;

@@ -130,10 +130,16 @@ impl ChatWidget {
         if enabled_count == 0 && disabled_count == 0 {
             return;
         }
-        self.add_info_message(
-            format!("{enabled_count} skills enabled, {disabled_count} skills disabled"),
-            /*hint*/ None,
-        );
+        let enabled_suffix = if enabled_count == 1 { "" } else { "s" };
+        let disabled_suffix = if disabled_count == 1 { "" } else { "s" };
+        let summary = match (enabled_count, disabled_count) {
+            (0, _) => format!("Disabled {disabled_count} skill{disabled_suffix}"),
+            (_, 0) => format!("Enabled {enabled_count} skill{enabled_suffix}"),
+            _ => format!(
+                "Enabled {enabled_count} skill{enabled_suffix}, disabled {disabled_count} skill{disabled_suffix}"
+            ),
+        };
+        self.add_info_message(summary, /*hint*/ None);
     }
 
     pub(crate) fn set_skills_from_response(&mut self, response: &SkillsListResponse) {
