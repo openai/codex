@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_config::cloud_config_bundle_loader_for_storage;
+use codex_cloud_config::chatgpt_config_bundle_loader_for_storage;
 use codex_config::LoaderOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -506,7 +506,7 @@ async fn load_exec_server_config(
         )
         .await?;
         let bootstrap_auth_config = bootstrap_auth_config(&codex_home, &bootstrap_config)?;
-        let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
+        let cloud_config_bundle = chatgpt_config_bundle_loader_for_storage(
             bootstrap_auth_config,
             /*enable_codex_api_key_env*/ false,
         )

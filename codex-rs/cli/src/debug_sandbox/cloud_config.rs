@@ -1,4 +1,4 @@
-use codex_cloud_config::cloud_config_bundle_loader_for_storage;
+use codex_cloud_config::chatgpt_config_bundle_loader_for_storage;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLoadOptions;
 use codex_core::config::bootstrap_auth_config;
@@ -40,7 +40,7 @@ pub(super) async fn bootstrap_cloud_config_bundle(
         },
     )
     .await?;
-    Ok(cloud_config_bundle_loader_for_storage(
+    Ok(chatgpt_config_bundle_loader_for_storage(
         bootstrap_auth_config(codex_home.as_path(), &bootstrap_config)?,
         /*enable_codex_api_key_env*/ false,
     )

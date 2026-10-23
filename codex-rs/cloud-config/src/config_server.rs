@@ -37,7 +37,7 @@ pub fn config_server_bundle_loader(
                 codex_home,
                 CLOUD_CONFIG_BUNDLE_TIMEOUT,
             );
-            crate::bundle_loader::cloud_config_bundle_loader_for_service(service).0
+            crate::bundle_loader::managed_config_bundle_loader_for_service(service).0
         }
         Err(error) => CloudConfigBundleLoader::new(std::future::ready(Err(error))),
     }

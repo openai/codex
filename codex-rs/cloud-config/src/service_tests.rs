@@ -1347,7 +1347,7 @@ async fn production_loader_recovers_startup_timeouts_in_background() {
         codex_home.path().to_path_buf(),
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
-    let (loader, _) = crate::bundle_loader::cloud_config_bundle_loader_for_service(service);
+    let (loader, _) = crate::bundle_loader::managed_config_bundle_loader_for_service(service);
     let (initial, ()) = tokio::join!(loader.get(), async {
         fetcher.request_started.notified().await;
         tokio::time::advance(CLOUD_CONFIG_BUNDLE_TIMEOUT + Duration::from_millis(1)).await;
@@ -1427,7 +1427,7 @@ async fn production_loader_restores_normal_refresh_interval_after_non_timeout_er
         codex_home.path().to_path_buf(),
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
-    let (loader, _) = crate::bundle_loader::cloud_config_bundle_loader_for_service(service);
+    let (loader, _) = crate::bundle_loader::managed_config_bundle_loader_for_service(service);
     let (initial, ()) = tokio::join!(loader.get(), async {
         fetcher.request_started.notified().await;
         tokio::time::advance(CLOUD_CONFIG_BUNDLE_TIMEOUT + Duration::from_millis(1)).await;
@@ -1499,7 +1499,7 @@ async fn production_loader_refreshes_later_configs_and_preserves_failed_refreshe
         codex_home.path().to_path_buf(),
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
-    let (loader, _) = crate::bundle_loader::cloud_config_bundle_loader_for_service(service);
+    let (loader, _) = crate::bundle_loader::managed_config_bundle_loader_for_service(service);
 
     let (first, second) = tokio::join!(loader.get(), loader.get());
     assert_eq!(first, Ok(Some(initial_bundle.clone())));
@@ -1556,7 +1556,7 @@ async fn each_loader_owns_refresh_until_its_last_clone_is_dropped() {
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
     let (loader, original_task) =
-        crate::bundle_loader::cloud_config_bundle_loader_for_service(service);
+        crate::bundle_loader::managed_config_bundle_loader_for_service(service);
     let cloned_loader = loader.clone();
     assert_eq!(loader.get().await, Ok(Some(test_bundle())));
     fetcher.request_started.notified().await;
@@ -1582,7 +1582,7 @@ async fn each_loader_owns_refresh_until_its_last_clone_is_dropped() {
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
     let (replacement_loader, replacement_task) =
-        crate::bundle_loader::cloud_config_bundle_loader_for_service(replacement_service);
+        crate::bundle_loader::managed_config_bundle_loader_for_service(replacement_service);
     assert_eq!(replacement_loader.get().await, Ok(Some(test_bundle())));
     replacement_fetcher.request_started.notified().await;
 
@@ -1629,7 +1629,7 @@ async fn dropping_loader_cancels_in_flight_startup_and_refresh() {
             codex_home.path().to_path_buf(),
             CLOUD_CONFIG_BUNDLE_TIMEOUT,
         );
-        let (loader, _) = crate::bundle_loader::cloud_config_bundle_loader_for_service(service);
+        let (loader, _) = crate::bundle_loader::managed_config_bundle_loader_for_service(service);
         if starts_from_cache {
             assert_eq!(loader.get().await, Ok(Some(test_bundle())));
             tokio::task::yield_now().await;

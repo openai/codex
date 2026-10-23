@@ -569,7 +569,7 @@ pub async fn run_main_with_transport_options(
         Arc::new(NoopThreadConfigLoader),
     );
     let startup = config_manager
-        .load_cloud_startup_config(startup_cwd.clone())
+        .load_managed_startup_config(startup_cwd.clone())
         .await?;
     let mut config_warnings = Vec::new();
     let mut plugin_startup_config = PluginStartupConfig::Current;
@@ -600,11 +600,7 @@ pub async fn run_main_with_transport_options(
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false)
             .await
             .map_err(std::io::Error::other)?;
-    config_manager.replace_cloud_config_bundle_loader(
-        auth_manager.clone(),
-        config.chatgpt_base_url.clone(),
-        config.http_client_factory(),
-    );
+    config_manager.update_managed_config_loader(auth_manager.clone(), &config);
     config_manager
         .sync_default_client_residency_requirement()
         .await;

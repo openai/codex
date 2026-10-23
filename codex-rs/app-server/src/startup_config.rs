@@ -120,7 +120,7 @@ async fn read_startup_config(
     );
     let cwd = std::env::current_dir().ok();
     let loaded = manager
-        .load_cloud_startup_config(cwd.clone())
+        .load_managed_startup_config(cwd.clone())
         .await
         .map_err(startup_error)?;
     let config = match loaded.config {
@@ -143,11 +143,7 @@ async fn read_startup_config(
         set_default_client_residency_requirement(config.enforce_residency.value());
         let config = logout_configured_account(&manager, &auth, &config).await?;
         clear_account_configuration(&manager, &config).await?;
-        manager.replace_cloud_config_bundle_loader(
-            Arc::clone(&auth),
-            config.chatgpt_base_url.clone(),
-            config.http_client_factory(),
-        );
+        manager.update_managed_config_loader(Arc::clone(&auth), &config);
         manager
             .load_latest_config(cwd)
             .await

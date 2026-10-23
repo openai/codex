@@ -45,7 +45,7 @@ pub fn managed_config_bundle_loader(
         .network_policy()
         .clone()
         .restrict_to_endpoints(endpoint.parse().into_iter().collect());
-    cloud_config_bundle_loader(
+    chatgpt_config_bundle_loader(
         auth_manager,
         chatgpt_base_url,
         codex_home,
@@ -68,8 +68,8 @@ pub async fn managed_config_bundle_loader_for_storage(
         ));
     }
     let service =
-        cloud_config_bundle_service_for_storage(auth_config, enable_codex_api_key_env).await?;
-    Ok(cloud_config_bundle_loader_for_service(service).0)
+        chatgpt_config_bundle_service_for_storage(auth_config, enable_codex_api_key_env).await?;
+    Ok(managed_config_bundle_loader_for_service(service).0)
 }
 
 struct CloudConfigBundleLoaderLifetime<C: BundleSource> {
@@ -83,7 +83,7 @@ impl<C: BundleSource> Drop for CloudConfigBundleLoaderLifetime<C> {
     }
 }
 
-pub fn cloud_config_bundle_loader(
+pub fn chatgpt_config_bundle_loader(
     auth_manager: Arc<AuthManager>,
     chatgpt_base_url: String,
     codex_home: PathBuf,
@@ -98,11 +98,11 @@ pub fn cloud_config_bundle_loader(
         codex_home,
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
-    let (loader, _) = cloud_config_bundle_loader_for_service(service);
+    let (loader, _) = managed_config_bundle_loader_for_service(service);
     loader
 }
 
-pub(crate) fn cloud_config_bundle_loader_for_service<C>(
+pub(crate) fn managed_config_bundle_loader_for_service<C>(
     service: CloudConfigBundleService<C>,
 ) -> (CloudConfigBundleLoader, JoinHandle<()>)
 where
@@ -133,24 +133,24 @@ where
     (loader, refresh_task)
 }
 
-pub async fn cloud_config_bundle_loader_for_storage(
+pub async fn chatgpt_config_bundle_loader_for_storage(
     auth_config: AuthConfig,
     enable_codex_api_key_env: bool,
 ) -> std::io::Result<CloudConfigBundleLoader> {
     let service =
-        cloud_config_bundle_service_for_storage(auth_config, enable_codex_api_key_env).await?;
-    let (loader, _) = cloud_config_bundle_loader_for_service(service);
+        chatgpt_config_bundle_service_for_storage(auth_config, enable_codex_api_key_env).await?;
+    let (loader, _) = managed_config_bundle_loader_for_service(service);
     Ok(loader)
 }
 
 /// Fetches directly from the network on each load, without reading or writing
 /// the disk cache or starting a background refresher.
-pub async fn cloud_config_bundle_loader_for_storage_without_cache(
+pub async fn chatgpt_config_bundle_loader_for_storage_without_cache(
     auth_config: AuthConfig,
     enable_codex_api_key_env: bool,
 ) -> std::io::Result<CloudConfigBundleLoader> {
     let service = Arc::new(
-        cloud_config_bundle_service_for_storage(auth_config, enable_codex_api_key_env)
+        chatgpt_config_bundle_service_for_storage(auth_config, enable_codex_api_key_env)
             .await?
             .without_cache(),
     );
@@ -160,7 +160,7 @@ pub async fn cloud_config_bundle_loader_for_storage_without_cache(
     }))
 }
 
-async fn cloud_config_bundle_service_for_storage(
+async fn chatgpt_config_bundle_service_for_storage(
     auth_config: AuthConfig,
     enable_codex_api_key_env: bool,
 ) -> std::io::Result<CloudConfigBundleService<ChatGptSource<BackendBundleClient>>> {

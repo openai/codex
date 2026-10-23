@@ -75,7 +75,7 @@ impl ConfigManager {
             .map_err(io::Error::other)?;
         let revision = self.network_policy.policy().revision();
         let local_sources = self.load_local_network_policy(revision).await?;
-        let cloud_config = self.current_cloud_config_bundle();
+        let cloud_config = self.current_managed_config_loader();
         let result = async {
             let cloud_snapshot = cloud_config.get_snapshot().await;
             let cloud = cloud_snapshot.bundle.clone().map_err(io::Error::other)?;

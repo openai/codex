@@ -59,7 +59,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_config::cloud_config_bundle_loader_for_storage;
+use codex_cloud_config::chatgpt_config_bundle_loader_for_storage;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLoadError;
 use codex_config::ConfigLoadOptions;
@@ -408,7 +408,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             CloudConfigBundleLoader::default(),
         )
         .await;
-        let gate_cloud_config = cloud_config_bundle_loader_for_storage(
+        let gate_cloud_config = chatgpt_config_bundle_loader_for_storage(
             embedded_network_policy
                 .bind_bootstrap_auth(bootstrap_auth_config(&codex_home, &gate_bootstrap)?),
             /*enable_codex_api_key_env*/ false,
@@ -508,7 +508,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     // API keys cannot fetch workspace-managed configuration. Preserve the
     // existing ChatGPT bootstrap identity even when model requests allow
     // CODEX_API_KEY.
-    let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
+    let cloud_config_bundle = chatgpt_config_bundle_loader_for_storage(
         bootstrap_auth_config,
         /*enable_codex_api_key_env*/ false,
     )

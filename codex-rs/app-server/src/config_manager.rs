@@ -1,5 +1,5 @@
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_config::cloud_config_bundle_loader;
+use codex_cloud_config::chatgpt_config_bundle_loader;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLayerStack;
 use codex_config::LoaderOverrides;
@@ -174,7 +174,7 @@ impl ConfigManager {
             .unwrap_or_default()
     }
 
-    pub(crate) fn current_cloud_config_bundle(&self) -> CloudConfigBundleLoader {
+    pub(crate) fn current_managed_config_loader(&self) -> CloudConfigBundleLoader {
         self.cloud_config_bundle
             .read()
             .map(|guard| guard.clone())
@@ -191,12 +191,13 @@ impl ConfigManager {
         Ok(())
     }
 
-    pub(crate) fn replace_cloud_config_bundle_loader(
+    pub(crate) fn update_managed_config_loader(
         &self,
         auth_manager: Arc<AuthManager>,
-        chatgpt_base_url: String,
-        http_client_factory: codex_http_client::HttpClientFactory,
+        config: &Config,
     ) {
+        let chatgpt_base_url = config.chatgpt_base_url.clone();
+        let http_client_factory = config.http_client_factory();
         let endpoint = codex_backend_client::Client::new(
             chatgpt_base_url.clone(),
             http_client_factory.clone(),
@@ -207,7 +208,7 @@ impl ConfigManager {
                 .policy()
                 .restrict_to_endpoints(endpoint.parse().into_iter().collect()),
         );
-        let loader = cloud_config_bundle_loader(
+        let loader = chatgpt_config_bundle_loader(
             auth_manager,
             chatgpt_base_url,
             self.codex_home.clone(),
@@ -222,7 +223,7 @@ impl ConfigManager {
         self.revoke_mcp_ema();
     }
 
-    pub(crate) fn clear_cloud_config_bundle_loader(&self) {
+    pub(crate) fn clear_chatgpt_config_loader(&self) {
         if let Ok(mut guard) = self.cloud_config_bundle.write() {
             guard.retire_ema_policy();
             *guard = CloudConfigBundleLoader::default();
@@ -409,7 +410,7 @@ impl ConfigManager {
 
     /// Load local policy before auth, then fetch the account's cloud configuration.
     /// Callers choose their error/recovery policy before initializing any runtimes.
-    pub(crate) async fn load_cloud_startup_config(
+    pub(crate) async fn load_managed_startup_config(
         &self,
         cwd: Option<PathBuf>,
     ) -> std::io::Result<CloudStartupConfig> {
@@ -418,11 +419,7 @@ impl ConfigManager {
             AuthManager::shared_from_config(&bootstrap, /*enable_codex_api_key_env*/ false)
                 .await
                 .map_err(std::io::Error::other)?;
-        self.replace_cloud_config_bundle_loader(
-            auth,
-            bootstrap.chatgpt_base_url.clone(),
-            bootstrap.http_client_factory(),
-        );
+        self.update_managed_config_loader(auth, &bootstrap);
         let config = self.load_latest_config(cwd).await;
         Ok(CloudStartupConfig { bootstrap, config })
     }

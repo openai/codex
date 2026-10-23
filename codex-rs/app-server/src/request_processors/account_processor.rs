@@ -476,7 +476,7 @@ impl AccountRequestProcessor {
         ) {
             Ok(()) => {
                 self.auth_manager.reload().await;
-                self.config_manager.clear_cloud_config_bundle_loader();
+                self.config_manager.clear_chatgpt_config_loader();
                 Ok(())
             }
             Err(err) => Err(internal_error(format!("failed to save api key: {err}"))),
@@ -575,7 +575,7 @@ impl AccountRequestProcessor {
             }
             .map_err(|err| internal_error(format!("failed to save Amazon Bedrock auth: {err}")))?;
             self.auth_manager.reload().await;
-            self.config_manager.clear_cloud_config_bundle_loader();
+            self.config_manager.clear_chatgpt_config_loader();
             Ok(LoginAccountResponse::AmazonBedrock {})
         }
         .await;
@@ -910,11 +910,8 @@ impl AccountRequestProcessor {
             )))
             .await
             .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
-        self.config_manager.replace_cloud_config_bundle_loader(
-            self.auth_manager.clone(),
-            self.config.chatgpt_base_url.clone(),
-            self.config.http_client_factory(),
-        );
+        self.config_manager
+            .update_managed_config_loader(self.auth_manager.clone(), &self.config);
         self.config_manager
             .sync_default_client_residency_requirement()
             .await;
@@ -986,11 +983,8 @@ impl AccountRequestProcessor {
             let auth_changes = self.auth_manager.auth_change_state_receiver();
             let owner_generation = auth_changes.borrow().owner_generation;
             self.thread_manager.invalidate_mcp_runtimes().await;
-            self.config_manager.replace_cloud_config_bundle_loader(
-                self.auth_manager.clone(),
-                self.config.chatgpt_base_url.clone(),
-                self.config.http_client_factory(),
-            );
+            self.config_manager
+                .update_managed_config_loader(self.auth_manager.clone(), &self.config);
             self.config_manager
                 .sync_default_client_residency_requirement()
                 .await;
@@ -1542,11 +1536,7 @@ pub(crate) async fn logout_configured_account(
     // Another process may have changed the persisted workspace. Reload both
     // account authority and its policy before selecting a grant to remove.
     auth_manager.reload().await;
-    config_manager.replace_cloud_config_bundle_loader(
-        Arc::clone(auth_manager),
-        fallback_config.chatgpt_base_url.clone(),
-        fallback_config.http_client_factory(),
-    );
+    config_manager.update_managed_config_loader(Arc::clone(auth_manager), fallback_config);
     let config = config_manager
         .load_latest_config(/*fallback_cwd*/ None)
         .await;
@@ -1602,7 +1592,7 @@ pub(crate) async fn clear_account_configuration(
     config_manager: &ConfigManager,
     config: &Config,
 ) -> Result<(), JSONRPCErrorError> {
-    config_manager.clear_cloud_config_bundle_loader();
+    config_manager.clear_chatgpt_config_loader();
     if config.model_provider.is_amazon_bedrock() {
         clear_user_model_provider_if_bedrock(config_manager, config).await?;
     }

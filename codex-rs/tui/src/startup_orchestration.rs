@@ -508,7 +508,7 @@ pub(super) async fn run_main_inner(
         cloud_config_bundle
     } else {
         startup_draft
-            .run_until(cloud_config_bundle_loader_for_storage(
+            .run_until(chatgpt_config_bundle_loader_for_storage(
                 embedded_network_policy.bind_bootstrap_auth(
                     app_server_target.auth_config_for_cloud_loader(config.auth_config()),
                 ),

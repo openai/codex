@@ -84,6 +84,16 @@ fn login_with_api_key_reads_stdin_and_writes_auth_json() -> Result<()> {
     Authentication is checked when you send a request.
     ");
 
+    for args in [vec!["login"], vec!["login", "--device-auth"]] {
+        codex_command(codex_home.path())?
+            .args(["-c", "forced_login_method=\"api\""])
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(contains("ChatGPT login is disabled"));
+        assert_eq!(read_auth_json(codex_home.path())?, auth);
+    }
+
     Ok(())
 }
 

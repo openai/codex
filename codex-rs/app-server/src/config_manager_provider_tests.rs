@@ -236,7 +236,7 @@ async fn catalog_reload_uses_latest_model_provider() -> Result<()> {
     );
     let startup = manager.load_non_project_config().await?;
     assert_eq!(startup.model_provider_id, "gateway");
-    manager.clear_cloud_config_bundle_loader();
+    manager.clear_chatgpt_config_loader();
     let refreshed = manager
         .load_startup_config(/*fallback_cwd*/ None)
         .await?
