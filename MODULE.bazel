@@ -807,25 +807,36 @@ inject_repo(crate, "alsa_lib")
     ]
 ]
 
-bazel_dep(name = "v8", version = "15.2.124.1")
 bazel_dep(name = "rules_license", version = "1.0.0")
 
-archive_override(
-    module_name = "v8",
+engine_repository = use_repo_rule("//third_party/v8:engine_repository.bzl", "engine_repository")
+
+engine_repository(
+    name = "v8",
     integrity = "sha256-aNN5G427qQbP/5o+NXONgXR8ZvS6mjf6mfAI6jtxyzI=",
     patch_strip = 3,
     patches = [
-        "//patches:v8_module_deps.patch",
-        "//patches:v8_bazel_rules.patch",
         "//patches:v8_source_portability.patch",
         "//patches:v8_array_sort_elements_kind.patch",
+        "//third_party/v8:v8_defs.patch",
     ],
     strip_prefix = "v8-15.2.124.1",
     urls = ["https://github.com/v8/v8/archive/refs/tags/15.2.124.1.tar.gz"],
 )
 
-# The dependency repos and their BUILD files belong to Codex. V8 only needs
-# its original apparent repo names to resolve to these same imports.
+# All V8 inputs are owned here, including the pinned Python generator inputs.
+pip.parse(
+    extra_pip_args = ["--require-hashes"],
+    hub_name = "v8_python_deps",
+    python_version = "3.11",
+    requirements_lock = "@v8//:bazel/requirements.txt",
+    simpleapi_skip = [
+        "jinja2",
+        "markupsafe",
+    ],
+)
+use_repo(pip, "v8_python_deps")
+
 v8_dependencies = use_extension("//third_party/v8:dependencies.bzl", "dependencies")
 use_repo(
     v8_dependencies,
@@ -836,19 +847,6 @@ use_repo(
     "v8_highway",
     "v8_icu",
     "v8_simdutf",
-)
-
-v8_dependency_bridge = use_extension("@v8//:bazel/codex_deps.bzl", "codex_deps")
-
-inject_repo(
-    v8_dependency_bridge,
-    dragonbox = "v8_dragonbox",
-    fast_float = "v8_fast_float",
-    fp16 = "v8_fp16",
-    highway = "v8_highway",
-    icu = "v8_icu",
-    simdutf = "v8_simdutf",
-    v8_abseil = "v8_abseil",
 )
 
 http_archive(

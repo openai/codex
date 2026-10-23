@@ -10,11 +10,15 @@ exports_files([
     "dependencies.bzl",
     "dependency_config.bzl",
     "dragonbox.BUILD.bazel",
+    "engine.BUILD.bazel",
+    "engine_repository.bzl",
+    "engine_rules.bzl",
     "fast_float.BUILD.bazel",
     "fp16.BUILD.bazel",
     "highway.BUILD.bazel",
     "icu.BUILD.bazel",
     "simdutf.BUILD.bazel",
+    "v8_defs.patch",
 ])
 
 config_setting(

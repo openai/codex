@@ -35,6 +35,10 @@ Use this as the maintainer flow for a version bump:
 2. Update the Bazel versioned inputs in `MODULE.bazel` and the source pins
    in `third_party/v8/dependencies.bzl` and `abseil_repository.bzl` using
    [the source dependency update procedure](#updating-source-dependencies).
+   Verify the imported source groups by querying the source archive and generating Torque
+   and snapshots for each supported platform. If V8 changes its BUILD section
+   layout, the importer fails instead of silently using an old inventory;
+   update that boundary and review its fixed feature and CPU selections.
    Then refresh the matching checksum manifest and generated checksums below.
 3. Publish a release-candidate PR and validate that `v8-canary` passes.
 4. If the canary is green, publish the release tag and release build.
@@ -147,10 +151,20 @@ here declare the targets V8 uses. Abseil, Highway and simdutf apply their C++ ru
 settings through `dependency_config.bzl`; ICU defines its settings in its own
 overlay.
 
-V8's module has a small dependency ingress. The root `MODULE.bazel` injects
-the seven Codex repositories there, so V8's `@highway`, `@icu`, etc. resolve to
-the same repositories Codex declares. The bridge has no fallback downloads.
-V8's BUILD patch still wires these targets into its generator and library graph.
+`engine_repository.bzl` fetches the V8 source pin and installs Codex's engine
+BUILD into `@v8`. Source filegroups are read from the pinned upstream BUILD
+each fetch, including added, removed or reordered groups. The importer rejects
+missing boundaries, malformed or empty sections, and new compiled targets. Only
+the two known Dragonbox and FP16 declarations are skipped, since the dependency
+overlays already supply them. `v8_binary` is valid V8 syntax, but compiled targets
+must be reviewed against the owned engine BUILD on an upgrade. The
+upstream `bazel/config` platform and CPU package is reused unchanged.
+`v8_defs.patch` records just the Codex differences to upstream's
+`bazel/defs.bzl`: release flag visibility, libc++ headers/runtime, Windows
+compiler and linker settings, and snapshot generation. All engine rules,
+including Torque and V8's test configuration helpers, load from that file.
+The engine BUILD owns feature policy and dependency targets; the remaining V8
+ABI, runtime and CPU settings still support the existing release commands.
 
 V8's private Abseil is built from the pinned 20250814.1 sources and uses
 `codex_v8_lts_20250814` for its supported inline-namespace option. Protobuf
@@ -165,9 +179,12 @@ autoupdater: the prebuilt checksum commands above and their CI check validate
 published archive/binding pairs, not these source revisions. Bazel verifies
 the declared download hashes and Git revisions; it does not choose them for us.
 
-Use the V8 tag in the root `MODULE.bazel` `archive_override(module_name = "v8")`
+Use the V8 tag in the root `MODULE.bazel` `engine_repository(name = "v8")`
 (currently `15.2.124.1`) as the input. Read that tag's **unpatched** `DEPS`
-and `MODULE.bazel`; the fetched `@v8` MODULE has Codex's bridge applied.
+and `MODULE.bazel`; `@v8` deliberately does not include upstream's MODULE.
+On an upgrade, also review `v8_defs.patch` against the new `bazel/defs.bzl`
+and run the V8 source canary. A cleanly applying patch does not by itself
+verify new upstream defaults or code-generation behavior.
 
 ```bash
 v8_tag=15.2.124.1 # Replace with the V8 source tag selected for this upgrade.

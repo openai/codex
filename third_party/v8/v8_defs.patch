@@ -1,0 +1,176 @@
+# What: adapt the pinned V8 rule helpers to Codex's engine configuration.
+# Scope: bazel/defs.bzl only; the engine graph and dependency choices live in
+# third_party/v8/engine.BUILD.bazel. The platform/CPU config is unmodified V8.
+# Preserve the existing release flags, Chromium libc++ headers/runtime, Clang
+# Windows driver flags, and Windows target-ABI snapshot tool. The optional
+# Linux backtrace link flag is omitted because that feature is fixed off.
+# On a V8 pin change, review these hunks and build the native canary matrix.
+
+--- a/orig/v8-15.2.124.1/bazel/defs.bzl
++++ b/mod/v8-15.2.124.1/bazel/defs.bzl
+@@ -42,12 +42,30 @@
+ )
+
+ def v8_flag(name, default = False):
+-    _create_option_flag(name = name, build_setting_default = default, scope = "universal")
+-    native.config_setting(name = "is_" + name, flag_values = {name: "True"})
+-    native.config_setting(name = "is_not_" + name, flag_values = {name: "False"})
+-
+-def v8_string(name, default = ""):
+-    _create_option_string(name = name, build_setting_default = default, scope = "universal")
++    _create_option_flag(
++        name = name,
++        build_setting_default = default,
++        scope = "universal",
++        visibility = ["//visibility:public"],
++    )
++    native.config_setting(
++        name = "is_" + name,
++        flag_values = {name: "True"},
++        visibility = ["//visibility:public"],
++    )
++    native.config_setting(
++        name = "is_not_" + name,
++        flag_values = {name: "False"},
++        visibility = ["//visibility:public"],
++    )
++
++def v8_string(name, default = "", visibility = None):
++    _create_option_string(
++        name = name,
++        build_setting_default = default,
++        scope = "universal",
++        visibility = visibility,
++    )
+
+ def v8_int(name, default = 0):
+     _create_option_int(name = name, build_setting_default = default, scope = "universal")
+@@ -106,7 +124,13 @@
+
+ def _default_args():
+     return struct(
+-        deps = [":define_flags", "@libcxx//:libc++"],
++        deps = [":define_flags"] + select({
++            "@v8//:is_v8_use_rusty_v8_custom_libcxx": [
++                "@@//third_party/v8:rusty_v8_custom_libcxx_headers",
++                "@@//third_party/v8:rusty_v8_custom_libcxx_runtime",
++            ],
++            "//conditions:default": [],
++        }),
+         defines = select({
+             "@v8//bazel/config:is_windows": [
+                 "UNICODE",
+@@ -136,12 +160,15 @@
+             ],
+             "//conditions:default": [],
+         }) + select({
+-            "@v8//bazel/config:is_clang": [
+-                "-Wno-invalid-offsetof",
+-                "-Wno-deprecated-this-capture",
+-                "-Wno-deprecated-declarations",
+-                "-std=c++20",
+-            ],
++            "@v8//:is_v8_use_rusty_v8_custom_libcxx": [
++                "-nostdinc++",
++                "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
++                "-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE",
++                "-D_LIBCPP_INSTRUMENTED_WITH_ASAN=0",
++                "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
++            ],
++            "//conditions:default": [],
++        }) + select({
+             "@v8//bazel/config:is_gcc": [
+                 "-Wno-extra",
+                 "-Wno-array-bounds",
+@@ -161,9 +188,17 @@
+                 "-std=gnu++2a",
+             ],
+             "@v8//bazel/config:is_windows": [
+-                "/std:c++20",
+-            ],
+-            "//conditions:default": [],
++                "-Wno-invalid-offsetof",
++                "-Wno-deprecated-this-capture",
++                "-Wno-deprecated-declarations",
++                "-std=c++20",
++            ],
++            "//conditions:default": [
++                "-Wno-invalid-offsetof",
++                "-Wno-deprecated-this-capture",
++                "-Wno-deprecated-declarations",
++                "-std=c++20",
++            ],
+         }) + select({
+             "@v8//bazel/config:is_gcc_fastbuild": [
+                 # Non-debug builds without optimizations fail because
+@@ -187,15 +222,12 @@
+         includes = ["include"],
+         linkopts = select({
+             "@v8//bazel/config:is_windows": [
+-                "Winmm.lib",
+-                "DbgHelp.lib",
+-                "Advapi32.lib",
++                "-lwinmm",
++                "-ldbghelp",
++                "-ladvapi32",
+             ],
+             "@v8//bazel/config:is_macos": ["-pthread"],
+-            "//conditions:default": ["-Wl,--no-as-needed -ldl -latomic -pthread"],
+-        }) + select({
+-            ":should_add_rdynamic": ["-rdynamic"],
+-            "//conditions:default": [],
++            "//conditions:default": ["-Wl,--no-as-needed -ldl -pthread"],
+         }),
+     )
+
+@@ -466,6 +498,12 @@
+ def _mksnapshot(ctx):
+     prefix = ctx.attr.prefix
+     suffix = ctx.attr.suffix
++
++    # Windows cross-builds use Linux for the exec configuration, but the
++    # snapshot generator must match the target ABI and run on the Windows
++    # runner. Action strategies only choose where an action runs; they cannot
++    # change this executable from the exec to the target configuration.
++    tool = ctx.executable.target_tool if ctx.attr.target_os == "win" else ctx.executable.tool
+     outs = [
+         ctx.actions.declare_file(prefix + "/snapshot" + suffix + ".cc"),
+         ctx.actions.declare_file(prefix + "/embedded" + suffix + ".S"),
+@@ -483,7 +521,7 @@
+             "--embedded_src",
+             outs[1].path,
+         ] + ctx.attr.args,
+-        executable = ctx.executable.tool,
++        executable = tool,
+         progress_message = "Running mksnapshot",
+     )
+     return [DefaultInfo(files = depset(outs))]
+@@ -498,6 +536,12 @@
+             executable = True,
+             cfg = "exec",
+         ),
++        "target_tool": attr.label(
++            mandatory = True,
++            allow_files = True,
++            executable = True,
++            cfg = "target",
++        ),
+         "target_os": attr.string(mandatory = True),
+         "prefix": attr.string(mandatory = True),
+         "suffix": attr.string(mandatory = True),
+@@ -511,6 +555,7 @@
+         args = args,
+         prefix = "noicu",
+         tool = ":noicu/mksnapshot" + suffix,
++        target_tool = ":noicu/mksnapshot" + suffix,
+         suffix = suffix,
+         target_os = select({
+             "@v8//bazel/config:is_macos": "mac",
+@@ -523,6 +568,7 @@
+         args = args,
+         prefix = "icu",
+         tool = ":icu/mksnapshot" + suffix,
++        target_tool = ":icu/mksnapshot" + suffix,
+         suffix = suffix,
+         target_os = select({
+             "@v8//bazel/config:is_macos": "mac",

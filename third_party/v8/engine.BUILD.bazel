@@ -1,0 +1,933 @@
+# Copyright 2021 the V8 project authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("@@//third_party/v8:engine_rules.bzl", "v8_fixed_source_features")
+load("@bazel_skylib//lib:selects.bzl", "selects")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+load(
+    "@v8//:bazel/defs.bzl",
+    "v8_binary",
+    "v8_build_config",
+    "v8_config",
+    "v8_flag",
+    "v8_library",
+    "v8_mksnapshot",
+    "v8_string",
+    "v8_torque_files",
+)
+load("@v8//:bazel/v8-non-pointer-compression.bzl", "v8_binary_non_pointer_compression")
+load("@v8_python_deps//:requirements.bzl", "requirement")
+
+# Used by the Codex-owned pip hub; pin changes travel with the V8 source.
+exports_files(["bazel/requirements.txt"])
+
+# Codex V8 source policy. Only ABI, runtime and target CPU vary; these still
+# accept the existing release inputs. CPU selection lives in bazel/config.
+# Upstream experiments, profiling and debug flags use their pinned 15.2 defaults.
+# ICU and no-ICU remain separate targets for the engine and its generators.
+v8_flag(name = "v8_enable_sandbox")
+
+v8_flag(name = "v8_use_rusty_v8_custom_libcxx")
+
+# Maglev is supported on the two architectures shipped by Codex. Keep the
+# architecture tests separate from feature policy for host-tool transitions.
+selects.config_setting_group(
+    name = "enable_maglev",
+    match_any = [
+        "@v8//bazel/config:v8_target_x64",
+        "@v8//bazel/config:v8_target_arm64",
+    ],
+)
+
+selects.config_setting_group(
+    name = "enable_maglev_x64",
+    match_all = [
+        ":enable_maglev",
+        "@v8//bazel/config:v8_target_x64",
+    ],
+)
+
+selects.config_setting_group(
+    name = "enable_maglev_arm64",
+    match_all = [
+        ":enable_maglev",
+        "@v8//bazel/config:v8_target_arm64",
+    ],
+)
+
+# WebAssembly remains enabled; its source implementation still depends on OS.
+selects.config_setting_group(
+    name = "webassembly_on_posix",
+    match_any = ["@v8//bazel/config:is_posix"],
+)
+
+selects.config_setting_group(
+    name = "webassembly_on_windows",
+    match_any = ["@v8//bazel/config:is_windows"],
+)
+
+# Artifact transitions set True or False, never the upstream "none" auto mode.
+# The 32-bit Torque helper can also force this off.
+v8_string(
+    name = "v8_enable_pointer_compression",
+    default = "False",
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "is_v8_enable_pointer_compression",
+    flag_values = {":v8_enable_pointer_compression": "True"},
+)
+
+# V8's pinned default short-call policy differs on x64 and arm64. In particular
+# the legacy arm64 non-pointer-compressed profile still uses short calls.
+selects.config_setting_group(
+    name = "v8_target_x64_default_short_builtin_calls",
+    match_all = [
+        "@v8//bazel/config:v8_target_x64",
+        ":is_v8_enable_pointer_compression",
+    ],
+)
+
+selects.config_setting_group(
+    name = "v8_target_arm64_default_short_builtin_calls",
+    match_all = [
+        "@v8//bazel/config:v8_target_arm64",
+        "@v8//bazel/config:is_not_android",
+    ],
+)
+
+selects.config_setting_group(
+    name = "is_v8_enable_short_builtin_calls",
+    match_any = [
+        ":v8_target_x64_default_short_builtin_calls",
+        ":v8_target_arm64_default_short_builtin_calls",
+    ],
+)
+
+# Fixed V8 15.2 Codex feature contract: TurboFan and WebAssembly enabled;
+# experiments, VTune and profiling disabled. Do not hard-code ABI-sensitive
+# values such as sandbox, pointer compression or target CPU into this baseline.
+v8_config(
+    name = "define_flags",
+    conditional_defines = {"v8_enable_sandbox": "V8_ENABLE_SANDBOX"},
+    defines = [
+        "V8_DEPRECATION_WARNINGS",
+        "V8_IMMINENT_DEPRECATION_WARNINGS",
+        "V8_ENABLE_LAZY_SOURCE_POSITIONS",
+        "V8_ENABLE_TURBOFAN",
+        "V8_ENABLE_WEBASSEMBLY",
+        "V8_ENABLE_UNDEFINED_DOUBLE",
+        "V8_USE_HOST_CPU_ARM_FEATURES",
+        "V8_TYPED_ARRAY_MAX_SIZE_IN_HEAP=64",
+    ] + [
+        "GOOGLE3",
+        "V8_ADVANCED_BIGINT_ALGORITHMS",
+        "V8_CONCURRENT_MARKING",
+        "V8_ENABLE_SPARKPLUG",
+        "V8_ENABLE_EXTENSIBLE_RO_SNAPSHOT",
+        "V8_ENABLE_CONTINUATION_PRESERVED_EMBEDDER_DATA",
+        "V8_TLS_USED_IN_LIBRARY",
+    ] + select({
+        "@v8//bazel/config:is_debug": [
+            "DEBUG",
+            "V8_ENABLE_CHECKS",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "@v8//bazel/config:asan_enabled": ["V8_USE_ADDRESS_SANITIZER"],
+        "//conditions:default": [],
+    }) + select({
+        "@v8//bazel/config:hwasan_enabled": ["V8_USE_HWADDRESS_SANITIZER"],
+        "//conditions:default": [],
+    }) + select({
+        "@v8//bazel/config:msan_enabled": ["V8_USE_MEMORY_SANITIZER"],
+        "//conditions:default": [],
+    }) + select({
+        "@v8//bazel/config:ubsan_enabled": ["V8_USE_UNDEFINED_BEHAVIOR_SANITIZER"],
+        "//conditions:default": [],
+    }) + select(
+        {
+            "@v8//bazel/config:v8_target_ia32": ["V8_TARGET_ARCH_IA32"],
+            "@v8//bazel/config:v8_target_x64": [
+                "V8_TARGET_ARCH_X64",
+                "V8_ENABLE_SPARKPLUG_PLUS",
+            ],
+            "@v8//bazel/config:v8_target_arm": [
+                "V8_TARGET_ARCH_ARM",
+                "CAN_USE_ARMV7_INSTRUCTIONS",
+                "CAN_USE_VFP3_INSTRUCTIONS",
+            ],
+            "@v8//bazel/config:v8_target_arm64": [
+                "V8_TARGET_ARCH_ARM64",
+                "V8_ENABLE_SPARKPLUG_PLUS",
+            ],
+            "@v8//bazel/config:v8_target_s390x": [
+                "V8_TARGET_ARCH_S390X",
+            ],
+            "@v8//bazel/config:v8_target_riscv64": [
+                # NOTE: Bazel rules for riscv64 weren't tested on a real system.
+                "V8_TARGET_ARCH_RISCV64",
+                "CAN_USE_FPU_INSTRUCTIONS",
+            ],
+            "@v8//bazel/config:v8_target_ppc64le": [
+                # NOTE: Bazel rules for ppc64le weren't tested on a real system.
+                "V8_TARGET_ARCH_PPC64",
+            ],
+        },
+        no_match_error = "Please specify a target cpu supported by v8",
+    ) + select({
+        "@v8//bazel/config:is_android": [
+            "V8_HAVE_TARGET_OS",
+            "V8_TARGET_OS_ANDROID",
+        ],
+        "@v8//bazel/config:is_linux": [
+            "V8_HAVE_TARGET_OS",
+            "V8_TARGET_OS_LINUX",
+        ],
+        "@v8//bazel/config:is_macos": [
+            "V8_HAVE_TARGET_OS",
+            "V8_TARGET_OS_MACOS",
+        ],
+        "@v8//bazel/config:is_windows": [
+            "V8_HAVE_TARGET_OS",
+            "V8_TARGET_OS_WIN",
+            "UNICODE",
+            "_UNICODE",
+            "_CRT_RAND_S",
+            "_WIN32_WINNT=0x0A00",
+        ],
+    }) + select({
+        ":is_v8_enable_pointer_compression": [
+            "V8_COMPRESS_POINTERS",
+            "V8_31BIT_SMIS_ON_64BIT_ARCH",
+            "V8_CONTIGUOUS_COMPRESSED_RO_SPACE",
+            "V8_CONTIGUOUS_COMPRESSED_RO_SPACE_SIZE_MB=8",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        ":is_v8_enable_pointer_compression": [
+            "V8_COMPRESS_POINTERS_IN_SHARED_CAGE",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        ":is_v8_enable_short_builtin_calls": [
+            "V8_SHORT_BUILTIN_CALLS",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        ":is_v8_enable_pointer_compression": [
+            "V8_EXTERNAL_CODE_SPACE",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        ":is_v8_enable_pointer_compression": [
+            "V8_STATIC_ROOTS",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        ":enable_maglev": [
+            "V8_ENABLE_MAGLEV",
+        ],
+        "//conditions:default": [],
+    }) + [] + [],
+    deps = [],
+)
+
+# Source inventory and dependency aliases.
+
+# The imported groups retain upstream select names. They express our pinned
+# feature contract here; only CPU, ABI and the C++ runtime actually vary.
+v8_fixed_source_features(
+    name = "pinned_source_features",
+    build_setting_default = True,
+)
+
+config_setting(
+    name = "is_v8_enable_webassembly",
+    flag_values = {":pinned_source_features": "True"},
+)
+
+config_setting(
+    name = "disabled_pinned_source_feature",
+    flag_values = {":pinned_source_features": "False"},
+)
+
+alias(
+    name = "enable_drumbrake_arm64",
+    actual = ":disabled_pinned_source_feature",
+)
+
+alias(
+    name = "enable_drumbrake_x64",
+    actual = ":disabled_pinned_source_feature",
+)
+
+alias(
+    name = "enable_maglev_arm",
+    actual = ":disabled_pinned_source_feature",
+)
+
+alias(
+    name = "enable_maglev_riscv",
+    actual = ":disabled_pinned_source_feature",
+)
+
+alias(
+    name = "is_v8_enable_drumbrake",
+    actual = ":disabled_pinned_source_feature",
+)
+
+alias(
+    name = "is_v8_enable_experimental_tq_to_tsa",
+    actual = ":disabled_pinned_source_feature",
+)
+
+alias(
+    name = "is_v8_wasm_random_fuzzers",
+    actual = ":disabled_pinned_source_feature",
+)
+
+# @CODEX_V8_UPSTREAM_FILEGROUPS@
+
+alias(
+    name = "lib_dragonbox",
+    actual = "@v8_dragonbox//:dragonbox",
+)
+
+alias(
+    name = "lib_fp16",
+    actual = "@v8_fp16//:fp16",
+)
+
+# Generated files
+
+# Define file groups for torque definitions and initializers. Both are
+# generated together, but we can use output_group to split them.
+filegroup(
+    name = "icu/generated_torque_definitions",
+    srcs = [":icu/generated_torque_files"],
+    output_group = "definitions",
+)
+
+filegroup(
+    name = "noicu/generated_torque_definitions",
+    srcs = [":noicu/generated_torque_files"],
+    output_group = "definitions",
+)
+
+filegroup(
+    name = "icu/generated_torque_initializers",
+    srcs = [":icu/generated_torque_files"],
+    output_group = "initializers",
+)
+
+filegroup(
+    name = "noicu/generated_torque_initializers",
+    srcs = [":noicu/generated_torque_files"],
+    output_group = "initializers",
+)
+
+# TODO(victorgomes): Add support to tools/debug_helper,
+# which needs class-debug-readers and debug-macros.
+v8_torque_files(
+    name = "generated_torque_files",
+    args = [] + select({
+        "@v8//bazel/config:v8_target_is_32_bits": ["-m32"],
+        "//conditions:default": [],
+    }),
+    definition_extras = [
+        "bit-field-asserts.cc",
+        "builtin-definitions.h",
+        # "class-debug-readers.cc",
+        # "class-debug-readers.h",
+        "class-forward-declarations.h",
+        # "debug-macros.cc",
+        # "debug-macros.h",
+        "instance-types.h",
+        "interface-descriptors.inc",
+    ],
+    icu_srcs = [":icu/torque_files"],
+    initializer_extras = [
+        "csa-types.h",
+        "enum-verifiers.cc",
+        "exported-macros-assembler.cc",
+        "exported-macros-assembler.h",
+    ],
+    noicu_srcs = [":noicu/torque_files"],
+)
+
+py_binary(
+    name = "code_generator",
+    srcs = [
+        "third_party/inspector_protocol/code_generator.py",
+        "third_party/inspector_protocol/pdl.py",
+    ],
+    data = [
+        "third_party/inspector_protocol/lib/Forward_h.template",
+        "third_party/inspector_protocol/lib/Object_cpp.template",
+        "third_party/inspector_protocol/lib/Object_h.template",
+        "third_party/inspector_protocol/lib/Protocol_cpp.template",
+        "third_party/inspector_protocol/lib/ValueConversions_cpp.template",
+        "third_party/inspector_protocol/lib/ValueConversions_h.template",
+        "third_party/inspector_protocol/lib/Values_cpp.template",
+        "third_party/inspector_protocol/lib/Values_h.template",
+        "third_party/inspector_protocol/templates/Exported_h.template",
+        "third_party/inspector_protocol/templates/Imported_h.template",
+        "third_party/inspector_protocol/templates/TypeBuilder_cpp.template",
+        "third_party/inspector_protocol/templates/TypeBuilder_h.template",
+    ],
+    imports = ["third_party/inspector_protocol/"],
+    deps = [
+        requirement("jinja2"),
+    ],
+)
+
+genrule(
+    name = "generated_inspector_files",
+    srcs = [
+        "include/js_protocol.pdl",
+        "src/inspector/inspector_protocol_config.json",
+        "third_party/inspector_protocol/code_generator.py",
+        "third_party/inspector_protocol/pdl.py",
+        "third_party/inspector_protocol/lib/Forward_h.template",
+        "third_party/inspector_protocol/lib/Object_cpp.template",
+        "third_party/inspector_protocol/lib/Object_h.template",
+        "third_party/inspector_protocol/lib/Protocol_cpp.template",
+        "third_party/inspector_protocol/lib/ValueConversions_cpp.template",
+        "third_party/inspector_protocol/lib/ValueConversions_h.template",
+        "third_party/inspector_protocol/lib/Values_cpp.template",
+        "third_party/inspector_protocol/lib/Values_h.template",
+        "third_party/inspector_protocol/templates/Exported_h.template",
+        "third_party/inspector_protocol/templates/Imported_h.template",
+        "third_party/inspector_protocol/templates/TypeBuilder_cpp.template",
+        "third_party/inspector_protocol/templates/TypeBuilder_h.template",
+    ],
+    outs = [
+        "include/inspector/Debugger.h",
+        "include/inspector/Runtime.h",
+        "include/inspector/Schema.h",
+        "src/inspector/protocol/Forward.h",
+        "src/inspector/protocol/Protocol.cpp",
+        "src/inspector/protocol/Protocol.h",
+        "src/inspector/protocol/Console.cpp",
+        "src/inspector/protocol/Console.h",
+        "src/inspector/protocol/Debugger.cpp",
+        "src/inspector/protocol/Debugger.h",
+        "src/inspector/protocol/HeapProfiler.cpp",
+        "src/inspector/protocol/HeapProfiler.h",
+        "src/inspector/protocol/Profiler.cpp",
+        "src/inspector/protocol/Profiler.h",
+        "src/inspector/protocol/Runtime.cpp",
+        "src/inspector/protocol/Runtime.h",
+        "src/inspector/protocol/Schema.cpp",
+        "src/inspector/protocol/Schema.h",
+    ],
+    cmd = "INSPECTOR_PROTOCOL_DIR=$$(dirname $(execpath third_party/inspector_protocol/code_generator.py)); \
+           PYTHONPATH=$$INSPECTOR_PROTOCOL_DIR:external/rules_python++pip+v8_python_deps_311_jinja2/site-packages:external/rules_python++pip+v8_python_deps_311_markupsafe/site-packages:$${PYTHONPATH-} \
+           $(execpath @rules_python//python/bin:python) $(execpath third_party/inspector_protocol/code_generator.py) --jinja_dir . \
+           --inspector_protocol_dir $$INSPECTOR_PROTOCOL_DIR \
+           --config $(location :src/inspector/inspector_protocol_config.json) \
+           --config_value protocol.path=$(location :include/js_protocol.pdl) \
+           --config_value crdtp.dir=third_party/inspector_protocol/crdtp \
+           --output_base $(@D)/src/inspector",
+    message = "Generating inspector files",
+    tools = [
+        "@rules_python//python/bin:python",
+        requirement("jinja2"),
+        requirement("markupsafe"),
+    ],
+)
+
+filegroup(
+    name = "v8_common_libshared_files",
+    srcs = [
+        ":torque_runtime_support_files",
+        ":v8_libplatform_files",
+        ":v8_libsampler_files",
+        ":v8_shared_internal_headers",
+    ],
+)
+
+cc_library(
+    name = "rusty_v8_internal_headers",
+    hdrs = [
+        "src/libplatform/default-platform.h",
+    ],
+    strip_include_prefix = "",
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "rusty_v8_crdtp_headers",
+    hdrs = [
+        "third_party/inspector_protocol/crdtp/cbor.h",
+        "third_party/inspector_protocol/crdtp/dispatch.h",
+        "third_party/inspector_protocol/crdtp/error_support.h",
+        "third_party/inspector_protocol/crdtp/export.h",
+        "third_party/inspector_protocol/crdtp/find_by_first.h",
+        "third_party/inspector_protocol/crdtp/frontend_channel.h",
+        "third_party/inspector_protocol/crdtp/json.h",
+        "third_party/inspector_protocol/crdtp/parser_handler.h",
+        "third_party/inspector_protocol/crdtp/protocol_core.h",
+        "third_party/inspector_protocol/crdtp/serializable.h",
+        "third_party/inspector_protocol/crdtp/span.h",
+        "third_party/inspector_protocol/crdtp/status.h",
+    ],
+    strip_include_prefix = "",
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "d8_files",
+    srcs = [
+        "src/d8/async-hooks-wrapper.cc",
+        "src/d8/async-hooks-wrapper.h",
+        "src/d8/d8.cc",
+        "src/d8/d8.h",
+        "src/d8/d8-console.cc",
+        "src/d8/d8-console.h",
+        "src/d8/d8-js.cc",
+        "src/d8/d8-platforms.cc",
+        "src/d8/d8-platforms.h",
+        "src/d8/d8-posix.cc",
+        "src/d8/d8-test.cc",
+        "src/d8/hardware-watchpoints.cc",
+        "src/d8/hardware-watchpoints.h",
+        "src/d8/memory-access-information.cc",
+        "src/d8/memory-access-information.h",
+    ],
+)
+
+genrule(
+    name = "generated_bytecode_builtins_list",
+    srcs = [],
+    outs = ["builtins-generated/bytecodes-builtins-list.h"],
+    cmd = "$(location :bytecode_builtins_list_generator) $@",
+    cmd_bat = "$(location :bytecode_builtins_list_generator) $@",
+    tools = [":bytecode_builtins_list_generator"],
+)
+
+genrule(
+    name = "generated_regexp_special_case",
+    srcs = [],
+    outs = ["src/regexp/special-case.cc"],
+    cmd = "$(location :regexp_special_case_generator) $@",
+    cmd_bat = "$(location :regexp_special_case_generator) $@",
+    tools = [":regexp_special_case_generator"],
+)
+
+v8_mksnapshot(
+    name = "generated_snapshot_files",
+    args = [] + [] + [] + ["--no-native-code-counters"],
+)
+
+# =================================================
+# Libraries rules
+# =================================================
+
+# NOTE: This allow headers to be accessed without the icu/noicu prefixes.
+cc_library(
+    name = "icu/generated_torque_definitions_headers",
+    hdrs = [":icu/generated_torque_definitions"],
+    copts = ["-Wno-implicit-fallthrough"],
+    strip_include_prefix = "icu",
+)
+
+cc_library(
+    name = "noicu/generated_torque_definitions_headers",
+    hdrs = [":noicu/generated_torque_definitions"],
+    copts = ["-Wno-implicit-fallthrough"],
+    strip_include_prefix = "noicu",
+)
+
+alias(
+    name = "llvm_libc_headers",
+    actual = "@@//third_party/v8:rusty_v8_llvm_libc_headers",
+)
+
+v8_library(
+    name = "v8_libbase",
+    srcs = [
+        ":v8_libbase_files",
+        ":v8_shared_internal_headers",
+    ],
+    copts = ["-Wno-implicit-fallthrough"],
+    deps = [
+        ":llvm_libc_headers",
+        "@v8_abseil//:overload",
+        "@v8_abseil//:synchronization",
+        "@v8_abseil//:time",
+    ],
+)
+
+cc_library(
+    name = "torque_base_headers",
+    hdrs = [
+        "src/torque/kythe-data.h",
+        "src/torque/torque-compiler.h",
+    ],
+    copts = ["-Wno-implicit-fallthrough"],
+    include_prefix = "third_party/v8",
+    includes = ["."],
+)
+
+cc_library(
+    name = "kythe_torque_base",
+    srcs = [
+        ":torque_base_files",
+    ],
+    copts = ["-Wno-implicit-fallthrough"] + select({
+        "@v8//bazel/config:is_posix": ["-fexceptions"],
+        "//conditions:default": [],
+    }),
+    features = ["-use_header_modules"],
+    deps = [
+        ":torque_base_headers",
+        ":v8_libbase",
+        "@v8_abseil//:node_hash_map",
+        "@v8_abseil//:node_hash_set",
+    ],
+)
+
+alias(
+    name = "simdutf",
+    actual = "@v8_simdutf//:simdutf",
+)
+
+v8_library(
+    name = "v8_libshared",
+    srcs = [
+        ":v8_base_without_compiler_files",
+        ":v8_common_libshared_files",
+    ] + [
+        ":v8_compiler_files",
+    ],
+    copts = ["-Wno-implicit-fallthrough"],
+    icu_deps = [
+        ":icu/generated_torque_definitions_headers",
+        "@v8_icu//:icu",
+    ],
+    icu_srcs = [
+        ":generated_regexp_special_case",
+        ":icu/generated_torque_definitions",
+        ":icu/v8_base_without_compiler_files",
+    ],
+    noicu_deps = [
+        ":noicu/generated_torque_definitions_headers",
+    ],
+    noicu_srcs = [
+        ":noicu/generated_torque_definitions",
+    ],
+    deps = [
+        # keep
+        ":lib_dragonbox",
+        "@v8_fast_float//:fast_float",
+        ":lib_fp16",
+        ":simdutf",
+        ":v8_libbase",
+        "@v8_abseil//:btree",
+        "@v8_abseil//:flat_hash_map",
+        "@v8_abseil//:flat_hash_set",
+        "@v8_abseil//:overload",
+        "@v8_highway//:hwy",
+    ],
+)
+
+v8_library(
+    name = "v8",
+    srcs = [
+        ":v8_inspector_files",
+    ] + [],
+    hdrs = [":public_header_files"],
+    copts = ["-Wno-implicit-fallthrough"],
+    icu_deps = [":icu/v8_libshared"],
+    icu_srcs = [":icu/snapshot_files"],
+    noicu_deps = [":noicu/v8_libshared"],
+    noicu_srcs = [":noicu/snapshot_files"],
+    visibility = ["//visibility:public"],
+)
+
+v8_library(
+    name = "wee8",
+    srcs = [":wee8_files"],
+    hdrs = [":public_wasm_c_api_header_files"],
+    copts = ["-Wno-implicit-fallthrough"],
+    strip_include_prefix = "third_party",
+    visibility = ["//visibility:public"],
+    deps = [":noicu/v8"] + [],
+)
+
+alias(
+    name = "core_lib_noicu",
+    actual = "noicu/v8",
+)
+
+alias(
+    name = "core_lib_icu",
+    actual = "icu/v8",
+    visibility = ["//visibility:public"],
+)
+
+v8_library(
+    name = "v8_vtune",
+    srcs = [
+        "third_party/vtune/v8-vtune.h",
+        "third_party/vtune/vtune-jit.cc",
+        "third_party/vtune/vtune-jit.h",
+    ],
+    copts = ["-I"],
+    deps = [
+        ":core_lib_noicu",
+        "@intel_ittapi//:lib_ittapi",
+    ],
+)
+
+# =================================================
+# Binary rules
+# =================================================
+
+v8_binary(
+    name = "bytecode_builtins_list_generator",
+    srcs = [
+        "src/builtins/generate-bytecodes-builtins-list.cc",
+        "src/interpreter/bytecode-operands.cc",
+        "src/interpreter/bytecode-operands.h",
+        "src/interpreter/bytecode-traits.h",
+        "src/interpreter/bytecodes.cc",
+        "src/interpreter/bytecodes.h",
+    ],
+    copts = ["-Wno-implicit-fallthrough"],
+    deps = ["v8_libbase"],
+)
+
+v8_binary(
+    name = "regexp_special_case_generator",
+    srcs = [
+        "src/regexp/gen-regexp-special-case.cc",
+        "src/regexp/special-case.h",
+        ":v8_shared_internal_headers",
+    ],
+    copts = ["-Wno-implicit-fallthrough"],
+    defines = [
+        "V8_INTL_SUPPORT",
+        "ICU_UTIL_DATA_IMPL=ICU_UTIL_DATA_STATIC",
+        # src/regexp/regexp-compiler-tonode.cc uses an unsafe ICU method and
+        # access a character implicitly.
+        "UNISTR_FROM_CHAR_EXPLICIT=",
+    ],
+    deps = [
+        ":v8_libbase",
+        "@v8_icu//:icu",
+    ],
+)
+
+v8_binary(
+    name = "torque",
+    srcs = [
+        "src/torque/torque.cc",
+        ":torque_base_files",
+    ],
+    copts = ["-Wno-implicit-fallthrough"] + select({
+        "@v8//bazel/config:is_posix": ["-fexceptions"],
+        "//conditions:default": [],
+    }),
+    features = ["-use_header_modules"],
+    icu_defines = ["V8_INTL_SUPPORT"],
+    linkopts = select({
+        "@v8//bazel/config:is_android": ["-llog"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "v8_libbase",
+        "@v8_abseil//:node_hash_map",
+        "@v8_abseil//:node_hash_set",
+    ],
+)
+
+v8_binary(
+    name = "mksnapshot",
+    srcs = [
+        ":mksnapshot_files",
+    ] + [],
+    copts = ["-Wno-implicit-fallthrough"],
+    icu_deps = [":icu/v8_libshared"],
+    icu_srcs = [
+        ":icu/generated_torque_initializers",
+        ":icu/v8_initializers_files",
+    ],
+    # Match GN's mksnapshot `disable_icf` config. If the linker folds distinct
+    # external-reference helpers together while producing the snapshot, the
+    # final embedder binary may not fold the same pair and startup
+    # deserialization will reject the snapshot.
+    # GN also increases the x64 Windows stack reserve because constructing the
+    # snapshot overflows the linker's 1 MiB default.
+    linkopts = select({
+        "@v8//bazel/config:is_android": ["-llog"],
+        "@v8//bazel/config:is_macos": ["-Wl,-no_deduplicate"],
+        "@v8//bazel/config:is_windows": [
+            "-Wl,/OPT:NOICF",
+            "-Wl,/STACK:2097152",
+        ],
+        "//conditions:default": ["-Wl,--icf=none"],
+    }),
+    noicu_deps = [":v8_libshared_noicu"],
+    noicu_srcs = [
+        ":noicu/generated_torque_initializers",
+        ":noicu/v8_initializers_files",
+    ],
+)
+
+v8_binary(
+    name = "d8",
+    srcs = [":d8_files"],
+    copts = ["-Wno-implicit-fallthrough"],
+    icu_deps = [":icu/v8"],
+    noicu_deps = [":noicu/v8"],
+)
+
+# This target forces torque to be compiled without pointer compression.
+v8_binary_non_pointer_compression(
+    name = "noicu/torque_non_pointer_compression",
+    binary = "noicu/torque",
+)
+
+v8_binary_non_pointer_compression(
+    name = "icu/torque_non_pointer_compression",
+    binary = "icu/torque",
+)
+
+alias(
+    name = "v8ci",
+    actual = "noicu/v8",
+)
+
+# =================================================
+# Tests
+# =================================================
+
+v8_build_config(
+    name = "v8_build_config",
+    arch = select({
+        "@v8//bazel/config:v8_target_arm64": "arm64",
+        "@v8//bazel/config:v8_target_x64": "x64",
+        "//conditions:default": "x64",
+    }),
+)
+
+# Runs mjsunit with d8.
+py_test(
+    name = "noicu/mjsunit",
+    size = "medium",
+    srcs = [
+        "test/mjsunit/testcfg.py",
+        "tools/predictable_wrapper.py",
+        "tools/run-tests.py",
+    ] + glob(["tools/testrunner/**/*.py"]),
+    args = [
+        "--no-sorting",
+        "--nopresubmit",
+        "--variant=google3",
+        "--outdir noicu",
+        "--verbose",
+    ] + select({
+        "@v8//bazel/config:v8_target_arm64": [
+            "--arch=arm64",
+        ],
+        "@v8//bazel/config:v8_target_x64": [
+            "--arch=x64",
+        ],
+        "//conditions:default": [],
+    }) + [
+        "mjsunit",
+    ],
+    data = [
+        "test",
+        ":noicu/d8",
+        ":noicu/v8_build_config",
+        "//testing/pybase",
+    ] + glob(["test/**"]) + glob(["tools/**/*.js"]) + glob(["tools/**/*.mjs"]),
+    main = "tools/run-tests.py",
+    tags = [
+        # Disable sanitizers, as they don't work in general in V8.
+        "nosan",
+    ],
+)
+
+py_test(
+    name = "icu/mjsunit",
+    size = "medium",
+    srcs = [
+        "test/mjsunit/testcfg.py",
+        "tools/predictable_wrapper.py",
+        "tools/run-tests.py",
+    ] + glob(["tools/testrunner/**/*.py"]),
+    args = [
+        "--no-sorting",
+        "--nopresubmit",
+        "--variant=google3",
+        "--outdir icu",
+        "--verbose",
+    ] + select({
+        "@v8//bazel/config:v8_target_arm64": [
+            "--arch=arm64",
+        ],
+        "@v8//bazel/config:v8_target_x64": [
+            "--arch=x64",
+        ],
+        "//conditions:default": [],
+    }) + [
+        "mjsunit",
+    ],
+    data = [
+        "test",
+        ":icu/d8",
+        ":icu/v8_build_config",
+        "//testing/pybase",
+    ] + glob(["test/**"]) + glob(["tools/**/*.js"]) + glob(["tools/**/*.mjs"]),
+    main = "tools/run-tests.py",
+    tags = [
+        # Disable sanitizers, as they don't work in general in V8.
+        "nosan",
+    ],
+)
+
+py_test(
+    name = "icu/intl",
+    size = "medium",
+    srcs = [
+        "test/intl/testcfg.py",
+        "tools/predictable_wrapper.py",
+        "tools/run-tests.py",
+    ] + glob(["tools/testrunner/**/*.py"]),
+    args = [
+        "--no-sorting",
+        "--nopresubmit",
+        "--variant=google3",
+        "--outdir icu",
+        "--verbose",
+    ] + select({
+        "@v8//bazel/config:v8_target_arm64": [
+            "--arch=arm64",
+        ],
+        "@v8//bazel/config:v8_target_x64": [
+            "--arch=x64",
+        ],
+        "//conditions:default": [],
+    }) + [
+        "intl",
+    ],
+    data = [
+        "test",
+        ":icu/d8",
+        ":icu/v8_build_config",
+        "//testing/pybase",
+    ] + glob(["test/**"]) + glob(["tools/**/*.js"]) + glob(["tools/**/*.mjs"]),
+    main = "tools/run-tests.py",
+    tags = [
+        # Disable sanitizers, as they don't work in general in V8.
+        "nosan",
+    ],
+)
