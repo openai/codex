@@ -50,6 +50,8 @@ fn archive_picker_state() -> (PickerState, Arc<Mutex<Vec<ThreadId>>>) {
 
 fn set_selected_session(state: &mut PickerState, thread_id: ThreadId) {
     state.all_rows = vec![Row {
+        backend_id: None,
+        history_mode: None,
         path: None,
         preview: String::from("Selected session"),
         thread_id: Some(thread_id),
