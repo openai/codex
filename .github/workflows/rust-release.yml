@@ -1579,7 +1579,7 @@ jobs:
       - name: Setup Node.js for npm packaging
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -1893,8 +1893,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          # Node 24 bundles npm >= 11.5.1, which trusted publishing requires.
-          node-version: 24
+          # Trusted publishing requires the selected Node.js release to include npm >= 11.5.1.
+          node-version-file: .nvmrc
           registry-url: "https://registry.npmjs.org"
           scope: "@openai"
 

@@ -7,7 +7,7 @@ stdio, OAuth, and additional transport and security regression fixtures.
 
 The official upstream suite is pinned to
 `modelcontextprotocol/conformance@49103de6ed70804e940637bf3e9e29e4a3f54e64`.
-Use Node.js 22 and Python 3.10 or later.
+Use the Node.js version in the repository's `.nvmrc` and Python 3.10 or later.
 
 ## Run the conformance gate
 
