@@ -50,7 +50,6 @@ use super::LunaSampler;
 use super::LunaSamplerConfig;
 use super::LunaSamplerError;
 use super::LunaSamplingRequest;
-use super::MAX_CONCURRENT_REQUESTS;
 
 #[path = "request_tests.rs"]
 mod request;
@@ -60,6 +59,38 @@ mod retained;
 mod routing;
 
 impl LunaSampler {
+    // Drive the production retained sampler to completion for transport tests. Tests of
+    // early publication poll sample_retained directly so they can hold the stream open.
+    pub(in crate::async_scorer) async fn sample(
+        &self,
+        mut request: LunaSamplingRequest,
+    ) -> Result<String, LunaSamplerError> {
+        let evidence = std::mem::take(&mut request.input)
+            .into_iter()
+            .map(codex_history::ResponseItemEnvelope::new)
+            .collect();
+        let (input, input_tokens) = Self::prepare_input(&request, /*history*/ None, evidence);
+        let (ready, score) = tokio::sync::oneshot::channel();
+        let sample = super::ConversationSample {
+            input: crate::async_scorer::request::PreparedRequest {
+                input,
+                input_tokens,
+                existing_context_tokens: 0,
+                cursor: codex_guardian_context::TranscriptCursor {
+                    parent_history_version: 0,
+                    transcript_entry_count: 1,
+                },
+                truncations: Vec::new(),
+                section_costs: Vec::new(),
+            },
+            sampling: request,
+        };
+        let (_, score) = tokio::join!(self.sample_retained(sample, ready), score);
+        score
+            .expect("retained sampler publishes its result")
+            .map(super::SampledScore::accept)
+    }
+
     /// Waits for warm sockets to enter the client pool, beyond the server handshake.
     pub(in crate::async_scorer) async fn wait_for_prewarm(&self, timeout: Duration) -> Result<()> {
         tokio::time::timeout(timeout, async {
@@ -280,7 +311,6 @@ pub(in crate::async_scorer) fn sample_request(parent_turn_id: &str) -> LunaSampl
             "The user requested a README summary.",
         )],
         parent_compaction: None,
-        parent_compaction_hash: None,
         reasoning_effort: ReasoningEffort::None,
         parent_turn_id: parent_turn_id.to_owned(),
         root_turn_id: None,
@@ -426,7 +456,7 @@ impl ExtensionMetrics for RecordingMetrics {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sampler_records_token_usage_after_returning_an_early_classification() -> Result<()> {
+async fn sampler_records_token_usage_after_classification() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let events = vec![
@@ -485,79 +515,7 @@ async fn sampler_records_token_usage_after_returning_an_early_classification() -
         ))
     );
 
-    let request = server
-        .wait_for_request(
-            /*connection_index*/ INITIAL_WEBSOCKET_CONNECTIONS - 1,
-            /*request_index*/ 0,
-        )
-        .await
-        .body_json();
-    let input: Vec<ResponseItem> = serde_json::from_value(request["input"].clone())?;
-    let estimated = input
-        .iter()
-        .map(codex_guardian_context::estimate_input_tokens)
-        .sum::<usize>();
-    assert_eq!(
-        metrics
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(
-                |metric| metric.0 == codex_guardian_context::REQUEST_TOKENS_METRIC
-                    && metric.2.iter().any(|(key, _)| key == "token_bucket")
-            )
-            .cloned()
-            .collect::<Vec<_>>(),
-        vec![(
-            codex_guardian_context::REQUEST_TOKENS_METRIC.to_owned(),
-            i64::try_from(estimated)?,
-            vec![
-                ("target".to_owned(), "async".to_owned()),
-                ("component".to_owned(), "total".to_owned()),
-                (
-                    "token_bucket".to_owned(),
-                    codex_guardian_context::request_token_bucket(estimated).to_owned()
-                ),
-            ],
-        )],
-    );
-
     Ok(())
-}
-
-#[tokio::test]
-async fn oversized_classification_keeps_untagged_request_histograms() {
-    let metrics = Arc::new(RecordingMetrics::default());
-    let mut config = sampler_config("http://localhost".to_owned());
-    config.max_input_tokens = 1;
-    config.metrics = Some(metrics.clone());
-    let sampler = LunaSampler::new(config);
-    assert!(matches!(
-        sampler.sample(sample_request("parent")).await,
-        Err(LunaSamplerError::InputTooLarge)
-    ));
-    assert_eq!(
-        metrics
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|metric| metric.2.iter().any(|(key, _)| key == "token_bucket"))
-            .cloned()
-            .collect::<Vec<_>>(),
-        Vec::<RecordedMetric>::new(),
-    );
-    assert_eq!(
-        metrics
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|metric| metric.0 == codex_guardian_context::REQUEST_TOKENS_METRIC)
-            .count(),
-        3,
-    );
 }
 
 struct RefreshableAuth(std::sync::Mutex<&'static str>);
@@ -751,7 +709,6 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
                 internal_chat_message_metadata_passthrough: None,
             }],
             parent_compaction: None,
-            parent_compaction_hash: None,
             reasoning_effort: ReasoningEffort::None,
             parent_turn_id: "turn-1".to_owned(),
             root_turn_id: Some("turn-1".to_owned()),
@@ -785,7 +742,6 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
                 "The user requested a source review.",
             )],
             parent_compaction: None,
-            parent_compaction_hash: None,
             reasoning_effort: ReasoningEffort::Medium,
             parent_turn_id: "turn-2".to_owned(),
             root_turn_id: Some("root-2".to_owned()),
@@ -847,92 +803,6 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sampler_reuses_parent_compaction_only_for_matching_model_hashes() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    for (parent_hash, luna_hash, should_reuse) in [
-        (Some("compatible"), Some("compatible"), true),
-        (Some("parent"), Some("luna"), false),
-        (None, Some("compatible"), false),
-        (Some("compatible"), None, false),
-        (Some(""), Some(""), false),
-    ] {
-        let events = vec![
-            ev_assistant_message("sample", "low"),
-            ev_completed("response-1"),
-        ];
-        let mut connections = vec![Vec::new(); INITIAL_WEBSOCKET_CONNECTIONS - 1];
-        connections.push(vec![events.clone(), events]);
-        let server = responses::start_websocket_server(connections).await;
-        let mut config = sampler_config(format!(
-            "http://{}/v1",
-            server.uri().trim_start_matches("ws://")
-        ));
-        config.luna_compaction_hash = luna_hash.map(str::to_owned);
-        let sampler = connect_sampler(config).await?;
-        let parent_compaction = ResponseItem::Compaction {
-            id: Some(ResponseItemId::from_server("cmp_parent".to_owned())),
-            encrypted_content: "opaque encrypted summary".to_owned(),
-            internal_chat_message_metadata_passthrough: None,
-        };
-        let mut request = sample_request("turn-1");
-        request.parent_compaction = Some(parent_compaction.clone());
-        request.parent_compaction_hash = parent_hash.map(str::to_owned);
-        request.input.insert(
-            /*index*/ 0,
-            PreviousReviews::try_from_fragments(vec![codex_guardian_context::PreviousReview {
-                id: ResponseItemId::from_server("review-trusted".to_owned()),
-                fragment: "trusted review".to_owned(),
-            }])?
-            .into_annotated_message()
-            .into_item(),
-        );
-
-        let result = sampler.sample(request).await;
-        if !should_reuse {
-            assert!(matches!(
-                result,
-                Err(LunaSamplerError::IncompatibleCompaction)
-            ));
-            assert!(server.connections().iter().all(Vec::is_empty));
-            assert_eq!(
-                sampler.sample(sample_request("uncompacted-turn")).await?,
-                "low"
-            );
-            continue;
-        }
-        assert_eq!(result?, "low");
-
-        let request = server
-            .wait_for_request(
-                /*connection_index*/ INITIAL_WEBSOCKET_CONNECTIONS - 1,
-                /*request_index*/ 0,
-            )
-            .await
-            .body_json();
-        let input = request["input"].as_array().expect("input items");
-        assert_eq!(input[0]["type"], "additional_tools");
-        assert_eq!(input[1]["role"], "developer");
-        assert_eq!(input.len(), 5);
-        assert_eq!(input[2], serde_json::to_value(&parent_compaction)?);
-        assert_eq!(input[3]["role"], "developer");
-        assert_eq!(input[3]["content"][1]["text"], "trusted review");
-        assert_eq!(input[4]["role"], "user");
-
-        let mut switched_request = sample_request("turn-2");
-        switched_request.parent_compaction = Some(parent_compaction);
-        switched_request.parent_compaction_hash = Some("incompatible".to_owned());
-        assert!(matches!(
-            sampler.sample(switched_request).await,
-            Err(LunaSamplerError::IncompatibleCompaction)
-        ));
-        assert_eq!(server.connections().iter().map(Vec::len).sum::<usize>(), 1);
-    }
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sampler_returns_classification_token_before_terminal_response_events() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -971,25 +841,38 @@ async fn sampler_returns_classification_token_before_terminal_response_events() 
     })
     .await?;
 
-    let output = tokio::time::timeout(
-        Duration::from_secs(2),
-        sampler.sample(LunaSamplingRequest {
-            cyber_access_program: None,
-            parent_response_id: None,
-            instructions: classifier_instructions(),
-            input: vec![responses::user_message_item(
-                "The user requested a README summary.",
-            )],
-            parent_compaction: None,
-            parent_compaction_hash: None,
-            reasoning_effort: ReasoningEffort::None,
-            parent_turn_id: "turn-1".to_owned(),
-            root_turn_id: Some("turn-1".to_owned()),
-            pending_score: None,
-        }),
-    )
-    .await??;
-
+    let request = sample_request("turn-1");
+    let (input, input_tokens) = LunaSampler::prepare_input(
+        &request,
+        /*history*/ None,
+        request
+            .input
+            .iter()
+            .cloned()
+            .map(codex_history::ResponseItemEnvelope::new)
+            .collect(),
+    );
+    let sample = super::ConversationSample {
+        input: crate::async_scorer::request::PreparedRequest {
+            input,
+            input_tokens,
+            existing_context_tokens: 0,
+            cursor: codex_guardian_context::TranscriptCursor {
+                parent_history_version: 0,
+                transcript_entry_count: 1,
+            },
+            truncations: Vec::new(),
+            section_costs: Vec::new(),
+        },
+        sampling: request,
+    };
+    let (ready, score) = tokio::sync::oneshot::channel();
+    let output = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            _ = sampler.sample_retained(sample, ready) => panic!("response must remain pending after its early score"),
+            score = score => score.expect("early score sender").map(super::SampledScore::accept),
+        }
+    }).await??;
     assert_eq!(output, "low");
     drop(sampler);
     tokio::join!(idle_server.shutdown(), server.shutdown());
@@ -1034,142 +917,6 @@ async fn sampler_remains_available_when_second_prewarm_fails() -> Result<()> {
 
     assert_eq!(sampler.sample(sample_request("turn-1")).await?, "low");
     assert_eq!(server.handshakes().len(), 1);
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn sampler_replaces_scored_drains_before_unfinished_classifications() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let incomplete_response = WebSocketConnectionConfig {
-        requests: vec![vec![ev_output_text_delta("low")]],
-        response_headers: Vec::new(),
-        accept_delay: None,
-        close_after_requests: false,
-    };
-    let scored_response = WebSocketConnectionConfig {
-        requests: vec![vec![ev_assistant_message("scored", "low")]],
-        ..incomplete_response.clone()
-    };
-    let stalled_response = WebSocketConnectionConfig {
-        requests: vec![Vec::new()],
-        response_headers: Vec::new(),
-        accept_delay: None,
-        close_after_requests: false,
-    };
-    let mut servers = Vec::with_capacity(MAX_CONCURRENT_REQUESTS + 2);
-    servers.push(responses::start_websocket_server_with_headers(vec![scored_response]).await);
-    servers.push(responses::start_websocket_server_with_headers(vec![stalled_response]).await);
-    for _ in 2..MAX_CONCURRENT_REQUESTS {
-        servers.push(
-            responses::start_websocket_server_with_headers(vec![incomplete_response.clone()]).await,
-        );
-    }
-    let http = responses::start_mock_server().await;
-    let _http_mock = responses::mount_sse_sequence(
-        &http,
-        ["low", "high"]
-            .map(|score| {
-                responses::sse(vec![
-                    ev_assistant_message("overflow", score),
-                    ev_completed("overflow"),
-                ])
-            })
-            .to_vec(),
-    )
-    .await;
-    let server_refs = servers[2..INITIAL_WEBSOCKET_CONNECTIONS]
-        .iter()
-        .chain(servers[..2].iter())
-        .chain(servers[INITIAL_WEBSOCKET_CONNECTIONS..].iter())
-        .collect::<Vec<_>>();
-    let sampler = Arc::new(
-        connect_sampler(sampler_config(
-            proxy_websocket_servers_with_http(
-                &server_refs,
-                ProxyPrewarmLimit::AllConnections,
-                Some(&http.uri()),
-            )
-            .await?,
-        ))
-        .await?,
-    );
-
-    // Select the stalled socket first independently of handshake completion order.
-    let stalled_id = servers[1].single_handshake().header("thread-id").unwrap();
-    sampler
-        .connections
-        .idle_connections
-        .lock()
-        .unwrap()
-        .sort_by_key(|connection| connection.thread_id == stalled_id);
-
-    let oldest_sampler = Arc::clone(&sampler);
-    let oldest = tokio::spawn(async move { oldest_sampler.sample(sample_request("oldest")).await });
-    tokio::time::timeout(
-        Duration::from_secs(2),
-        servers[1].wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
-    )
-    .await?;
-
-    // Finish the refill before selecting a socket; it must not append after sorting.
-    sampler.prewarm().await;
-    let scored_id = servers[0].single_handshake().header("thread-id").unwrap();
-    sampler
-        .connections
-        .idle_connections
-        .lock()
-        .unwrap()
-        .sort_by_key(|connection| connection.thread_id == scored_id);
-    let scored_sampler = Arc::clone(&sampler);
-    let scored_request =
-        tokio::spawn(async move { scored_sampler.sample(sample_request("scored")).await });
-    tokio::time::timeout(
-        Duration::from_secs(2),
-        servers[0].wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
-    )
-    .await?;
-
-    for index in 0..MAX_CONCURRENT_REQUESTS - 2 {
-        sampler.prewarm().await;
-        assert_eq!(
-            sampler
-                .sample(sample_request(&format!("turn-{index}")))
-                .await?,
-            "low"
-        );
-    }
-
-    assert_eq!(
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            sampler.sample(sample_request("replace-oldest")),
-        )
-        .await??,
-        "low"
-    );
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), scored_request).await???,
-        "low"
-    );
-    assert!(!oldest.is_finished());
-
-    assert_eq!(
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            sampler.sample(sample_request("replace-oldest-drain")),
-        )
-        .await??,
-        "high"
-    );
-
-    assert!(!oldest.is_finished());
-    oldest.abort();
-    let _ = oldest.await;
-    drop(sampler);
-    for server in servers {
-        server.shutdown().await;
-    }
     Ok(())
 }
 

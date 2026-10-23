@@ -192,7 +192,6 @@ impl Reservation {
             request.metrics.as_deref(),
             review_request.existing_context_tokens,
             review_request.input_tokens,
-            super::metrics::RequestAdmission::Admitted,
         );
         drop(request.evidence);
         Some(PreparedConversation {

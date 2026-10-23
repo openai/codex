@@ -1,5 +1,4 @@
 //! Executes one prepared classifier request with the existing retry and streaming rules.
-//! Legacy snapshot execution remains test-only until the transport tests are migrated.
 //! Retained requests publish the same early result but keep ownership through completion.
 //! Sampling outcomes describe score delivery, independently of retained response draining.
 //! Requests and retries stop when the account owner that started the classification changes.
@@ -29,15 +28,7 @@ use codex_protocol::turn_input::CyberAccessProgram;
 use http::StatusCode;
 use serde_json::json;
 use std::collections::HashMap;
-#[cfg(test)]
-use std::future::Future;
-#[cfg(test)]
-use std::pin::Pin;
 use std::sync::Arc;
-#[cfg(test)]
-use std::sync::atomic::AtomicBool;
-#[cfg(test)]
-use std::sync::atomic::Ordering;
 use tokio::sync::oneshot;
 
 const MAX_SAMPLING_RETRIES: usize = 2;
@@ -62,32 +53,6 @@ pub(super) struct RetainedCompletion {
     pub(super) output: Option<Vec<ResponseItem>>,
     pub(super) remaining_tokens: usize,
     pub(super) early_score: Option<String>,
-}
-
-/// Retained admission owns the response through completion; snapshot mode is test-only.
-pub(super) enum SamplingMode<'a> {
-    #[cfg(test)]
-    Snapshot {
-        superseded: Pin<Box<dyn Future<Output = ()> + Send>>,
-        scored: Arc<AtomicBool>,
-    },
-    Retained(&'a mut RetainedCompletion),
-}
-
-impl SamplingMode<'_> {
-    async fn superseded(&mut self) {
-        match self {
-            #[cfg(test)]
-            Self::Snapshot { superseded, .. } => {
-                superseded.await;
-            }
-            Self::Retained(_) => std::future::pending().await,
-        }
-    }
-
-    fn early_result_sent(&self) -> bool {
-        matches!(self, Self::Retained(completion) if completion.ready.is_none())
-    }
 }
 
 impl RetainedCompletion {
@@ -174,8 +139,6 @@ impl SamplingExecution {
                     status.is_server_error() || *status == StatusCode::TOO_MANY_REQUESTS
                 }
             }
-            #[cfg(test)]
-            LunaSamplerError::IncompatibleCompaction => false,
             LunaSamplerError::Provider(_)
             | LunaSamplerError::MissingOutput
             | LunaSamplerError::OutputTooLarge
@@ -215,7 +178,7 @@ impl SamplingExecution {
 
     pub(super) async fn run(
         &mut self,
-        mut mode: SamplingMode<'_>,
+        completion: &mut RetainedCompletion,
         telemetry: &mut SamplingTelemetry,
     ) -> Result<String, LunaSamplerError> {
         let auth_changes = self
@@ -258,26 +221,15 @@ impl SamplingExecution {
             .provider
             .auth_manager()
             .map(|manager| manager.unauthorized_recovery());
-        let retention_budget = match &mode {
-            #[cfg(test)]
-            SamplingMode::Snapshot { .. } => 0,
-            SamplingMode::Retained(completion) => completion.remaining_tokens,
-        };
+        let retention_budget = completion.remaining_tokens;
         'retry: loop {
             ensure_account_owner()?;
             telemetry.attempts = telemetry.attempts.saturating_add(1);
-            match &mut mode {
-                SamplingMode::Retained(completion) => {
-                    completion.output = Some(Vec::new());
-                    completion.remaining_tokens = retention_budget;
-                }
-                #[cfg(test)]
-                SamplingMode::Snapshot { .. } => {}
-            }
+            completion.output = Some(Vec::new());
+            completion.remaining_tokens = retention_budget;
             let lease = match tokio::select! {
                 biased;
                 _ = &mut owner_changed => return Err(account_changed_error()),
-                _ = mode.superseded() => return Err(LunaSamplerError::Superseded),
                 lease = self.connections.lease() => lease,
             } {
                 Ok(lease) => lease,
@@ -298,8 +250,7 @@ impl SamplingExecution {
                     let auth = tokio::select! {
                         biased;
                         _ = &mut owner_changed => return Err(account_changed_error()),
-                        _ = mode.superseded() => return Err(LunaSamplerError::Superseded),
-                        auth = self.config.provider.auth() => auth,
+                                auth = self.config.provider.auth() => auth,
                     };
                     cyber_access_program::for_auth(
                         auth.as_ref(),
@@ -349,7 +300,6 @@ impl SamplingExecution {
             let stream = match tokio::select! {
                 biased;
                 _ = &mut owner_changed => return Err(account_changed_error()),
-                _ = mode.superseded() => return Err(LunaSamplerError::Superseded),
                 stream = lease.stream_request(&self.request) => stream,
             } {
                 Ok(stream) => stream,
@@ -370,15 +320,6 @@ impl SamplingExecution {
             while let Some(event) = tokio::select! {
                 biased;
                 _ = &mut owner_changed => return Err(account_changed_error()),
-                _ = mode.superseded() => {
-                    #[cfg(test)]
-                    if matches!(&mode, SamplingMode::Snapshot { scored, .. } if scored.load(Ordering::Relaxed))
-                        && !output.is_empty()
-                    {
-                        return Ok(output);
-                    }
-                    return Err(LunaSamplerError::Superseded);
-                }
                 event = response.next() => event,
             } {
                 ensure_account_owner()?;
@@ -386,7 +327,7 @@ impl SamplingExecution {
                     Ok(event) => event,
                     Err(error) => {
                         let error = LunaSamplerError::Api(error);
-                        if mode.early_result_sent() {
+                        if completion.ready.is_none() {
                             return Err(error);
                         }
                         if self
@@ -400,7 +341,7 @@ impl SamplingExecution {
                 };
                 match event {
                     ResponseEvent::OutputTextDelta(delta) => {
-                        if mode.early_result_sent() {
+                        if completion.ready.is_none() {
                             continue;
                         }
                         if delta.is_empty() {
@@ -412,48 +353,13 @@ impl SamplingExecution {
                         // The first output token is the complete classification.
                         // Later output cannot revise that decision; drain it only
                         // to preserve connection reuse and token accounting.
-                        match mode {
-                            SamplingMode::Retained(ref mut retained) => {
-                                retained.early_score = Some(delta.clone());
-                                if let Some(ready) = retained.ready.take() {
-                                    telemetry.deliver(ready, Ok(delta));
-                                }
-                                continue;
-                            }
-                            #[cfg(test)]
-                            SamplingMode::Snapshot {
-                                mut superseded,
-                                scored,
-                            } => {
-                                scored.store(true, Ordering::Relaxed);
-                                tokio::spawn(async move {
-                                    while let Some(event) = tokio::select! {
-                                        biased;
-                                        _ = &mut superseded => None,
-                                        event = response.next() => event,
-                                    } {
-                                        match event {
-                                            Ok(ResponseEvent::Completed {
-                                                token_usage, ..
-                                            }) => {
-                                                response.reuse(token_usage.as_ref()).await;
-                                                break;
-                                            }
-                                            Err(_) => break,
-                                            _ => {}
-                                        }
-                                    }
-                                });
-                                return Ok(delta);
-                            }
+                        completion.early_score = Some(delta.clone());
+                        if let Some(ready) = completion.ready.take() {
+                            telemetry.deliver(ready, Ok(delta));
                         }
                     }
                     ResponseEvent::OutputItemDone(item) => {
-                        match &mut mode {
-                            SamplingMode::Retained(completion) => completion.record(item.clone()),
-                            #[cfg(test)]
-                            SamplingMode::Snapshot { .. } => {}
-                        }
+                        completion.record(item.clone());
                         if let ResponseItem::Message { role, content, .. } = item
                             && role == "assistant"
                         {
@@ -475,12 +381,6 @@ impl SamplingExecution {
                 }
                 if output.len() > MAX_OUTPUT_BYTES {
                     return Err(LunaSamplerError::OutputTooLarge);
-                }
-                #[cfg(test)]
-                if !output.is_empty()
-                    && let SamplingMode::Snapshot { scored, .. } = &mode
-                {
-                    scored.store(true, Ordering::Relaxed);
                 }
             }
             return Err(LunaSamplerError::MissingOutput);

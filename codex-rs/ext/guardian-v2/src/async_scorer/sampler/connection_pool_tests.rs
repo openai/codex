@@ -1,12 +1,16 @@
 //! Exercises classifier fallback, cooldown, and cancellation against local servers.
 
+use super::super::ConversationSample;
 use super::super::LunaSampler;
 use super::super::tests::ProxyPrewarmLimit;
 use super::super::tests::proxy_websocket_servers_with_http;
 use super::super::tests::sample_request;
 use super::super::tests::sampler_config;
 use super::*;
+use crate::async_scorer::request::PreparedRequest;
 use anyhow::Result;
+use codex_guardian_context::TranscriptCursor;
+use codex_history::ResponseItemEnvelope;
 use codex_login::AuthManager;
 use codex_login::WorkspaceRouting;
 use codex_login::WorkspaceRoutingRequest;
@@ -404,7 +408,7 @@ async fn stalled_http_headers_exhaust_the_sampling_retry_budget() -> Result<()> 
 }
 
 #[tokio::test]
-async fn supersession_closes_http_before_headers_and_while_draining_the_body() -> Result<()> {
+async fn cancellation_closes_http_before_headers_and_while_draining_the_body() -> Result<()> {
     skip_if_no_network!(Ok(()));
     // The second case publishes a score, then leaves the response body open forever.
     for response in [
@@ -446,37 +450,53 @@ async fn supersession_closes_http_before_headers_and_while_draining_the_body() -
             }
             Ok::<_, std::io::Error>(())
         });
-        let mut samples = tokio::task::JoinSet::new();
+        let mut request = sample_request("first");
+        let evidence = std::mem::take(&mut request.input)
+            .into_iter()
+            .map(ResponseItemEnvelope::new)
+            .collect();
+        let (input, input_tokens) =
+            LunaSampler::prepare_input(&request, /*history*/ None, evidence);
+        let sample = ConversationSample {
+            input: PreparedRequest {
+                input,
+                input_tokens,
+                existing_context_tokens: 0,
+                cursor: TranscriptCursor {
+                    parent_history_version: 0,
+                    transcript_entry_count: 1,
+                },
+                truncations: Vec::new(),
+                section_costs: Vec::new(),
+            },
+            sampling: request,
+        };
+        let (ready, score) = tokio::sync::oneshot::channel();
         let first = Arc::clone(&sampler);
-        samples.spawn(async move { first.sample(sample_request("first")).await });
+        let pending = tokio::spawn(async move { first.sample_retained(sample, ready).await });
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(5), requests.recv()).await?,
             Some(1)
         );
         if has_score {
             assert_eq!(
-                tokio::time::timeout(Duration::from_secs(5), samples.join_next())
-                    .await?
-                    .unwrap()??,
+                tokio::time::timeout(Duration::from_secs(5), score)
+                    .await???
+                    .accept(),
                 "low",
             );
             assert!(disconnects.try_recv().is_err());
         }
-        for _ in 0..MAX_CONCURRENT_REQUESTS {
-            let sampler = Arc::clone(&sampler);
-            samples.spawn(async move { sampler.sample(sample_request("newer")).await });
-        }
-        if !has_score {
-            assert!(matches!(
-                tokio::time::timeout(Duration::from_secs(5), samples.join_next())
-                    .await?
-                    .unwrap()?,
-                Err(LunaSamplerError::Superseded)
-            ));
-        }
+        // Conversation expiry cancels the retained future, including its unfinished drain.
+        pending.abort();
+        assert!(pending.await.unwrap_err().is_cancelled());
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(5), disconnects.recv()).await?,
             Some(1)
+        );
+        assert_eq!(
+            sampler.connections.classifications.available_permits(),
+            MAX_CONCURRENT_REQUESTS
         );
     }
     Ok(())

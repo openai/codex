@@ -323,8 +323,6 @@ impl Classification {
                 #[cfg(test)]
                 input: Vec::new(),
                 parent_compaction,
-                #[cfg(test)]
-                parent_compaction_hash: None,
                 reasoning_effort: guardian_config.reasoning_effort.clone(),
                 parent_turn_id: turn_id.clone(),
                 root_turn_id,
