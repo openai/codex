@@ -19,7 +19,11 @@ impl AdditionalContextStore {
     ) -> Vec<ResponseItem> {
         let fragments = values
             .iter()
-            .filter(|(key, value)| self.values.get(*key) != Some(*value))
+            .filter(|(key, entry)| {
+                self.values.get(*key).is_none_or(|previous| {
+                    previous.kind != entry.kind || previous.value != entry.value
+                })
+            })
             .map(|(key, entry)| match entry.kind {
                 AdditionalContextKind::Untrusted => ContextualUserFragment::into(
                     AdditionalContextUserFragment::new(key.clone(), entry.value.clone()),

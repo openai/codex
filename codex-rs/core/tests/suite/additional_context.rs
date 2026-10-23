@@ -1,5 +1,6 @@
 use anyhow::Result;
 use codex_core::TurnInputRequest;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind;
@@ -46,17 +47,17 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
             .with_additional_context(BTreeMap::from([
                 (
                     "browser_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "tab one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
+                    AdditionalContextEntry::new(
+                        "tab one".to_string(),
+                        AdditionalContextKind::Untrusted,
+                    ),
                 ),
                 (
                     "automation_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "run one".to_string(),
-                        kind: AdditionalContextKind::Application,
-                    },
+                    AdditionalContextEntry::new(
+                        "run one".to_string(),
+                        AdditionalContextKind::Application,
+                    ),
                 ),
             ])),
         )
@@ -181,17 +182,17 @@ async fn additional_context_trust_controls_message_role() -> Result<()> {
             .with_additional_context(BTreeMap::from([
                 (
                     "browser_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "tab one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
+                    AdditionalContextEntry::new(
+                        "tab one".to_string(),
+                        AdditionalContextKind::Untrusted,
+                    ),
                 ),
                 (
                     "automation_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "run one".to_string(),
-                        kind: AdditionalContextKind::Application,
-                    },
+                    AdditionalContextEntry::new(
+                        "run one".to_string(),
+                        AdditionalContextKind::Application,
+                    ),
                 ),
             ])),
         )
@@ -222,8 +223,13 @@ async fn additional_context_trust_controls_message_role() -> Result<()> {
     Ok(())
 }
 
+#[test_case::test_case(None, None; "unchanged")]
+#[test_case::test_case(Some("browser"), Some("editor"); "name_only_change")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn additional_context_is_deduplicated_between_turns_while_retained() -> Result<()> {
+async fn additional_context_is_deduplicated_between_turns_while_retained(
+    first_name: Option<&str>,
+    second_name: Option<&str>,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -241,11 +247,12 @@ async fn additional_context_is_deduplicated_between_turns_while_retained() -> Re
         .with_config(|config| config.include_environment_context = false)
         .build(&server)
         .await?;
-    let additional_context = BTreeMap::from([(
+    let mut additional_context = BTreeMap::from([(
         "browser_info".to_string(),
         AdditionalContextEntry {
             value: "same tab".to_string(),
             kind: AdditionalContextKind::Untrusted,
+            name: first_name.map(str::to_owned),
         },
     )]);
 
@@ -263,6 +270,10 @@ async fn additional_context_is_deduplicated_between_turns_while_retained() -> Re
     })
     .await;
 
+    additional_context
+        .get_mut("browser_info")
+        .expect("browser context")
+        .name = second_name.map(str::to_owned);
     test.codex
         .start_or_steer_turn(
             TurnInputRequest::user_input(vec![UserInput::Text {
@@ -330,17 +341,17 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
             .with_additional_context(BTreeMap::from([
                 (
                     "automation_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "run one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
+                    AdditionalContextEntry::new(
+                        "run one".to_string(),
+                        AdditionalContextKind::Untrusted,
+                    ),
                 ),
                 (
                     "browser_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "tab one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
+                    AdditionalContextEntry::new(
+                        "tab one".to_string(),
+                        AdditionalContextKind::Untrusted,
+                    ),
                 ),
             ])),
         )
@@ -359,17 +370,17 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
             .with_additional_context(BTreeMap::from([
                 (
                     "automation_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "run one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
+                    AdditionalContextEntry::new(
+                        "run one".to_string(),
+                        AdditionalContextKind::Untrusted,
+                    ),
                 ),
                 (
                     "terminal_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "pty one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
+                    AdditionalContextEntry::new(
+                        "pty one".to_string(),
+                        AdditionalContextKind::Untrusted,
+                    ),
                 ),
             ])),
         )
@@ -388,24 +399,24 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
             .with_additional_context(BTreeMap::from([
                 (
                     "automation_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "run one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
+                    AdditionalContextEntry::new(
+                        "run one".to_string(),
+                        AdditionalContextKind::Untrusted,
+                    ),
                 ),
                 (
                     "browser_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "tab one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
+                    AdditionalContextEntry::new(
+                        "tab one".to_string(),
+                        AdditionalContextKind::Untrusted,
+                    ),
                 ),
                 (
                     "terminal_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "pty one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
+                    AdditionalContextEntry::new(
+                        "pty one".to_string(),
+                        AdditionalContextKind::Untrusted,
+                    ),
                 ),
             ])),
         )
@@ -481,17 +492,17 @@ async fn additional_context_values_are_truncated_before_model_input() -> Result<
             .with_additional_context(BTreeMap::from([
                 (
                     "automation_info".to_string(),
-                    AdditionalContextEntry {
-                        value: long_automation_value.clone(),
-                        kind: AdditionalContextKind::Application,
-                    },
+                    AdditionalContextEntry::new(
+                        long_automation_value.clone(),
+                        AdditionalContextKind::Application,
+                    ),
                 ),
                 (
                     "browser_info".to_string(),
-                    AdditionalContextEntry {
-                        value: long_browser_value.clone(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
+                    AdditionalContextEntry::new(
+                        long_browser_value.clone(),
+                        AdditionalContextKind::Untrusted,
+                    ),
                 ),
             ])),
         )
@@ -541,5 +552,55 @@ async fn additional_context_values_are_truncated_before_model_input() -> Result<
         external_text.len()
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn additional_context_rejects_invalid_names_before_admitting_input() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let request = mount_sse_once(&server, sse(vec![ev_completed("valid-turn")])).await;
+    let test = test_codex()
+        .with_config(|config| config.include_environment_context = false)
+        .build_with_auto_env(&server)
+        .await?;
+
+    for (kind, name) in [
+        (AdditionalContextKind::Untrusted, String::new()),
+        (AdditionalContextKind::Untrusted, "agent.browser".to_owned()),
+        (AdditionalContextKind::Untrusted, "other.browser".to_owned()),
+        (AdditionalContextKind::Untrusted, "1browser".to_owned()),
+        (AdditionalContextKind::Untrusted, "Browser".to_owned()),
+        (AdditionalContextKind::Untrusted, "é".to_owned()),
+        (AdditionalContextKind::Untrusted, "a".repeat(65)),
+        (AdditionalContextKind::Application, "browser".to_owned()),
+    ] {
+        let result = test
+            .codex
+            .start_or_steer_turn(
+                TurnInputRequest::user_input(vec![UserInput::Text {
+                    text: "rejected input".to_owned(),
+                    text_elements: Vec::new(),
+                }])
+                .with_additional_context(BTreeMap::from([(
+                    "source".to_owned(),
+                    AdditionalContextEntry::new("rejected context".to_owned(), kind)
+                        .with_name(name),
+                )])),
+            )
+            .await;
+        assert!(matches!(
+            result
+                .expect_err("invalid context must be rejected")
+                .details(),
+            CodexErrorDetails::InvalidRequest(_)
+        ));
+    }
+    assert!(request.requests().is_empty());
+    test.submit_text_turn("valid input").await?;
+    assert_eq!(
+        request.single_request().message_input_texts("user"),
+        vec!["valid input"]
+    );
     Ok(())
 }

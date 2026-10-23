@@ -7034,6 +7034,13 @@
           "kind": {
             "$ref": "#/definitions/v2/AdditionalContextKind"
           },
+          "name": {
+            "description": "Optional name for untrusted context, used to label its tool output.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "value": {
             "type": "string"
           }

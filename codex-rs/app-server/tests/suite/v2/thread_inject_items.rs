@@ -196,6 +196,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
                     AdditionalContextEntry {
                         value: application_context_text.to_string(),
                         kind: AdditionalContextKind::Application,
+                        name: None,
                     },
                 ),
                 (
@@ -203,6 +204,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
                     AdditionalContextEntry {
                         value: untrusted_context_text.to_string(),
                         kind: AdditionalContextKind::Untrusted,
+                        name: None,
                     },
                 ),
             ])),

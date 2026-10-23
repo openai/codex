@@ -235,6 +235,12 @@ pub(super) async fn handle(
     submission_id: String,
 ) -> CodexResult<TurnInputSubmission> {
     let request = request.into();
+    request
+        .request
+        .additional_context
+        .values()
+        .try_for_each(AdditionalContextEntry::validate)
+        .map_err(|message| CodexErr::InvalidRequest(message.to_owned()))?;
     let result = match mode {
         TurnInputMode::StartOrSteer => start_or_steer(session, request, submission_id).await,
         TurnInputMode::StartIfIdle => {

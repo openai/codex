@@ -125,17 +125,17 @@ async fn first_request_item_types_roles_and_content_annotations() -> Result<()> 
             .with_additional_context(BTreeMap::from([
                 (
                     "browser_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "tab one".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
+                    AdditionalContextEntry::new(
+                        "tab one".to_string(),
+                        AdditionalContextKind::Untrusted,
+                    ),
                 ),
                 (
                     "automation_info".to_string(),
-                    AdditionalContextEntry {
-                        value: "run one".to_string(),
-                        kind: AdditionalContextKind::Application,
-                    },
+                    AdditionalContextEntry::new(
+                        "run one".to_string(),
+                        AdditionalContextKind::Application,
+                    ),
                 ),
             ])),
         )

@@ -2262,14 +2262,14 @@ mod tests {
                 continue;
             }
 
-            // Only allow "?: T | null" in objects representing JSON-RPC requests,
-            // which we assume are called "*Params".
+            // Allow "?: T | null" in JSON-RPC request objects and nested request types.
             let allow_optional_nullable = path
                 .file_stem()
                 .and_then(|stem| stem.to_str())
                 .is_some_and(|stem| {
                     stem.ends_with("Params")
                         || stem == "InitializeCapabilities"
+                        || stem == "AdditionalContextEntry"
                         || matches!(
                             stem,
                             "CollabAgentRef"

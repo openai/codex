@@ -790,8 +790,13 @@ async fn turn_start_steers_active_turn_and_returns_active_turn_id() -> Result<()
     Ok(())
 }
 
+#[test_case::test_case(Some("browser"); "named_context")]
+#[test_case::test_case(Some("a"); "minimum_length")]
+#[test_case::test_case(Some("browser_2"); "digits_and_underscore")]
+#[test_case::test_case(Some(&"a".repeat(64)); "maximum_length")]
+#[test_case::test_case(None; "legacy_caller")]
 #[tokio::test]
-async fn turn_start_additional_context_flows_to_model_input() -> Result<()> {
+async fn turn_start_additional_context_flows_to_model_input(name: Option<&str>) -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
@@ -810,27 +815,75 @@ async fn turn_start_additional_context_flows_to_model_input() -> Result<()> {
         })
         .await?;
 
-    let _: TurnStartResponse = mcp
-        .request(|request_id| ClientRequest::TurnStart {
-            request_id,
-            params: TurnStartParams {
-                thread_id: thread.id,
-                client_user_message_id: None,
-                input: vec![V2UserInput::Text {
-                    text: "inspect tab".to_string(),
-                    text_elements: Vec::new(),
-                }],
-                additional_context: Some(HashMap::from([(
-                    "custom_source".to_string(),
-                    AdditionalContextEntry {
-                        value: "source value".to_string(),
-                        kind: AdditionalContextKind::Untrusted,
-                    },
-                )])),
-                ..Default::default()
-            },
+    let rejected_request = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "rejected input".to_owned(),
+                text_elements: Vec::new(),
+            }],
+            additional_context: Some(HashMap::from([(
+                "application".to_owned(),
+                AdditionalContextEntry {
+                    value: "rejected context".to_owned(),
+                    kind: AdditionalContextKind::Application,
+                    name: Some("browser".to_owned()),
+                },
+            )])),
+            ..Default::default()
         })
         .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(rejected_request)),
+    )
+    .await??;
+    assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+
+    let mut params = serde_json::to_value(TurnStartParams {
+        thread_id: thread.id,
+        client_user_message_id: None,
+        input: vec![V2UserInput::Text {
+            text: "inspect tab".to_string(),
+            text_elements: Vec::new(),
+        }],
+        additional_context: Some(HashMap::from([(
+            "custom_source".to_string(),
+            AdditionalContextEntry {
+                value: "source value".to_string(),
+                kind: AdditionalContextKind::Untrusted,
+                name: name.map(str::to_owned),
+            },
+        )])),
+        ..Default::default()
+    })?;
+    let entry = params["additionalContext"]["custom_source"]
+        .as_object_mut()
+        .context("additional context entry")?;
+    if name.is_none() {
+        entry.remove("name");
+    }
+    let mut malformed_params = params.clone();
+    malformed_params["additionalContext"]["custom_source"]["name"] = json!("agent.browser");
+    let rejected_request = mcp
+        .send_request("turn/start", Some(malformed_params))
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(rejected_request)),
+    )
+    .await??;
+    assert_eq!(
+        error.error,
+        codex_app_server_protocol::JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message: "additional context name must match [a-z][a-z0-9_]{0,63}".to_owned(),
+            data: None,
+        }
+    );
+
+    let request_id = mcp.send_request("turn/start", Some(params)).await?;
+    let _: TurnStartResponse = mcp.read_response(request_id).await?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -848,10 +901,20 @@ async fn turn_start_additional_context_flows_to_model_input() -> Result<()> {
     let body = request
         .body_json::<Value>()
         .context("request body should be JSON")?;
+    let input = body["input"].as_array().context("input array")?;
+    let texts = input
+        .iter()
+        .filter_map(|item| item["content"].as_array())
+        .flatten()
+        .filter_map(|part| part["text"].as_str())
+        .collect::<Vec<_>>();
+    assert!(!texts.contains(&"rejected input"));
+    assert!(!texts.contains(&"<application>rejected context</application>"));
     assert!(
         body.to_string()
             .contains("<external_custom_source>source value</external_custom_source>")
     );
+    assert!(!body.to_string().contains("function_call_output"));
 
     Ok(())
 }
