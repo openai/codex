@@ -465,7 +465,9 @@ async fn native_mrtr_does_not_restart_after_continuation_session_expiry() -> any
     .await?;
     let error = call(&client).await.unwrap_err();
     assert!(
-        error.to_string().contains("the tool was not restarted"),
+        error
+            .to_string()
+            .contains("the operation was not restarted"),
         "{error}"
     );
     client.shutdown().await;
@@ -512,7 +514,9 @@ async fn native_mrtr_does_not_restart_after_proof_then_state_only_round() -> any
     .await?;
     let error = call(&client).await.unwrap_err();
     assert!(
-        error.to_string().contains("the tool was not restarted"),
+        error
+            .to_string()
+            .contains("the operation was not restarted"),
         "{error}"
     );
     client.shutdown().await;
@@ -521,7 +525,7 @@ async fn native_mrtr_does_not_restart_after_proof_then_state_only_round() -> any
 }
 
 #[tokio::test]
-async fn native_mrtr_concurrent_prompts_have_independent_cancellation() -> anyhow::Result<()> {
+async fn native_mrtr_shared_calls_isolate_inputs_cancellation_and_timeouts() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/mcp"))
@@ -529,6 +533,10 @@ async fn native_mrtr_concurrent_prompts_have_independent_cancellation() -> anyho
             let body: Value = request.body_json().unwrap();
             match body["method"].as_str() {
                 Some("server/discover") => discover_response(&body),
+                Some("tools/call") if body["params"]["name"] == "slow" => {
+                    result_response(&body, json!({"resultType": "complete", "content": []}))
+                        .set_delay(Duration::from_secs(1))
+                }
                 Some("tools/call") if body.pointer("/params/inputResponses").is_none() => {
                     result_response(&body, input_required(native_request()))
                 }
@@ -542,31 +550,62 @@ async fn native_mrtr_concurrent_prompts_have_independent_cancellation() -> anyho
                 other => panic!("unexpected request: {other:?}"),
             }
         })
-        .expect(/*r*/ 4)
+        .expect(/*r*/ 5)
         .mount(&server)
         .await;
     let (tx, mut rx) = mpsc::unbounded_channel();
     let client = client(
         &server,
         capabilities(),
-        Box::new(move |id, _| {
-            let (reply_tx, reply_rx) = oneshot::channel();
-            tx.send((id, reply_tx)).unwrap();
-            Box::pin(async move { Ok(reply_rx.await?) })
-        }),
+        Box::new(|_, _| panic!("shared input must use the calling chat's callback")),
     )
     .await?;
-    let first_client = Arc::clone(&client);
-    let first_call = tokio::spawn(async move { call(&first_client).await });
-    let (first_id, mut first_reply) = timeout(Duration::from_secs(/*secs*/ 5), rx.recv())
-        .await?
-        .unwrap();
-    let second_client = Arc::clone(&client);
-    let second_call = tokio::spawn(async move { call(&second_client).await });
-    let (second_id, second_reply) = timeout(Duration::from_secs(/*secs*/ 5), rx.recv())
-        .await?
-        .unwrap();
+    let launch = |caller| {
+        let client = Arc::clone(&client);
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let sender: SendElicitation = Box::new(move |id, _| {
+                let (reply_tx, reply_rx) = oneshot::channel();
+                tx.send((caller, id, reply_tx)).unwrap();
+                Box::pin(async move { Ok(reply_rx.await?) })
+            });
+            client
+                .call_tool_with_elicitation(
+                    "verified_operation".into(),
+                    /*arguments*/ None,
+                    |_| Ok(None),
+                    Some(Duration::from_secs(5)),
+                    Arc::new(sender),
+                )
+                .await
+        })
+    };
+    let first_call = launch("first");
+    let (first_caller, first_id, mut first_reply) =
+        timeout(Duration::from_secs(/*secs*/ 5), rx.recv())
+            .await?
+            .unwrap();
+    let second_call = launch("second");
+    let (second_caller, second_id, second_reply) =
+        timeout(Duration::from_secs(/*secs*/ 5), rx.recv())
+            .await?
+            .unwrap();
     assert_ne!(first_id, second_id);
+    assert_eq!((first_caller, second_caller), ("first", "second"));
+    let timeout_error = client
+        .call_tool_with_elicitation(
+            "slow".into(),
+            /*arguments*/ None,
+            |_| Ok(None),
+            Some(Duration::from_millis(100)),
+            Arc::new(Box::new(|_, _| panic!("slow call must not ask for input"))),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        timeout_error.to_string().contains("timed out"),
+        "{timeout_error}"
+    );
     first_call.abort();
     assert!(first_call.await.unwrap_err().is_cancelled());
     timeout(Duration::from_secs(/*secs*/ 5), first_reply.closed()).await?;
@@ -575,7 +614,7 @@ async fn native_mrtr_concurrent_prompts_have_independent_cancellation() -> anyho
         .send(response(ElicitationAction::Cancel, Value::Null))
         .unwrap();
     assert_eq!(
-        timeout(Duration::from_secs(/*secs*/ 5), second_call).await???,
+        serde_json::to_value(timeout(Duration::from_secs(/*secs*/ 5), second_call).await???)?,
         json!({"resultType": "complete", "content": []})
     );
     client.shutdown().await;

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -10,6 +11,7 @@ use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::McpProtocolMode;
 use codex_rmcp_client::RmcpClient;
+use codex_rmcp_client::SendElicitation;
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
 use rmcp::model::ClientCapabilities;
@@ -133,10 +135,9 @@ async fn create_client(
             )
             .with_protocol_version(ProtocolVersion::V_2025_06_18),
             Some(Duration::from_secs(5)),
-            Box::new(move |request_id, request| {
+            Box::new(move |_, request| {
                 let elicitation_modes = Arc::clone(&elicitation_modes);
                 async move {
-                    assert_eq!(request_id.to_string(), "confirmation");
                     let Elicitation::Mcp(request) = request else {
                         anyhow::bail!("MRTR input must be a standard MCP elicitation");
                     };
@@ -219,12 +220,10 @@ async fn modern_sse_input_required_preserves_response_metadata() -> anyhow::Resu
 }
 
 #[tokio::test]
-async fn modern_tool_mrtr_drives_form_and_url_elicitation_and_preserves_metadata()
+async fn modern_tool_mrtr_routes_concurrent_inputs_to_their_callers_and_preserves_metadata()
 -> anyhow::Result<()> {
     for mode in ["form", "url"] {
         let server = MockServer::start().await;
-        let calls = Arc::new(Mutex::new(Vec::<Value>::new()));
-        let recorded = Arc::clone(&calls);
 
         Mock::given(method("POST"))
             .and(path("/mcp"))
@@ -233,11 +232,7 @@ async fn modern_tool_mrtr_drives_form_and_url_elicitation_and_preserves_metadata
                 match body["method"].as_str() {
                     Some("server/discover") => discover_response(&body),
                     Some("tools/call") => {
-                        recorded.lock().expect("requests lock").push(body.clone());
-                        assert_eq!(
-                            body.pointer("/params/_meta/requestContext"),
-                            Some(&json!("caller-context"))
-                        );
+                        let caller = body["params"]["_meta"]["requestContext"].clone();
                         assert_eq!(
                             body.pointer("/params/_meta/io.modelcontextprotocol~1protocolVersion"),
                             Some(&json!(MODERN_VERSION))
@@ -269,7 +264,7 @@ async fn modern_tool_mrtr_drives_form_and_url_elicitation_and_preserves_metadata
                                 body.pointer("/params/inputResponses/confirmation"),
                                 Some(&json!({
                                     "action": "accept",
-                                    "content": {"confirmed": true},
+                                    "content": {"confirmed": true, "caller": caller},
                                     "_meta": {"clientContext": "preserved"},
                                 }))
                             );
@@ -285,35 +280,65 @@ async fn modern_tool_mrtr_drives_form_and_url_elicitation_and_preserves_metadata
                     other => panic!("unexpected MRTR request: {other:?}"),
                 }
             })
-            .expect(3)
+            .expect(8)
             .mount(&server)
             .await;
 
-        let elicitation_modes = Arc::new(Mutex::new(Vec::new()));
-        let client = create_client(&server, Arc::clone(&elicitation_modes)).await?;
-        let result = client
-            .call_tool(
+        let client = create_client(&server, Arc::default()).await?;
+        let other_client = create_client(&server, Arc::default()).await?;
+        let inputs = Arc::new(Mutex::new(Vec::new()));
+        let callers = [
+            (&client, "first"),
+            (&client, "second"),
+            (&other_client, "other connection"),
+        ];
+        let results = futures::future::try_join_all(callers.map(|(client, caller)| {
+            let inputs = Arc::clone(&inputs);
+            let sender: SendElicitation = Box::new(move |id, request| {
+                inputs.lock().unwrap().push((caller, id));
+                let Elicitation::Mcp(request) = request else {
+                    panic!("expected standard MCP input");
+                };
+                let meta = match request {
+                    ElicitRequestParams::FormElicitationParams { meta, .. }
+                    | ElicitRequestParams::UrlElicitationParams { meta, .. } => meta,
+                    _ => panic!("expected form or URL input"),
+                };
+                assert_eq!(
+                    meta.and_then(|meta| meta.get("inputContext").cloned()),
+                    Some(json!("server-context"))
+                );
+                futures::future::ready(Ok(ElicitationResponse {
+                    action: ElicitationAction::Accept,
+                    content: Some(json!({"confirmed": true, "caller": caller})),
+                    meta: Some(json!({"clientContext": "preserved"})),
+                }))
+                .boxed()
+            });
+            client.call_tool_with_elicitation(
                 "confirm".into(),
                 Some(json!({"mode": mode})),
-                |_| Ok(Some(json!({"requestContext": "caller-context"}))),
+                move |_| Ok(Some(json!({"requestContext": caller}))),
                 Some(Duration::from_secs(5)),
+                Arc::new(sender),
             )
-            .await?;
-        assert_eq!(
-            result.content[0].as_text().map(|text| text.text.as_str()),
-            Some("MRTR completed")
-        );
-        assert_eq!(
-            *elicitation_modes.lock().expect("elicitation lock"),
-            vec![mode]
-        );
+        }))
+        .await?;
+        for result in results {
+            assert_eq!(
+                result.content[0].as_text().map(|text| text.text.as_str()),
+                Some("MRTR completed")
+            );
+        }
 
         {
-            let calls = calls.lock().expect("requests lock");
-            assert_eq!(calls.len(), 2);
-            assert_ne!(calls[0]["id"], calls[1]["id"]);
+            let inputs = inputs.lock().unwrap();
+            assert_eq!(inputs.len(), 3);
+            let ids = inputs.iter().map(|(_, id)| id).collect::<HashSet<_>>();
+            assert_eq!(ids.len(), inputs.len());
         }
         client.shutdown().await;
+        other_client.shutdown().await;
     }
     Ok(())
 }
@@ -548,11 +573,26 @@ async fn modern_resource_mrtr_retries_with_opaque_request_state() -> anyhow::Res
         .await;
 
     let elicitation_modes = Arc::new(Mutex::new(Vec::new()));
-    let client = create_client(&server, Arc::clone(&elicitation_modes)).await?;
+    let client = create_client(&server, Arc::default()).await?;
+    let observed_modes = Arc::clone(&elicitation_modes);
+    let sender: SendElicitation = Box::new(move |_, request| {
+        assert!(matches!(
+            request,
+            Elicitation::Mcp(ElicitRequestParams::FormElicitationParams { .. })
+        ));
+        observed_modes.lock().unwrap().push("form");
+        futures::future::ready(Ok(ElicitationResponse {
+            action: ElicitationAction::Accept,
+            content: Some(json!({"confirmed": true})),
+            meta: Some(json!({"clientContext": "preserved"})),
+        }))
+        .boxed()
+    });
     let result = client
-        .read_resource(
+        .read_resource_with_elicitation(
             ReadResourceRequestParams::new("memo://requires-confirmation"),
             Some(Duration::from_secs(5)),
+            Arc::new(sender),
         )
         .await?;
     assert_eq!(result.contents.len(), 1);

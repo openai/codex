@@ -5,7 +5,10 @@ use super::ElicitationPauseState;
 use super::ElicitationResponse;
 use super::RmcpClient;
 use crate::InProcessTransportFactory;
+use crate::McpProtocolMode;
 use codex_protocol::mcp::OPENAI_ELICITATION_EXTENSION_ID;
+use futures::FutureExt;
+use futures::TryFutureExt;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use rmcp::RoleServer;
@@ -19,9 +22,11 @@ use rmcp::model::ClientJsonRpcMessage;
 use rmcp::model::ClientNotification;
 use rmcp::model::ClientRequest;
 use rmcp::model::CustomRequest;
+use rmcp::model::DiscoverResult;
 use rmcp::model::ElicitationAction;
 use rmcp::model::InitializeResult;
 use rmcp::model::ProtocolVersion;
+use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::RequestId;
 use rmcp::model::ServerJsonRpcMessage;
 use rmcp::model::ServerNotification;
@@ -147,6 +152,78 @@ async fn dropping_tool_call_cancels_remote_request() -> anyhow::Result<()> {
         Ok(())
     })
     .await?
+}
+
+#[tokio::test]
+async fn dropping_shared_resource_and_custom_requests_cancels_the_pending_request()
+-> anyhow::Result<()> {
+    let (servers, mut server_rx) = mpsc::unbounded_channel();
+    let mut client =
+        RmcpClient::new_in_process_client(Arc::new(ElicitationTestTransport { servers })).await?;
+    client.protocol_mode = McpProtocolMode::V20260728;
+    let mut server =
+        IntoTransport::<RoleServer, _, _>::into_transport(server_rx.recv().await.unwrap());
+    let (initialized, discovery) = tokio::join!(
+        client.initialize(
+            ClientConfig::default(),
+            Some(Duration::from_secs(5)),
+            Box::new(|_, _| panic!("unexpected startup elicitation")),
+        ),
+        async {
+            let Some(ClientJsonRpcMessage::Request(request)) = server.receive().await else {
+                anyhow::bail!("expected discovery");
+            };
+            assert!(matches!(request.request, ClientRequest::DiscoverRequest(_)));
+            let result = DiscoverResult::from_server_info(
+                vec![ProtocolVersion::V_2026_07_28],
+                InitializeResult::default(),
+            );
+            server
+                .send(ServerJsonRpcMessage::response(
+                    ServerResult::DiscoverResult(result),
+                    request.id,
+                ))
+                .await?;
+            anyhow::Ok(())
+        },
+    );
+    discovery?;
+    initialized?;
+    client.enable_request_cancellation();
+    for mut pending in [
+        client
+            .read_resource_with_elicitation(
+                ReadResourceRequestParams::new("test://pending"),
+                /*timeout*/ None,
+                Arc::new(Box::new(|_, _| panic!("unexpected input"))),
+            )
+            .map_ok(|_| ())
+            .boxed(),
+        client
+            .send_custom_request("test/pending", /*params*/ None)
+            .map_ok(|_| ())
+            .boxed(),
+    ] {
+        let request = tokio::select! {
+            result = &mut pending => panic!("request completed before a response: {result:?}"),
+            message = timeout(Duration::from_secs(5), server.receive()) => message?,
+        };
+        let Some(ClientJsonRpcMessage::Request(request)) = request else {
+            anyhow::bail!("expected pending request");
+        };
+        drop(pending);
+        let Some(ClientJsonRpcMessage::Notification(notification)) =
+            timeout(Duration::from_secs(5), server.receive()).await?
+        else {
+            anyhow::bail!("expected cancellation");
+        };
+        let ClientNotification::CancelledNotification(cancelled) = notification.notification else {
+            anyhow::bail!("expected cancellation");
+        };
+        assert_eq!(cancelled.params.request_id, Some(request.id));
+    }
+    client.shutdown().await;
+    Ok(())
 }
 
 #[traced_test]

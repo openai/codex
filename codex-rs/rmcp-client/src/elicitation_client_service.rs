@@ -94,6 +94,19 @@ impl Drop for PendingVerification {
 }
 
 impl ElicitationClientService {
+    /// Retains protocol validation and cancellation dispatch while isolating the caller's inputs.
+    pub(crate) fn for_request(
+        &self,
+        send_elicitation: Arc<SendElicitation>,
+        pause_state: ElicitationPauseState,
+    ) -> Self {
+        Self {
+            send_elicitation,
+            pause_state,
+            ..self.clone()
+        }
+    }
+
     pub(crate) fn new(
         client_info: ClientConfig,
         send_elicitation: SendElicitation,
