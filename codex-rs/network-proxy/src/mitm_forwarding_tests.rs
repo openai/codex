@@ -94,6 +94,7 @@ async fn tls_origin(
         }],
         ..Default::default()
     };
+    config.set_credential_broker_enabled(/*enabled*/ true);
     config.set_allowed_domains(vec!["localhost".to_string()]);
     let app_state = Arc::new(network_proxy_state_for_policy(config));
     let roots = Arc::new(roots);
@@ -194,6 +195,34 @@ fn request(
 async fn forwards_aoss_payload_hashes_and_signatures_over_tls() {
     let dir = tempdir().expect("TLS fixture directory");
     let (context, listener, acceptor) = tls_origin(dir.path(), "aoss", b"http/1.1").await;
+    let builder = crate::NetworkProxy::builder()
+        .state(Arc::clone(&context.policy.app_state))
+        .managed_proxy_routing(crate::ManagedProxyRouting::DedicatedListeners);
+    let proxy = crate::certs::TEST_MITM_CA
+        .scope(Arc::clone(&context.mitm.ca), builder.build())
+        .await
+        .expect("local proxy");
+    let mut env = HashMap::from([("ALIAS".to_string(), "prefix:test-secret-key".to_string())]);
+    proxy.apply_to_env_for_snapshot(&mut env);
+    assert_eq!(env["AWS_ACCESS_KEY_ID"], "MASKEDACCESSKEY");
+    assert_eq!(env["AWS_CA_BUNDLE"], env["SSL_CERT_FILE"]);
+    assert_eq!(Path::new(&env["AWS_CA_BUNDLE"]).parent(), Some(dir.path()));
+    assert!(crate::brokered_credential_env_keys(&env).any(|key| key == "AWS_ACCESS_KEY_ID"));
+    assert_eq!(
+        env["ALIAS"],
+        format!("prefix:{}", env["AWS_SECRET_ACCESS_KEY"])
+    );
+    let mut snapshot = "export COPY=test-secret-key".to_string();
+    assert!(proxy.virtualize_brokered_text(&mut snapshot, &env));
+    assert_eq!(
+        snapshot,
+        format!("export COPY={}", env["AWS_SECRET_ACCESS_KEY"])
+    );
+    let remote = proxy
+        .prepare_for_remote_environment(HashMap::new(), "remote")
+        .expect("remote environment");
+    assert!(!remote.env.contains_key("AWS_ACCESS_KEY_ID"));
+    assert!(!remote.env.contains_key("AWS_CA_BUNDLE"));
     let cases: [(&str, &[u8]); 4] = [
         ("/unsigned", b""),
         ("/other-key", b""),

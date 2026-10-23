@@ -455,6 +455,9 @@ pub fn brokered_credential_env_keys(
     let active = env_value(env, CREDENTIAL_BROKER_ACTIVE_ENV_KEY).is_some_and(|value| value == "1");
     let mut keys = Vec::new();
     if active {
+        if let Some(aws_keys) = crate::aws_sigv4::snapshot_env_keys(env) {
+            keys.extend(aws_keys);
+        }
         let brokered_keys = brokered_credential_dummy_env_keys(env);
         keys.extend(providers::credential_env_keys().filter(|key| {
             brokered_keys

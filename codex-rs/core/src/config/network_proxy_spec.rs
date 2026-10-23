@@ -174,6 +174,19 @@ impl NetworkProxySpec {
         } else {
             (config, NetworkProxyConstraints::default())
         };
+        if config.enabled
+            && config.mitm
+            && !config.credential_broker
+            && config
+                .mitm_hooks
+                .iter()
+                .any(|hook| hook.actions.aws_sigv4.is_some())
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "local AWS SigV4 hooks require features.credential_masking for protected shell snapshots",
+            ));
+        }
         validate_policy_against_constraints(&config, &constraints).map_err(|err| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,

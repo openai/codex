@@ -683,7 +683,7 @@ pub fn is_managed_proxy_env_var(key: &str, value: &str) -> bool {
     if PROXY_ENV_KEYS.contains(&key) {
         return true;
     }
-    if crate::certs::CUSTOM_CA_ENV_KEYS.contains(&key) {
+    if key == crate::aws_sigv4::AWS_CA_BUNDLE || crate::certs::CUSTOM_CA_ENV_KEYS.contains(&key) {
         return crate::certs::is_managed_mitm_ca_trust_bundle_path(value);
     }
     #[cfg(target_os = "macos")]
@@ -1153,7 +1153,6 @@ impl NetworkProxy {
         &self,
         mut env: HashMap<String, String>,
         addrs: EnvironmentProxyAddrs,
-        #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
         client: EnvironmentProxyClient,
         environment_id: Option<&str>,
     ) -> PreparedManagedNetwork {
@@ -1171,6 +1170,15 @@ impl NetworkProxy {
             ..addrs
         };
         let runtime_settings = self.runtime_settings();
+        if client == EnvironmentProxyClient::SandboxedProcess {
+            self.state.mask_local_aws_credentials(
+                &mut env,
+                runtime_settings
+                    .mitm_ca_trust_bundle
+                    .as_ref()
+                    .map(|bundle| bundle.path.as_path()),
+            );
+        }
         // Enforce proxying for child processes. Proxy endpoint values are always rewritten;
         // managed MITM CA vars preserve child-scoped overrides after proxy startup.
         apply_proxy_env_overrides(

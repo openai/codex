@@ -274,12 +274,42 @@ what it can reasonably guarantee.
   transport layer. If your threat model includes hostile DNS, enforce network egress at a lower
   layer too (e.g., firewall / VPC / corporate proxy policies).
 
-### Native origin and exact secret substitution
+### Native AWS signing and exact secret substitution
 
-MITM hook `match.schemes` and `match.ports` constrain the trusted tunnel origin;
-empty lists preserve existing behavior. An injected header can set `placeholder`
-to require one exact whole-header value before substitution. Missing, mismatched,
-or duplicate values fail closed. This form requires HTTPS port 443 and cannot
-modify routing or framing headers. Secret sources remain trusted host references;
-resolved values are marked sensitive in diagnostics and file sources are bounded
-to 64 KiB. Ambiguous semicolon paths cannot authorize scoped credentials.
+A trusted `aws_sigv4` action pairs a `placeholder_access_key_id` with a real
+`access_key_id`, `secret_access_key`, and optional `session_token`. The latter
+three reference files or environment variables in the proxy process. Resolve them
+at startup and replace the proxy installation to rotate them.
+
+For local Codex, enable `credential_masking = true` under `[features]` in
+`config.toml` and set `placeholder_access_key_id = "CODEXMASKEDWORKSPACE"` on the
+proxy action. Local managed commands receive the dummy access key, secret and,
+for temporary credentials, session token in their standard AWS environment.
+An empty AWS environment selects a single configured pair. With multiple pairs,
+set `AWS_ACCESS_KEY_ID` to the intended placeholder. An unrelated access key or
+an explicit `AWS_PROFILE` keeps its own selection. Inherited copies of configured
+credentials are masked in child environment values and protected shell snapshots.
+File-backed credentials require filesystem permissions that prevent child access.
+The AWS CLI or SDK signs with the dummy secret. After the exact
+host, method and path hook authorizes the request, the proxy recognizes the
+placeholder in the SigV4 credential scope and re-signs for the configured HTTPS
+port (443 by default), region and service. The dummy ID selects the pair and is
+visible to the workload. Unsigned requests and requests using other credentials
+follow the ordinary network and hook policy with their original AWS identity.
+A matched placeholder with an invalid scope or unsupported signature is denied.
+
+Re-signing preserves the client timestamp and signed headers and substitutes the
+real session token when configured. The AWS SDK signs the forwarded bytes after
+header mutations. Literal payloads use a 30-second deadline and an 8 MiB default
+buffer limit (16 MiB maximum). An explicit `UNSIGNED-PAYLOAD` streams without
+using the signing buffer. OpenSearch Serverless requires a literal payload hash.
+Masked presigned URLs, SigV4a, AWS signed streams and declared trailers are denied.
+
+An injected header can additionally set `placeholder` to require one exact
+whole-header value before substituting the secret. Missing, mismatched, or
+duplicate values fail closed. This form requires HTTPS port 443 and cannot
+modify routing or framing headers. Resolved secret headers and signing headers
+are marked sensitive in diagnostics.
+All native buffering stages share eight request slots, with a five-second bounded
+wait. Each lease follows the prepared body until consumed or dropped; the 16 MiB
+body cap bounds retained memory even when upstream connections are slow.

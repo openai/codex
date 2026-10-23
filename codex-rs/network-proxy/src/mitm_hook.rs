@@ -389,6 +389,12 @@ where
             });
     }
 
+    crate::aws_sigv4::validate_guest_placeholders(
+        hooks_by_host
+            .values()
+            .flatten()
+            .filter_map(|hook| hook.actions.aws_sigv4.as_deref()),
+    )?;
     Ok(hooks_by_host)
 }
 

@@ -1,6 +1,9 @@
 //! Trusted, destination-scoped AWS signing after network and HTTP hook authorization.
 //! Credentials never enter the workload; unsupported streaming signatures fail closed.
 
+use crate::credential_broker::env_value;
+use crate::credential_broker::remove_env_value;
+use crate::credential_broker::set_env_value;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::ensure;
@@ -29,6 +32,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest as _;
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 
@@ -153,17 +159,6 @@ impl AwsSigV4Config {
             /*expires_after*/ None,
             "network-proxy",
         );
-        ensure!(
-            [
-                Some(credentials.access_key_id()),
-                Some(credentials.secret_access_key()),
-                credentials.session_token(),
-            ]
-            .into_iter()
-            .flatten()
-            .all(|value| !self.placeholder_access_key_id.contains(value)),
-            "AWS guest placeholders overlap a real credential"
-        );
         Ok(AwsSigV4Signer {
             config: self.clone(),
             credentials,
@@ -234,6 +229,132 @@ pub(crate) struct GuestSignature {
     time: SystemTime,
     signed_headers: Vec<HeaderName>,
     unsigned_payload: bool,
+}
+
+const DUMMY_SECRET: &str = "codex-local-aws-secret";
+const DUMMY_TOKEN: &str = "codex-local-aws-token";
+pub(crate) const AWS_CA_BUNDLE: &str = "AWS_CA_BUNDLE";
+
+/// Every value exposed to a child must be safe with respect to every configured pair.
+pub(crate) fn validate_guest_placeholders<'a>(
+    signers: impl Iterator<Item = &'a AwsSigV4Signer> + Clone,
+) -> Result<()> {
+    for signer in signers.clone() {
+        let credentials = &signer.credentials;
+        let mut placeholders = [DUMMY_SECRET, DUMMY_TOKEN].into_iter().chain(
+            signers
+                .clone()
+                .map(|other| other.config.placeholder_access_key_id.as_str()),
+        );
+        ensure!(
+            placeholders.all(|placeholder| {
+                [
+                    Some(credentials.access_key_id()),
+                    Some(credentials.secret_access_key()),
+                    credentials.session_token(),
+                ]
+                .into_iter()
+                .flatten()
+                .all(|real| !placeholder.contains(real))
+            }),
+            "AWS guest placeholders overlap a real credential"
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn snapshot_env_keys(env: &HashMap<String, String>) -> Option<[&'static str; 5]> {
+    (env_value(env, "AWS_SECRET_ACCESS_KEY") == Some(DUMMY_SECRET)
+        || env_value(env, AWS_CA_BUNDLE)
+            .is_some_and(crate::certs::is_managed_mitm_ca_trust_bundle_path))
+    .then_some([
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_SECURITY_TOKEN",
+        AWS_CA_BUNDLE,
+    ])
+}
+
+/// Prepare the standard AWS environment for a local process before generic credential discovery.
+pub(crate) fn mask_local_aws_env(
+    signers: &[Arc<AwsSigV4Signer>],
+    env: &mut HashMap<String, String>,
+    ca_path: Option<&Path>,
+) {
+    if signers.is_empty() {
+        return;
+    }
+    if env_value(env, AWS_CA_BUNDLE).is_none_or(str::is_empty)
+        && let Some(path) = ca_path
+    {
+        set_env_value(env, AWS_CA_BUNDLE, path.to_string_lossy().into_owned());
+    }
+    let access = env_value(env, "AWS_ACCESS_KEY_ID").filter(|id| !id.is_empty());
+    let use_default = access.is_none()
+        && env_value(env, "AWS_PROFILE").is_none()
+        && env_value(env, "AWS_DEFAULT_PROFILE").is_none();
+    let mut candidates = signers.iter().filter(|s| {
+        use_default
+            || access.is_some_and(|id| {
+                id == s.credentials.access_key_id() || id == s.config.placeholder_access_key_id
+            })
+    });
+    let first = candidates.next();
+    let selected = first.filter(|first| {
+        candidates.all(|s| {
+            s.config.placeholder_access_key_id == first.config.placeholder_access_key_id
+                && s.credentials.session_token().is_some()
+                    == first.credentials.session_token().is_some()
+        })
+    });
+    let ambiguous_access = access.is_some() && first.is_some() && selected.is_none();
+    // Mask aliases of every configured pair, including pairs the SDK didn't select.
+    for value in env.values_mut() {
+        mask_local_aws_text(signers, value);
+    }
+    if ambiguous_access {
+        for key in [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "AWS_SECURITY_TOKEN",
+        ] {
+            remove_env_value(env, key);
+        }
+    } else if let Some(signer) = selected {
+        set_env_value(
+            env,
+            "AWS_ACCESS_KEY_ID",
+            signer.config.placeholder_access_key_id.clone(),
+        );
+        set_env_value(env, "AWS_SECRET_ACCESS_KEY", DUMMY_SECRET.to_string());
+        remove_env_value(env, "AWS_SECURITY_TOKEN");
+        if signer.credentials.session_token().is_some() {
+            set_env_value(env, "AWS_SESSION_TOKEN", DUMMY_TOKEN.to_string());
+        } else {
+            remove_env_value(env, "AWS_SESSION_TOKEN");
+        }
+    }
+}
+
+pub(crate) fn mask_local_aws_text(signers: &[Arc<AwsSigV4Signer>], text: &mut String) {
+    for signer in signers {
+        for (real, dummy) in [
+            (
+                Some(signer.credentials.access_key_id()),
+                signer.config.placeholder_access_key_id.as_str(),
+            ),
+            (Some(signer.credentials.secret_access_key()), DUMMY_SECRET),
+            (signer.credentials.session_token(), DUMMY_TOKEN),
+        ] {
+            if let Some(real) = real
+                && text.contains(real)
+            {
+                *text = text.replace(real, dummy);
+            }
+        }
+    }
 }
 
 impl AwsSigV4Signer {

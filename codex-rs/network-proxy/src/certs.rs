@@ -51,8 +51,17 @@ static MANAGED_MITM_CAS: LazyLock<Mutex<HashMap<PathBuf, Arc<ManagedMitmCa>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 const MAX_EXTERNAL_CA_FILE_BYTES: u64 = 1024 * 1024;
 
+#[cfg(test)]
+tokio::task_local! {
+    pub(super) static TEST_MITM_CA: Arc<ManagedMitmCa>;
+}
+
 impl ManagedMitmCa {
     pub(super) fn load_or_create() -> Result<Arc<Self>> {
+        #[cfg(test)]
+        if let Ok(ca) = TEST_MITM_CA.try_with(Arc::clone) {
+            return Ok(ca);
+        }
         let proxy_dir = managed_ca_dir()?;
         let mut managed_cas = MANAGED_MITM_CAS
             .lock()

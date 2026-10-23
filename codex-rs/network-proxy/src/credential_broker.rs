@@ -258,14 +258,14 @@ pub(super) fn env_value<'a>(env: &'a HashMap<String, String>, key: &str) -> Opti
     env_entry(env, key).map(|(_, value)| value)
 }
 
-fn set_env_value(env: &mut HashMap<String, String>, key: &str, value: String) {
+pub(super) fn set_env_value(env: &mut HashMap<String, String>, key: &str, value: String) {
     if cfg!(windows) {
         env.retain(|candidate, _| !env_key_matches(candidate, key));
     }
     env.insert(key.to_string(), value);
 }
 
-fn remove_env_value(env: &mut HashMap<String, String>, key: &str) {
+pub(super) fn remove_env_value(env: &mut HashMap<String, String>, key: &str) {
     if cfg!(windows) {
         env.retain(|candidate, _| !env_key_matches(candidate, key));
     } else {

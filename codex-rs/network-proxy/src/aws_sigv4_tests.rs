@@ -92,7 +92,33 @@ fn matches_aws_published_iam_signature_vector() {
 async fn signs_actual_payload_and_replaces_untrusted_signing_headers() {
     let mut config = config("s3");
     config.session_token = Some(ProxySecretSource::EnvVar("SESSION_TOKEN".into()));
-    let signer = signer(config);
+    let signer = Arc::new(signer(config));
+    let mut env = HashMap::from([
+        (
+            "AWS_ACCESS_KEY_ID".to_string(),
+            signer.credentials.access_key_id().to_string(),
+        ),
+        (
+            "SESSION_TOKEN".to_string(),
+            "secret-session-token".to_string(),
+        ),
+    ]);
+    mask_local_aws_env(
+        std::slice::from_ref(&signer),
+        &mut env,
+        /*ca_path*/ None,
+    );
+    assert_eq!(env["AWS_ACCESS_KEY_ID"], "MASKEDACCESSKEY");
+    assert_eq!(env["SESSION_TOKEN"], env["AWS_SESSION_TOKEN"]);
+    assert_ne!(env["AWS_SESSION_TOKEN"], "secret-session-token");
+    env.insert("AWS_ACCESS_KEY_ID".to_string(), "OTHERKEY".to_string());
+    env.insert("AWS_SECRET_ACCESS_KEY".to_string(), "unrelated".to_string());
+    mask_local_aws_env(
+        std::slice::from_ref(&signer),
+        &mut env,
+        /*ca_path*/ None,
+    );
+    assert_eq!(env["AWS_SECRET_ACCESS_KEY"], "unrelated");
     let mut cookie = HeaderValue::from_static("b=2");
     cookie.set_sensitive(true);
     let request = Request::builder()
@@ -289,6 +315,16 @@ fn credentials_are_required_and_configured_limits_are_bounded() {
             .compile(&|_| None, &|_| panic!("unexpected file"))
             .is_err()
     );
+    let first = signer(config("s3"));
+    let mut other = config("sts");
+    other.placeholder_access_key_id = format!("GUEST{}", first.credentials.access_key_id());
+    let other = other
+        .compile(&|key| Some(format!("other-{key}")), &|_| {
+            panic!("unexpected file")
+        })
+        .unwrap();
+    assert!(validate_guest_placeholders([&first, &other].into_iter()).is_err());
+
     let mut config = config("s3");
     config.max_body_bytes = 16 * 1024 * 1024 + 1;
     assert_eq!(
