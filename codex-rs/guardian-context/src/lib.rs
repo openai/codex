@@ -97,6 +97,8 @@ pub use node_repl::RenderedNodeReplEvidence;
 mod permissions;
 pub use images::TranscriptImageInput;
 pub use images::TranscriptImages;
+mod guardian_tool_descriptions;
+pub use guardian_tool_descriptions::GuardianToolDescriptions;
 mod trusted_skills;
 mod trusted_tool;
 pub use trusted_skills::TrustedSkills;
@@ -162,7 +164,7 @@ pub struct SectionInput<'a> {
     pub root_conversation: &'a [GuardianRootMessage],
     /// Bounded, role-labeled answers selected from the host-owned context snapshot.
     pub trusted_user_answers: &'a [String],
-    /// Exact action JSON and optional reason; sync composition bounds the reason.
+    /// Exact action JSON; sync composition bounds the reason and descriptions.
     pub planned_action: Option<&'a PlannedAction>,
     /// Sync-only restrictions resolved from the parent execution environment.
     pub permissions: Option<&'a PermissionContext>,

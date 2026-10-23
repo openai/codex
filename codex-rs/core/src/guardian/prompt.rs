@@ -18,7 +18,6 @@ use codex_guardian_context::TranscriptSelection;
 use codex_guardian_context::default_registry;
 use codex_protocol::models::ResponseItem;
 
-use crate::context::ContextualUserFragment;
 use crate::context::GuardianPermissionContext;
 use crate::context::GuardianReviewEvidence;
 use crate::context::GuardianToolDescriptions;
@@ -135,7 +134,6 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
                 tool_description.as_deref(),
                 connector_description.as_deref(),
             )
-            .map(|descriptions| descriptions.render().into_text().unwrap_or_default())
         } else {
             None
         },

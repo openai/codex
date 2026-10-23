@@ -267,7 +267,10 @@ fn planned_action_budget_omits_descriptions_without_changing_arguments() {
             .to_owned(),
         kind: crate::PlannedActionKind::Command,
         reason: Some(reason),
-        tool_descriptions: Some("optional tool description ".repeat(/*n*/ 100)),
+        tool_descriptions: crate::GuardianToolDescriptions::new(
+            Some(&"optional tool description ".repeat(/*n*/ 100)),
+            /*connector*/ None,
+        ),
     };
     for (presentation, action_presentation) in [
         (
@@ -291,9 +294,9 @@ fn planned_action_budget_omits_descriptions_without_changing_arguments() {
             )
         });
         let required = bounded.render(action_presentation);
-        let context = crate::CollectedContext {
+        let context = (crate::CollectedContext {
             sections: vec![crate::ContextSection::PlannedAction(action.clone())],
-        }
+        })
         .compose(
             presentation,
             crate::PreparedTranscript {
