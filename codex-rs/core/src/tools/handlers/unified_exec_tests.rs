@@ -42,6 +42,7 @@ async fn invocation_for_payload(
         tool_name: codex_tools::ToolName::plain(tool_name),
         source: ToolCallSource::Direct,
         payload,
+        environments: Default::default(),
     }
 }
 
@@ -352,6 +353,7 @@ async fn exec_command_rejects_login_when_selected_environment_disallows_it() {
         call_id: "login-disallowed".to_string(),
         tool_name: codex_tools::ToolName::plain("exec_command"),
         source: ToolCallSource::Direct,
+        environments: Default::default(),
         payload: ToolPayload::Function {
             arguments: serde_json::json!({ "cmd": "echo hello", "login": true }).to_string(),
         },
@@ -436,6 +438,7 @@ async fn exec_command_reuses_foreign_windows_grant() {
             call_id: "foreign-windows-grant".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
             source: ToolCallSource::Direct,
+            environments: Default::default(),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "cmd": "*** Begin Patch\n*** Add File: granted/file.txt\n+text\n*** End Patch",
@@ -477,6 +480,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
             tool_name: codex_tools::ToolName::plain("exec_command"),
             source: crate::tools::context::ToolCallSource::Direct,
             payload,
+            environments: Default::default(),
         }),
         Some(crate::tools::registry::PreToolUsePayload {
             tool_name: HookToolName::bash(),
@@ -505,6 +509,7 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
             tool_name: codex_tools::ToolName::plain("write_stdin"),
             source: crate::tools::context::ToolCallSource::Direct,
             payload,
+            environments: Default::default(),
         }),
         None
     );

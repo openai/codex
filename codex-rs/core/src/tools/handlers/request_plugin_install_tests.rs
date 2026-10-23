@@ -66,6 +66,7 @@ async fn request_plugin_install_rejects_subagent_threads(presentation: ToolSugge
             call_id: "call-1".to_string(),
             tool_name: codex_tools::ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME),
             source: crate::tools::context::ToolCallSource::Direct,
+            environments: Default::default(),
             payload: ToolPayload::Function {
                 arguments: arguments.to_string(),
             },

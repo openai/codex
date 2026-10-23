@@ -1,50 +1,28 @@
 //! Resolves Guardian permission evidence from the host's captured environment context.
 //! Sync review and async scoring use the same rules and environment identity.
 
+use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
+
 use super::GuardianReviewContext;
 use crate::context::GuardianPermissionContext;
 use crate::session::turn_context::TurnEnvironment;
+use crate::tools::context::ToolEnvironments;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolPayload;
-use crate::tools::handlers::RequestPermissionsEnvironmentArgs;
 
-pub(crate) async fn for_tool(
-    invocation: &ToolInvocation,
-) -> anyhow::Result<GuardianPermissionContext> {
+pub(crate) fn for_tool(invocation: &ToolInvocation) -> anyhow::Result<GuardianPermissionContext> {
     let context = GuardianReviewContext::from(&invocation.step_context);
-    if !invocation.tool_name.is_default_namespace() {
-        return for_environment(&context, /*environment_id*/ None);
-    }
-    let environment_id = match (invocation.tool_name.name.as_str(), &invocation.payload) {
-        ("apply_patch", ToolPayload::Custom { input }) => {
-            codex_apply_patch::parse_patch(input)?.environment_id
-        }
-        ("write_stdin", ToolPayload::Function { arguments }) => {
-            let arguments: serde_json::Value = serde_json::from_str(arguments)?;
-            let process_id = arguments["session_id"]
-                .as_i64()
-                .and_then(|id| i32::try_from(id).ok())
-                .ok_or_else(|| anyhow::anyhow!("missing terminal session id"))?;
-            Some(
-                invocation
-                    .session
-                    .services
-                    .unified_exec_manager
-                    .environment_id_for_process(process_id)
-                    .await
-                    .ok_or_else(|| anyhow::anyhow!("terminal session is unavailable"))?,
-            )
-        }
-        ("request_permissions", ToolPayload::Function { arguments }) => {
-            serde_json::from_str::<RequestPermissionsEnvironmentArgs>(arguments)?.environment_id
-        }
-        ("exec_command" | "view_image", ToolPayload::Function { arguments }) => {
-            let arguments: serde_json::Value = serde_json::from_str(arguments)?;
-            serde_json::from_value::<Option<String>>(arguments["environment_id"].clone())?
-        }
-        _ => return for_environment(&context, /*environment_id*/ None),
+    let environment_id = if matches!(invocation.environments, ToolEnvironments::Mcp { .. })
+        && invocation.environments.single_id() == Some(DEFAULT_MCP_SERVER_ENVIRONMENT_ID)
+        && context.environments().local_selection().is_none()
+    {
+        // Local execution tools can only resolve to an environment present in the step.
+        // Host MCP tools and resources can also serve remote-only turns: their hooks use
+        // the server owner, while Guardian needs the turn's primary permissions.
+        None
+    } else {
+        invocation.environments.single_id()
     };
-    for_environment(&context, environment_id.as_deref())
+    for_environment(&context, environment_id)
 }
 
 pub(super) fn for_environment(

@@ -11,6 +11,7 @@ use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::SnapshotEntry;
 use core_test_support::responses::ResponsesRequest;
 use pretty_assertions::assert_eq;
+use test_case::test_case;
 
 /// The selected executor may be local, Docker, or Wine; the second executor is host-native.
 /// One flow covers same-environment rejection and both directions across executor boundaries.
@@ -283,5 +284,153 @@ async fn copy_file_transfers_between_local_and_foreign_executors() -> Result<()>
         contents
     );
     assert_eq!(fs::read(local_root.path().join("returned.bin"))?, contents);
+    Ok(())
+}
+
+#[test_case(false; "rewrite paths within the selected environments")]
+#[test_case(true; "reject swapping source and target")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn copy_hooks_follow_source_and_target(swap_endpoints: bool) -> Result<()> {
+    use codex_protocol::models::PermissionProfile;
+    use codex_protocol::models::PermissionProfileSnapshot;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
+    use core_test_support::exec_server::ExecServerProcess;
+
+    let server = start_mock_server().await;
+    let mut extensions = ExtensionRegistryBuilder::new();
+    codex_multi_env_copy_file::install(&mut extensions);
+    let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("enable hooks");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let executor = ExecServerProcess::start().await?;
+    let root = TempDir::new()?;
+    let source = root.path().join("a/source");
+    let original_target = root.path().join("b/original");
+    let target = root.path().join("b/rewritten");
+    let mut rewrite = json!({"source_path": source, "target_path": target});
+    if swap_endpoints {
+        rewrite["source_environment_id"] = json!("b");
+        rewrite["target_environment_id"] = json!("a");
+    }
+    let hook_output = json!({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": rewrite,
+    }});
+    let manager = test.thread_manager.environment_manager();
+    let mut selections = Vec::new();
+    // Select the target first to check that the copy still reads from the source.
+    for id in ["b", "c", "a"] {
+        let dir = root.path().join(id);
+        fs::create_dir(&dir)?;
+        manager.upsert_environment(
+            id.to_string(),
+            executor.websocket_url.clone(),
+            /*connect_timeout*/ None,
+        )?;
+        manager
+            .get_environment(id)
+            .context("test executor")?
+            .wait_until_ready()
+            .await?;
+        let cwd = PathUri::from_host_native_path(&dir)?;
+        let mut selection = TurnEnvironmentSelection {
+            environment_id: id.to_string(),
+            cwd: cwd.clone(),
+            workspace_roots: vec![cwd],
+            selected_capability_roots: Default::default(),
+            config: EnvironmentConfigState::FromThread,
+        };
+        let mut config = environment_config_for_selection(&test.config, &selection);
+        config.permission_profile =
+            PermissionProfileSnapshot::legacy(PermissionProfile::workspace_write_with(
+                &[],
+                NetworkSandboxPolicy::Restricted,
+                /*exclude_tmpdir_env_var*/ true,
+                /*exclude_slash_tmp*/ true,
+            ));
+        let hook = |marker, output: &serde_json::Value| {
+            let output = output
+                .to_string()
+                .replace('\'', if cfg!(windows) { "''" } else { "'\\''" });
+            let command = if cfg!(windows) {
+                // The hook receives its event on the PowerShell pipeline.
+                format!(
+                    "Out-Null; Add-Content -Path {marker} -Value run -ErrorAction Stop; Write-Output '{output}'"
+                )
+            } else {
+                format!("echo run >> {marker}; printf '%s' '{output}'")
+            };
+            json!([{"matcher":"multi_env_copy_file","hooks":[{"type":"command","command": command}]}])
+        };
+        let pass = json!({});
+        config.environment_hooks = serde_json::from_value(json!({
+            "PreToolUse": hook("pre", if id == "a" { &hook_output } else { &pass }),
+            "PostToolUse": hook("post", &pass),
+        }))?;
+        selection.config = EnvironmentConfigState::Ready(config);
+        selections.push(selection);
+    }
+    fs::write(&source, b"from a")?;
+    let args = json!({
+        "source_environment_id": "a", "source_path": source,
+        "target_environment_id": "b", "target_path": original_target,
+    });
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "copy",
+                    "functions",
+                    "multi_env_copy_file",
+                    &args.to_string(),
+                ),
+                ev_completed("copy"),
+            ]),
+            sse(vec![
+                ev_assistant_message("done", "done"),
+                ev_completed("done"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn_with_environments("Copy the file.", Some(selections))
+        .await?;
+    let output = mock
+        .function_call_output_text("copy")
+        .context("copy result")?;
+    if swap_endpoints {
+        assert!(
+            output.contains("cannot change the tool environment"),
+            "{output}"
+        );
+        assert!(!target.exists());
+    } else {
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&output)
+                .with_context(|| format!("expected a successful copy, got {output}"))?,
+            json!({"bytes_copied":6})
+        );
+        assert_eq!(fs::read(&target)?, b"from a");
+    }
+    assert!(!original_target.exists());
+    for id in ["a", "b", "c"] {
+        for marker in ["pre", "post"] {
+            let path = root.path().join(id).join(marker);
+            if id != "c" && (marker == "pre" || !swap_endpoints) {
+                let contents = fs::read_to_string(&path)
+                    .with_context(|| format!("read hook marker {}", path.display()))?;
+                assert_eq!(contents.lines().count(), 1);
+            } else {
+                assert!(!path.exists(), "unexpected hook at {}", path.display());
+            }
+        }
+    }
     Ok(())
 }

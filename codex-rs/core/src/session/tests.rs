@@ -248,6 +248,15 @@ pub(crate) fn mcp_config_for_test(config: &crate::config::Config) -> Arc<codex_m
     ))
 }
 
+pub(crate) fn test_environment_id(turn: &TurnContext) -> &str {
+    &turn
+        .initial_environments
+        .single_local_environment()
+        .expect("test turn should have one local environment")
+        .selection
+        .environment_id
+}
+
 /// Updates both initial/current views before sharing a test turn context.
 pub(crate) fn update_turn_settings_for_test(
     turn: &mut TurnContext,
@@ -7796,11 +7805,13 @@ async fn request_permissions_tool_resolves_legacy_paths_against_selected_environ
             current_environment.shell,
         )
     };
-    turn_context_mut.initial_environments.environments[0] =
-        TurnEnvironmentState::Ready(environment);
+    turn_context_mut
+        .initial_environments
+        .environments
+        .push(TurnEnvironmentState::Ready(environment));
 
     let call_id = "call-1".to_string();
-    let handler = RequestPermissionsHandler;
+    let registry = ToolRegistry::with_handler_for_test(Arc::new(RequestPermissionsHandler));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let handle = tokio::spawn({
@@ -7810,30 +7821,32 @@ async fn request_permissions_tool_resolves_legacy_paths_against_selected_environ
         let tracker = Arc::clone(&tracker);
         let call_id = call_id.clone();
         async move {
-            handler
-                .handle(ToolInvocation {
-                    session,
-                    step_context,
-                    turn: turn_context,
-                    cancellation_token: CancellationToken::new(),
-                    tracker,
-                    call_id,
-                    tool_name: codex_tools::ToolName::plain("request_permissions"),
-                    source: ToolCallSource::Direct,
-                    payload: ToolPayload::Function {
-                        arguments: json!({
-                            "environment_id": "remote",
-                            "reason": "need write",
-                            "permissions": {
-                                "file_system": {
-                                    "read": null,
-                                    "write": ["relative.txt", "~/home-relative.txt"],
-                                },
+            let invocation = ToolInvocation {
+                session,
+                step_context,
+                turn: turn_context,
+                cancellation_token: CancellationToken::new(),
+                tracker,
+                call_id,
+                tool_name: codex_tools::ToolName::plain("request_permissions"),
+                source: ToolCallSource::Direct,
+                environments: Default::default(),
+                payload: ToolPayload::Function {
+                    arguments: json!({
+                        "environment_id": "remote",
+                        "reason": "need write",
+                        "permissions": {
+                            "file_system": {
+                                "read": null,
+                                "write": ["relative.txt", "~/home-relative.txt"],
                             },
-                        })
-                        .to_string(),
-                    },
-                })
+                        },
+                    })
+                    .to_string(),
+                },
+            };
+            registry
+                .dispatch_any_with_state(invocation, /*call_state*/ None)
                 .await
         }
     });
@@ -7894,28 +7907,31 @@ async fn request_permissions_tool_rejects_invalid_requests(
     environment.selection.cwd = PathUri::parse("file:///workspace/%FF").expect("non-UTF8 cwd");
     let turn_context = Arc::new(turn_context);
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
-    let result = RequestPermissionsHandler
-        .handle(ToolInvocation {
-            session: Arc::new(session),
-            step_context,
-            turn: turn_context,
-            cancellation_token: CancellationToken::new(),
-            tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
-            call_id: "call-1".to_string(),
-            tool_name: codex_tools::ToolName::plain("request_permissions"),
-            source: ToolCallSource::Direct,
-            payload: ToolPayload::Function {
-                arguments: json!({
-                    "environment_id": environment_id,
-                    "permissions": {
-                        "file_system": {
-                            "write": ["relative"],
-                        },
+    let registry = ToolRegistry::with_handler_for_test(Arc::new(RequestPermissionsHandler));
+    let invocation = ToolInvocation {
+        session: Arc::new(session),
+        step_context,
+        turn: turn_context,
+        cancellation_token: CancellationToken::new(),
+        tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+        call_id: "call-1".to_string(),
+        tool_name: codex_tools::ToolName::plain("request_permissions"),
+        source: ToolCallSource::Direct,
+        environments: Default::default(),
+        payload: ToolPayload::Function {
+            arguments: json!({
+                "environment_id": environment_id,
+                "permissions": {
+                    "file_system": {
+                        "write": ["relative"],
                     },
-                })
-                .to_string(),
-            },
-        })
+                },
+            })
+            .to_string(),
+        },
+    };
+    let result = registry
+        .dispatch_any_with_state(invocation, /*call_state*/ None)
         .await;
 
     let Err(FunctionCallError::RespondToModel(output)) = result else {
@@ -13376,6 +13392,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
             call_id: "exec-call".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
             source: crate::tools::context::ToolCallSource::Direct,
+            environments: Default::default(),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "cmd": "echo hi",

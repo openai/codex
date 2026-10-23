@@ -63,6 +63,8 @@ use crate::context::HookAdditionalContext;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::event_mapping::parse_turn_item;
 use crate::guardian::GuardianReviewContext;
+use crate::hook_environment_executor::with_environment_hooks;
+use crate::hook_environment_executor::with_tool_environment_hooks;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
@@ -160,7 +162,11 @@ pub(crate) async fn run_pending_session_start_hooks(
             permission_mode: hook_permission_mode(turn_context.approval_policy()),
             target,
         };
-        let hooks = sess.hooks();
+        let hooks = with_environment_hooks(
+            sess,
+            turn_context,
+            &turn_context.initial_environments.refresh_readiness(),
+        );
         let preview_runs = hooks.preview_session_start(&request);
         if run_context_injecting_hook(
             sess,
@@ -190,6 +196,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
     tool_use_id: String,
     tool_name: &HookToolName,
     tool_input: &Value,
+    target_environments: &[&str],
 ) -> PreToolUseHookResult {
     let turn_context = &step_context.turn;
     let request = PreToolUseRequest {
@@ -205,7 +212,12 @@ pub(crate) async fn run_pre_tool_use_hooks(
         tool_use_id,
         tool_input: tool_input.clone(),
     };
-    let hooks = sess.hooks();
+    let hooks = with_tool_environment_hooks(
+        sess,
+        turn_context,
+        &step_context.environments,
+        target_environments,
+    );
     let preview_runs = hooks.preview_pre_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
@@ -259,6 +271,7 @@ pub(crate) async fn run_permission_request_hooks(
     review_context: &GuardianReviewContext,
     run_id_suffix: &str,
     payload: PermissionRequestPayload,
+    target_environment: &str,
 ) -> Option<PermissionRequestDecision> {
     let turn_context = review_context.turn();
     let request = PermissionRequestRequest {
@@ -274,7 +287,12 @@ pub(crate) async fn run_permission_request_hooks(
         run_id_suffix: run_id_suffix.to_string(),
         tool_input: payload.tool_input,
     };
-    let hooks = sess.hooks();
+    let hooks = with_tool_environment_hooks(
+        sess,
+        turn_context,
+        review_context.environments(),
+        &[target_environment],
+    );
     let preview_runs = hooks.preview_permission_request(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
@@ -293,6 +311,7 @@ pub(crate) async fn run_permission_request_hooks(
 /// already adapted by the tool handler into the stable hook contract. Passing
 /// raw internal tool data here would leak implementation details into user hook
 /// matchers and hook logs.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_post_tool_use_hooks(
     sess: &Arc<Session>,
     step_context: &StepContext,
@@ -301,6 +320,7 @@ pub(crate) async fn run_post_tool_use_hooks(
     matcher_aliases: Vec<String>,
     tool_input: Value,
     tool_response: Value,
+    target_environments: &[&str],
 ) -> PostToolUseOutcome {
     let turn_context = &step_context.turn;
     let request = PostToolUseRequest {
@@ -317,7 +337,12 @@ pub(crate) async fn run_post_tool_use_hooks(
         tool_input,
         tool_response,
     };
-    let hooks = sess.hooks();
+    let hooks = with_tool_environment_hooks(
+        sess,
+        turn_context,
+        &step_context.environments,
+        target_environments,
+    );
     let preview_runs = hooks.preview_post_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
@@ -416,7 +441,8 @@ pub(crate) async fn run_turn_stop_hooks(
         target,
     };
     let executor_hook_sources = step_context.executor_hook_sources.clone();
-    let hooks = sess.hooks().with_executor_hooks(executor_hook_sources);
+    let hooks = with_environment_hooks(sess, turn_context, &step_context.environments)
+        .with_executor_hooks(executor_hook_sources);
     emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
 
     let mut outcome = hooks.run_stop(request).await;
@@ -426,13 +452,26 @@ pub(crate) async fn run_turn_stop_hooks(
 
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn run_session_end_hooks(sess: &Arc<Session>) {
-    let hooks = sess.hooks();
-    let preview_runs = hooks.preview_session_end();
-    if preview_runs.is_empty() {
+    // Building a turn can read plugins and skills from a remote executor. Check
+    // the captured hook declarations before spending any of the shutdown deadline.
+    let environments = sess.services.turn_environments.snapshot_now();
+    let has_environment_end_hooks = environments.turn_environments().any(|environment| {
+        !environment
+            .config()
+            .environment_hooks
+            .session_end
+            .is_empty()
+    });
+    if !has_environment_end_hooks && sess.hooks().preview_session_end().is_empty() {
         return;
     }
 
     let turn_context = sess.new_default_turn().await;
+    let hooks = with_environment_hooks(sess, &turn_context, &environments);
+    let preview_runs = hooks.preview_session_end();
+    if preview_runs.is_empty() {
+        return;
+    }
 
     // SessionEnd is root-only; ThreadSpawn uses SubagentStart/SubagentStop and other subagents
     // are internal implementation details.
@@ -472,7 +511,13 @@ pub(crate) async fn run_turn_interrupt_hooks(
         .map(|step| step.executor_hook_sources.clone())
         .unwrap_or_default();
     let has_executor_hooks = !executor_hook_sources.is_empty();
-    let hooks = sess.hooks().with_executor_hooks(executor_hook_sources);
+    let hooks = last_known_step_context
+        .as_deref()
+        .map_or_else(
+            || (*sess.hooks()).clone(),
+            |step| with_environment_hooks(sess, &step.turn, &step.environments),
+        )
+        .with_executor_hooks(executor_hook_sources);
     let preview_runs = hooks.preview_interrupt();
     if preview_runs.is_empty() && !has_executor_hooks {
         return;
@@ -513,10 +558,15 @@ pub(crate) async fn run_pre_compact_hooks(
         model: turn_context.model_info().slug.clone(),
         trigger: compaction_trigger_label(trigger).to_string(),
     };
-    let preview_runs = sess.hooks().preview_pre_compact(&request);
+    let hooks = with_environment_hooks(
+        sess,
+        turn_context,
+        &turn_context.initial_environments.refresh_readiness(),
+    );
+    let preview_runs = hooks.preview_pre_compact(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
-    let outcome = sess.hooks().run_pre_compact(request).await;
+    let outcome = hooks.run_pre_compact(request).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
     if outcome.should_stop {
         PreCompactHookOutcome::Stopped
@@ -550,10 +600,15 @@ pub(crate) async fn run_post_compact_hooks(
         model: turn_context.model_info().slug.clone(),
         trigger: compaction_trigger_label(trigger).to_string(),
     };
-    let preview_runs = sess.hooks().preview_post_compact(&request);
+    let hooks = with_environment_hooks(
+        sess,
+        turn_context,
+        &turn_context.initial_environments.refresh_readiness(),
+    );
+    let preview_runs = hooks.preview_post_compact(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
-    let outcome = sess.hooks().run_post_compact(request).await;
+    let outcome = hooks.run_post_compact(request).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
     if outcome.should_stop {
         PostCompactHookOutcome::Stopped
@@ -649,7 +704,11 @@ pub(crate) async fn inspect_pending_input(
                 permission_mode: hook_permission_mode(turn_context.approval_policy()),
                 prompt: UserMessageItem::new(content).message(),
             };
-            let hooks = sess.hooks();
+            let hooks = with_environment_hooks(
+                sess,
+                turn_context,
+                &turn_context.initial_environments.refresh_readiness(),
+            );
             let preview_runs = hooks.preview_user_prompt_submit(&request);
             run_context_injecting_hook(
                 sess,
@@ -1032,16 +1091,21 @@ fn compaction_trigger_label(value: CompactionTrigger) -> &'static str {
 }
 
 pub(crate) fn hooks_for_model_request(
-    session: &Session,
+    session: &Arc<Session>,
     step: &StepContext,
 ) -> Arc<codex_hooks::Hooks> {
-    let hooks = session.hooks();
     match step.turn.session_source {
         SessionSource::Internal(InternalSessionSource::MemoryConsolidation)
-        | SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
-            Arc::new(hooks.for_memory_consolidation(step.executor_hook_sources.clone()))
-        }
-        _ => hooks,
+        | SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => Arc::new(
+            session
+                .hooks()
+                .for_memory_consolidation(step.executor_hook_sources.clone()),
+        ),
+        _ => Arc::new(with_environment_hooks(
+            session,
+            &step.turn,
+            &step.environments,
+        )),
     }
 }
 

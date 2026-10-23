@@ -6,15 +6,18 @@ use serde_json::Value;
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolEnvironments;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
+use crate::tools::handlers::function_tool_environment;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::handlers::resolve_tool_environment;
+use crate::tools::handlers::selected_executor;
 use crate::tools::handlers::shell_spec::create_request_permissions_tool;
 use crate::tools::handlers::shell_spec::request_permissions_tool_description;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use crate::tools::registry::with_updated_function_input;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use serde::Deserialize;
@@ -22,9 +25,9 @@ use serde::Deserialize;
 pub struct RequestPermissionsHandler;
 
 #[derive(Deserialize)]
-pub(crate) struct RequestPermissionsEnvironmentArgs {
-    #[serde(default, rename = "environment_id", alias = "environmentId")]
-    pub(crate) environment_id: Option<String>,
+struct RequestPermissionsEnvironmentArgs {
+    #[serde(alias = "environmentId")]
+    environment_id: Option<String>,
 }
 
 impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
@@ -50,6 +53,7 @@ impl RequestPermissionsHandler {
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
+            environments,
             session,
             step_context,
             cancellation_token,
@@ -67,11 +71,7 @@ impl RequestPermissionsHandler {
             }
         };
 
-        let environment_args: RequestPermissionsEnvironmentArgs = parse_arguments(&arguments)?;
-        let turn_environment = resolve_tool_environment(
-            &step_context.environments,
-            environment_args.environment_id.as_deref(),
-        )?;
+        let turn_environment = selected_executor(&environments, &step_context.environments)?;
         let sandbox_context =
             turn_environment.sandbox_context(/*additional_permissions*/ None);
         let context = sandbox_context.policy_context();
@@ -121,7 +121,33 @@ impl RequestPermissionsHandler {
     }
 }
 
-impl CoreToolRuntime for RequestPermissionsHandler {}
+impl CoreToolRuntime for RequestPermissionsHandler {
+    fn environments_for_input(
+        &self,
+        invocation: &ToolInvocation,
+    ) -> Result<ToolEnvironments, FunctionCallError> {
+        function_tool_environment(invocation, |args: RequestPermissionsEnvironmentArgs| {
+            args.environment_id
+        })
+    }
+
+    fn with_updated_hook_input(
+        &self,
+        invocation: ToolInvocation,
+        mut updated_input: Value,
+    ) -> Result<ToolInvocation, FunctionCallError> {
+        // The public permission tool accepts either spelling of this selector.
+        if let Some(args) = updated_input.as_object_mut()
+            && let Some(alias) = args.remove("environmentId")
+            && args.insert("environment_id".to_string(), alias).is_some()
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "duplicate field `environment_id`".to_string(),
+            ));
+        }
+        with_updated_function_input(invocation, updated_input)
+    }
+}
 
 fn resolve_permission_path_strings(
     arguments: &mut Value,

@@ -10,6 +10,7 @@ use crate::tools::approvals::ApprovalAction;
 use crate::tools::approvals::ApprovalContext;
 use crate::tools::events::truncate_rejection_message;
 use crate::tools::sandboxing::ToolError;
+use codex_features::Feature;
 use codex_network_proxy::BlockedRequest;
 use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::EnvironmentNetworkPolicy;
@@ -21,9 +22,12 @@ use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkRequestCancellation;
 use codex_network_proxy::NetworkRequestCancellationReason;
 use codex_network_proxy::NetworkRequestDisconnect;
+use codex_network_proxy::RemoteCredentialMasking;
+use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
+use codex_protocol::error::CodexErr;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
@@ -1115,18 +1119,76 @@ pub(crate) async fn begin_network_approval(
         return Ok(None);
     }
 
+    let fallback_policy_decider = network_policy.as_ref().map(|_| {
+        build_network_policy_decider(
+            Arc::clone(&session.services.network_approval),
+            Arc::new(RwLock::new(Arc::downgrade(session))),
+        )
+    });
+    let registration_id = Uuid::new_v4().to_string();
+    let Some(execution_proxy) = execution_network_proxy(
+        session,
+        turn,
+        environments
+            .turn_environments()
+            .find(|environment| environment.selection.environment_id == environment_id),
+        network,
+        &environment_id,
+        &permission_profile,
+        network_policy.as_ref(),
+        &registration_id,
+        fallback_policy_decider,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let cancellation_token = CancellationToken::new();
+    session
+        .services
+        .network_approval
+        .register_call(ActiveNetworkApprovalCall {
+            registration_id: registration_id.clone(),
+            turn_id: turn.sub_id.clone(),
+            trigger,
+            tool_name,
+            command,
+            environment_id,
+            permission_profile,
+            environments: environments.clone(),
+            cancellation_token: cancellation_token.clone(),
+        })
+        .await;
+
+    Ok(Some(ActiveNetworkApproval {
+        registration_id: Some(registration_id),
+        cancellation_token,
+        execution_proxy,
+    }))
+}
+
+/// Resolve the issuing environment's network policy under controller requirements and
+/// return a proxy with unique execution attribution. Does not register an approval flow.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn execution_network_proxy(
+    session: &Session,
+    turn: &TurnContext,
+    environment: Option<&TurnEnvironment>,
+    network: Option<NetworkProxy>,
+    environment_id: &str,
+    permission_profile: &PermissionProfile,
+    network_policy: Option<&EnvironmentNetworkPolicy>,
+    registration_id: &str,
+    fallback_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+) -> Result<Option<NetworkProxy>, ToolError> {
     let controller = turn.config.permissions.network.as_ref();
-    let environment = environments
-        .turn_environments()
-        .find(|environment| environment.selection.environment_id == environment_id);
     let owner_spec = network_policy
-        .as_ref()
         .map(|policy| {
             // Resolve owner policy once, where the command's actual enforcing proxy is built.
             NetworkProxySpec::for_environment(
                 controller,
                 policy,
-                &permission_profile,
+                permission_profile,
                 session.services.exec_policy.current().as_ref(),
                 environment.map_or(
                     codex_network_proxy::LocalBindingPolicy::DefaultFalse,
@@ -1194,49 +1256,62 @@ pub(crate) async fn begin_network_approval(
         return Ok(None);
     };
     let environment_policy = owner_spec.map(|spec| spec.environment_policy());
-    let fallback_policy_decider = environment_policy.as_ref().map(|_| {
-        build_network_policy_decider(
-            Arc::clone(&session.services.network_approval),
-            Arc::new(RwLock::new(Arc::downgrade(session))),
-        )
-    });
-    let registration_id = Uuid::new_v4().to_string();
     let attribution_token = Uuid::new_v4().to_string();
     let execution_proxy = network
         .for_execution(
-            &environment_id,
-            &registration_id,
+            environment_id,
+            registration_id,
             attribution_token,
             environment_policy,
             fallback_policy_decider,
         )
         .map_err(|err| {
-            ToolError::Codex(codex_protocol::error::CodexErr::Io(io::Error::other(
-                format!("failed to create execution-scoped network proxy: {err}"),
-            )))
+            ToolError::Codex(CodexErr::Io(io::Error::other(format!(
+                "failed to create execution-scoped network proxy: {err}"
+            ))))
         })?;
-    let cancellation_token = CancellationToken::new();
-    session
-        .services
-        .network_approval
-        .register_call(ActiveNetworkApprovalCall {
-            registration_id: registration_id.clone(),
-            turn_id: turn.sub_id.clone(),
-            trigger,
-            tool_name,
-            command,
-            environment_id,
-            permission_profile,
-            environments: environments.clone(),
-            cancellation_token: cancellation_token.clone(),
-        })
-        .await;
+    Ok(Some(execution_proxy))
+}
 
-    Ok(Some(ActiveNetworkApproval {
-        registration_id: Some(registration_id),
-        cancellation_token,
-        execution_proxy,
-    }))
+/// Resolve a proxy launch against the executor's capabilities, failing closed if required.
+pub(crate) async fn remote_network_proxy_launch(
+    environment: &TurnEnvironment,
+    network: &NetworkProxy,
+    turn: &TurnContext,
+) -> Result<(RemoteNetworkProxyLaunchConfig, RemoteCredentialMasking), ToolError> {
+    let network_proxy = environment
+        .environment
+        .info()
+        .await
+        .map_err(|err| {
+            ToolError::Codex(CodexErr::Io(io::Error::other(format!(
+                "failed to query exec-server capabilities: {err}"
+            ))))
+        })?
+        .capabilities
+        .network_proxy();
+    let credential_masking = if turn.config.features.enabled(Feature::CredentialMasking) {
+        network_proxy.credential_masking
+    } else {
+        RemoteCredentialMasking::Disabled
+    };
+    let launch = network
+        .remote_launch_config(
+            crate::windows_sandbox::local_binding_policy_for_sandbox(
+                environment.config().windows_sandbox_type,
+                environment.executor_platform_os.as_deref(),
+            ),
+            credential_masking,
+        )
+        .await
+        .map_err(|err| ToolError::Codex(CodexErr::Io(io::Error::other(err))))?;
+    if launch.proxy.enabled && !network_proxy.launch {
+        return Err(ToolError::Rejected(
+            "selected exec-server does not support executor-local network proxy launches"
+                .to_string(),
+        ));
+    }
+    Ok((launch, credential_masking))
 }
 
 pub(crate) async fn finish_deferred_network_approval(

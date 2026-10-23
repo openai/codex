@@ -62,13 +62,18 @@ impl StepContext {
     pub(crate) fn environments(&self) -> Vec<(&TurnEnvironment, impl EnvironmentAccess + '_)> {
         self.environments
             .turn_environments()
-            .map(|environment| {
-                let grants = self
-                    .turn
-                    .granted_permissions(&environment.selection.environment_id);
-                (environment, environment.fs_accessor(grants))
-            })
+            .map(|environment| (environment, self.fs_accessor(environment)))
             .collect()
+    }
+
+    pub(crate) fn fs_accessor<'a>(
+        &self,
+        environment: &'a TurnEnvironment,
+    ) -> impl EnvironmentAccess + 'a + use<'a> {
+        let grants = self
+            .turn
+            .granted_permissions(&environment.selection.environment_id);
+        environment.fs_accessor(grants)
     }
 
     /// Persist the context captured for this request, even after a live update.

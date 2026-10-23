@@ -36,6 +36,9 @@ mod view_image;
 pub(crate) mod view_image_spec;
 mod wait_for_environment;
 
+use crate::tools::context::ToolEnvironments;
+use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolPayload;
 use codex_file_system::FileSystemSandboxContext;
 use codex_sandboxing::policy_transforms::materialize_additional_permissions_with_context;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
@@ -68,7 +71,6 @@ pub use mcp_resource::ListMcpResourcesHandler;
 pub use mcp_resource::ReadMcpResourceHandler;
 pub use new_context_window::NewContextWindowHandler;
 pub use plan::PlanHandler;
-pub(crate) use request_permissions::RequestPermissionsEnvironmentArgs;
 pub use request_permissions::RequestPermissionsHandler;
 pub use request_plugin_install::RequestPluginInstallHandler;
 pub use request_user_input::RequestUserInputHandler;
@@ -156,6 +158,42 @@ where
 {
     let _guard = AbsolutePathBufGuard::new(base_path);
     parse_arguments(arguments)
+}
+
+#[derive(Deserialize)]
+struct ToolEnvironmentArgs {
+    environment_id: Option<String>,
+}
+
+fn function_tool_environment<T: serde::de::DeserializeOwned>(
+    invocation: &ToolInvocation,
+    environment_id: impl FnOnce(T) -> Option<String>,
+) -> Result<ToolEnvironments, FunctionCallError> {
+    let ToolPayload::Function { arguments } = &invocation.payload else {
+        return Err(FunctionCallError::Fatal(
+            "expected function arguments for environment selection".to_string(),
+        ));
+    };
+    let environment_id = environment_id(parse_arguments(arguments)?);
+    resolve_tool_environment(
+        &invocation.step_context.environments,
+        environment_id.as_deref(),
+    )
+    .map(ToolEnvironments::single_executor)
+}
+
+fn selected_executor<'a>(
+    environments: &'a ToolEnvironments,
+    snapshot: &'a TurnEnvironmentSnapshot,
+) -> Result<&'a TurnEnvironment, FunctionCallError> {
+    match environments {
+        ToolEnvironments::Arguments(args) if let [(_, env)] = args.as_slice() => Ok(env),
+        // Direct handler callers may supply only the step context.
+        ToolEnvironments::All => resolve_tool_environment(snapshot, /*environment_id*/ None),
+        _ => Err(FunctionCallError::Fatal(
+            "expected one executor for this call".to_string(),
+        )),
+    }
 }
 
 fn resolve_tool_environment<'a>(

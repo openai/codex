@@ -170,6 +170,12 @@ impl McpConnectionSet {
             .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
     }
 
+    pub(crate) fn server_environment_id(&self, server: &str) -> Option<&str> {
+        self.servers
+            .get(server)
+            .map(|view| view.metadata.environment_id.as_str())
+    }
+
     pub(crate) async fn client_by_name(
         &self,
         name: &str,

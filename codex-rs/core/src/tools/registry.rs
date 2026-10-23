@@ -15,6 +15,7 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolCallState;
+use crate::tools::context::ToolEnvironments;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -46,6 +47,9 @@ use futures::future::BoxFuture;
 use indexmap::IndexMap;
 use indexmap::map::Entry;
 use serde_json::Value;
+
+pub(crate) type LiveEnvironmentResolver =
+    fn(&ToolInvocation) -> BoxFuture<'_, Result<ToolEnvironments, FunctionCallError>>;
 
 pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
 
@@ -92,6 +96,19 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
     /// A built-in stays false even if a client's tool has the same name.
     fn is_third_party_tool(&self) -> bool {
         false
+    }
+
+    /// Identify the environments selected by the original input.
+    fn environments_for_input(
+        &self,
+        _invocation: &ToolInvocation,
+    ) -> Result<ToolEnvironments, FunctionCallError> {
+        Ok(ToolEnvironments::All)
+    }
+
+    /// Select a shared resolver when the environment belongs to a live resource.
+    fn live_environment_resolver(&self) -> Option<LiveEnvironmentResolver> {
+        None
     }
 
     /// Returns the owning server only for MCP-backed tool runtimes.
@@ -167,28 +184,87 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         invocation: ToolInvocation,
         updated_input: Value,
     ) -> Result<ToolInvocation, FunctionCallError> {
-        let ToolPayload::Function { .. } = &invocation.payload else {
-            return Err(FunctionCallError::RespondToModel(
-                "hook input rewrite received unsupported function tool payload".to_string(),
-            ));
-        };
-
-        let arguments = serde_json::to_string(&updated_input).map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "failed to serialize rewritten {} arguments: {err}",
-                flat_tool_name(&invocation.tool_name)
-            ))
-        })?;
-        Ok(ToolInvocation {
-            payload: ToolPayload::Function { arguments },
-            ..invocation
-        })
+        with_updated_function_input(invocation, updated_input)
     }
 
     /// Creates an optional consumer for streamed tool argument diffs.
     fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         None
     }
+}
+
+pub(super) fn with_updated_function_input(
+    invocation: ToolInvocation,
+    mut updated_input: Value,
+) -> Result<ToolInvocation, FunctionCallError> {
+    let ToolPayload::Function { .. } = &invocation.payload else {
+        return Err(FunctionCallError::RespondToModel(
+            "hook input rewrite received unsupported function tool payload".to_string(),
+        ));
+    };
+
+    match &invocation.environments {
+        ToolEnvironments::Arguments(environments) => {
+            for (field, environment) in environments {
+                preserve_hook_selector(
+                    &mut updated_input,
+                    field,
+                    serde_json::json!(environment.selection.environment_id),
+                )?;
+            }
+        }
+        ToolEnvironments::Mcp { server, .. } => {
+            if let Some(Value::String(value)) = updated_input.get_mut("server") {
+                *value = value.trim().to_owned();
+                if value.is_empty() {
+                    updated_input["server"] = Value::Null;
+                }
+            }
+            preserve_hook_selector(&mut updated_input, "server", serde_json::json!(server))?;
+        }
+        ToolEnvironments::Terminal(terminal) => {
+            preserve_hook_selector(
+                &mut updated_input,
+                "session_id",
+                serde_json::json!(terminal.process_id),
+            )?;
+        }
+        ToolEnvironments::All => {}
+    }
+    let arguments = serde_json::to_string(&updated_input).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to serialize rewritten {} arguments: {err}",
+            flat_tool_name(&invocation.tool_name)
+        ))
+    })?;
+    Ok(ToolInvocation {
+        payload: ToolPayload::Function { arguments },
+        ..invocation
+    })
+}
+
+/// A rewrite may omit the selector or repeat its original value.
+fn preserve_hook_selector(
+    input: &mut Value,
+    field: &str,
+    expected: Value,
+) -> Result<(), FunctionCallError> {
+    let object = input.as_object_mut().ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "expected an object for rewritten tool arguments".to_string(),
+        )
+    })?;
+    if let Some(value) = object.get(field)
+        && value != &expected
+    {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "PreToolUse hook cannot change the tool environment ({field})"
+        )));
+    }
+    if !expected.is_null() {
+        object.insert(field.to_string(), expected);
+    }
+    Ok(())
 }
 
 /// Consumes streamed argument diffs for a tool call and emits protocol events
@@ -698,6 +774,30 @@ impl ToolRegistry {
             return Err(err);
         }
 
+        let fail_before_execution = async |invocation: &ToolInvocation, err: FunctionCallError| {
+            if tool.is_builtin_control_tool() {
+                let mut analytics = ControlToolCallGuard::new(invocation);
+                analytics.finish(ControlToolCallStatus::Failed);
+            }
+            dispatch_trace.record_failed(&err);
+            notify_tool_finish_if_unclaimed(
+                invocation,
+                call_state.as_deref(),
+                ToolCallOutcome::Failed {
+                    handler_executed: false,
+                },
+            )
+            .await;
+            err
+        };
+        let environments = match tool.live_environment_resolver() {
+            Some(resolve) => resolve(&invocation).await,
+            None => tool.environments_for_input(&invocation),
+        };
+        invocation.environments = match environments {
+            Ok(environments) => environments,
+            Err(err) => return Err(fail_before_execution(&invocation, err).await),
+        };
         if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
             match run_pre_tool_use_hooks(
                 &invocation.session,
@@ -705,6 +805,7 @@ impl ToolRegistry {
                 invocation.call_id.clone(),
                 &pre_tool_use_payload.tool_name,
                 &pre_tool_use_payload.tool_input,
+                &invocation.environments.hook_ids(),
             )
             .or_cancel_tool(&cancellation_token)
             .await?
@@ -730,22 +831,7 @@ impl ToolRegistry {
                     Ok(updated_invocation) => {
                         invocation = updated_invocation;
                     }
-                    Err(err) => {
-                        if tool.is_builtin_control_tool() {
-                            let mut analytics = ControlToolCallGuard::new(&invocation);
-                            analytics.finish(ControlToolCallStatus::Failed);
-                        }
-                        dispatch_trace.record_failed(&err);
-                        notify_tool_finish_if_unclaimed(
-                            &invocation,
-                            call_state.as_deref(),
-                            ToolCallOutcome::Failed {
-                                handler_executed: false,
-                            },
-                        )
-                        .await;
-                        return Err(err);
-                    }
+                    Err(err) => return Err(fail_before_execution(&invocation, err).await),
                 },
                 PreToolUseHookResult::Continue {
                     updated_input: None,
@@ -826,6 +912,7 @@ impl ToolRegistry {
                     post_tool_use_payload.tool_name.matcher_aliases().to_vec(),
                     post_tool_use_payload.tool_input,
                     post_tool_use_payload.tool_response,
+                    &invocation.environments.hook_ids(),
                 )
                 .or_cancel_tool(&cancellation_token)
                 .await?,

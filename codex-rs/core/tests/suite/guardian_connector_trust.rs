@@ -19,11 +19,15 @@ use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_LIST_TOOL;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE;
 use core_test_support::apps_test_server::apps_enabled_builder;
+use core_test_support::exec_server::ExecServerProcess;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::TestEnv;
+use core_test_support::test_codex::test_env;
 use core_test_support::wait_for_mcp_server;
 use serde_json::Value;
 use serde_json::json;
+use test_case::test_case;
 use wiremock::Mock;
 use wiremock::matchers::body_partial_json;
 use wiremock::matchers::method;
@@ -53,8 +57,12 @@ impl McpServerContributor<Config> for ExtensionOwnedAppsServer {
     }
 }
 
+#[test_case(false; "selected executor")]
+#[test_case(true; "host MCP server with only a remote executor")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn extension_owned_apps_cannot_attest_connector_to_guardian() -> Result<()> {
+async fn extension_owned_apps_cannot_attest_connector_to_guardian(
+    use_remote_executor: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -120,6 +128,13 @@ async fn extension_owned_apps_cannot_attest_connector_to_guardian() -> Result<()
     extensions.mcp_server_contributor(Arc::new(ExtensionOwnedAppsServer {
         url: format!("{}/api/codex/ps/mcp", apps.chatgpt_base_url),
     }));
+    let executor;
+    let environment = if use_remote_executor {
+        executor = ExecServerProcess::start().await?;
+        TestEnv::local_with_exec_server_url(Some(executor.websocket_url.clone())).await?
+    } else {
+        test_env().await?
+    };
     let test = apps_enabled_builder(apps.chatgpt_base_url)
         .with_model("test-gpt-5.1-codex")
         .with_extensions(Arc::new(extensions.build()))
@@ -147,7 +162,7 @@ async fn extension_owned_apps_cannot_attest_connector_to_guardian() -> Result<()
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         })
-        .build_with_auto_env(&server)
+        .build_with_environment(&server, environment)
         .await?;
     wait_for_mcp_server(&test.codex, "codex_apps").await?;
     test.submit_text_turn("List today's calendar events.")

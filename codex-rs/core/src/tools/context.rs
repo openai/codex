@@ -2,6 +2,7 @@ use crate::original_image_detail::sanitize_original_image_detail;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::format_output_omission_marker;
 use crate::unified_exec::resolve_max_tokens;
@@ -66,6 +67,47 @@ pub enum ToolCallSource {
     },
 }
 
+/// Targets captured from the original call. Environments follow the order declared by the tool.
+#[derive(Clone, Default)]
+pub(crate) enum ToolEnvironments {
+    #[default]
+    All,
+    Terminal(crate::unified_exec::TerminalSession),
+    Arguments(Vec<(&'static str, Arc<TurnEnvironment>)>),
+    Mcp {
+        server: Option<String>,
+        owner: Option<String>,
+    },
+}
+
+impl ToolEnvironments {
+    pub(crate) fn single_executor(env: &TurnEnvironment) -> Self {
+        Self::Arguments(vec![("environment_id", Arc::new(env.clone()))])
+    }
+
+    pub(crate) fn single_id(&self) -> Option<&str> {
+        match self {
+            Self::Arguments(args) => match args.as_slice() {
+                [(_, env)] => Some(&env.selection.environment_id),
+                _ => None,
+            },
+            Self::Terminal(terminal) => Some(&terminal.environment_id),
+            Self::Mcp { owner, .. } => owner.as_deref(),
+            Self::All => None,
+        }
+    }
+
+    pub(crate) fn hook_ids(&self) -> Vec<&str> {
+        match self {
+            Self::Arguments(args) => args
+                .iter()
+                .map(|(_, env)| env.selection.environment_id.as_str())
+                .collect(),
+            _ => self.single_id().into_iter().collect(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ToolInvocation {
     pub session: Arc<Session>,
@@ -78,6 +120,8 @@ pub struct ToolInvocation {
     pub tool_name: ToolName,
     pub source: ToolCallSource,
     pub payload: ToolPayload,
+    /// Captured before PreToolUse and retained across input rewrites.
+    pub(crate) environments: ToolEnvironments,
 }
 
 /// Identity of the model call that started a tool invocation, retained across code-mode waits.

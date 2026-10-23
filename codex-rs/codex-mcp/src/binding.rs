@@ -102,6 +102,11 @@ impl McpBinding {
         self.connections.has_servers()
     }
 
+    /// The environment owning this server in the step's connection set, even if it exposes no tools.
+    pub fn server_environment_id(&self, server: &str) -> Option<&str> {
+        self.connections.server_environment_id(server)
+    }
+
     pub async fn list_resources(
         &self,
         server: &str,

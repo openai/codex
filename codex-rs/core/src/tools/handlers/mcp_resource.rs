@@ -30,7 +30,10 @@ use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolEnvironments;
+use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use codex_protocol::protocol::McpInvocation;
 
@@ -59,6 +62,47 @@ fn ensure_model_can_access_mcp_server(
     }
 }
 
+enum ResourceOperation {
+    List,
+    Read,
+}
+
+fn resource_environments(
+    invocation: &ToolInvocation,
+    operation: ResourceOperation,
+) -> Result<ToolEnvironments, FunctionCallError> {
+    let arguments = resource_arguments(&invocation.payload)?;
+    let server = match operation {
+        ResourceOperation::List => ListResourceArgs::parse(arguments)?.server,
+        ResourceOperation::Read => Some(ReadResourceArgs::parse(arguments)?.server),
+    };
+    // Only an aggregate list has no owning server. A named but unknown server is an error.
+    let Some(server) = server else {
+        return Ok(ToolEnvironments::Mcp {
+            server: None,
+            owner: None,
+        });
+    };
+    let step = &invocation.step_context;
+    ensure_model_can_access_mcp_server(&step.turn, &server)?;
+    let environment_id = step.mcp.server_environment_id(&server).ok_or_else(|| {
+        FunctionCallError::RespondToModel(format!("unknown MCP server '{server}'"))
+    })?;
+    Ok(ToolEnvironments::Mcp {
+        server: Some(server),
+        owner: Some(environment_id.to_owned()),
+    })
+}
+
+fn resource_arguments(payload: &ToolPayload) -> Result<Option<Value>, FunctionCallError> {
+    let ToolPayload::Function { arguments } = payload else {
+        return Err(FunctionCallError::Fatal(
+            "expected function arguments for MCP resource operation".to_string(),
+        ));
+    };
+    parse_arguments(arguments)
+}
+
 #[derive(Debug, Deserialize, Default, PartialEq, Eq)]
 struct ListResourceArgs {
     #[serde(default)]
@@ -68,6 +112,10 @@ struct ListResourceArgs {
 }
 
 impl ListResourceArgs {
+    fn parse(arguments: Option<Value>) -> Result<Self, FunctionCallError> {
+        parse_args_with_default::<Self>(arguments).map(Self::normalized)
+    }
+
     fn normalized(self) -> Self {
         Self {
             server: normalize_optional_string(self.server),
@@ -100,6 +148,16 @@ impl ListResourceArgs {
 struct ReadResourceArgs {
     server: String,
     uri: String,
+}
+
+impl ReadResourceArgs {
+    fn parse(arguments: Option<Value>) -> Result<Self, FunctionCallError> {
+        let Self { server, uri } = parse_args(arguments)?;
+        Ok(Self {
+            server: normalize_required_string("server", server)?,
+            uri: normalize_required_string("uri", uri)?,
+        })
+    }
 }
 
 #[derive(Debug, Serialize)]

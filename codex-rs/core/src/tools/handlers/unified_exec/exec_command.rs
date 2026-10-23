@@ -7,19 +7,22 @@ use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ExecCommandToolOutput;
+use crate::tools::context::ToolEnvironments;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
+use crate::tools::handlers::ToolEnvironmentArgs;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::file_system_sandbox_policy_context_for_cwd;
+use crate::tools::handlers::function_tool_environment;
 use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_sandbox_permissions;
-use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::rewrite_function_string_argument;
+use crate::tools::handlers::selected_executor;
 use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::CoreToolRuntime;
@@ -48,7 +51,7 @@ use codex_utils_string::truncate_middle_chars;
 use super::super::shell_spec::CommandToolOptions;
 use super::super::shell_spec::create_exec_command_tool_with_environment_id;
 use super::ExecCommandArgs;
-use super::ExecCommandEnvironmentArgs;
+use super::ExecCommandWorkdirArgs;
 use super::get_command;
 use super::post_unified_exec_tool_use_payload;
 
@@ -150,6 +153,7 @@ impl ExecCommandHandler {
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
+            environments,
             session,
             turn,
             step_context,
@@ -176,13 +180,10 @@ impl ExecCommandHandler {
             cancellation_token,
             call_id.clone(),
         );
-        let environment_args: ExecCommandEnvironmentArgs = parse_arguments(&arguments)?;
-        let turn_environment = resolve_tool_environment(
-            &step_context.environments,
-            environment_args.environment_id.as_deref(),
-        )?;
+        let workdir_args: ExecCommandWorkdirArgs = parse_arguments(&arguments)?;
+        let turn_environment = selected_executor(&environments, &step_context.environments)?;
         let native_environment_cwd = turn_environment.cwd().clone();
-        let cwd = environment_args
+        let cwd = workdir_args
             .workdir
             .as_deref()
             .filter(|workdir| !workdir.is_empty())
@@ -492,6 +493,13 @@ fn one_shot_exec_command_spec(spec: ToolSpec) -> ToolSpec {
 }
 
 impl CoreToolRuntime for ExecCommandHandler {
+    fn environments_for_input(
+        &self,
+        invocation: &ToolInvocation,
+    ) -> Result<ToolEnvironments, FunctionCallError> {
+        function_tool_environment(invocation, |args: ToolEnvironmentArgs| args.environment_id)
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

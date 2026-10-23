@@ -20,6 +20,7 @@ use crate::shell_snapshot::ShellSnapshotSandbox;
 use crate::shell_snapshot::snapshot_read_permissions;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use crate::tools::network_approval::remote_network_proxy_launch;
 use crate::tools::runtimes::RuntimePathPrepends;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
@@ -342,44 +343,16 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
         };
         let (mut env, managed_network_context, network_proxy_launch) = match managed_network {
             Some(network) if environment_is_remote => {
-                let environment_info =
-                    req.turn_environment
-                        .environment
-                        .info()
-                        .await
-                        .map_err(|err| {
-                            ToolError::Codex(CodexErr::Io(io::Error::other(format!(
-                                "failed to query exec-server capabilities: {err}"
-                            ))))
-                        })?;
-                let network_proxy = environment_info.capabilities.network_proxy();
-                let credential_masking = if ctx
-                    .step_context
-                    .turn
-                    .config
-                    .features
-                    .enabled(Feature::CredentialMasking)
-                {
-                    network_proxy.credential_masking
-                } else {
-                    RemoteCredentialMasking::Disabled
-                };
-                let mut launch = network
-                    .remote_launch_config(
-                        crate::windows_sandbox::local_binding_policy_for_sandbox(
-                            req.turn_environment.config().windows_sandbox_type,
-                            req.turn_environment.executor_platform_os.as_deref(),
-                        ),
-                        credential_masking,
-                    )
-                    .await
-                    .map_err(|err| {
-                        ToolError::Codex(CodexErr::Io(io::Error::other(err.to_string())))
-                    })?;
+                let (mut launch, credential_masking) = remote_network_proxy_launch(
+                    &req.turn_environment,
+                    network,
+                    &ctx.step_context.turn,
+                )
+                .await?;
                 warn_if_remote_credential_masking_unavailable(
                     ctx,
                     req,
-                    network_proxy.credential_masking,
+                    credential_masking,
                     &launch.proxy,
                 )
                 .await;
@@ -404,17 +377,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                             )
                         })?);
                 }
-                if !launch.proxy.enabled {
-                    (env, None, None)
-                } else {
-                    if !network_proxy.launch {
-                        return Err(ToolError::Rejected(
-                            "selected exec-server does not support executor-local network proxy launches"
-                                .to_string(),
-                        ));
-                    }
-                    (env, None, Some(launch))
-                }
+                (env, None, launch.proxy.enabled.then_some(launch))
             }
             Some(network) => {
                 let prepared = snapshot_credential_context

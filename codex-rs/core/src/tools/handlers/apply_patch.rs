@@ -19,6 +19,7 @@ use crate::session::turn_context::TurnEnvironment;
 use crate::tools::context::ApplyPatchToolOutput;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolEnvironments;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
@@ -28,6 +29,7 @@ use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch_spec::create_apply_patch_freeform_tool;
 use crate::tools::handlers::file_system_sandbox_policy_context_for_cwd;
 use crate::tools::handlers::resolve_tool_environment;
+use crate::tools::handlers::selected_executor;
 use crate::tools::handlers::updated_hook_command;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
@@ -304,6 +306,7 @@ impl ApplyPatchHandler {
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
+            environments,
             session,
             step_context,
             cancellation_token,
@@ -327,14 +330,7 @@ impl ApplyPatchHandler {
                 )));
             }
         };
-        let selected_environment_id =
-            require_environment_id(args.environment_id.as_deref(), self.multi_environment)?;
-
-        // Verify the parsed patch against the selected environment filesystem.
-        let turn_environment = resolve_tool_environment(
-            &step_context.environments,
-            selected_environment_id.as_deref(),
-        )?;
+        let turn_environment = selected_executor(&environments, &step_context.environments)?;
         let fs = turn_environment.environment.get_filesystem();
         let sandbox = turn_environment.sandbox_context(/*additional_permissions*/ None);
         match codex_apply_patch::verify_apply_patch_args(
@@ -383,6 +379,27 @@ impl ApplyPatchHandler {
 }
 
 impl CoreToolRuntime for ApplyPatchHandler {
+    fn environments_for_input(
+        &self,
+        invocation: &ToolInvocation,
+    ) -> Result<ToolEnvironments, FunctionCallError> {
+        let ToolPayload::Custom { input } = &invocation.payload else {
+            return Err(FunctionCallError::Fatal(
+                "expected apply_patch input".to_string(),
+            ));
+        };
+        let args = codex_apply_patch::parse_patch(input).map_err(|err| {
+            FunctionCallError::RespondToModel(format!("apply_patch verification failed: {err}"))
+        })?;
+        let environment_id =
+            require_environment_id(args.environment_id.as_deref(), self.multi_environment)?;
+        let environment = resolve_tool_environment(
+            &invocation.step_context.environments,
+            environment_id.as_deref(),
+        )?;
+        Ok(ToolEnvironments::single_executor(environment))
+    }
+
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Custom { .. })
     }
@@ -404,6 +421,17 @@ impl CoreToolRuntime for ApplyPatchHandler {
         updated_input: serde_json::Value,
     ) -> Result<ToolInvocation, FunctionCallError> {
         let patch = updated_hook_command(&updated_input)?;
+        let args = codex_apply_patch::parse_patch(patch).map_err(|err| {
+            FunctionCallError::RespondToModel(format!("apply_patch verification failed: {err}"))
+        })?;
+        if let Some(id) =
+            require_environment_id(args.environment_id.as_deref(), self.multi_environment)?
+            && Some(id.as_str()) != invocation.environments.single_id()
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "PreToolUse hook cannot change the tool environment".to_string(),
+            ));
+        }
         invocation.payload = match invocation.payload {
             ToolPayload::Custom { .. } => ToolPayload::Custom {
                 input: patch.to_string(),

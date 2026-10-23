@@ -290,6 +290,7 @@ pub(crate) async fn handle_mcp_tool_call(
         &metadata,
         prepared_call.config(),
         prepared_call.permission_profile(),
+        prepared_call.server_environment_id(),
         approval_policy,
     )
     .await
@@ -1515,6 +1516,7 @@ async fn maybe_request_mcp_tool_approval(
     metadata: &McpToolApprovalMetadata,
     config: &codex_mcp::McpConfig,
     permission_profile: &PermissionProfile,
+    environment_id: &str,
     policy: McpToolApprovalPolicy,
 ) -> Option<McpToolApproval> {
     let turn_context = &step_context.turn;
@@ -1567,6 +1569,7 @@ async fn maybe_request_mcp_tool_approval(
 
     let action = ApprovalAction::McpToolCall {
         id: call_id.to_string(),
+        environment_id: environment_id.to_owned(),
         server: invocation.server.clone(),
         tool_name: invocation.tool.clone(),
         arguments: invocation.arguments.clone(),

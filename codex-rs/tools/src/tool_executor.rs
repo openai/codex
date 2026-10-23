@@ -123,6 +123,15 @@ pub trait ToolExecutor<Invocation>: Send + Sync {
         false
     }
 
+    /// Return the argument names and environment IDs used by this call. The host supplies their
+    /// filesystem accessors in the same order. An empty list keeps the turn-wide environment view.
+    fn environment_arguments(
+        &self,
+        _payload: &crate::ToolPayload,
+    ) -> Result<Vec<(&'static str, String)>, FunctionCallError> {
+        Ok(Vec::new())
+    }
+
     /// Handles one invocation without retaining capabilities borrowed by the host.
     fn handle<'a>(&'a self, invocation: Invocation) -> ToolExecutorFuture<'a>
     where
