@@ -958,6 +958,12 @@ impl App {
                 // A full usage read can finish before thread/start. Apply its cached fallback
                 // after attachment but before the initial prompt or queued draft is submitted.
                 let recovery_was_pending = self.chat_widget.hold_rate_limit_recovery();
+                if self.loader_overrides.user_config_profile.is_none() {
+                    self.chat_widget.accept_startup_approval_policy(
+                        &mut self.config.permissions.approval_policy,
+                        started.session.approval_policy,
+                    )?;
+                }
                 self.enqueue_primary_thread_session(started.session, started.turns)
                     .await?;
                 self.apply_backend_banner_fallback(app_server).await;

@@ -12,14 +12,20 @@ use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GranularApprovalConfig;
 
-/// Returns whether eligible implicit permissions require Windows sandbox setup.
+#[derive(Default)]
+pub(crate) struct AppliedDefaults {
+    pub(crate) prompt_windows_sandbox: bool,
+    pub(crate) approval_policy: Option<AskForApproval>,
+}
+
+/// Returns the selected product approval policy and whether Windows sandbox setup is required.
 pub(crate) fn apply_defaults(
     config: &mut Config,
     overrides: &ConfigOverrides,
     app_server: &AppServerSession,
     environments: &EnvironmentManager,
     response: &crate::config_update::EffectiveConfig,
-) -> bool {
+) -> AppliedDefaults {
     let defaults = &response.config;
     let effective = config.config_layer_stack.effective_config();
     if response.layers.as_ref().is_none_or(|layers| layers.iter().any(|layer| {
@@ -61,7 +67,7 @@ pub(crate) fn apply_defaults(
             &PermissionProfile::workspace_write(),
         )
     {
-        return false;
+        return AppliedDefaults::default();
     }
     let granular = AskForApproval::Granular(GranularApprovalConfig {
         sandbox_approval: false,
@@ -70,7 +76,9 @@ pub(crate) fn apply_defaults(
         request_permissions: true,
         mcp_elicitations: true,
     });
+    let mut applied = AppliedDefaults::default();
     if overrides.approval_policy.is_none() && effective.get("approval_policy").is_none() {
+        applied.approval_policy = defaults.approval_policy.is_none().then_some(granular);
         let granular = defaults
             .approval_policy
             .as_ref()
@@ -79,14 +87,15 @@ pub(crate) fn apply_defaults(
     }
     #[cfg(target_os = "windows")]
     if config.effective_local_windows_sandbox_type() == codex_sandboxing::SandboxType::None {
-        return true;
+        applied.prompt_windows_sandbox = true;
+        return applied;
     }
     if config
         .permissions
         .set_permission_profile(PermissionProfile::workspace_write())
         .is_err()
     {
-        return false;
+        return applied;
     }
     let snapshot = PermissionProfileSnapshot::active(
         config.permissions.permission_profile().clone(),
@@ -95,7 +104,7 @@ pub(crate) fn apply_defaults(
     let _ = config
         .permissions
         .set_permission_profile_from_session_snapshot(snapshot);
-    false
+    applied
 }
 
 /// Local filesystem discovery is authoritative only for positively local execution.

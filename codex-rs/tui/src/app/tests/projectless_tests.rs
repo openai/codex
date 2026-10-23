@@ -284,9 +284,11 @@ async fn local_projectless_defaults_respect_trust_scope_and_explicit_settings() 
         } else {
             ""
         };
+        let shared_settings =
+            format!("{windows}[projects.{parent_path}]\ntrust_level = \"untrusted\"\n");
         std::fs::write(
             home.path().join("config.toml"),
-            format!("{settings}{windows}[projects.{parent_path}]\ntrust_level = \"untrusted\"\n"),
+            format!("{settings}{shared_settings}"),
         )?;
         let overrides = ConfigOverrides {
             cwd: Some(cwd),
@@ -298,6 +300,10 @@ async fn local_projectless_defaults_respect_trust_scope_and_explicit_settings() 
             .harness_overrides(overrides.clone())
             .build()
             .await?;
+        if expected_approval.is_some() {
+            // The client loaded an approval policy that the server will not see.
+            std::fs::write(home.path().join("config.toml"), shared_settings)?;
+        }
         let original_approval = if settings.is_empty() && !project_marker {
             Approval::Granular(codex_protocol::protocol::GranularApprovalConfig {
                 sandbox_approval: false,
@@ -336,6 +342,9 @@ async fn local_projectless_defaults_respect_trust_scope_and_explicit_settings() 
             &EnvironmentManager::default_for_tests(),
         )
         .await?;
+        if expected_approval.is_some() {
+            assert_eq!(startup.approval_policy, None);
+        }
         assert_eq!(
             startup.prompt_windows_sandbox,
             cfg!(target_os = "windows") && !sandbox_ready && settings.is_empty() && !project_marker

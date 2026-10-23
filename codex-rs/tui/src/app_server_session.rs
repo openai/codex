@@ -320,6 +320,7 @@ pub(crate) struct AppServerBootstrap {
     pub(crate) has_chatgpt_account: bool,
     pub(crate) available_models: Vec<ModelPreset>,
     pub(crate) collaboration_modes: Vec<codex_protocol::config_types::CollaborationModeMask>,
+    pub(crate) allowed_approval_policies: Option<Vec<AskForApproval>>,
 }
 
 pub(crate) struct AppServerSession {
@@ -759,6 +760,10 @@ impl AppServerSession {
                 )
                 .await;
         }
+        let allowed_approval_policies = requirements
+            .requirements
+            .as_ref()
+            .and_then(|requirements| requirements.allowed_approval_policies.clone());
         self.managed_new_thread_defaults = requirements
             .requirements
             .and_then(|requirements| requirements.models)
@@ -838,6 +843,7 @@ impl AppServerSession {
             has_chatgpt_account,
             available_models,
             collaboration_modes,
+            allowed_approval_policies,
         })
     }
 
@@ -1857,6 +1863,7 @@ pub(crate) async fn start_thread_with_request_handle(
         remote_cwd_override.as_deref(),
         /*session_start_source*/ None,
         launch_choices.approvals_reviewer,
+        &launch_choices.approval_policy,
     );
     thread_tool_transport.validate_config(&config)?;
     launch_choices.configure(&mut params);
@@ -2184,6 +2191,7 @@ pub(crate) fn thread_start_params_from_config(
         remote_cwd_override,
         session_start_source,
         startup_launch::StartupApprovalsReviewer::Config,
+        &startup_launch::StartupApprovalPolicy::ResolvedConfig,
     )
 }
 
@@ -2193,6 +2201,7 @@ fn thread_start_params_with_reviewer(
     remote_cwd_override: Option<&std::path::Path>,
     session_start_source: Option<ThreadStartSource>,
     reviewer_source: startup_launch::StartupApprovalsReviewer,
+    policy_source: &startup_launch::StartupApprovalPolicy,
 ) -> ThreadStartParams {
     let permissions = permissions_selection_from_config(config, thread_params_mode);
     let sandbox = permissions
@@ -2210,7 +2219,13 @@ fn thread_start_params_with_reviewer(
         service_tier: service_tier_override_from_config(config),
         cwd: thread_cwd_from_config(config, thread_params_mode, remote_cwd_override),
         runtime_workspace_roots: thread_params_mode.workspace_roots_from_config(config),
-        approval_policy: Some(config.permissions.approval_policy.value().into()),
+        approval_policy: match policy_source {
+            startup_launch::StartupApprovalPolicy::ResolvedConfig => {
+                Some(config.permissions.approval_policy.value().into())
+            }
+            startup_launch::StartupApprovalPolicy::Invocation(policy) => *policy,
+            startup_launch::StartupApprovalPolicy::ConfigOverride(_) => None,
+        },
         approvals_reviewer: match reviewer_source {
             startup_launch::StartupApprovalsReviewer::Config => {
                 approvals_reviewer_override_from_config(config)

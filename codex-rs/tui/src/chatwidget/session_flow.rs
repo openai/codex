@@ -7,6 +7,26 @@ use crate::history_cell::ForkedThreadHistoryCell;
 use crate::style::accent_color;
 
 impl ChatWidget {
+    pub(crate) fn accept_startup_approval_policy(
+        &mut self,
+        app_policy: &mut Constrained<codex_protocol::protocol::AskForApproval>,
+        server_policy: AskForApproval,
+    ) -> codex_config::ConstraintResult<()> {
+        let server_policy = server_policy.to_core();
+        if app_policy.can_set(&server_policy).is_err() {
+            let local = app_policy.clone();
+            *app_policy = Constrained::new(server_policy, move |candidate| {
+                if *candidate == server_policy {
+                    Ok(())
+                } else {
+                    local.can_set(candidate)
+                }
+            })?;
+            self.config.permissions.approval_policy = app_policy.clone();
+        }
+        Ok(())
+    }
+
     /// Offer the flourish only for a successful primary thread/start without initial work.
     pub(crate) fn mark_fresh_task_for_sparkle(
         &mut self,
