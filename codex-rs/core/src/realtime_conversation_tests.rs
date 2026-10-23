@@ -8,6 +8,7 @@ use super::RealtimeSessionKind;
 use super::RealtimeStreamedItem;
 use super::classify_realtime_input_error;
 use super::classify_realtime_input_error_with_pending;
+use super::prepare_realtime_start;
 use super::realtime_delegation_from_handoff;
 use super::realtime_request_headers;
 use super::realtime_text_from_handoff_request;
@@ -16,11 +17,16 @@ use crate::context::RealtimeDelegationSource;
 use async_channel::bounded;
 use codex_api::ApiError;
 use codex_api::RealtimeEventParser;
+use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::CodexResponseHandoffMode;
+use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ConversationTextRole;
+use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeHandoffRequested;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeTranscriptEntry;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
@@ -28,6 +34,97 @@ use std::sync::Arc;
 use std::time::Instant;
 use test_case::test_case;
 use tokio::sync::Mutex;
+
+#[tokio::test]
+async fn prepared_realtime_routing_follows_selected_api_key_and_explicit_overrides() {
+    for (api_key, base_url, realtime_base_url, expected_url, expected_fedramp_header) in [
+        ("legacy-key", None, None, "https://api.openai.com/v1", None),
+        (
+            "sk-proj-fedramp-synthetic-test-key",
+            None,
+            None,
+            "https://gov.api.openai.com/v1",
+            Some("true"),
+        ),
+        (
+            "sk-svcacct-fedramp-synthetic-test-key",
+            None,
+            None,
+            "https://gov.api.openai.com/v1",
+            Some("true"),
+        ),
+        (
+            "sk-proj-fedramp-synthetic-test-key",
+            Some("https://proxy.example/v1"),
+            None,
+            "https://proxy.example/v1",
+            Some("true"),
+        ),
+        (
+            "sk-svcacct-fedramp-synthetic-test-key",
+            Some("https://proxy.example/v1"),
+            Some("wss://realtime.example/v1"),
+            "wss://realtime.example/v1",
+            Some("true"),
+        ),
+    ] {
+        let (sess, _turn, _events) =
+            crate::session::tests::make_session_and_context_with_auth_and_config_and_rx(
+                CodexAuth::from_api_key("sk-proj-fedramp-ambient-test-key"),
+                Vec::new(),
+                |config| {
+                    config.model_provider = ModelProviderInfo {
+                        experimental_bearer_token: Some(api_key.into()),
+                        ..ModelProviderInfo::create_openai_provider(base_url.map(str::to_string))
+                    };
+                    config.experimental_realtime_ws_base_url =
+                        realtime_base_url.map(str::to_string);
+                },
+            )
+            .await;
+        let prepared = prepare_realtime_start(
+            &sess,
+            ConversationStartParams {
+                client_managed_handoffs: false,
+                delegation_ack_filler: None,
+                flush_transcript_tail_on_session_end: false,
+                codex_responses_as_items: false,
+                codex_response_item_prefix: None,
+                codex_response_handoff_mode: CodexResponseHandoffMode::Thinking,
+                backend_reasoning_status: false,
+                codex_response_handoff_channel_prefixes: None,
+                model: None,
+                output_modality: RealtimeOutputModality::Audio,
+                include_startup_context: false,
+                initial_items: Vec::new(),
+                realtime_start_instructions: None,
+                realtime_end_instructions: None,
+                prompt: None,
+                realtime_session_id: None,
+                voice_session_id: None,
+                transport: None,
+                version: Some(RealtimeConversationVersion::V1),
+                voice: None,
+            },
+        )
+        .await
+        .expect("realtime startup should prepare without connecting");
+        assert_eq!(prepared.api_provider.base_url, expected_url);
+        let headers = prepared.extra_headers.expect("realtime request headers");
+        assert_eq!(
+            headers[http::header::AUTHORIZATION]
+                .to_str()
+                .expect("authorization should be ASCII"),
+            format!("Bearer {api_key}")
+        );
+        assert_eq!(
+            headers
+                .get("X-OpenAI-Fedramp")
+                .and_then(|value| value.to_str().ok()),
+            expected_fedramp_header
+        );
+    }
+}
 
 /// Hold old input cleanup open while a successor tries to claim the connection.
 #[tokio::test]
@@ -508,6 +605,8 @@ fn realtime_headers_keep_realtime_and_voice_session_ids_distinct() {
     .expect("headers")
     .expect("headers");
 
+    assert!(!headers.contains_key(http::header::AUTHORIZATION));
+    assert!(!headers.contains_key("X-OpenAI-Fedramp"));
     assert_eq!(
         headers
             .get("x-session-id")

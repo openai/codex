@@ -2318,8 +2318,8 @@ async fn websocket_reachability_check(
         auth.as_ref().map(auth_mode_name).unwrap_or("none")
     ));
 
-    let api_provider = match runtime_provider.api_provider().await {
-        Ok(api_provider) => api_provider,
+    let (api_provider, api_auth) = match runtime_provider.api_provider_and_auth().await {
+        Ok(setup) => setup,
         Err(err) => {
             return websocket_probe_warning(
                 "Responses WebSocket provider setup failed",
@@ -2345,17 +2345,6 @@ async fn websocket_reachability_check(
             );
         }
     }
-
-    let api_auth = match runtime_provider.api_auth().await {
-        Ok(api_auth) => api_auth,
-        Err(err) => {
-            return websocket_probe_warning(
-                "Responses WebSocket auth could not be resolved",
-                details,
-                format!("auth resolution failed: {err}"),
-            );
-        }
-    };
 
     let mut extra_headers = HeaderMap::new();
     extra_headers.insert(

@@ -147,26 +147,32 @@ fn login_with_api_key_overwrites_existing_auth_json() {
             "account_id": "stale-acc"
         }
     });
-    std::fs::write(
-        &auth_path,
-        serde_json::to_string_pretty(&stale_auth).unwrap(),
-    )
-    .unwrap();
-
-    super::login_with_api_key(
-        dir.path(),
+    for api_key in [
         "sk-new",
-        AuthCredentialsStoreMode::File,
-        AuthKeyringBackendKind::default(),
-    )
-    .expect("login_with_api_key should succeed");
+        "sk-proj-fedramp-synthetic-test-key",
+        "sk-svcacct-fedramp-synthetic-test-key",
+    ] {
+        std::fs::write(
+            &auth_path,
+            serde_json::to_string_pretty(&stale_auth).unwrap(),
+        )
+        .unwrap();
 
-    let storage = FileAuthStorage::new(dir.path().to_path_buf());
-    let auth = storage
-        .try_read_auth_json(&auth_path)
-        .expect("auth.json should parse");
-    assert_eq!(auth.openai_api_key.as_deref(), Some("sk-new"));
-    assert!(auth.tokens.is_none(), "tokens should be cleared");
+        super::login_with_api_key(
+            dir.path(),
+            api_key,
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )
+        .expect("login_with_api_key should succeed");
+
+        let storage = FileAuthStorage::new(dir.path().to_path_buf());
+        let auth = storage
+            .try_read_auth_json(&auth_path)
+            .expect("auth.json should parse");
+        assert_eq!(auth.openai_api_key.as_deref(), Some(api_key));
+        assert!(auth.tokens.is_none(), "tokens should be cleared");
+    }
 }
 
 #[tokio::test]
@@ -1138,30 +1144,47 @@ async fn loads_api_key_from_auth_json() {
     let dir = tempdir().unwrap();
     let _access_token_guard = remove_access_token_env_var();
     let auth_file = dir.path().join("auth.json");
-    std::fs::write(
-        auth_file,
-        r#"{"OPENAI_API_KEY":"sk-test-key","tokens":null,"last_refresh":null}"#,
-    )
-    .unwrap();
+    for (api_key, expected_fedramp) in [
+        ("sk-test-key", false),
+        ("sk-proj-fedramp-synthetic-test-key", true),
+        ("sk-svcacct-fedramp-synthetic-test-key", true),
+        ("sk-proj-synthetic-test-key", false),
+        ("sk-svcacct-synthetic-test-key", false),
+        ("sk-proj-fedramp", false),
+        ("sk-svcacct-fedrampish-test-key", false),
+        ("sk-proj-FEDRAMP-test-key", false),
+        ("sk-admin-fedramp-test-key", false),
+        ("other-sk-proj-fedramp-test-key", false),
+    ] {
+        std::fs::write(
+            &auth_file,
+            json!({"OPENAI_API_KEY": api_key, "tokens": null, "last_refresh": null}).to_string(),
+        )
+        .unwrap();
 
-    let auth = super::load_auth(
-        dir.path(),
-        /*enable_codex_api_key_env*/ false,
-        AuthCredentialsStoreMode::File,
-        /*allowed_login_methods*/ None,
-        /*forced_chatgpt_workspace_id*/ None,
-        /*chatgpt_base_url*/ None,
-        AuthKeyringBackendKind::Direct,
-        /*agent_identity_authapi_base_url*/ None,
-        &crate::test_support::transport_default_auth_route_config(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
-    assert_eq!(auth.api_key(), Some("sk-test-key"));
+        let auth = super::load_auth(
+            dir.path(),
+            /*enable_codex_api_key_env*/ false,
+            AuthCredentialsStoreMode::File,
+            /*allowed_login_methods*/ None,
+            /*forced_chatgpt_workspace_id*/ None,
+            /*chatgpt_base_url*/ None,
+            AuthKeyringBackendKind::Direct,
+            /*agent_identity_authapi_base_url*/ None,
+            &crate::test_support::transport_default_auth_route_config(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
+        assert_eq!(auth.api_key(), Some(api_key));
+        assert_eq!(
+            (auth.get_token().unwrap(), auth.is_fedramp_account()),
+            (api_key.to_string(), expected_fedramp)
+        );
 
-    assert!(auth.get_token_data().is_err());
+        assert!(auth.get_token_data().is_err());
+    }
 }
 
 #[test]

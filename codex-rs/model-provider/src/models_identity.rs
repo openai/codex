@@ -10,12 +10,13 @@ use sha2::Digest;
 use sha2::Sha256;
 
 use crate::auth::resolve_provider_auth;
+use crate::provider::resolve_api_provider;
 
 pub(crate) fn identity(
     provider_info: &ModelProviderInfo,
     auth: Option<&CodexAuth>,
 ) -> CoreResult<String> {
-    let mut api_provider = provider_info.to_api_provider(auth.map(CodexAuth::auth_mode))?;
+    let mut api_provider = resolve_api_provider(provider_info, auth)?;
     let mut digest = Sha256::new();
     // Length-prefix every field to avoid ambiguity between adjacent values.
     let mut field = |value: &[u8]| {

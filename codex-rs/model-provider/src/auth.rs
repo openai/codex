@@ -353,6 +353,23 @@ fn bearer_auth_for_provider(
     Ok(None)
 }
 
+/// Whether the selected API key enables OpenAI's default FedRAMP endpoints.
+/// Command-backed providers retain their configured routing across token refreshes.
+pub(crate) fn uses_fedramp_api_key(
+    auth: Option<&CodexAuth>,
+    provider: &ModelProviderInfo,
+) -> codex_protocol::error::Result<bool> {
+    if !provider.is_openai() || provider.has_command_auth() {
+        return Ok(false);
+    }
+    if let Some(auth) = bearer_auth_for_provider(provider)? {
+        return Ok(auth.is_fedramp_account);
+    }
+    Ok(provider.requires_openai_auth
+        && matches!(auth, Some(CodexAuth::ApiKey(_)))
+        && auth.is_some_and(CodexAuth::is_fedramp_account))
+}
+
 /// Builds request-header auth for a first-party Codex auth snapshot.
 pub fn auth_provider_from_auth(auth: &CodexAuth) -> SharedAuthProvider {
     match auth {
@@ -544,12 +561,14 @@ mod tests {
             "ChatGPT-Account-ID",
             HeaderValue::from_static("account-123"),
         );
-        let ambient_auth = CodexAuth::Headers(AuthHeaders::new(ambient_headers));
-
-        let auth =
-            resolve_provider_auth(Some(&ambient_auth), &provider).expect("auth should resolve");
-
-        assert!(auth.to_auth_headers().unwrap().is_empty());
+        for ambient_auth in [
+            CodexAuth::Headers(AuthHeaders::new(ambient_headers)),
+            CodexAuth::from_api_key("sk-proj-fedramp-synthetic-test-key"),
+        ] {
+            let auth =
+                resolve_provider_auth(Some(&ambient_auth), &provider).expect("auth should resolve");
+            assert!(auth.to_auth_headers().unwrap().is_empty());
+        }
     }
 
     #[test]
@@ -587,6 +606,41 @@ mod tests {
             Some(&HeaderValue::from_static("Bearer provider-token"))
         );
         assert_eq!(headers.len(), 1);
+    }
+
+    #[test]
+    fn api_key_fedramp_routing_follows_the_selected_provider_credential() {
+        let project_key = "sk-proj-fedramp-synthetic-test-key";
+        let service_account_key = "sk-svcacct-fedramp-synthetic-test-key";
+        let legacy_key = "sk-proj-synthetic-test-key";
+
+        for (ambient_key, provider_key, expected_fedramp) in [
+            (project_key, None, true),
+            (service_account_key, None, true),
+            (legacy_key, None, false),
+            (project_key, Some(legacy_key), false),
+            (legacy_key, Some(project_key), true),
+            (legacy_key, Some(service_account_key), true),
+        ] {
+            let mut provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+            provider.experimental_bearer_token = provider_key.map(Into::into);
+            let ambient_auth = CodexAuth::from_api_key(ambient_key);
+
+            let headers = resolve_provider_auth(Some(&ambient_auth), &provider)
+                .expect("auth should resolve")
+                .to_auth_headers()
+                .unwrap();
+
+            let key = provider_key.unwrap_or(ambient_key);
+            let mut expected_headers = HeaderMap::from_iter([(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {key}")).unwrap(),
+            )]);
+            if expected_fedramp {
+                expected_headers.insert("X-OpenAI-Fedramp", HeaderValue::from_static("true"));
+            }
+            assert_eq!(headers, expected_headers);
+        }
     }
 
     #[test]

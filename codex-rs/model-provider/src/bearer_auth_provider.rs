@@ -1,5 +1,6 @@
 use codex_api::AuthProvider;
 use codex_http_client::CHATGPT_ACCOUNT_ID_HEADER;
+use codex_login::auth::is_fedramp_api_key;
 use http::HeaderMap;
 use http::HeaderValue;
 
@@ -13,10 +14,11 @@ pub struct BearerAuthProvider {
 
 impl BearerAuthProvider {
     pub fn new(token: String) -> Self {
+        let is_fedramp_account = is_fedramp_api_key(&token);
         Self {
             token: Some(token),
             account_id: None,
-            is_fedramp_account: false,
+            is_fedramp_account,
         }
     }
 

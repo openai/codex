@@ -2,6 +2,7 @@ mod amazon_bedrock;
 mod auth;
 mod bearer_auth_provider;
 mod capabilities;
+mod chatgpt_base_url;
 mod combined_auth;
 mod gcp;
 mod models_endpoint;
@@ -27,6 +28,8 @@ pub use auth::unauthenticated_auth_provider;
 pub use bearer_auth_provider::BearerAuthProvider;
 pub use bearer_auth_provider::BearerAuthProvider as CoreAuthProvider;
 pub use capabilities::ProviderCapabilities;
+pub use chatgpt_base_url::ChatgptBaseUrl;
+pub use chatgpt_base_url::DEFAULT_CHATGPT_BASE_URL;
 pub use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 pub use codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID;
 pub use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
@@ -43,6 +46,7 @@ pub use provider::ProviderUnauthorizedRecovery;
 pub use provider::SharedModelProvider;
 pub use provider::create_model_provider;
 pub use provider::provider_uses_first_party_auth_path;
+pub use provider::resolve_api_provider;
 
 #[cfg(test)]
 #[path = "workspace_routing_tests.rs"]

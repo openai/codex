@@ -10,7 +10,7 @@ pub(crate) fn analytics_events_client_from_config(
 ) -> AnalyticsEventsClient {
     AnalyticsEventsClient::new(
         auth_manager,
-        config.chatgpt_base_url.trim_end_matches('/').to_string(),
+        config.chatgpt_backend_url(),
         config.analytics_enabled,
     )
 }

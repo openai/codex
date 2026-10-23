@@ -78,14 +78,9 @@ impl CodexImagesBackend {
 
     /// Resolves the provider and auth required for the current image API request.
     async fn client(&self) -> Result<ImagesClient<ReqwestTransport>, ImageBackendError> {
-        let provider = self
+        let (provider, auth) = self
             .provider
-            .api_provider()
-            .await
-            .map_err(|err| ImageBackendError::from_message(err.to_string()))?;
-        let auth = self
-            .provider
-            .api_auth()
+            .api_provider_and_auth()
             .await
             .map_err(|err| ImageBackendError::from_message(err.to_string()))?;
         let transport = create_transport_for_routes_async(

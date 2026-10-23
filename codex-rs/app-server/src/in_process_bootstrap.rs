@@ -159,6 +159,7 @@ pub(super) async fn configure(
     };
     let config = Arc::make_mut(config);
     config.chatgpt_base_url = policy_config.chatgpt_base_url;
+    config.chatgpt_base_url_is_explicit = policy_config.chatgpt_base_url_is_explicit;
     config.enforce_residency = policy_config.enforce_residency;
     config.application_network_policy = policy_config.application_network_policy;
     config.application_auth_route_config = policy_config.application_auth_route_config;

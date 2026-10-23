@@ -47,6 +47,7 @@ use super::agent_identity::record_needs_task_registration;
 use super::agent_identity::register_managed_chatgpt_agent_identity;
 use super::agent_identity::require_agent_identity_authapi_base_url;
 use super::agent_identity::verified_record_from_jwt;
+use super::api_key::is_fedramp_api_key;
 use super::change_state::AuthChangeState;
 use super::change_state::same_login;
 use super::change_state::same_owner;
@@ -642,9 +643,10 @@ impl CodexAuth {
         }
     }
 
-    /// Returns false if Codex backend auth omits the FedRAMP claim.
+    /// Returns whether auth carries a FedRAMP routing hint from a claim or API-key prefix.
     pub fn is_fedramp_account(&self) -> bool {
         match self {
+            Self::ApiKey(auth) => is_fedramp_api_key(&auth.api_key),
             Self::Headers(_) => false,
             Self::AgentIdentity(auth) => auth.is_fedramp_account(),
             Self::PersonalAccessToken(auth) => auth.is_fedramp_account(),

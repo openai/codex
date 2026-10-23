@@ -53,11 +53,8 @@ impl HistoryNotesBackend {
             }),
         );
 
-        let provider = self.provider.api_provider().await.map_err(|_| {
-            format!("{OPERATION_ERROR_PREFIX} Could not resolve the backend provider.")
-        })?;
-        let auth = self.provider.api_auth().await.map_err(|_| {
-            format!("{OPERATION_ERROR_PREFIX} Could not resolve backend authentication.")
+        let (provider, auth) = self.provider.api_provider_and_auth().await.map_err(|_| {
+            format!("{OPERATION_ERROR_PREFIX} Could not prepare the backend request.")
         })?;
 
         let mut request = provider.build_request(Method::POST, path);

@@ -1483,8 +1483,14 @@ async fn resume_replays_image_tool_outputs_with_detail() {
     );
 }
 
+#[test_case::test_case("Test API Key", None; "legacy_key")]
+#[test_case::test_case("sk-proj-fedramp-synthetic-test-key", Some("true"); "fedramp_project_key")]
+#[test_case::test_case("sk-svcacct-fedramp-synthetic-test-key", Some("true"); "fedramp_service_account_key")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn includes_session_id_thread_id_and_model_headers_in_request() {
+async fn includes_session_id_thread_id_and_model_headers_in_request(
+    api_key: &str,
+    expected_fedramp_header: Option<&str>,
+) {
     skip_if_no_network!();
 
     // Mock server
@@ -1496,7 +1502,7 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
     )
     .await;
 
-    let mut builder = test_codex().with_auth(CodexAuth::from_api_key("Test API Key"));
+    let mut builder = test_codex().with_auth(CodexAuth::from_api_key(api_key));
     let test = builder
         .build(&server)
         .await
@@ -1511,7 +1517,7 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
             text_elements: Vec::new(),
         }]))
         .await
-        .unwrap();
+        .expect("start test turn");
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
@@ -1534,7 +1540,11 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
     assert_eq!(request_session_id, session_id_string.as_str());
     assert_eq!(request_thread_id, thread_id_string.as_str());
     assert_eq!(request_originator, originator().value);
-    assert_eq!(request_authorization, "Bearer Test API Key");
+    assert_eq!(request_authorization, format!("Bearer {api_key}"));
+    assert_eq!(
+        request.header("x-openai-fedramp").as_deref(),
+        expected_fedramp_header
+    );
     assert_eq!(
         request_body["prompt_cache_key"].as_str(),
         Some(session_id_string.as_str())

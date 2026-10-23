@@ -100,14 +100,9 @@ impl WebSearchTool {
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let commands = parse_commands(&call)?;
         let command_action = command_action(&commands);
-        let provider = self
+        let (provider, auth) = self
             .provider
-            .api_provider()
-            .await
-            .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
-        let auth = self
-            .provider
-            .api_auth()
+            .api_provider_and_auth()
             .await
             .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
         let transport = create_transport_for_routes_async(

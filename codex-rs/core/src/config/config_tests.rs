@@ -74,6 +74,7 @@ use codex_config::types::WindowsToml;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_login::CodexAuth;
 use codex_login::default_client::RESIDENCY_HEADER_NAME;
 use codex_login::test_support::auth_manager_from_optional_auth;
 use codex_model_provider::ProviderCapabilities;
@@ -6547,11 +6548,14 @@ async fn config_resolves_explicit_keyring_auth_store_mode() -> std::io::Result<(
     Ok(())
 }
 
+#[test_case::test_case("https://managed.example/backend-api/"; "custom")]
+#[test_case::test_case(DEFAULT_CHATGPT_BASE_URL; "explicit_default")]
 #[tokio::test]
-async fn config_applies_managed_auth_store_and_chatgpt_base_url() -> std::io::Result<()> {
+async fn config_applies_managed_auth_store_and_chatgpt_base_url(
+    managed_url: &str,
+) -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let managed_store = AuthCredentialsStoreMode::Keyring;
-    let managed_url = "https://managed.example/backend-api/";
     let requirements = codex_config::ConfigRequirements {
         cli_auth_credentials_store: Some(Sourced::new(managed_store, RequirementSource::Unknown)),
         chatgpt_base_url: Some(Sourced::new(
@@ -6584,6 +6588,13 @@ async fn config_applies_managed_auth_store_and_chatgpt_base_url() -> std::io::Re
 
     assert_eq!(config.cli_auth_credentials_store_mode, managed_store);
     assert_eq!(config.chatgpt_base_url, managed_url);
+    assert!(config.chatgpt_base_url_is_explicit);
+    assert_eq!(
+        config
+            .chatgpt_backend_url()
+            .resolve(&CodexAuth::from_api_key("sk-proj-fedramp-test-key")),
+        managed_url
+    );
     assert!(config.startup_warnings.iter().any(|warning| {
         warning.contains("Configured value for `cli_auth_credentials_store` is overridden")
     }));
@@ -6591,6 +6602,50 @@ async fn config_applies_managed_auth_store_and_chatgpt_base_url() -> std::io::Re
         warning.contains("Configured value for `chatgpt_base_url` is overridden")
     }));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn chatgpt_backend_url_defaults_follow_captured_auth() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let legacy = CodexAuth::from_api_key("legacy-key");
+    let marked = CodexAuth::from_api_key("sk-proj-fedramp-test-key");
+    let custom_url = "https://custom.example/backend-api/";
+    for configured_url in [None, Some(custom_url), Some(DEFAULT_CHATGPT_BASE_URL)] {
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            configured_url
+                .map(|url| format!("chatgpt_base_url = '{url}'\n"))
+                .unwrap_or_default(),
+        )?;
+        let mut config = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .build()
+            .await?;
+        let raw_url = configured_url.unwrap_or(DEFAULT_CHATGPT_BASE_URL);
+        let raw_auth_config = config.auth_config();
+        assert_eq!(
+            config.chatgpt_base_url_is_explicit,
+            configured_url.is_some()
+        );
+        for (auth, default_url) in [
+            (&legacy, DEFAULT_CHATGPT_BASE_URL),
+            (&marked, "https://gov.chatgpt.com/backend-api/"),
+            (&legacy, DEFAULT_CHATGPT_BASE_URL),
+        ] {
+            assert_eq!(
+                config.chatgpt_backend_url().resolve(auth),
+                configured_url.unwrap_or(default_url)
+            );
+            assert_eq!(config.chatgpt_base_url, raw_url);
+            assert_eq!(config.auth_config(), raw_auth_config);
+        }
+        if configured_url.is_none() {
+            config.chatgpt_base_url = custom_url.to_owned();
+            assert_eq!(config.chatgpt_backend_url().resolve(&marked), custom_url);
+        }
+    }
     Ok(())
 }
 

@@ -40,10 +40,13 @@ use tokio::time::timeout;
 use crate::auth::ResolvedProviderAuth;
 use crate::auth::agent_identity_telemetry;
 use crate::auth::resolve_provider_auth;
+use crate::auth::uses_fedramp_api_key;
 use crate::combined_auth::compose_auth;
+use crate::provider::resolve_api_provider;
 
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
+const FEDRAMP_CODEX_BASE_URL: &str = "https://gov.chatgpt.com/backend-api/codex";
 
 /// Provider-owned OpenAI-compatible `/models` endpoint.
 #[derive(Debug)]
@@ -108,14 +111,19 @@ impl OpenAiModelsEndpoint {
         );
         let identity = crate::models_identity::identity(&self.provider_info, auth.as_ref())?;
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
-        let mut api_provider = self.provider_info.to_api_provider(auth_mode)?;
+        let mut api_provider = resolve_api_provider(&self.provider_info, auth.as_ref())?;
         if (auth.as_ref().is_some_and(CodexAuth::is_api_key_auth) || self.has_provider_api_key())
             && self.supports_api_key_models()
             && self.provider_info.base_url.is_none()
             && self.provider_info.model_catalog_url.is_none()
         {
             // Codex metadata is served by the Codex backend, not the public /v1/models API.
-            api_provider.base_url = CHATGPT_CODEX_BASE_URL.to_string();
+            api_provider.base_url = if uses_fedramp_api_key(auth.as_ref(), &self.provider_info)? {
+                FEDRAMP_CODEX_BASE_URL
+            } else {
+                CHATGPT_CODEX_BASE_URL
+            }
+            .to_string();
         }
         let resolved = compose_auth(
             &self.provider_info,
@@ -432,7 +440,6 @@ mod tests {
     use codex_models_manager::manager::OpenAiModelsManager;
     use codex_models_manager::manager::RefreshStrategy;
     use codex_models_manager::model_info::model_info_from_slug;
-    use codex_protocol::auth::AuthMode;
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_protocol::openai_models::ModelVisibility;
     use codex_protocol::openai_models::ModelsResponse;
@@ -484,28 +491,59 @@ mod tests {
     #[tokio::test]
     async fn api_key_discovery_respects_provider_routing() {
         let client_version = codex_models_manager::client_version_to_whole();
-        for (name, base_url, models_url, inference_url) in [
+        for (api_key, name, base_url, models_url, inference_url) in [
             (
+                "test-api-key",
                 "OpenAI",
                 None,
                 Some("https://chatgpt.com/backend-api/codex/models"),
                 "https://api.openai.com/v1",
             ),
             (
+                "test-api-key",
                 "OpenAI",
                 Some("https://example.com/codex"),
                 None,
                 "https://example.com/codex",
             ),
             (
+                "test-api-key",
                 "Azure",
                 Some("https://example.openai.azure.com/openai/v1"),
                 None,
                 "https://example.openai.azure.com/openai/v1",
             ),
+            (
+                "sk-proj-fedramp-synthetic-test-key",
+                "OpenAI",
+                None,
+                Some("https://gov.chatgpt.com/backend-api/codex/models"),
+                "https://gov.api.openai.com/v1",
+            ),
+            (
+                "sk-svcacct-fedramp-synthetic-test-key",
+                "OpenAI",
+                None,
+                Some("https://gov.chatgpt.com/backend-api/codex/models"),
+                "https://gov.api.openai.com/v1",
+            ),
+            (
+                "sk-proj-fedramp-synthetic-test-key",
+                "OpenAI",
+                Some("https://example.com/codex"),
+                None,
+                "https://example.com/codex",
+            ),
+            (
+                "sk-svcacct-fedramp-synthetic-test-key",
+                "Azure",
+                None,
+                None,
+                "https://api.openai.com/v1",
+            ),
         ] {
             let capture = Arc::new(CaptureModelsUrl(Mutex::new(/*t*/ None)));
-            let auth = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test-api-key"));
+            let auth = AuthManager::from_auth_for_testing(CodexAuth::from_api_key(api_key));
             let endpoint = Arc::new(OpenAiModelsEndpoint {
                 provider_info: ModelProviderInfo {
                     name: name.to_string(),
@@ -515,7 +553,11 @@ mod tests {
                 gateway_auth_manager: None,
                 transport_builder: capture.clone(),
             });
-            let manager = OpenAiModelsManager::new_without_cache(endpoint.clone(), Some(auth));
+            let provider = crate::provider::create_model_provider(
+                endpoint.provider_info.clone(),
+                Some(auth.clone()),
+            );
+            let manager = OpenAiModelsManager::new_without_cache(endpoint, Some(auth));
             manager.set_api_key_model_discovery_enabled(/*enabled*/ true);
             manager
                 .raw_model_catalog(
@@ -528,11 +570,7 @@ mod tests {
                 models_url.map(|url| format!("{url}?client_version={client_version}"))
             );
             assert_eq!(
-                endpoint
-                    .provider_info
-                    .to_api_provider(Some(AuthMode::ApiKey))
-                    .unwrap()
-                    .base_url,
+                provider.api_provider().await.unwrap().base_url,
                 inference_url
             );
         }
@@ -540,21 +578,59 @@ mod tests {
 
     #[tokio::test]
     async fn provider_api_key_without_endpoint_overrides_uses_codex_backend() {
-        for auth in [
-            None,
-            Some(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        for (api_key, auth, models_base_url, inference_url) in [
+            (
+                "provider-key",
+                None,
+                CHATGPT_CODEX_BASE_URL,
+                "https://api.openai.com/v1",
+            ),
+            (
+                "provider-key",
+                Some(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+                CHATGPT_CODEX_BASE_URL,
+                CHATGPT_CODEX_BASE_URL,
+            ),
+            (
+                "provider-key",
+                Some(CodexAuth::from_api_key("sk-proj-fedramp-ambient-key")),
+                CHATGPT_CODEX_BASE_URL,
+                "https://api.openai.com/v1",
+            ),
+            (
+                "sk-proj-fedramp-provider-key",
+                None,
+                "https://gov.chatgpt.com/backend-api/codex",
+                "https://gov.api.openai.com/v1",
+            ),
+            (
+                "sk-svcacct-fedramp-provider-key",
+                Some(CodexAuth::from_api_key("legacy-ambient-key")),
+                "https://gov.chatgpt.com/backend-api/codex",
+                "https://gov.api.openai.com/v1",
+            ),
+            (
+                "sk-proj-fedramp-provider-key",
+                Some(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+                "https://gov.chatgpt.com/backend-api/codex",
+                "https://gov.api.openai.com/v1",
+            ),
         ] {
             let capture = Arc::new(CaptureModelsUrl(Mutex::new(/*t*/ None)));
             let auth_manager = auth.map(AuthManager::from_auth_for_testing);
             let endpoint = Arc::new(OpenAiModelsEndpoint {
                 provider_info: ModelProviderInfo {
-                    experimental_bearer_token: Some("provider-key".into()),
+                    experimental_bearer_token: Some(api_key.into()),
                     ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
                 },
                 auth_manager: auth_manager.clone(),
                 gateway_auth_manager: None,
                 transport_builder: capture.clone(),
             });
+            let provider = crate::provider::create_model_provider(
+                endpoint.provider_info.clone(),
+                auth_manager.clone(),
+            );
             let manager = OpenAiModelsManager::new_without_cache(endpoint, auth_manager);
             manager.set_api_key_model_discovery_enabled(/*enabled*/ true);
             manager
@@ -566,9 +642,13 @@ mod tests {
             assert_eq!(
                 *capture.0.lock().unwrap(),
                 Some(format!(
-                    "{CHATGPT_CODEX_BASE_URL}/models?client_version={}",
+                    "{models_base_url}/models?client_version={}",
                     codex_models_manager::client_version_to_whole(),
                 ))
+            );
+            assert_eq!(
+                provider.api_provider().await.unwrap().base_url,
+                inference_url
             );
         }
     }
@@ -599,6 +679,13 @@ mod tests {
         );
 
         assert!(endpoint.has_command_auth());
+        let auth = CodexAuth::from_api_key("sk-proj-fedramp-command-key");
+        assert_eq!(
+            resolve_api_provider(&endpoint.provider_info, Some(&auth))
+                .unwrap()
+                .base_url,
+            "https://api.openai.com/v1"
+        );
     }
 
     #[test]
@@ -822,6 +909,8 @@ mod tests {
         for auth in [
             CodexAuth::create_dummy_chatgpt_auth_for_testing(),
             CodexAuth::from_api_key("test-key"),
+            CodexAuth::from_api_key("sk-proj-fedramp-synthetic-test-key"),
+            CodexAuth::from_api_key("sk-svcacct-fedramp-synthetic-test-key"),
         ] {
             let server = MockServer::start().await;
             let mut model = model_info_from_slug("provider-model");
