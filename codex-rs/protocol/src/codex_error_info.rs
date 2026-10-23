@@ -23,6 +23,7 @@ enum CodexErrorInfoWire {
     RateLimitExceeded,
     FlexUnavailable,
     ServerOverloaded,
+    ModelNotFound,
     CyberPolicy,
     BioPolicy,
     MisalignmentPolicyViolation,

@@ -187,6 +187,7 @@ impl SamplingExecution {
                 | ApiError::UsageNotIncluded
                 | ApiError::RateLimit(_)
                 | ApiError::InvalidRequest { .. }
+                | ApiError::ModelNotFound { .. }
                 | ApiError::InvalidPrompt { .. }
                 | ApiError::MisalignmentPolicyViolation { .. }
                 | ApiError::CyberPolicy { .. }

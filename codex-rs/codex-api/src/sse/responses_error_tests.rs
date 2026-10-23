@@ -61,6 +61,25 @@ async fn flex_failure_with_retry_header_ends_stream_immediately() {
     }
 }
 
+#[test]
+fn statusless_model_errors_have_no_http_status() {
+    let error = json!({"code": "model_not_found"});
+    for event in [
+        json!({"type": "error", "error": error}),
+        json!({"type": "response.failed", "response": {"error": error}}),
+    ] {
+        let event = serde_json::from_value(event).unwrap();
+        let error = map_api_error(process_responses_event(event).unwrap_err().into_api_error());
+        assert_eq!(
+            (
+                error.to_codex_protocol_error(),
+                error.http_status_code_value()
+            ),
+            (CodexErrorInfo::ModelNotFound, None)
+        );
+    }
+}
+
 /// Error headers beat rate-limit message advice; invalid ones fall back.
 #[tokio::test(start_paused = true)]
 async fn rate_limit_plaintext_loses_to_valid_error_header() {

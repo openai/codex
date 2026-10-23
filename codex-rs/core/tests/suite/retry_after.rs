@@ -1419,13 +1419,16 @@ async fn assert_terminal_failure(
     test: &TestCodex,
     expected: CodexErrorInfo,
     expected_retries: usize,
-) -> Result<()> {
-    let mut errors = Vec::new();
+) -> Result<String> {
+    let mut messages = Vec::new();
     let mut completions = Vec::new();
     let mut retries = 0;
     loop {
         match wait_for_event(&test.codex, |_| true).await {
-            EventMsg::Error(error) => errors.push(error.codex_error_info),
+            EventMsg::Error(error) => {
+                assert_eq!(error.codex_error_info.as_ref(), Some(&expected));
+                messages.push(error.message);
+            }
             EventMsg::StreamError(_) => retries += 1,
             EventMsg::TurnComplete(event) => {
                 completions.push(event.error.and_then(|error| error.codex_error_info));
@@ -1435,32 +1438,34 @@ async fn assert_terminal_failure(
             _ => {}
         }
     }
-    assert_eq!(errors, vec![Some(expected.clone())]);
     assert_eq!(completions, vec![Some(expected)]);
     assert_eq!(retries, expected_retries);
-    Ok(())
+    let [message] = messages.try_into().expect("expected one terminal error");
+    Ok(message)
 }
 
+#[test_case::test_case("flex_unavailable", 429, CodexErrorInfo::FlexUnavailable, "Flex capacity unavailable."; "flex")]
+#[test_case::test_case("model_not_found", 404, CodexErrorInfo::ModelNotFound, "Access to this deployment ended."; "model")]
 #[tokio::test(flavor = "current_thread")]
-async fn http_and_sse_flex_unavailable_are_terminal() -> Result<()> {
+async fn http_and_sse_provider_errors_are_terminal(
+    code: &str,
+    status: u16,
+    expected: CodexErrorInfo,
+    message: &str,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let error = json!({
-        "type": "resource_unavailable", "code": "flex_unavailable",
-        "message": "Flex capacity unavailable."
+        "code": code, "message": message
     });
     for response in [
-        ResponseTemplate::new(429)
+        ResponseTemplate::new(status)
             .insert_header("Retry-After", "300")
             .set_body_json(json!({"error": error})),
         responses::sse_response(responses::sse(vec![
             json!({"type": "error", "error": error}),
         ])),
-        responses::sse_response(responses::sse_failed(
-            "failed",
-            "flex_unavailable",
-            "No capacity",
-        )),
+        responses::sse_response(responses::sse_failed("failed", code, message)),
     ] {
         let server = responses::start_mock_server().await;
         let response_mock = responses::mount_response_once(&server, response).await;
@@ -1473,13 +1478,11 @@ async fn http_and_sse_flex_unavailable_are_terminal() -> Result<()> {
             .build_with_auto_env(&server)
             .await?;
 
-        submit_user_input(&test, "surface the Flex capacity failure").await?;
-        assert_terminal_failure(
-            &test,
-            CodexErrorInfo::FlexUnavailable,
-            /*expected_retries*/ 0,
-        )
-        .await?;
+        submit_user_input(&test, "surface the provider error").await?;
+        assert_eq!(
+            assert_terminal_failure(&test, expected.clone(), /*expected_retries*/ 0).await?,
+            message
+        );
         assert_eq!(
             response_mock.single_request().body_json()["service_tier"],
             json!("flex")
@@ -1488,7 +1491,7 @@ async fn http_and_sse_flex_unavailable_are_terminal() -> Result<()> {
             server
                 .received_requests()
                 .await
-                .unwrap()
+                .expect("mock server should record requests")
                 .iter()
                 .filter(|request| request.url.path() == "/v1/responses")
                 .count(),
@@ -1498,17 +1501,23 @@ async fn http_and_sse_flex_unavailable_are_terminal() -> Result<()> {
     Ok(())
 }
 
+#[test_case::test_case("flex_unavailable", 429, CodexErrorInfo::FlexUnavailable, "Flex capacity unavailable."; "flex")]
+#[test_case::test_case("model_not_found", 404, CodexErrorInfo::ModelNotFound, "Access to this deployment ended."; "model")]
 #[tokio::test(flavor = "current_thread")]
-async fn websocket_streamed_flex_unavailable_is_terminal() -> Result<()> {
+async fn websocket_provider_errors_are_terminal(
+    code: &str,
+    status: u16,
+    expected: CodexErrorInfo,
+    message: &str,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let error = json!({
-        "type": "resource_unavailable", "code": "flex_unavailable",
-        "message": "Flex capacity unavailable."
+        "code": code, "message": message
     });
     for event in [
-        json!({"type": "error", "status": 429, "headers": {"retry-after": "300"}, "error": error}),
-        json!({"type": "error", "error": {"code": "flex_unavailable", "headers": {"retry-after": "300"}}}),
+        json!({"type": "error", "status": status, "headers": {"retry-after": "300"}, "error": error}),
+        json!({"type": "error", "error": {"code": code, "message": message, "headers": {"retry-after": "300"}}}),
         json!({"type": "response.failed", "response": {"error": error}}),
     ] {
         let server = responses::start_websocket_server(vec![vec![
@@ -1530,13 +1539,11 @@ async fn websocket_streamed_flex_unavailable_is_terminal() -> Result<()> {
             .build_with_websocket_server(&server)
             .await?;
 
-        submit_user_input(&test, "surface the Flex capacity failure").await?;
-        assert_terminal_failure(
-            &test,
-            CodexErrorInfo::FlexUnavailable,
-            /*expected_retries*/ 0,
-        )
-        .await?;
+        submit_user_input(&test, "surface the provider error").await?;
+        assert_eq!(
+            assert_terminal_failure(&test, expected.clone(), /*expected_retries*/ 0).await?,
+            message
+        );
         let requests = server.single_connection();
         assert_eq!(requests.len(), 2, "prewarm and failed turn");
         assert_eq!(requests[1].body_json()["service_tier"], json!("flex"));

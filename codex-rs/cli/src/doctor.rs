@@ -2447,6 +2447,7 @@ fn websocket_error_detail(err: &ApiError) -> String {
         | ApiError::RateLimitExceeded { .. }
         | ApiError::RateLimit(_)
         | ApiError::InvalidRequest { .. }
+        | ApiError::ModelNotFound { .. }
         | ApiError::InvalidPrompt { .. }
         | ApiError::CyberPolicy { .. }
         | ApiError::BioPolicy { .. }

@@ -512,6 +512,7 @@ class CodexErrorInfoValue(str, Enum):
     rate_limit_exceeded = "rateLimitExceeded"
     flex_unavailable = "flexUnavailable"
     server_overloaded = "serverOverloaded"
+    model_not_found = "modelNotFound"
     cyber_policy = "cyberPolicy"
     misalignment_policy_violation = "misalignmentPolicyViolation"
     too_many_denials = "tooManyDenials"

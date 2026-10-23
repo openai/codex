@@ -11,7 +11,9 @@ use codex_app_server::in_process;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::DeprecationNoticeNotification;
+use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ImageReference;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
@@ -2366,11 +2368,12 @@ async fn thread_items_read_validates_ids_before_history_access() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_read_reports_system_error_idle_flag_after_failed_turn() -> Result<()> {
+async fn thread_read_preserves_model_not_found_after_failed_turn() -> Result<()> {
     let server = responses::start_mock_server().await;
+    let message = "Access to this deployment ended.";
     let _response_mock = responses::mount_sse_once(
         &server,
-        responses::sse_failed("resp-1", "server_error", "simulated failure"),
+        responses::sse_failed("resp-1", "model_not_found", message),
     )
     .await;
     let codex_home = TempDir::new()?;
@@ -2381,14 +2384,12 @@ async fn thread_read_reports_system_error_idle_flag_after_failed_turn() -> Resul
         .build_initialized()
         .await?;
 
-    let start_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
         .await?;
-    let ThreadStartResponse { thread, .. } =
-        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
 
     let turn_start_id = mcp
         .send_turn_start_request(TurnStartParams {
@@ -2403,22 +2404,34 @@ async fn thread_read_reports_system_error_idle_flag_after_failed_turn() -> Resul
         .await?;
     let _: TurnStartResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_start_id)).await??;
+    let live: ErrorNotification =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_notification("error")).await??;
+    assert!(!live.will_retry);
+    assert_eq!(
+        live.error.codex_error_info,
+        Some(CodexErrorInfo::ModelNotFound)
+    );
+    assert_eq!(live.error.message, message);
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("error"),
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
             thread_id: thread.id,
-            include_turns: false,
+            include_turns: true,
         })
         .await?;
     let ThreadReadResponse { thread, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(read_id)).await??;
 
-    assert_eq!(thread.status, ThreadStatus::SystemError,);
+    assert_eq!(thread.status, ThreadStatus::SystemError);
+    assert_eq!(
+        thread.turns.last().and_then(|turn| turn.error.as_ref()),
+        Some(&live.error)
+    );
 
     Ok(())
 }

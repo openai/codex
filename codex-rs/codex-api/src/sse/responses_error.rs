@@ -2,7 +2,7 @@
 //! Only rate-limit codes derive retry delays from plaintext messages.
 
 use crate::error::ApiError;
-use crate::error::parse_flex_unavailable;
+use crate::error::parse_terminal_provider_error;
 use crate::responses_headers::json_headers_to_http_headers;
 use codex_http_client::RetryAfter;
 use codex_protocol::protocol::MisalignmentErrorDetails;
@@ -29,7 +29,7 @@ pub(super) fn parse_failed_response(response: Option<Value>) -> ApiError {
         .and_then(|error| error.get("headers"))
         .and_then(Value::as_object)
         .and_then(|headers| RetryAfter::from_headers(&json_headers_to_http_headers(headers)));
-    if let Some(error) = error.and_then(parse_flex_unavailable) {
+    if let Some(error) = parse_terminal_provider_error(error, /*status*/ None) {
         return error;
     }
     let Some(error) = error.and_then(|error| serde_json::from_value::<Error>(error.clone()).ok())
