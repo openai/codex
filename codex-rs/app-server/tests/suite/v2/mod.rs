@@ -87,6 +87,7 @@ mod luna_reserve;
 mod marketplace_add;
 mod marketplace_remove;
 mod marketplace_upgrade;
+mod mcp_connection_sharing;
 mod mcp_event_stream;
 mod mcp_protocol_default;
 mod mcp_resource;

@@ -46,14 +46,13 @@ impl McpConnectionSet {
             .filter(|(server_name, _)| include_server(server_name))
         {
             let server_name = server_name.clone();
-            let Ok(managed_client) = view.connection.client().await else {
+            let Ok(client) = view.connection.client().await else {
                 continue;
             };
             let timeout = view.tool_timeout;
-            let client = managed_client.client;
             join_set.spawn(async move {
                 let resources = collect_paginated("resources/list", timeout, |params| {
-                    let client = Arc::clone(&client);
+                    let client = client.clone();
                     async move {
                         let response = client.list_resources(params, timeout).await?;
                         Ok((response.resources, response.next_cursor))
@@ -93,14 +92,13 @@ impl McpConnectionSet {
             .filter(|(server_name, _)| include_server(server_name))
         {
             let server_name = server_name.clone();
-            let Ok(managed_client) = view.connection.client().await else {
+            let Ok(client) = view.connection.client().await else {
                 continue;
             };
             let timeout = view.tool_timeout;
-            let client = managed_client.client;
             join_set.spawn(async move {
                 let templates = collect_paginated("resources/templates/list", timeout, |params| {
-                    let client = Arc::clone(&client);
+                    let client = client.clone();
                     async move {
                         let response = client.list_resource_templates(params, timeout).await?;
                         Ok((response.resource_templates, response.next_cursor))
@@ -137,7 +135,6 @@ impl McpConnectionSet {
     ) -> Result<ListResourcesResult> {
         let (managed, timeout) = self.client_by_name(server).await?;
         managed
-            .client
             .list_resources(params, timeout)
             .await
             .with_context(|| format!("resources/list failed for `{server}`"))
@@ -150,7 +147,6 @@ impl McpConnectionSet {
     ) -> Result<ListResourceTemplatesResult> {
         let (managed, timeout) = self.client_by_name(server).await?;
         managed
-            .client
             .list_resource_templates(params, timeout)
             .await
             .with_context(|| format!("resources/templates/list failed for `{server}`"))
@@ -164,7 +160,6 @@ impl McpConnectionSet {
         let (managed, timeout) = self.client_by_name(server).await?;
         let uri = params.uri.clone();
         managed
-            .client
             .read_resource(params, timeout)
             .await
             .with_context(|| format!("resources/read failed for `{server}` ({uri})"))

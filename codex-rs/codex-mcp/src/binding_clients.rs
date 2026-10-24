@@ -40,7 +40,6 @@ impl McpBindingClients {
             .client(server)
             .ok_or_else(|| anyhow!("MCP server '{server}' was not ready for this step"))?;
         managed
-            .client
             .list_resources(params, managed.tool_timeout)
             .await
             .with_context(|| format!("resources/list failed for `{server}`"))
@@ -55,7 +54,6 @@ impl McpBindingClients {
             .client(server)
             .ok_or_else(|| anyhow!("MCP server '{server}' was not ready for this step"))?;
         managed
-            .client
             .list_resource_templates(params, managed.tool_timeout)
             .await
             .with_context(|| format!("resources/templates/list failed for `{server}`"))
@@ -71,7 +69,6 @@ impl McpBindingClients {
             .ok_or_else(|| anyhow!("MCP server '{server}' was not ready for this step"))?;
         let uri = params.uri.clone();
         managed
-            .client
             .read_resource(params, managed.tool_timeout)
             .await
             .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
@@ -88,7 +85,7 @@ impl McpBindingClients {
             .filter(|(server_name, _)| include_server(server_name))
         {
             let server_name = server_name.clone();
-            let client = Arc::clone(&managed.client);
+            let client = Arc::clone(managed);
             let timeout = managed.tool_timeout;
             join_set.spawn(async move {
                 let resources = collect_paginated("resources/list", timeout, |params| {
@@ -116,7 +113,7 @@ impl McpBindingClients {
             .filter(|(server_name, _)| include_server(server_name))
         {
             let server_name = server_name.clone();
-            let client = Arc::clone(&managed.client);
+            let client = Arc::clone(managed);
             let timeout = managed.tool_timeout;
             join_set.spawn(async move {
                 let templates = collect_paginated("resources/templates/list", timeout, |params| {

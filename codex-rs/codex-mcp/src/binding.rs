@@ -398,55 +398,63 @@ impl PreparedMcpCall {
             (server_timeout, requested_timeout) => server_timeout.or(requested_timeout),
         };
         let tool_name = self.tool_info().tool.name.to_string();
-        self.client
-            .tool_catalog
-            .run_with_snapshot(&self.catalog_snapshot, || async {
-                let (arguments, meta) = prepare().await?;
-                let timeout_deadline =
-                    effective_timeout.map(|timeout| tokio::time::Instant::now() + timeout);
-                let add_trusted_access_context = self.connections.add_trusted_access_context(
-                    self.tool_info(),
-                    &self.server_metadata,
-                    arguments.as_ref(),
-                    meta,
-                );
-                let meta = match effective_timeout.zip(timeout_deadline) {
-                    Some((timeout, deadline)) => {
-                        tokio::time::timeout_at(deadline, add_trusted_access_context)
-                            .await
-                            .map_err(|_| {
-                                codex_rmcp_client::request_timeout_error("tools/call", timeout)
-                            })?
-                    }
-                    None => add_trusted_access_context.await,
-                };
-                let remaining_timeout = match effective_timeout.zip(timeout_deadline) {
-                    Some((timeout, deadline)) => {
-                        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-                        if remaining.is_zero() {
-                            return Err(codex_rmcp_client::request_timeout_error("tools/call", timeout));
+        let operation =
+            self.client
+                .tool_catalog
+                .run_with_snapshot(&self.catalog_snapshot, || async {
+                    let (arguments, meta) = prepare().await?;
+                    let timeout_deadline =
+                        effective_timeout.map(|timeout| tokio::time::Instant::now() + timeout);
+                    let add_trusted_access_context = self.connections.add_trusted_access_context(
+                        self.tool_info(),
+                        &self.server_metadata,
+                        arguments.as_ref(),
+                        meta,
+                    );
+                    let meta = match effective_timeout.zip(timeout_deadline) {
+                        Some((timeout, deadline)) => {
+                            tokio::time::timeout_at(deadline, add_trusted_access_context)
+                                .await
+                                .map_err(|_| {
+                                    codex_rmcp_client::request_timeout_error("tools/call", timeout)
+                                })?
                         }
-                        Some(remaining)
-                    }
-                    None => None,
-                };
-                self.client
-                    .client
-                    .call_tool(
-                        tool_name.clone(),
-                        arguments,
-                        self.connections.network_policy_meta_for_call(
-                            &self.client,
-                            Some(self.permission_profile()),
-                            self.server_environment_id(),
-                            meta,
-                        ),
-                        remaining_timeout,
-                    )
-                    .await
-                    .with_context(|| format!("tool call failed for `{}/{tool_name}`", self.server_name))
-            })
-            .await
+                        None => add_trusted_access_context.await,
+                    };
+                    let remaining_timeout = match effective_timeout.zip(timeout_deadline) {
+                        Some((timeout, deadline)) => {
+                            let remaining =
+                                deadline.saturating_duration_since(tokio::time::Instant::now());
+                            if remaining.is_zero() {
+                                return Err(codex_rmcp_client::request_timeout_error(
+                                    "tools/call",
+                                    timeout,
+                                ));
+                            }
+                            Some(remaining)
+                        }
+                        None => None,
+                    };
+                    self.client
+                        .call_tool(
+                            tool_name.clone(),
+                            arguments,
+                            self.connections.network_policy_meta_for_call(
+                                &self.client,
+                                Some(self.permission_profile()),
+                                self.server_environment_id(),
+                                meta,
+                            ),
+                            remaining_timeout,
+                        )
+                        .await
+                        .with_context(|| {
+                            format!("tool call failed for `{}/{tool_name}`", self.server_name)
+                        })
+                });
+        self.client
+            .with_active_shared_lease(operation)
+            .await?
             .ok_or_else(|| anyhow::anyhow!(
                 "tool call rejected because the catalog changed after `{}/{tool_name}` was prepared",
                 self.server_name

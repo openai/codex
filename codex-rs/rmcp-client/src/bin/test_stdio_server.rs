@@ -13,9 +13,15 @@ use rmcp::ServiceExt;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
+use rmcp::model::ContentBlock;
+use rmcp::model::ElicitRequest;
+use rmcp::model::ElicitRequestParams;
+use rmcp::model::ElicitationSchema;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::InitializeResult;
+use rmcp::model::InputRequest;
+use rmcp::model::InputRequiredResult;
 use rmcp::model::JsonObject;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
@@ -780,6 +786,30 @@ impl ServerHandler for TestToolServer {
                         ));
                     }
                 };
+
+                if std::env::var_os("MCP_TEST_ECHO_INPUT").is_some() {
+                    if let Some(responses) = request.input_responses {
+                        let answer = responses["confirmation"]["content"]["answer"]
+                            .as_str()
+                            .ok_or_else(|| McpError::invalid_params("missing answer text", None))?;
+                        return Ok(CallToolResult::success(vec![ContentBlock::text(answer)]).into());
+                    }
+                    let mut meta = MetaObject::new();
+                    meta.insert("fixture/processId".into(), json!(std::process::id()));
+                    let form = ElicitRequestParams::FormElicitationParams {
+                        meta: Some(meta.into()),
+                        message: args.message,
+                        requested_schema: ElicitationSchema::builder()
+                            .required_string_property("answer", |s| s)
+                            .build()
+                            .map_err(|error| McpError::internal_error(error.to_string(), None))?,
+                    };
+                    let input = InputRequest::Elicitation(ElicitRequest::new(form));
+                    return Ok(InputRequiredResult::from_input_requests(BTreeMap::from([
+                        ("confirmation".into(), input),
+                    ]))
+                    .into());
+                }
 
                 let env_snapshot: HashMap<String, String> = std::env::vars().collect();
                 let env_name = args.env_var.as_deref().unwrap_or("MCP_TEST_VALUE");

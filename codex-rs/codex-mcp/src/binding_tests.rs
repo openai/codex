@@ -84,6 +84,8 @@ async fn test_step(
         /*updates*/ None,
     ));
     let managed_client = Arc::new(ManagedClient {
+        connection_sharing: Default::default(),
+        shared_elicitation: None,
         _auth_change_notifications: None,
         client: Arc::clone(&client),
         server_info: McpServerInfo {

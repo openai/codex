@@ -8,6 +8,10 @@
 
 mod status;
 
+#[cfg(test)]
+#[path = "runtime_shared_connection_tests.rs"]
+mod shared_connection_tests;
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -46,6 +50,7 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::McpConfig;
 use crate::binding::McpBinding;
@@ -54,6 +59,7 @@ use crate::client_tool_catalog::CodexAppsToolSnapshot;
 use crate::connection_manager::BindingCatalogRevision;
 use crate::connection_manager::McpConnectionSet;
 use crate::connection_manager::PreviousMcpConnections;
+use crate::connection_pool::McpConnectionPool;
 use crate::elicitation::ElicitationLifecycle;
 use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::ElicitationReviewerHandle;
@@ -112,6 +118,8 @@ pub struct McpRuntimeInput {
 /// their exact connections and configuration for as long as they are needed.
 pub struct McpRuntime {
     current: ArcSwap<PublishedMcpRuntime>,
+    // Old bindings keep leases alive after publication; cancellation alone does not release them.
+    superseded_connections: Mutex<Vec<Weak<McpConnectionSet>>>,
     event_stream_cancellation: Mutex<EventStreamCancellation>,
     reconnect_pending: AtomicBool,
     resource_cache_generation: AtomicU64,
@@ -269,6 +277,7 @@ impl McpRuntime {
                 ready_environments: HashMap::new(),
                 cached_binding: Mutex::new(None),
             }),
+            superseded_connections: Mutex::default(),
             event_stream_cancellation: Mutex::new(EventStreamCancellation {
                 event_server_available: false,
                 cancel_event_streams_on_server_removal: watch::channel(()).0,
@@ -398,6 +407,9 @@ impl McpRuntime {
         let auth = input.auth.clone();
         let auth_manager = input.auth_manager.clone();
         let auth_token = auth.as_ref().and_then(|auth| auth.get_token().ok());
+        if !reuse_previous {
+            current.connections.retire_shared_connections();
+        }
         let auth_matches = current.auth_matches(auth.as_ref());
         let auth_owner = AuthOwner::capture(auth.as_ref(), auth_manager.as_deref());
         let same_owner = match (current.auth_owner, auth_owner) {
@@ -421,8 +433,9 @@ impl McpRuntime {
         let ready_selected_capability_roots = input.ready_selected_capability_roots.clone();
         let environment_selections = Arc::clone(&input.runtime_context.environment_selections);
         let ready_environments = input.runtime_context.ready_environments.clone();
+        // Keep MCP startup state out of the caller's nested session-initialization future.
         let connections = Arc::new(
-            McpConnectionSet::new(
+            Box::pin(McpConnectionSet::new(
                 ema_auth,
                 retain_ema.then_some(current.connections.as_ref()),
                 reuse_previous.then_some(PreviousMcpConnections {
@@ -432,7 +445,7 @@ impl McpRuntime {
                 publication_gate,
                 input,
                 self.elicitation_router.clone(),
-            )
+            ))
             .await,
         );
         let hosted_event_server_retained = connections.contains_server(CODEX_APPS_MCP_SERVER_NAME)
@@ -448,6 +461,14 @@ impl McpRuntime {
             .event_stream_cancellation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        {
+            let mut superseded = self
+                .superseded_connections
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            superseded.retain(|connections| connections.strong_count() > 0);
+            superseded.push(Arc::downgrade(&current.connections));
+        }
         self.current.store(Arc::new(PublishedMcpRuntime {
             connections,
             config: Some(config),
@@ -923,7 +944,26 @@ impl McpRuntime {
 
     pub async fn shutdown(&self) {
         self.elicitation_router.close().await;
-        self.latest_connections().shutdown().await;
+        let superseded = std::mem::take(
+            &mut *self
+                .superseded_connections
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        let current = self.latest_connections();
+        // Keep every publication's cleanup alive if the caller is interrupted.
+        let shutdown = tokio::spawn(async move {
+            for connections in superseded
+                .into_iter()
+                .filter_map(|connections| connections.upgrade())
+            {
+                connections.shutdown_shared_connections().await;
+            }
+            current.shutdown().await;
+        });
+        if let Err(error) = shutdown.await {
+            warn!("MCP runtime shutdown task failed: {error}");
+        }
     }
 }
 
@@ -933,6 +973,7 @@ impl McpRuntime {
 /// environment registry, captured thread selections, and the host-local cwd used by MCP processes.
 #[derive(Clone)]
 pub struct McpRuntimeContext {
+    pub(crate) connection_pool: Option<McpConnectionPool>,
     environment_manager: Arc<EnvironmentManager>,
     environment_selections: Arc<[TurnEnvironmentSelection]>,
     ready_environments: HashMap<String, Arc<Environment>>,
@@ -981,12 +1022,19 @@ impl McpRuntimeContext {
                 .with_tls_backend_fallback(),
         );
         Self {
+            connection_pool: None,
             environment_manager,
             environment_selections: Arc::default(),
             ready_environments: HashMap::new(),
             local_process_cwd,
             local_http_client,
         }
+    }
+
+    /// Uses this process's pool for compatible local stdio servers using MCP 2026-07-28.
+    pub fn with_connection_pool(mut self, pool: McpConnectionPool) -> Self {
+        self.connection_pool = Some(pool);
+        self
     }
 
     /// Pins all captured selections and the concrete handles for environments already ready.

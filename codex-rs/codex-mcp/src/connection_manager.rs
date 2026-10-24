@@ -41,6 +41,8 @@ use std::time::Duration;
 use crate::McpProtocolMode;
 use crate::binding::call_tool_result_from_rmcp;
 use crate::catalog::McpServerSource;
+use crate::connection_pool::ConnectionKey;
+use crate::connection_pool::ConnectionSharing;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationRequestRouter;
 use crate::event_stream::EventStreamConnectionSettings;
@@ -279,8 +281,8 @@ impl McpServerView {
         let timeout = self.refresh_timeout;
         let result = client
             .tool_catalog
-            .refresh_after_notifications(&client.client.tool_list_revision(), timeout, || {
-                crate::rmcp_client::list_tools_for_client_uncached(
+            .refresh_after_notifications(&client.client.tool_list_revision(), timeout, || async {
+                let relist = crate::rmcp_client::list_tools_for_client_uncached(
                     server_name,
                     /*is_codex_apps_mcp_server*/ false,
                     "list_changed",
@@ -288,7 +290,8 @@ impl McpServerView {
                     Some(timeout),
                     self.catalog_item_limit,
                     client.server_instructions.as_deref(),
-                )
+                );
+                client.with_active_shared_lease(relist.boxed()).await?
             })
             .await;
         if result.is_err() {
@@ -675,6 +678,12 @@ impl McpConnectionSet {
                 expected_protocol_mode
             };
             let protocol_mode = expected_protocol_mode.unwrap_or(protocol_mode);
+            let connection_pool = runtime_context.connection_pool.as_ref().filter(|_| {
+                // Sharing a signed-in helper requires tracking account changes.
+                discover_local_stdio
+                    && protocol_mode != McpProtocolMode::Legacy
+                    && (auth.is_none() || auth_manager.is_some())
+            });
             if matches!(configured_config.auth, McpServerAuth::EmaAuth) && existing_ema.is_some() {
                 if let Some(previous_view) = existing_ema
                     .filter(|_| elicitation_previous.is_some())
@@ -743,6 +752,10 @@ impl McpConnectionSet {
                 && (same_owner || !previous_view.connection.may_use_legacy_fallback())
             {
                 let connection = Arc::clone(&previous_view.connection);
+                // A failed pool acquisition can leave this chat on its private helper.
+                let retained_legacy = connection.retained_legacy().is_some();
+                let can_reuse = retained_legacy
+                    || connection.client.connection_slot.is_some() == connection_pool.is_some();
                 let reusable_pending_startup = connection.identity.as_ref()
                     == Some(&connection_identity)
                     && !connection.client.startup_complete.load(Ordering::Acquire)
@@ -770,15 +783,15 @@ impl McpConnectionSet {
                     .reusable_client(&connection_identity)
                     .await
                     .filter(|_| previous_view.catalog_item_limit == catalog_item_limit);
-                if reusable_pending_startup
-                    || unchanged_auth_failure.is_some()
-                    || ready.as_ref().is_some_and(|client| {
-                        expected_protocol_mode.is_some_and(|expected| {
-                            client.client.protocol_mode() == expected
-                                || (previous_view.protocol_mode == expected
-                                    && connection.retained_legacy().is_some())
-                        })
-                    })
+                if can_reuse
+                    && (reusable_pending_startup
+                        || unchanged_auth_failure.is_some()
+                        || ready.as_ref().is_some_and(|client| {
+                            expected_protocol_mode.is_some_and(|expected| {
+                                client.client.protocol_mode() == expected
+                                    || (previous_view.protocol_mode == expected && retained_legacy)
+                            })
+                        }))
                 {
                     let pending_client =
                         reusable_pending_startup.then(|| connection.client.clone());
@@ -853,6 +866,7 @@ impl McpConnectionSet {
                     && !connection.client.cancel_token.is_cancelled()
                     && ready.is_some_and(|client| {
                         client.client.protocol_mode() == McpProtocolMode::Legacy
+                            && matches!(client.connection_sharing, ConnectionSharing::Private)
                     })
                 {
                     legacy_to_upgrade = Some(connection);
@@ -861,6 +875,24 @@ impl McpConnectionSet {
             let cancel_token = startup_cancellation_token.child_token();
             let tool_catalog_cache_context = tool_catalog_cache_context.take();
             let has_runtime_auth = runtime_auth_provider.is_some();
+            let connection_pool = connection_pool.map(|pool| {
+                (
+                    pool.clone(),
+                    ConnectionKey {
+                        server_name: server_name.clone(),
+                        identity: connection_identity.clone(),
+                        account: codex_apps_tools_cache_key.clone(),
+                        auth_state: auth_manager.as_ref().map(|manager| {
+                            (
+                                Arc::clone(manager),
+                                *manager.auth_change_state_receiver().borrow(),
+                            )
+                        }),
+                        startup_timeout,
+                        catalog_item_limit,
+                    },
+                )
+            });
             let mut async_managed_client = AsyncManagedClient::new(
                 ema_auth.clone(),
                 server_name.clone(),
@@ -890,6 +922,7 @@ impl McpConnectionSet {
                     .map(|manager| manager.auth_change_state_receiver()),
                 protocol_mode,
                 catalog_item_limit,
+                connection_pool,
             );
             // A forced reconnect must also wait for the previously published helper to exit.
             if let Some(previous) = existing_ema.and_then(|set| set.servers.get(&server_name)) {
@@ -1192,14 +1225,29 @@ impl McpConnectionSet {
             || view.connection.client_for_call().await.is_ok()
     }
 
-    /// Stop all MCP clients owned by this manager and terminate stdio server processes.
+    /// Release this manager's clients, terminating shared stdio servers after their final release.
     pub async fn shutdown(&self) {
         let connections = self
             .servers
             .values()
             .map(|view| Arc::clone(&view.connection))
             .collect::<Vec<_>>();
-        // Keep cleanup alive if an interrupt cancels the refresh that requested it.
+        Self::shutdown_connections(connections).await;
+    }
+
+    /// Releases pool leases retained by older bindings.
+    pub(crate) async fn shutdown_shared_connections(&self) {
+        let connections = self
+            .servers
+            .values()
+            .filter(|view| view.connection.client.connection_slot.is_some())
+            .map(|view| Arc::clone(&view.connection))
+            .collect();
+        Self::shutdown_connections(connections).await;
+    }
+
+    /// Keeps cleanup alive if an interrupt cancels the refresh that requested it.
+    async fn shutdown_connections(connections: Vec<Arc<McpServerConnection>>) {
         let shutdown_task = tokio::spawn(async move {
             join_all(connections.iter().map(|connection| connection.shutdown())).await;
         });
@@ -1211,6 +1259,14 @@ impl McpConnectionSet {
     pub(crate) fn cancel_startup(&self) {
         for view in self.servers.values() {
             view.connection.cancel_startup();
+        }
+    }
+
+    pub(crate) fn retire_shared_connections(&self) {
+        for view in self.servers.values() {
+            if let Some(slot) = &view.connection.client.connection_slot {
+                slot.retire();
+            }
         }
     }
 
@@ -1304,7 +1360,6 @@ impl McpConnectionSet {
             meta.remove(ENTITLEMENT_CONTEXT_KEY);
         }
         let result: rmcp::model::CallToolResult = client
-            .client
             .call_tool(
                 tool.to_string(),
                 arguments,

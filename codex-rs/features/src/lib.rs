@@ -269,7 +269,7 @@ pub enum Feature {
     Mcp20260728,
     /// Honor ordinary MCP server tool-list notifications within a turn.
     McpToolListChanged,
-    /// Discover the MCP protocol for eligible local stdio servers.
+    /// Discover and share eligible local stdio connections across chats.
     McpConnectionSharing,
     /// Enable MCP protocol version 2026-07-28 for the host-owned Codex Apps server.
     CodexAppsMcp20260728,

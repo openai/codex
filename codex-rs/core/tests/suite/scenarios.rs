@@ -152,6 +152,9 @@ mod mcp_resource_messages;
 #[path = "scenarios_mcp_ema.rs"]
 mod mcp_ema;
 
+#[path = "scenarios_mcp_sharing.rs"]
+mod mcp_sharing;
+
 #[path = "scenarios_guardian_agent_messages_tests.rs"]
 mod guardian_agent_messages;
 
