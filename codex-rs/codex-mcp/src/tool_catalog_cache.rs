@@ -184,6 +184,7 @@ impl McpToolCatalogCacheContext {
         cached_deadline.deadline
     }
 
+    #[cfg(test)]
     pub(crate) fn current_tools(&self) -> Option<Vec<ToolInfo>> {
         self.current_tools_or(/*fallback*/ None)
     }
@@ -235,31 +236,44 @@ impl McpToolCatalogCacheContext {
         state.snapshot = None;
     }
 
+    /// An observed protocol change invalidates a legacy catalog, including any older fetch in flight.
+    pub(crate) fn invalidate_if_newest(&self, ticket: &McpToolCatalogFetchTicket) {
+        if let Some(mut state) = self.accept_generation(ticket.generation) {
+            state.snapshot = None;
+        }
+    }
+
     pub(crate) fn publish_if_newest(
         &self,
         ticket: McpToolCatalogFetchTicket,
         tools: &[ToolInfo],
         meta: Option<Arc<serde_json::Value>>,
     ) {
-        let mut state = lock_unpoisoned(&self.entry.state);
-        if state.disabled_by_server || ticket.generation <= state.last_accepted_generation {
+        let Some(mut state) = self.accept_generation(ticket.generation) else {
             return;
-        }
-
+        };
         let mut tools = tools.to_vec();
         for tool in &mut tools {
             // Tool annotations affect approval and parallelism decisions, so only the live
             // connection may supply them.
             tool.tool.annotations = None;
         }
-        state.last_accepted_generation = ticket.generation;
-        state.optional_startup_deadline = None;
         state.snapshot = Some(ToolCatalogSnapshot {
             tools,
             meta,
             published_at: Instant::now(),
             tool_list_revision: ticket.tool_list_revision,
         });
+    }
+
+    fn accept_generation(&self, generation: u64) -> Option<MutexGuard<'_, ToolCatalogCacheState>> {
+        let mut state = lock_unpoisoned(&self.entry.state);
+        if state.disabled_by_server || generation <= state.last_accepted_generation {
+            return None;
+        }
+        state.last_accepted_generation = generation;
+        state.optional_startup_deadline = None;
+        Some(state)
     }
 }
 
@@ -417,6 +431,13 @@ impl ToolCatalogTransportIdentity {
         else {
             return None;
         };
+        // An unmarked helper can expose different tools after a legacy fallback.
+        if matches!(
+            connection_identity,
+            Some((_, McpProtocolMode::DiscoverLocalStdio, _))
+        ) {
+            return None;
+        }
         if env_vars
             .iter()
             .any(codex_config::McpServerEnvVar::is_remote_source)
@@ -438,6 +459,7 @@ impl ToolCatalogTransportIdentity {
                 env_vars,
                 cwd,
                 &config.environment_id,
+                connection_identity.map(|(_, mode, _)| mode.preferred_protocol_version()),
                 client_elicitation_capability,
                 client_mcp_extensions.iter().collect::<BTreeMap<_, _>>(),
             ))

@@ -46,21 +46,21 @@ async fn exercise_stdio_server(
             OsString::from("2026-07-28"),
         );
     }
-    let cwd = std::env::current_dir()?;
-    #[cfg(unix)]
     let root = tempfile::tempdir()?;
+    let cwd = if use_executor {
+        std::env::current_dir()?
+    } else {
+        root.path().to_path_buf()
+    };
     #[cfg(unix)]
-    let (server, cwd) = if use_executor {
-        (server, cwd)
+    let server = if use_executor {
+        server
     } else {
         let wrapper = root.path().join("server");
         let script = "#!/bin/sh\nprintf '%s' \"$0\" > argv0\nexec \"$MCP_SERVER\" \"$@\"\n";
         codex_utils_cargo_bin::write_executable(&wrapper, script)?;
         env.insert(OsString::from("MCP_SERVER"), server.into_os_string());
-        (
-            std::path::PathBuf::from("./server"),
-            root.path().to_path_buf(),
-        )
+        std::path::PathBuf::from("./server")
     };
     let client = RmcpClient::new_stdio_client_with_protocol_mode(
         server.into(),
@@ -86,7 +86,11 @@ async fn exercise_stdio_server(
                 Implementation::new("codex-mcp-client", "0.0.0-test"),
             )
             .with_protocol_version(ProtocolVersion::V_2025_06_18),
-            Some(Duration::from_secs(5)),
+            Some(Duration::from_secs(if server_mode.ends_with("-late") {
+                30
+            } else {
+                5
+            })),
             Box::new(move |_request_id, request| {
                 let observed_elicitations = Arc::clone(&observed_elicitations);
                 async move {
@@ -238,6 +242,29 @@ async fn rollout_flag_alone_preserves_legacy_stdio_and_sep1034_defaults() -> any
         /*use_executor*/ false,
     )
     .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unmarked_stdio_helpers_recover_from_failed_or_late_discovery() -> anyhow::Result<()> {
+    for mode in [
+        "legacy",
+        "legacy-init-first",
+        "legacy-reject-late-initialize",
+        "legacy-reject-and-exit",
+        "legacy-late",
+        "legacy-silent",
+        "legacy-versions",
+        "modern-late",
+    ] {
+        exercise_stdio_server(
+            mode,
+            McpProtocolMode::DiscoverLocalStdio,
+            /*opt_in*/ false,
+            /*use_executor*/ false,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -288,6 +288,33 @@ pub fn kill_process_group(_process_group_id: u32) -> io::Result<()> {
     Ok(())
 }
 
+/// Wait up to `grace` for a signaled group's members to release their resources.
+/// After that, allow the caller to proceed. An unreaped zombie or a recycled group ID
+/// can remain visible after the original processes have released their resources.
+#[cfg(unix)]
+pub fn wait_for_process_group_exit(process_group_id: u32, grace: std::time::Duration) {
+    let deadline = std::time::Instant::now() + grace;
+    loop {
+        #[cfg(target_os = "macos")]
+        let exists = signal_process_group_with_member_fallback(
+            process_group_id,
+            /*signal*/ 0,
+            signal_process_group_id,
+            signal_process_id,
+        );
+        #[cfg(not(target_os = "macos"))]
+        let exists = signal_process_group_id(process_group_id as libc::pid_t, /*signal*/ 0);
+        if matches!(exists, Ok(false)) {
+            break;
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        std::thread::sleep(remaining.min(std::time::Duration::from_millis(10)));
+    }
+}
+
 #[cfg(unix)]
 /// Kill the process group for a tokio child (best-effort).
 pub fn kill_child_process_group(child: &mut Child) -> io::Result<()> {

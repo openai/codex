@@ -8,6 +8,7 @@ use crate::spawn_pty_process;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::BorrowedHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
 use std::os::windows::process::CommandExt;
@@ -20,7 +21,10 @@ use tokio::io::BufReader;
 use tokio::process::Command;
 use winapi::um::jobapi::IsProcessInJob;
 use winapi::um::processthreadsapi::OpenProcess;
+use winapi::um::synchapi::WaitForSingleObject;
+use winapi::um::winbase::WAIT_OBJECT_0;
 use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
+use winapi::um::winnt::SYNCHRONIZE;
 
 const READY_MARKER: &str = "__CODEX_CHILD_READY__";
 const VALUE_MARKER: &str = "__CODEX_CHILD_VALUE__";
@@ -67,7 +71,10 @@ async fn piped_child_has_no_console_with_or_without_job_containment() -> anyhow:
             let pid = child
                 .id()
                 .ok_or_else(|| anyhow::anyhow!("missing child pid"))?;
-            anyhow::ensure!(job.assign_and_resume_process(pid)?, "job assignment failed");
+            anyhow::ensure!(
+                job.assign_and_resume_process(pid)?.is_some(),
+                "job assignment failed"
+            );
         }
         child
             .stdin
@@ -289,7 +296,13 @@ async fn contained_spawn_owns_immediate_descendant() -> anyhow::Result<()> {
     tokio::time::timeout(Duration::from_secs(10), stdout.read_line(&mut child_pid)).await??;
     let child_pid: u32 = child_pid.trim().parse()?;
 
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, child_pid) };
+    let process = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
+            /*bInheritHandle*/ 0,
+            child_pid,
+        )
+    };
     anyhow::ensure!(!process.is_null(), "failed to open immediate child process");
     let process = unsafe { OwnedHandle::from_raw_handle(process.cast()) };
     let mut in_job = 0;
@@ -303,7 +316,15 @@ async fn contained_spawn_owns_immediate_descendant() -> anyhow::Result<()> {
     anyhow::ensure!(checked != 0, "failed to inspect child Job Object");
     anyhow::ensure!(in_job != 0, "immediate child escaped its Job Object");
 
-    job.terminate()?;
+    let root_handle = root
+        .raw_handle()
+        .ok_or_else(|| anyhow::anyhow!("missing contained root handle"))?;
+    let root_handle = unsafe { BorrowedHandle::borrow_raw(root_handle) }.try_clone_to_owned()?;
+    job.terminate_and_wait(&root_handle, Duration::from_secs(10))?;
+    let child_status = unsafe {
+        WaitForSingleObject(process.as_raw_handle().cast(), /*dwMilliseconds*/ 0)
+    };
+    assert_eq!(child_status, WAIT_OBJECT_0);
     tokio::time::timeout(Duration::from_secs(10), root.wait()).await??;
     Ok(())
 }
@@ -346,7 +367,9 @@ async fn rejected_job_assignment_resumes_existing_job_member() -> anyhow::Result
         .ok_or_else(|| anyhow::anyhow!("missing suspended process id"))?;
 
     assert!(
-        !rejected_job.assign_and_resume_process(process_id)?,
+        rejected_job
+            .assign_and_resume_process(process_id)?
+            .is_none(),
         "unrelated nested job unexpectedly accepted the process"
     );
     let stdout = root

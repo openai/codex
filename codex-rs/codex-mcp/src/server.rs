@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::runtime::McpRuntimeContext;
 use codex_api::SharedAuthProvider;
 use codex_config::AppToolApproval;
@@ -17,6 +19,7 @@ use codex_exec_server::Environment;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_rmcp_client::McpOAuthRefreshMode;
+use codex_rmcp_client::McpProtocolMode;
 use codex_rmcp_client::StoredOAuthCredentialSnapshot;
 use codex_rmcp_client::StoredOAuthTokens;
 use codex_utils_path_uri::PathUri;
@@ -80,6 +83,35 @@ impl EffectiveMcpServer {
 
     pub fn config(&self) -> &McpServerConfig {
         &self.config
+    }
+
+    /// Checks whether Core can discover the protocol of a local stdio server.
+    ///
+    /// The reserved `codex_apps` server has a per-chat catalog. Servers with runtime or
+    /// enterprise-managed credentials need that chat's authentication state.
+    pub(crate) fn can_discover_local_stdio(
+        &self,
+        server_name: &str,
+        runtime_auth_provider: Option<&SharedAuthProvider>,
+    ) -> bool {
+        server_name != CODEX_APPS_MCP_SERVER_NAME
+            && self.config.is_local_environment()
+            && runtime_auth_provider.is_none()
+            && !matches!(self.config.auth, McpServerAuth::EmaAuth)
+            && self
+                .stdio_protocol_mode(McpProtocolMode::DiscoverLocalStdio)
+                .is_some()
+    }
+
+    /// Returns the handshake a stdio launch would use, or `None` for HTTP or an invalid version.
+    pub(crate) fn stdio_protocol_mode(&self, mode: McpProtocolMode) -> Option<McpProtocolMode> {
+        let McpServerTransportConfig::Stdio { env, .. } = &self.config.transport else {
+            return None;
+        };
+        let version = env
+            .as_ref()
+            .and_then(|env| env.get("CODEX_MCP_PROTOCOL_VERSION"));
+        mode.stdio_mode(version.map(OsStr::new)).ok()
     }
 
     pub fn enabled(&self) -> bool {

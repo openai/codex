@@ -19,6 +19,7 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
+use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::mcp::McpServerConnectionStatus;
 use codex_protocol::models::PermissionProfile;
@@ -700,6 +701,11 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
         /*sandbox*/ None,
     )
     .await?;
+    // The subagent can reuse the parent's legacy catalog even when discovery is enabled.
+    let mut subagent_config = fixture.config.clone();
+    subagent_config
+        .features
+        .enable(Feature::McpConnectionSharing)?;
     let NewThread {
         thread: second_thread,
         ..
@@ -713,7 +719,7 @@ async fn cached_mcp_startup_is_eager_for_root_and_lazy_for_subagents() -> anyhow
                 agent_nickname: None,
                 agent_role: None,
             })),
-            ..StartThreadOptions::new(fixture.config.clone())
+            ..StartThreadOptions::new(subagent_config)
         })
         .await?;
     second_thread.submit(Op::Interrupt).await?;

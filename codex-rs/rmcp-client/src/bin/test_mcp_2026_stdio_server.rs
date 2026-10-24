@@ -2,6 +2,7 @@ use std::io;
 use std::io::BufRead;
 use std::io::Write;
 
+use anyhow::Context;
 use anyhow::Result;
 use serde_json::Value;
 use serde_json::json;
@@ -41,7 +42,18 @@ fn main() -> Result<()> {
     let mode = std::env::args().nth(1).unwrap_or_default();
     assert!(matches!(
         mode.as_str(),
-        "modern" | "legacy" | "legacy-fallback" | "oversized-stdout" | "oversized-stdout-legacy"
+        "modern"
+            | "modern-late"
+            | "legacy"
+            | "legacy-fallback"
+            | "legacy-reject-and-exit"
+            | "legacy-init-first"
+            | "legacy-reject-late-initialize"
+            | "legacy-late"
+            | "legacy-silent"
+            | "legacy-versions"
+            | "oversized-stdout"
+            | "oversized-stdout-legacy"
     ));
     assert!(std::env::var_os("CODEX_MCP_PROTOCOL_VERSION").is_none());
     let is_legacy = mode.starts_with("legacy") || mode.ends_with("-legacy");
@@ -49,8 +61,9 @@ fn main() -> Result<()> {
     let mut stdout = io::stdout().lock();
     let mut initialized = false;
     let mut pending_legacy_call = None;
+    let mut late_discovery_id = None;
 
-    for line in io::stdin().lock().lines() {
+    for (index, line) in io::stdin().lock().lines().enumerate() {
         let message: Value = serde_json::from_str(&line?)?;
         let Some(method) = message.get("method").and_then(Value::as_str) else {
             let pending_call = pending_legacy_call
@@ -70,9 +83,60 @@ fn main() -> Result<()> {
             continue;
         };
 
+        // Some older helpers assume their first request is initialize without inspecting its method.
+        let method = if mode == "legacy-init-first" && !initialized {
+            "initialize"
+        } else {
+            method
+        };
         match method {
+            // Some legacy stdio servers exit if their first message is not initialize.
+            "server/discover" if mode == "legacy" => {
+                // Some wrappers print a banner before starting the protocol.
+                writeln!(stdout, "starting server")?;
+                write_message(
+                    &mut stdout,
+                    json!({"jsonrpc": "2.0", "id": "startup", "method": "ping"}),
+                )?;
+                return Ok(());
+            }
+            "server/discover" if mode == "legacy-late" => {
+                late_discovery_id = Some(message["id"].clone());
+            }
+            // The first helper makes its version offer only after it receives initialize.
+            "server/discover"
+                if mode == "modern-late"
+                    && !std::path::Path::new("retry-modern").try_exists()? => {}
+            "initialize" if mode == "modern-late" => {
+                std::fs::write("retry-modern", [])?;
+                write_message(
+                    &mut stdout,
+                    json!({
+                        "jsonrpc": "2.0", "id": null,
+                        "error": {"code": -32022, "message": "unsupported protocol", "data": {"supported": [MODERN_VERSION]}},
+                    }),
+                )?;
+                return Ok(());
+            }
+            "server/discover" if mode == "legacy-silent" => {
+                write_message(
+                    &mut stdout,
+                    json!({
+                        "jsonrpc": "2.0", "method": "notifications/message",
+                        "params": {"level": "info", "data": "starting server"},
+                    }),
+                )?;
+            }
+            "server/discover" if mode == "legacy-versions" => {
+                write_message(
+                    &mut stdout,
+                    json!({
+                        "jsonrpc": "2.0", "id": message["id"],
+                        "error": {"code": -32022, "message": "unsupported protocol", "data": {"supported": [LEGACY_VERSION]}},
+                    }),
+                )?;
+            }
             "server/discover" if is_legacy => {
-                assert_eq!(mode, "legacy-fallback");
                 write_message(
                     &mut stdout,
                     json!({
@@ -81,6 +145,9 @@ fn main() -> Result<()> {
                         "error": {"code": -32601, "message": "method not found"},
                     }),
                 )?;
+                if mode == "legacy-reject-and-exit" {
+                    return Ok(());
+                }
             }
             "server/discover" => {
                 assert!(!initialized);
@@ -107,9 +174,28 @@ fn main() -> Result<()> {
                     }),
                 )?;
             }
+            "initialize" if mode == "legacy-reject-late-initialize" && index != 0 => {
+                write_message(
+                    &mut stdout,
+                    json!({"jsonrpc": "2.0", "id": message["id"], "error": {
+                        "code": -32600, "message": "initialize must be the first request"
+                    }}),
+                )?;
+            }
             "initialize" => {
                 assert!(is_legacy);
-                assert_eq!(message["params"]["protocolVersion"], LEGACY_VERSION);
+                if mode == "legacy-late" {
+                    let id = late_discovery_id
+                        .take()
+                        .context("initialize must follow discover on the same pipe")?;
+                    write_message(
+                        &mut stdout,
+                        json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Method not found"}}),
+                    )?;
+                }
+                if message["method"] == "initialize" {
+                    assert_eq!(message["params"]["protocolVersion"], LEGACY_VERSION);
+                }
                 initialized = true;
                 write_message(
                     &mut stdout,
@@ -129,6 +215,9 @@ fn main() -> Result<()> {
                 assert!(initialized);
                 if !is_legacy {
                     assert_modern_metadata(&message);
+                }
+                if mode == "oversized-stdout-legacy" {
+                    write!(stdout, "\u{feff}")?;
                 }
                 let description = if oversized {
                     "x".repeat(MAX_MESSAGE_BYTES + 1)

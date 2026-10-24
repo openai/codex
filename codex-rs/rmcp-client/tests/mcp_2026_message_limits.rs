@@ -234,13 +234,14 @@ async fn legacy_http_keeps_existing_large_json_response_behavior() -> anyhow::Re
 async fn modern_local_and_executor_stdio_reject_oversized_lines() -> anyhow::Result<()> {
     let server = codex_utils_cargo_bin::cargo_bin("test_mcp_2026_stdio_server")?;
 
-    for (modern, executor) in [(false, false), (false, true), (true, false), (true, true)] {
-        let mode = if modern {
-            McpProtocolMode::V20260728
-        } else {
-            McpProtocolMode::Legacy
-        };
-        let env = modern.then(|| {
+    for (mode, modern, executor) in [
+        (McpProtocolMode::Legacy, false, false),
+        (McpProtocolMode::Legacy, false, true),
+        (McpProtocolMode::V20260728, true, false),
+        (McpProtocolMode::V20260728, true, true),
+        (McpProtocolMode::DiscoverLocalStdio, false, false),
+    ] {
+        let env = (mode == McpProtocolMode::V20260728).then(|| {
             HashMap::from([(
                 OsString::from("CODEX_MCP_PROTOCOL_VERSION"),
                 OsString::from("2026-07-28"),

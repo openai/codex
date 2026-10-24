@@ -166,6 +166,7 @@ impl ManagedClient {
 
 pub(crate) type ManagedClientFuture =
     Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>;
+type StartupShutdown = Shared<BoxFuture<'static, Result<(), String>>>;
 
 #[derive(Default)]
 struct CodexAppsStartupReconnectState {
@@ -368,6 +369,7 @@ impl ManagedClientStartup {
                 .as_ref()
                 .map(McpToolCatalogCacheContext::begin_fetch);
             let refresh_start = is_codex_apps_mcp_server.then(Instant::now);
+            let mut discovery_client = None;
             let outcome = match async {
                 if let Err(error) = validate_mcp_server_name(&server_name) {
                     return Err(error.into());
@@ -399,6 +401,9 @@ impl ManagedClientStartup {
                         )));
                     }
                 };
+                if client.protocol_mode() == McpProtocolMode::DiscoverLocalStdio {
+                    discovery_client = Some(Arc::clone(&client));
+                }
                 start_server_task(
                     server_name.clone(),
                     client,
@@ -422,8 +427,32 @@ impl ManagedClientStartup {
             .or_cancel(&cancel_token_for_fut)
             .await
             {
-                Ok(result) => result,
-                Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
+                Ok(mut result) => {
+                    if let Err(StartupOutcomeError::Failed { shutdown, .. }) = &mut result
+                        && let Some(client) = discovery_client
+                    {
+                        // Report the startup error now. A retry waits for the helper to exit.
+                        *shutdown = Some(
+                            tokio::spawn(async move { client.shutdown_before_retry().await })
+                                .map(|joined| match joined {
+                                    Ok(result) => result.map_err(|error| error.to_string()),
+                                    Err(error) => Err(error.to_string()),
+                                })
+                                .boxed()
+                                .shared(),
+                        );
+                    }
+                    result
+                }
+                Err(CancelErr::Cancelled) => {
+                    // A cancelled legacy replacement may still be inside the native spawn.
+                    if let Some(client) = discovery_client
+                        && let Err(error) = client.shutdown_before_retry().await
+                    {
+                        warn!("failed to stop cancelled MCP discovery: {error}");
+                    }
+                    Err(StartupOutcomeError::Cancelled)
+                }
             };
             // Log once per startup attempt, including discovery without startup notifications.
             if let Err(StartupOutcomeError::Failed { error, .. }) = &outcome {
@@ -540,6 +569,9 @@ impl AsyncManagedClient {
             startup_complete: Arc::clone(&startup_complete),
             server_capabilities: Arc::clone(&server_capabilities),
         });
+        // Startup can publish a legacy fallback. Readers wait for the negotiated catalog.
+        let tool_catalog_cache_context = tool_catalog_cache_context
+            .filter(|_| protocol_mode != McpProtocolMode::DiscoverLocalStdio);
         let client = startup.start();
         let startup_reconnect = is_codex_apps_mcp_server.then(|| {
             let startup = Arc::clone(&startup);
@@ -595,6 +627,33 @@ impl AsyncManagedClient {
         self.ready_client().map(|client| client.client)
     }
 
+    /// Waits for this server's failed predecessor when the replacement actually starts.
+    pub(crate) fn wait_for_failed_predecessor(&mut self, previous: &Self) {
+        let Some(Err(
+            error @ StartupOutcomeError::Failed {
+                shutdown: Some(shutdown),
+                ..
+            },
+        )) = previous.client.peek()
+        else {
+            return;
+        };
+        let shutdown = shutdown.clone();
+        let error = error.clone();
+        let client = self.client.clone();
+        let startup_complete = Arc::clone(&self.startup_complete);
+        self.client = async move {
+            if let Err(stop_error) = shutdown.await {
+                warn!("cannot restart MCP server after failed cleanup: {stop_error}");
+                startup_complete.store(true, Ordering::Release);
+                return Err(error);
+            }
+            client.await
+        }
+        .boxed()
+        .shared();
+    }
+
     pub(crate) async fn reconnect_failed_startup(&self) {
         let Some(startup_reconnect) = self.startup_reconnect.as_ref() else {
             return;
@@ -614,6 +673,7 @@ impl AsyncManagedClient {
             Err(StartupOutcomeError::Cancelled) => {}
             Err(error) => {
                 warn!("failed to initialize MCP client during shutdown: {error:#}");
+                error.wait_for_shutdown().await;
             }
         }
     }
@@ -684,10 +744,22 @@ pub(crate) enum StartupOutcomeError {
         error: String,
         is_authentication_required: bool,
         is_ema_authentication_required: bool,
+        shutdown: Option<StartupShutdown>,
     },
 }
 
 impl StartupOutcomeError {
+    pub(crate) async fn wait_for_shutdown(&self) {
+        if let Self::Failed {
+            shutdown: Some(shutdown),
+            ..
+        } = self
+            && let Err(error) = shutdown.clone().await
+        {
+            warn!("failed to stop MCP server after startup failed: {error}");
+        }
+    }
+
     pub(crate) fn is_authentication_required(&self) -> bool {
         match self {
             Self::Cancelled => false,
@@ -709,6 +781,7 @@ impl From<anyhow::Error> for StartupOutcomeError {
             is_ema_authentication_required: is_authentication_required
                 && (error.downcast_ref::<EmaTokenSourceError>().is_some()
                     || error.downcast_ref::<EmaAuthFailure>().is_some()),
+            shutdown: None,
         }
     }
 }
@@ -1013,7 +1086,7 @@ async fn start_server_task(
         tx_event,
         elicitation_requests,
         codex_apps_tools_cache_context,
-        tool_catalog_cache_context,
+        mut tool_catalog_cache_context,
         tool_catalog_fetch_ticket,
         client_elicitation_capability,
         client_mcp_extensions,
@@ -1050,6 +1123,13 @@ async fn start_server_task(
         &initialize_result,
     );
     let initialize_result = initialize_result.map_err(StartupOutcomeError::from)?;
+    if client.protocol_mode() == McpProtocolMode::DiscoverLocalStdio
+        && !initialize_result.protocol_version.has_initialize()
+        && let Some(context) = tool_catalog_cache_context.take()
+        && let Some(ticket) = &tool_catalog_fetch_ticket
+    {
+        context.invalidate_if_newest(ticket);
+    }
     *server_capabilities
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) =
@@ -1186,7 +1266,7 @@ fn record_protocol_discovery_metrics(
 
     let mode = match mode {
         McpProtocolMode::Legacy => "legacy",
-        McpProtocolMode::V20260728 => "auto",
+        McpProtocolMode::V20260728 | McpProtocolMode::DiscoverLocalStdio => "auto",
     };
     let outcome = match result {
         Ok(result) if result.protocol_version == ProtocolVersion::V_2026_07_28 => "modern",

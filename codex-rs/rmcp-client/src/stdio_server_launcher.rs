@@ -21,6 +21,10 @@ use std::os::windows::io::OwnedHandle;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(unix)]
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 #[cfg(unix)]
@@ -29,6 +33,7 @@ use std::thread::sleep;
 use std::thread::spawn;
 use std::time::Duration;
 
+use crate::local_stdio_transport::DiscoveryOutcome;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_config::types::McpServerEnvVar;
@@ -39,6 +44,8 @@ use codex_exec_server::ExecProcess;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
+#[cfg(unix)]
+use codex_utils_pty::Child;
 use codex_utils_pty::Command;
 #[cfg(unix)]
 use codex_utils_pty::DescriptorPolicy;
@@ -47,16 +54,23 @@ use codex_utils_pty::ProcessMode;
 use codex_utils_pty::process_group::kill_process_group;
 #[cfg(unix)]
 use codex_utils_pty::process_group::terminate_process_group;
+#[cfg(unix)]
+use codex_utils_pty::process_group::wait_for_process_group_exit;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use futures::future::Shared;
 use rmcp::service::RoleClient;
 use rmcp::service::RxJsonRpcMessage;
 use rmcp::service::TxJsonRpcMessage;
 use rmcp::transport::Transport;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
+use tokio::runtime::Handle;
+use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::time::Instant;
+use tokio_util::task::AbortOnDropHandle;
 use tracing::info;
 use tracing::warn;
 
@@ -93,6 +107,70 @@ pub struct StdioServerCommand {
     env_vars: Vec<McpServerEnvVar>,
     cwd: Option<String>,
     protocol_mode: McpProtocolMode,
+    replacement_slot: Option<StdioProcessSlot>,
+}
+
+/// A replacement holds the slot from OS spawn through registration. Closing it seals that handoff.
+pub(super) type StdioProcessSlot = Arc<AsyncMutex<StdioProcessRegistration>>;
+
+pub(super) struct StdioProcessRegistration {
+    process: StdioProcessRef,
+    closed: bool,
+}
+
+impl StdioProcessRegistration {
+    pub(super) fn close(&mut self) -> StdioProcessRef {
+        self.closed = true;
+        self.process.clone()
+    }
+}
+
+type DiscoveryCleanupResult = Shared<BoxFuture<'static, Result<(), Arc<io::Error>>>>;
+
+struct DiscoveryCleanup {
+    process: Weak<StdioServerProcessHandle>,
+    result: OnceLock<DiscoveryCleanupResult>,
+}
+
+impl DiscoveryCleanup {
+    fn start(&self, runtime: &Handle, reason: StdioTermination) -> &DiscoveryCleanupResult {
+        self.result.get_or_init(|| {
+            let process = self.process.upgrade();
+            // The owner waits for this worker on shutdown. Its grace periods must also advance
+            // when the caller leaves a current-thread runtime idle.
+            runtime
+                .spawn_blocking(move || {
+                    process
+                        .ok_or_else(|| io::Error::other("discovery process already released"))?
+                        .terminate_discovery(reason)
+                })
+                .map(|joined| match joined {
+                    Ok(result) => result.map_err(Arc::new),
+                    Err(error) => Err(Arc::new(io::Error::other(error))),
+                })
+                .boxed()
+                .shared()
+        })
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct StdioProcessRef {
+    process: Weak<StdioServerProcessHandle>,
+    discovery_cleanup: Option<Arc<DiscoveryCleanup>>,
+}
+
+impl StdioProcessRef {
+    pub(super) async fn terminate(&self, reason: StdioTermination) -> io::Result<()> {
+        if let Some(cleanup) = &self.discovery_cleanup {
+            let result = cleanup.start(&Handle::current(), reason);
+            return result.clone().await.map_err(io::Error::other);
+        }
+        if let Some(process) = self.process.upgrade() {
+            process.terminate().await?;
+        }
+        Ok(())
+    }
 }
 
 /// Client-side rmcp transport for a launched MCP stdio server.
@@ -102,7 +180,9 @@ pub struct StdioServerCommand {
 /// directly to `rmcp::service::serve_client`.
 pub struct StdioServerTransport {
     inner: StdioServerTransportInner,
-    process: StdioServerProcessHandle,
+    process: Arc<StdioServerProcessHandle>,
+    discovery_cleanup: Option<Arc<DiscoveryCleanup>>,
+    protocol_mode: McpProtocolMode,
 }
 
 enum StdioServerTransportInner {
@@ -137,7 +217,9 @@ impl Transport<RoleClient> for StdioServerTransport {
     }
 
     async fn close(&mut self) -> std::result::Result<(), Self::Error> {
-        self.process.terminate().await?;
+        if self.discovery_cleanup.is_none() {
+            self.process.terminate().await?;
+        }
         match &mut self.inner {
             StdioServerTransportInner::Local(transport) => transport.close().await,
             StdioServerTransportInner::Executor(transport) => transport.close().await,
@@ -145,9 +227,48 @@ impl Transport<RoleClient> for StdioServerTransport {
     }
 }
 
+impl Drop for StdioServerTransport {
+    fn drop(&mut self) {
+        // A client or handshake still holding this result may retry after the SDK drops a
+        // failed transport. Otherwise the process handle runs its ordinary shutdown on drop.
+        if let Some(cleanup) = &self.discovery_cleanup
+            && Arc::strong_count(cleanup) > 1
+            && !self.process.terminated.load(Ordering::Acquire)
+            && let Ok(runtime) = Handle::try_current()
+        {
+            cleanup.start(&runtime, StdioTermination::Restart);
+        }
+    }
+}
+
 impl StdioServerTransport {
-    pub(crate) fn process_handle(&self) -> StdioServerProcessHandle {
-        self.process.clone()
+    pub(super) fn protocol_mode(&self) -> McpProtocolMode {
+        self.protocol_mode
+    }
+
+    /// Observes the first discovery reply or a clean EOF during local stdio startup.
+    pub(super) fn watch_discovery(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> Option<oneshot::Receiver<DiscoveryOutcome>> {
+        match &mut self.inner {
+            StdioServerTransportInner::Local(local) => Some(local.watch_discovery(timeout)),
+            StdioServerTransportInner::Executor(_) => None,
+        }
+    }
+
+    pub(super) fn process_ref(&self) -> StdioProcessRef {
+        StdioProcessRef {
+            process: Arc::downgrade(&self.process),
+            discovery_cleanup: self.discovery_cleanup.clone(),
+        }
+    }
+
+    pub(super) fn process_slot(&self) -> StdioProcessSlot {
+        Arc::new(AsyncMutex::new(StdioProcessRegistration {
+            process: self.process_ref(),
+            closed: false,
+        }))
     }
 }
 
@@ -169,6 +290,20 @@ impl StdioServerCommand {
             env_vars,
             cwd,
             protocol_mode,
+            replacement_slot: None,
+        }
+    }
+
+    /// Registers the replacement with its original client before the native spawn can finish.
+    pub(super) fn for_restart(
+        &self,
+        protocol_mode: McpProtocolMode,
+        slot: StdioProcessSlot,
+    ) -> Self {
+        Self {
+            protocol_mode,
+            replacement_slot: Some(slot),
+            ..self.clone()
         }
     }
 }
@@ -202,11 +337,13 @@ impl StdioServerLauncher for LocalStdioServerLauncher {
     ) -> BoxFuture<'static, io::Result<StdioServerTransport>> {
         let fallback_cwd = self.fallback_cwd.clone();
         async move {
-            // Keep synchronous program resolution and process creation from blocking the
-            // caller's startup deadline.
-            tokio::task::spawn_blocking(move || Self::launch_server(command, fallback_cwd))
-                .await
-                .map_err(io::Error::other)?
+            // Cancel queued launches when startup is dropped. A worker that already started
+            // drops its transport and cleans up the child when it finishes.
+            AbortOnDropHandle::new(tokio::task::spawn_blocking(move || {
+                Self::launch_server(command, fallback_cwd)
+            }))
+            .await
+            .map_err(io::Error::other)?
         }
         .boxed()
     }
@@ -217,30 +354,75 @@ impl StdioServerLauncher for LocalStdioServerLauncher {
 #[cfg(unix)]
 const PROCESS_GROUP_TERM_GRACE_PERIOD: Duration = Duration::from_secs(2);
 
+#[cfg(unix)]
+const RESTART_DRAIN_GRACE_PERIOD: Duration = Duration::from_millis(250);
+
 // Keep queued stderr diagnostics before closing the reader, even when an
 // escaped descendant prevents the pipe from reaching EOF.
 const STDERR_READER_DRAIN_GRACE_PERIOD: Duration = Duration::from_millis(250);
 
 #[cfg(unix)]
-struct LocalProcessTerminator {
-    process_group_id: u32,
+enum LocalProcessTerminator {
+    ProcessGroup(u32),
+    // The SDK may drop the failed transport before the caller can decide whether to restart it.
+    DiscoveryLeader {
+        leader: Mutex<Option<Box<Child>>>,
+        runtime: Handle,
+    },
+}
+
+#[cfg(unix)]
+#[derive(Clone)]
+struct KillDiscoveryGroupOnDrop(Arc<Mutex<Option<Box<Child>>>>);
+
+#[cfg(unix)]
+impl KillDiscoveryGroupOnDrop {
+    fn new(child: Box<Child>) -> Self {
+        Self(Arc::new(Mutex::new(Some(child))))
+    }
+
+    fn kill(&self) -> io::Result<()> {
+        // Runtime teardown must wait for a timer that has already started sending the signal.
+        let mut leader = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(child) = leader.as_ref()
+            && let Some(pid) = child.id()
+        {
+            kill_process_group_and_warn(pid)?;
+        }
+        leader.take();
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+impl Drop for KillDiscoveryGroupOnDrop {
+    fn drop(&mut self) {
+        let _ = self.kill();
+    }
+}
+
+#[cfg(unix)]
+fn kill_process_group_and_warn(pid: u32) -> io::Result<()> {
+    kill_process_group(pid)
+        .inspect_err(|error| warn!("Failed to kill MCP process group {pid}: {error}"))
 }
 
 #[cfg(windows)]
 enum LocalProcessTerminator {
-    Job(codex_utils_pty::JobObject),
+    Job {
+        job: codex_utils_pty::JobObject,
+        discovery_root: Option<OwnedHandle>,
+    },
     Process(OwnedHandle),
 }
 
 #[cfg(not(any(unix, windows)))]
 struct LocalProcessTerminator;
 
-#[derive(Clone)]
 pub(crate) struct StdioServerProcessHandle {
-    inner: Arc<StdioServerProcessHandleInner>,
-}
-
-struct StdioServerProcessHandleInner {
     program_name: String,
     kind: StdioServerProcessKind,
     terminated: AtomicBool,
@@ -251,6 +433,12 @@ struct StdioServerProcessHandleInner {
 enum StdioServerProcessKind {
     Local(Option<LocalProcessTerminator>),
     Executor(Arc<dyn ExecProcess>),
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum StdioTermination {
+    Shutdown,
+    Restart,
 }
 
 mod private {
@@ -271,6 +459,7 @@ impl LocalStdioServerLauncher {
             env_vars,
             cwd,
             protocol_mode,
+            replacement_slot,
         } = command;
         let program_name = program.to_string_lossy().into_owned();
         let envs = create_env_for_mcp_server(env, &env_vars).map_err(io::Error::other)?;
@@ -306,45 +495,56 @@ impl LocalStdioServerLauncher {
             }
         };
 
-        let spawn_transport = |command: Command| -> io::Result<(
-            StdioServerTransportInner,
-            Option<tokio::process::ChildStderr>,
-            Option<u32>,
-        )> {
-            let (transport, stderr) =
-                LocalStdioTransport::spawn(command, program_name.clone(), protocol_mode)?;
-            let process_id = transport.id();
-            Ok((
-                StdioServerTransportInner::Local(transport),
-                stderr,
-                process_id,
-            ))
-        };
-        let (transport, stderr, process_id) = spawn_transport(command)?;
+        // The async caller can be cancelled while this blocking worker is inside spawn.
+        let slot = replacement_slot.as_ref().map(|slot| slot.blocking_lock());
+        if slot.as_ref().is_some_and(|slot| slot.closed) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "MCP client is shut down",
+            ));
+        }
+        let child = command.spawn()?;
         #[cfg(windows)]
-        let (transport, stderr, process_id, job) = match job {
-            Some(job) => match process_id
+        let (child, job) = match job {
+            Some(job) => match child
+                .id()
                 .ok_or_else(|| io::Error::other("missing suspended MCP server process id"))
                 .and_then(|process_id| job.assign_and_resume_process(process_id))
             {
-                Ok(true) => (transport, stderr, process_id, Some(job)),
-                Ok(false) => (transport, stderr, process_id, None),
+                Ok(Some(root)) => (child, Some((job, root))),
+                Ok(None) => (child, None),
                 Err(error) => {
                     warn!(
                         "Windows MCP process job containment failed; retrying without it: {error}"
                     );
-                    drop(stderr);
-                    drop(transport);
+                    drop(child);
                     drop(job);
-                    let (transport, stderr, process_id) = spawn_transport(build_command())?;
-                    (transport, stderr, process_id, None)
+                    (build_command().spawn()?, None)
                 }
             },
-            None => (transport, stderr, process_id, None),
+            None => (child, None),
         };
         #[cfg(windows)]
+        let protocol_mode = if job.is_none() && protocol_mode == McpProtocolMode::DiscoverLocalStdio
+        {
+            // A probe can require a restart. Without a job we cannot stop its descendants.
+            McpProtocolMode::Legacy
+        } else {
+            protocol_mode
+        };
+        let process_id = child.id();
+        // A legacy replacement still belongs to the discovery startup that launched it.
+        let discovery_owned = (protocol_mode == McpProtocolMode::DiscoverLocalStdio
+            || replacement_slot.is_some())
+            && process_id.is_some();
+        let (transport, stderr) =
+            LocalStdioTransport::new(child, program_name.clone(), protocol_mode)?;
+        #[cfg(windows)]
         let terminator = match job {
-            Some(job) => Some(LocalProcessTerminator::Job(job)),
+            Some((job, root)) => Some(LocalProcessTerminator::Job {
+                job,
+                discovery_root: discovery_owned.then_some(root),
+            }),
             None => process_id.and_then(|process_id| {
                 match codex_utils_pty::JobObject::open_process_handle(process_id) {
                     Ok(handle) => Some(LocalProcessTerminator::Process(handle)),
@@ -355,8 +555,23 @@ impl LocalStdioServerLauncher {
                 }
             }),
         };
-        #[cfg(not(windows))]
-        let terminator = process_id.map(LocalProcessTerminator::new);
+        #[cfg(unix)]
+        let (transport, terminator) = {
+            let mut transport = transport;
+            let terminator = process_id.map(|pid| {
+                if discovery_owned {
+                    LocalProcessTerminator::DiscoveryLeader {
+                        leader: Mutex::new(transport.take_child()),
+                        runtime: Handle::current(),
+                    }
+                } else {
+                    LocalProcessTerminator::ProcessGroup(pid)
+                }
+            });
+            (transport, terminator)
+        };
+        #[cfg(not(any(unix, windows)))]
+        let terminator = process_id.map(|_| LocalProcessTerminator);
         let stderr_reader = stderr.map(|stderr| {
             let program_name = program_name.clone();
             let (stop_tx, mut stop_rx) = watch::channel(());
@@ -395,31 +610,77 @@ impl LocalStdioServerLauncher {
             stop_tx
         });
         let process = StdioServerProcessHandle::local(program_name, terminator, stderr_reader);
-
-        Ok(StdioServerTransport {
-            inner: transport,
+        let discovery_cleanup = discovery_owned.then(|| {
+            Arc::new(DiscoveryCleanup {
+                process: Arc::downgrade(&process),
+                result: OnceLock::new(),
+            })
+        });
+        let transport = StdioServerTransport {
+            inner: StdioServerTransportInner::Local(transport),
             process,
-        })
+            discovery_cleanup,
+            protocol_mode,
+        };
+        if let Some(mut slot) = slot {
+            slot.process = transport.process_ref();
+        }
+
+        Ok(transport)
     }
 }
 
 impl LocalProcessTerminator {
-    #[cfg(not(windows))]
-    fn new(process_group_id: u32) -> Self {
-        #[cfg(unix)]
-        {
-            Self { process_group_id }
+    #[cfg(unix)]
+    fn terminate_discovery(&self, reason: StdioTermination) -> io::Result<()> {
+        let Self::DiscoveryLeader { leader, .. } = self else {
+            return Err(io::Error::other("missing Unix MCP discovery leader"));
+        };
+        let child = leader
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .ok_or_else(|| io::Error::other("Unix MCP discovery leader already released"))?;
+        let pid = child
+            .id()
+            .ok_or_else(|| io::Error::other("missing Unix MCP discovery leader PID"))?;
+        let cleanup = KillDiscoveryGroupOnDrop::new(child);
+        // A failed transport closed stdin. Let the helper release its endpoint before TERM,
+        // and reserve its PID through the last group signal.
+        let term_grace = match reason {
+            StdioTermination::Restart => {
+                sleep(RESTART_DRAIN_GRACE_PERIOD);
+                RESTART_DRAIN_GRACE_PERIOD
+            }
+            StdioTermination::Shutdown => PROCESS_GROUP_TERM_GRACE_PERIOD,
+        };
+        if terminate_process_group(pid)? {
+            // A wrapper may exit before a child handling SIGTERM has released its own endpoint.
+            wait_for_process_group_exit(pid, term_grace);
         }
-        #[cfg(not(any(unix, windows)))]
-        {
-            let _ = process_group_id;
-            Self
-        }
+        cleanup.kill()?;
+        wait_for_process_group_exit(pid, Duration::from_secs(1));
+        Ok(())
     }
 
     #[cfg(unix)]
     fn terminate(&self) {
-        let process_group_id = self.process_group_id;
+        let (process_group_id, discovery) = match self {
+            Self::ProcessGroup(pid) => (*pid, None),
+            Self::DiscoveryLeader { leader, runtime } => {
+                let Some(leader) = leader
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                else {
+                    return;
+                };
+                let Some(pid) = leader.id() else {
+                    return;
+                };
+                (pid, Some((runtime, leader)))
+            }
+        };
         let should_escalate = match terminate_process_group(process_group_id) {
             Ok(exists) => exists,
             Err(error) => {
@@ -428,19 +689,46 @@ impl LocalProcessTerminator {
             }
         };
         if should_escalate {
+            let discovery = discovery.map(|(runtime, leader)| {
+                let on_timeout = KillDiscoveryGroupOnDrop::new(leader);
+                let on_runtime_exit = on_timeout.clone();
+                let (finished, wait) = oneshot::channel::<()>();
+                std::mem::drop(runtime.spawn(async move {
+                    let _ = wait.await;
+                    drop(on_runtime_exit);
+                }));
+                (on_timeout, finished)
+            });
+            // A caller can leave a current-thread runtime idle for the entire grace period.
             spawn(move || {
                 sleep(PROCESS_GROUP_TERM_GRACE_PERIOD);
-                if let Err(error) = kill_process_group(process_group_id) {
-                    warn!("Failed to kill MCP process group {process_group_id}: {error}");
+                if let Some((on_timeout, finished)) = discovery {
+                    drop(on_timeout);
+                    drop(finished);
+                } else {
+                    let _ = kill_process_group_and_warn(process_group_id);
                 }
             });
         }
     }
 
     #[cfg(windows)]
+    fn terminate_discovery(&self, _reason: StdioTermination) -> io::Result<()> {
+        match self {
+            Self::Job {
+                job,
+                discovery_root: Some(root),
+            } => job.terminate_and_wait(root, Duration::from_secs(1)),
+            _ => Err(io::Error::other(
+                "cannot restart an uncontained Windows MCP server",
+            )),
+        }
+    }
+
+    #[cfg(windows)]
     fn terminate(&self) {
         let result = match self {
-            Self::Job(job) => job.terminate(),
+            Self::Job { job, .. } => job.terminate(),
             Self::Process(process_handle) => {
                 codex_utils_pty::JobObject::terminate_process_handle(process_handle)
             }
@@ -448,6 +736,11 @@ impl LocalProcessTerminator {
         if let Err(error) = result {
             warn!("Failed to terminate Windows MCP process: {error}");
         }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn terminate_discovery(&self, _reason: StdioTermination) -> io::Result<()> {
+        Err(io::Error::other("MCP stdio restart is unsupported"))
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -459,55 +752,71 @@ impl StdioServerProcessHandle {
         program_name: String,
         terminator: Option<LocalProcessTerminator>,
         stderr_reader: Option<watch::Sender<()>>,
-    ) -> Self {
-        Self {
-            inner: Arc::new(StdioServerProcessHandleInner {
-                program_name,
-                kind: StdioServerProcessKind::Local(terminator),
-                terminated: AtomicBool::new(false),
-                stderr_reader,
-            }),
-        }
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            program_name,
+            kind: StdioServerProcessKind::Local(terminator),
+            terminated: AtomicBool::new(false),
+            stderr_reader,
+        })
     }
 
-    pub(crate) fn executor(program_name: String, process: Arc<dyn ExecProcess>) -> Self {
-        Self {
-            inner: Arc::new(StdioServerProcessHandleInner {
-                program_name,
-                kind: StdioServerProcessKind::Executor(process),
-                terminated: AtomicBool::new(false),
-                stderr_reader: None,
-            }),
+    pub(crate) fn executor(program_name: String, process: Arc<dyn ExecProcess>) -> Arc<Self> {
+        Arc::new(Self {
+            program_name,
+            kind: StdioServerProcessKind::Executor(process),
+            terminated: AtomicBool::new(false),
+            stderr_reader: None,
+        })
+    }
+
+    fn begin_termination(&self) -> bool {
+        if self.terminated.swap(true, Ordering::AcqRel) {
+            return false;
         }
+        if let Some(stderr_reader) = &self.stderr_reader {
+            stderr_reader.send_replace(());
+        }
+        true
+    }
+
+    fn terminate_discovery(&self, reason: StdioTermination) -> io::Result<()> {
+        if !self.begin_termination() {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "MCP stdio server is already shutting down",
+            ));
+        }
+        let StdioServerProcessKind::Local(Some(terminator)) = &self.kind else {
+            return Err(io::Error::other("missing local MCP discovery process"));
+        };
+        // Stop an uncontained replacement, but don't permit a retry on it.
+        terminator
+            .terminate_discovery(reason)
+            .inspect_err(|_| terminator.terminate())
     }
 
     pub(crate) async fn terminate(&self) -> io::Result<()> {
-        if self.inner.terminated.swap(true, Ordering::AcqRel) {
+        if !self.begin_termination() {
             return Ok(());
         }
-
-        let result = match &self.inner.kind {
+        match &self.kind {
             StdioServerProcessKind::Local(Some(terminator)) => {
                 terminator.terminate();
                 Ok(())
             }
             StdioServerProcessKind::Local(None) => Ok(()),
-            StdioServerProcessKind::Executor(process) => match process.terminate().await {
-                Ok(()) => Ok(()),
-                Err(error) => {
-                    self.inner.terminated.store(false, Ordering::Release);
-                    Err(io::Error::other(error))
-                }
-            },
-        };
-        if let Some(stderr_reader) = &self.inner.stderr_reader {
-            stderr_reader.send_replace(());
+            StdioServerProcessKind::Executor(process) => {
+                process.terminate().await.map_err(|error| {
+                    self.terminated.store(false, Ordering::Release);
+                    io::Error::other(error)
+                })
+            }
         }
-        result
     }
 }
 
-impl Drop for StdioServerProcessHandleInner {
+impl Drop for StdioServerProcessHandle {
     fn drop(&mut self) {
         if self.terminated.swap(true, Ordering::AcqRel) {
             return;
@@ -521,7 +830,7 @@ impl Drop for StdioServerProcessHandleInner {
             StdioServerProcessKind::Executor(process) => {
                 let process = Arc::clone(process);
                 let program_name = self.program_name.clone();
-                let Ok(handle) = tokio::runtime::Handle::try_current() else {
+                let Ok(handle) = Handle::try_current() else {
                     warn!(
                         "Could not schedule remote MCP server process termination on drop ({}): no Tokio runtime is available",
                         self.program_name
@@ -593,7 +902,8 @@ impl ExecutorStdioServerLauncher {
             env,
             env_vars,
             cwd,
-            protocol_mode: _,
+            protocol_mode,
+            replacement_slot: _,
         } = command;
         let Some(cwd) = cwd else {
             return Err(io::Error::other(
@@ -644,6 +954,8 @@ impl ExecutorStdioServerLauncher {
                 program_name,
             )),
             process,
+            discovery_cleanup: None,
+            protocol_mode,
         })
     }
 

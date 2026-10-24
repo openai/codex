@@ -1143,6 +1143,9 @@
             "mcp_2026_07_28": {
               "type": "boolean"
             },
+            "mcp_connection_sharing": {
+              "type": "boolean"
+            },
             "mcp_oauth_refresh_coordination": {
               "type": "boolean"
             },
@@ -7749,6 +7752,9 @@
           "type": "boolean"
         },
         "mcp_2026_07_28": {
+          "type": "boolean"
+        },
+        "mcp_connection_sharing": {
           "type": "boolean"
         },
         "mcp_oauth_refresh_coordination": {

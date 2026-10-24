@@ -124,6 +124,7 @@ impl ManagedFeatures {
         let mut values = self.get().clone();
         for feature in [
             Feature::EnableMcpApps,
+            Feature::McpConnectionSharing,
             Feature::SecretAuthStorage,
             Feature::McpOAuthRefreshCoordination,
         ] {

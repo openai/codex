@@ -12,6 +12,8 @@ pub enum McpProtocolMode {
     Legacy,
     /// Allow the MCP 2026-07-28 discovery and request lifecycle.
     V20260728,
+    /// Probe an eligible local stdio server even when its launch config omits a version.
+    DiscoverLocalStdio,
 }
 
 impl McpProtocolMode {
@@ -19,27 +21,27 @@ impl McpProtocolMode {
     pub fn preferred_protocol_version(self) -> ProtocolVersion {
         match self {
             Self::Legacy => ProtocolVersion::V_2025_06_18,
-            Self::V20260728 => ProtocolVersion::V_2026_07_28,
+            Self::V20260728 | Self::DiscoverLocalStdio => ProtocolVersion::V_2026_07_28,
         }
     }
 
     pub(crate) fn client_lifecycle(self) -> ClientLifecycleMode {
         match self {
             Self::Legacy => ClientLifecycleMode::Initialize,
-            Self::V20260728 => ClientLifecycleMode::Auto {
+            Self::V20260728 | Self::DiscoverLocalStdio => ClientLifecycleMode::Auto {
                 preferred_versions: vec![ProtocolVersion::V_2026_07_28],
                 legacy_version: Some(ProtocolVersion::V_2025_06_18),
             },
         }
     }
 
-    pub(crate) fn stdio_mode(self, requested_version: Option<&OsStr>) -> io::Result<Self> {
+    /// Selects the stdio handshake from the client policy and the server's declared version.
+    pub fn stdio_mode(self, requested_version: Option<&OsStr>) -> io::Result<Self> {
         match (self, requested_version) {
             (Self::Legacy, _) => Ok(Self::Legacy),
-            (_, None) => Ok(Self::Legacy),
-            (Self::V20260728, Some(version)) if version == OsStr::new("2026-07-28") => {
-                Ok(Self::V20260728)
-            }
+            (Self::DiscoverLocalStdio, None) => Ok(Self::DiscoverLocalStdio),
+            (Self::V20260728, None) => Ok(Self::Legacy),
+            (_, Some(version)) if version == OsStr::new("2026-07-28") => Ok(Self::V20260728),
             (_, Some(version)) => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(

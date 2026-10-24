@@ -898,11 +898,11 @@ pub(super) fn legacy_discovery_fallback_response(
 }
 
 fn only_known_legacy_protocol_versions(versions: &[ProtocolVersion]) -> bool {
-    !versions.is_empty()
-        && versions.iter().all(|version| {
-            ProtocolVersion::KNOWN_VERSIONS.contains(version)
-                && version < &ProtocolVersion::V_2026_07_28
-        })
+    !versions.is_empty() && versions.iter().all(is_known_legacy_protocol_version)
+}
+
+pub(super) fn is_known_legacy_protocol_version(version: &ProtocolVersion) -> bool {
+    ProtocolVersion::KNOWN_VERSIONS.contains(version) && version < &ProtocolVersion::V_2026_07_28
 }
 
 fn explicitly_rejects_modern_protocol_version(message: &str) -> bool {

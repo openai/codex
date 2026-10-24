@@ -53,6 +53,7 @@ use crate::binding::PreparedMcpCall;
 use crate::client_tool_catalog::CodexAppsToolSnapshot;
 use crate::connection_manager::BindingCatalogRevision;
 use crate::connection_manager::McpConnectionSet;
+use crate::connection_manager::PreviousMcpConnections;
 use crate::elicitation::ElicitationLifecycle;
 use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::ElicitationReviewerHandle;
@@ -131,12 +132,30 @@ struct PublishedMcpRuntime {
     auth: Option<CodexAuth>,
     auth_token: Option<String>,
     auth_manager: Option<Arc<AuthManager>>,
+    auth_owner: Option<AuthOwner>,
     auth_generation: Arc<()>,
     plugins_available: bool,
     ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
     environment_selections: Arc<[TurnEnvironmentSelection]>,
     ready_environments: HashMap<String, Arc<Environment>>,
     cached_binding: Mutex<Option<CachedMcpBinding>>,
+}
+
+/// The account that owns a private helper across credential refreshes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct AuthOwner {
+    generation: u64,
+    is_fedramp: bool,
+}
+
+impl AuthOwner {
+    fn capture(auth: Option<&CodexAuth>, manager: Option<&AuthManager>) -> Option<Self> {
+        let auth = auth?;
+        Some(Self {
+            generation: manager?.auth_change_state_for(auth)?.owner_generation,
+            is_fedramp: auth.is_fedramp_account(),
+        })
+    }
 }
 
 fn ensure_host_owned_apps_registration(
@@ -242,6 +261,7 @@ impl McpRuntime {
                 auth: None,
                 auth_token: None,
                 auth_manager: None,
+                auth_owner: None,
                 auth_generation: Arc::new(()),
                 plugins_available: false,
                 ready_selected_capability_roots: Vec::new(),
@@ -323,22 +343,18 @@ impl McpRuntime {
 
     /// Reconciles configured servers and publishes their immutable runtime snapshot.
     pub async fn replace(&self, input: McpRuntimeInput) {
-        let current = self.current.load_full();
         let mut reconnect = McpReconnectGuard {
             pending: &self.reconnect_pending,
             claimed: self.reconnect_pending.swap(false, Ordering::AcqRel),
         };
-        self.publish(
-            input,
-            (!reconnect.claimed).then_some(current.connections.as_ref()),
-        )
-        .await;
+        self.publish(input, /*reuse_previous*/ !reconnect.claimed)
+            .await;
         reconnect.claimed = false;
     }
 
     /// Starts fresh connections and returns their complete, refreshed Apps catalog.
     pub async fn replace_fresh(&self, input: McpRuntimeInput) -> anyhow::Result<Vec<ToolInfo>> {
-        self.publish(input, /*previous*/ None).await;
+        self.publish(input, /*reuse_previous*/ false).await;
         self.latest_hard_refresh_codex_apps_tools_cache().await
     }
 
@@ -357,7 +373,7 @@ impl McpRuntime {
         }
     }
 
-    async fn publish(&self, input: McpRuntimeInput, previous: Option<&McpConnectionSet>) {
+    async fn publish(&self, input: McpRuntimeInput, reuse_previous: bool) {
         let current = self.current.load_full();
         let retain_ema = current.config.is_some();
         let ema_auth = (input.config.xaa_enabled
@@ -382,7 +398,21 @@ impl McpRuntime {
         let auth = input.auth.clone();
         let auth_manager = input.auth_manager.clone();
         let auth_token = auth.as_ref().and_then(|auth| auth.get_token().ok());
-        let auth_generation = if current.auth_matches(auth.as_ref()) {
+        let auth_matches = current.auth_matches(auth.as_ref());
+        let auth_owner = AuthOwner::capture(auth.as_ref(), auth_manager.as_deref());
+        let same_owner = match (current.auth_owner, auth_owner) {
+            (Some(previous), Some(next)) => {
+                previous == next
+                    && current
+                        .auth_manager
+                        .as_ref()
+                        .zip(auth_manager.as_ref())
+                        .is_some_and(|(previous, next)| Arc::ptr_eq(previous, next))
+            }
+            (None, None) => auth_matches,
+            _ => false,
+        };
+        let auth_generation = if auth_matches {
             Arc::clone(&current.auth_generation)
         } else {
             Arc::new(())
@@ -395,7 +425,10 @@ impl McpRuntime {
             McpConnectionSet::new(
                 ema_auth,
                 retain_ema.then_some(current.connections.as_ref()),
-                previous,
+                reuse_previous.then_some(PreviousMcpConnections {
+                    connections: &current.connections,
+                    same_owner,
+                }),
                 publication_gate,
                 input,
                 self.elicitation_router.clone(),
@@ -421,6 +454,7 @@ impl McpRuntime {
             auth,
             auth_token,
             auth_manager,
+            auth_owner,
             auth_generation,
             plugins_available,
             ready_selected_capability_roots,
@@ -1129,6 +1163,7 @@ mod tests {
             auth: None,
             auth_token: None,
             auth_manager: None,
+            auth_owner: None,
             auth_generation: Arc::new(()),
             plugins_available: false,
             ready_selected_capability_roots: Vec::new(),
@@ -1204,6 +1239,7 @@ mod tests {
             auth: None,
             auth_token: None,
             auth_manager: None,
+            auth_owner: None,
             auth_generation: Arc::new(()),
             plugins_available: false,
             ready_selected_capability_roots: Vec::new(),

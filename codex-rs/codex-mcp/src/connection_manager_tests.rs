@@ -148,6 +148,7 @@ impl McpConnectionSet {
                     client,
                     startup_timeout: DEFAULT_STARTUP_TIMEOUT,
                     startup_trigger: None,
+                    legacy_fallback: None,
                     _diagnostics_guard: LIVE_CONNECTIONS.track(),
                 }),
                 metadata: McpServerMetadata {
@@ -617,6 +618,7 @@ async fn connection_statuses_observe_clients_without_starting_them() {
                 error: "broken".to_string(),
                 is_authentication_required: false,
                 is_ema_authentication_required: false,
+                shutdown: None,
             },
         ),
         (
@@ -625,6 +627,7 @@ async fn connection_statuses_observe_clients_without_starting_them() {
                 error: "login".to_string(),
                 is_authentication_required: true,
                 is_ema_authentication_required: false,
+                shutdown: None,
             },
         ),
         (
@@ -700,6 +703,7 @@ async fn connection_statuses_follow_latest_reconnect_outcome() {
                         error: "retry failed".to_string(),
                         is_authentication_required: attempt == 0,
                         is_ema_authentication_required: false,
+                        shutdown: None,
                     }),
                     _ => Ok(recovered),
                 }
@@ -866,6 +870,7 @@ fn create_test_manager_with_failed_apps_startup(
         error: "startup failed".to_string(),
         is_authentication_required: false,
         is_ema_authentication_required: false,
+        shutdown: None,
     }))
     .boxed()
     .shared();
@@ -3194,6 +3199,7 @@ async fn stable_catalog_revisions_ignore_terminal_optional_server_failures() {
             error: "optional startup failed".to_string(),
             is_authentication_required: false,
             is_ema_authentication_required: false,
+            shutdown: None,
         },
     ))
     .boxed()
@@ -3397,8 +3403,10 @@ async fn capture_binding_uses_cache_published_during_optional_startup() {
     let server_config: McpServerConfig =
         serde_json::from_value(serde_json::json!({ "command": "pending-mcp" }))
             .expect("server configuration");
-    let cache_context = McpToolCatalogCache::default()
-        .context(
+    let cache = McpToolCatalogCache::default();
+    let identity = reusable_server_identity("pending", &server_config, &runtime_context);
+    let catalog = |mode| {
+        cache.context(
             "pending",
             &server_config,
             &runtime_context,
@@ -3407,9 +3415,17 @@ async fn capture_binding_uses_cache_published_during_optional_startup() {
                 &ElicitationCapability::default(),
                 &ClientMcpExtensions::default(),
             ),
-            /*connection_identity*/ None,
+            Some((&identity, mode, /*agent_plugin*/ false)),
         )
-        .expect("shared catalog");
+    };
+    let legacy = catalog(McpProtocolMode::Legacy).expect("legacy catalog");
+    legacy.publish_if_newest(
+        legacy.begin_fetch(),
+        &[create_test_tool("pending", "legacy_tool")],
+        /*meta*/ None,
+    );
+    assert!(catalog(McpProtocolMode::DiscoverLocalStdio).is_none());
+    let cache_context = catalog(McpProtocolMode::V20260728).expect("modern catalog");
     let (mut client, started, _release) = create_gated_async_managed_client(
         create_test_managed_client(vec![create_test_tool("pending", "live_tool")]).await,
     );
@@ -3427,7 +3443,7 @@ async fn capture_binding_uses_cache_published_during_optional_startup() {
     assert!(futures::poll!(&mut binding).is_pending());
     started
         .await
-        .expect("optional startup began without a cache");
+        .expect("a catalog from the legacy handshake cannot satisfy discovery");
     cache_context.publish_if_newest(
         cache_context.begin_fetch(),
         &[create_test_tool("pending", "peer_tool")],
@@ -4144,6 +4160,7 @@ async fn list_all_tools_uses_shared_codex_apps_cache_when_client_startup_fails()
             error: "startup failed".to_string(),
             is_authentication_required: false,
             is_ema_authentication_required: false,
+            shutdown: None,
         },
     ))
     .boxed()
@@ -4304,6 +4321,7 @@ async fn later_tool_list_retries_after_failed_reconnect_and_keeps_cached_tools()
                     error: "recreated startup failed".to_string(),
                     is_authentication_required: false,
                     is_ema_authentication_required: false,
+                    shutdown: None,
                 })
             } else {
                 Ok(recovered_client)
@@ -5110,6 +5128,7 @@ fn mcp_init_error_display_prompts_for_login_when_auth_required() {
             error: "OAuth refresh token was rejected: invalid_grant".to_string(),
             is_authentication_required: true,
             is_ema_authentication_required: false,
+            shutdown: None,
         },
     ] {
         let display = mcp_init_error_display(
@@ -5142,6 +5161,7 @@ fn mcp_init_error_display_identifies_oauth_reauthentication() {
         error: "authorization required: Bearer error=\"invalid_token\"".to_string(),
         is_authentication_required: true,
         is_ema_authentication_required: false,
+        shutdown: None,
     };
     let executor_config: McpServerConfig = serde_json::from_value(serde_json::json!({
         "url": "https://example.com/mcp",
@@ -5206,6 +5226,7 @@ fn mcp_startup_failure_reason_requires_existing_oauth_and_auth_failure() {
             error: "startup failed".to_string(),
             is_authentication_required,
             is_ema_authentication_required: false,
+            shutdown: None,
         };
 
         assert_eq!(
@@ -5388,6 +5409,7 @@ async fn manager_with_reusable_ready_server(
                     .startup_timeout_sec
                     .unwrap_or(DEFAULT_STARTUP_TIMEOUT),
                 startup_trigger: None,
+                legacy_fallback: None,
                 _diagnostics_guard: LIVE_CONNECTIONS.track(),
             }),
             metadata: McpServerMetadata::from(&server),
@@ -5426,7 +5448,10 @@ async fn reconcile_reusable_server_with_mcp_config(
     McpConnectionSet::new(
         /*ema_auth*/ None,
         /*existing_ema*/ None,
-        Some(previous),
+        Some(PreviousMcpConnections {
+            connections: previous,
+            same_owner: true,
+        }),
         McpPublicationGate::already_published(),
         McpRuntimeInput {
             network_policy_metadata: None,
@@ -5839,6 +5864,7 @@ async fn reconciliation_reuses_connection_without_relisting_regular_tools() -> a
                     .startup_timeout_sec
                     .unwrap_or(DEFAULT_STARTUP_TIMEOUT),
                 startup_trigger: None,
+                legacy_fallback: None,
                 _diagnostics_guard: LIVE_CONNECTIONS.track(),
             }),
             metadata: McpServerMetadata::from(&server),
@@ -6129,6 +6155,7 @@ async fn reconciliation_retries_non_oauth_authentication_failures() {
         error: "bearer token rejected".to_string(),
         is_authentication_required: true,
         is_ema_authentication_required: false,
+        shutdown: None,
     }))
     .boxed()
     .shared();
@@ -6389,7 +6416,10 @@ async fn reconciliation_replaces_connection_when_protocol_mode_changes() {
     let reconciled = McpConnectionSet::new(
         /*ema_auth*/ None,
         /*existing_ema*/ None,
-        Some(&previous),
+        Some(PreviousMcpConnections {
+            connections: &previous,
+            same_owner: true,
+        }),
         McpPublicationGate::already_published(),
         McpRuntimeInput {
             network_policy_metadata: None,
@@ -6450,7 +6480,10 @@ async fn reconciliation_reuses_legacy_stdio_server_when_modern_protocol_is_enabl
     let reconciled = McpConnectionSet::new(
         /*ema_auth*/ None,
         /*existing_ema*/ None,
-        Some(&previous),
+        Some(PreviousMcpConnections {
+            connections: &previous,
+            same_owner: true,
+        }),
         McpPublicationGate::already_published(),
         McpRuntimeInput {
             network_policy_metadata: None,
@@ -6667,6 +6700,7 @@ async fn reconciliation_replaces_closed_connections() -> anyhow::Result<()> {
             .startup_timeout_sec
             .unwrap_or(DEFAULT_STARTUP_TIMEOUT),
         startup_trigger: None,
+        legacy_fallback: None,
         _diagnostics_guard: LIVE_CONNECTIONS.track(),
     });
 
