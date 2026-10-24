@@ -90,6 +90,7 @@ async fn post_tool_use_payload_uses_patch_input_and_tool_output() {
     assert_eq!(
         handler.post_tool_use_payload(&invocation, &output),
         Some(PostToolUsePayload {
+            tool_cwd: None,
             tool_name: HookToolName::apply_patch(),
             tool_use_id: "call-apply-patch".to_string(),
             tool_input: json!({ "command": patch }),

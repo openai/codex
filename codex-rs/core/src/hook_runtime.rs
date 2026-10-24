@@ -71,6 +71,7 @@ use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::state::TurnState;
 use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::PostToolUsePayload;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::turn_metadata::ExecutionMetadata;
 
@@ -281,6 +282,7 @@ pub(crate) async fn run_permission_request_hooks(
         turn_id: turn_context.sub_id.clone(),
         subagent: thread_spawn_subagent_hook_context(sess, turn_context),
         cwd: tool_hook_cwd(review_context.environments(), turn_context).to_path_buf(),
+        tool_cwd: payload.tool_cwd,
         transcript_path: sess.hook_transcript_path().await,
         model: review_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(review_context.approval_policy),
@@ -309,19 +311,13 @@ pub(crate) async fn run_permission_request_hooks(
 
 /// Runs matching `PostToolUse` hooks after a tool has produced a successful output.
 ///
-/// The `tool_name`, matcher aliases, `tool_input`, and `tool_response` values are
-/// already adapted by the tool handler into the stable hook contract. Passing
+/// The payload is already adapted by the tool handler into the stable hook contract. Passing
 /// raw internal tool data here would leak implementation details into user hook
 /// matchers and hook logs.
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_post_tool_use_hooks(
     sess: &Arc<Session>,
     step_context: &StepContext,
-    tool_use_id: String,
-    tool_name: String,
-    matcher_aliases: Vec<String>,
-    tool_input: Value,
-    tool_response: Value,
+    payload: PostToolUsePayload,
     target_environments: &[&str],
 ) -> PostToolUseOutcome {
     let turn_context = &step_context.turn;
@@ -330,14 +326,15 @@ pub(crate) async fn run_post_tool_use_hooks(
         turn_id: turn_context.sub_id.clone(),
         subagent: thread_spawn_subagent_hook_context(sess, turn_context),
         cwd: tool_hook_cwd(&step_context.environments, turn_context),
+        tool_cwd: payload.tool_cwd,
         transcript_path: sess.hook_transcript_path().await,
         model: step_context.settings.model_info.slug.clone(),
         permission_mode: hook_permission_mode(step_context.settings.approval_policy()),
-        tool_name,
-        matcher_aliases,
-        tool_use_id,
-        tool_input,
-        tool_response,
+        tool_name: payload.tool_name.name().to_string(),
+        matcher_aliases: payload.tool_name.matcher_aliases().to_vec(),
+        tool_use_id: payload.tool_use_id,
+        tool_input: payload.tool_input,
+        tool_response: payload.tool_response,
     };
     let hooks = with_tool_environment_hooks(
         sess,

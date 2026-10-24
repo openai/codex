@@ -47,6 +47,7 @@ fn messaging_result(name: &str, input: Value, success: bool) -> AnyToolResult {
             Some(success),
         )),
         post_tool_use_payload: Some(PostToolUsePayload {
+            tool_cwd: None,
             tool_name: HookToolName::new(name),
             tool_use_id: "message-call".to_owned(),
             tool_input: input,

@@ -129,10 +129,11 @@ pub(crate) use super::approvals::ApprovalAction;
 pub(crate) struct PermissionRequestPayload {
     pub tool_name: HookToolName,
     pub tool_input: serde_json::Value,
+    pub tool_cwd: Option<PathUri>,
 }
 
 impl PermissionRequestPayload {
-    pub(crate) fn bash(command: String, description: Option<String>) -> Self {
+    pub(crate) fn bash(command: String, description: Option<String>, cwd: PathUri) -> Self {
         let mut tool_input = serde_json::Map::new();
         tool_input.insert("command".to_string(), serde_json::Value::String(command));
         if let Some(description) = description {
@@ -145,6 +146,7 @@ impl PermissionRequestPayload {
         Self {
             tool_name: HookToolName::bash(),
             tool_input: serde_json::Value::Object(tool_input),
+            tool_cwd: Some(cwd),
         }
     }
 }

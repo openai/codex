@@ -166,12 +166,17 @@ impl ApprovalAction {
     }
 
     pub(crate) fn permission_request_payload(&self) -> PermissionRequestPayload {
-        match self {
+        let mut payload = match self {
             Self::ExecCommand {
                 hook_command,
                 justification,
+                cwd,
                 ..
-            } => PermissionRequestPayload::bash(hook_command.clone(), justification.clone()),
+            } => PermissionRequestPayload::bash(
+                hook_command.clone(),
+                justification.clone(),
+                cwd.clone(),
+            ),
             Self::WriteStdin {
                 id,
                 approval_id,
@@ -185,6 +190,7 @@ impl ApprovalAction {
                 additional_permissions_preapproved: _,
             } => PermissionRequestPayload {
                 tool_name: HookToolName::new("write_stdin"),
+                tool_cwd: Some(cwd.clone()),
                 tool_input: serde_json::json!({
                     "session_id": process_id,
                     "chars": input,
@@ -199,6 +205,7 @@ impl ApprovalAction {
             },
             Self::ApplyPatch { patch, .. } => PermissionRequestPayload {
                 tool_name: HookToolName::apply_patch(),
+                tool_cwd: None,
                 tool_input: serde_json::json!({ "command": patch }),
             },
             Self::McpToolCall {
@@ -207,6 +214,7 @@ impl ApprovalAction {
                 ..
             } => PermissionRequestPayload {
                 tool_name: hook_tool_name.clone(),
+                tool_cwd: None,
                 tool_input: arguments
                     .clone()
                     .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
@@ -214,10 +222,16 @@ impl ApprovalAction {
             Self::NetworkAccess {
                 hook_command,
                 target,
+                cwd,
+                trigger,
                 ..
             } => PermissionRequestPayload::bash(
                 hook_command.clone(),
                 Some(format!("network-access {target}")),
+                trigger.as_ref().map_or_else(
+                    || PathUri::from_abs_path(cwd),
+                    |trigger| trigger.cwd.clone(),
+                ),
             ),
             Self::RequestPermissions {
                 reason,
@@ -225,12 +239,25 @@ impl ApprovalAction {
                 ..
             } => PermissionRequestPayload {
                 tool_name: HookToolName::new("request_permissions"),
+                tool_cwd: None,
                 tool_input: serde_json::json!({
                     "reason": reason,
                     "permissions": permissions,
                 }),
             },
+        };
+        // Command hooks run on the host. Keep remote paths in the action's
+        // original tool input, but never use them as the hook's top-level cwd.
+        if matches!(
+            self,
+            Self::ExecCommand { environment_id, .. }
+                | Self::WriteStdin { environment_id, .. }
+                | Self::NetworkAccess { environment_id, .. }
+                if environment_id != codex_exec_server::LOCAL_ENVIRONMENT_ID
+        ) {
+            payload.tool_cwd = None;
         }
+        payload
     }
 
     pub(crate) fn cache_keys(&self) -> Vec<ApprovalCacheKey> {

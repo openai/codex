@@ -139,6 +139,7 @@ fn post_unified_exec_tool_use_payload(
     let tool_use_id = result.post_tool_use_id(&invocation.call_id);
     let tool_response = result.post_tool_use_response(&tool_use_id, &invocation.payload)?;
     Some(PostToolUsePayload {
+        tool_cwd: result.post_tool_use_cwd(),
         tool_name: HookToolName::bash(),
         tool_use_id,
         tool_input,

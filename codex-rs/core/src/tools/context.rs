@@ -20,6 +20,7 @@ use codex_utils_audio::estimate_audio_token_count;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_function_output_payload;
 use codex_utils_output_truncation::with_serialization_allowance;
+use codex_utils_path_uri::PathUri;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
@@ -429,6 +430,9 @@ pub struct ExecCommandToolOutput {
     pub exit_code: Option<i32>,
     pub original_token_count: Option<usize>,
     pub hook_command: Option<String>,
+    /// Local execution cwd retained for PostToolUse, independent of the collecting
+    /// turn. Remote commands leave this unset to retain the host hook cwd.
+    pub tool_cwd: Option<PathUri>,
 }
 
 impl ToolOutput for ExecCommandToolOutput {
@@ -467,6 +471,10 @@ impl ToolOutput for ExecCommandToolOutput {
         self.hook_command
             .as_ref()
             .map(|command| serde_json::json!({ "command": command }))
+    }
+
+    fn post_tool_use_cwd(&self) -> Option<PathUri> {
+        self.tool_cwd.clone()
     }
 
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {

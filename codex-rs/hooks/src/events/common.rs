@@ -1,9 +1,12 @@
+use std::path::Path;
+
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_utils_path_uri::PathUri;
 
 use crate::engine::ConfiguredHandler;
 use crate::engine::HandlerSourcePath;
@@ -16,6 +19,13 @@ use codex_protocol::models::ContentItemMetadata;
 pub struct SubagentHookContext {
     pub agent_id: String,
     pub agent_type: String,
+}
+
+pub(crate) fn command_input_cwd(cwd: &Path, tool_cwd: Option<&PathUri>) -> String {
+    tool_cwd.map_or_else(
+        || cwd.display().to_string(),
+        PathUri::inferred_native_path_string,
+    )
 }
 
 pub(crate) fn join_text_chunks(chunks: Vec<String>) -> Option<String> {

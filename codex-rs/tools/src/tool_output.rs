@@ -3,6 +3,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseInputItem;
+use codex_utils_path_uri::PathUri;
 use serde_json::Value as JsonValue;
 
 use crate::ToolPayload;
@@ -38,6 +39,13 @@ pub trait ToolOutput: Send {
     /// Returns the tool call id exposed to `PostToolUse` hooks for this output.
     fn post_tool_use_id(&self, call_id: &str) -> String {
         call_id.to_string()
+    }
+
+    /// Returns the original local execution cwd for hook input, including delayed
+    /// results. Remote commands return `None` to retain the host hook cwd.
+    /// This does not change the local directory used to launch the hook process.
+    fn post_tool_use_cwd(&self) -> Option<PathUri> {
+        None
     }
 
     /// Returns the tool input exposed to `PostToolUse` hooks for this output.
@@ -96,6 +104,10 @@ where
 
     fn post_tool_use_id(&self, call_id: &str) -> String {
         (**self).post_tool_use_id(call_id)
+    }
+
+    fn post_tool_use_cwd(&self) -> Option<PathUri> {
+        (**self).post_tool_use_cwd()
     }
 
     fn post_tool_use_input(&self, payload: &ToolPayload) -> Option<JsonValue> {

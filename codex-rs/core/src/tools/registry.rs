@@ -141,6 +141,7 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         };
 
         Some(PostToolUsePayload {
+            tool_cwd: result.post_tool_use_cwd(),
             tool_name: function_hook_tool_name(invocation),
             tool_use_id: result.post_tool_use_id(&invocation.call_id),
             tool_input: result
@@ -375,6 +376,8 @@ pub(crate) struct PreToolUsePayload {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PostToolUsePayload {
+    /// Local execution cwd used by hook input; remote tools retain the host fallback.
+    pub(crate) tool_cwd: Option<PathUri>,
     /// Hook-facing tool name model.
     ///
     /// The canonical name is serialized to hook stdin, while aliases are used
@@ -934,11 +937,7 @@ impl ToolRegistry {
                 run_post_tool_use_hooks(
                     &invocation.session,
                     invocation.step_context.as_ref(),
-                    post_tool_use_payload.tool_use_id,
-                    post_tool_use_payload.tool_name.name().to_string(),
-                    post_tool_use_payload.tool_name.matcher_aliases().to_vec(),
-                    post_tool_use_payload.tool_input,
-                    post_tool_use_payload.tool_response,
+                    post_tool_use_payload,
                     &invocation.environments.hook_ids(),
                 )
                 .or_cancel_tool(&cancellation_token)

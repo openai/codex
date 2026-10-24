@@ -21,9 +21,14 @@ use std::collections::HashMap;
 #[test]
 fn bash_permission_request_payload_omits_missing_description() {
     assert_eq!(
-        PermissionRequestPayload::bash("echo hi".to_string(), /*description*/ None),
+        PermissionRequestPayload::bash(
+            "echo hi".to_string(),
+            /*description*/ None,
+            PathUri::parse("file:///repo-B").unwrap()
+        ),
         PermissionRequestPayload {
             tool_name: HookToolName::bash(),
+            tool_cwd: Some(PathUri::parse("file:///repo-B").unwrap()),
             tool_input: json!({ "command": "echo hi" }),
         }
     );
@@ -35,9 +40,11 @@ fn bash_permission_request_payload_includes_description_when_present() {
         PermissionRequestPayload::bash(
             "echo hi".to_string(),
             Some("network-access example.com".to_string()),
+            PathUri::parse("file:///repo-B").unwrap(),
         ),
         PermissionRequestPayload {
             tool_name: HookToolName::bash(),
+            tool_cwd: Some(PathUri::parse("file:///repo-B").unwrap()),
             tool_input: json!({
                 "command": "echo hi",
                 "description": "network-access example.com",

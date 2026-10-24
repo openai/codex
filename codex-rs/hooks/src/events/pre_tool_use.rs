@@ -186,10 +186,7 @@ fn command_input(request: &PreToolUseRequest) -> Result<Value, serde_json::Error
         agent_id: subagent.agent_id,
         agent_type: subagent.agent_type,
         transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
-        cwd: request.tool_cwd.as_ref().map_or_else(
-            || request.cwd.display().to_string(),
-            PathUri::inferred_native_path_string,
-        ),
+        cwd: common::command_input_cwd(request.cwd.as_ref(), request.tool_cwd.as_ref()),
         hook_event_name: "PreToolUse".to_string(),
         model: request.model.clone(),
         permission_mode: request.permission_mode.clone(),

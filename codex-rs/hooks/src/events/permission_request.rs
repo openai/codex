@@ -30,6 +30,7 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_utils_path_uri::PathUri;
 use serde_json::Value;
 
 #[derive(Debug, Clone)]
@@ -38,6 +39,9 @@ pub struct PermissionRequestRequest {
     pub turn_id: String,
     pub subagent: Option<common::SubagentHookContext>,
     pub cwd: PathBuf,
+    /// Local approval action cwd for hook stdin. Remote commands leave this unset
+    /// to retain the host cwd. The hook process still runs in `cwd`.
+    pub tool_cwd: Option<PathUri>,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
     pub permission_mode: String,
@@ -176,7 +180,7 @@ fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestC
         agent_id: subagent.agent_id,
         agent_type: subagent.agent_type,
         transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
-        cwd: request.cwd.display().to_string(),
+        cwd: common::command_input_cwd(request.cwd.as_ref(), request.tool_cwd.as_ref()),
         hook_event_name: "PermissionRequest".to_string(),
         model: request.model.clone(),
         permission_mode: request.permission_mode.clone(),
@@ -303,6 +307,37 @@ mod tests {
 
     use super::PermissionRequestDecision;
     use super::resolve_permission_request_decision;
+
+    #[test]
+    fn command_input_uses_approval_cwd_path_convention() {
+        let mut request = super::PermissionRequestRequest {
+            session_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-1".into(),
+            subagent: None,
+            cwd: codex_utils_absolute_path::test_support::test_path_buf("/local"),
+            tool_cwd: None,
+            transcript_path: None,
+            model: "test".into(),
+            permission_mode: "default".into(),
+            tool_name: "Bash".into(),
+            matcher_aliases: Vec::new(),
+            run_id_suffix: "call-cwd".into(),
+            tool_input: serde_json::json!({"command": "pwd"}),
+        };
+        let original: serde_json::Value =
+            serde_json::to_value(super::build_command_input(&request)).unwrap();
+        for (uri, expected) in [
+            ("file:///repo-B", "/repo-B"),
+            ("file:///C:/repo-B", r"C:\repo-B"),
+        ] {
+            request.tool_cwd = Some(codex_utils_path_uri::PathUri::parse(uri).unwrap());
+            let actual: serde_json::Value =
+                serde_json::to_value(super::build_command_input(&request)).unwrap();
+            let mut expected_input = original.clone();
+            expected_input["cwd"] = serde_json::json!(expected);
+            assert_eq!(actual, expected_input);
+        }
+    }
 
     #[test]
     fn permission_request_deny_overrides_earlier_allow() {

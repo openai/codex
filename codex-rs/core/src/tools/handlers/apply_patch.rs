@@ -449,6 +449,7 @@ impl CoreToolRuntime for ApplyPatchHandler {
         let tool_response =
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
+            tool_cwd: result.post_tool_use_cwd(),
             tool_name: HookToolName::apply_patch(),
             tool_use_id: invocation.call_id.clone(),
             tool_input: serde_json::json!({

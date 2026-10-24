@@ -212,6 +212,7 @@ async fn exec_command_with_tty(
         exit_code,
         original_token_count: Some(original_token_count),
         hook_command: Some(cmd.to_string()),
+        tool_cwd: None,
     })
 }
 

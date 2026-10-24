@@ -545,6 +545,7 @@ impl CoreToolRuntime for McpHandler {
         let tool_response =
             result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
+            tool_cwd: result.post_tool_use_cwd(),
             tool_name: self.hook_tool_name(),
             tool_use_id: invocation.call_id.clone(),
             tool_input: result.post_tool_use_input(&invocation.payload)?,
@@ -834,6 +835,7 @@ mod tests {
         assert_eq!(
             handler.post_tool_use_payload(&invocation, &output),
             Some(PostToolUsePayload {
+                tool_cwd: None,
                 tool_name: HookToolName::new("mcp__filesystem__read_file"),
                 tool_use_id: "call-mcp-post".to_string(),
                 tool_input: json!({

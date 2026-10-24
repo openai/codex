@@ -3441,7 +3441,7 @@ mode = "limited"
 allow_local_binding = true
 "#,
     )?;
-    let args = serde_json::json!({ "cmd": command });
+    let args = serde_json::json!({ "cmd": command, "workdir": "network-workdir" });
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -3472,6 +3472,14 @@ allow_local_binding = true
                 hook_reason,
             )
             .expect("failed to write permission request hook test fixture");
+            let script_path = home.join("permission_request_hook.py");
+            let script = fs::read_to_string(&script_path)
+                .expect("read permission request hook script")
+                .replace(
+                    "payload = json.load(sys.stdin)",
+                    "payload = json.load(sys.stdin)\npayload['process_cwd'] = str(Path.cwd())",
+                );
+            fs::write(script_path, script).expect("record network hook process cwd");
         })
         .with_cloud_config_bundle(
             CloudConfigBundleFixture::loader_with_enterprise_requirement(
@@ -3495,6 +3503,8 @@ review_domains = ["codex-network-test.invalid"]
         })
         .build(&server)
         .await?;
+    let execution_cwd = test.workspace_path_uri("network-workdir")?;
+    fs::create_dir(execution_cwd.to_abs_path()?).context("create network command workdir")?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "run the shell command after the network permission hook",
@@ -3531,11 +3541,21 @@ review_domains = ["codex-network-test.invalid"]
         );
     }
 
-    assert_single_permission_request_hook_input(
+    let hook_inputs = assert_single_permission_request_hook_input(
         test.codex_home_path(),
         command,
         Some("network-access http://codex-network-test.invalid:80"),
     )?;
+    assert_eq!(
+        json!({
+            "cwd": hook_inputs[0]["cwd"],
+            "process_cwd": hook_inputs[0]["process_cwd"],
+        }),
+        json!({
+            "cwd": execution_cwd.inferred_native_path_string(),
+            "process_cwd": dunce::canonicalize(&test.config.cwd)?.to_string_lossy(),
+        }),
+    );
     let requests = responses.requests();
     assert_eq!(
         requests

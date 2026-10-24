@@ -377,6 +377,7 @@ impl ExecCommandHandler {
                 exit_code: None,
                 original_token_count: None,
                 hook_command: None,
+                tool_cwd: None,
             }));
         }
 
@@ -399,7 +400,7 @@ impl ExecCommandHandler {
             process_id,
             yield_time_ms,
             max_output_tokens,
-            cwd,
+            cwd: cwd.clone(),
             sandbox_cwd: turn_environment.cwd().clone(),
             turn_environment: turn_environment.clone(),
             network: context.step_context.turn.network.clone(),
@@ -445,6 +446,7 @@ impl ExecCommandHandler {
                     exit_code: Some(output.exit_code),
                     original_token_count: Some(original_token_count),
                     hook_command: Some(hook_command),
+                    tool_cwd: (!turn_environment.environment.is_remote()).then_some(cwd),
                 }))
             }
             Err(err) => {

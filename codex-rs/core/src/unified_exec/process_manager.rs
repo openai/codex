@@ -266,6 +266,7 @@ struct PreparedProcessHandles {
     network_approval: Option<DeferredNetworkApproval>,
     call_id: String,
     hook_command: String,
+    tool_cwd: Option<PathUri>,
     process_id: i32,
     tty: bool,
 }
@@ -874,6 +875,8 @@ impl UnifiedExecProcessManager {
             exit_code,
             original_token_count: Some(original_token_count),
             hook_command: Some(request.hook_command.clone()),
+            tool_cwd: (!request.turn_environment.environment.is_remote())
+                .then(|| request.cwd.clone()),
         };
 
         Ok(response)
@@ -996,6 +999,7 @@ impl UnifiedExecProcessManager {
             network_approval,
             call_id,
             hook_command,
+            tool_cwd,
             process_id,
             tty,
             ..
@@ -1126,6 +1130,7 @@ impl UnifiedExecProcessManager {
             exit_code,
             original_token_count: Some(original_token_count),
             hook_command: Some(hook_command),
+            tool_cwd,
         };
 
         let should_emit_interaction = !request.input.is_empty() || response.process_id.is_some();
@@ -1230,6 +1235,10 @@ impl UnifiedExecProcessManager {
             network_approval: entry.network_approval.clone(),
             call_id: entry.call_id.clone(),
             hook_command: entry.hook_command.clone(),
+            // Capture the original process's locality before it can be removed
+            // from the store. A later turn may select a different environment.
+            tool_cwd: (entry.environment_id == codex_exec_server::LOCAL_ENVIRONMENT_ID)
+                .then(|| entry.cwd.clone()),
             process_id: entry.process_id,
             tty: entry.tty,
         })
