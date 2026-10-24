@@ -52,17 +52,45 @@ pub(crate) fn decide_approval(
 ) -> futures::future::BoxFuture<'static, Option<ReviewDecision>> {
     let context: GuardianReviewContext = context.into();
     let request: ReviewAction = request.into();
-    // Invalidate before scheduling: cancellation may finalize the turn before
-    // the review future is first polled. Replace this boundary with attribution.
-    if context
+    // Bind the invocation before scheduling. Async review cleanup can outlive
+    // the decision, but must not extend the time blocking this tool.
+    let review_timing = if context
         .turn()
         .config
         .features
         .enabled(codex_features::Feature::CriticalPathTiming)
     {
-        context.turn().turn_timing_state.invalidate_critical_path();
-    }
+        // Network display identity differs from its owning tool invocation. Keep
+        // timing correlation separate from the reviewer's existing provenance.
+        let timing_call_id = match &request.request {
+            Ok(GuardianApprovalRequest::NetworkAccess { trigger, .. }) => {
+                trigger.as_ref().map(|trigger| trigger.call_id.as_str())
+            }
+            Ok(
+                GuardianApprovalRequest::ExecCommand { .. }
+                | GuardianApprovalRequest::WriteStdin { .. }
+                | GuardianApprovalRequest::ApplyPatch { .. }
+                | GuardianApprovalRequest::McpToolCall { .. }
+                | GuardianApprovalRequest::RequestPermissions { .. },
+            )
+            | Err(_) => request.tool_call_id.as_deref(),
+        };
+        let timing = timing_call_id.and_then(|call_id| {
+            context
+                .turn()
+                .turn_timing_state
+                .direct_tool_timings
+                .start_review_for_turn(call_id, &context.turn().sub_id)
+        });
+        if timing.is_none() {
+            context.turn().turn_timing_state.invalidate_critical_path();
+        }
+        timing
+    } else {
+        None
+    };
     Box::pin(async move {
+        let _review_timing = review_timing;
         let (_, history_reset) = session.history_reset().await;
         let cancellation = match options.external_cancel.take() {
             Some(external) => crate::exec::cancel_when_either(external, history_reset.clone()),

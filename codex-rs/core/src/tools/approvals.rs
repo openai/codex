@@ -752,6 +752,7 @@ impl Session {
                         ExecApprovalKind::Command,
                         ctx.review_context.model_context(),
                         ctx.call_id.clone(),
+                        Some(&ctx.call_id),
                         /*approval_id*/ None,
                         Some(environment_id.clone()),
                         command.clone(),
@@ -782,6 +783,7 @@ impl Session {
                     ExecApprovalKind::WriteStdin,
                     ctx.review_context.model_context(),
                     id.clone(),
+                    Some(&ctx.call_id),
                     Some(approval_id.clone()),
                     Some(environment_id.clone()),
                     vec![
@@ -852,6 +854,7 @@ impl Session {
                 environment_id,
                 command,
                 cwd,
+                trigger,
                 ..
             } => {
                 self.request_command_approval(
@@ -859,6 +862,7 @@ impl Session {
                     ExecApprovalKind::Command,
                     ctx.review_context.model_context(),
                     ctx.call_id.clone(),
+                    trigger.as_ref().map(|trigger| trigger.call_id.as_str()),
                     /*approval_id*/ None,
                     Some(environment_id.clone()),
                     command.clone(),

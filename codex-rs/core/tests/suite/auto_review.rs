@@ -160,7 +160,10 @@ async fn approval_review_contributor_skips_existing_guardian_model_call() -> Res
     let observe = codex_core::test_support::observe_turn_timing(&test.codex)
         .await
         .expect("active turn");
-    let now = std::time::Instant::now();
+    let review_start = std::time::Instant::now();
+    tokio::task::yield_now().await;
+    let review_end = std::time::Instant::now();
+    assert!(review_end > review_start);
     reviewer.release.add_permits(/* n */ 1);
 
     loop {
@@ -176,7 +179,16 @@ async fn approval_review_contributor_skips_existing_guardian_model_call() -> Res
         }
     }
 
-    assert_eq!(observe(now, now), None);
+    assert_eq!(
+        observe(review_start, review_end),
+        Some([
+            Duration::ZERO,
+            review_end.duration_since(review_start),
+            Duration::ZERO,
+            Duration::ZERO,
+            Duration::ZERO,
+        ])
+    );
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
     assert!(

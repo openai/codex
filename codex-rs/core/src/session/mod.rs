@@ -2998,15 +2998,42 @@ impl Session {
             .await;
     }
 
-    fn invalidate_uncaptured_user_wait(&self, turn_context: &TurnContext) {
-        // Replace this boundary with owner-scoped timing when user waits are connected.
-        if turn_context
+    fn user_wait_timing_owner(
+        &self,
+        turn_context: &TurnContext,
+        call_id: Option<&str>,
+    ) -> Option<Arc<codex_direct_tool_timing::ToolTimingGuard>> {
+        if !turn_context
             .config
             .features
             .enabled(Feature::CriticalPathTiming)
         {
+            return None;
+        }
+        // Retain the invocation identity before request preparation can suspend.
+        call_id.and_then(|call_id| {
+            turn_context
+                .turn_timing_state
+                .direct_tool_timings
+                .owner_for_turn(call_id, &turn_context.sub_id)
+        })
+    }
+
+    fn start_user_wait_timing(
+        &self,
+        turn_context: &TurnContext,
+        owner: Option<&codex_direct_tool_timing::ToolTimingGuard>,
+    ) -> Option<codex_direct_tool_timing::ToolBlockingTimingGuard> {
+        let timing = owner.and_then(codex_direct_tool_timing::ToolTimingGuard::start_user_wait);
+        if timing.is_none()
+            && turn_context
+                .config
+                .features
+                .enabled(Feature::CriticalPathTiming)
+        {
             turn_context.turn_timing_state.invalidate_critical_path();
         }
+        timing
     }
 
     /// Emit an exec approval request event and await the user's decision.
@@ -3030,6 +3057,7 @@ impl Session {
         kind: ExecApprovalKind,
         model_context: ModelInvocationContext,
         call_id: String,
+        timing_call_id: Option<&str>,
         approval_id: Option<String>,
         environment_id: Option<String>,
         command: Vec<String>,
@@ -3041,6 +3069,7 @@ impl Session {
         available_decisions: Option<Vec<ReviewDecision>>,
         plugin_attribution_override: Option<PluginCommandAttribution>,
     ) -> ReviewDecision {
+        let user_wait_owner = self.user_wait_timing_owner(turn_context, timing_call_id);
         let _elicitation = self.services.elicitations.register();
         //  command-level approvals use `call_id`.
         // `approval_id` identifies subcommand callbacks and stdin writes.
@@ -3111,7 +3140,7 @@ impl Session {
             available_decisions: Some(available_decisions),
             parsed_cmd,
         });
-        self.invalidate_uncaptured_user_wait(turn_context);
+        let _user_wait = self.start_user_wait_timing(turn_context, user_wait_owner.as_deref());
         self.send_event(turn_context, event).await;
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
@@ -3128,6 +3157,7 @@ impl Session {
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     ) -> ReviewDecision {
+        let user_wait_owner = self.user_wait_timing_owner(turn_context, Some(&call_id));
         let _elicitation = self.services.elicitations.register();
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
@@ -3154,7 +3184,7 @@ impl Session {
             reason,
             grant_root,
         });
-        self.invalidate_uncaptured_user_wait(turn_context);
+        let _user_wait = self.start_user_wait_timing(turn_context, user_wait_owner.as_deref());
         self.send_event(turn_context, event).await;
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
@@ -3172,6 +3202,7 @@ impl Session {
         cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
         let turn_context = &step_context.turn;
+        let user_wait_owner = self.user_wait_timing_owner(turn_context, Some(&call_id));
         let approval_policy = step_context.settings.approval_policy();
         let Some(environment) = step_context
             .environments
@@ -3320,11 +3351,12 @@ impl Session {
             permissions: requested_permissions,
             cwd: Some(cwd.clone().into()),
         });
-        self.invalidate_uncaptured_user_wait(turn_context);
+        let _user_wait = self.start_user_wait_timing(turn_context, user_wait_owner.as_deref());
         self.send_event(turn_context.as_ref(), event).await;
         tokio::select! {
             biased;
             _ = cancellation_token.cancelled() => {
+                drop(_user_wait);
                 let mut active = self.active_turn.lock().await;
                 if let Some(at) = active.as_mut() {
                     let mut ts = at.turn_state.lock().await;
@@ -3346,6 +3378,7 @@ impl Session {
         call_id: String,
         args: RequestUserInputArgs,
     ) -> Option<AcceptedUserInputResponse> {
+        let user_wait_owner = self.user_wait_timing_owner(turn_context, Some(&call_id));
         let _elicitation = self.services.elicitations.register();
         let sub_id = turn_context.sub_id.clone();
         let (tx_response, rx_response) = oneshot::channel();
@@ -3374,7 +3407,7 @@ impl Session {
         turn_context
             .turn_metadata_state
             .mark_user_input_requested_during_turn();
-        self.invalidate_uncaptured_user_wait(turn_context);
+        let _user_wait = self.start_user_wait_timing(turn_context, user_wait_owner.as_deref());
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
     }

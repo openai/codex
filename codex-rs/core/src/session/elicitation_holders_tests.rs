@@ -1,6 +1,10 @@
+use codex_direct_tool_timing::ToolBatchTiming;
+use codex_direct_tool_timing::ToolTimingGuard;
 use codex_features::Feature;
+use codex_utils_critical_path::CriticalPath;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 
 use codex_core_plugins::PluginCommandAttribution;
@@ -20,25 +24,32 @@ use super::tests::make_session_and_context_with_rx;
 use crate::session::step_context::StepContext;
 use crate::state::ActiveTurn;
 
-async fn start_timing(turn: &mut Arc<super::turn_context::TurnContext>, enabled: bool) {
+fn start_timing(
+    turn: &mut Arc<super::turn_context::TurnContext>,
+    enabled: bool,
+) -> (Arc<ToolTimingGuard>, Instant) {
     Arc::make_mut(&mut Arc::get_mut(turn).expect("unique test turn").config)
         .features
         .set_enabled(Feature::CriticalPathTiming, enabled)
         .unwrap();
-    // Populate state independently to verify disabled capture does not invalidate it.
-    turn.turn_timing_state.enable_critical_path();
-    turn.turn_timing_state
-        .mark_turn_started(Instant::now())
-        .await;
+    let start = Instant::now();
+    let owner = turn
+        .turn_timing_state
+        .direct_tool_timings
+        .start_turn_direct_call(
+            "call-1",
+            &turn.sub_id,
+            ToolBatchTiming::default(),
+            start,
+            Some(CriticalPath::default()),
+        );
+    (owner, start)
 }
 
-fn assert_uncaptured_wait(turn: &super::turn_context::TurnContext, enabled: bool) {
-    assert_eq!(
-        turn.turn_timing_state
-            .snapshot_path(Instant::now())
-            .is_none(),
-        enabled
-    );
+fn assert_user_wait(owner: &ToolTimingGuard, start: Instant, enabled: bool) {
+    let completed = owner.finish().unwrap();
+    let totals = completed.path.unwrap().durations(start, completed.ended_at);
+    assert_eq!(totals.user_wait > Duration::ZERO, enabled);
 }
 
 async fn wait_until_held(pause_state: &mut watch::Receiver<bool>) {
@@ -55,12 +66,13 @@ async fn wait_until_released(pause_state: &mut watch::Receiver<bool>) {
         .expect("elicitation service should remain available");
 }
 
-#[test_case::test_case(true; "capture_on")]
-#[test_case::test_case(false; "capture_off")]
+#[test_case::test_case(true, "call-1"; "capture_on")]
+#[test_case::test_case(false, "call-1"; "capture_off")]
+#[test_case::test_case(true, "network-prompt"; "distinct_network_prompt_identity")]
 #[tokio::test]
-async fn command_approval_holds_an_elicitation_until_response(capture: bool) {
+async fn command_approval_holds_an_elicitation_until_response(capture: bool, prompt_id: &str) {
     let (session, mut turn_context, events) = make_session_and_context_with_rx().await;
-    start_timing(&mut turn_context, capture).await;
+    let (timing, timing_start) = start_timing(&mut turn_context, capture);
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let mut pause_state = session.subscribe_elicitation_pause_state();
     #[allow(deprecated)]
@@ -71,6 +83,7 @@ async fn command_approval_holds_an_elicitation_until_response(capture: bool) {
     };
 
     let request = tokio::spawn({
+        let prompt_id = prompt_id.to_owned();
         let session = session.clone();
         let turn_context = turn_context.clone();
         async move {
@@ -80,7 +93,8 @@ async fn command_approval_holds_an_elicitation_until_response(capture: bool) {
                     ExecApprovalKind::Command,
                     crate::guardian::GuardianReviewContext::from(turn_context.clone())
                         .model_context(),
-                    "call-1".to_string(),
+                    prompt_id,
+                    Some("call-1"),
                     /*approval_id*/ None,
                     /*environment_id*/ None,
                     vec!["echo".to_string()],
@@ -104,17 +118,19 @@ async fn command_approval_holds_an_elicitation_until_response(capture: bool) {
     assert_eq!(event.script_path.as_deref(), Some("scripts/run.py"));
     wait_until_held(&mut pause_state).await;
     session
-        .notify_approval("call-1", ReviewDecision::Approved)
+        .notify_approval(prompt_id, ReviewDecision::Approved)
         .await;
     request.await.expect("approval task");
     wait_until_released(&mut pause_state).await;
-    assert_uncaptured_wait(&turn_context, capture);
+    assert_user_wait(&timing, timing_start, capture);
 }
 
+#[test_case::test_case(true; "capture_on")]
+#[test_case::test_case(false; "capture_off")]
 #[tokio::test]
-async fn patch_approval_holds_an_elicitation_until_response() {
+async fn patch_approval_holds_an_elicitation_until_response(capture: bool) {
     let (session, mut turn_context, events) = make_session_and_context_with_rx().await;
-    start_timing(&mut turn_context, /*enabled*/ true).await;
+    let (timing, timing_start) = start_timing(&mut turn_context, capture);
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let mut pause_state = session.subscribe_elicitation_pause_state();
 
@@ -141,13 +157,15 @@ async fn patch_approval_holds_an_elicitation_until_response() {
         .await;
     request.await.expect("approval task");
     wait_until_released(&mut pause_state).await;
-    assert_uncaptured_wait(&turn_context, /*enabled*/ true);
+    assert_user_wait(&timing, timing_start, capture);
 }
 
+#[test_case::test_case(true; "capture_on")]
+#[test_case::test_case(false; "capture_off")]
 #[tokio::test]
-async fn permission_request_holds_an_elicitation_until_response() {
+async fn permission_request_holds_an_elicitation_until_response(capture: bool) {
     let (session, mut turn_context, events) = make_session_and_context_with_rx().await;
-    start_timing(&mut turn_context, /*enabled*/ true).await;
+    let (timing, timing_start) = start_timing(&mut turn_context, capture);
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let mut pause_state = session.subscribe_elicitation_pause_state();
 
@@ -190,16 +208,21 @@ async fn permission_request_holds_an_elicitation_until_response() {
         .await;
     request.await.expect("permission request task");
     wait_until_released(&mut pause_state).await;
-    assert_uncaptured_wait(&turn_context, /*enabled*/ true);
+    assert_user_wait(&timing, timing_start, capture);
 }
 
-#[test_case::test_case(true, false; "blocking")]
-#[test_case::test_case(false, false; "nonblocking_ui_label")]
-#[test_case::test_case(true, true; "cancelled")]
+#[test_case::test_case(true, true, false; "blocking")]
+#[test_case::test_case(true, false, false; "nonblocking_ui_label")]
+#[test_case::test_case(true, true, true; "cancelled")]
+#[test_case::test_case(false, true, false; "capture_off")]
 #[tokio::test]
-async fn request_user_input_holds_an_elicitation_until_response(blocking: bool, cancel: bool) {
+async fn request_user_input_holds_an_elicitation_until_response(
+    capture: bool,
+    blocking: bool,
+    cancel: bool,
+) {
     let (session, mut turn_context, events) = make_session_and_context_with_rx().await;
-    start_timing(&mut turn_context, /*enabled*/ true).await;
+    let (timing, timing_start) = start_timing(&mut turn_context, capture);
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let mut pause_state = session.subscribe_elicitation_pause_state();
 
@@ -228,7 +251,7 @@ async fn request_user_input_holds_an_elicitation_until_response(blocking: bool, 
         request.abort();
         assert!(matches!(request.await, Err(error) if error.is_cancelled()));
         wait_until_released(&mut pause_state).await;
-        assert_uncaptured_wait(&turn_context, /*enabled*/ true);
+        assert_user_wait(&timing, timing_start, capture);
         return;
     }
     let response = RequestUserInputResponse {
@@ -240,5 +263,41 @@ async fn request_user_input_holds_an_elicitation_until_response(blocking: bool, 
 
     request.await.expect("request user input task");
     wait_until_released(&mut pause_state).await;
-    assert_uncaptured_wait(&turn_context, /*enabled*/ true);
+    assert_user_wait(&timing, timing_start, capture);
+}
+
+#[test_case::test_case(true; "enabled_unowned_wait_is_incomplete")]
+#[test_case::test_case(false; "disabled_unowned_wait_is_unchanged")]
+#[tokio::test]
+async fn unowned_human_wait_does_not_claim_a_complete_path(capture: bool) {
+    let (session, mut turn_context, _rx) = make_session_and_context_with_rx().await;
+    let (_tool_timing, _) = start_timing(&mut turn_context, capture);
+    turn_context.turn_timing_state.enable_critical_path();
+    turn_context
+        .turn_timing_state
+        .mark_turn_started(Instant::now())
+        .await;
+    assert!(
+        turn_context
+            .turn_timing_state
+            .snapshot_path(Instant::now())
+            .is_some()
+    );
+    assert!(
+        session
+            .user_wait_timing_owner(&turn_context, Some("unknown-call"))
+            .is_none()
+    );
+    assert!(
+        session
+            .start_user_wait_timing(&turn_context, /*owner*/ None)
+            .is_none()
+    );
+    assert_eq!(
+        turn_context
+            .turn_timing_state
+            .snapshot_path(Instant::now())
+            .is_none(),
+        capture
+    );
 }
