@@ -341,7 +341,7 @@ impl ToolCallRuntime {
                 }
                 result
             }
-            .instrument(dispatch_span.or_current()),
+            .instrument(dispatch_span.clone().or_current()),
         ));
 
         async move {
@@ -416,7 +416,7 @@ impl ToolCallRuntime {
             }
             result
         }
-        .in_current_span()
+        .instrument(dispatch_span.or_current())
     }
 }
 

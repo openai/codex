@@ -48,11 +48,25 @@ impl Visit for DispatchFields {
 }
 
 type DispatchRecords = Arc<Mutex<Vec<(BTreeMap<String, String>, bool)>>>;
+type RouterParents = Arc<Mutex<Vec<Option<&'static str>>>>;
 
-struct DispatchCapture(DispatchRecords);
+struct DispatchCapture {
+    dispatch_records: DispatchRecords,
+    router_parents: RouterParents,
+}
 
 impl Layer<Registry> for DispatchCapture {
     fn on_new_span(&self, attributes: &Attributes<'_>, id: &Id, context: Context<'_, Registry>) {
+        if attributes.metadata().target() == "codex_core::tools::router"
+            && attributes.metadata().name() == "dispatch_tool_call_with_state"
+        {
+            let parent = context
+                .span(id)
+                .and_then(|span| span.parent())
+                .map(|parent| parent.metadata().name());
+            self.router_parents.lock().unwrap().push(parent);
+            return;
+        }
         if attributes.metadata().target() != "codex_core::tools::parallel"
             || attributes.metadata().name() != "dispatch_tool_call_with_code_mode_result"
         {
@@ -66,7 +80,10 @@ impl Layer<Registry> for DispatchCapture {
                     && ancestor.metadata().name() == "turn"
             })
         });
-        self.0.lock().unwrap().push((fields.0, has_turn_ancestor));
+        self.dispatch_records
+            .lock()
+            .unwrap()
+            .push((fields.0, has_turn_ancestor));
     }
 }
 
@@ -124,7 +141,11 @@ async fn detached_code_mode_callback_keeps_thread_id_on_dispatch_span() -> anyho
     let cell_id = CellId::new("audit-cell".to_string());
     broker.mark_cell_ready_for_dispatch(&cell_id, /*originating_call*/ None);
     let records = DispatchRecords::default();
-    let subscriber = tracing_subscriber::registry().with(DispatchCapture(Arc::clone(&records)));
+    let router_parents = RouterParents::default();
+    let subscriber = tracing_subscriber::registry().with(DispatchCapture {
+        dispatch_records: Arc::clone(&records),
+        router_parents: Arc::clone(&router_parents),
+    });
     let _untraced = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     let _subscriber = tracing::subscriber::set_default(subscriber);
     let delegate = CodeModeCellDelegate {
@@ -171,6 +192,10 @@ async fn detached_code_mode_callback_keeps_thread_id_on_dispatch_span() -> anyho
         .strip_prefix("exec-")
         .expect("nested call ID must belong to code mode");
     uuid::Uuid::parse_str(uuid)?;
+    assert_eq!(
+        router_parents.lock().unwrap().as_slice(),
+        [Some("dispatch_tool_call_with_code_mode_result")]
+    );
     Ok(())
 }
 
