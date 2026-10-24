@@ -1395,6 +1395,9 @@
             "unified_image_budget": {
               "type": "boolean"
             },
+            "untrusted_as_tool_output": {
+              "type": "boolean"
+            },
             "use_agent_identity": {
               "type": "boolean"
             },
@@ -7998,6 +8001,9 @@
           "type": "boolean"
         },
         "unified_image_budget": {
+          "type": "boolean"
+        },
+        "untrusted_as_tool_output": {
           "type": "boolean"
         },
         "use_agent_identity": {
