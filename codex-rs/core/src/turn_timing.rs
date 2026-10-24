@@ -72,6 +72,7 @@ pub(crate) struct TurnTimingState {
 struct TurnTimingStateInner {
     started_at: Option<Instant>,
     started_at_unix_secs: Option<i64>,
+    completed_at: Option<(Instant, i64)>,
     item_started_at_ms: HashMap<String, i64>,
     first_token_at: Option<Instant>,
     first_message_at: Option<Instant>,
@@ -79,6 +80,7 @@ struct TurnTimingStateInner {
 
 #[derive(Debug, Default)]
 struct TurnProfileState {
+    capture_enabled: bool,
     path: Option<CriticalPath>,
     tool_dependency: Option<CriticalPath>,
     started_at: Option<Instant>,
@@ -116,6 +118,7 @@ impl TurnTimingState {
     pub(crate) fn enable_critical_path(&self) {
         let mut state = self.profile_state();
         if state.completed_profile.is_none() {
+            state.capture_enabled = true;
             state.path = Some(CriticalPath::default());
         }
     }
@@ -140,6 +143,7 @@ impl TurnTimingState {
         let started_at_unix_ms = now_unix_timestamp_ms();
         let mut state = self.state.lock().await;
         state.started_at = Some(started_at);
+        state.completed_at = None;
         state.started_at_unix_secs = Some(started_at_unix_ms / 1000);
         state.item_started_at_ms.clear();
         state.first_token_at = None;
@@ -169,9 +173,11 @@ impl TurnTimingState {
     pub(crate) async fn complete_profile_and_duration_ms(
         &self,
     ) -> (Option<i64>, Option<i64>, TurnProfile) {
-        let completed_at_instant = Instant::now();
-        let state = self.state.lock().await;
-        let completed_at = Some(now_unix_timestamp_secs());
+        let mut state = self.state.lock().await;
+        // Repeated terminal notifications must retain the original measurement window.
+        let (completed_at_instant, completed_at) = *state
+            .completed_at
+            .get_or_insert_with(|| (Instant::now(), now_unix_timestamp_secs()));
         let duration_ms = state.started_at.map(|started_at| {
             i64::try_from(
                 completed_at_instant
@@ -181,7 +187,7 @@ impl TurnTimingState {
             .unwrap_or(i64::MAX)
         });
         let profile = self.profile_state().complete(completed_at_instant);
-        (completed_at, duration_ms, profile)
+        (Some(completed_at), duration_ms, profile)
     }
 
     pub(crate) async fn time_to_first_token_ms(&self) -> Option<i64> {
@@ -296,6 +302,7 @@ impl TurnProfileState {
         let path = self.path.clone();
         *self = Self {
             path,
+            capture_enabled: self.capture_enabled,
             started_at: Some(started_at),
             last_transition_at: Some(started_at),
             ..Self::default()
@@ -412,6 +419,7 @@ impl TurnProfileState {
         };
 
         let mut profile = TurnProfile {
+            critical_path: report::completed_critical_path(self, now),
             before_first_sampling_ms: duration_to_u64_ms(self.before_first_sampling),
             sampling_ms: duration_to_u64_ms(self.sampling),
             compaction_ms: duration_to_u64_ms(self.compaction),
@@ -534,6 +542,8 @@ fn response_item_records_turn_ttft(item: &ResponseItem) -> bool {
         | ResponseItem::Other => false,
     }
 }
+
+mod report;
 
 #[cfg(test)]
 #[path = "turn_timing_tests.rs"]

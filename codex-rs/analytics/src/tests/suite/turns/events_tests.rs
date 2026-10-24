@@ -102,6 +102,7 @@ fn turn_event_serializes_expected_shape() {
     let event = TrackEventRequest::TurnEvent(Box::new(CodexTurnEventRequest {
         event_type: "codex_turn_event",
         event_params: crate::events::CodexTurnEventParams {
+            critical_path: crate::TurnCriticalPath::Disabled.into(),
             thread_id: "thread-2".to_string(),
             session_id: "session-thread-2".to_string(),
             turn_id: "turn-2".to_string(),
@@ -187,6 +188,14 @@ fn turn_event_serializes_expected_shape() {
         r#"{
             "event_type": "codex_turn_event",
             "event_params": {
+                "critical_path_status": "disabled",
+                "critical_path_duration_ms": null,
+                "critical_path_inference_ms": null,
+                "critical_path_auto_review_ms": null,
+                "critical_path_user_wait_ms": null,
+                "critical_path_tools_ms": null,
+                "critical_path_overhead_ms": null,
+                "critical_path_unknown_ms": null,
                 "thread_id": "thread-2",
                 "session_id": "session-thread-2",
                 "turn_id": "turn-2",
@@ -957,4 +966,108 @@ async fn turn_completed_without_started_notification_emits_null_started_at() {
         json!(null)
     );
     assert_eq!(payload["event_params"]["total_tokens"], json!(null));
+}
+
+#[tokio::test]
+async fn critical_path_payload_preserves_capture_status_and_emits_once() {
+    use crate::TurnCriticalPath;
+    use crate::TurnCriticalPathDurations;
+    use crate::TurnProfileFact;
+    use crate::tests::support::sample_turn_profile;
+
+    for status in [
+        AppServerTurnStatus::Completed,
+        AppServerTurnStatus::Interrupted,
+    ] {
+        for (critical_path, expected) in [
+            (
+                TurnCriticalPath::Disabled,
+                json!(["disabled", null, null, null, null, null, null, null]),
+            ),
+            (
+                TurnCriticalPath::Incomplete,
+                json!(["incomplete", null, null, null, null, null, null, null]),
+            ),
+            (
+                TurnCriticalPath::Complete(TurnCriticalPathDurations {
+                    duration_ms: 1234,
+                    inference_ms: 700,
+                    auto_review_ms: 200,
+                    user_wait_ms: 100,
+                    tools_ms: 150,
+                    overhead_ms: 80,
+                    unknown_ms: 4,
+                }),
+                json!(["complete", 1234, 700, 200, 100, 150, 80, 4]),
+            ),
+            (
+                TurnCriticalPath::Complete(TurnCriticalPathDurations {
+                    duration_ms: 1234,
+                    inference_ms: 1234,
+                    auto_review_ms: 0,
+                    user_wait_ms: 0,
+                    tools_ms: 0,
+                    overhead_ms: 0,
+                    unknown_ms: 0,
+                }),
+                json!(["complete", 1234, 1234, 0, 0, 0, 0, 0]),
+            ),
+        ] {
+            let mut reducer = AnalyticsReducer::default();
+            let mut out = Vec::new();
+            ingest_turn_prerequisites(
+                &mut reducer,
+                &mut out,
+                /*include_initialize*/ true,
+                /*include_resolved_config*/ true,
+                /*include_started*/ true,
+                /*include_token_usage*/ true,
+            )
+            .await;
+            let mut profile = sample_turn_profile();
+            profile.critical_path = critical_path;
+            reducer
+                .ingest(
+                    AnalyticsFact::Custom(CustomAnalyticsFact::TurnProfile(Box::new(
+                        TurnProfileFact {
+                            turn_id: "turn-2".into(),
+                            profile,
+                        },
+                    ))),
+                    &mut out,
+                )
+                .await;
+            for _ in 0..2 {
+                reducer
+                    .ingest(
+                        AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                            "thread-2",
+                            "turn-2",
+                            status.clone(),
+                            /*codex_error_info*/ None,
+                        ))),
+                        &mut out,
+                    )
+                    .await;
+            }
+            assert_eq!(out.len(), 1);
+            let payload = serde_json::to_value(&out[0]).unwrap();
+            let params = &payload["event_params"];
+            assert_eq!(
+                json!([
+                    params["critical_path_status"],
+                    params["critical_path_duration_ms"],
+                    params["critical_path_inference_ms"],
+                    params["critical_path_auto_review_ms"],
+                    params["critical_path_user_wait_ms"],
+                    params["critical_path_tools_ms"],
+                    params["critical_path_overhead_ms"],
+                    params["critical_path_unknown_ms"],
+                ]),
+                expected
+            );
+            assert_eq!(params["tool_blocking_ms"], json!(250));
+            assert_eq!(params["duration_ms"], json!(1234));
+        }
+    }
 }

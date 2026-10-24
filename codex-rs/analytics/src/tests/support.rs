@@ -374,6 +374,7 @@ pub(super) fn sample_turn_resolved_config(
 
 pub(super) fn sample_turn_profile() -> TurnProfile {
     TurnProfile {
+        critical_path: crate::TurnCriticalPath::Disabled,
         before_first_sampling_ms: 100,
         sampling_ms: 700,
         compaction_ms: 40,

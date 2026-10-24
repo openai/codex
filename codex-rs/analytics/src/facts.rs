@@ -246,6 +246,7 @@ pub struct TurnTokenUsageFact {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TurnProfile {
+    pub critical_path: crate::TurnCriticalPath,
     pub before_first_sampling_ms: u64,
     pub sampling_ms: u64,
     pub compaction_ms: u64,

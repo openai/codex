@@ -1110,6 +1110,8 @@ pub(crate) struct CodexGoalEventRequest {
 
 #[derive(Serialize)]
 pub(crate) struct CodexTurnEventParams {
+    #[serde(flatten)]
+    pub(crate) critical_path: crate::turn_critical_path::CriticalPathEventParams,
     pub(crate) thread_id: String,
     pub(crate) session_id: String,
     pub(crate) turn_id: String,

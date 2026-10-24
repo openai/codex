@@ -3958,6 +3958,7 @@ fn codex_turn_event_params(
         is_first_turn,
     } = resolved_config;
     let TurnProfile {
+        critical_path,
         before_first_sampling_ms,
         sampling_ms,
         compaction_ms,
@@ -3971,6 +3972,7 @@ fn codex_turn_event_params(
     let token_usage = turn_state.token_usage.clone();
     let codex_error = turn_state.codex_error.as_ref();
     CodexTurnEventParams {
+        critical_path: critical_path.into(),
         thread_id,
         session_id: thread_metadata.session_id.clone(),
         turn_id,

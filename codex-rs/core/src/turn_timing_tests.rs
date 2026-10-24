@@ -245,6 +245,7 @@ fn turn_profile_breaks_down_sampling_blocking_and_retry_overhead() {
     assert_eq!(
         state.complete(started_at + Duration::from_millis(1_300)),
         TurnProfile {
+            critical_path: codex_analytics::TurnCriticalPath::Disabled,
             before_first_sampling_ms: 100,
             sampling_ms: 700,
             compaction_ms: 0,
@@ -263,6 +264,7 @@ fn turn_profile_counts_compaction_as_an_exclusive_phase() {
     let started_at = Instant::now();
     let mut state = TurnProfileState {
         path: Some(CriticalPath::default()),
+        capture_enabled: true,
         ..Default::default()
     };
     state.start(started_at);
@@ -282,6 +284,17 @@ fn turn_profile_counts_compaction_as_an_exclusive_phase() {
     assert_eq!(
         state.complete(started_at + Duration::from_millis(1_100)),
         TurnProfile {
+            critical_path: codex_analytics::TurnCriticalPath::Complete(
+                codex_analytics::TurnCriticalPathDurations {
+                    duration_ms: 1100,
+                    inference_ms: 800,
+                    auto_review_ms: 0,
+                    user_wait_ms: 0,
+                    tools_ms: 0,
+                    overhead_ms: 300,
+                    unknown_ms: 0,
+                }
+            ),
             before_first_sampling_ms: 200,
             sampling_ms: 300,
             compaction_ms: 500,
@@ -310,7 +323,22 @@ async fn turn_profile_and_duration_share_a_completion_instant() {
         .mark_turn_started(Instant::now() - Duration::from_millis(100))
         .await;
 
-    let (_, duration_ms, profile) = state.complete_profile_and_duration_ms().await;
+    state.enable_critical_path();
+    let result = state.complete_profile_and_duration_ms().await;
+    assert_eq!(state.complete_profile_and_duration_ms().await, result);
+    let (_, duration_ms, profile) = result;
+    assert_eq!(
+        profile.critical_path,
+        codex_analytics::TurnCriticalPath::Complete(codex_analytics::TurnCriticalPathDurations {
+            duration_ms: duration_ms.unwrap() as u64,
+            inference_ms: 0,
+            auto_review_ms: 0,
+            user_wait_ms: 0,
+            tools_ms: 0,
+            overhead_ms: duration_ms.unwrap() as u64,
+            unknown_ms: 0,
+        })
+    );
     let classified_ms = profile.before_first_sampling_ms
         + profile.sampling_ms
         + profile.compaction_ms
@@ -331,6 +359,7 @@ fn capture_preserves_phases_and_freezes_missing_dependencies() {
     let mut state = TurnProfileState::default();
     state.start(started_at);
     assert!(state.path_at(time_after_turn_start(10)).is_none());
+    state.capture_enabled = true;
     state.path = Some(CriticalPath::default());
     assert!(state.begin_sampling(time_after_turn_start(10)));
     state.end_phase(time_after_turn_start(20), TurnProfilePhase::Sampling);
@@ -350,6 +379,18 @@ fn capture_preserves_phases_and_freezes_missing_dependencies() {
             ..PathDurations::default()
         }
     );
+    assert_eq!(
+        profile.critical_path,
+        codex_analytics::TurnCriticalPath::Complete(codex_analytics::TurnCriticalPathDurations {
+            duration_ms: 60,
+            inference_ms: 10,
+            auto_review_ms: 0,
+            user_wait_ms: 0,
+            tools_ms: 0,
+            overhead_ms: 20,
+            unknown_ms: 30,
+        })
+    );
     let frozen_path = state.path.clone();
     state.end_phase(time_after_turn_start(70), TurnProfilePhase::ToolBlocking);
     assert_eq!(state.complete(time_after_turn_start(80)), profile);
@@ -363,7 +404,11 @@ async fn invalidation_and_late_guard_drop_cannot_restore_a_frozen_path() {
     timing.mark_turn_started(Instant::now()).await;
     let guard = timing.begin_tool_blocking(Some(ToolBatchTiming::default()));
     timing.invalidate_critical_path();
-    timing.complete_profile_and_duration_ms().await;
+    let (_, _, profile) = timing.complete_profile_and_duration_ms().await;
+    assert_eq!(
+        profile.critical_path,
+        codex_analytics::TurnCriticalPath::Incomplete
+    );
     timing.enable_critical_path();
     drop(guard);
     assert!(timing.snapshot_path(Instant::now()).is_none());
@@ -411,4 +456,31 @@ async fn completed_batch_guard_retains_its_path_across_turns() {
     assert_eq!(totals.auto_review, Duration::from_secs(1));
     assert_eq!(totals.unknown, Duration::ZERO);
     assert!(totals.tools >= Duration::from_secs(1));
+}
+
+#[test]
+fn critical_path_report_retains_fractional_millisecond_rounding_and_compaction() {
+    let start = Instant::now();
+    let mut state = TurnProfileState {
+        capture_enabled: true,
+        path: Some(CriticalPath::default()),
+        ..Default::default()
+    };
+    state.start(start);
+    state.begin_compaction(start);
+    let end = start + Duration::from_nanos(1_999_999);
+    state.end_phase(end, TurnProfilePhase::Compaction);
+    let profile = state.complete(end);
+    assert_eq!(
+        profile.critical_path,
+        codex_analytics::TurnCriticalPath::Complete(codex_analytics::TurnCriticalPathDurations {
+            duration_ms: 1,
+            inference_ms: 1,
+            auto_review_ms: 0,
+            user_wait_ms: 0,
+            tools_ms: 0,
+            overhead_ms: 0,
+            unknown_ms: 0,
+        })
+    );
 }
