@@ -2954,6 +2954,7 @@ dependencies = [
  "codex-context-fragments",
  "codex-core-plugins",
  "codex-diagnostics",
+ "codex-direct-tool-timing",
  "codex-exec-server",
  "codex-exec-server-test-support",
  "codex-execpolicy",
@@ -3003,6 +3004,7 @@ dependencies = [
  "codex-utils-audio",
  "codex-utils-cache",
  "codex-utils-cargo-bin",
+ "codex-utils-critical-path",
  "codex-utils-git-discovery",
  "codex-utils-head-tail-buffer",
  "codex-utils-home-dir",
@@ -3178,6 +3180,9 @@ version = "0.0.0"
 dependencies = [
  "codex-utils-critical-path",
  "pretty_assertions",
+ "test-case",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

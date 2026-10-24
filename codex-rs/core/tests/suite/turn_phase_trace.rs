@@ -63,19 +63,27 @@ enum Finish {
     Interrupt,
 }
 
-#[test_case(Finish::Reply; "reply")]
-#[test_case(Finish::Interrupt; "interrupt")]
+#[test_case(Finish::Reply, false; "reply_disabled")]
+#[test_case(Finish::Interrupt, false; "interrupt_disabled")]
+#[test_case(Finish::Reply, true; "reply_enabled")]
+#[test_case(Finish::Interrupt, true; "interrupt_enabled")]
 #[tokio::test(flavor = "current_thread")]
 async fn steer_joins_existing_turn_without_extending_sampling(
     finish: Finish,
+    critical_path_timing: bool,
 ) -> anyhow::Result<()> {
     if std::env::var_os(SUBPROCESS_ENV_VAR).is_none() {
         let case = match finish {
             Finish::Reply => "reply",
             Finish::Interrupt => "interrupt",
         };
+        let capture = if critical_path_timing {
+            "enabled"
+        } else {
+            "disabled"
+        };
         let test_name = format!(
-            "suite::turn_phase_trace::steer_joins_existing_turn_without_extending_sampling::{case}"
+            "suite::turn_phase_trace::steer_joins_existing_turn_without_extending_sampling::{case}_{capture}"
         );
         let output = Command::new(std::env::current_exe()?)
             .arg("--exact")
@@ -117,7 +125,22 @@ async fn steer_joins_existing_turn_without_extending_sampling(
         ]),
     )
     .await;
-    let mut test = test_codex().build_with_auto_env(&server).await?;
+    let mut test = test_codex()
+        .with_config(move |config| {
+            config
+                .features
+                .enable(codex_features::Feature::RuntimeMetrics)
+                .expect("runtime metrics feature can be configured");
+            config
+                .features
+                .set_enabled(
+                    codex_features::Feature::CriticalPathTiming,
+                    critical_path_timing,
+                )
+                .expect("critical path capture can be configured independently");
+        })
+        .build_with_auto_env(&server)
+        .await?;
     let thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
@@ -152,6 +175,10 @@ async fn steer_joins_existing_turn_without_extending_sampling(
         unreachable!();
     };
     first.single_request();
+    let timing_start = std::time::Instant::now();
+    let observe_timing = codex_core::test_support::observe_turn_timing(&test.codex)
+        .await
+        .expect("active turn");
     // The tool is still blocked. Sampling must already be exportable, even though
     // the dispatch future and its trace remain alive until the host responds.
     let sampling = wait_for_span(&exported, |span| span.name == "codex.sampling").await?;
@@ -167,6 +194,7 @@ async fn steer_joins_existing_turn_without_extending_sampling(
             turn_id: call.turn_id.clone()
         }
     );
+    let mut interrupted_capture = None;
     match finish {
         Finish::Reply => {
             let reply = mount_sse_once(
@@ -204,6 +232,8 @@ async fn steer_joins_existing_turn_without_extending_sampling(
                 matches!(event, EventMsg::TurnAborted(_))
             })
             .await;
+            let closed_at = std::time::Instant::now();
+            interrupted_capture = Some((closed_at, observe_timing(timing_start, closed_at)));
             let reply = mount_sse_once(
                 &server,
                 sse(vec![
@@ -252,6 +282,19 @@ async fn steer_joins_existing_turn_without_extending_sampling(
                 (Some(thread_id.clone()), Some(call.turn_id.clone()))
             );
         }
+    }
+    if let Some((closed_at, captured)) = interrupted_capture {
+        // Recovery reuses a turn ID, but must not mutate the closed capture.
+        assert_eq!(observe_timing(timing_start, closed_at), captured);
+    }
+    let timing_end = std::time::Instant::now();
+    let totals = observe_timing(timing_start, timing_end);
+    if critical_path_timing {
+        let [_, review, tools, _, unknown] = totals.expect("captured direct-tool path");
+        assert!(tools > Duration::ZERO);
+        assert_eq!((review, unknown), (Duration::ZERO, Duration::ZERO));
+    } else {
+        assert_eq!(totals, None);
     }
     test.codex.submit(Op::Shutdown).await?;
     wait_for_event(&test.codex, |event| {

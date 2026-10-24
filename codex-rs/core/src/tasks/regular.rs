@@ -44,6 +44,14 @@ impl SessionTask for RegularTask {
         input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
+        if ctx
+            .config
+            .features
+            .enabled(codex_features::Feature::CriticalPathTiming)
+            && !ctx.session_source.is_non_root_agent()
+        {
+            ctx.turn_timing_state.enable_critical_path();
+        }
         let run_turn_span = trace_span!(
             "run_turn",
             conversation.id = %sess.thread_id,

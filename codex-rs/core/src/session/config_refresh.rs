@@ -1,4 +1,4 @@
-//! Publishes resolved MCP configuration while preserving session-static settings.
+//! Publishes resolved MCP configuration and host timing rollouts for future turns.
 
 use std::sync::Arc;
 
@@ -106,6 +106,16 @@ impl Session {
                     warn!("failed to refresh {description} config: {err}");
                 }
             }
+        }
+        // Publish host rollout changes only to future turn snapshots. Active turns
+        // must retain one capture policy across tool dispatch and Guardian review.
+        if matches!(scope, RuntimeConfigRefresh::User)
+            && let Err(err) = config.features.set_enabled(
+                Feature::CriticalPathTiming,
+                next_config.features.enabled(Feature::CriticalPathTiming),
+            )
+        {
+            warn!("failed to refresh critical path timing config: {err}");
         }
         let mut config = Arc::new(config);
         let notify_contributors = !matches!(scope, RuntimeConfigRefresh::Mcp)

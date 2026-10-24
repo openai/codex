@@ -225,6 +225,7 @@ codex-core-api = { path = "core-api" }
 codex-core-plugin-common = { path = "core-plugin-common" }
 codex-core-plugins = { path = "core-plugins" }
 codex-diagnostics = { path = "diagnostics" }
+codex-direct-tool-timing = { path = "direct-tool-timing" }
 codex-exec = { path = "exec" }
 codex-file-system = { path = "file-system" }
 codex-exec-server-protocol = { path = "exec-server-protocol" }

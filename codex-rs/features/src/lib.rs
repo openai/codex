@@ -203,6 +203,8 @@ pub enum Feature {
     CwdRelativeTurnDiffs,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
+    /// Capture internal direct-tool dependency paths for turn attribution.
+    CriticalPathTiming,
     /// Enable startup memory extraction and file-backed memory consolidation.
     MemoryTool,
     /// Enable importing project-scoped memory from external agents.
@@ -1323,6 +1325,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RuntimeMetrics,
         key: "runtime_metrics",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CriticalPathTiming,
+        key: "critical_path_timing",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

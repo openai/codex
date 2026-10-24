@@ -3,12 +3,18 @@
 //! Prefixes and dependency paths can contain any work kind; this recorder adds tool and
 //! review and human-wait intervals, or Unknown for a dependency wait whose history is unavailable.
 //! Review callbacks must retain their invocation guard and bracket blocking automated
-//! reviews with the review guard's lifetime. Execution-lock admission timing is separate.
+//! reviews with the review guard's lifetime. Runtime lookup retains weak owners;
+//! execution-lock admission timing is separate.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
+
+mod runtime;
+pub use runtime::AdmittedToolTiming;
+pub use runtime::ToolAdmission;
+pub use runtime::ToolGateTiming;
 
 use codex_utils_critical_path::CriticalPath;
 use codex_utils_critical_path::WorkKind;
@@ -67,12 +73,19 @@ impl ToolBatchTiming {
 #[derive(Clone, Default)]
 pub struct DirectToolTimings(Arc<Mutex<State>>);
 
+impl std::fmt::Debug for DirectToolTimings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DirectToolTimings").finish_non_exhaustive()
+    }
+}
+
 #[derive(Default)]
 struct State {
     calls: HashMap<String, Vec<DirectToolInvocation>>,
 }
 
 struct DirectToolInvocation {
+    runtime_owner: Option<(String, std::sync::Weak<ToolTimingGuard>)>,
     identity: Arc<()>,
     path: Option<CriticalPath>,
     segment_started_at: Instant,
@@ -164,6 +177,7 @@ impl DirectToolTimings {
             None
         };
         calls.push(DirectToolInvocation {
+            runtime_owner: None,
             identity: Arc::clone(&identity),
             path,
             segment_started_at: started_at,
@@ -189,6 +203,44 @@ impl DirectToolTimings {
         if let Some(work) = self.state().unique_work(call_id) {
             work.join(start, end, dependency);
         }
+    }
+
+    pub fn start_turn_direct_call(
+        &self,
+        call_id: &str,
+        turn_id: &str,
+        batch: ToolBatchTiming,
+        started_at: Instant,
+        prefix: Option<CriticalPath>,
+    ) -> Arc<ToolTimingGuard> {
+        let work = Arc::new(self.start_direct_call(call_id, batch, started_at, prefix));
+        let mut state = self.state();
+        if let Some(invocation) = state.calls.get_mut(call_id).and_then(|calls| {
+            calls
+                .iter_mut()
+                .find(|invocation| Arc::ptr_eq(&invocation.identity, &work.identity))
+        }) {
+            invocation.runtime_owner = Some((turn_id.to_owned(), Arc::downgrade(&work)));
+        }
+        work
+    }
+
+    pub fn start_review_for_turn(
+        &self,
+        call_id: &str,
+        turn_id: &str,
+    ) -> Option<ToolBlockingTimingGuard> {
+        self.owner_for_turn(call_id, turn_id)?.start_review()
+    }
+
+    pub fn owner_for_turn(&self, call_id: &str, turn_id: &str) -> Option<Arc<ToolTimingGuard>> {
+        let mut state = self.state();
+        let (owner_turn, owner) = state.unique_work(call_id)?.runtime_owner.as_ref()?;
+        if owner_turn != turn_id {
+            return None;
+        }
+        // Retain the invocation identity across registry unlock and later ID reuse.
+        owner.upgrade()
     }
 
     fn finish(&self, call_id: &str, identity: &Arc<()>) -> Option<CompletedWork> {

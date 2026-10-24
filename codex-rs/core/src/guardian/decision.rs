@@ -26,13 +26,12 @@ pub(crate) fn spawn_approval_decision(
     let request: ReviewAction = request.into();
     let (tx, rx) = oneshot::channel();
     let runtime = session.services.runtime_handle.clone();
+    let decision = decide_approval(session, context, review_id, request, reasons, options);
     let spawn_result = std::thread::Builder::new()
         .name("codex-approval-review".to_string())
         .stack_size(THREAD_STACK_SIZE_BYTES)
         .spawn(move || {
-            let decision = runtime.block_on(decide_approval(
-                session, context, review_id, request, reasons, options,
-            ));
+            let decision = runtime.block_on(decision);
             let _ = tx.send(decision);
         });
     if let Err(err) = spawn_result {
@@ -43,80 +42,92 @@ pub(crate) fn spawn_approval_decision(
 
 /// `None` requests the existing user flow. No contributor is never an implicit allow.
 /// Both metric sinks use the originating turn retained by the review context.
-pub(crate) async fn decide_approval(
+pub(crate) fn decide_approval(
     session: Arc<Session>,
     context: impl Into<GuardianReviewContext>,
     review_id: String,
     request: impl Into<ReviewAction>,
     reasons: ApprovalRequestReasons,
     mut options: GuardianReviewOptions,
-) -> Option<ReviewDecision> {
-    let context = context.into();
-    let request = request.into();
-    let (_, history_reset) = session.history_reset().await;
-    let cancellation = match options.external_cancel.take() {
-        Some(external) => crate::exec::cancel_when_either(external, history_reset.clone()),
-        None => history_reset.child_token(),
-    };
-    let _cancel_on_drop = cancellation.clone().drop_guard();
-    let turn = context.turn();
-    let live_config = session.get_config().await;
-    let requirements = live_config.config_layer_stack.requirements();
-    let model_requires_review =
-        requirements.auto_review_required_for_model(&context.model_info.slug);
-    let require_guardian = options.require_guardian
-        || model_requires_review
-        || requirements
-            .approvals_reviewer
-            .can_set(&codex_protocol::config_types::ApprovalsReviewer::User)
-            .is_err();
-    let full_access = context.environments().has_full_access(
-        context.approval_policy,
-        &turn.config.permissions.effective_permission_profile(),
-    );
-    let require_synchronous_review = options.require_synchronous_review;
-    let retried = reasons.retry.is_some();
-    let decision = codex_guardian_reviewer::ReviewRequest {
-        host: ReviewRuntime {
-            session: Arc::clone(&session),
-            history_reset: history_reset.clone(),
-            context: context.clone(),
-            request: request.clone(),
-            reasons,
-            options,
-        },
-        approval_id: &review_id,
-        tool_call_id: request.tool_call_id.as_deref(),
-        action: request.action.as_ref().ok(),
-        thread_id: session.thread_id,
-        thread_store: &session.services.thread_extension_data,
-        category: request.category,
-        approval_policy: context.approval_policy,
-        approvals_reviewer: context.approvals_reviewer,
-        require_guardian,
-        require_synchronous_review,
-        model_requires_review,
-        async_enabled: turn.config.features.enabled(codex_features::Feature::GuardianV2),
-        retried,
-        escalated_exec: matches!(&request.request, Ok(GuardianApprovalRequest::ExecCommand { sandbox_permissions, .. }) if sandbox_permissions.requires_escalated_permissions()),
-        full_access,
-        cancellation: cancellation.clone(),
-        timeout: turn.config.guardian_review_timeout,
-        // Keep the existing turn-level reporting policy during this ownership move.
-        model: turn.model_info(),
-        telemetry: &turn.session_telemetry,
-        log_assessments: turn.config.otel.guardian_assessment_logging_enabled(),
-        analytics: &session.services.analytics_events_client,
-        metrics: Some(crate::session::extension_metrics::from_session_telemetry(
-            turn.session_telemetry.clone(),
-        )),
+) -> futures::future::BoxFuture<'static, Option<ReviewDecision>> {
+    let context: GuardianReviewContext = context.into();
+    let request: ReviewAction = request.into();
+    // Invalidate before scheduling: cancellation may finalize the turn before
+    // the review future is first polled. Replace this boundary with attribution.
+    if context
+        .turn()
+        .config
+        .features
+        .enabled(codex_features::Feature::CriticalPathTiming)
+    {
+        context.turn().turn_timing_state.invalidate_critical_path();
     }
-    .decide(&session.services.extensions)
-    .await;
-    // Enforce cancellation after extension callbacks too, including cached decisions.
-    if history_reset.is_cancelled() || cancellation.is_cancelled() {
-        Some(ReviewDecision::Abort)
-    } else {
-        decision
-    }
+    Box::pin(async move {
+        let (_, history_reset) = session.history_reset().await;
+        let cancellation = match options.external_cancel.take() {
+            Some(external) => crate::exec::cancel_when_either(external, history_reset.clone()),
+            None => history_reset.child_token(),
+        };
+        let _cancel_on_drop = cancellation.clone().drop_guard();
+        let turn = context.turn();
+        let live_config = session.get_config().await;
+        let requirements = live_config.config_layer_stack.requirements();
+        let model_requires_review =
+            requirements.auto_review_required_for_model(&context.model_info.slug);
+        let require_guardian = options.require_guardian
+            || model_requires_review
+            || requirements
+                .approvals_reviewer
+                .can_set(&codex_protocol::config_types::ApprovalsReviewer::User)
+                .is_err();
+        let full_access = context.environments().has_full_access(
+            context.approval_policy,
+            &turn.config.permissions.effective_permission_profile(),
+        );
+        let require_synchronous_review = options.require_synchronous_review;
+        let retried = reasons.retry.is_some();
+        let decision = codex_guardian_reviewer::ReviewRequest {
+            host: ReviewRuntime {
+                session: Arc::clone(&session),
+                history_reset: history_reset.clone(),
+                context: context.clone(),
+                request: request.clone(),
+                reasons,
+                options,
+            },
+            approval_id: &review_id,
+            tool_call_id: request.tool_call_id.as_deref(),
+            action: request.action.as_ref().ok(),
+            thread_id: session.thread_id,
+            thread_store: &session.services.thread_extension_data,
+            category: request.category,
+            approval_policy: context.approval_policy,
+            approvals_reviewer: context.approvals_reviewer,
+            require_guardian,
+            require_synchronous_review,
+            model_requires_review,
+            async_enabled: turn.config.features.enabled(codex_features::Feature::GuardianV2),
+            retried,
+            escalated_exec: matches!(&request.request, Ok(GuardianApprovalRequest::ExecCommand { sandbox_permissions, .. }) if sandbox_permissions.requires_escalated_permissions()),
+            full_access,
+            cancellation: cancellation.clone(),
+            timeout: turn.config.guardian_review_timeout,
+            // Keep the existing turn-level reporting policy during this ownership move.
+            model: turn.model_info(),
+            telemetry: &turn.session_telemetry,
+            log_assessments: turn.config.otel.guardian_assessment_logging_enabled(),
+            analytics: &session.services.analytics_events_client,
+            metrics: Some(crate::session::extension_metrics::from_session_telemetry(
+                turn.session_telemetry.clone(),
+            )),
+        }
+        .decide(&session.services.extensions)
+        .await;
+        // Enforce cancellation after extension callbacks too, including cached decisions.
+        if history_reset.is_cancelled() || cancellation.is_cancelled() {
+            Some(ReviewDecision::Abort)
+        } else {
+            decision
+        }
+    })
 }

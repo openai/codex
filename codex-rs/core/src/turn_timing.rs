@@ -7,6 +7,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use codex_analytics::TurnProfile;
+use codex_direct_tool_timing::DirectToolTimings;
 use codex_otel::TURN_TTFM_DURATION_METRIC;
 use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
@@ -16,6 +17,9 @@ use tokio::sync::Mutex;
 use crate::ResponseEvent;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
+use codex_direct_tool_timing::ToolBatchTiming;
+use codex_utils_critical_path::CriticalPath;
+use codex_utils_critical_path::WorkKind;
 
 // Reuse the finalized analytics counters instead of counting sampled child spans.
 // Recovery can complete the same turn ID again, so consumers must retain the
@@ -59,6 +63,7 @@ pub(crate) async fn record_turn_ttfm_metric(turn_context: &TurnContext, item: &T
 
 #[derive(Debug, Default)]
 pub(crate) struct TurnTimingState {
+    pub(crate) direct_tool_timings: DirectToolTimings,
     state: Mutex<TurnTimingStateInner>,
     profile: StdMutex<TurnProfileState>,
 }
@@ -74,6 +79,8 @@ struct TurnTimingStateInner {
 
 #[derive(Debug, Default)]
 struct TurnProfileState {
+    path: Option<CriticalPath>,
+    tool_dependency: Option<CriticalPath>,
     started_at: Option<Instant>,
     last_transition_at: Option<Instant>,
     active_phase: Option<TurnProfilePhase>,
@@ -102,9 +109,33 @@ pub(crate) struct TurnProfileTimingGuard {
     timing: Arc<TurnTimingState>,
     phase: TurnProfilePhase,
     active: bool,
+    tool_batch: Option<ToolBatchTiming>,
 }
 
 impl TurnTimingState {
+    pub(crate) fn enable_critical_path(&self) {
+        let mut state = self.profile_state();
+        if state.completed_profile.is_none() {
+            state.path = Some(CriticalPath::default());
+        }
+    }
+
+    pub(crate) fn invalidate_critical_path(&self) {
+        let mut state = self.profile_state();
+        if state.completed_profile.is_none() {
+            state.path = None;
+        }
+    }
+
+    pub(crate) fn snapshot_path(&self, now: Instant) -> Option<CriticalPath> {
+        let state = self.profile_state();
+        if state.completed_profile.is_some() {
+            state.path.clone()
+        } else {
+            state.path_at(now)
+        }
+    }
+
     pub(crate) async fn mark_turn_started(&self, started_at: Instant) -> i64 {
         let started_at_unix_ms = now_unix_timestamp_ms();
         let mut state = self.state.lock().await;
@@ -166,6 +197,7 @@ impl TurnTimingState {
             timing: Arc::clone(self),
             phase: TurnProfilePhase::Sampling,
             active,
+            tool_batch: None,
         }
     }
 
@@ -186,15 +218,20 @@ impl TurnTimingState {
             timing: Arc::clone(self),
             phase: TurnProfilePhase::Compaction,
             active,
+            tool_batch: None,
         }
     }
 
-    pub(crate) fn begin_tool_blocking(self: &Arc<Self>) -> TurnProfileTimingGuard {
+    pub(crate) fn begin_tool_blocking(
+        self: &Arc<Self>,
+        batch: Option<ToolBatchTiming>,
+    ) -> TurnProfileTimingGuard {
         let active = self.profile_state().begin_tool_blocking(Instant::now());
         TurnProfileTimingGuard {
             timing: Arc::clone(self),
             phase: TurnProfilePhase::ToolBlocking,
             active,
+            tool_batch: batch,
         }
     }
 
@@ -227,9 +264,14 @@ impl TurnTimingState {
 impl Drop for TurnProfileTimingGuard {
     fn drop(&mut self) {
         if self.active {
-            self.timing
-                .profile_state()
-                .end_phase(Instant::now(), self.phase);
+            let mut state = self.timing.profile_state();
+            if state.completed_profile.is_some() {
+                return;
+            }
+            if let Some(batch) = &self.tool_batch {
+                state.tool_dependency = batch.completed().and_then(|work| work.path);
+            }
+            state.end_phase(Instant::now(), self.phase);
         }
     }
 }
@@ -251,7 +293,9 @@ fn duration_to_u64_ms(duration: Duration) -> u64 {
 
 impl TurnProfileState {
     fn start(&mut self, started_at: Instant) {
+        let path = self.path.clone();
         *self = Self {
+            path,
             started_at: Some(started_at),
             last_transition_at: Some(started_at),
             ..Self::default()
@@ -318,6 +362,11 @@ impl TurnProfileState {
             return;
         };
         let elapsed = now.saturating_duration_since(previous);
+        self.path = self
+            .path
+            .as_ref()
+            .map(|path| self.extend_path(path.clone(), previous, now));
+        self.tool_dependency = None;
         match self.active_phase {
             Some(TurnProfilePhase::Sampling) => self.sampling += elapsed,
             Some(TurnProfilePhase::Compaction) => self.compaction += elapsed,
@@ -327,11 +376,33 @@ impl TurnProfileState {
         }
     }
 
+    fn path_at(&self, now: Instant) -> Option<CriticalPath> {
+        let path = self.path.clone()?;
+        Some(self.extend_path(path, self.last_transition_at?, now))
+    }
+
+    fn extend_path(&self, path: CriticalPath, previous: Instant, now: Instant) -> CriticalPath {
+        match self.active_phase {
+            // Compaction is model-related elapsed work, including local bookkeeping;
+            // the existing profile still exposes its separate compaction_ms duration.
+            Some(TurnProfilePhase::Sampling | TurnProfilePhase::Compaction) => {
+                path.work(previous, now, WorkKind::Inference)
+            }
+            Some(TurnProfilePhase::ToolBlocking) => {
+                let dependency = self
+                    .tool_dependency
+                    .clone()
+                    .unwrap_or_else(|| path.clone().work(previous, now, WorkKind::Unknown));
+                path.join(previous, now, dependency)
+            }
+            None => path.work(previous, now, WorkKind::Overhead),
+        }
+    }
+
     fn complete(&mut self, now: Instant) -> TurnProfile {
         if let Some(profile) = self.completed_profile.as_ref() {
             return profile.clone();
         }
-
         let final_phase = self.active_phase;
         self.advance(now);
         let after_last_sampling = if self.seen_sampling {

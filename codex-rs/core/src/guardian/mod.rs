@@ -224,3 +224,7 @@ use review_session::build_guardian_review_session_config as build_guardian_revie
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "decision_timing_tests.rs"]
+mod decision_timing_tests;

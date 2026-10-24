@@ -732,6 +732,15 @@ impl Session {
             };
         }
 
+        // This callback carries a request ID, not a reliable tool invocation owner.
+        // Do not report its human wait as ordinary tool execution.
+        if turn_context
+            .config
+            .features
+            .enabled(Feature::CriticalPathTiming)
+        {
+            turn_context.turn_timing_state.invalidate_critical_path();
+        }
         let _elicitation = self.services.elicitations.register();
         let (tx_response, rx_response) = oneshot::channel();
         let prev_entry = {

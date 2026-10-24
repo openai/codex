@@ -222,6 +222,7 @@ use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use std::path::Path;
 use std::time::Duration;
+use std::time::Instant;
 use test_case::test_case;
 use tokio::sync::Notify;
 use tokio::sync::Semaphore;
@@ -715,15 +716,35 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled(
     assert!(rx.try_recv().is_err());
 }
 
-#[test_case(SessionSource::Exec; "root")]
-#[test_case(SessionSource::SubAgent(SubAgentSource::Review); "subagent")]
-#[test_case(SessionSource::Internal(InternalSessionSource::Guardian); "guardian")]
+#[test_case(SessionSource::Exec, true; "root")]
+#[test_case(SessionSource::Exec, false; "capture_off")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::Review), true; "subagent")]
+#[test_case(SessionSource::Internal(InternalSessionSource::Guardian), true; "guardian")]
 #[tokio::test]
-async fn request_mcp_server_elicitation_waits_for_user_response(source: SessionSource) {
+async fn request_mcp_server_elicitation_waits_for_user_response(
+    source: SessionSource,
+    capture: bool,
+) {
     let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
     Arc::get_mut(&mut turn_context)
         .expect("turn context should not be shared")
         .session_source = source;
+    Arc::make_mut(&mut Arc::get_mut(&mut turn_context).unwrap().config)
+        .features
+        .set_enabled(Feature::CriticalPathTiming, capture)
+        .unwrap();
+    // Enable state independently to prove a disabled feature does not invalidate it.
+    turn_context.turn_timing_state.enable_critical_path();
+    turn_context
+        .turn_timing_state
+        .mark_turn_started(Instant::now())
+        .await;
+    assert!(
+        turn_context
+            .turn_timing_state
+            .snapshot_path(Instant::now())
+            .is_some()
+    );
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let paused = session.subscribe_elicitation_pause_state();
     let request = ElicitationRequest::Url {
@@ -764,6 +785,13 @@ async fn request_mcp_server_elicitation_waits_for_user_response(source: SessionS
         }
     );
     assert!(*paused.borrow());
+    assert_eq!(
+        turn_context
+            .turn_timing_state
+            .snapshot_path(Instant::now())
+            .is_none(),
+        capture
+    );
     assert!(!pending.is_finished());
 
     let response = ElicitationResponse {
@@ -2358,6 +2386,10 @@ async fn refresh_config_rejects_stale_owner_without_effects(scope: RuntimeConfig
             !stale_owner.features.enabled(Feature::Mcp20260728),
         )
         .expect("set MCP protocol rollout");
+    stale_config
+        .features
+        .enable(Feature::CriticalPathTiming)
+        .unwrap();
     assert_eq!(
         session
             .refresh_runtime_config(Arc::clone(&stale_owner), stale_owner.as_ref().clone())
@@ -2782,7 +2814,22 @@ async fn inter_agent_communication_waits_for_confirmed_delivery_persistence() {
 
 #[tokio::test]
 async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
-    let (mut session, turn_context) = make_session_and_context().await;
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    Arc::make_mut(&mut turn_context.config)
+        .features
+        .enable(Feature::CriticalPathTiming)
+        .unwrap();
+    turn_context.turn_timing_state.enable_critical_path();
+    turn_context
+        .turn_timing_state
+        .mark_turn_started(std::time::Instant::now())
+        .await;
+    assert!(
+        turn_context
+            .turn_timing_state
+            .snapshot_path(std::time::Instant::now())
+            .is_some()
+    );
     let rollout_path = attach_thread_persistence(&mut session).await;
     let communication = InterAgentCommunication::new(
         AgentPath::root().join("worker").expect("worker path"),
@@ -2803,6 +2850,12 @@ async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
         .record_inter_agent_communication(&turn_context, turn_context.model_info(), communication)
         .await;
 
+    assert!(
+        turn_context
+            .turn_timing_state
+            .snapshot_path(std::time::Instant::now())
+            .is_none()
+    );
     let recorded_history = session.clone_history().await;
     let recorded_items = raw_history_items(&recorded_history);
     let create_time = recorded_items[0]

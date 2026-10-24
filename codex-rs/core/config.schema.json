@@ -978,6 +978,9 @@
             "credential_masking": {
               "type": "boolean"
             },
+            "critical_path_timing": {
+              "type": "boolean"
+            },
             "current_time_reminder": {
               "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
             },
@@ -7578,6 +7581,9 @@
           "$ref": "#/definitions/FeatureToml_for_ContextManagementConfigToml"
         },
         "credential_masking": {
+          "type": "boolean"
+        },
+        "critical_path_timing": {
           "type": "boolean"
         },
         "current_time_reminder": {

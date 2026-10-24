@@ -3429,7 +3429,9 @@ async fn try_run_sampling_request(
     .await;
 
     if !in_flight.is_empty() {
-        let _tool_blocking_timing_guard = turn_context.turn_timing_state.begin_tool_blocking();
+        let _tool_blocking_timing_guard = turn_context
+            .turn_timing_state
+            .begin_tool_blocking(tool_runtime.batch_timing());
         let _tool_blocking_span = trace_span!(
             "codex.tool_blocking",
             codex.turn.phase = "tool_blocking",

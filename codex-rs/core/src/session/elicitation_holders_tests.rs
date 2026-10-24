@@ -1,5 +1,7 @@
+use codex_features::Feature;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use codex_core_plugins::PluginCommandAttribution;
 use codex_plugin::PluginId;
@@ -18,6 +20,27 @@ use super::tests::make_session_and_context_with_rx;
 use crate::session::step_context::StepContext;
 use crate::state::ActiveTurn;
 
+async fn start_timing(turn: &mut Arc<super::turn_context::TurnContext>, enabled: bool) {
+    Arc::make_mut(&mut Arc::get_mut(turn).expect("unique test turn").config)
+        .features
+        .set_enabled(Feature::CriticalPathTiming, enabled)
+        .unwrap();
+    // Populate state independently to verify disabled capture does not invalidate it.
+    turn.turn_timing_state.enable_critical_path();
+    turn.turn_timing_state
+        .mark_turn_started(Instant::now())
+        .await;
+}
+
+fn assert_uncaptured_wait(turn: &super::turn_context::TurnContext, enabled: bool) {
+    assert_eq!(
+        turn.turn_timing_state
+            .snapshot_path(Instant::now())
+            .is_none(),
+        enabled
+    );
+}
+
 async fn wait_until_held(pause_state: &mut watch::Receiver<bool>) {
     pause_state
         .wait_for(|paused| *paused)
@@ -32,9 +55,12 @@ async fn wait_until_released(pause_state: &mut watch::Receiver<bool>) {
         .expect("elicitation service should remain available");
 }
 
+#[test_case::test_case(true; "capture_on")]
+#[test_case::test_case(false; "capture_off")]
 #[tokio::test]
-async fn command_approval_holds_an_elicitation_until_response() {
-    let (session, turn_context, events) = make_session_and_context_with_rx().await;
+async fn command_approval_holds_an_elicitation_until_response(capture: bool) {
+    let (session, mut turn_context, events) = make_session_and_context_with_rx().await;
+    start_timing(&mut turn_context, capture).await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let mut pause_state = session.subscribe_elicitation_pause_state();
     #[allow(deprecated)]
@@ -82,11 +108,13 @@ async fn command_approval_holds_an_elicitation_until_response() {
         .await;
     request.await.expect("approval task");
     wait_until_released(&mut pause_state).await;
+    assert_uncaptured_wait(&turn_context, capture);
 }
 
 #[tokio::test]
 async fn patch_approval_holds_an_elicitation_until_response() {
-    let (session, turn_context, events) = make_session_and_context_with_rx().await;
+    let (session, mut turn_context, events) = make_session_and_context_with_rx().await;
+    start_timing(&mut turn_context, /*enabled*/ true).await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let mut pause_state = session.subscribe_elicitation_pause_state();
 
@@ -113,11 +141,13 @@ async fn patch_approval_holds_an_elicitation_until_response() {
         .await;
     request.await.expect("approval task");
     wait_until_released(&mut pause_state).await;
+    assert_uncaptured_wait(&turn_context, /*enabled*/ true);
 }
 
 #[tokio::test]
 async fn permission_request_holds_an_elicitation_until_response() {
-    let (session, turn_context, events) = make_session_and_context_with_rx().await;
+    let (session, mut turn_context, events) = make_session_and_context_with_rx().await;
+    start_timing(&mut turn_context, /*enabled*/ true).await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let mut pause_state = session.subscribe_elicitation_pause_state();
 
@@ -160,11 +190,16 @@ async fn permission_request_holds_an_elicitation_until_response() {
         .await;
     request.await.expect("permission request task");
     wait_until_released(&mut pause_state).await;
+    assert_uncaptured_wait(&turn_context, /*enabled*/ true);
 }
 
+#[test_case::test_case(true, false; "blocking")]
+#[test_case::test_case(false, false; "nonblocking_ui_label")]
+#[test_case::test_case(true, true; "cancelled")]
 #[tokio::test]
-async fn request_user_input_holds_an_elicitation_until_response() {
-    let (session, turn_context, events) = make_session_and_context_with_rx().await;
+async fn request_user_input_holds_an_elicitation_until_response(blocking: bool, cancel: bool) {
+    let (session, mut turn_context, events) = make_session_and_context_with_rx().await;
+    start_timing(&mut turn_context, /*enabled*/ true).await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     let mut pause_state = session.subscribe_elicitation_pause_state();
 
@@ -178,7 +213,7 @@ async fn request_user_input_holds_an_elicitation_until_response() {
                     "call-1".to_string(),
                     RequestUserInputArgs {
                         questions: Vec::new(),
-                        is_blocking: true,
+                        is_blocking: blocking,
                         auto_resolution_ms: None,
                     },
                 )
@@ -189,6 +224,13 @@ async fn request_user_input_holds_an_elicitation_until_response() {
     events.recv().await.expect("request user input event");
     wait_until_held(&mut pause_state).await;
 
+    if cancel {
+        request.abort();
+        assert!(matches!(request.await, Err(error) if error.is_cancelled()));
+        wait_until_released(&mut pause_state).await;
+        assert_uncaptured_wait(&turn_context, /*enabled*/ true);
+        return;
+    }
     let response = RequestUserInputResponse {
         answers: HashMap::new(),
     };
@@ -198,4 +240,5 @@ async fn request_user_input_holds_an_elicitation_until_response() {
 
     request.await.expect("request user input task");
     wait_until_released(&mut pause_state).await;
+    assert_uncaptured_wait(&turn_context, /*enabled*/ true);
 }

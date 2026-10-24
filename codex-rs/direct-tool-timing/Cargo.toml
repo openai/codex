@@ -15,3 +15,6 @@ codex-utils-critical-path = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+test-case = "3.3.1"
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+tokio-util = { workspace = true }

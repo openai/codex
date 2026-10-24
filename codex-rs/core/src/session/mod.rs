@@ -2998,6 +2998,17 @@ impl Session {
             .await;
     }
 
+    fn invalidate_uncaptured_user_wait(&self, turn_context: &TurnContext) {
+        // Replace this boundary with owner-scoped timing when user waits are connected.
+        if turn_context
+            .config
+            .features
+            .enabled(Feature::CriticalPathTiming)
+        {
+            turn_context.turn_timing_state.invalidate_critical_path();
+        }
+    }
+
     /// Emit an exec approval request event and await the user's decision.
     ///
     /// The request is keyed by `call_id` + `approval_id` so matching responses
@@ -3100,6 +3111,7 @@ impl Session {
             available_decisions: Some(available_decisions),
             parsed_cmd,
         });
+        self.invalidate_uncaptured_user_wait(turn_context);
         self.send_event(turn_context, event).await;
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
@@ -3142,6 +3154,7 @@ impl Session {
             reason,
             grant_root,
         });
+        self.invalidate_uncaptured_user_wait(turn_context);
         self.send_event(turn_context, event).await;
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
@@ -3307,6 +3320,7 @@ impl Session {
             permissions: requested_permissions,
             cwd: Some(cwd.clone().into()),
         });
+        self.invalidate_uncaptured_user_wait(turn_context);
         self.send_event(turn_context.as_ref(), event).await;
         tokio::select! {
             biased;
@@ -3360,6 +3374,7 @@ impl Session {
         turn_context
             .turn_metadata_state
             .mark_user_input_requested_during_turn();
+        self.invalidate_uncaptured_user_wait(turn_context);
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
     }
@@ -4189,6 +4204,14 @@ impl Session {
         communication: impl Into<crate::PendingAgentMessage>,
     ) {
         let communication = communication.into();
+        // Agent-message dependencies are not captured by direct-tool timing.
+        if turn_context
+            .config
+            .features
+            .enabled(Feature::CriticalPathTiming)
+        {
+            turn_context.turn_timing_state.invalidate_critical_path();
+        }
         let mut response_item = communication.to_model_input_item();
         if let ResponseItem::AgentMessage {
             content,

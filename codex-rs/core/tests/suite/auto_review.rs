@@ -59,7 +59,10 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-struct ApprovedReviewContributor;
+struct ApprovedReviewContributor {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Semaphore,
+}
 
 impl ApprovalReviewContributor for ApprovedReviewContributor {
     fn decide<'a>(
@@ -67,6 +70,8 @@ impl ApprovalReviewContributor for ApprovedReviewContributor {
         input: &'a codex_extension_api::ApprovalDecisionInput<'_>,
     ) -> ExtensionFuture<'a, Option<codex_extension_api::ApprovalDecision>> {
         Box::pin(async move {
+            self.entered.notify_one();
+            self.release.acquire().await.expect("review gate").forget();
             assert!(input.metrics.is_some());
             assert_eq!(input.action["tool"], "request_permissions");
             Some(codex_extension_api::ApprovalDecision::Allow)
@@ -125,11 +130,19 @@ async fn approval_review_contributor_skips_existing_guardian_model_call() -> Res
     .await;
 
     let mut extensions = ExtensionRegistryBuilder::new();
-    extensions.approval_review_contributor(Arc::new(ApprovedReviewContributor));
+    let reviewer = Arc::new(ApprovedReviewContributor {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Semaphore::new(/* permits */ 0),
+    });
+    extensions.approval_review_contributor(reviewer.clone());
     let mut builder = test_codex()
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config
+                .features
+                .enable(Feature::CriticalPathTiming)
+                .expect("critical-path capture is configurable");
             config
                 .features
                 .enable(Feature::RequestPermissionsTool)
@@ -142,6 +155,13 @@ async fn approval_review_contributor_skips_existing_guardian_model_call() -> Res
             text_elements: Vec::new(),
         }]))
         .await?;
+
+    reviewer.entered.notified().await;
+    let observe = codex_core::test_support::observe_turn_timing(&test.codex)
+        .await
+        .expect("active turn");
+    let now = std::time::Instant::now();
+    reviewer.release.add_permits(/* n */ 1);
 
     loop {
         match wait_for_event(&test.codex, |_| true).await {
@@ -156,6 +176,7 @@ async fn approval_review_contributor_skips_existing_guardian_model_call() -> Res
         }
     }
 
+    assert_eq!(observe(now, now), None);
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
     assert!(
@@ -332,7 +353,10 @@ async fn required_model_bypasses_extension_approval_when_guardian_v2_is_disabled
     let requirements =
         format!("{reviewer_requirements}[auto_review]\nrequired_on_models = [\"{model}\"]\n");
     let mut extensions = ExtensionRegistryBuilder::new();
-    extensions.approval_review_contributor(Arc::new(ApprovedReviewContributor));
+    extensions.approval_review_contributor(Arc::new(ApprovedReviewContributor {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Semaphore::new(/* permits */ 1),
+    }));
     let mut builder = test_codex()
         .with_model(model)
         .with_extensions(Arc::new(extensions.build()))
