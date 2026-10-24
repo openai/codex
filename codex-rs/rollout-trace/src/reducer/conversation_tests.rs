@@ -290,6 +290,8 @@ fn later_full_request_reuses_prior_json_tool_call_by_position() -> anyhow::Resul
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;
     start_turn(&writer, "turn-1")?;
+    // The display summary's byte limit falls inside a three-byte character.
+    let arguments = json!({"cmd": "界".repeat(100)}).to_string();
 
     let request = writer.write_json_payload(
         RawPayloadKind::InferenceRequest,
@@ -306,11 +308,12 @@ fn later_full_request_reuses_prior_json_tool_call_by_position() -> anyhow::Resul
             "output_items": [{
                 "type": "function_call",
                 "name": "shell",
-                "arguments": "{\"cmd\":\"cargo test\"}",
+                "arguments": arguments,
                 "call_id": "call-1"
             }]
         }),
     )?;
+    let response_payload_id = response.raw_payload_id.clone();
     append_inference_completion(&writer, "inference-1", "resp-1", response)?;
     start_turn(&writer, "turn-2")?;
 
@@ -322,7 +325,7 @@ fn later_full_request_reuses_prior_json_tool_call_by_position() -> anyhow::Resul
                 {
                     "type": "function_call",
                     "name": "shell",
-                    "arguments": "{\"cmd\":\"cargo test\"}",
+                    "arguments": arguments,
                     "call_id": "call-1"
                 }
             ]
@@ -342,6 +345,15 @@ fn later_full_request_reuses_prior_json_tool_call_by_position() -> anyhow::Resul
         ],
     );
     assert_eq!(rollout.conversation_items.len(), 2);
+    assert_eq!(
+        rollout.conversation_items[&first.response_item_ids[0]].body,
+        ConversationBody {
+            parts: vec![ConversationPart::Json {
+                summary: format!("{{\"cmd\":\"{}...", "界".repeat(77)),
+                raw_payload_id: response_payload_id,
+            }],
+        },
+    );
 
     Ok(())
 }
