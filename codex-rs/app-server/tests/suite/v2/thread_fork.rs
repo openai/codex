@@ -84,6 +84,7 @@ use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_rollout::RolloutItem;
 use codex_rollout::RolloutLine;
+use codex_rollout::RolloutRecorder;
 use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::append_thread_name;
 use codex_rollout::read_session_meta_line;
@@ -442,7 +443,7 @@ async fn assert_thread_fork_preserves_persisted_approvals_reviewer(
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
-    let (source_thread_id, source_turn_id) = {
+    let (source_thread_id, source_turn_id, rollout_path) = {
         let mut mcp = TestAppServer::builder()
             .with_codex_home(codex_home.path())
             .build_initialized()
@@ -530,8 +531,19 @@ async fn assert_thread_fork_preserves_persisted_approvals_reviewer(
             );
         }
 
-        (thread.id, turn.id)
+        (
+            thread.id,
+            turn.id,
+            thread.path.expect("source rollout path"),
+        )
     };
+
+    // The first turn records its workspace permissions after the source switched to read-only.
+    let (items, _, _) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    let frozen_context = items.into_iter().find(|item| {
+        matches!(item, RolloutItem::TurnContext(context) if context.turn_id.as_deref() == Some(&source_turn_id))
+    }).expect("first turn context");
+    append_rollout_item_to_path(&rollout_path, &frozen_context).await?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())

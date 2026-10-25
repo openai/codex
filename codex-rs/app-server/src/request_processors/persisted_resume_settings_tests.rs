@@ -1,5 +1,6 @@
 use super::PersistedResumeSettings;
 use super::latest_persisted_resume_settings;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -22,13 +23,14 @@ fn cwd() -> AbsolutePathBuf {
 }
 
 fn settings_item(
+    thread_id: Option<ThreadId>,
     approval_policy: AskForApproval,
     approvals_reviewer: ApprovalsReviewer,
     active_permission_profile: Option<ActivePermissionProfile>,
 ) -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(
         ThreadSettingsAppliedEvent {
-            thread_id: None,
+            thread_id,
             thread_settings: ThreadSettingsSnapshot {
                 disabled_plugin_ids: Vec::new(),
                 model: "gpt-5".to_string(),
@@ -90,14 +92,17 @@ fn latest_settings_snapshot_wins() {
         approval_policy: AskForApproval::OnRequest,
         approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
         active_permission_profile: Some(ActivePermissionProfile::new("dev")),
+        unnamed_permission_profile: None,
     };
     let history = vec![
         settings_item(
+            /*thread_id*/ None,
             AskForApproval::Never,
             ApprovalsReviewer::User,
             /*active_permission_profile*/ None,
         ),
         settings_item(
+            /*thread_id*/ None,
             AskForApproval::OnRequest,
             ApprovalsReviewer::AutoReview,
             Some(ActivePermissionProfile::new("dev")),
@@ -113,9 +118,11 @@ fn latest_turn_context_wins_over_earlier_settings_update() {
         approval_policy: AskForApproval::UnlessTrusted,
         approvals_reviewer: Some(ApprovalsReviewer::User),
         active_permission_profile: Some(ActivePermissionProfile::read_only()),
+        unnamed_permission_profile: None,
     };
     let history = vec![
         settings_item(
+            /*thread_id*/ None,
             AskForApproval::Never,
             ApprovalsReviewer::AutoReview,
             Some(ActivePermissionProfile::new("dev")),
@@ -129,6 +136,69 @@ fn latest_turn_context_wins_over_earlier_settings_update() {
     ];
 
     assert_eq!(latest_persisted_resume_settings(&history), Some(expected));
+}
+
+#[test]
+fn newer_legacy_permissions_only_supersede_their_own_threads_checkpoint() {
+    let thread_id = ThreadId::new();
+    let other_thread_id = ThreadId::new();
+    let workspace = ActivePermissionProfile::new(":workspace");
+    let read_only = ActivePermissionProfile::read_only();
+    let owned = settings_item(
+        Some(thread_id),
+        AskForApproval::Never,
+        ApprovalsReviewer::AutoReview,
+        Some(workspace.clone()),
+    );
+    let legacy = settings_item(
+        /*thread_id*/ None,
+        AskForApproval::OnRequest,
+        ApprovalsReviewer::User,
+        Some(read_only.clone()),
+    );
+    let stale_turn = turn_context_item(
+        "turn",
+        AskForApproval::Never,
+        Some(ApprovalsReviewer::AutoReview),
+        Some(workspace.clone()),
+    );
+    let foreign = settings_item(
+        Some(other_thread_id),
+        AskForApproval::Never,
+        ApprovalsReviewer::AutoReview,
+        Some(workspace.clone()),
+    );
+    let foreign_legacy = settings_item(
+        /*thread_id*/ None,
+        AskForApproval::Never,
+        ApprovalsReviewer::AutoReview,
+        Some(workspace.clone()),
+    );
+    let mut history = vec![owned.clone(), legacy.clone(), stale_turn.clone()];
+    let expected = Some(PersistedResumeSettings {
+        approval_policy: AskForApproval::OnRequest,
+        approvals_reviewer: Some(ApprovalsReviewer::User),
+        active_permission_profile: Some(read_only),
+        unnamed_permission_profile: None,
+    });
+    assert_eq!(
+        PersistedResumeSettings::from_history(&history, thread_id),
+        expected
+    );
+    history.extend([foreign.clone(), foreign_legacy]);
+    assert_eq!(
+        PersistedResumeSettings::from_history(&history, thread_id),
+        expected
+    );
+    assert_eq!(
+        PersistedResumeSettings::from_history(&[owned, foreign, legacy, stale_turn], thread_id),
+        Some(PersistedResumeSettings {
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            active_permission_profile: Some(workspace),
+            unnamed_permission_profile: None,
+        })
+    );
 }
 
 #[test]
@@ -154,6 +224,20 @@ fn older_reviewer_is_used_when_latest_turn_context_omits_it() {
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             active_permission_profile: None,
+            unnamed_permission_profile: None,
         })
     );
+}
+
+#[test]
+fn an_unattributed_snapshot_does_not_restore_unnamed_permissions() {
+    let history = [settings_item(
+        /*thread_id*/ None,
+        AskForApproval::OnRequest,
+        ApprovalsReviewer::User,
+        /*active_permission_profile*/ None,
+    )];
+    let settings =
+        PersistedResumeSettings::from_history(&history, ThreadId::new()).expect("legacy settings");
+    assert_eq!(settings.unnamed_permission_profile, None);
 }

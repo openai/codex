@@ -1019,6 +1019,82 @@ sandbox = "unelevated"
 }
 
 #[tokio::test]
+async fn resume_and_fork_restore_unnamed_permissions_from_a_legacy_update() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .with_sandbox_mode("workspace-write")
+        .write(codex_home.path())?;
+    let stamp = "2025-01-05T12-00-00";
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        stamp,
+        "2025-01-05T12:00:00Z",
+        "Unnamed permissions",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let path = rollout_path(codex_home.path(), stamp, &thread_id);
+    let owned: ThreadSettingsAppliedEvent = serde_json::from_value(json!({
+        "thread_id": thread_id,
+        "thread_settings": {
+            "model": "gpt-5.5",
+            "model_provider_id": "mock_provider",
+            "cwd": normalized_existing_path(codex_home.path())?,
+            "approval_policy": "never",
+            "approvals_reviewer": "user",
+            "permission_profile": PermissionProfile::workspace_write(),
+            "collaboration_mode": {"mode": "default", "settings": {"model": "gpt-5.5"}},
+        },
+    }))?;
+    let mut legacy = owned.clone();
+    legacy.thread_id = None;
+    legacy.thread_settings.permission_profile = PermissionProfile::read_only();
+    for event in [owned, legacy] {
+        append_rollout_item_to_path(
+            &path,
+            &RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)),
+        )
+        .await?;
+    }
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_managed_config()
+        .build_initialized()
+        .await?;
+    // Fork first so it reads the original history before resume writes a checkpoint.
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: thread_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let fork: ThreadForkResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(fork_id)).await??;
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let resumed: ThreadResumeResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
+    let expected = (
+        AppSandboxPolicy::ReadOnly {
+            network_access: false,
+        },
+        None,
+    );
+    assert_eq!(
+        (resumed.sandbox, resumed.active_permission_profile),
+        expected
+    );
+    assert_eq!((fork.sandbox, fork.active_permission_profile), expected);
+    Ok(())
+}
+
+#[tokio::test]
 async fn cold_resume_workspace_roots_validate_foreign_startup_paths() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -1474,6 +1550,9 @@ async fn thread_resume_preserves_acknowledged_model_effort_and_approvals_reviewe
             .send_thread_start_request_with_auto_env(ThreadStartParams {
                 model: Some("gpt-5.4".to_string()),
                 history_mode: Some(ThreadHistoryMode::Legacy),
+                approval_policy: Some(AskForApproval::Never),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                permissions: Some(":workspace".to_string()),
                 ..Default::default()
             })
             .await?;
@@ -1516,7 +1595,9 @@ async fn thread_resume_preserves_acknowledged_model_effort_and_approvals_reviewe
                 thread_id: thread.id.clone(),
                 model: Some("gpt-5.2-codex".to_string()),
                 effort: Some(ReasoningEffort::Ultra),
+                approval_policy: Some(AskForApproval::OnRequest),
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                permissions: Some(":read-only".to_string()),
                 cwd: Some(persisted_cwd.clone()),
                 ..Default::default()
             })
@@ -1607,7 +1688,7 @@ async fn thread_resume_preserves_acknowledged_model_effort_and_approvals_reviewe
     .await??;
     timeout(DEFAULT_READ_TIMEOUT, mcp.shutdown_gracefully()).await??;
 
-    // Older rollouts can retain a frozen turn context after an accepted settings update.
+    // A running turn can record its original permissions after the thread accepts an update.
     let (items, _, _) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
     let frozen_context = items
         .into_iter()
@@ -1619,6 +1700,21 @@ async fn thread_resume_preserves_acknowledged_model_effort_and_approvals_reviewe
         .with_codex_home(codex_home.path())
         .build_initialized()
         .await?;
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: thread_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let fork: ThreadForkResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(fork_id)).await??;
+    assert_eq!(fork.approval_policy, AskForApproval::OnRequest);
+    assert_eq!(fork.approvals_reviewer, ApprovalsReviewer::AutoReview);
+    assert_eq!(
+        fork.active_permission_profile,
+        Some(ActivePermissionProfile::new(":read-only"))
+    );
+
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread_id.clone(),
@@ -1630,10 +1726,25 @@ async fn thread_resume_preserves_acknowledged_model_effort_and_approvals_reviewe
         cwd,
         reasoning_effort,
         collaboration_mode,
+        approval_policy,
+        approvals_reviewer,
+        active_permission_profile,
         ..
     } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
     assert_eq!(reasoning_effort, Some(ReasoningEffort::High));
     assert_eq!(cwd.as_path(), persisted_cwd);
+    assert_eq!(
+        (
+            approval_policy,
+            approvals_reviewer,
+            active_permission_profile
+        ),
+        (
+            AskForApproval::OnRequest,
+            ApprovalsReviewer::AutoReview,
+            Some(ActivePermissionProfile::new(":read-only")),
+        )
+    );
     let (items, _, _) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
     let mode = items.iter().rev().find_map(|item| match item {
         RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
