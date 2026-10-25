@@ -5,6 +5,7 @@
 //! `Selection`.
 
 use super::*;
+use crate::key_hint::KeyBindingListExt;
 use crate::text_selection::SelectionUnit;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -25,12 +26,52 @@ pub(super) struct SelectMode {
 pub(super) struct Mark {
     anchor: Anchor,
     active: Anchor,
+    anchor_edges: Option<(Anchor, Anchor)>,
+    active_edges: Option<(Anchor, Anchor)>,
+    unit: SelectionUnit,
 }
 
 #[derive(Clone, Copy)]
 enum CursorMotion {
     Character(KeyCode),
     Rows(isize),
+    WordForward,
+    WordBackward,
+    WordEnd,
+    LineStart,
+    LineEnd,
+    Beginning,
+    End,
+}
+
+fn pager_motion(
+    keymap: &crate::keymap::RuntimeKeymap,
+    key: KeyEvent,
+    area_height: u16,
+) -> Option<CursorMotion> {
+    let pager = &keymap.pager;
+    if pager.jump_top.is_pressed(key) {
+        return Some(CursorMotion::Beginning);
+    }
+    if pager.jump_bottom.is_pressed(key) {
+        return Some(CursorMotion::End);
+    }
+    let page = isize::try_from(area_height.saturating_sub(1).max(1)).unwrap_or(isize::MAX);
+    let half = isize::try_from(area_height.div_ceil(2)).unwrap_or(isize::MAX);
+    [
+        (&pager.scroll_up, -1),
+        (&pager.scroll_down, 1),
+        (&pager.page_up, -page),
+        (&pager.page_down, page),
+        (&pager.half_page_up, -half),
+        (&pager.half_page_down, half),
+    ]
+    .into_iter()
+    .find_map(|(action_bindings, rows)| {
+        action_bindings
+            .is_pressed(key)
+            .then_some(CursorMotion::Rows(rows))
+    })
 }
 
 impl SelectMode {
@@ -48,6 +89,7 @@ impl TranscriptView {
         }
         self.copy_mode = None;
         self.cancel_beginning();
+        let has_range = self.has_selection_range();
         if self.selection.is_none() {
             let cursor = self
                 .visible
@@ -74,6 +116,9 @@ impl TranscriptView {
             self.hold_position();
         }
         self.select_mode = Some(SelectMode::default());
+        if has_range {
+            self.adopt_select_mouse_range();
+        }
         self.reveal_select_cursor(cells);
         true
     }
@@ -134,17 +179,24 @@ impl TranscriptView {
             && matches!(code, KeyCode::Char('v') | KeyCode::Char(' '))
             && modifiers == KeyModifiers::NONE
         {
-            self.start_select_mark(cells);
+            self.start_select_mark(cells, SelectionUnit::Character);
             return Some(ViewAction::Changed);
         }
-
+        if pressed && code == KeyCode::Char('v') && modifiers == KeyModifiers::SHIFT {
+            self.start_select_mark(cells, SelectionUnit::Line);
+            return Some(ViewAction::Changed);
+        }
+        if pressed && code == KeyCode::Char('o') && modifiers == KeyModifiers::NONE {
+            self.swap_select_ends(cells);
+            return Some(ViewAction::Changed);
+        }
         let shift_arrow = modifiers == KeyModifiers::SHIFT
             && matches!(
                 code,
                 KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
             );
         if shift_arrow && self.select_mode.is_some_and(|mode| mode.mark.is_none()) {
-            self.start_select_mark(cells);
+            self.start_select_mark(cells, SelectionUnit::Character);
         }
         let motion = match (code, modifiers) {
             (
@@ -161,6 +213,38 @@ impl TranscriptView {
             (KeyCode::Char('l'), KeyModifiers::NONE) => CursorMotion::Character(KeyCode::Right),
             (KeyCode::Char('k'), KeyModifiers::NONE) => CursorMotion::Rows(-1),
             (KeyCode::Char('j'), KeyModifiers::NONE) => CursorMotion::Rows(1),
+            (KeyCode::Char('w'), KeyModifiers::NONE) => CursorMotion::WordForward,
+            (KeyCode::Char('b'), KeyModifiers::NONE) => CursorMotion::WordBackward,
+            (KeyCode::Char('e'), KeyModifiers::NONE) => CursorMotion::WordEnd,
+            (KeyCode::Home | KeyCode::Char('0'), KeyModifiers::NONE) => CursorMotion::LineStart,
+            (KeyCode::End, KeyModifiers::NONE)
+            | (KeyCode::Char('$'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                CursorMotion::LineEnd
+            }
+            (KeyCode::PageUp, KeyModifiers::NONE) | (KeyCode::Char('b'), KeyModifiers::CONTROL) => {
+                CursorMotion::Rows(
+                    -isize::try_from(self.area.height.saturating_sub(1).max(1))
+                        .unwrap_or(isize::MAX),
+                )
+            }
+            (KeyCode::PageDown, KeyModifiers::NONE)
+            | (KeyCode::Char('f'), KeyModifiers::CONTROL) => CursorMotion::Rows(
+                isize::try_from(self.area.height.saturating_sub(1).max(1)).unwrap_or(isize::MAX),
+            ),
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => CursorMotion::Rows(
+                -isize::try_from(self.area.height.div_ceil(2)).unwrap_or(isize::MAX),
+            ),
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => CursorMotion::Rows(
+                isize::try_from(self.area.height.div_ceil(2)).unwrap_or(isize::MAX),
+            ),
+            (KeyCode::Char('g'), KeyModifiers::NONE) | (KeyCode::Home, KeyModifiers::CONTROL) => {
+                CursorMotion::Beginning
+            }
+            (KeyCode::Char('g'), KeyModifiers::SHIFT) => CursorMotion::End,
+            (KeyCode::End, KeyModifiers::CONTROL) => CursorMotion::End,
+            _ if !self.is_search_editing() => {
+                pager_motion(&self.disclosure.keymap, key, self.area.height)?
+            }
             _ => return None,
         };
         self.move_select_cursor(cells, motion);
@@ -172,7 +256,7 @@ impl TranscriptView {
         ViewAction::ExitSelectMode
     }
 
-    fn start_select_mark(&mut self, cells: &[Arc<dyn HistoryCell>]) {
+    fn start_select_mark(&mut self, cells: &[Arc<dyn HistoryCell>], unit: SelectionUnit) {
         let Some(mut mode) = self.select_mode else {
             return;
         };
@@ -181,13 +265,22 @@ impl TranscriptView {
         };
         let cursor = mode.cursor(selection);
         mode.mark = match mode.mark {
-            Some(_) => {
+            Some(mark) if mark.unit == unit => {
                 self.clear_select_mark();
                 return;
             }
+            Some(mark) => Some(Mark {
+                anchor_edges: None,
+                active_edges: None,
+                unit,
+                ..mark
+            }),
             None => Some(Mark {
                 anchor: cursor,
                 active: cursor,
+                anchor_edges: None,
+                active_edges: None,
+                unit,
             }),
         };
         mode.preferred_column = None;
@@ -208,7 +301,21 @@ impl TranscriptView {
         selection.set_keyboard_range(cursor, cursor);
     }
 
-    fn reveal_select_cursor(&mut self, cells: &[Arc<dyn HistoryCell>]) {
+    fn swap_select_ends(&mut self, cells: &[Arc<dyn HistoryCell>]) {
+        let Some(mode) = &mut self.select_mode else {
+            return;
+        };
+        let Some(mark) = &mut mode.mark else {
+            return;
+        };
+        std::mem::swap(&mut mark.anchor, &mut mark.active);
+        std::mem::swap(&mut mark.anchor_edges, &mut mark.active_edges);
+        mode.preferred_column = None;
+        self.sync_select_range(cells);
+        self.reveal_select_cursor(cells);
+    }
+
+    pub(super) fn reveal_select_cursor(&mut self, cells: &[Arc<dyn HistoryCell>]) {
         let Some(mode) = self.select_mode else {
             return;
         };
@@ -257,6 +364,53 @@ impl TranscriptView {
                 /*height*/ 1,
             );
             buf.set_style(area, crate::style::selection_style().underlined());
+        }
+    }
+
+    pub(super) fn adopt_select_mouse_range(&mut self) {
+        let has_range = self.has_selection_range();
+        let Some(selection) = &self.selection else {
+            return;
+        };
+        let (start, end, unit) = (selection.start, selection.end, selection.unit());
+        let snapshot = self.snapshot_cells();
+        let cells = snapshot.as_deref().unwrap_or_default();
+        let mark = has_range.then(|| {
+            if self.anchor_order(cells, start) <= self.anchor_order(cells, end) {
+                let active = self.before_grapheme(cells, end);
+                let anchor_end = self
+                    .selection_endpoint_bounds(cells, start, unit)
+                    .map_or(start, |edges| edges.1);
+                let active_start = self
+                    .selection_endpoint_bounds(cells, active, unit)
+                    .map_or(active, |edges| edges.0);
+                Mark {
+                    anchor: start,
+                    active,
+                    anchor_edges: Some((start, anchor_end)),
+                    active_edges: Some((active_start, end)),
+                    unit,
+                }
+            } else {
+                let anchor = self.before_grapheme(cells, start);
+                let anchor_start = self
+                    .selection_endpoint_bounds(cells, anchor, unit)
+                    .map_or(anchor, |edges| edges.0);
+                let active_end = self
+                    .selection_endpoint_bounds(cells, end, unit)
+                    .map_or(end, |edges| edges.1);
+                Mark {
+                    anchor,
+                    active: end,
+                    anchor_edges: Some((anchor_start, start)),
+                    active_edges: Some((end, active_end)),
+                    unit,
+                }
+            }
+        });
+        if let Some(mode) = &mut self.select_mode {
+            mode.preferred_column = None;
+            mode.mark = mark;
         }
     }
 }

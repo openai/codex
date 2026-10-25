@@ -83,6 +83,10 @@ impl Selection {
         self.origin = origin;
         self.unit = unit;
     }
+
+    pub(super) fn unit(&self) -> SelectionUnit {
+        self.unit
+    }
 }
 
 impl TranscriptView {
