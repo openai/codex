@@ -23,6 +23,7 @@
 mod cloud;
 mod path;
 mod remote;
+mod remote_websocket;
 pub use cloud::CloudClient;
 pub use cloud::CloudCommand;
 pub use cloud::CloudOperation;

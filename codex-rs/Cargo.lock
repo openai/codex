@@ -2179,6 +2179,7 @@ version = "0.0.0"
 dependencies = [
  "codex-app-server",
  "codex-app-server-protocol",
+ "codex-app-server-transport",
  "codex-arg0",
  "codex-config",
  "codex-core",
