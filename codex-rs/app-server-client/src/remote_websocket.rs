@@ -2,10 +2,12 @@
 
 use std::io;
 
+use codex_app_server_transport::CompressionConnection;
 use codex_app_server_transport::WEBSOCKET_COMPRESSION_HEADER;
 use codex_app_server_transport::WebSocketCompression;
 use codex_app_server_transport::ZstdDecoder;
 use codex_app_server_transport::ZstdEncoder;
+use codex_app_server_transport::zstd_codec_pair;
 use futures::SinkExt;
 use futures::StreamExt;
 use tokio::io::AsyncRead;
@@ -47,9 +49,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RemoteWebSocket<S> {
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         let codec = match WebSocketCompression::from_response_header(header)? {
             WebSocketCompression::Plain => None,
-            WebSocketCompression::Zstd => {
-                Some((ZstdEncoder::new()?, ZstdDecoder::new(max_message_size)?))
-            }
+            WebSocketCompression::Zstd => Some(zstd_codec_pair(
+                max_message_size,
+                CompressionConnection::NativeClient,
+            )?),
         };
         let max_frame_bytes = headers
             .get(MAX_UNFRAGMENTED_MESSAGE_BYTES_HEADER)

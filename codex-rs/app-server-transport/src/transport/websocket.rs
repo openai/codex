@@ -11,6 +11,7 @@ use crate::websocket_compression::WebSocketCompression;
 use crate::websocket_compression::ZSTD_STREAM_PROTOCOL;
 use crate::websocket_compression::ZstdDecoder;
 use crate::websocket_compression::ZstdEncoder;
+use crate::websocket_compression::zstd_codec_pair;
 use axum::Router;
 use axum::body::Body;
 use axum::body::Bytes;
@@ -211,20 +212,22 @@ pub(crate) async fn run_websocket_connection<M, SinkError, StreamError>(
     SinkError: Send + 'static,
     StreamError: std::fmt::Display + Send + 'static,
 {
+    let connection_id = next_connection_id();
     let (encoder, decoder) = match compression {
         WebSocketCompression::Plain => (None, None),
-        WebSocketCompression::Zstd => match (
-            ZstdEncoder::new(),
-            ZstdDecoder::new(MAX_DECOMPRESSED_MESSAGE_SIZE),
-        ) {
-            (Ok(encoder), Ok(decoder)) => (Some(encoder), Some(decoder)),
-            _ => {
-                warn!("failed to initialize websocket compression");
-                return;
+        WebSocketCompression::Zstd => {
+            match zstd_codec_pair(
+                MAX_DECOMPRESSED_MESSAGE_SIZE,
+                crate::CompressionConnection::Listener(connection_id),
+            ) {
+                Ok((encoder, decoder)) => (Some(encoder), Some(decoder)),
+                Err(_) => {
+                    warn!("failed to initialize websocket compression");
+                    return;
+                }
             }
-        },
+        }
     };
-    let connection_id = next_connection_id();
     let (writer_tx, writer_rx) =
         mpsc::channel::<QueuedOutgoingMessage>(WEBSOCKET_OUTBOUND_CHANNEL_CAPACITY);
     let writer_tx_for_reader = writer_tx.clone();

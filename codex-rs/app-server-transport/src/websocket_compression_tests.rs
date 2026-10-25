@@ -1,5 +1,7 @@
 //! Verify persistent history, peer fallback, and bounded decompression.
 
+#![cfg(test)]
+
 use super::*;
 use pretty_assertions::assert_eq;
 
@@ -24,12 +26,36 @@ fn messages_keep_history_and_have_independent_size_limits() -> io::Result<()> {
             .map(|index| format!("thread-{index}: individual message body {index}"))
             .collect::<Vec<_>>(),
     )?;
-    let mut encoder = ZstdEncoder::new()?;
+    let connection_id = ConnectionId(42);
+    let (mut encoder, mut decoder) =
+        zstd_codec_pair(text.len(), CompressionConnection::Listener(connection_id))?;
+    assert_eq!(encoder.stats.as_ref().unwrap().saved_percent(), None);
     let first = encoder.encode(&text)?;
     let second = encoder.encode(&text)?;
-    let mut decoder = ZstdDecoder::new(text.len())?;
     assert_eq!(decoder.decode(&first)?, text);
     assert_eq!(decoder.decode(&second)?, text);
+    let tx = encoder.stats.as_ref().unwrap();
+    let rx = decoder.stats.as_ref().unwrap();
+    assert_eq!(
+        (tx.connection_id, rx.connection_id),
+        (connection_id.0, connection_id.0)
+    );
+    assert_eq!(
+        (tx.uncompressed_bytes, tx.compressed_bytes, tx.messages),
+        (
+            (text.len() * 2) as u64,
+            (first.len() + second.len()) as u64,
+            2
+        )
+    );
+    assert_eq!(
+        (rx.uncompressed_bytes, rx.compressed_bytes, rx.messages),
+        (tx.uncompressed_bytes, tx.compressed_bytes, tx.messages)
+    );
+    assert_eq!(
+        tx.saved_percent(),
+        Some(100.0 * (1.0 - (first.len() + second.len()) as f64 / (text.len() * 2) as f64))
+    );
     assert!(second.len() < first.len());
     assert!(ZstdDecoder::new(text.len())?.decode(&second).is_err());
     Ok(())
@@ -40,10 +66,13 @@ fn decoded_size_limit_covers_output_larger_than_scratch_buffer() -> io::Result<(
     let text = "abcdefgh".repeat(BUFFER_SIZE);
     let encoded = ZstdEncoder::new()?.encode(&text)?;
     assert_eq!(ZstdDecoder::new(text.len())?.decode(&encoded)?, text);
-    let error = ZstdDecoder::new(text.len() - 1)?
+    let (_, mut decoder) = zstd_codec_pair(text.len() - 1, CompressionConnection::NativeClient)?;
+    let error = decoder
         .decode(&encoded)
         .expect_err("oversize message must fail");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    let stats = decoder.stats.as_ref().unwrap();
+    assert_eq!((stats.uncompressed_bytes, stats.compressed_bytes), (0, 0));
     Ok(())
 }
 
