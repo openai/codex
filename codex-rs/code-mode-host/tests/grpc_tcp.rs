@@ -117,6 +117,7 @@ async fn http1_response(endpoint: &str, request: &[u8]) -> Result<String> {
     .context("timed out waiting for HTTP/1.1 response from gRPC code-mode host")?
 }
 
+/// Negotiate zstd for capable clients while preserving identity-only clients.
 #[tokio::test]
 async fn tcp_listener_opens_a_grpc_session() -> Result<()> {
     let mut host = Command::new(codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?)
@@ -139,24 +140,37 @@ async fn tcp_listener_opens_a_grpc_session() -> Result<()> {
         .context("gRPC code-mode host published an invalid endpoint")?
         .connect_timeout(TEST_TIMEOUT)
         .timeout(TEST_TIMEOUT);
-    let mut client = CodeModeHostClient::connect(endpoint)
-        .await
-        .context("failed to connect to gRPC code-mode host")?;
-    let mut events = client
-        .open_session(grpc::OpenSessionRequest {
-            cell_execution_limits: None,
-        })
-        .await
-        .context("failed to open gRPC code-mode session")?
-        .into_inner();
-    let event = timeout(TEST_TIMEOUT, events.message())
-        .await
-        .context("timed out waiting for gRPC code-mode session event")?
-        .context("failed to read gRPC code-mode session event")?
-        .context("gRPC code-mode session ended before opening")?;
-    assert!(matches!(
-        event.event,
-        Some(grpc::session_event::Event::Opened(opened)) if !opened.session_id.is_empty()
-    ));
+    for encoding in [None, Some(tonic::codec::CompressionEncoding::Zstd)] {
+        let mut client = CodeModeHostClient::connect(endpoint.clone())
+            .await
+            .context("failed to connect to gRPC code-mode host")?;
+        if let Some(encoding) = encoding {
+            client = client.accept_compressed(encoding);
+        }
+        let response = client
+            .open_session(grpc::OpenSessionRequest {
+                cell_execution_limits: None,
+            })
+            .await
+            .context("failed to open gRPC code-mode session")?;
+        assert_eq!(
+            response
+                .metadata()
+                .get("grpc-encoding")
+                .map(|value| value.to_str())
+                .transpose()?,
+            encoding.map(|_| "zstd"),
+        );
+        let mut events = response.into_inner();
+        let event = timeout(TEST_TIMEOUT, events.message())
+            .await
+            .context("timed out waiting for gRPC code-mode session event")?
+            .context("failed to read gRPC code-mode session event")?
+            .context("gRPC code-mode session ended before opening")?;
+        assert!(matches!(
+            event.event,
+            Some(grpc::session_event::Event::Opened(opened)) if !opened.session_id.is_empty()
+        ));
+    }
     Ok(())
 }

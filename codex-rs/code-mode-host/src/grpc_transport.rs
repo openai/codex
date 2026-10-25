@@ -34,6 +34,7 @@ pub(super) async fn run_tcp_listener(bind_address: SocketAddr) -> Result<()> {
 
     let routes = Routes::new(
         CodeModeHostServer::new(GrpcCodeModeHost::new())
+            .send_compressed(tonic::codec::CompressionEncoding::Zstd)
             .max_decoding_message_size(MAX_FRAME_BYTES)
             .max_encoding_message_size(MAX_FRAME_BYTES),
     )

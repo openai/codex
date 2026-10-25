@@ -1,0 +1,14 @@
+--- a/src/codec/compression.rs
++++ b/src/codec/compression.rs
+@@ -239,8 +239,9 @@
+         CompressionEncoding::Zstd => {
+             let mut zstd_encoder = Encoder::new(
+                 &decompressed_buf[0..len],
+-                // FIXME: support customizing the compression level
+-                zstd::DEFAULT_COMPRESSION_LEVEL,
++                // Favor CodeModeHost response latency over compression ratio.
++                // Level 1 is the fastest positive level and matches the benchmark.
++                1,
+             )?;
+             std::io::copy(&mut zstd_encoder, &mut out_writer)?;
+         }

@@ -393,6 +393,14 @@ crate.annotation(
     },
     rustc_flags = ["-Copt-level=3"],
 )
+
+# Match the CodeModeHost response-compression benchmark's zstd level.
+crate.annotation(
+    crate = "tonic",
+    patch_args = ["-p1"],
+    patches = ["//patches:tonic-zstd-level1.patch"],
+    version = "0.14.3",
+)
 crate.annotation(
     crate = "zstd-sys",
     gen_build_script = "on",
