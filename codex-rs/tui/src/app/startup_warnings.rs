@@ -1,4 +1,4 @@
-//! Coalesce retained startup diagnostics without adding live transcript rows or forcing reflow.
+//! Detect Linux NFS migration permission warnings and coalesce retained startup diagnostics.
 
 use super::*;
 use crate::history_cell::StartupWarningsCell;
@@ -62,3 +62,39 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 }
+
+#[cfg(target_os = "linux")]
+const NFS_MIGRATION_WARNING: &str = "Some Codex SQLite files on NFS have permissions other than 0600. Migration preserves these permissions and requires your confirmation. Before running `codex migrate-nfs-db`, stop Codex on every host that uses these databases.";
+
+#[cfg(target_os = "linux")]
+pub(super) async fn warn_about_nfs_migration(
+    sqlite: codex_state::SqliteConfig,
+    app_event_tx: AppEventSender,
+) {
+    let inspection: anyhow::Result<bool> = async {
+        if !sqlite.is_nfs().await? {
+            return Ok(false);
+        }
+        for database in sqlite.runtime_db_paths() {
+            if database.path.parent() == Some(sqlite.home())
+                && codex_state::NfsDbMigration::needs_permission_confirmation(&database.path)?
+                && codex_state::NfsDbMigration::needs_migration(&database.path).await?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+    .await;
+    match inspection {
+        Ok(true) => app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            StartupWarningsCell::new(vec![NFS_MIGRATION_WARNING.to_string()]),
+        ))),
+        Ok(false) => {}
+        Err(error) => tracing::debug!(%error, "Could not inspect NFS database permissions"),
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "startup_warnings_tests.rs"]
+mod tests;

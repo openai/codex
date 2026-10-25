@@ -452,13 +452,24 @@ async fn required_nfs_migration_preserves_runtime_data_and_backups_after_restart
         .await?
         .close()
         .await;
+    let state_path = original.state_db_path();
+    assert!(crate::NfsDbMigration::needs_migration(&state_path).await?);
+    let bytes = std::fs::read(&state_path)?;
+    std::fs::set_permissions(&state_path, std::fs::Permissions::from_mode(/*mode*/ 0o060))?;
+    let staging = tempfile::tempdir()?;
+    let result = crate::NfsDbMigration::lock(home.path())?
+        .migrate(&state_path, staging.path())
+        .await;
+    std::fs::set_permissions(&state_path, std::fs::Permissions::from_mode(/*mode*/ 0o600))?;
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(&state_path)?, bytes);
     let mut backups = Vec::new();
     for db in original
         .runtime_db_paths()
         .into_iter()
         .filter(|db| db.path.exists())
     {
-        std::fs::set_permissions(&db.path, std::fs::Permissions::from_mode(/*mode*/ 0o600))?;
+        std::fs::set_permissions(&db.path, std::fs::Permissions::from_mode(/*mode*/ 0o644))?;
         let name = db.path.file_name().unwrap().to_str().unwrap();
         backups.push((
             home.path()
@@ -472,11 +483,15 @@ async fn required_nfs_migration_preserves_runtime_data_and_backups_after_restart
         /*enforce_delete_on_nfs*/ true,
     );
     sqlite.is_nfs.set(/*value*/ true)?;
+    assert!(crate::NfsDbMigration::needs_permission_confirmation(
+        &sqlite.state_db_path()
+    )?);
     let migrated = crate::StateRuntime::init(sqlite.clone(), "test-provider".into()).await?;
     assert_eq!(migrated.get_backfill_state().await?, before);
     migrated.checkpoint_backfill("after-migration").await?;
     let after = migrated.get_backfill_state().await?;
     migrated.close().await;
+    assert!(!crate::NfsDbMigration::needs_migration(&state_path).await?);
 
     // Simulate a crash after moving the original but before reinstalling a lazy database.
     let lazy = sqlite.memories_v2_db_path();
@@ -486,6 +501,8 @@ async fn required_nfs_migration_preserves_runtime_data_and_backups_after_restart
         home.path()
             .join(format!("{name}_wal_migration_backup/delete.sqlite")),
     )?;
+    assert!(crate::NfsDbMigration::needs_permission_confirmation(&lazy)?);
+    assert!(crate::NfsDbMigration::needs_migration(&lazy).await?);
     let restarted = crate::StateRuntime::init(sqlite.clone(), "test-provider".into()).await?;
     assert_eq!(restarted.get_backfill_state().await?, after);
     restarted.close().await;
@@ -499,6 +516,15 @@ async fn required_nfs_migration_preserves_runtime_data_and_backups_after_restart
         .await?;
         assert_eq!(settings, ("delete".into(), 3));
         pool.close().await;
+        if backups
+            .iter()
+            .any(|(backup, _)| backup.file_name() == db.path.file_name())
+        {
+            assert_eq!(
+                std::fs::metadata(&db.path)?.permissions().mode() & 0o777,
+                0o644
+            );
+        }
     }
     for (path, bytes) in backups {
         assert_eq!(std::fs::read(path)?, bytes);
@@ -532,6 +558,7 @@ async fn required_nfs_migration_refuses_active_wal_and_retries_after_close() -> 
         .enable_delete_mode_on_nfs(/*enabled*/ true);
     required.is_nfs.set(/*value*/ true)?;
     required.logs_is_nfs.set(/*value*/ false)?;
+    assert!(crate::NfsDbMigration::needs_migration(&path).await?);
     let error = required.open_read_write_pool(&path).await.unwrap_err();
     assert!(
         error

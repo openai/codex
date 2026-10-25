@@ -29,7 +29,7 @@ pub(super) enum Recovery {
 pub(super) struct Replacement {
     source: PathBuf,
     pub(super) backup_directory: PathBuf,
-    backup_database: PathBuf,
+    pub(super) backup_database: PathBuf,
 }
 
 impl Replacement {
@@ -156,14 +156,6 @@ impl Replacement {
         let backup_exists = regular_file_exists(&self.backup_database)?;
         let replacement_exists = regular_file_exists(&self.replacement_path())?;
         let source_exists = regular_file_exists(&self.source)?;
-        #[cfg(unix)]
-        if backup_exists {
-            super::access::require_private_database(&File::open(&self.backup_database)?)?;
-        }
-        #[cfg(unix)]
-        if replacement_exists {
-            super::access::require_private_database(&File::open(self.replacement_path())?)?;
-        }
         // No original files moved yet. The caller must lock the source and rebuild the copy.
         if !backup_exists {
             for suffix in SIDECARS {

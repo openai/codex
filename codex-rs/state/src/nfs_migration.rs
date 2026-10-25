@@ -1,6 +1,8 @@
 //! Converts WAL databases to DELETE mode while preserving recoverable WAL backups.
 //! Callers serialize startup and migration with the directory lock. Other SQLite clients
 //! must remain stopped during replacement; NFS must enforce cross-client POSIX locks.
+//! Migration requires write access to the directory and its persistent migration lock.
+//! Relaxed file permissions do not establish cross-user database sharing.
 
 use anyhow::Context;
 use anyhow::ensure;
@@ -19,8 +21,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-#[cfg(unix)]
-mod access;
 mod replacement;
 
 use replacement::Recovery;
@@ -40,6 +40,76 @@ pub enum NfsDbMigrationOutcome {
 }
 
 impl NfsDbMigration {
+    /// Inspect the on-disk journal mode without accessing WAL shared memory.
+    /// Use SQLite's descriptor so closing it cannot release another connection's locks.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "NFS inspection needs an immutable connection without shared memory"
+    )]
+    pub async fn needs_migration(source: &Path) -> anyhow::Result<bool> {
+        if !regular_file_exists(source)? {
+            let replacement = Replacement::new(source)?;
+            return Ok(regular_file_exists(&replacement.backup_database)?
+                || regular_file_exists(&replacement.replacement_path())?);
+        }
+        let mut connection = SqliteConnection::connect_with(
+            &SqliteConnectOptions::new()
+                .filename(source)
+                .read_only(true)
+                .immutable(true)
+                .disable_statement_logging(),
+        )
+        .await?;
+        let inspected: anyhow::Result<bool> = async {
+            let mut handle = connection.lock_handle().await?;
+            let mut file: *mut libsqlite3_sys::sqlite3_file = std::ptr::null_mut();
+            // SAFETY: SQLx's guard excludes its worker. FILE_POINTER writes a borrowed
+            // sqlite3_file pointer, valid while this connection and guard remain alive.
+            let status = unsafe {
+                libsqlite3_sys::sqlite3_file_control(
+                    handle.as_raw_handle().as_ptr(),
+                    c"main".as_ptr(),
+                    libsqlite3_sys::SQLITE_FCNTL_FILE_POINTER,
+                    (&raw mut file).cast(),
+                )
+            };
+            ensure!(
+                status == libsqlite3_sys::SQLITE_OK && !file.is_null(),
+                "cannot inspect database header"
+            );
+            // SAFETY: FILE_POINTER returned a live file owned by the guarded connection.
+            let methods = unsafe { (*file).pMethods };
+            ensure!(!methods.is_null(), "database VFS has no file methods");
+            let mut header = [0u8; 20];
+            // SAFETY: the built-in file VFS supplies xRead; the guarded file is live,
+            // and the buffer has space for exactly the requested 20 bytes.
+            let status = unsafe {
+                let read = (*methods).xRead.context("database VFS cannot read")?;
+                read(
+                    file,
+                    header.as_mut_ptr().cast(),
+                    /*iAmt*/ 20,
+                    /*iOfst*/ 0,
+                )
+            };
+            ensure!(
+                status == libsqlite3_sys::SQLITE_OK,
+                "cannot read database header: {status}"
+            );
+            ensure!(
+                &header[..16] == b"SQLite format 3\0",
+                "invalid database header"
+            );
+            // SQLite file-format read/write versions are 1 for rollback and 2 for WAL.
+            Ok(header[18] == 2 || header[19] == 2)
+        }
+        .await;
+        let closed = connection.close().await;
+        let needed = inspected?;
+        closed?;
+        Ok(needed)
+    }
+
     pub fn lock(sqlite_home: &Path) -> anyhow::Result<Self> {
         ensure!(
             cfg!(unix),
@@ -57,8 +127,34 @@ impl NfsDbMigration {
         Ok(Self { _lock: lock })
     }
 
+    /// Whether source or recovery files have permission bits other than 0600.
+    /// Only inspect metadata: opening WAL databases can create shared-memory files.
+    pub fn needs_permission_confirmation(source: &Path) -> anyhow::Result<bool> {
+        let replacement = Replacement::new(source)?;
+        for path in [
+            source.to_path_buf(),
+            replacement.backup_database.clone(),
+            replacement.replacement_path(),
+        ] {
+            if !regular_file_exists(&path)? {
+                continue;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if std::fs::metadata(path)?.permissions().mode() & 0o777 != 0o600 {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     /// Convert an existing WAL database or resume an interrupted replacement.
     /// All other clients must remain stopped until this returns successfully.
+    /// Callers must obtain consent or require unsafe migration through managed policy.
+    /// The replacement preserves mode bits, but belongs to the current user and does not
+    /// copy the original owner, group, or extended ACLs.
     #[expect(
         clippy::disallowed_methods,
         reason = "Migration needs a dedicated exclusive connection, not a runtime pool"
@@ -93,7 +189,7 @@ impl NfsDbMigration {
             // SQLite then locks the database file without shared memory across NFS client kernels.
             .locking_mode(SqliteLockingMode::Exclusive)
             .synchronous(SqliteSynchronous::Full)
-            .busy_timeout(Duration::ZERO)
+            .busy_timeout(Duration::from_secs(/*secs*/ 5))
             .disable_statement_logging();
         let mut connection = SqliteConnection::connect_with(&options).await.context(
             "cannot open source database exclusively; close its SQLite clients on all hosts",
@@ -150,8 +246,15 @@ impl NfsDbMigration {
             // A DELETE no-op must not open raw descriptors: closing them could release
             // POSIX locks held by another pool in this process.
             source_files.push(File::open(source)?);
+            let source_permissions = source_files[0].metadata()?.permissions();
             #[cfg(unix)]
-            access::require_private_database(&source_files[0])?;
+            {
+                use std::os::unix::fs::PermissionsExt;
+                ensure!(
+                    source_permissions.mode() & 0o600 == 0o600,
+                    "database owner permissions must include read and write so the replacement remains accessible to its new owner"
+                );
+            }
             // The private directory protects WAL contents even on a shared /tmp.
             let staging = tempfile::Builder::new()
                 .prefix("codex-nfs-migration-")
@@ -197,9 +300,7 @@ impl NfsDbMigration {
             // Use the open handle. Closing another source descriptor can release SQLite's locks.
             temporary
                 .as_file()
-                .set_permissions(source_files[0].metadata()?.permissions())?;
-            #[cfg(unix)]
-            access::require_private_database(temporary.as_file())?;
+                .set_permissions(source_permissions)?;
             temporary.as_file().sync_all()?;
             temporary
                 .into_temp_path()

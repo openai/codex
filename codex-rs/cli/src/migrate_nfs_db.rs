@@ -42,10 +42,6 @@ pub(crate) async fn run(
     eprintln!(
         "Stop all Codex instances on every host that uses these databases.\nKeep them stopped until the migration completes successfully."
     );
-    ensure!(
-        crate::confirm("Continue? [y/N]:")?,
-        "Migration cancelled. No databases were changed."
-    );
     let config = ConfigBuilder::default()
         .cli_overrides(
             config_overrides
@@ -63,6 +59,31 @@ pub(crate) async fn run(
         println!("No databases found.");
         return Ok(());
     }
+    let mut needs_permission_confirmation = false;
+    for database in sqlite.runtime_db_paths() {
+        if skip_logs && database.path == sqlite.logs_db_path() {
+            continue;
+        }
+        needs_permission_confirmation |=
+            NfsDbMigration::needs_permission_confirmation(&database.path)?;
+    }
+    if needs_permission_confirmation {
+        eprintln!(
+            "Some database files have permissions other than 0600.\nMigration preserves file mode bits, including group and other access."
+        );
+    }
+    eprintln!(
+        "Replacement files belong to you; the original owner, group, and extended ACLs are not copied.\nThis can remove another user's access even when file permissions are 0600.\nOriginal files remain in a private backup directory.\nYou need write access to the database directory and its migration lock."
+    );
+    let prompt = if needs_permission_confirmation {
+        "Migrate databases, including files with permissions other than 0600? [y/N]:"
+    } else {
+        "Continue? [y/N]:"
+    };
+    ensure!(
+        crate::confirm(prompt)?,
+        "Migration cancelled. No databases were changed."
+    );
     let mut migration = NfsDbMigration::lock(sqlite.home())?;
     for database in sqlite.runtime_db_paths() {
         if skip_logs && database.path == sqlite.logs_db_path() {

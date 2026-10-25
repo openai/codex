@@ -219,6 +219,7 @@ impl SqliteConfig {
     }
 
     /// When enforcement is enabled, migrate existing WAL databases on NFS before opening them.
+    /// Other clients on all hosts must remain stopped during migration.
     pub fn enable_delete_mode_on_nfs(mut self, enabled: bool) -> Self {
         self.enforce_delete_on_nfs = enabled;
         self
