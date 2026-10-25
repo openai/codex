@@ -45,6 +45,7 @@ tracing-appender = { workspace = true }
 [dev-dependencies]
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
