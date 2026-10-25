@@ -92,7 +92,6 @@ impl SelectMode {
 
 impl TranscriptView {
     /// Enter at the accepted Find hit, preferring the bottommost visible selectable position.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by a later stack layer"))]
     pub(crate) fn begin_select_mode(&mut self, cells: &[Arc<dyn HistoryCell>]) -> bool {
         if self.select_mode.is_some() {
             return true;
@@ -134,6 +133,17 @@ impl TranscriptView {
         }
         self.reveal_select_cursor(cells);
         true
+    }
+
+    pub(crate) fn is_select_mode(&self) -> bool {
+        self.select_mode.is_some()
+    }
+
+    /// Finish an explicit beginning traversal after the last older page is installed.
+    pub(crate) fn complete_select_beginning(&mut self, cells: &[Arc<dyn HistoryCell>]) {
+        if self.select_mode.is_some() {
+            self.move_select_cursor(cells, CursorMotion::Beginning);
+        }
     }
 
     /// Leave the mode while retaining its displayed revision at the paused reading position.

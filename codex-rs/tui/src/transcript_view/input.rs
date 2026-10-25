@@ -262,7 +262,25 @@ impl TranscriptView {
         event: MouseEvent,
         cells: &[Arc<dyn HistoryCell>],
     ) -> Option<ViewAction> {
-        self.handle_mouse_with_mode(event, cells, MouseMode::Selection)
+        let endpoint_changed = matches!(
+            event.kind,
+            MouseEventKind::Down(MouseButton::Left)
+                | MouseEventKind::Drag(MouseButton::Left)
+                | MouseEventKind::Up(MouseButton::Left)
+        );
+        let before = self
+            .selection
+            .as_ref()
+            .map(|selection| (selection.start, selection.end, selection.unit()));
+        let action = self.handle_mouse_with_mode(event, cells, MouseMode::Selection);
+        let after = self
+            .selection
+            .as_ref()
+            .map(|selection| (selection.start, selection.end, selection.unit()));
+        if endpoint_changed && before != after {
+            self.adopt_select_mouse_range();
+        }
+        action
     }
 
     fn handle_mouse_with_mode(

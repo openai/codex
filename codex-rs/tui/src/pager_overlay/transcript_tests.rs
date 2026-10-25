@@ -29,6 +29,87 @@ fn transcript_overlay(cells: Vec<Arc<dyn HistoryCell>>) -> TranscriptOverlay {
 }
 
 #[test]
+fn empty_pending_select_mode_closes_instead_of_retaining_overlay_focus() {
+    let mut overlay = transcript_overlay(Vec::new());
+    overlay.begin_select_mode();
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 8,
+    );
+
+    overlay.render(area, &mut Buffer::empty(area));
+
+    assert!(overlay.is_done());
+}
+
+#[tokio::test]
+async fn select_enter_closes_and_remapped_action_marks_in_the_inline_overlay() -> Result<()> {
+    let cells = || {
+        vec![Arc::new(TestCell {
+            lines: vec!["copy me".into()],
+        }) as Arc<dyn HistoryCell>]
+    };
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 8,
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    let mut remapped = transcript_overlay(cells());
+    let config = serde_json::from_value(serde_json::json!({
+        "global": {"find_transcript": "v"}
+    }))?;
+    let keymap =
+        crate::keymap::RuntimeKeymap::from_config(&config).expect("configured select shortcut");
+    remapped.set_keymap_bindings(&keymap);
+    remapped.render(area, &mut Buffer::empty(area));
+    remapped.begin_select_mode();
+    remapped.handle_event(&mut tui, TuiEvent::Key(KeyCode::Char('v').into()))?;
+    assert_eq!(
+        remapped.view.selected_text(&remapped.cells).as_deref(),
+        Some("c")
+    );
+
+    let mut find = transcript_overlay(cells());
+    find.set_keymap_bindings(&keymap);
+    find.render(area, &mut Buffer::empty(area));
+    find.begin_search();
+    find.handle_event(&mut tui, TuiEvent::Key(KeyCode::Char('v').into()))?;
+    assert!(find.view.is_search_editing());
+    assert!(!find.view.is_select_mode());
+
+    let mut enter = transcript_overlay(cells());
+    let mut pager_find = keymap.clone();
+    pager_find.pager.find = vec![crate::key_hint::KeyBinding::from_event(
+        KeyCode::Enter.into(),
+    )];
+    enter.set_keymap_bindings(&pager_find);
+    enter.render(area, &mut Buffer::empty(area));
+    enter.begin_select_mode();
+    enter.handle_event(&mut tui, TuiEvent::Key(KeyCode::Enter.into()))?;
+    assert!(enter.is_done());
+
+    let mut ordinary = transcript_overlay(vec![Arc::new(history_cell::AgentMarkdownCell::new(
+        "copy me".to_string(),
+        std::path::Path::new("/"),
+    ))]);
+    ordinary.render(area, &mut Buffer::empty(area));
+    ordinary.browsing_footer = Some("browsing prompts".into());
+    assert!(
+        ordinary
+            .view
+            .begin_copy_mode(&ordinary.cells, /*guard*/ None)
+    );
+    ordinary.handle_event(&mut tui, TuiEvent::Key(KeyCode::Enter.into()))?;
+    if let Some((id, close_overlay)) = ordinary.pending_follow_close {
+        assert!(close_overlay);
+        ordinary.browsing_footer = None;
+        ordinary.finish_pending_copy(&(id, Ok(crate::clipboard_copy::CopyStatus::Confirmed)));
+    }
+    assert!(ordinary.is_done());
+
+    Ok(())
+}
+
+#[test]
 fn scrolling_prepend_and_resize_preserve_reading_content() {
     let cells = (0..30)
         .map(|index| {

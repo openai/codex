@@ -141,6 +141,8 @@ pub struct TuiGlobalKeymap {
     pub open_transcript: Option<KeybindingsSpec>,
     /// Find text in the full transcript.
     pub find_transcript: Option<KeybindingsSpec>,
+    /// Enter keyboard selection mode for the transcript.
+    pub select_transcript: Option<KeybindingsSpec>,
     /// Focus activity groups in the owned transcript to inspect their details.
     pub focus_activity: Option<KeybindingsSpec>,
     /// Open the external editor for the current draft.

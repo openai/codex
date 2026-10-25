@@ -1,8 +1,13 @@
 use super::*;
 use crate::clipboard_copy::CopyStatus;
 use crate::history_cell::PlainHistoryCell;
+use crossterm::event::MouseButton;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use pretty_assertions::assert_eq;
 use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 
 fn cell(lines: &[&str]) -> Arc<dyn HistoryCell> {
     Arc::new(PlainHistoryCell::new(
@@ -607,4 +612,195 @@ fn accepted_find_pins_an_expanded_match_before_select_mode_exits() {
             .text(),
         expanded
     );
+}
+#[test]
+fn beginning_motion_finishes_at_the_first_grapheme_after_paging() {
+    let mut cells = vec![cell(&["newer"])];
+    let mut view = TranscriptView {
+        history: TranscriptHistoryState::Partial,
+        ..Default::default()
+    };
+    render(&mut view, &cells);
+    assert!(view.begin_select_mode(&cells));
+    press(&mut view, &cells, KeyCode::Char('g'));
+    assert_eq!(view.history, TranscriptHistoryState::LoadingBeginning);
+
+    cells.insert(/*index*/ 0, cell(&["older"]));
+    view.history_loaded(&cells, 0..1);
+    view.history = TranscriptHistoryState::Complete;
+    view.complete_select_beginning(&cells);
+    press(&mut view, &cells, KeyCode::Char('v'));
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("o"));
+}
+
+#[test]
+fn shift_click_extends_from_the_keyboard_marks_fixed_anchor() {
+    let cells = vec![cell(&["abcdef"])];
+    let mut view = TranscriptView::default();
+    render(&mut view, &cells);
+    assert!(view.begin_select_mode(&cells));
+    press(&mut view, &cells, KeyCode::Char('g'));
+    press(&mut view, &cells, KeyCode::Right);
+    press(&mut view, &cells, KeyCode::Right);
+    press(&mut view, &cells, KeyCode::Char('v'));
+    press(&mut view, &cells, KeyCode::Right);
+    press(&mut view, &cells, KeyCode::Right);
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("cde"));
+
+    view.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::SHIFT,
+        },
+        &cells,
+    );
+
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("abc"));
+}
+
+#[test]
+fn existing_mouse_selection_keeps_its_word_or_line_unit() {
+    let word_cells = vec![cell(&["alpha beta"])];
+    let mut word_view = TranscriptView::default();
+    render(&mut word_view, &word_cells);
+    word_view.begin_selection(
+        &word_cells,
+        /*column*/ 1,
+        /*row*/ 0,
+        /*clicks*/ 2,
+    );
+    assert!(word_view.begin_select_mode(&word_cells));
+    press(&mut word_view, &word_cells, KeyCode::Char('h'));
+    assert_eq!(
+        word_view.selected_text(&word_cells).as_deref(),
+        Some(&"alpha"[..4])
+    );
+
+    let line_cells = vec![cell(&["first", "second"])];
+    let mut line_view = TranscriptView::default();
+    render(&mut line_view, &line_cells);
+    line_view.begin_selection(
+        &line_cells,
+        /*column*/ 1,
+        /*row*/ 1,
+        /*clicks*/ 3,
+    );
+    assert!(line_view.begin_select_mode(&line_cells));
+    press(&mut line_view, &line_cells, KeyCode::Char('k'));
+    assert_eq!(
+        line_view.selected_text(&line_cells).as_deref(),
+        Some("first\nsecond")
+    );
+}
+
+#[test]
+fn passive_mouse_events_do_not_reanchor_a_reverse_line_mark() {
+    let cells = vec![cell(&["first", "second", "third"])];
+    let mut view = TranscriptView::default();
+    render(&mut view, &cells);
+    assert!(view.begin_select_mode(&cells));
+    press(&mut view, &cells, KeyCode::Char('g'));
+    press(&mut view, &cells, KeyCode::Char('j'));
+    press(&mut view, &cells, KeyCode::Char('V'));
+    press(&mut view, &cells, KeyCode::Char('k'));
+
+    for kind in [MouseEventKind::Moved, MouseEventKind::ScrollDown] {
+        view.handle_mouse(
+            MouseEvent {
+                kind,
+                column: 0,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            },
+            &cells,
+        );
+    }
+    view.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 80,
+            row: 80,
+            modifiers: KeyModifiers::NONE,
+        },
+        &cells,
+    );
+    press(&mut view, &cells, KeyCode::Char('j'));
+
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("second\n"));
+}
+
+#[test]
+fn select_mode_renders_cursor_and_scannable_footer_hints() {
+    let cells = vec![cell(&["alpha beta", "gamma"])];
+    let mut view = TranscriptView::default();
+    render(&mut view, &cells);
+    assert!(view.begin_select_mode(&cells));
+    let buffer = render(&mut view, &cells);
+    let [unmarked_wide, footer, unmarked_narrow] = [240, 64, 32].map(|width| {
+        view.footer_with_navigation(
+            width,
+            crate::motion::MotionMode::Reduced,
+            /*latest_navigation*/ "",
+        )
+        .expect("select footer")
+    });
+    let area = Rect::new(
+        /*x*/ 0,
+        /*y*/ 0,
+        /*width*/ 64,
+        footer.text.height() as u16,
+    );
+    let mut footer_buffer = Buffer::empty(area);
+    Paragraph::new(footer.text).render(area, &mut footer_buffer);
+
+    press(&mut view, &cells, KeyCode::Char('g'));
+    press(&mut view, &cells, KeyCode::Char('v'));
+    for _ in 0..5 {
+        press(&mut view, &cells, KeyCode::Right);
+    }
+    let marked_buffer = render(&mut view, &cells);
+    let [marked_wide, marked] = [240, 64].map(|width| {
+        view.footer_with_navigation(
+            width,
+            crate::motion::MotionMode::Reduced,
+            /*latest_navigation*/ "",
+        )
+        .expect("select footer")
+    });
+
+    press(&mut view, &cells, KeyCode::Esc);
+    press(&mut view, &cells, KeyCode::Char('/'));
+    assert!(view.paste_search("beta"));
+    while view.advance_search(&cells) {}
+    let find_buffer = render(&mut view, &cells);
+    let find_footer = view
+        .footer_with_navigation(
+            /*width*/ 64,
+            crate::motion::MotionMode::Reduced,
+            /*latest_navigation*/ "",
+        )
+        .expect("find footer");
+    let find_footer_text = find_footer
+        .text
+        .to_string()
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    press(&mut view, &cells, KeyCode::Enter);
+    press(&mut view, &cells, KeyCode::Char('v'));
+    press(&mut view, &cells, KeyCode::Right);
+    let find_marked_buffer = render(&mut view, &cells);
+
+    insta::assert_snapshot!(format!(
+        "{buffer:?}\nunmarked wide: {}\nunmarked:\n{footer_buffer:?}\nunmarked narrow: {}\nmarked:\n{marked_buffer:?}\nmarked wide: {}\nmarked: {}\nfind:\n{find_buffer:?}\nfind footer: {}\nfind cursor: {:?}\nfind marked:\n{find_marked_buffer:?}",
+        unmarked_wide.text,
+        unmarked_narrow.text,
+        marked_wide.text,
+        marked.text,
+        find_footer_text,
+        find_footer.cursor_column,
+    ));
 }

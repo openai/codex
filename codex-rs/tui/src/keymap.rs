@@ -50,6 +50,10 @@ mod voice_tests;
 #[path = "keymap/global_find_tests.rs"]
 mod global_find_tests;
 
+#[cfg(test)]
+#[path = "keymap/select_transcript_tests.rs"]
+mod select_transcript_tests;
+
 pub(crate) use bindings::KeymapActionId;
 pub(crate) use bindings::KeymapContext;
 pub(crate) use bindings::bindings_for_action;
@@ -102,6 +106,8 @@ pub(crate) struct AppKeymap {
     pub(crate) open_transcript: Vec<KeyBinding>,
     /// Find text in the full transcript.
     pub(crate) find_transcript: Vec<KeyBinding>,
+    /// Enter keyboard selection mode for the transcript.
+    pub(crate) select_transcript: Vec<KeyBinding>,
     /// Focus activity groups in the owned transcript to inspect their details.
     pub(crate) focus_activity: Vec<KeyBinding>,
     /// Open retained warnings without replacing the composer.
@@ -722,6 +728,11 @@ impl RuntimeKeymap {
                 keymap.global.find_transcript.as_ref(),
                 &defaults.app.find_transcript,
                 "tui.keymap.global.find_transcript",
+            )?,
+            select_transcript: resolve_bindings(
+                keymap.global.select_transcript.as_ref(),
+                &defaults.app.select_transcript,
+                "tui.keymap.global.select_transcript",
             )?,
             focus_activity: resolve_bindings(
                 keymap.global.focus_activity.as_ref(),
@@ -1457,6 +1468,10 @@ impl RuntimeKeymap {
                 app.find_transcript.as_slice(),
             ),
             (
+                keymap.global.select_transcript.as_ref(),
+                app.select_transcript.as_slice(),
+            ),
+            (
                 keymap.global.focus_activity.as_ref(),
                 app.focus_activity.as_slice(),
             ),
@@ -1647,7 +1662,7 @@ impl RuntimeKeymap {
             }
         }
         resolved.configure_search(keymap)?;
-        chords::quick_dial_defaults::register(keymap, &mut resolved);
+        chords::leader_defaults::register(keymap, &mut resolved);
         resolved.validate_conflicts()?;
         chords::validate_chord_conflicts(&resolved)?;
         chords::install_dispatch_bindings(&mut resolved)?;
@@ -1676,6 +1691,7 @@ impl RuntimeKeymap {
                 open_agents: default_bindings![],
                 open_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
                 find_transcript: default_bindings![plain(KeyCode::F(3))],
+                select_transcript: default_bindings![],
                 focus_activity: default_bindings![plain(KeyCode::F(4))],
                 open_warnings: default_bindings![plain(KeyCode::F(2))],
                 open_external_editor: default_bindings![ctrl(KeyCode::Char('g'))],
@@ -2052,6 +2068,7 @@ impl RuntimeKeymap {
             ("open_agents", self.app.open_agents.as_slice()),
             ("open_transcript", self.app.open_transcript.as_slice()),
             ("find_transcript", self.app.find_transcript.as_slice()),
+            ("select_transcript", self.app.select_transcript.as_slice()),
             ("focus_activity", self.app.focus_activity.as_slice()),
             ("open_warnings", self.app.open_warnings.as_slice()),
             (
@@ -2159,6 +2176,7 @@ impl RuntimeKeymap {
                 ("open_agents", self.app.open_agents.as_slice()),
                 ("open_transcript", self.app.open_transcript.as_slice()),
                 ("find_transcript", self.app.find_transcript.as_slice()),
+                ("select_transcript", self.app.select_transcript.as_slice()),
                 ("focus_activity", self.app.focus_activity.as_slice()),
                 ("open_warnings", self.app.open_warnings.as_slice()),
                 (
@@ -2218,6 +2236,7 @@ impl RuntimeKeymap {
                 ("open_agents", self.app.open_agents.as_slice()),
                 ("open_transcript", self.app.open_transcript.as_slice()),
                 ("find_transcript", self.app.find_transcript.as_slice()),
+                ("select_transcript", self.app.select_transcript.as_slice()),
                 ("focus_activity", self.app.focus_activity.as_slice()),
                 ("open_warnings", self.app.open_warnings.as_slice()),
                 (
@@ -2336,6 +2355,30 @@ impl RuntimeKeymap {
 
         validate_unique("pager", context_bindings(KeymapContext::Pager))?;
 
+        validate_unique(
+            "transcript",
+            [
+                (
+                    "global.select_transcript",
+                    self.app.select_transcript.as_slice(),
+                ),
+                ("pager.scroll_up", self.pager.scroll_up.as_slice()),
+                ("pager.scroll_down", self.pager.scroll_down.as_slice()),
+                ("pager.page_up", self.pager.page_up.as_slice()),
+                ("pager.page_down", self.pager.page_down.as_slice()),
+                ("pager.half_page_up", self.pager.half_page_up.as_slice()),
+                ("pager.half_page_down", self.pager.half_page_down.as_slice()),
+                ("pager.jump_top", self.pager.jump_top.as_slice()),
+                ("pager.jump_bottom", self.pager.jump_bottom.as_slice()),
+                ("pager.close", self.pager.close.as_slice()),
+                (
+                    "pager.close_transcript",
+                    self.pager.close_transcript.as_slice(),
+                ),
+                ("pager.find", self.pager.find.as_slice()),
+            ],
+        )?;
+
         validate_no_reserved(
             "pager",
             context_bindings(KeymapContext::Pager),
@@ -2351,6 +2394,10 @@ impl RuntimeKeymap {
                 (
                     "global.find_transcript",
                     self.app.find_transcript.as_slice(),
+                ),
+                (
+                    "global.select_transcript",
+                    self.app.select_transcript.as_slice(),
                 ),
             ]),
         )?;
@@ -4140,9 +4187,14 @@ mod tests {
         assert_eq!(
             (
                 runtime.composer.history_search_previous,
-                runtime.chat.open_presets
+                runtime.chat.open_presets,
+                runtime.app.select_transcript
             ),
-            (vec![key_hint::ctrl(KeyCode::Char('r'))], Vec::new())
+            (
+                vec![key_hint::ctrl(KeyCode::Char('r'))],
+                Vec::new(),
+                Vec::new()
+            )
         );
         let defaults = RuntimeKeymap::defaults();
         for leader in ["page-up", "page-down"] {
@@ -4153,11 +4205,13 @@ mod tests {
                 (
                     runtime.pager.page_up,
                     runtime.pager.page_down,
-                    runtime.chat.open_presets
+                    runtime.chat.open_presets,
+                    runtime.app.select_transcript
                 ),
                 (
                     defaults.pager.page_up.clone(),
                     defaults.pager.page_down.clone(),
+                    Vec::new(),
                     Vec::new()
                 )
             );

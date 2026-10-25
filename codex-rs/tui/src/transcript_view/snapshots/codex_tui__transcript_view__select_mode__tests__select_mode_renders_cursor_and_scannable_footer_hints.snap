@@ -1,0 +1,99 @@
+---
+source: tui/src/transcript_view/select_mode_tests.rs
+assertion_line: 627
+expression: "format!(\"{buffer:?}\\nunmarked wide: {}\\nunmarked:\\n{footer_buffer:?}\\nunmarked narrow: {}\\nmarked:\\n{marked_buffer:?}\\nmarked wide: {}\\nmarked: {}\\nfind:\\n{find_buffer:?}\\nfind footer: {}\\nfind cursor: {:?}\\nfind marked:\\n{find_marked_buffer:?}\",\nunmarked_wide.text, unmarked_narrow.text, marked_wide.text, marked.text,\nfind_footer.text, find_footer.cursor_column,)"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 32, height: 6 },
+    content: [
+        "alpha beta                      ",
+        "gamma                           ",
+        "                                ",
+        "                                ",
+        "                                ",
+        "                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | UNDERLINED | REVERSED,
+        x: 1, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+unmarked wide: arrows/hjkl/w/b/e move · home/end/0/$/g/G/⌃home/⌃end ends · pgup/pgdn/⌃b/⌃f/⌃u/⌃d page · v/space/V/shift+arrows mark · / find · n/N next · enter/q/esc close
+unmarked:
+Buffer {
+    area: Rect { x: 0, y: 0, width: 64, height: 1 },
+    content: [
+        "arrows/hjkl move · v/space/V mark · / find · enter/q/esc close  ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 11, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 19, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 28, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 36, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 37, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 45, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 56, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 62, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+unmarked narrow: v mark · enter/q close
+marked:
+Buffer {
+    area: Rect { x: 0, y: 0, width: 32, height: 6 },
+    content: [
+        "alpha beta                      ",
+        "gamma                           ",
+        "                                ",
+        "                                ",
+        "                                ",
+        "                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 5, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | UNDERLINED | REVERSED,
+        x: 6, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+marked wide: arrows/hjkl/w/b/e/shift+arrows move · home/end/0/$/g/G/⌃home/⌃end ends · pgup/pgdn/⌃b/⌃f/⌃u/⌃d page · v/space/V mark · o swap · / find · y/⌃c copy · enter copy & latest · esc clear · q close
+marked: y/⌃c copy · enter copy & latest · esc clear · q close
+find:
+Buffer {
+    area: Rect { x: 0, y: 0, width: 32, height: 6 },
+    content: [
+        "alpha beta                      ",
+        "gamma                           ",
+        "                                ",
+        "                                ",
+        "                                ",
+        "                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 5, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | UNDERLINED | REVERSED,
+        x: 6, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 10, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+find footer: Find: beta
+enter accept · ⌃p older · ⌃n newer · esc cancel
+find cursor: Some(10)
+find marked:
+Buffer {
+    area: Rect { x: 0, y: 0, width: 32, height: 6 },
+    content: [
+        "alpha beta                      ",
+        "gamma                           ",
+        "                                ",
+        "                                ",
+        "                                ",
+        "                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 6, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 7, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | UNDERLINED | REVERSED,
+        x: 8, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
