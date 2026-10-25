@@ -1,0 +1,6 @@
+---
+source: tui/src/resume_picker/sources_tests.rs
+assertion_line: 206
+expression: terminal.backend().to_string()
+---
+Could not load one backend. Reopen the picker to retry.

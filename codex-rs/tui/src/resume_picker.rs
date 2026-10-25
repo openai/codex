@@ -76,6 +76,7 @@ mod archive;
 mod catalog;
 mod layout;
 mod page_loading;
+mod sources;
 
 #[cfg(test)]
 #[path = "resume_picker_color_tests.rs"]
@@ -197,16 +198,20 @@ struct PageLoadRequest {
 enum PickerLoadRequest {
     Page(PageLoadRequest),
     Preview {
+        backend_id: crate::backend_id::BackendId,
         thread_id: ThreadId,
     },
     Transcript {
+        backend_id: crate::backend_id::BackendId,
         thread_id: ThreadId,
         cancellation: oneshot::Receiver<()>,
     },
     Archive {
+        backend_id: crate::backend_id::BackendId,
         thread_id: ThreadId,
     },
     Unarchive {
+        backend_id: crate::backend_id::BackendId,
         thread_id: ThreadId,
     },
 }
@@ -322,10 +327,24 @@ impl From<SessionListDensity> for SessionPickerViewMode {
 }
 
 type PickerLoader = Arc<dyn Fn(PickerLoadRequest) + Send + Sync>;
+
+struct PickerBackground {
+    loader: PickerLoader,
+    task: tokio::task::JoinHandle<()>,
+}
+
 enum BackgroundEvent {
+    PartialPage {
+        request_token: usize,
+        page: PickerPage,
+    },
+    SourceError {
+        request_token: usize,
+    },
     Page {
         request_token: usize,
         search_token: Option<usize>,
+        mode: PageLoadMode,
         page: std::io::Result<PickerPage>,
     },
     Preview {
@@ -349,6 +368,7 @@ enum BackgroundEvent {
 #[derive(Clone)]
 enum PageCursor {
     AppServer(String),
+    Catalog,
 }
 
 struct PickerPage {
@@ -584,6 +604,19 @@ pub async fn run_fork_picker_with_app_server(
 async fn run_session_picker_with_loader(
     tui: &mut Tui,
     options: SessionPickerRunOptions,
+    background: PickerBackground,
+    bg_rx: mpsc::UnboundedReceiver<BackgroundEvent>,
+) -> Result<SessionSelection> {
+    let PickerBackground { loader, task } = background;
+    let result = run_session_picker_event_loop(tui, options, loader, bg_rx).await;
+
+    drop(task);
+    result
+}
+
+async fn run_session_picker_event_loop(
+    tui: &mut Tui,
+    options: SessionPickerRunOptions,
     picker_loader: PickerLoader,
     bg_rx: mpsc::UnboundedReceiver<BackgroundEvent>,
 ) -> Result<SessionSelection> {
@@ -752,33 +785,31 @@ fn spawn_app_server_page_loader(
     include_non_interactive: bool,
     raw_reasoning_visibility: RawReasoningVisibility,
     config: Option<Config>,
-    bg_tx: mpsc::UnboundedSender<BackgroundEvent>,
-) -> PickerLoader {
+    output: mpsc::UnboundedSender<BackgroundEvent>,
+) -> PickerBackground {
+    let backend_id = app_server.backend_id();
+    let (bg_tx, events) = mpsc::unbounded_channel();
     let (request_tx, mut request_rx) = mpsc::unbounded_channel::<PickerLoadRequest>();
 
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         let mut app_server = app_server;
         let mut page_cwd_filter = PageCwdFilter::default();
-        let mut catalog = catalog::ThreadCatalog::default();
         while let Some(request) = request_rx.recv().await {
             match request {
                 PickerLoadRequest::Page(request) => {
-                    if request.cursor.is_none() {
-                        catalog.reset();
-                    }
-                    let Some(catalog_request) = catalog.begin_page(app_server.backend_id()) else {
-                        continue;
-                    };
+                    let mode = request.mode;
                     let cwd_filter = page_cwd_filter.for_request(
                         request.cursor.as_ref(),
                         request.cwd_filter.as_deref(),
                         request.filter_mode,
                         uses_remote_filesystem,
                     );
-                    let cursor = catalog_request
-                        .cursor
-                        .clone()
-                        .map(|PageCursor::AppServer(cursor)| cursor);
+                    let cursor = request.cursor.map(|cursor| match cursor {
+                        PageCursor::AppServer(cursor) => cursor,
+                        PageCursor::Catalog => {
+                            unreachable!("catalog cursors never reach a source")
+                        }
+                    });
                     let params = thread_list_params(
                         cursor,
                         cwd_filter,
@@ -788,24 +819,28 @@ fn spawn_app_server_page_loader(
                         include_non_interactive,
                         matches!(request.mode, PageLoadMode::StateDbOnly),
                     );
-                    let page = load_app_server_page(&mut app_server, params).await;
-                    let Some(page) = catalog.finish_page(catalog_request, page) else {
-                        continue;
+                    let page = tokio::select! {
+                        page = load_app_server_page(&mut app_server, params) => page,
+                        _ = bg_tx.closed() => continue,
                     };
                     let _ = bg_tx.send(BackgroundEvent::Page {
                         request_token: request.request_token,
                         search_token: request.search_token,
+                        mode,
                         page,
                     });
                 }
-                PickerLoadRequest::Preview { thread_id } => {
-                    let preview =
-                        load_transcript_preview(&mut app_server, thread_id, config.as_ref()).await;
+                PickerLoadRequest::Preview { thread_id, .. } => {
+                    let preview = tokio::select! {
+                        preview = load_transcript_preview(&mut app_server, thread_id, config.as_ref()) => preview,
+                        _ = bg_tx.closed() => continue,
+                    };
                     let _ = bg_tx.send(BackgroundEvent::Preview { thread_id, preview });
                 }
                 PickerLoadRequest::Transcript {
                     thread_id,
                     cancellation,
+                    ..
                 } => {
                     tokio::select! {
                         transcript = load_session_transcript(
@@ -820,9 +855,10 @@ fn spawn_app_server_page_loader(
                             });
                         }
                         _ = cancellation => {}
+                        _ = bg_tx.closed() => {}
                     }
                 }
-                PickerLoadRequest::Archive { thread_id } => {
+                PickerLoadRequest::Archive { thread_id, .. } => {
                     let result = archive_request_handle
                         .request_typed::<ThreadArchiveResponse>(ClientRequest::ThreadArchive {
                             request_id: RequestId::String(format!(
@@ -838,7 +874,7 @@ fn spawn_app_server_page_loader(
                         .map_err(std::io::Error::other);
                     let _ = bg_tx.send(BackgroundEvent::Archive { thread_id, result });
                 }
-                PickerLoadRequest::Unarchive { thread_id } => {
+                PickerLoadRequest::Unarchive { thread_id, .. } => {
                     let result = archive_request_handle
                         .request_typed::<ThreadUnarchiveResponse>(ClientRequest::ThreadUnarchive {
                             request_id: RequestId::String(format!(
@@ -867,9 +903,15 @@ fn spawn_app_server_page_loader(
         }
     });
 
-    Arc::new(move |request: PickerLoadRequest| {
-        let _ = request_tx.send(request);
-    })
+    let source = sources::Source {
+        backend_id,
+        loader: Arc::new(move |request: PickerLoadRequest| {
+            let _ = request_tx.send(request);
+        }),
+        events,
+        task,
+    };
+    sources::spawn(vec![source], output)
 }
 
 /// Returns the human-readable column header for the given sort key.
@@ -1262,6 +1304,7 @@ impl PickerState {
             self.request_frame();
             return;
         };
+        let backend_id = row.backend_id.unwrap_or(self.backend_id);
         match self.transcript_cells.get(&thread_id) {
             Some(SessionTranscriptState::Loaded(_)) => {
                 self.begin_transcript_loading(thread_id);
@@ -1276,6 +1319,7 @@ impl PickerState {
                 let (cancellation_tx, cancellation) = oneshot::channel();
                 self.pending_transcript_cancellation = Some(cancellation_tx);
                 (self.picker_loader)(PickerLoadRequest::Transcript {
+                    backend_id,
                     thread_id,
                     cancellation,
                 });
@@ -1385,7 +1429,7 @@ impl PickerState {
                     let path = row.path.clone();
                     if let Some(thread_id) = row.thread_id {
                         if self.status == SessionStatus::Archived {
-                            self.request_unarchive(thread_id);
+                            self.request_unarchive(thread_id, row.backend_id.unwrap_or(self.backend_id));
                             return Ok(None);
                         }
                         return Ok(Some(self.action.selection(SessionTarget {
@@ -1569,20 +1613,36 @@ impl PickerState {
         event: BackgroundEvent,
     ) -> Result<Option<SessionSelection>> {
         match event {
+            BackgroundEvent::PartialPage {
+                request_token,
+                page,
+            } => {
+                if self.pagination.is_pending(request_token) {
+                    self.ingest_page(page);
+                }
+            }
+            BackgroundEvent::SourceError { request_token } => {
+                if self.pagination.is_pending(request_token) {
+                    self.inline_error =
+                        Some("Could not load one backend. Reopen the picker to retry.".into());
+                    self.request_frame();
+                }
+            }
             BackgroundEvent::Page {
                 request_token,
                 search_token,
+                mode,
                 page,
             } => {
                 let Some(pending) = self.pagination.finish_load(request_token) else {
                     return Ok(None);
                 };
+                self.pagination.next_page_mode = mode;
                 let page_has_rows = matches!(&page, Ok(page) if !page.rows.is_empty());
                 // Fall back only when the initial DB listing is unusable. Once SQLite returns
                 // rows, its pagination is authoritative and an empty later page ends the list.
-                let should_restart_from_store = pending.mode == PageLoadMode::StateDbOnly
-                    && self.all_rows.is_empty()
-                    && !page_has_rows;
+                let should_restart_from_store =
+                    mode == PageLoadMode::StateDbOnly && self.all_rows.is_empty() && !page_has_rows;
                 if should_restart_from_store {
                     let request_token = self.allocate_request_token();
                     let search_token = pending.search_token.or(search_token);
@@ -2048,6 +2108,7 @@ impl PickerState {
         let Some(thread_id) = row.thread_id else {
             return;
         };
+        let backend_id = row.backend_id.unwrap_or(self.backend_id);
         if self.expanded_thread_id == Some(thread_id) {
             self.expanded_thread_id = None;
             self.request_frame();
@@ -2058,7 +2119,10 @@ impl PickerState {
             self.transcript_previews.entry(thread_id)
         {
             e.insert(TranscriptPreviewState::Loading);
-            (self.picker_loader)(PickerLoadRequest::Preview { thread_id });
+            (self.picker_loader)(PickerLoadRequest::Preview {
+                backend_id,
+                thread_id,
+            });
         }
         self.request_frame();
     }
@@ -3754,6 +3818,7 @@ mod tests {
             .handle_background_event(BackgroundEvent::Page {
                 request_token: request.request_token,
                 search_token: request.search_token,
+                mode: request.mode,
                 page,
             })
             .await
@@ -3974,7 +4039,7 @@ mod tests {
         let mut live_picker = PickerState::new(
             crate::backend_id::BackendId::new(),
             FrameRequester::test_dummy(),
-            loader,
+            loader.loader.clone(),
             ProviderFilter::MatchDefault(config.model_provider_id.clone()),
             /*show_all*/ false,
             Some(primary.clone()),
@@ -3982,14 +4047,16 @@ mod tests {
         );
         live_picker.local_filter_cwd = Some(primary.clone());
         live_picker.start_initial_load();
-        let event = tokio::time::timeout(std::time::Duration::from_secs(10), bg_rx.recv())
-            .await
-            .expect("app-server page response")
-            .expect("page event");
-        live_picker
-            .handle_background_event(event)
-            .await
-            .expect("ingest app-server page");
+        while live_picker.pagination.is_loading() {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(10), bg_rx.recv())
+                .await
+                .expect("app-server page response")
+                .expect("page event");
+            live_picker
+                .handle_background_event(event)
+                .await
+                .expect("ingest app-server page");
+        }
         assert!(
             live_picker
                 .filtered_rows
@@ -3998,14 +4065,16 @@ mod tests {
         );
         live_picker.filter_mode = SessionFilterMode::Repo;
         live_picker.start_initial_load();
-        let event = tokio::time::timeout(std::time::Duration::from_secs(10), bg_rx.recv())
-            .await
-            .expect("app-server repo page response")
-            .expect("repo page event");
-        live_picker
-            .handle_background_event(event)
-            .await
-            .expect("ingest app-server repo page");
+        while live_picker.pagination.is_loading() {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(10), bg_rx.recv())
+                .await
+                .expect("app-server repo page response")
+                .expect("repo page event");
+            live_picker
+                .handle_background_event(event)
+                .await
+                .expect("ingest app-server repo page");
+        }
         let linked_index = live_picker
             .filtered_rows
             .iter()
@@ -4025,6 +4094,9 @@ mod tests {
             live_picker.handle_key(accept).await.expect("fork selection"),
             Some(SessionSelection::Fork(SessionTarget { thread_id, .. })) if thread_id == linked_id
         ));
+        drop(live_picker);
+        drop(bg_rx);
+        loader.task.await.unwrap();
         let local = crate::latest_session_lookup_params(
             /*model_provider*/ None,
             Some(&primary),
@@ -4205,6 +4277,15 @@ mod tests {
                 "---- loading fallback ----\n{loading_snapshot}\n---- repaired results ----\n{repaired_snapshot}"
             )
         );
+        state.pagination.complete_page(
+            Some(PageCursor::AppServer("fallback-next".to_string())),
+            /*num_scanned_files*/ 0,
+            /*reached_scan_cap*/ false,
+        );
+        assert!(matches!(
+            state.pagination.next_page(),
+            Some((_, PageLoadMode::StoreDefault))
+        ));
     }
 
     #[tokio::test]
@@ -5688,7 +5769,7 @@ session_picker_view = "dense"
         let recorded_requests: Arc<Mutex<Vec<ThreadId>>> = Arc::new(Mutex::new(Vec::new()));
         let request_sink = recorded_requests.clone();
         let loader: PickerLoader = Arc::new(move |request| {
-            if let PickerLoadRequest::Preview { thread_id } = request {
+            if let PickerLoadRequest::Preview { thread_id, .. } = request {
                 request_sink.lock().unwrap().push(thread_id);
             }
         });
@@ -7408,6 +7489,7 @@ session_picker_view = "dense"
             .handle_background_event(BackgroundEvent::Page {
                 request_token: first_request.request_token,
                 search_token: first_request.search_token,
+                mode: first_request.mode,
                 page: Ok(page(
                     vec![make_row("/tmp/beta.jsonl", "2025-01-02T00:00:00Z", "beta")],
                     Some("2025-01-03T00:00:00Z"),
@@ -7430,6 +7512,7 @@ session_picker_view = "dense"
             .handle_background_event(BackgroundEvent::Page {
                 request_token: second_request.request_token,
                 search_token: second_request.search_token,
+                mode: second_request.mode,
                 page: Ok(page(
                     vec![make_row(
                         "/tmp/match.jsonl",
@@ -7459,6 +7542,7 @@ session_picker_view = "dense"
             .handle_background_event(BackgroundEvent::Page {
                 request_token: second_request.request_token,
                 search_token: second_request.search_token,
+                mode: second_request.mode,
                 page: Ok(page(
                     Vec::new(),
                     /*next_cursor*/ None,
@@ -7474,6 +7558,7 @@ session_picker_view = "dense"
             .handle_background_event(BackgroundEvent::Page {
                 request_token: active_request.request_token,
                 search_token: active_request.search_token,
+                mode: active_request.mode,
                 page: Ok(page(
                     Vec::new(),
                     /*next_cursor*/ None,

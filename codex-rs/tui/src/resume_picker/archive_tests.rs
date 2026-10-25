@@ -27,8 +27,8 @@ fn archive_picker_state() -> (PickerState, Arc<Mutex<Vec<ThreadId>>>) {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let request_sink = Arc::clone(&requests);
     let picker_loader: PickerLoader = Arc::new(move |request| {
-        if let PickerLoadRequest::Archive { thread_id }
-        | PickerLoadRequest::Unarchive { thread_id } = request
+        if let PickerLoadRequest::Archive { thread_id, .. }
+        | PickerLoadRequest::Unarchive { thread_id, .. } = request
         {
             request_sink
                 .lock()
@@ -66,15 +66,21 @@ fn set_selected_session(state: &mut PickerState, thread_id: ThreadId) {
 
 #[tokio::test]
 async fn archive_shortcut_archives_selected_session_once() {
-    let (mut state, requests) = archive_picker_state();
+    let (mut state, _requests) = archive_picker_state();
+    let (requests, mut actions) = tokio::sync::mpsc::unbounded_channel();
+    state.picker_loader = Arc::new(move |request| requests.send(request).unwrap());
+    let backend_id = crate::backend_id::BackendId::new();
     let thread_id = ThreadId::new();
     set_selected_session(&mut state, thread_id);
+    state.filtered_rows[0].backend_id = Some(backend_id);
     let shortcut = KeyEvent::new(KeyCode::Char('\u{0001}'), KeyModifiers::NONE);
 
     assert!(state.handle_key(shortcut).await.unwrap().is_none());
     assert!(state.handle_key(shortcut).await.unwrap().is_none());
     assert_eq!(state.archive_state, ArchiveState::Pending { thread_id });
-    assert_eq!(*requests.lock().unwrap(), vec![thread_id]);
+    assert!(
+        matches!(actions.recv().await, Some(PickerLoadRequest::Archive { backend_id: owner, thread_id: archived }) if (owner, archived) == (backend_id, thread_id))
+    );
     assert!(
         state
             .handle_key(KeyEvent::from(KeyCode::Enter))
@@ -87,6 +93,17 @@ async fn archive_shortcut_archives_selected_session_once() {
 
     assert_eq!(state.archive_state, ArchiveState::Idle);
     assert!(state.filtered_rows.is_empty());
+
+    state.status = SessionStatus::Archived;
+    set_selected_session(&mut state, thread_id);
+    state.filtered_rows[0].backend_id = Some(backend_id);
+    state
+        .handle_key(KeyEvent::from(KeyCode::Enter))
+        .await
+        .unwrap();
+    assert!(
+        matches!(actions.recv().await, Some(PickerLoadRequest::Unarchive { backend_id: owner, thread_id: restored }) if (owner, restored) == (backend_id, thread_id))
+    );
 }
 
 #[test]
@@ -287,7 +304,7 @@ fn archived_session_restore_failure_preserves_session_and_allows_retry() {
     let thread_id = ThreadId::new();
     state.status = SessionStatus::Archived;
     set_selected_session(&mut state, thread_id);
-    state.request_unarchive(thread_id);
+    state.request_unarchive(thread_id, state.backend_id);
 
     let selection =
         state.handle_unarchive_result(thread_id, Err(std::io::Error::other("restore denied")));
@@ -300,7 +317,7 @@ fn archived_session_restore_failure_preserves_session_and_allows_retry() {
     );
     assert_eq!(state.filtered_rows.len(), 1);
 
-    state.request_unarchive(thread_id);
+    state.request_unarchive(thread_id, state.backend_id);
 
     assert_eq!(*requests.lock().unwrap(), vec![thread_id, thread_id]);
 }

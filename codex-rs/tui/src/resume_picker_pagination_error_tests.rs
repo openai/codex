@@ -33,6 +33,7 @@ async fn later_page_error_preserves_loaded_sessions() {
                 .handle_background_event(BackgroundEvent::Page {
                     request_token: request.request_token,
                     search_token: request.search_token,
+                    mode: request.mode,
                     page: Ok(PickerPage {
                         rows: vec![Row {
                             backend_id: None,
@@ -67,6 +68,7 @@ async fn later_page_error_preserves_loaded_sessions() {
                 .handle_background_event(BackgroundEvent::Page {
                     request_token: request.request_token,
                     search_token: request.search_token,
+                    mode: request.mode,
                     page: Err(std::io::Error::other(
                         "failed to list threads from state database",
                     )),
