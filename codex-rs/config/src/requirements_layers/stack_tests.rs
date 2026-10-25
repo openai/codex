@@ -102,6 +102,7 @@ allowed_approval_policies = ["on-request"]
 allowed_sandbox_modes = ["workspace-write"]
 default_permissions = ":workspace"
 allow_remote_control = true
+unsafe_enforce_sqlite_journal_mode = false
 additional_developer_instructions = "Lower-priority instructions."
 
 [allowed_permission_profiles]
@@ -117,6 +118,7 @@ allowed_approval_policies = ["never"]
 allowed_sandbox_modes = ["read-only"]
 default_permissions = ":read-only"
 allow_remote_control = false
+unsafe_enforce_sqlite_journal_mode = true
 additional_developer_instructions = ""
 
 [allowed_permission_profiles]
@@ -136,6 +138,7 @@ allowed_approval_policies = ["never"]
 allowed_sandbox_modes = ["read-only"]
 default_permissions = ":read-only"
 allow_remote_control = false
+unsafe_enforce_sqlite_journal_mode = true
 additional_developer_instructions = ""
 
 [allowed_permission_profiles]

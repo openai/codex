@@ -166,6 +166,7 @@ pub struct ConfigRequirements {
     pub cli_auth_credentials_store: Option<Sourced<AuthCredentialsStoreMode>>,
     pub chatgpt_base_url: Option<Sourced<String>>,
     pub sqlite_home: Option<Sourced<AbsolutePathBuf>>,
+    pub unsafe_enforce_sqlite_journal_mode: Option<Sourced<bool>>,
     pub log_dir: Option<Sourced<AbsolutePathBuf>>,
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
     pub model_provider: Option<Sourced<String>>,
@@ -211,6 +212,7 @@ impl Default for ConfigRequirements {
             cli_auth_credentials_store: None,
             chatgpt_base_url: None,
             sqlite_home: None,
+            unsafe_enforce_sqlite_journal_mode: None,
             log_dir: None,
             model_catalog_json: None,
             model_provider: None,
@@ -1049,6 +1051,8 @@ pub struct ConfigRequirementsToml {
     pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
     pub chatgpt_base_url: Option<String>,
     pub sqlite_home: Option<AbsolutePathBuf>,
+    /// Require migration of existing WAL databases on NFS before opening writable pools.
+    pub unsafe_enforce_sqlite_journal_mode: Option<bool>,
     pub log_dir: Option<AbsolutePathBuf>,
     pub model_catalog_json: Option<AbsolutePathBuf>,
     /// Exact provider selection, overriding local and session configuration.
@@ -1161,6 +1165,7 @@ pub struct ConfigRequirementsWithSources {
     pub cli_auth_credentials_store: Option<Sourced<AuthCredentialsStoreMode>>,
     pub chatgpt_base_url: Option<Sourced<String>>,
     pub sqlite_home: Option<Sourced<AbsolutePathBuf>>,
+    pub unsafe_enforce_sqlite_journal_mode: Option<Sourced<bool>>,
     pub log_dir: Option<Sourced<AbsolutePathBuf>>,
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
     pub model_provider: Option<Sourced<String>>,
@@ -1225,6 +1230,7 @@ impl ConfigRequirementsWithSources {
             cli_auth_credentials_store: _,
             chatgpt_base_url: _,
             sqlite_home: _,
+            unsafe_enforce_sqlite_journal_mode: _,
             log_dir: _,
             model_catalog_json: _,
             model_provider: _,
@@ -1291,6 +1297,7 @@ impl ConfigRequirementsWithSources {
                 cli_auth_credentials_store,
                 chatgpt_base_url,
                 sqlite_home,
+                unsafe_enforce_sqlite_journal_mode,
                 log_dir,
                 model_catalog_json,
                 model_provider,
@@ -1378,6 +1385,7 @@ impl ConfigRequirementsWithSources {
             cli_auth_credentials_store,
             chatgpt_base_url,
             sqlite_home,
+            unsafe_enforce_sqlite_journal_mode,
             log_dir,
             model_catalog_json,
             model_provider,
@@ -1423,6 +1431,8 @@ impl ConfigRequirementsWithSources {
             cli_auth_credentials_store: cli_auth_credentials_store.map(|sourced| sourced.value),
             chatgpt_base_url: chatgpt_base_url.map(|sourced| sourced.value),
             sqlite_home: sqlite_home.map(|sourced| sourced.value),
+            unsafe_enforce_sqlite_journal_mode: unsafe_enforce_sqlite_journal_mode
+                .map(|sourced| sourced.value),
             log_dir: log_dir.map(|sourced| sourced.value),
             model_catalog_json: model_catalog_json.map(|sourced| sourced.value),
             model_provider: model_provider.map(|sourced| sourced.value),
@@ -1536,6 +1546,7 @@ impl ConfigRequirementsToml {
             && self.cli_auth_credentials_store.is_none()
             && self.chatgpt_base_url.is_none()
             && self.sqlite_home.is_none()
+            && self.unsafe_enforce_sqlite_journal_mode.is_none()
             && self.log_dir.is_none()
             && self.model_catalog_json.is_none()
             && self.model_provider.is_none()
@@ -1780,6 +1791,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             cli_auth_credentials_store,
             chatgpt_base_url,
             sqlite_home,
+            unsafe_enforce_sqlite_journal_mode,
             log_dir,
             model_catalog_json,
             model_provider,
@@ -2170,6 +2182,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             cli_auth_credentials_store,
             chatgpt_base_url,
             sqlite_home,
+            unsafe_enforce_sqlite_journal_mode,
             log_dir,
             model_catalog_json,
             model_provider,
@@ -2334,6 +2347,7 @@ mod tests {
             cli_auth_credentials_store,
             chatgpt_base_url,
             sqlite_home,
+            unsafe_enforce_sqlite_journal_mode,
             log_dir,
             model_catalog_json,
             model_provider,
@@ -2385,6 +2399,8 @@ mod tests {
             chatgpt_base_url: chatgpt_base_url
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             sqlite_home: sqlite_home.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            unsafe_enforce_sqlite_journal_mode: unsafe_enforce_sqlite_journal_mode
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             log_dir: log_dir.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             model_catalog_json: model_catalog_json
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -2916,6 +2932,7 @@ mod tests {
             cli_auth_credentials_store: Some(AuthCredentialsStoreMode::Keyring),
             chatgpt_base_url: Some("https://managed.example/backend-api/".to_string()),
             sqlite_home: Some(sqlite_home.clone()),
+            unsafe_enforce_sqlite_journal_mode: Some(true),
             log_dir: Some(log_dir.clone()),
             model_catalog_json: Some(model_catalog_json.clone()),
             model_provider: Some("gateway".to_string()),
@@ -2979,6 +2996,10 @@ mod tests {
                     source.clone(),
                 )),
                 sqlite_home: Some(Sourced::new(sqlite_home, source.clone())),
+                unsafe_enforce_sqlite_journal_mode: Some(Sourced::new(
+                    /*value*/ true,
+                    source.clone()
+                )),
                 log_dir: Some(Sourced::new(log_dir, source.clone())),
                 model_catalog_json: Some(Sourced::new(model_catalog_json, source.clone())),
                 model_provider: Some(Sourced::new("gateway".to_string(), source.clone())),
@@ -3109,6 +3130,7 @@ mod tests {
         let mut populated_target = ConfigRequirementsWithSources::default();
         let populated_requirements: ConfigRequirementsToml = from_str(
             r#"
+                unsafe_enforce_sqlite_journal_mode = true
                 allowed_approval_policies = ["never"]
                 guardian_extra_policy = "Use the managed extra policy."
             "#,
@@ -3117,6 +3139,7 @@ mod tests {
 
         let source: ConfigRequirementsToml = from_str(
             r#"
+                unsafe_enforce_sqlite_journal_mode = false
                 allowed_approval_policies = ["on-request"]
                 guardian_extra_policy = "Use the lower-priority extra policy."
             "#,
@@ -3130,6 +3153,10 @@ mod tests {
         assert_eq!(
             populated_target,
             ConfigRequirementsWithSources {
+                unsafe_enforce_sqlite_journal_mode: Some(Sourced::new(
+                    /*value*/ true,
+                    existing_source.clone()
+                )),
                 allowed_approval_policies: Some(Sourced::new(
                     vec![AskForApproval::Never],
                     existing_source.clone(),

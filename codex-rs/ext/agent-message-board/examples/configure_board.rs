@@ -13,8 +13,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let [_, sqlite_home, board, input] = args.as_slice() else {
         return Err("Usage: configure_board <sqlite-home> <board-session-id> <setup.json>".into());
     };
-    let sqlite = SqliteConfig::from_sqlite_home(
+    let sqlite = SqliteConfig::from_sqlite_home_with_nfs_enforcement(
         std::path::absolute(PathBuf::from(sqlite_home))?.try_into()?,
+        /*enforce_delete_on_nfs*/ false,
     );
     let board = SessionId::from_string(board.to_str().ok_or("invalid board ID")?)?;
     let input = tokio::fs::read(input).await?;

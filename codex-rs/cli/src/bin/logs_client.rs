@@ -134,8 +134,9 @@ async fn resolve_sqlite_config(args: &Args) -> anyhow::Result<SqliteConfig> {
             .parent()
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| PathBuf::from("."));
-        return Ok(SqliteConfig::from_sqlite_home(
+        return Ok(SqliteConfig::from_sqlite_home_with_nfs_enforcement(
             AbsolutePathBuf::relative_to_current_dir(sqlite_home)?,
+            /*enforce_delete_on_nfs*/ false,
         ));
     }
 

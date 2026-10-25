@@ -955,6 +955,7 @@ interrupt_message = false
             cli_auth_credentials_store: None,
             chatgpt_base_url: None,
             sqlite_home: Some(sqlite_home),
+            unsafe_enforce_sqlite_journal_mode: None,
             log_dir: Some(log_dir),
             model_catalog_json: Some(model_catalog_json),
             model_provider: None,

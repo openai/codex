@@ -148,7 +148,6 @@ impl StateRuntime {
         let goals_path = sqlite.goals_db_path();
         let memories_path = sqlite.memories_db_path();
         let queue_path = sqlite.queue_db_path();
-        let has_memories_v2 = tokio::fs::try_exists(sqlite.memories_v2_db_path()).await?;
         let pool = match sqlite
             .open_state_db(&state_migrator, telemetry_override)
             .await
@@ -159,6 +158,7 @@ impl StateRuntime {
                 return Err(err);
             }
         };
+        let has_memories_v2 = tokio::fs::try_exists(sqlite.memories_v2_db_path()).await?;
         let logs_pool = match sqlite
             .open_logs_db(&logs_migrator, telemetry_override)
             .await
