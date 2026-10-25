@@ -13,6 +13,7 @@ use crossterm::event::KeyModifiers;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
+use super::select_mode::SelectSearchOrigin;
 use super::*;
 
 #[path = "search_footer.rs"]
@@ -47,10 +48,18 @@ enum Progress {
     Exhausted,
 }
 
+#[derive(Clone)]
 struct Match {
     anchor: Anchor,
     end: usize,
     layout: Arc<TextLayout>,
+}
+
+struct SavedSelectSearch {
+    query: String,
+    current: Option<Match>,
+    progress: Progress,
+    page_start: Option<EntryKey>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -68,6 +77,7 @@ pub(super) struct Search {
     saved_snapshot: Option<ViewSnapshot>,
     saved_detailed: bool,
     current: Option<Match>,
+    saved_select: Option<SavedSelectSearch>,
     progress: Progress,
     scanning_layout: Option<(EntryKey, Arc<TextLayout>)>,
     page_start: Option<EntryKey>,
@@ -86,6 +96,7 @@ impl Default for Search {
             saved_snapshot: None,
             saved_detailed: false,
             current: None,
+            saved_select: None,
             progress: Progress::Idle,
             scanning_layout: None,
             page_start: None,
@@ -103,13 +114,42 @@ impl TranscriptView {
             return;
         }
         self.copy_mode = None;
-        let saved_position = self.position;
-        let saved_snapshot = self
-            .selection
-            .take()
-            .map(|selection| selection.snapshot)
-            .or(self.held_reading.take());
         if self.search.is_reading() {
+            self.pin_current_search_match();
+        }
+        if let (Some(mode), Some(selection)) = (&mut self.select_mode, &mut self.selection) {
+            let cursor = mode.cursor(selection);
+            mode.search_origin = Some(SelectSearchOrigin {
+                mark: mode.mark,
+                preferred_column: mode.preferred_column,
+                start: selection.start,
+                end: selection.end,
+            });
+            mode.mark = None;
+            selection.set_keyboard_range(cursor, cursor);
+        }
+        let saved_position = self.position;
+        let saved_snapshot = if self.select_mode.is_some() {
+            None
+        } else {
+            self.selection
+                .take()
+                .map(|selection| selection.snapshot)
+                .or(self.held_reading.take())
+        };
+        if self.search.is_reading() {
+            if self.select_mode.is_some() {
+                self.search.saved_select = Some(SavedSelectSearch {
+                    query: self.search.editor.text().to_string(),
+                    current: self.search.current.clone(),
+                    progress: self.search.progress,
+                    page_start: self.search.page_start,
+                });
+                self.search.editor.set_text_clearing_elements("");
+                self.search.saved_position = saved_position;
+                self.search.saved_snapshot = None;
+                self.search.saved_detailed = self.detailed;
+            }
             self.held_reading = saved_snapshot;
             self.search.mode = SearchMode::Editing;
             if self.search.current.is_none() {
@@ -161,6 +201,9 @@ impl TranscriptView {
                 return modifiers == KeyModifiers::NONE;
             }
             (KeyCode::Enter, KeyModifiers::NONE) => {
+                if self.search.editor.is_empty() && self.restore_saved_select_search() {
+                    return true;
+                }
                 // Accept the displayed match even if finding an older one is still pending.
                 // An idle nonempty query can also mean scrolling released a live match.
                 // Leave initial scans and empty/unmatched queries open until they find a hit.
@@ -175,6 +218,7 @@ impl TranscriptView {
                         _ => Progress::Idle,
                     };
                     self.search.scanning_layout = None;
+                    self.search.saved_select = None;
                 }
             }
             (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
@@ -233,6 +277,9 @@ impl TranscriptView {
         if !self.search.is_active() {
             return;
         }
+        if self.select_mode.is_some() && self.restore_saved_select_search() {
+            return;
+        }
         let position = self.search.saved_position;
         let snapshot = self.search.saved_snapshot.take().or_else(|| {
             let Position::Reading(anchor) = position else {
@@ -256,11 +303,128 @@ impl TranscriptView {
         self.search.editor.set_text_clearing_elements("");
         self.search.query_changed();
         self.search.progress = Progress::Idle;
+        self.search.saved_select = None;
         self.search.live = None;
         self.search.live_key = None;
         self.position = position;
         self.held_reading = snapshot;
         self.rewrap_snapshot(self.area.width);
+    }
+
+    pub(super) fn accept_search_into_select_mode(&mut self, cells: &[Arc<dyn HistoryCell>]) {
+        let Some(found) = self.search.current.as_ref() else {
+            self.search.mode = SearchMode::Editing;
+            return;
+        };
+        let anchor = found.anchor;
+        let layout = Arc::clone(&found.layout);
+        self.move_select_cursor_to_search_match(anchor, &layout, cells);
+    }
+
+    pub(super) fn restore_select_search_origin(&mut self) {
+        let (Some(mode), Some(selection)) = (&mut self.select_mode, &mut self.selection) else {
+            return;
+        };
+        let Some(origin) = mode.search_origin.take() else {
+            return;
+        };
+        mode.mark = origin.mark;
+        mode.preferred_column = origin.preferred_column;
+        selection.set_keyboard_range(origin.start, origin.end);
+    }
+
+    pub(super) fn cancel_pending_select_search(&mut self) {
+        if self.search.is_reading()
+            && matches!(
+                self.search.progress,
+                Progress::Scanning(_) | Progress::AwaitingHistory
+            )
+        {
+            self.search.progress = if self.search.current.is_some() {
+                Progress::Found
+            } else {
+                Progress::Idle
+            };
+            self.search.scanning_layout = None;
+        }
+    }
+
+    pub(super) fn repeat_select_search(
+        &mut self,
+        cells: &[Arc<dyn HistoryCell>],
+        newer: bool,
+    ) -> bool {
+        if !self.search.is_reading() {
+            return false;
+        }
+        let direction = if newer {
+            Direction::Newer
+        } else {
+            Direction::Older
+        };
+        let Some(cursor) = self
+            .select_mode
+            .zip(self.selection.as_ref())
+            .map(|(mode, selection)| mode.cursor(selection))
+        else {
+            return false;
+        };
+        self.pin_current_search_match();
+        let index = self.resolve(cells, cursor);
+        let Some(layout) = self.layout(cells, index) else {
+            return false;
+        };
+        let offset = layout
+            .text()
+            .floor_char_boundary(cursor.offset.min(layout.text().len()));
+        let offset = if direction == Direction::Newer {
+            let row = layout
+                .row_for_offset(offset)
+                .saturating_add_signed(cursor.row_bias.saturating_neg());
+            layout.after_cursor_grapheme(row, offset)
+        } else {
+            offset
+        };
+        self.search.current = None;
+        self.search.scanning_layout = None;
+        self.search.page_start = None;
+        self.search.progress = Progress::Scanning(Cursor {
+            anchor: Anchor {
+                key: self.entry_key(cells, index),
+                index,
+                offset,
+                row_bias: 0,
+            },
+            direction,
+        });
+        true
+    }
+
+    /// Drop Find's transient expansion after cursor mode exits while preserving its paused view.
+    pub(super) fn close_search_after_select_mode(&mut self) {
+        if !self.search.is_active() {
+            return;
+        }
+        self.pin_current_search_match();
+        self.search.mode = SearchMode::Closed;
+        self.search.editor.set_text_clearing_elements("");
+        self.search.query_changed();
+        self.search.progress = Progress::Idle;
+        self.search.saved_select = None;
+        self.search.live = None;
+        self.search.live_key = None;
+        self.rewrap_snapshot(self.area.width);
+    }
+
+    fn pin_current_search_match(&mut self) {
+        let retained_match = self
+            .search
+            .current
+            .as_ref()
+            .map(|found| (found.anchor.key, Arc::clone(&found.layout)));
+        if let (Some((key, layout)), Some(snapshot)) = (retained_match, self.snapshot_mut()) {
+            snapshot.pinned.insert(key, layout);
+        }
     }
 
     pub(crate) fn paste_search(&mut self, text: &str) -> bool {
@@ -334,6 +498,14 @@ impl TranscriptView {
         if let Some(found) = &mut self.search.current {
             found.layout = Arc::new(found.layout.rewrap(width));
         }
+        if let Some(found) = self
+            .search
+            .saved_select
+            .as_mut()
+            .and_then(|saved| saved.current.as_mut())
+        {
+            found.layout = Arc::new(found.layout.rewrap(width));
+        }
         self.area.width = width;
         if self.search.current.is_none()
             || !matches!(self.search.progress, Progress::Found | Progress::Exhausted)
@@ -342,9 +514,17 @@ impl TranscriptView {
         }
     }
 
+    fn restore_saved_select_search(&mut self) -> bool {
+        if !self.search.restore_saved_select() {
+            return false;
+        }
+        self.position = self.search.saved_position;
+        true
+    }
+
     /// Return true only while another local scanning frame can make progress.
     pub(crate) fn advance_search(&mut self, cells: &[Arc<dyn HistoryCell>]) -> bool {
-        if self.selection.is_some() {
+        if self.selection.is_some() && self.select_mode.is_none() {
             return false;
         }
         let current_cells = cells;
@@ -427,11 +607,11 @@ impl TranscriptView {
                 ..anchor
             });
         }
-        if !matches!(self.search.progress, Progress::AwaitingHistory) || inserted.is_empty() {
+        if inserted.is_empty() {
             return;
         }
         let index = inserted.end - 1;
-        self.search.progress = Progress::Scanning(Cursor {
+        let cursor = Cursor {
             anchor: Anchor {
                 key: self.entry_key(cells, index),
                 index,
@@ -439,14 +619,34 @@ impl TranscriptView {
                 row_bias: 0,
             },
             direction: Direction::Older,
-        });
+        };
+        let page_start = self.entry_key(cells, inserted.start);
+        if let Some(saved) = &mut self.search.saved_select
+            && matches!(
+                saved.progress,
+                Progress::AwaitingHistory
+                    | Progress::Scanning(Cursor {
+                        direction: Direction::Older,
+                        ..
+                    })
+            )
+        {
+            if matches!(saved.progress, Progress::AwaitingHistory) {
+                saved.progress = Progress::Scanning(cursor);
+            }
+            saved.page_start = Some(page_start);
+        }
+        if !matches!(self.search.progress, Progress::AwaitingHistory) {
+            return;
+        }
+        self.search.progress = Progress::Scanning(cursor);
         self.search.scanning_layout = None;
-        self.search.page_start = Some(self.entry_key(cells, inserted.start));
+        self.search.page_start = Some(page_start);
     }
 
     pub(super) fn render_search(&self, buf: &mut Buffer) {
         // The copy range takes precedence until selection ends.
-        if self.selection.is_some() {
+        if !self.search.is_active() || self.has_selection_range() {
             return;
         }
         let Some(found) = &self.search.current else {
@@ -699,6 +899,20 @@ impl Search {
         self.page_start = None;
         self.progress = Progress::Restart;
         self.query_truncated = false;
+    }
+
+    fn restore_saved_select(&mut self) -> bool {
+        let Some(saved) = self.saved_select.take() else {
+            return false;
+        };
+        self.editor.set_text_clearing_elements(&saved.query);
+        self.folded_query = saved.query.chars().flat_map(char::to_lowercase).collect();
+        self.current = saved.current;
+        self.progress = saved.progress;
+        self.scanning_layout = None;
+        self.page_start = saved.page_start;
+        self.mode = SearchMode::Reading;
+        true
     }
 }
 

@@ -13,6 +13,7 @@ use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use unicode_segmentation::UnicodeSegmentation;
 
 mod motion;
 
@@ -20,6 +21,7 @@ mod motion;
 pub(super) struct SelectMode {
     pub(super) mark: Option<Mark>,
     pub(super) preferred_column: Option<u16>,
+    pub(super) search_origin: Option<SelectSearchOrigin>,
 }
 
 #[derive(Clone, Copy)]
@@ -29,6 +31,14 @@ pub(super) struct Mark {
     anchor_edges: Option<(Anchor, Anchor)>,
     active_edges: Option<(Anchor, Anchor)>,
     unit: SelectionUnit,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct SelectSearchOrigin {
+    pub(super) mark: Option<Mark>,
+    pub(super) preferred_column: Option<u16>,
+    pub(super) start: Anchor,
+    pub(super) end: Anchor,
 }
 
 #[derive(Clone, Copy)]
@@ -81,7 +91,7 @@ impl SelectMode {
 }
 
 impl TranscriptView {
-    /// Enter at the bottommost visible selectable position.
+    /// Enter at the accepted Find hit, preferring the bottommost visible selectable position.
     #[cfg_attr(not(test), expect(dead_code, reason = "used by a later stack layer"))]
     pub(crate) fn begin_select_mode(&mut self, cells: &[Arc<dyn HistoryCell>]) -> bool {
         if self.select_mode.is_some() {
@@ -92,17 +102,18 @@ impl TranscriptView {
         let has_range = self.has_selection_range();
         if self.selection.is_none() {
             let cursor = self
-                .visible
-                .iter()
-                .rev()
-                .find_map(|visible| {
-                    let offset = visible.layout.first_cursor_position(visible.row)?;
-                    Some(Anchor {
-                        key: visible.key,
-                        index: visible.index,
-                        offset,
-                        row_bias: visible.layout.row_for_offset(offset) as isize
-                            - visible.row as isize,
+                .search
+                .match_anchor()
+                .or_else(|| {
+                    self.visible.iter().rev().find_map(|visible| {
+                        let offset = visible.layout.first_cursor_position(visible.row)?;
+                        Some(Anchor {
+                            key: visible.key,
+                            index: visible.index,
+                            offset,
+                            row_bias: visible.layout.row_for_offset(offset) as isize
+                                - visible.row as isize,
+                        })
                     })
                 })
                 .or_else(|| self.select_boundary(cells, /*end*/ true));
@@ -118,6 +129,8 @@ impl TranscriptView {
         self.select_mode = Some(SelectMode::default());
         if has_range {
             self.adopt_select_mouse_range();
+        } else if self.search.is_reading() {
+            self.accept_search_into_select_mode(cells);
         }
         self.reveal_select_cursor(cells);
         true
@@ -175,6 +188,10 @@ impl TranscriptView {
         if pressed && code == KeyCode::Char('q') && modifiers == KeyModifiers::NONE {
             return Some(self.exit_select_mode());
         }
+        if pressed && code == KeyCode::Char('/') && modifiers == KeyModifiers::NONE {
+            self.begin_search();
+            return Some(ViewAction::Changed);
+        }
         if pressed
             && matches!(code, KeyCode::Char('v') | KeyCode::Char(' '))
             && modifiers == KeyModifiers::NONE
@@ -190,6 +207,13 @@ impl TranscriptView {
             self.swap_select_ends(cells);
             return Some(ViewAction::Changed);
         }
+        if code == KeyCode::Char('n')
+            && matches!(modifiers, KeyModifiers::NONE | KeyModifiers::SHIFT)
+            && self.repeat_select_search(cells, modifiers == KeyModifiers::SHIFT)
+        {
+            return Some(ViewAction::Changed);
+        }
+
         let shift_arrow = modifiers == KeyModifiers::SHIFT
             && matches!(
                 code,
@@ -253,10 +277,12 @@ impl TranscriptView {
 
     fn exit_select_mode(&mut self) -> ViewAction {
         self.end_select_mode();
+        self.close_search_after_select_mode();
         ViewAction::ExitSelectMode
     }
 
     fn start_select_mark(&mut self, cells: &[Arc<dyn HistoryCell>], unit: SelectionUnit) {
+        self.cancel_pending_select_search();
         let Some(mut mode) = self.select_mode else {
             return;
         };
@@ -289,6 +315,7 @@ impl TranscriptView {
     }
 
     fn clear_select_mark(&mut self) {
+        self.cancel_pending_select_search();
         let Some(mode) = &mut self.select_mode else {
             return;
         };
@@ -302,6 +329,7 @@ impl TranscriptView {
     }
 
     fn swap_select_ends(&mut self, cells: &[Arc<dyn HistoryCell>]) {
+        self.cancel_pending_select_search();
         let Some(mode) = &mut self.select_mode else {
             return;
         };
@@ -368,6 +396,7 @@ impl TranscriptView {
     }
 
     pub(super) fn adopt_select_mouse_range(&mut self) {
+        self.cancel_pending_select_search();
         let has_range = self.has_selection_range();
         let Some(selection) = &self.selection else {
             return;
@@ -412,6 +441,54 @@ impl TranscriptView {
             mode.preferred_column = None;
             mode.mark = mark;
         }
+    }
+
+    pub(super) fn move_select_cursor_to_search_match(
+        &mut self,
+        mut anchor: Anchor,
+        layout: &TextLayout,
+        cells: &[Arc<dyn HistoryCell>],
+    ) {
+        let text = layout.text();
+        let containing = text
+            .grapheme_indices(/*is_extended*/ true)
+            .rfind(|(offset, _)| *offset <= anchor.offset)
+            .map(|(offset, _)| offset);
+        anchor.offset = containing
+            .filter(|offset| layout.is_cursor_position(*offset))
+            .or_else(|| {
+                text.grapheme_indices(/*is_extended*/ true)
+                    .map(|(offset, _)| offset)
+                    .find(|offset| *offset >= anchor.offset && layout.is_cursor_position(*offset))
+            })
+            .or_else(|| {
+                text.grapheme_indices(/*is_extended*/ true)
+                    .map(|(offset, _)| offset)
+                    .rfind(|offset| layout.is_cursor_position(*offset))
+            })
+            .unwrap_or(anchor.offset);
+
+        let (Some(mut mode), Some(mut selection)) =
+            (self.select_mode.take(), self.selection.take())
+        else {
+            return;
+        };
+        if let Some(origin) = mode.search_origin.take() {
+            mode.mark = origin.mark;
+            mode.preferred_column = origin.preferred_column;
+            selection.set_keyboard_range(origin.start, origin.end);
+        }
+        mode.preferred_column = None;
+        if let Some(mark) = &mut mode.mark {
+            mark.active = anchor;
+            mark.active_edges = None;
+        } else {
+            selection.set_keyboard_range(anchor, anchor);
+        }
+        self.select_mode = Some(mode);
+        self.selection = Some(selection);
+        self.sync_select_range(cells);
+        self.reveal_select_cursor(cells);
     }
 }
 

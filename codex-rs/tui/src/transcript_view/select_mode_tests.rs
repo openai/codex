@@ -12,7 +12,6 @@ fn cell(lines: &[&str]) -> Arc<dyn HistoryCell> {
             .collect(),
     ))
 }
-
 fn render(view: &mut TranscriptView, cells: &[Arc<dyn HistoryCell>]) -> Buffer {
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 32, /*height*/ 6,
@@ -350,4 +349,262 @@ fn confirmed_copy_keeps_the_select_mode_caret_on_the_active_grapheme() {
     assert!(view.select_mode.is_some());
     press(&mut view, &cells, KeyCode::Char('v'));
     assert_eq!(view.selected_text(&cells).as_deref(), Some("b"));
+}
+
+#[test]
+fn find_accepts_at_the_match_and_cancel_restores_the_saved_selection() {
+    let mut cells = vec![cell(&["alpha beta gamma"])];
+    for _ in 0..6 {
+        cells.push(cell(&["filler"]));
+    }
+    cells.push(cell(&["distant"]));
+    let mut view = TranscriptView::default();
+    render(&mut view, &cells);
+    assert!(view.begin_select_mode(&cells));
+    press(&mut view, &cells, KeyCode::Char('/'));
+    assert!(view.paste_search("gamma"));
+    while view.advance_search(&cells) {}
+    press(&mut view, &cells, KeyCode::Enter);
+    let accepted_cursor = view
+        .select_mode
+        .expect("select mode")
+        .cursor(view.selection.as_ref().expect("selection"));
+    let accepted_position = view.position;
+
+    press(&mut view, &cells, KeyCode::Char('/'));
+    assert!(view.paste_search("distant"));
+    while view.advance_search(&cells) {}
+    render(&mut view, &cells);
+    press(&mut view, &cells, KeyCode::Esc);
+
+    assert_eq!(view.position, accepted_position);
+    assert_eq!(
+        view.select_mode
+            .expect("select mode")
+            .cursor(view.selection.as_ref().expect("selection")),
+        accepted_cursor
+    );
+    press(&mut view, &cells, KeyCode::Char('v'));
+    press(&mut view, &cells, KeyCode::Right);
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("ga"));
+
+    press(&mut view, &cells, KeyCode::Char('/'));
+    let narrow = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 8, /*height*/ 6,
+    );
+    view.render(narrow, &mut Buffer::empty(narrow), &cells);
+    press(&mut view, &cells, KeyCode::Esc);
+    view.render(narrow, &mut Buffer::empty(narrow), &cells);
+
+    press(&mut view, &cells, KeyCode::Char('/'));
+    assert!(matches!(
+        view.handle_key(
+            KeyEvent::new(KeyCode::Char('\u{3}'), KeyModifiers::NONE),
+            &cells,
+        ),
+        Some(ViewAction::Changed)
+    ));
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("ga"));
+
+    press(&mut view, &cells, KeyCode::Char('/'));
+    assert!(view.paste_search("alpha"));
+    while view.advance_search(&cells) {}
+    press(&mut view, &cells, KeyCode::Enter);
+    assert_eq!(
+        view.select_mode
+            .expect("select mode")
+            .cursor(view.selection.as_ref().expect("selection"))
+            .offset,
+        0
+    );
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("alpha beta g"));
+
+    let key = accepted_cursor.key;
+    view.select_mode = None;
+    view.selection
+        .as_mut()
+        .expect("selection")
+        .set_keyboard_range(
+            Anchor {
+                offset: 6,
+                ..accepted_cursor
+            },
+            Anchor {
+                key,
+                offset: 10,
+                ..accepted_cursor
+            },
+        );
+    assert!(view.begin_select_mode(&cells));
+    assert_eq!(view.selected_text(&cells).as_deref(), Some("beta"));
+
+    for (query, expected_offset, expected_text) in [("\u{301}", 0, "a\u{301}"), ("\nbeta", 4, "b")]
+    {
+        let cells = vec![cell(&["a\u{301}", "beta"])];
+        let mut view = TranscriptView::default();
+        render(&mut view, &cells);
+        assert!(view.begin_select_mode(&cells));
+        press(&mut view, &cells, KeyCode::Char('/'));
+        assert!(view.paste_search(query));
+        while view.advance_search(&cells) {}
+        press(&mut view, &cells, KeyCode::Enter);
+        assert_eq!(
+            view.select_mode
+                .expect("select mode")
+                .cursor(view.selection.as_ref().expect("selection"))
+                .offset,
+            expected_offset
+        );
+        press(&mut view, &cells, KeyCode::Char('v'));
+        assert_eq!(view.selected_text(&cells).as_deref(), Some(expected_text));
+    }
+}
+
+#[test]
+fn accepted_find_repeats_into_the_select_cursor() {
+    let cells = vec![cell(&["needle first needle second"])];
+    let mut view = TranscriptView::default();
+    render(&mut view, &cells);
+    assert!(view.begin_select_mode(&cells));
+    press(&mut view, &cells, KeyCode::Char('/'));
+    assert!(view.paste_search("needle"));
+    while view.advance_search(&cells) {}
+    press(&mut view, &cells, KeyCode::Enter);
+    assert_eq!(
+        view.select_mode
+            .expect("select mode")
+            .cursor(view.selection.as_ref().expect("selection"))
+            .offset,
+        13
+    );
+
+    press(&mut view, &cells, KeyCode::Char('/'));
+    press(&mut view, &cells, KeyCode::Enter);
+    assert_eq!(
+        view.select_mode
+            .expect("select mode")
+            .cursor(view.selection.as_ref().expect("selection"))
+            .offset,
+        13
+    );
+
+    press(&mut view, &cells, KeyCode::Char('n'));
+    press(&mut view, &cells, KeyCode::Right);
+    while view.advance_search(&cells) {}
+    assert_eq!(
+        view.select_mode
+            .expect("select mode")
+            .cursor(view.selection.as_ref().expect("selection"))
+            .offset,
+        14
+    );
+
+    press(&mut view, &cells, KeyCode::Char('n'));
+    while view.advance_search(&cells) {}
+    assert_eq!(
+        view.select_mode
+            .expect("select mode")
+            .cursor(view.selection.as_ref().expect("selection"))
+            .offset,
+        0
+    );
+
+    press(&mut view, &cells, KeyCode::Char('v'));
+    assert!(matches!(
+        view.handle_key(
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::SHIFT),
+            &cells,
+        ),
+        Some(ViewAction::Changed)
+    ));
+    while view.advance_search(&cells) {}
+    let mode = view.select_mode.expect("select mode");
+    assert!(mode.mark.is_some());
+    assert_eq!(
+        mode.cursor(view.selection.as_ref().expect("selection"))
+            .offset,
+        13
+    );
+}
+
+#[test]
+fn accepted_find_pins_an_expanded_match_before_select_mode_exits() {
+    let output = format!(
+        "{}hidden needle\n{}",
+        "head\n".repeat(/*n*/ 20),
+        "tail\n".repeat(/*n*/ 20)
+    );
+    let command = crate::exec_cell::ExecCell::new(
+        crate::exec_cell::ExecCall {
+            call_id: "command".to_string(),
+            command: vec!["echo".to_string()],
+            parsed: Vec::new(),
+            output: Some(crate::exec_cell::CommandOutput::new(
+                /*exit_code*/ 0, output,
+            )),
+            source: codex_app_server_protocol::CommandExecutionSource::Agent,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        },
+        /*animations_enabled*/ false,
+    );
+    let cells = vec![Arc::new(command) as Arc<dyn HistoryCell>];
+    let mut view = TranscriptView::default();
+    render(&mut view, &cells);
+    assert!(view.begin_select_mode(&cells));
+    press(&mut view, &cells, KeyCode::Char('/'));
+    assert!(view.paste_search("needle"));
+    while view.advance_search(&cells) {}
+    press(&mut view, &cells, KeyCode::Enter);
+
+    let anchor = view.search.match_anchor().expect("accepted hidden match");
+    render(&mut view, &cells);
+    let cursor = view
+        .select_mode
+        .expect("select mode")
+        .cursor(view.selection.as_ref().expect("selection"));
+    let index = view.resolve(&cells, cursor);
+    let row = view
+        .layout(&cells, index)
+        .expect("cursor layout")
+        .row_for_offset(cursor.offset);
+    assert!(
+        view.visible
+            .iter()
+            .any(|visible| visible.index == index && visible.row == row)
+    );
+    let expanded = view
+        .search
+        .match_layout(anchor.key)
+        .expect("expanded search layout")
+        .text()
+        .to_owned();
+    press(&mut view, &cells, KeyCode::Char('/'));
+    press(&mut view, &cells, KeyCode::Esc);
+    assert_eq!(
+        view.selection
+            .as_ref()
+            .expect("selection")
+            .snapshot
+            .pinned
+            .get(&anchor.key)
+            .expect("expanded origin pinned")
+            .text(),
+        expanded
+    );
+    assert!(matches!(
+        view.handle_key(KeyCode::Char('q').into(), &cells),
+        Some(ViewAction::ExitSelectMode)
+    ));
+    assert_eq!(
+        view.held_reading
+            .as_ref()
+            .expect("paused snapshot")
+            .pinned
+            .get(&anchor.key)
+            .expect("expanded match pinned")
+            .text(),
+        expanded
+    );
 }

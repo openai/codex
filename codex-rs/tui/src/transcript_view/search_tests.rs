@@ -886,9 +886,20 @@ fn search_scans_a_page_inserted_after_the_retained_session_header() {
     view.paste_search("needle");
     finish_scan(&mut view, &cells);
     assert!(view.search.needs_history(view.history));
-    cells.insert(/*index*/ 1, cell("older NEEDLE"));
+    view.search.saved_select = Some(SavedSelectSearch {
+        query: "needle".to_string(),
+        current: None,
+        progress: view.search.progress,
+        page_start: view.search.page_start,
+    });
+    view.search.progress = Progress::Restart;
+    cells.insert(/*index*/ 1, cell("older messages"));
+    view.history = TranscriptHistoryState::Partial;
+    view.history_loaded(&cells, 1..2);
+    cells.insert(/*index*/ 1, cell("oldest NEEDLE"));
     view.history = TranscriptHistoryState::Complete;
     view.history_loaded(&cells, 1..2);
+    assert!(view.search.restore_saved_select());
     finish_scan(&mut view, &cells);
     let found = view
         .search
@@ -902,7 +913,7 @@ fn search_scans_a_page_inserted_after_the_retained_session_header() {
             found.anchor.offset,
             found.end
         ),
-        (EntryKey::cell(&cells[1]), 1, 6, 12)
+        (EntryKey::cell(&cells[1]), 1, 7, 13)
     );
     assert!(Arc::ptr_eq(&cells[0], &header));
 }

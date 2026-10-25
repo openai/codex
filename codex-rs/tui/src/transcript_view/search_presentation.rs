@@ -31,6 +31,9 @@ impl TranscriptView {
             end,
             layout: Arc::clone(&layout),
         });
+        if self.search.is_reading() {
+            self.move_select_cursor_to_search_match(anchor, &layout, current_cells);
+        }
         let row = layout.row_for_offset(anchor.offset);
         let match_rows = layout.row_for_offset(end - 1) - row + 1;
         let context_rows = usize::from(self.area.height / 3)

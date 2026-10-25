@@ -10,6 +10,7 @@ impl TranscriptView {
         cells: &[Arc<dyn HistoryCell>],
         motion: CursorMotion,
     ) {
+        self.cancel_pending_select_search();
         let Some(mut mode) = self.select_mode else {
             return;
         };
