@@ -404,6 +404,8 @@ Reduce `tui.keymap.global.leader` alternatives or `leader ...` bindings."
                     !(contexts.0 & TRANSCRIPT_CLOSE != 0
                         && binding.action.context == KeymapContext::Pager
                         && binding.action.action == "close_transcript"),
+                    !(contexts.0 & TRANSCRIPT_ACTIONS != 0
+                        && binding.action.context == KeymapContext::Pager),
                     contexts.is_warnings() && binding.action.context != KeymapContext::List,
                     contexts.is_warnings() && binding.action.context == KeymapContext::Global,
                 )
@@ -690,7 +692,7 @@ pub(crate) fn is_dispatch_token_event(event: KeyEvent) -> bool {
     )
 }
 
-fn chord_stroke_matches(binding: KeyBinding, key_event: KeyEvent) -> bool {
+pub(crate) fn chord_stroke_matches(binding: KeyBinding, key_event: KeyEvent) -> bool {
     let ctrl_slash = crate::key_hint::ctrl(KeyCode::Char('/'));
     let ctrl_seven = crate::key_hint::ctrl(KeyCode::Char('7'));
 

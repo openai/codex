@@ -78,6 +78,7 @@ impl TranscriptOverlay {
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
         let browsing = self.browsing_footer.is_some()
+            && !self.pending_select_mode
             && !self.view.has_active_interaction()
             && self.view.history != TranscriptHistoryState::Failed;
         let chrome_height = if browsing { 2 } else { 5 };
@@ -190,10 +191,18 @@ impl TranscriptOverlay {
         Ok(())
     }
 
-    pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        if let Some(completion) = tui.clipboard.poll() {
+    pub(crate) fn handle_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        event: TuiEvent,
+    ) -> Result<Option<u64>> {
+        let completed_copy = if let Some(completion) = tui.clipboard.poll() {
+            let id = completion.0;
             self.finish_pending_copy(completion);
-        }
+            Some(id)
+        } else {
+            None
+        };
         if matches!(event, TuiEvent::Resume | TuiEvent::FocusLost) {
             self.view.cancel_primary();
             self.view.end_drag();
@@ -219,7 +228,7 @@ impl TranscriptOverlay {
             }
             TuiEvent::Paste(text) => {
                 if self.view.is_select_mode() && !self.view.is_search_editing() {
-                    return Ok(());
+                    return Ok(completed_copy);
                 }
                 if self.view.is_search_editing() {
                     self.view.end_selection(&self.cells);
@@ -232,7 +241,7 @@ impl TranscriptOverlay {
                         .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
                 }
                 self.draw(tui)?;
-                return Ok(());
+                return Ok(completed_copy);
             }
             TuiEvent::FocusLost => None,
         };
@@ -240,7 +249,7 @@ impl TranscriptOverlay {
             self.apply_action(tui, action);
             tui.frame_requester().schedule_frame();
         }
-        Ok(())
+        Ok(completed_copy)
     }
 
     pub(crate) fn is_done(&self) -> bool {
@@ -263,19 +272,27 @@ impl TranscriptOverlay {
     }
 
     pub(crate) fn begin_select_mode(&mut self) {
-        self.pending_select_mode = !self.view.begin_select_mode(&self.cells);
+        self.pending_select_mode = true;
     }
 
     pub(crate) fn is_search_editing(&self) -> bool {
         self.view.is_search_editing()
     }
 
+    pub(crate) fn is_select_mode(&self) -> bool {
+        self.pending_select_mode || self.view.is_select_mode()
+    }
+
     pub(crate) fn owns_interaction_key(&self, key: KeyEvent) -> bool {
-        self.view.owns_interaction_key(key)
+        self.pending_select_mode || self.view.owns_interaction_key(key)
     }
 
     pub(crate) fn has_active_interaction(&self) -> bool {
-        self.view.has_active_interaction()
+        self.pending_select_mode || self.view.has_active_interaction()
+    }
+
+    pub(crate) fn pending_follow_id(&self) -> Option<u64> {
+        self.pending_follow_close.map(|(id, _)| id)
     }
 
     pub(crate) fn needs_history(&mut self) -> bool {

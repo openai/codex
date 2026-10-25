@@ -69,11 +69,18 @@ impl App {
             let follow =
                 self.transcript_view
                     .finish_copy(&self.transcript_cells, completion, current);
+            let pending_exit_key = if current {
+                self.backtrack
+                    .finish_pending_select_exit_key(completion.0, /*select_mode_closed*/ true)
+            } else {
+                None
+            };
             if follow == Some(true) {
                 if self.backtrack.overlay_preview_active {
                     self.close_transcript_overlay(tui);
                 }
                 self.transcript_view.jump_to_latest();
+                self.backtrack.select_exit_key = pending_exit_key;
             }
         }
         if !current || matches!(event, TuiEvent::FocusLost | TuiEvent::Resume) {

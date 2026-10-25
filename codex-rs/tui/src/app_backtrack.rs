@@ -75,7 +75,41 @@ pub(crate) struct BacktrackState {
     pub(crate) nth_user_message: usize,
     /// True when the transcript overlay is showing a backtrack preview.
     pub(crate) overlay_preview_active: bool,
+    /// Consume held-key input after a fresh press acts on transcript select mode.
+    pub(crate) select_exit_key: Option<crate::key_hint::KeyBinding>,
+    /// Preserve the initiating key while a select-and-follow copy is pending.
+    pub(crate) pending_select_exit_key: Option<(u64, crate::key_hint::KeyBinding)>,
     origin: Option<browsing::BrowsingOrigin>,
+}
+
+impl BacktrackState {
+    pub(crate) fn observe_pending_select_exit_key(&mut self, event: KeyEvent) {
+        if event.kind == KeyEventKind::Release
+            && self.pending_select_exit_key.is_some_and(|(_, binding)| {
+                binding.parts() == crate::key_hint::KeyBinding::from_event(event).parts()
+            })
+        {
+            self.pending_select_exit_key = None;
+        }
+    }
+
+    pub(crate) fn finish_pending_select_exit_key(
+        &mut self,
+        completed_id: u64,
+        select_mode_closed: bool,
+    ) -> Option<crate::key_hint::KeyBinding> {
+        match self.pending_select_exit_key {
+            Some((id, key)) if id == completed_id => {
+                self.pending_select_exit_key = None;
+                select_mode_closed.then_some(key)
+            }
+            Some((id, _)) if id < completed_id => {
+                self.pending_select_exit_key = None;
+                None
+            }
+            _ => None,
+        }
+    }
 }
 
 /// A user-visible backtrack choice that can be reopened in the current thread.
@@ -357,6 +391,7 @@ impl App {
     /// source of truth for the active cell and its cache invalidation key, and because `App` owns
     /// overlay lifecycle and frame scheduling for animations.
     fn overlay_forward_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
+        let select_exit_key = Self::transcript_select_exit_key(&event);
         if matches!(
             &event,
             TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained
@@ -378,6 +413,8 @@ impl App {
             ))
             && let Some(Overlay::Transcript(t)) = &mut self.overlay
         {
+            let was_select_mode = t.is_select_mode();
+            let pending_follow_before = t.pending_follow_id();
             tui.set_overlay_input(tui::OverlayInput::Transcript)?;
             t.motion = crate::motion::MotionMode::from_animations_enabled(
                 self.local_settings.tui.animations && self.local_settings.tui.effects.shimmer,
@@ -407,14 +444,31 @@ impl App {
             if result.is_err() {
                 let _ = tui.set_overlay_input(tui::OverlayInput::Default);
             }
-            result?;
+            let completed_copy = result?;
             let close_overlay = t.is_done();
+            let select_mode_closed = was_select_mode && (!t.is_select_mode() || close_overlay);
+            let pending_follow_id = t.pending_follow_id();
             if !close_overlay
                 && active_key.is_some_and(|key| key.animation_tick.is_some())
                 && t.is_scrolled_to_bottom()
             {
                 tui.frame_requester()
                     .schedule_frame_in(std::time::Duration::from_millis(50));
+            }
+            if pending_follow_id != pending_follow_before
+                && let (Some(id), Some(key)) = (pending_follow_id, select_exit_key)
+            {
+                self.backtrack.pending_select_exit_key = Some((id, key));
+            }
+            let completed_exit_key = completed_copy.and_then(|completed_id| {
+                self.backtrack
+                    .finish_pending_select_exit_key(completed_id, select_mode_closed)
+            });
+            if select_mode_closed {
+                self.backtrack.select_exit_key = select_exit_key.or(completed_exit_key);
+                if select_exit_key.is_some() {
+                    self.backtrack.pending_select_exit_key = None;
+                }
             }
             if close_overlay {
                 self.close_transcript_overlay(tui);
@@ -738,6 +792,38 @@ mod tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    #[test]
+    fn pending_select_exit_key_ends_on_completion_or_release() {
+        let key = crate::key_hint::KeyBinding::from_event(KeyCode::Enter.into());
+        let mut state = BacktrackState {
+            pending_select_exit_key: Some((7, key)),
+            ..BacktrackState::default()
+        };
+
+        assert_eq!(
+            state.finish_pending_select_exit_key(
+                /*completed_id*/ 7, /*select_mode_closed*/ false,
+            ),
+            None
+        );
+        assert_eq!(state.pending_select_exit_key, None);
+        state.pending_select_exit_key = Some((8, key));
+        state.observe_pending_select_exit_key(KeyEvent::new_with_kind(
+            KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+            KeyEventKind::Release,
+        ));
+        assert_eq!(state.pending_select_exit_key, None);
+        state.pending_select_exit_key = Some((9, key));
+        assert_eq!(
+            state.finish_pending_select_exit_key(
+                /*completed_id*/ 9, /*select_mode_closed*/ true,
+            ),
+            Some(key)
+        );
+        assert_eq!(state.pending_select_exit_key, None);
     }
 
     fn turn(turn_id: &str, status: TurnStatus, user_messages: usize) -> Turn {

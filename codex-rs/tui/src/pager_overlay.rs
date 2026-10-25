@@ -92,7 +92,7 @@ impl Overlay {
         };
         tui.set_overlay_input(input)?;
         let result = match self {
-            Overlay::Transcript(o) => o.handle_event(tui, event),
+            Overlay::Transcript(o) => o.handle_event(tui, event).map(drop),
             Overlay::Static(o) => o.handle_event(tui, event),
             Overlay::Analytics(o) => o.handle_event(tui, event),
         };

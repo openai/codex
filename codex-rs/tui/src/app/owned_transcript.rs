@@ -485,6 +485,7 @@ impl App {
                         | crossterm::event::MouseEventKind::ScrollDown
                 ) {
                     self.transcript_view.end_selection(&self.transcript_cells);
+                    self.transcript_view.end_select_mode();
                     self.transcript_view.cancel_search();
                     self.transcript_view.clear_activity_focus();
                 }
@@ -531,6 +532,16 @@ impl App {
             || matches!(event, TuiEvent::Mouse(mouse) if matches!(mouse.kind, crossterm::event::MouseEventKind::Down(_)))
         {
             self.chat_widget.end_composer_drag();
+        }
+        if let TuiEvent::Key(key) = event
+            && self.chat_widget.no_modal_or_popup_active()
+            && !self.transcript_view.is_select_mode()
+            && self.keymap.app.select_transcript.is_pressed(*key)
+        {
+            self.transcript_view
+                .begin_select_mode(&self.transcript_cells);
+            tui.frame_requester().schedule_frame();
+            return Ok(true);
         }
         // Read-only Escape belongs to session navigation, even when the transcript is scrolled.
         // Search and selection still consume Escape first to dismiss their interaction.
@@ -627,7 +638,24 @@ impl App {
         {
             return Ok(false);
         }
+        let was_select_mode = self.transcript_view.is_select_mode();
+        let select_exit_key = Self::transcript_select_exit_key(event);
         let action = match event {
+            TuiEvent::Key(key) if was_select_mode && !self.transcript_view.is_search_editing() => {
+                if let Some(action) = self
+                    .transcript_view
+                    .handle_select_mode_key(*key, &self.transcript_cells)
+                {
+                    Some(action)
+                } else {
+                    if self.keymap.app.find_transcript.is_pressed(*key)
+                        || self.keymap.pager.find.is_pressed(*key)
+                    {
+                        self.transcript_view.begin_search();
+                    }
+                    Some(ViewAction::Changed)
+                }
+            }
             TuiEvent::Key(key)
                 if !self.transcript_view.is_search_editing()
                     && self.keymap.app.find_transcript.is_pressed(*key) =>
@@ -645,6 +673,11 @@ impl App {
                 .transcript_view
                 .handle_mouse(*mouse, &self.transcript_cells),
             TuiEvent::Paste(text) => {
+                if self.transcript_view.is_select_mode()
+                    && !self.transcript_view.is_search_editing()
+                {
+                    return Ok(true);
+                }
                 self.transcript_view.end_selection(&self.transcript_cells);
                 if self.transcript_view.paste_search(text) {
                     Some(ViewAction::Changed)
@@ -677,15 +710,39 @@ impl App {
             }
             return self.handle_owned_backtrack_event(tui, event);
         };
-        if let Some((characters, result)) = self.transcript_view.copy_action(
-            tui,
-            &self.transcript_cells,
-            &action,
-            crate::clipboard_copy::CopyFormat::Markdown,
-        ) {
-            self.transcript_view.show_copy_feedback(&result, characters);
-        } else if let ViewAction::OpenLink(url) = action {
-            self.open_url_in_browser(url);
+        let resume_following = matches!(action, ViewAction::CopyAndFollow(_));
+        if !matches!(action, ViewAction::ExitSelectMode) {
+            if let Some((characters, result)) = self.transcript_view.copy_action(
+                tui,
+                &self.transcript_cells,
+                &action,
+                crate::clipboard_copy::CopyFormat::Markdown,
+            ) {
+                self.transcript_view.show_copy_feedback(&result, characters);
+                if resume_following {
+                    match result {
+                        Ok(crate::clipboard_copy::CopyStatus::Confirmed) => {
+                            self.transcript_view.jump_to_latest();
+                        }
+                        Ok(crate::clipboard_copy::CopyStatus::Pending(id)) => {
+                            if let Some(key) = select_exit_key {
+                                self.backtrack.pending_select_exit_key = Some((id, key));
+                            }
+                        }
+                        Ok(
+                            crate::clipboard_copy::CopyStatus::Unconfirmed
+                            | crate::clipboard_copy::CopyStatus::Busy,
+                        )
+                        | Err(_) => {}
+                    }
+                }
+            } else if let ViewAction::OpenLink(url) = action {
+                self.open_url_in_browser(url);
+            }
+        }
+        if was_select_mode && !self.transcript_view.is_select_mode() {
+            self.backtrack.pending_select_exit_key = None;
+            self.backtrack.select_exit_key = select_exit_key;
         }
         self.request_owned_history(tui, app_server);
         tui.frame_requester().schedule_frame();

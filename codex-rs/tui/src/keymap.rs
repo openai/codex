@@ -66,6 +66,8 @@ pub(crate) use chords::KeyChordMatch;
 pub(crate) use chords::KeyChordMatcher;
 pub(crate) use chords::KeymapContextSet;
 pub(crate) use chords::RuntimeChordKeymap;
+pub(crate) use chords::chord_stroke_matches;
+pub(crate) use chords::dispatch_event;
 pub(crate) use chords::is_dispatch_token;
 pub(crate) use chords::is_dispatch_token_event;
 

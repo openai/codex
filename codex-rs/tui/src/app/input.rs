@@ -9,6 +9,8 @@ use crate::app_backtrack::SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE;
 use crate::keymap::bindings_for_action;
 use crate::keymap::keymap_action_ids;
 
+mod select_mode;
+
 impl App {
     pub(super) fn should_recover_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
         let active_contexts = self.active_keymap_contexts();
@@ -90,14 +92,16 @@ impl App {
         if self.overlay.is_none() && self.chat_widget.handle_quick_dial_menu(key_event) {
             return None;
         }
-        if matches!(&self.overlay, Some(Overlay::Transcript(overlay)) if overlay.owns_interaction_key(key_event))
+        let select_mode_chord = self.select_mode_owns_chord(tui, key_event);
+        if (matches!(&self.overlay, Some(Overlay::Transcript(overlay)) if overlay.owns_interaction_key(key_event))
             || (tui.is_owned_screen()
                 && self.overlay.is_none()
                 && self.chat_widget.no_modal_or_popup_active()
                 && self.transcript_view.owns_interaction_key(key_event)
                 && (self.transcript_view.has_active_interaction()
                     || self.backtrack.overlay_preview_active
-                    || crate::transcript_view::JumpTarget::from_key(key_event).is_none()))
+                    || crate::transcript_view::JumpTarget::from_key(key_event).is_none())))
+            && !select_mode_chord
         {
             let close_chord = tui.is_owned_screen()
                 && self.overlay.is_none()
@@ -232,7 +236,13 @@ impl App {
             } else {
                 KeymapContext::Pager
             };
-            let contexts = KeymapContextSet::new(context).with_voice_toggle(&self.keymap);
+            let contexts =
+                if matches!(overlay, Overlay::Transcript(_)) && context == KeymapContext::Pager {
+                    KeymapContextSet::transcript()
+                } else {
+                    KeymapContextSet::new(context)
+                }
+                .with_voice_toggle(&self.keymap);
             return if self.backtrack.overlay_preview_active && context == KeymapContext::Pager {
                 KeymapContextSet::browsing().with_voice_toggle(&self.keymap)
             } else {
@@ -241,6 +251,9 @@ impl App {
         }
         if self.transcript_view.is_search_editing() && self.chat_widget.no_modal_or_popup_active() {
             return KeymapContextSet::new(KeymapContext::Editor).with_voice_toggle(&self.keymap);
+        }
+        if self.transcript_view.is_select_mode() && self.chat_widget.no_modal_or_popup_active() {
+            return KeymapContextSet::transcript().with_voice_toggle(&self.keymap);
         }
         if self.transcript_view.is_activity_focused() && self.chat_widget.no_modal_or_popup_active()
         {
@@ -583,8 +596,11 @@ impl App {
         }
 
         let find_transcript = self.keymap.app.find_transcript.is_pressed(key_event);
+        let select_transcript = self.keymap.app.select_transcript.is_pressed(key_event);
         if app_keymap_shortcuts_available
-            && (self.keymap.app.open_transcript.is_pressed(key_event) || find_transcript)
+            && (self.keymap.app.open_transcript.is_pressed(key_event)
+                || find_transcript
+                || select_transcript)
         {
             self.scrollback_has_older_history = self
                 .chat_widget
@@ -594,6 +610,10 @@ impl App {
             if find_transcript && let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
                 overlay.set_keymap_bindings(&self.keymap);
                 overlay.begin_search();
+            }
+            if select_transcript && let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
+                overlay.set_keymap_bindings(&self.keymap);
+                overlay.begin_select_mode();
             }
             return;
         }

@@ -287,8 +287,13 @@ impl App {
         };
         let continue_to_start = previous == TranscriptHistoryState::LoadingBeginning;
         if continue_to_start && !self.scrollback_has_older_history {
-            self.transcript_view
-                .jump_to_entry(&self.transcript_cells, /*index*/ 0);
+            if self.transcript_view.is_select_mode() {
+                self.transcript_view
+                    .complete_select_beginning(&self.transcript_cells);
+            } else {
+                self.transcript_view
+                    .jump_to_entry(&self.transcript_cells, /*index*/ 0);
+            }
         }
         if self.scrollback_has_older_history
             && (continue_to_start

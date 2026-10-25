@@ -116,6 +116,10 @@ pub(crate) fn running_in_vscode_terminal() -> bool {
     keyboard_modes::running_in_vscode_terminal()
 }
 
+pub(crate) fn reports_key_releases() -> bool {
+    keyboard_modes::reports_key_releases()
+}
+
 fn should_emit_notification(condition: NotificationCondition, terminal_focused: bool) -> bool {
     match condition {
         NotificationCondition::Unfocused => !terminal_focused,

@@ -33,6 +33,7 @@ pub(super) static ALTERNATE_SCREEN: AlternateScreen = AlternateScreen {
     mouse_capture_disabled: AtomicBool::new(/*v*/ false),
     input_configured: AtomicBool::new(/*v*/ false),
     keyboard_active: AtomicBool::new(/*v*/ false),
+    parent_reports_key_releases: AtomicBool::new(/*v*/ false),
     link_pointer: super::link_pointer::LinkPointer::new(),
 };
 
@@ -47,6 +48,8 @@ pub(super) struct AlternateScreen {
     input_configured: AtomicBool,
     // An editor can take over the screen after Codex has popped its keyboard mode.
     keyboard_active: AtomicBool,
+    // Restore the main screen's input classification when this screen's keyboard frame is popped.
+    parent_reports_key_releases: AtomicBool,
 }
 
 /// Report pointer motion so the owned transcript can update its return-to-bottom hover state.
@@ -87,6 +90,8 @@ impl AlternateScreen {
         // Stdout retains queued bytes on a flush error; cleanup must follow that pending entry.
         self.active.store(/*val*/ true, Ordering::Relaxed);
         writer.flush()?;
+        self.parent_reports_key_releases
+            .store(keyboard_modes::reports_key_releases(), Ordering::Relaxed);
         let mouse_capture = keyboard_modes::enable_keyboard_enhancement(writer);
         self.keyboard_active.store(
             !cfg!(windows) && !keyboard_modes::keyboard_enhancement_disabled(),
@@ -174,6 +179,9 @@ impl AlternateScreen {
             let result = execute!(writer, PopKeyboardEnhancementFlags);
             if result.is_ok() {
                 self.keyboard_active.store(/*val*/ false, Ordering::Relaxed);
+                keyboard_modes::set_reports_key_releases(
+                    self.parent_reports_key_releases.load(Ordering::Relaxed),
+                );
             }
             result
         } else {

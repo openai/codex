@@ -887,6 +887,23 @@ impl App {
             self.chat_widget.acknowledge_program_status();
         }
         let idle_draw = matches!(event, TuiEvent::Draw);
+        if let TuiEvent::Key(key) = &event {
+            self.backtrack.observe_pending_select_exit_key(*key);
+        }
+        if let TuiEvent::Key(key) = &event
+            && let Some(binding) = self.backtrack.select_exit_key
+        {
+            if binding.parts() == crate::key_hint::KeyBinding::from_event(*key).parts() {
+                if key.kind == KeyEventKind::Release
+                    || !self.enhanced_keys_supported
+                    || !crate::tui::reports_key_releases()
+                {
+                    self.backtrack.select_exit_key = None;
+                }
+                return Ok(AppRunControl::Continue);
+            }
+            self.backtrack.select_exit_key = None;
+        }
         if self.handle_rendered_selection_event(tui, &event)? {
             return Ok(AppRunControl::Continue);
         }
@@ -993,9 +1010,12 @@ impl App {
                     })
                 && app.keymap.chat.toggle_voice.is_pressed(key)
         };
-        // Find consumes otherwise-unhandled keys; let enabled voice controls reach App.
+        // Transcript interactions consume otherwise-unhandled keys; let enabled voice controls
+        // reach App.
         if !matches!(&event, TuiEvent::Key(key)
-            if voice_toggle(self, *key) && !self.transcript_view.owns_interaction_key(*key))
+            if voice_toggle(self, *key)
+                && (!self.transcript_view.owns_interaction_key(*key)
+                    || self.transcript_view.is_select_mode()))
             && self.handle_owned_transcript_event(tui, app_server, &event)?
         {
             return Ok(AppRunControl::Continue);

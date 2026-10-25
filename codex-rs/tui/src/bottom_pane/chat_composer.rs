@@ -129,6 +129,8 @@
 //! Multiline pastes continue blockquote prefixes.
 //! `Enter` submits immediately. `Tab` requests queuing while a task is running; if no task is
 //! running, `Tab` submits just like Enter so input is never dropped.
+//! Submit and queue bindings act only on fresh key presses; repeated events are consumed so a held
+//! key cannot dispatch a preserved draft after another input layer closes.
 //! Vim Replace shares Insert's composer actions; only textarea editing differs.
 //! Literal completion/paste edits discard stale Replace recovery; subsequent typing records anew.
 //! Token markers added during Replace are removed when restoring overwritten characters.
@@ -3527,6 +3529,11 @@ impl ChatComposer {
             }
         } else {
             self.footer.mode = reset_mode_after_activity(self.footer.mode);
+        }
+        if key_event.kind == KeyEventKind::Repeat
+            && (self.queue_keys.is_pressed(key_event) || self.submit_keys.is_pressed(key_event))
+        {
+            return (InputResult::None, true);
         }
         if self.queue_keys.is_pressed(key_event)
             && (self.is_task_running || self.queue_submissions || !self.is_bang_shell_command())
