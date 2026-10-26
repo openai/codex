@@ -553,12 +553,17 @@ async fn reusing_completed_process_returns_unknown_process() -> anyhow::Result<(
     .await?;
     let process_id = open_shell.process_id.expect("expected process id");
 
-    write_stdin(
-        &session, &turn, process_id, "exit\n", /*yield_time_ms*/ 2_500,
-    )
-    .await?;
-
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
+        let mut response = write_stdin(
+            &session, &turn, process_id, "exit\n", /*yield_time_ms*/ 2_500,
+        )
+        .await?;
+        while response.process_id.is_some() {
+            response = write_stdin(&session, &turn, process_id, "", /*yield_time_ms*/ 100).await?;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
 
     let err = write_stdin(&session, &turn, process_id, "", /*yield_time_ms*/ 100)
         .await
