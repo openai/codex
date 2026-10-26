@@ -1302,6 +1302,9 @@
             "shell_zsh_fork": {
               "type": "boolean"
             },
+            "skill_catalog_deltas": {
+              "type": "boolean"
+            },
             "skill_env_var_dependency_prompt": {
               "type": "boolean"
             },
@@ -7924,6 +7927,9 @@
           "type": "boolean"
         },
         "shell_zsh_fork": {
+          "type": "boolean"
+        },
+        "skill_catalog_deltas": {
           "type": "boolean"
         },
         "skill_env_var_dependency_prompt": {

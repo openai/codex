@@ -3326,6 +3326,7 @@ async fn skill_instructions_in_parent_and_spawned_child(include_instructions: bo
     let mut extensions = ExtensionRegistryBuilder::new();
     codex_skills_extension::install(&mut extensions, |config: &Config| SkillsExtensionConfig {
         include_instructions: config.include_skill_instructions,
+        catalog_deltas_enabled: config.features.enabled(Feature::SkillCatalogDeltas),
         max_context_tokens: config.skill_max_context_tokens,
         bundled_skills_enabled: false,
         cloud_skill_enabled: false,

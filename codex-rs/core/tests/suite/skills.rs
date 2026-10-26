@@ -325,6 +325,9 @@ async fn user_turn_selects_symlinked_skill_by_advertised_discovery_path() -> Res
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     install(&mut extensions, |config: &Config| SkillsExtensionConfig {
         include_instructions: config.include_skill_instructions,
+        catalog_deltas_enabled: config
+            .features
+            .enabled(codex_features::Feature::SkillCatalogDeltas),
         max_context_tokens: config.skill_max_context_tokens,
         bundled_skills_enabled: false,
         cloud_skill_enabled: false,

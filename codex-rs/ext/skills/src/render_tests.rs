@@ -41,6 +41,37 @@ fn render_combined_available_skills(
 }
 
 #[test]
+fn edits_beyond_the_catalog_description_cap_keep_the_same_fingerprint() {
+    let prefix = "a".repeat(MAX_CATALOG_SKILL_DESCRIPTION_CHARS);
+    let fingerprint = |suffix| {
+        let catalog = SkillCatalog {
+            entries: vec![entry(
+                "release-notes",
+                &format!("{prefix}{suffix}"),
+                /*short_description*/ None,
+            )],
+            ..SkillCatalog::default()
+        };
+        let prepared =
+            PreparedSkillCatalog::new(&catalog, SkillCatalogRenderPolicy::CoreCompatible);
+        let rendered = prepared
+            .render(
+                SkillMetadataBudget::Characters(8_000),
+                /*include_skills_usage_instructions*/ false,
+            )
+            .unwrap();
+        prepared
+            .entries_for_render(&rendered)
+            .into_values()
+            .next()
+            .unwrap()
+            .snapshot
+            .fingerprint
+    };
+    assert_eq!(fingerprint("draft"), fingerprint("published"));
+}
+
+#[test]
 fn skill_prompt_contents_are_bounded_at_utf8_boundaries() {
     let contents = format!("{}é", "a".repeat(MAX_SKILL_PROMPT_BYTES - 1));
 
@@ -1124,13 +1155,6 @@ fn catalog_emits_omission_marker_when_every_minimum_skill_line_exceeds_budget() 
         truncated_description_chars: MAX_CATALOG_SKILL_DESCRIPTION_CHARS,
         truncated_description_count: 1,
     };
-    assert_eq!(
-        expected_report.warning_message(),
-        Some(
-            "Exceeded skills context budget. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list."
-                .to_string()
-        )
-    );
     let core_render = render_available_skills(
         &catalog,
         SkillCatalogRenderPolicy::CoreCompatible,
@@ -1140,6 +1164,24 @@ fn catalog_emits_omission_marker_when_every_minimum_skill_line_exceeds_budget() 
     )
     .expect("core-compatible report should render");
     assert_eq!(core_render.report, expected_report);
+    assert_eq!(
+        core_render
+            .report
+            .warning_message(/*catalog_deltas_enabled*/ false)
+            .as_deref(),
+        Some(
+            "Exceeded skills context budget. All skill descriptions were removed and 1 additional skill was not included in the model-visible skills list."
+        )
+    );
+    assert_eq!(
+        core_render
+            .report
+            .warning_message(/*catalog_deltas_enabled*/ true)
+            .as_deref(),
+        Some(
+            "Exceeded skills context budget. Some skills were not included in the model-visible skills list."
+        )
+    );
     let core_fragment = core_render
         .into_fragment(/*include_skills_usage_instructions*/ false)
         .expect("core-compatible rendering should preserve an empty skills fragment");

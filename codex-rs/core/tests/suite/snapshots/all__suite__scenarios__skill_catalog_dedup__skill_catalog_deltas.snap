@@ -1,0 +1,568 @@
+---
+source: core/tests/suite/scenarios_skill_catalog_dedup.rs
+expression: "context_snapshot::format_request_history_snapshot(\"Skill additions and edits share the remaining metadata budget across turns and resume. Removals stay silent and do not refund budget. Compaction rebuilds the current catalog and resets the allowance.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
+---
+Scenario: Skill additions and edits share the remaining metadata budget across turns and resume. Removals stay silent and do not refund budget. Compaction rebuilds the current catalog and resets the allowance.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-6-astra"
+  parallel_tool_calls: false
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"context":"all_turns","effort":"low"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+-- request 1 (turn) --
+00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
+        - namespace/functions; hash=fada4a476a3754dd
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collabo...them until their intended goal is completely handled. [hash=efa50f074efa5803]
+
+    # When to ask the user for permission
+
+    Use your best judgement given task context for when you really need user permission, like a competent co...ork without ending the turn to clarify with the user. [hash=ca7367e658b51388]
+
+    User authorization and preferences persist across turns. Do not request permission again when the user h... any guidelines provided in skills or external files. [hash=911f91c92c72882c]
+
+    <OMITTED 155 LINES; ~4935 TOKENS; hash=5573869716192298>
+
+    - Skill naming: If a plugin contributes skills, those skill entries are prefixed with plugin_name: in the Skills list.
+    - MCP naming: Plugin-provided MCP tools keep standard MCP identifiers such as mcp__server__tool; use tool provenance to tell which plugin they come from.
+    - Trigger rules: If the user explicitly names a plugin, prefer capabilities associated with that plugin for that turn.
+    - Relationship to capabilities: Plugins are not invoked directly. Use their underlying skills, MCP tools, and app tools to help solve the task.
+    - Relevance: Determine what a plugin can help with from explicit user mention or from the plugin-associa..., MCP tools, and apps exposed elsewhere in this turn. [hash=620459a4e7b590f0]
+    - Missing/blocked: If the user requests a plugin that does not have relevant callable capabilities for t..., say so briefly and continue with the best fallback. [hash=746b0469a8f6cb3e]
+
+02:message/developer[3]:
+    [01] <skills_instructions>
+        ## Host skills
+
+        ## Skills
+        A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
+        ### Skill roots
+        - `r0` = `<SKILLS_ROOT>`
+        - `r1` = `<SKILLS_ROOT>/.system`
+        ### Available skills
+        - imagegen: Generate or edit raster images when the task benefits from AI-created bitmap visuals such as...ctly in HTML/CSS/canvas. (file: r1/imagegen/SKILL.md) [hash=dcccaed407aafb03]
+        - openai-docs: Use for Codex models/pricing, scheduled tasks, skills, settings, setup, troubleshooting, ...merely mention Codex. (file: r1/openai-docs/SKILL.md) [hash=1c1693bbc4dfd0f7]
+        - skill-creator: Create or update a Codex skill with appropriately scoped instructions and any needed supporting resources. (file: r1/skill-creator/SKILL.md)
+        - skill-installer: Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo pat...g private repos). (file: r1/skill-installer/SKILL.md) [hash=80e87da510d34d88]
+        - browser-testing: Run browser tests for web applications. (file: r0/browser-testing/SKILL.md)
+        - code-review: Review code changes for correctness. (file: r0/code-review/SKILL.md)
+        - release-notes: Draft release notes from recent commits. (file: r0/release-notes/SKILL.md)
+        </skills_instructions>
+    [02] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
+        Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
+        </permissions instructions>
+    [03] <collaboration_mode># Collaboration Mode: Default
+
+        You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
+
+        Your active mode changes only when new developer instructions with a different `<collaboration_mode>...<...by themselves. Known mode names are Default and Plan. [hash=e75f6b12fc52d812]
+
+        ## request_user_input availability
+
+        Use the `request_user_input` tool only when it is listed in the available tools for this turn.
+
+        Use the `request_user_input` tool only for optional questions where the answer would materially improve the quality of the work.
+
+        If `request_user_input` returns no answers, continue with best judgment instead of asking again or treating the turn as blocked.
+
+        Never use the `request_user_input` tool for permission requests or permission-related escalations.
+        </collaboration_mode>
+03:message/developer:
+    <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
+
+    At the start of your turn, you are the active agent.
+    You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.
+    All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
+
+    You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task an...message to a running agent without triggering a turn. [hash=7d40ff8b58977202]
+    `send_message` calls may be read by a human, so ensure they are legible. Always put proper spaces between words and/or numbers.
+    <OMITTED 17 LINES; ~246 TOKENS; hash=780031e2df907944>
+    - All agents use the same current working directory.
+    - As a result, edits made by one agent are immediately visible to all other agents.
+
+    When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
+
+    There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
+
+    Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d... so, set `fork_turns` to `"none"`.</multi_agent_role> [hash=d5928243dc643bcc]
+04:message/developer:
+    <multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. D...elegation, or parallel agent work.</multi_agent_mode> [hash=2b6e037067b4390c]
+05:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="disabled"><...e="unrestricted" /></permission_profile></filesystem> [hash=d40b2f45cb028888]
+    </environment_context>
+06:message/user:
+    Inspect the available skills.
+07:configuration_update:reasoning={"effort":"low"}
+-- request 2 (turn) --
+08:message/developer:
+    <skills_instructions>
+    ## Host skills update
+    ### Added or updated skills:
+    - release-notes: Draft release notes grouped by feature and bug fix. (file: r0/release-notes/SKILL.md)
+    </skills_instructions>
+09:message/user:
+    Check the release-notes skill.
+-- request 3 (turn) --
+10:message/developer:
+    <skills_instructions>
+    ## Host skills update
+    ### Added or updated skills:
+    - incident-summary: Summarize incidents and follow-up actions. (file: r0/incident-summary/SKILL.md)
+    </skills_instructions>
+11:message/user:
+    Check the incident-summary skill.
+-- request 4 (turn) --
+12:message/user:
+    List the available skills after removing browser-testing.
+-- request 5 (turn) --
+13:message/user:
+    Continue with the same skills.
+-- request 6 (turn) --
+14:message/user:
+    <environment_context>
+      <cwd><CWD 2></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD 2></root></workspace_roots><permission_profile type="disabled"...e="unrestricted" /></permission_profile></filesystem> [hash=46e2a5c52f0891de]
+    </environment_context>
+15:message/user:
+    Resume with the same skills.
+16:configuration_update:reasoning={"effort":"low"}
+-- request 7 (compaction) --
+17:compaction_trigger
+
+## Window 2 (after request 7: input diverged at item 02)
+Settings: same as window 1
+-- request 8 (turn) --
+00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
+        - namespace/functions; hash=fada4a476a3754dd
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collabo...them until their intended goal is completely handled. [hash=efa50f074efa5803]
+
+    # When to ask the user for permission
+
+    Use your best judgement given task context for when you really need user permission, like a competent co...ork without ending the turn to clarify with the user. [hash=ca7367e658b51388]
+
+    User authorization and preferences persist across turns. Do not request permission again when the user h... any guidelines provided in skills or external files. [hash=911f91c92c72882c]
+
+    <OMITTED 155 LINES; ~4935 TOKENS; hash=5573869716192298>
+
+    - Skill naming: If a plugin contributes skills, those skill entries are prefixed with plugin_name: in the Skills list.
+    - MCP naming: Plugin-provided MCP tools keep standard MCP identifiers such as mcp__server__tool; use tool provenance to tell which plugin they come from.
+    - Trigger rules: If the user explicitly names a plugin, prefer capabilities associated with that plugin for that turn.
+    - Relationship to capabilities: Plugins are not invoked directly. Use their underlying skills, MCP tools, and app tools to help solve the task.
+    - Relevance: Determine what a plugin can help with from explicit user mention or from the plugin-associa..., MCP tools, and apps exposed elsewhere in this turn. [hash=620459a4e7b590f0]
+    - Missing/blocked: If the user requests a plugin that does not have relevant callable capabilities for t..., say so briefly and continue with the best fallback. [hash=746b0469a8f6cb3e]
+
+02:message/user:
+    Inspect the available skills.
+03:message/user:
+    Check the release-notes skill.
+04:message/user:
+    Check the incident-summary skill.
+05:message/user:
+    List the available skills after removing browser-testing.
+06:message/user:
+    Continue with the same skills.
+07:message/developer[3]:
+    [01] <skills_instructions>
+        ## Host skills
+
+        ## Skills
+        A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
+        ### Skill roots
+        - `r0` = `<SKILLS_ROOT>`
+        - `r1` = `<SKILLS_ROOT>/.system`
+        ### Available skills
+        - imagegen: Generate or edit raster images when the task benefits from AI-created bitmap visuals such as...ctly in HTML/CSS/canvas. (file: r1/imagegen/SKILL.md) [hash=dcccaed407aafb03]
+        - openai-docs: Use for Codex models/pricing, scheduled tasks, skills, settings, setup, troubleshooting, ...merely mention Codex. (file: r1/openai-docs/SKILL.md) [hash=1c1693bbc4dfd0f7]
+        - skill-creator: Create or update a Codex skill with appropriately scoped instructions and any needed supporting resources. (file: r1/skill-creator/SKILL.md)
+        - skill-installer: Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo pat...g private repos). (file: r1/skill-installer/SKILL.md) [hash=80e87da510d34d88]
+        - code-review: Review code changes for correctness. (file: r0/code-review/SKILL.md)
+        - incident-summary: Summarize incidents and follow-up actions. (file: r0/incident-summary/SKILL.md)
+        - release-notes: Draft release notes grouped by feature and bug fix. (file: r0/release-notes/SKILL.md)
+        </skills_instructions>
+    [02] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
+        Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
+        </permissions instructions>
+    [03] <collaboration_mode># Collaboration Mode: Default
+
+        You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
+
+        Your active mode changes only when new developer instructions with a different `<collaboration_mode>...<...by themselves. Known mode names are Default and Plan. [hash=e75f6b12fc52d812]
+
+        ## request_user_input availability
+
+        Use the `request_user_input` tool only when it is listed in the available tools for this turn.
+
+        Use the `request_user_input` tool only for optional questions where the answer would materially improve the quality of the work.
+
+        If `request_user_input` returns no answers, continue with best judgment instead of asking again or treating the turn as blocked.
+
+        Never use the `request_user_input` tool for permission requests or permission-related escalations.
+        </collaboration_mode>
+08:message/developer:
+    <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
+
+    At the start of your turn, you are the active agent.
+    You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.
+    All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
+
+    You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task an...message to a running agent without triggering a turn. [hash=7d40ff8b58977202]
+    `send_message` calls may be read by a human, so ensure they are legible. Always put proper spaces between words and/or numbers.
+    <OMITTED 17 LINES; ~246 TOKENS; hash=780031e2df907944>
+    - All agents use the same current working directory.
+    - As a result, edits made by one agent are immediately visible to all other agents.
+
+    When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
+
+    There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
+
+    Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d... so, set `fork_turns` to `"none"`.</multi_agent_role> [hash=d5928243dc643bcc]
+09:message/developer:
+    <multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. D...elegation, or parallel agent work.</multi_agent_mode> [hash=2b6e037067b4390c]
+10:message/user:
+    <environment_context>
+      <cwd><CWD 2></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD 2></root></workspace_roots><permission_profile type="disabled"...e="unrestricted" /></permission_profile></filesystem> [hash=46e2a5c52f0891de]
+    </environment_context>
+11:message/user:
+    Resume with the same skills.
+12:compaction:encrypted=true; chars=24; hash=68820eb5ac69d541
+13:message/user:
+    Continue after compaction.
+-- request 9 (turn) --
+14:message/user:
+    <environment_context>
+      <cwd><CWD 3></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD 3></root></workspace_roots><permission_profile type="disabled"...e="unrestricted" /></permission_profile></filesystem> [hash=84b040355e543755]
+    </environment_context>
+15:message/user:
+    Continue with a smaller skills list budget.
+16:configuration_update:reasoning={"effort":"low"}
+-- request 10 (turn) --
+17:message/user:
+    Check the translation skill.
+-- request 11 (compaction) --
+18:compaction_trigger
+
+## Window 3 (after request 11: input diverged at item 07)
+Settings: same as window 1
+-- request 12 (turn) --
+00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
+        - namespace/functions; hash=fada4a476a3754dd
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collabo...them until their intended goal is completely handled. [hash=efa50f074efa5803]
+
+    # When to ask the user for permission
+
+    Use your best judgement given task context for when you really need user permission, like a competent co...ork without ending the turn to clarify with the user. [hash=ca7367e658b51388]
+
+    User authorization and preferences persist across turns. Do not request permission again when the user h... any guidelines provided in skills or external files. [hash=911f91c92c72882c]
+
+    <OMITTED 155 LINES; ~4935 TOKENS; hash=5573869716192298>
+
+    - Skill naming: If a plugin contributes skills, those skill entries are prefixed with plugin_name: in the Skills list.
+    - MCP naming: Plugin-provided MCP tools keep standard MCP identifiers such as mcp__server__tool; use tool provenance to tell which plugin they come from.
+    - Trigger rules: If the user explicitly names a plugin, prefer capabilities associated with that plugin for that turn.
+    - Relationship to capabilities: Plugins are not invoked directly. Use their underlying skills, MCP tools, and app tools to help solve the task.
+    - Relevance: Determine what a plugin can help with from explicit user mention or from the plugin-associa..., MCP tools, and apps exposed elsewhere in this turn. [hash=620459a4e7b590f0]
+    - Missing/blocked: If the user requests a plugin that does not have relevant callable capabilities for t..., say so briefly and continue with the best fallback. [hash=746b0469a8f6cb3e]
+
+02:message/user:
+    Inspect the available skills.
+03:message/user:
+    Check the release-notes skill.
+04:message/user:
+    Check the incident-summary skill.
+05:message/user:
+    List the available skills after removing browser-testing.
+06:message/user:
+    Continue with the same skills.
+07:message/user:
+    Resume with the same skills.
+08:message/user:
+    Continue after compaction.
+09:message/user:
+    Continue with a smaller skills list budget.
+10:message/developer[3]:
+    [01] <skills_instructions>
+        ## Host skills
+
+        ## Skills
+        A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
+        ### Skill roots
+        - `r0` = `<SKILLS_ROOT>`
+        - `r1` = `<SKILLS_ROOT>/.system`
+        ### Available skills
+        - imagegen: (file: r1/imagegen/SKILL.md)
+        - openai-docs: (file: r1/openai-docs/SKILL.md)
+        - skill-creator: (file: r1/skill-creator/SKILL.md)
+        - skill-installer: (file: r1/skill-installer/SKILL.md)
+        - code-review: (file: r0/code-review/SKILL.md)
+        - incident-summary: (file: r0/incident-summary/SKILL.md)
+        - release-notes: (file: r0/release-notes/SKILL.md)
+        </skills_instructions>
+    [02] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
+        Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
+        </permissions instructions>
+    [03] <collaboration_mode># Collaboration Mode: Default
+
+        You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
+
+        Your active mode changes only when new developer instructions with a different `<collaboration_mode>...<...by themselves. Known mode names are Default and Plan. [hash=e75f6b12fc52d812]
+
+        ## request_user_input availability
+
+        Use the `request_user_input` tool only when it is listed in the available tools for this turn.
+
+        Use the `request_user_input` tool only for optional questions where the answer would materially improve the quality of the work.
+
+        If `request_user_input` returns no answers, continue with best judgment instead of asking again or treating the turn as blocked.
+
+        Never use the `request_user_input` tool for permission requests or permission-related escalations.
+        </collaboration_mode>
+11:message/developer:
+    <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
+
+    At the start of your turn, you are the active agent.
+    You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.
+    All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
+
+    You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task an...message to a running agent without triggering a turn. [hash=7d40ff8b58977202]
+    `send_message` calls may be read by a human, so ensure they are legible. Always put proper spaces between words and/or numbers.
+    <OMITTED 17 LINES; ~246 TOKENS; hash=780031e2df907944>
+    - All agents use the same current working directory.
+    - As a result, edits made by one agent are immediately visible to all other agents.
+
+    When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
+
+    There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
+
+    Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d... so, set `fork_turns` to `"none"`.</multi_agent_role> [hash=d5928243dc643bcc]
+12:message/developer:
+    <multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. D...elegation, or parallel agent work.</multi_agent_mode> [hash=2b6e037067b4390c]
+13:message/user:
+    <environment_context>
+      <cwd><CWD 3></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD 3></root></workspace_roots><permission_profile type="disabled"...e="unrestricted" /></permission_profile></filesystem> [hash=84b040355e543755]
+    </environment_context>
+14:message/user:
+    Check the translation skill.
+15:compaction:encrypted=true; chars=24; hash=68820eb5ac69d541
+16:message/user:
+    Continue after compacting the smaller skills list.
+-- request 13 (turn) --
+17:message/user:
+    Continue after editing translation.
+-- request 14 (turn) --
+18:message/user:
+    Continue after removing translation.
+-- request 15 (turn) --
+19:message/user:
+    Check the updated code-review skill.
+-- request 16 (turn) --
+20:message/user:
+    Continue after removing more skills.
+-- request 17 (turn) --
+21:message/user:
+    Check the documentation skill.
+-- request 18 (compaction) --
+22:compaction_trigger
+
+## Window 4 (after request 18: input diverged at item 10)
+Settings: same as window 1
+-- request 19 (turn) --
+00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
+        - namespace/functions; hash=fada4a476a3754dd
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collabo...them until their intended goal is completely handled. [hash=efa50f074efa5803]
+
+    # When to ask the user for permission
+
+    Use your best judgement given task context for when you really need user permission, like a competent co...ork without ending the turn to clarify with the user. [hash=ca7367e658b51388]
+
+    User authorization and preferences persist across turns. Do not request permission again when the user h... any guidelines provided in skills or external files. [hash=911f91c92c72882c]
+
+    <OMITTED 155 LINES; ~4935 TOKENS; hash=5573869716192298>
+
+    - Skill naming: If a plugin contributes skills, those skill entries are prefixed with plugin_name: in the Skills list.
+    - MCP naming: Plugin-provided MCP tools keep standard MCP identifiers such as mcp__server__tool; use tool provenance to tell which plugin they come from.
+    - Trigger rules: If the user explicitly names a plugin, prefer capabilities associated with that plugin for that turn.
+    - Relationship to capabilities: Plugins are not invoked directly. Use their underlying skills, MCP tools, and app tools to help solve the task.
+    - Relevance: Determine what a plugin can help with from explicit user mention or from the plugin-associa..., MCP tools, and apps exposed elsewhere in this turn. [hash=620459a4e7b590f0]
+    - Missing/blocked: If the user requests a plugin that does not have relevant callable capabilities for t..., say so briefly and continue with the best fallback. [hash=746b0469a8f6cb3e]
+
+02:message/user:
+    Inspect the available skills.
+03:message/user:
+    Check the release-notes skill.
+04:message/user:
+    Check the incident-summary skill.
+05:message/user:
+    List the available skills after removing browser-testing.
+06:message/user:
+    Continue with the same skills.
+07:message/user:
+    Resume with the same skills.
+08:message/user:
+    Continue after compaction.
+09:message/user:
+    Continue with a smaller skills list budget.
+10:message/user:
+    Check the translation skill.
+11:message/user:
+    Continue after compacting the smaller skills list.
+12:message/user:
+    Continue after editing translation.
+13:message/user:
+    Continue after removing translation.
+14:message/user:
+    Check the updated code-review skill.
+15:message/user:
+    Continue after removing more skills.
+16:message/developer[3]:
+    [01] <skills_instructions>
+        ## Host skills
+
+        ## Skills
+        A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
+        ### Skill roots
+        - `r0` = `<SKILLS_ROOT>`
+        - `r1` = `<SKILLS_ROOT>/.system`
+        ### Available skills
+        - imagegen: Generate or edit raster images (file: r1/imagegen/SKILL.md)
+        - openai-docs: Use for Codex models/pricing, sc (file: r1/openai-docs/SKILL.md)
+        - skill-creator: Create or update a Codex skill w (file: r1/skill-creator/SKILL.md)
+        - skill-installer: Install Codex skills into $C (file: r1/skill-installer/SKILL.md)
+        - documentation: Write project documentation. (file: r0/documentation/SKILL.md)
+        </skills_instructions>
+    [02] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
+        Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
+        </permissions instructions>
+    [03] <collaboration_mode># Collaboration Mode: Default
+
+        You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
+
+        Your active mode changes only when new developer instructions with a different `<collaboration_mode>...<...by themselves. Known mode names are Default and Plan. [hash=e75f6b12fc52d812]
+
+        ## request_user_input availability
+
+        Use the `request_user_input` tool only when it is listed in the available tools for this turn.
+
+        Use the `request_user_input` tool only for optional questions where the answer would materially improve the quality of the work.
+
+        If `request_user_input` returns no answers, continue with best judgment instead of asking again or treating the turn as blocked.
+
+        Never use the `request_user_input` tool for permission requests or permission-related escalations.
+        </collaboration_mode>
+17:message/developer:
+    <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
+
+    At the start of your turn, you are the active agent.
+    You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.
+    All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
+
+    You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task an...message to a running agent without triggering a turn. [hash=7d40ff8b58977202]
+    `send_message` calls may be read by a human, so ensure they are legible. Always put proper spaces between words and/or numbers.
+    <OMITTED 17 LINES; ~246 TOKENS; hash=780031e2df907944>
+    - All agents use the same current working directory.
+    - As a result, edits made by one agent are immediately visible to all other agents.
+
+    When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
+
+    There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
+
+    Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d... so, set `fork_turns` to `"none"`.</multi_agent_role> [hash=d5928243dc643bcc]
+18:message/developer:
+    <multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. D...elegation, or parallel agent work.</multi_agent_mode> [hash=2b6e037067b4390c]
+19:message/user:
+    <environment_context>
+      <cwd><CWD 3></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD 3></root></workspace_roots><permission_profile type="disabled"...e="unrestricted" /></permission_profile></filesystem> [hash=84b040355e543755]
+    </environment_context>
+20:message/user:
+    Check the documentation skill.
+21:compaction:encrypted=true; chars=24; hash=68820eb5ac69d541
+22:message/user:
+    Continue with the rebuilt skills catalog.

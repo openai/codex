@@ -39,6 +39,7 @@ async fn frozen_cloud_skills_with_named_executor_request_history() -> Result<()>
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
             shadow_selection_enabled: false,
+            catalog_deltas_enabled: config.features.enabled(Feature::SkillCatalogDeltas),
         },
     );
     let server = start_mock_server().await;

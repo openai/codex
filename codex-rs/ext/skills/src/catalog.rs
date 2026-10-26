@@ -304,6 +304,13 @@ impl SkillCatalogEntry {
         std::iter::once(self.primary_source()).chain(self.sources.iter().cloned())
     }
 
+    pub(crate) fn unaliased_locator(&self) -> &str {
+        match &self.authority.kind {
+            SkillSourceKind::Executor | SkillSourceKind::Cloud => self.id.0.as_str(),
+            SkillSourceKind::Host | SkillSourceKind::Custom(_) => self.rendered_path(),
+        }
+    }
+
     pub(crate) fn rendered_path(&self) -> &str {
         self.display_path
             .as_deref()

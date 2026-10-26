@@ -148,9 +148,15 @@ struct AliasBudget {
 }
 
 #[derive(Clone, Debug)]
-struct AliasRoot {
-    name: String,
-    value: Arc<str>,
+pub(crate) struct AliasRoot {
+    pub(crate) name: String,
+    pub(crate) value: Arc<str>,
+}
+
+impl AliasRoot {
+    pub(crate) fn line(&self) -> String {
+        format!("- `{}` = `{}`", self.name, self.value)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -210,17 +216,21 @@ impl AliasPlan {
         }
     }
 
-    pub(crate) fn shorten(&self, locator: &str) -> Option<String> {
+    pub(crate) fn root_for_locator(&self, locator: &str) -> Option<&AliasRoot> {
         self.roots
             .iter()
-            .filter_map(|root| {
-                let suffix = locator
-                    .strip_prefix(root.value.trim_end_matches('/'))?
-                    .strip_prefix('/')?;
-                Some((root, suffix))
+            .filter(|root| {
+                locator
+                    .strip_prefix(root.value.trim_end_matches('/'))
+                    .is_some_and(|suffix| suffix.starts_with('/'))
             })
-            .max_by_key(|(root, _)| root.value.len())
-            .map(|(root, suffix)| format!("{}/{suffix}", root.name))
+            .max_by_key(|root| root.value.len())
+    }
+
+    pub(crate) fn shorten(&self, locator: &str) -> Option<String> {
+        let root = self.root_for_locator(locator)?;
+        let suffix = &locator[root.value.trim_end_matches('/').len()..];
+        Some(format!("{}{suffix}", root.name))
     }
 
     fn expand(&self, alias: &str) -> Option<String> {
@@ -233,15 +243,12 @@ impl AliasPlan {
         self.roots
             .iter()
             .filter(|root| used.contains(&root.name))
-            .map(|root| format!("- `{}` = `{}`", root.name, root.value))
+            .map(AliasRoot::line)
             .collect()
     }
 
     pub(crate) fn root_lines(&self) -> Vec<String> {
-        self.roots
-            .iter()
-            .map(|root| format!("- `{}` = `{}`", root.name, root.value))
-            .collect()
+        self.roots.iter().map(AliasRoot::line).collect()
     }
 }
 
