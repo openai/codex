@@ -8,8 +8,11 @@ use codex_exec_server::LOCAL_FS;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
+use codex_extension_items::image_generation::ImageGenerationFailure;
 use codex_extension_items::image_generation::ImageGenerationInputImage;
 use codex_protocol::ResponseItemId;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::UsageLimitReachedError;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -32,12 +35,46 @@ use super::ImagegenArgs;
 use super::PreparedImageRequest;
 use super::imagegen_tool_spec;
 use super::request_for_call_args;
+use super::usage_limit_failure;
 use crate::IMAGE_GEN_NAMESPACE;
 use crate::IMAGEGEN_TOOL_NAME;
 use crate::artifact::image_generation_artifact_path;
 use crate::artifact::image_generation_output_hint;
 
 const RESULT: &str = "cG5n";
+
+#[test]
+fn test_usage_limit_failure_without_an_exhausted_window_reset() {
+    for (limit_id, expected) in [
+        (
+            Some("imagegen_premium"),
+            Some(ImageGenerationFailure::UsageLimitExceeded {
+                limit_id: "imagegen_premium".to_string(),
+                resets_at: None,
+            }),
+        ),
+        (Some("premium"), None),
+        (None, None),
+    ] {
+        let error = CodexErr::UsageLimitReached(UsageLimitReachedError {
+            plan_type: None,
+            resets_at: None,
+            limit_window_minutes: None,
+            rate_limits: Some(Box::new(
+                serde_json::from_value(serde_json::json!({
+                    "limit_id": limit_id,
+                    "primary": {"used_percent": 100.0},
+                    "secondary": {"used_percent": 50.0, "resets_at": 3000}
+                }))
+                .expect("rate limit snapshot"),
+            )),
+            promo_message: None,
+            rate_limit_reached_type: None,
+        });
+
+        assert_eq!(usage_limit_failure(&error), expected);
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn referenced_files_record_the_exact_bytes_read_for_each_request() {

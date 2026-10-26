@@ -679,24 +679,37 @@ async fn standalone_image_generation_failure_emits_terminal_item(
     Ok(())
 }
 
+#[test_case("image_gen", "x-image-gen-primary", Some(1_786_150_800); "image_count")]
+#[test_case("imagegen_premium", "x-imagegen-premium-primary", None; "imagegen_premium")]
 #[tokio::test]
-async fn image_generation_usage_limit_preserves_correlated_failure_metadata() -> Result<()> {
+async fn image_generation_usage_limit_preserves_correlated_failure_metadata(
+    limit_id: &str,
+    window_header: &str,
+    body_reset_at: Option<i64>,
+) -> Result<()> {
     let call_id = "image-run-limited";
-    let reset_at = 1_786_150_800;
+    let window_reset_at = 1_786_154_400;
+    let expected_failure = ImageGenerationFailure::UsageLimitExceeded {
+        limit_id: limit_id.to_string(),
+        resets_at: Some(body_reset_at.unwrap_or(window_reset_at)),
+    };
     let server = responses::start_mock_server().await;
     Mock::given(method("POST"))
         .and(path("/api/codex/images/generations"))
         .respond_with(
             ResponseTemplate::new(429)
-                .insert_header("x-codex-active-limit", "image_gen")
-                .insert_header("x-image-gen-primary-used-percent", "100")
-                .insert_header("x-image-gen-primary-window-minutes", "1440")
-                .insert_header("x-image-gen-primary-reset-at", reset_at.to_string())
+                .insert_header("x-codex-active-limit", limit_id)
+                .insert_header(format!("{window_header}-used-percent"), "100")
+                .insert_header(format!("{window_header}-window-minutes"), "1440")
+                .insert_header(
+                    format!("{window_header}-reset-at"),
+                    window_reset_at.to_string(),
+                )
                 .set_body_json(json!({
                     "error": {
                         "type": "usage_limit_reached",
                         "message": "image limit reached",
-                        "resets_at": reset_at,
+                        "resets_at": body_reset_at,
                         "plan_type": "plus"
                     }
                 })),
@@ -748,14 +761,9 @@ async fn image_generation_usage_limit_preserves_correlated_failure_metadata() ->
     let ThreadItemPayload::ImageGeneration(image) = completed.item.payload else {
         panic!("expected failed image-generation item");
     };
+    assert_eq!(image.id, call_id);
     assert_eq!(image.status, "failed");
-    assert_eq!(
-        image.failure,
-        Some(ImageGenerationFailure::UsageLimitExceeded {
-            limit_id: "image_gen".to_string(),
-            resets_at: Some(reset_at),
-        })
-    );
+    assert_eq!(image.failure.as_ref(), Some(&expected_failure));
 
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -775,16 +783,10 @@ async fn image_generation_usage_limit_preserves_correlated_failure_metadata() ->
         .iter()
         .flat_map(Turn::item_payloads)
         .find_map(|item| match item {
-            ThreadItemPayload::ImageGeneration(item) => item.failure.as_ref(),
+            ThreadItemPayload::ImageGeneration(item) if item.id == call_id => item.failure.as_ref(),
             _ => None,
         });
-    assert_eq!(
-        persisted_failure,
-        Some(&ImageGenerationFailure::UsageLimitExceeded {
-            limit_id: "image_gen".to_string(),
-            resets_at: Some(reset_at),
-        })
-    );
+    assert_eq!(persisted_failure, Some(&expected_failure));
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
@@ -799,16 +801,10 @@ async fn image_generation_usage_limit_preserves_correlated_failure_metadata() ->
         .iter()
         .flat_map(Turn::item_payloads)
         .find_map(|item| match item {
-            ThreadItemPayload::ImageGeneration(item) => item.failure.as_ref(),
+            ThreadItemPayload::ImageGeneration(item) if item.id == call_id => item.failure.as_ref(),
             _ => None,
         });
-    assert_eq!(
-        resumed_failure,
-        Some(&ImageGenerationFailure::UsageLimitExceeded {
-            limit_id: "image_gen".to_string(),
-            resets_at: Some(reset_at),
-        })
-    );
+    assert_eq!(resumed_failure, Some(&expected_failure));
 
     Ok(())
 }
