@@ -1296,7 +1296,7 @@ See the Codex keymap documentation for supported actions and examples."
                     if !tui.is_owned_screen() && tui.is_alt_screen_active() {
                         app.close_transcript_overlay(tui);
                     } else if let Err(err) =
-                        tui.set_mouse_capture(crate::tui::MouseCapture::Inherit)
+                        tui.set_mouse_capture(app.chat_widget.mouse_capture(tui.is_owned_screen()))
                     {
                         break Err(err.into());
                     }

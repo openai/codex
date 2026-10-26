@@ -669,6 +669,27 @@ fn open_questions(chat: &mut ChatWidget, options: Option<Vec<String>>) {
 }
 
 #[tokio::test]
+async fn expanded_question_yields_mouse_to_terminal_for_links() {
+    use crate::tui::MouseCapture::Disabled;
+    use crate::tui::MouseCapture::Inherit;
+
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let url = "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/r2/overview";
+    chat.add_async_questions("message", &[question(url, /*options*/ None)]);
+    assert_eq!(chat.mouse_capture(/*owned_screen*/ true), Inherit);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    assert_eq!(chat.mouse_capture(/*owned_screen*/ true), Disabled);
+    assert_eq!(chat.mouse_capture(/*owned_screen*/ false), Inherit);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+    assert_eq!(chat.mouse_capture(/*owned_screen*/ true), Inherit);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    chat.open_warnings(&[]);
+    assert!(render_bottom_popup(&chat, /*width*/ 100).contains(url));
+    assert_eq!(chat.mouse_capture(/*owned_screen*/ true), Disabled);
+}
+
+#[tokio::test]
 async fn question_queue_key_does_not_steer_the_running_turn() {
     let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
     open_questions(&mut chat, /*options*/ None);
