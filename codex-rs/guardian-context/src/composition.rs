@@ -301,9 +301,11 @@ impl CollectedContext {
                             .collect(),
                     ),
                 ),
-                ContextSection::TrustedUserAnswers { items } => {
-                    (3, "trusted_user_answers", text_content(items))
-                }
+                ContextSection::TrustedUserAnswers { items } => (
+                    3,
+                    "trusted_user_answers",
+                    text_content(items.into_iter().map(|item| item.text).collect()),
+                ),
                 ContextSection::ConversationTranscript { .. } => {
                     let transcript =
                         transcript.take().ok_or(SectionError::UnsupportedDelivery {

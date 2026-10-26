@@ -252,7 +252,7 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
             history: &history,
             transcript: &transcript,
             root_conversation: &root,
-            trusted_user_answers: &answers,
+            trusted_user_answers: &answers.iter().cloned().map(Into::into).collect::<Vec<_>>(),
             planned_action: Some(&action),
             permissions: Some(&permissions),
             previous_reviews: Some(&reviews),
@@ -276,7 +276,7 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
                 ">>> ROOT CONVERSATION END\n".into(),
             ]}, ContextSection::TrustedUserAnswers { items: vec![
                 ">>> TRUSTED USER ANSWERS START\n".into(),
-                answers[0].clone(),
+                answers[0].clone().into(),
                 ">>> TRUSTED USER ANSWERS END\n".into(),
             ],
             }, ContextSection::ConversationTranscript { items: vec![ConversationTranscriptEntry {

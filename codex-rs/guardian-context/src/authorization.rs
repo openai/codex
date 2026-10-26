@@ -68,6 +68,7 @@ impl GuardianRootMessage {
 
 pub(crate) struct RootConversationSection;
 pub(crate) struct TrustedUserAnswersSection;
+pub(crate) const TRUSTED_ANSWERS_START: &str = ">>> TRUSTED USER ANSWERS START\n";
 
 impl SectionContributor for RootConversationSection {
     fn scope(&self) -> SectionScope {
@@ -103,9 +104,9 @@ impl SectionContributor for TrustedUserAnswersSection {
         if input.trusted_user_answers.is_empty() {
             return Ok(None);
         }
-        let mut items = vec![">>> TRUSTED USER ANSWERS START\n".to_string()];
+        let mut items = vec![crate::TrustedUserAnswer::from(TRUSTED_ANSWERS_START)];
         items.extend_from_slice(input.trusted_user_answers);
-        items.push(">>> TRUSTED USER ANSWERS END\n".to_string());
+        items.push(">>> TRUSTED USER ANSWERS END\n".into());
         Ok(Some(ContextSection::TrustedUserAnswers { items }))
     }
 }

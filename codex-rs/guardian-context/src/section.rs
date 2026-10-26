@@ -18,16 +18,28 @@ use crate::TrustedTool;
 /// Review actions/rationales and remote tool descriptions remain untrusted.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ContextSection<T = ConversationTranscriptEntry> {
-    ConversationTranscript { items: Vec<T> },
-    RootConversation { items: Vec<String> },
-    TrustedUserAnswers { items: Vec<String> },
-    RetainedUserInstructions { items: Vec<RetainedInstructionItem> },
-    SenderUserMessages { items: Vec<String> },
+    ConversationTranscript {
+        items: Vec<T>,
+    },
+    RootConversation {
+        items: Vec<String>,
+    },
+    TrustedUserAnswers {
+        items: Vec<crate::TrustedUserAnswer>,
+    },
+    RetainedUserInstructions {
+        items: Vec<RetainedInstructionItem>,
+    },
+    SenderUserMessages {
+        items: Vec<String>,
+    },
     PlannedAction(PlannedAction),
     PreviousReviews(PreviousReviews),
     TrustedTool(TrustedTool),
     TrustedSkills(TrustedSkills),
     TranscriptImages(TranscriptImages),
     NodeReplEvidence(RenderedNodeReplEvidence),
-    PermissionContext { items: Vec<String> },
+    PermissionContext {
+        items: Vec<String>,
+    },
 }

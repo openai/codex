@@ -33,7 +33,11 @@ fn instructions_preserve_source_order_and_whole_records() {
         },
         RetainedInputSource::Local(None),
     );
-    let rendered = render_retained_instructions(&context, retained_assistant_message);
+    let rendered = render_retained_instructions(
+        &context,
+        retained_assistant_message,
+        crate::ContextTarget::Async,
+    );
     assert_eq!(
         rendered
             .into_iter()
@@ -62,7 +66,23 @@ fn instructions_preserve_source_order_and_whole_records() {
         },
         RetainedInputSource::Local(None),
     );
-    let rendered = render_retained_instructions(&context, retained_assistant_message);
+    let rendered = render_retained_instructions(
+        &context,
+        retained_assistant_message,
+        crate::ContextTarget::Async,
+    );
+    let history = RetainedTranscript {
+        retained: context,
+        messages: Vec::new(),
+    };
+    assert_eq!(
+        transcript_context(&history, crate::ContextProfile::synchronous())
+            .retained_instructions()
+            .into_messages(),
+        transcript_context(&history, crate::ContextProfile::asynchronous())
+            .retained_instructions()
+            .into_messages(),
+    );
     assert_eq!(rendered.len(), 2);
     assert!(rendered[0].content.starts_with("Host notice:"));
     assert!(
@@ -106,7 +126,11 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
     ] {
         let composed = crate::composition::CollectedContext {
             sections: vec![ContextSection::RetainedUserInstructions {
-                items: render_retained_instructions(&context, retained_assistant_message),
+                items: render_retained_instructions(
+                    &context,
+                    retained_assistant_message,
+                    crate::ContextTarget::Async,
+                ),
             }],
         }
         .compose(
@@ -141,21 +165,34 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
         assert!(text.contains("Some context was omitted."));
         assert!(!text.contains("Deploy to staging?"));
     }
-    let user_instruction = render_retained_instructions(&context, retained_assistant_message)
-        .pop()
-        .unwrap();
+    let user_instruction = render_retained_instructions(
+        &context,
+        retained_assistant_message,
+        crate::ContextTarget::Async,
+    )
+    .pop()
+    .unwrap();
     let mut checkpoint = serde_json::to_value(&context).unwrap();
     checkpoint["assistant_messages"][0]["text"] = "".into();
     let restored = serde_json::from_value(checkpoint.clone()).unwrap();
     assert_eq!(
-        render_retained_instructions(&restored, retained_assistant_message),
+        render_retained_instructions(
+            &restored,
+            retained_assistant_message,
+            crate::ContextTarget::Async
+        ),
         vec![user_instruction]
     );
     checkpoint["assistant_messages"][0]["complete"] = false.into();
     let restored = serde_json::from_value(checkpoint).unwrap();
     assert_eq!(
-        render_retained_instructions(&restored, retained_assistant_message)[0],
+        render_retained_instructions(
+            &restored,
+            retained_assistant_message,
+            crate::ContextTarget::Async
+        )[0],
         RetainedInstructionItem {
+            original_assistant_bytes: 0,
             content: GuardianRootMessage::IncompleteAssistantContext.render(),
             kind: RetainedInstructionKind::HostNotice,
             source: None,
@@ -167,15 +204,32 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
             origin: codex_history::UserInputOrigin::User,
             turn_id: "large".to_owned(),
             message_id: Some("large".to_owned()),
-            text: "x".repeat(4_000),
+            text: "x".repeat(3_570 - "assistant: \n".len()),
             complete: true,
         },
         RetainedInputSource::Local(Some(2)),
     );
-    let rendered = render_retained_instructions(&context, retained_assistant_message);
+    let rendered = render_retained_instructions(
+        &context,
+        retained_assistant_message,
+        crate::ContextTarget::Async,
+    );
+    let history = RetainedTranscript {
+        retained: context,
+        messages: Vec::new(),
+    };
+    assert_eq!(
+        transcript_context(&history, crate::ContextProfile::synchronous())
+            .retained_instructions()
+            .into_messages(),
+        transcript_context(&history, crate::ContextProfile::asynchronous())
+            .retained_instructions()
+            .into_messages(),
+    );
     assert_eq!(
         rendered[0],
         RetainedInstructionItem {
+            original_assistant_bytes: 0,
             content: GuardianRootMessage::IncompleteAssistantContext.render(),
             kind: RetainedInstructionKind::HostNotice,
             source: None,
@@ -190,7 +244,7 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
 
 #[test]
 fn legacy_verified_answers_keep_distinct_source_order() {
-    let context: RetainedContext = serde_json::from_value(serde_json::json!({
+    let mut context: RetainedContext = serde_json::from_value(serde_json::json!({
         "verified_answers": [
             {"turn_id": "old", "call_id": "grant", "questions": [{"question": "Publish?", "answer": "Yes."}]},
             {"turn_id": "old", "call_id": "revoke", "questions": [{"question": "Still publish?", "answer": "No."}]}
@@ -204,6 +258,38 @@ fn legacy_verified_answers_keep_distinct_source_order() {
             "Retained source order: 1\nassistant: Still publish?\nuser: No.\n".to_owned(),
         ]
     );
+    context.record(&RetainedContextEvent::VerifiedAnswer {
+        answer: VerifiedAnswer {
+            turn_id: "large".into(),
+            call_id: "large".into(),
+            questions: vec![VerifiedQuestionAnswer {
+                question: "Publish?".into(),
+                answer: "Only if conditions hold. ".repeat(200),
+            }],
+        },
+        acceptance_order: None,
+    });
+    let raw = crate::collect_verified_answer_candidates(&context);
+    let old = crate::render_verified_answers(&context);
+    assert!(!old.complete);
+    let [actual, expected] =
+        [raw, old.fragments.into_iter().map(Into::into).collect()].map(|items| {
+            crate::CollectedContext {
+                sections: vec![ContextSection::TrustedUserAnswers { items }],
+            }
+            .compose(
+                crate::ContextPresentation::SyncFull {
+                    session_id: "worker",
+                },
+                crate::ContextProfile::synchronous().prepare_transcript(
+                    /*transcript_entries*/ &[],
+                    /*entry_number_offset*/ 0,
+                ),
+            )
+            .unwrap()
+            .into_messages()
+        });
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -344,7 +430,11 @@ fn transcript_context(
             history,
             transcript: &profile.transcript,
             root_conversation: &[],
-            trusted_user_answers: &answers.fragments,
+            trusted_user_answers: &answers
+                .fragments
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
             planned_action: None,
             permissions: None,
             previous_reviews: None,

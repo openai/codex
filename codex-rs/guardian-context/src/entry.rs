@@ -75,6 +75,8 @@ pub struct ConversationTranscriptEntry {
 /// Display ordering is separate from source identity and cannot establish delivery.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RetainedTranscriptSource {
+    /// Size of the complete role- and order-labeled source, before request admission.
+    pub rendered_bytes: usize,
     pub order: String,
     pub source: codex_history::RetainedSource,
 }

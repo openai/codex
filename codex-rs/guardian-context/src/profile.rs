@@ -143,10 +143,15 @@ impl ContextProfile {
                     ContextTarget::Sync => "",
                     ContextTarget::Async => "\n",
                 };
-                let retained_source = entry
-                    .retained_source
-                    .as_ref()
-                    .filter(|_| entry.kind == ConversationTranscriptEntryKind::User);
+                let retained_source = entry.retained_source.as_ref().filter(|source| {
+                    entry.kind == ConversationTranscriptEntryKind::User
+                        && (self.target == ContextTarget::Async
+                            || source.rendered_bytes
+                                <= TruncationPolicy::Tokens(
+                                    crate::retained_instructions::MAX_INSTRUCTION_TOKENS,
+                                )
+                                .byte_budget())
+                });
                 let prepare_text = |text: &str| {
                     let record = TranscriptRecord::new(
                         &entry.kind,

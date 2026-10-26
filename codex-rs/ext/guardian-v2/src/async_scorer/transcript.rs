@@ -125,12 +125,17 @@ impl TranscriptConfig {
                 },
             },
         };
+        let trusted_user_answers = trusted_user_answers
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect::<Vec<_>>();
         let context = default_registry().prepare(&SectionInput {
             target,
             history: &history,
             transcript: &profile.transcript,
             root_conversation,
-            trusted_user_answers,
+            trusted_user_answers: &trusted_user_answers,
             planned_action,
             permissions,
             previous_reviews,

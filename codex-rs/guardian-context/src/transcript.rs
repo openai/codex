@@ -462,12 +462,14 @@ fn collect_transcript_for_target(
                             "Retained source order: {order}\n{}",
                             crate::GuardianRootMessage::User(message.text.clone()).render()
                         );
-                        (rendered.len()
-                            <= TruncationPolicy::Tokens(
-                                crate::retained_instructions::MAX_INSTRUCTION_TOKENS,
-                            )
-                            .byte_budget())
+                        (target == crate::ContextTarget::Sync
+                            || rendered.len()
+                                <= TruncationPolicy::Tokens(
+                                    crate::retained_instructions::MAX_INSTRUCTION_TOKENS,
+                                )
+                                .byte_budget())
                         .then(|| crate::RetainedTranscriptSource {
+                            rendered_bytes: rendered.len(),
                             order,
                             source: source.clone(),
                         })

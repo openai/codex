@@ -36,6 +36,14 @@ impl ContextualUserFragment for GuardianAssistantContext<'_> {
 /// whole role-labeled message against the retained evidence budget.
 pub fn render_retained_assistant_context(message: &RetainedUserMessage) -> Option<String> {
     codex_guardian_context::retained_assistant_message(message)?;
+    render_original_assistant_context(message)
+}
+
+/// Preserves the host fragment boundary while deferring sync size admission.
+pub(crate) fn render_original_assistant_context(message: &RetainedUserMessage) -> Option<String> {
+    if !message.complete {
+        return None;
+    }
     Some(
         GuardianAssistantContext(&message.text)
             .render()

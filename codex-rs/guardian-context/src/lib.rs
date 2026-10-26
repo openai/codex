@@ -46,6 +46,8 @@ pub use truncation::truncate_text;
 
 mod verified_answers;
 pub use verified_answers::RenderedVerifiedAnswers;
+pub use verified_answers::TrustedUserAnswer;
+pub use verified_answers::collect_verified_answer_candidates;
 pub use verified_answers::render_verified_answer;
 pub use verified_answers::render_verified_answers;
 
@@ -163,7 +165,7 @@ pub struct SectionInput<'a> {
     /// Bounded root evidence resolved by the host; empty when not applicable.
     pub root_conversation: &'a [GuardianRootMessage],
     /// Bounded, role-labeled answers selected from the host-owned context snapshot.
-    pub trusted_user_answers: &'a [String],
+    pub trusted_user_answers: &'a [TrustedUserAnswer],
     /// Exact action JSON; sync composition bounds the reason and descriptions.
     pub planned_action: Option<&'a PlannedAction>,
     /// Sync-only restrictions resolved from the parent execution environment.
@@ -201,6 +203,17 @@ pub trait SectionHistory: Send + Sync {
     /// Bounded host-owned facts from the same snapshot as the current items.
     fn retained_context(&self) -> Option<&codex_history::RetainedContext> {
         None
+    }
+
+    /// Renders an original complete assistant message without request-size selection.
+    /// Sync preparation applies admission after collection; hosts preserve their fragment boundary.
+    fn render_original_assistant(
+        &self,
+        message: &codex_history::RetainedUserMessage,
+    ) -> Option<GuardianRootMessage> {
+        message
+            .complete
+            .then(|| GuardianRootMessage::Assistant(message.text.clone()))
     }
 
     /// Renders one bounded retained assistant message through the host's
