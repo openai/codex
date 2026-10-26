@@ -154,7 +154,8 @@ impl RealtimeHandoffAdmission {
             return Ok(());
         };
         if !self.retired.load(Ordering::Acquire) {
-            session.route_realtime_text_input(text).await?;
+            // Bound the layout of the handoff future while retaining the admission permit.
+            Box::pin(session.route_realtime_text_input(text)).await?;
         }
         Ok(())
     }
