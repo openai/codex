@@ -18,8 +18,13 @@ use wiremock::matchers::header;
 
 use super::*;
 use crate::NoiseChannelIdentity;
+use crate::NoiseChannelPublicKey;
 use crate::relay::HarnessKeyValidator;
 use crate::remote::RegistryHarnessKeyValidator;
+
+// Hyphens keep fixture credentials out of randomly generated Base64 public keys.
+const OLD_AUTHORIZATION: &str = "Bearer test-old-token";
+const NEW_AUTHORIZATION: &str = "Bearer test-new-token";
 
 #[derive(Default)]
 struct RotatingAuth {
@@ -47,9 +52,9 @@ impl RotatingAuth {
 impl AuthProvider for RotatingAuth {
     fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<(), codex_api::AuthError> {
         let token = if self.refreshes.load(Ordering::SeqCst) == 0 {
-            "Bearer old"
+            OLD_AUTHORIZATION
         } else {
-            "Bearer new"
+            NEW_AUTHORIZATION
         };
         headers.insert(AUTHORIZATION, HeaderValue::from_static(token));
         Ok(())
@@ -119,13 +124,16 @@ async fn noise_registry_operations_retry_with_new_credentials() -> anyhow::Resul
         ("validate", RegistryAuthMode::ExecutorCredential),
     ] {
         let server = MockServer::start().await;
-        let key = NoiseChannelIdentity::generate()?.public_key();
-        Mock::given(header("authorization", "Bearer old"))
+        let mut key = serde_json::to_value(NoiseChannelIdentity::generate()?.public_key())?;
+        // 32-byte Base64-encoded key material containing the former fixture credential `new`.
+        key["x25519_public_key"] = "newAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into();
+        let key: NoiseChannelPublicKey = serde_json::from_value(key)?;
+        Mock::given(header("authorization", OLD_AUTHORIZATION))
             .respond_with(ResponseTemplate::new(401))
             .expect(1)
             .mount(&server)
             .await;
-        Mock::given(header("authorization", "Bearer new"))
+        Mock::given(header("authorization", NEW_AUTHORIZATION))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "environment_id": "env", "url": "wss://relay.example/ws",
                 "executor_registration_id": "registration",
