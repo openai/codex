@@ -12,14 +12,23 @@ use codex_protocol::ToolName;
 use codex_protocol::models::ExecutedToolCallArguments;
 use codex_protocol::models::ResponseItem;
 
-const ROOT_CONTEXT_WINDOW: usize = 3;
-
 pub(super) fn selected_message_indices(
     history: &[ResponseItemEnvelope],
     messages: &[(Option<RetainedContextOrder>, GuardianRootMessage)],
     worker: &AgentPath,
     tool_namespace: Option<&str>,
 ) -> Option<BTreeSet<usize>> {
+    codex_guardian_context::select_root_handoff_indices(
+        messages,
+        &handoff_boundaries(history, worker, tool_namespace),
+    )
+}
+
+pub(super) fn handoff_boundaries(
+    history: &[ResponseItemEnvelope],
+    worker: &AgentPath,
+    tool_namespace: Option<&str>,
+) -> Vec<RetainedContextOrder> {
     let configured_handoff_names = ["spawn_agent", "send_message", "followup_task"].map(|name| {
         (
             codex_tools::code_mode_name_for_tool_name(&ToolName::new(
@@ -29,7 +38,7 @@ pub(super) fn selected_message_indices(
             name,
         )
     });
-    let mut selected = BTreeSet::new();
+    let mut boundaries = Vec::new();
     let mut preceding_order = None;
     for envelope in history {
         if let Some(order) = envelope.metadata.as_ref().and_then(|metadata| {
@@ -78,51 +87,10 @@ pub(super) fn selected_message_indices(
         if (direct || nested)
             && let Some(boundary) = preceding_order
         {
-            selected.extend(
-                messages
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .filter_map(|(index, (order, message))| {
-                        if matches!(message, GuardianRootMessage::UserInput(_)) {
-                            return None;
-                        }
-                        order.filter(|order| *order <= boundary).map(|_| index)
-                    })
-                    .take(ROOT_CONTEXT_WINDOW),
-            );
+            boundaries.push(boundary);
         }
     }
-    if !selected.is_empty() {
-        // Include the latest ordinary messages even without a new handoff to this branch.
-        selected.extend(
-            messages
-                .iter()
-                .enumerate()
-                .rev()
-                .filter_map(|(index, (order, message))| {
-                    (order.is_some() && !matches!(message, GuardianRootMessage::UserInput(_)))
-                        .then_some(index)
-                })
-                .take(ROOT_CONTEXT_WINDOW),
-        );
-        // Later user inputs can restrict an earlier handoff even when they are not recent.
-        // Leave all user inputs, verified answers, and unordered legacy evidence to the shared cap.
-        selected.extend(
-            messages
-                .iter()
-                .enumerate()
-                .filter_map(|(index, (order, message))| {
-                    (order.is_none()
-                        || matches!(
-                            message,
-                            GuardianRootMessage::User(_) | GuardianRootMessage::UserInput(_)
-                        ))
-                    .then_some(index)
-                }),
-        );
-    }
-    (!selected.is_empty()).then_some(selected)
+    boundaries
 }
 
 fn is_handoff(name: &str, args: &serde_json::Value, worker: &AgentPath) -> bool {

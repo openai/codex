@@ -2,6 +2,8 @@
 //! Collection keeps captured sources intact. This owner applies text and image policy;
 //! delivery checks repeat against current reviewer history after compaction.
 
+pub(crate) mod root;
+
 use crate::CollectedContext;
 use crate::ContextSection;
 use crate::GuardianRootMessage;

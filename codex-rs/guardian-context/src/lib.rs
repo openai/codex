@@ -28,6 +28,11 @@ pub use action::PlannedAction;
 pub use action::PlannedActionKind;
 pub use action::action_for_review;
 pub use authorization::GuardianRootMessage;
+pub use preparation::root::RootAssistantCandidate;
+pub use preparation::root::RootAssistantContent;
+pub use preparation::root::RootDeliveredMessage;
+pub use preparation::root::RootMessageCandidate;
+pub use preparation::root::RootRetainedAssistant;
 pub use section::ContextSection;
 
 pub use entry::ConversationTranscriptEntry;
@@ -48,6 +53,7 @@ mod verified_answers;
 pub use verified_answers::RenderedVerifiedAnswers;
 pub use verified_answers::TrustedUserAnswer;
 pub use verified_answers::collect_verified_answer_candidates;
+pub use verified_answers::render_original_verified_answer;
 pub use verified_answers::render_verified_answer;
 pub use verified_answers::render_verified_answers;
 
@@ -86,6 +92,10 @@ pub use composition::CollectedContext;
 pub use composition::ComposedContext;
 pub use composition::ContextPresentation;
 pub use composition::PreparedTranscript;
+pub use preparation::root::PreparedRootAssistants;
+pub use preparation::root::prepare_root_assistant_messages;
+pub use preparation::root::prepare_root_user_messages;
+pub use preparation::root::select_root_handoff_indices;
 pub use profile::ContextProfile;
 mod authorization;
 mod entry;
@@ -164,7 +174,7 @@ pub struct SectionInput<'a> {
     pub transcript: &'a ConversationTranscriptConfig,
     /// Bounded root evidence resolved by the host; empty when not applicable.
     pub root_conversation: &'a [GuardianRootMessage],
-    /// Bounded, role-labeled answers selected from the host-owned context snapshot.
+    /// Role-labeled sync answer candidates or already-bounded answers from other consumers.
     pub trusted_user_answers: &'a [TrustedUserAnswer],
     /// Exact action JSON; sync composition bounds the reason and descriptions.
     pub planned_action: Option<&'a PlannedAction>,

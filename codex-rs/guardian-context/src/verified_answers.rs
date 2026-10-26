@@ -44,11 +44,12 @@ pub fn render_verified_answers(context: &RetainedContext) -> RenderedVerifiedAns
 /// Selects one complete response, preserving both sides of every question/answer pair.
 /// Returning None means the caller must account for missing evidence, not partial permission.
 pub fn render_verified_answer(answer: &VerifiedAnswer) -> Option<String> {
-    let text = answer_text(answer);
+    let text = render_original_verified_answer(answer);
     answer_fits(text.len()).then_some(text)
 }
 
-fn answer_text(answer: &VerifiedAnswer) -> String {
+/// Renders original question/answer bodies without making a request-selection decision.
+pub fn render_original_verified_answer(answer: &VerifiedAnswer) -> String {
     answer
         .questions
         .iter()
@@ -105,7 +106,7 @@ pub fn collect_verified_answer_candidates(context: &RetainedContext) -> Vec<Trus
     }
     for (order, entry) in source_order_labels(context) {
         if let RetainedContextEntry::VerifiedAnswer(answer) = entry {
-            let text = answer_text(answer);
+            let text = render_original_verified_answer(answer);
             items.push(TrustedUserAnswer {
                 answer_bytes: Some(text.len()),
                 text: format!("Retained source order: {order}\n{text}"),

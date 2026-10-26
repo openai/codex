@@ -10,7 +10,6 @@
 //! Handoff projection preserves saved heartbeat instructions and the active turn's skills.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
@@ -24,17 +23,18 @@ use crate::context::ContextualUserFragment;
 use crate::context::GuardianReviewEvidence;
 use crate::context::UserGoalUpdate;
 use crate::context::is_contextual_user_fragment;
-use crate::context::render_retained_assistant_context;
 use crate::event_mapping::parse_turn_item;
-use crate::guardian::GUARDIAN_MAX_ROOT_MESSAGE_TOKENS;
-use crate::guardian::guardian_truncate_text;
+use codex_guardian_context::RootAssistantCandidate;
+use codex_guardian_context::RootAssistantContent;
+use codex_guardian_context::RootDeliveredMessage;
+use codex_guardian_context::RootMessageCandidate;
+use codex_guardian_context::RootRetainedAssistant;
 use codex_history::ReconciledRetainedContext;
 use codex_history::RetainedContextEntry;
 use codex_history::RetainedContextOrder;
 use codex_history::RetainedUserMessage;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
-use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
@@ -75,7 +75,7 @@ impl LocalAgentControl {
         let history = root_history.conversation_history_snapshot();
         // Join calls to host-confirmed outputs in this snapshot. Older outputs without
         // captured text cannot establish what was sent, including after a hook rewrite.
-        let delivered_messages = root_history
+        let delivered_candidates = root_history
             .annotated_items()
             .iter()
             .rev()
@@ -92,10 +92,9 @@ impl LocalAgentControl {
                     .as_ref()?
                     .delivered_assistant_message
                     .as_deref()?;
-                Some((call_id.as_str(), text))
+                Some(RootDeliveredMessage { call_id, text })
             })
-            .take(MAX_ROOT_MESSAGES)
-            .collect::<HashMap<_, _>>();
+            .collect::<Vec<_>>();
         let root_evidence = root_thread
             .session
             .services
@@ -141,7 +140,7 @@ impl LocalAgentControl {
         );
         let mut latest_user_turn_id = reconciled.latest_user_turn_id.clone();
         let mut missing_root_instructions = reconciled.missing_user_messages;
-        let mut messages = reconciled
+        let user_candidates = reconciled
             .ordered_entries()
             .filter_map(|(order, entry)| match entry {
                 RetainedContextEntry::UserMessage(message) => {
@@ -176,22 +175,23 @@ impl LocalAgentControl {
                         return None;
                     }
                     (!is_summary_message(&text) && !text.trim_start().starts_with("<user_action>"))
-                        .then(|| {
-                            (
-                                Some(order),
-                                GuardianRootMessage::User(
-                                    guardian_truncate_text(&text, GUARDIAN_MAX_ROOT_MESSAGE_TOKENS)
-                                        .0,
-                                ),
-                            )
+                        .then(|| RootMessageCandidate {
+                            order: Some(order),
+                            message: GuardianRootMessage::User(text.to_string()),
                         })
                 }
-                RetainedContextEntry::VerifiedAnswer(answer) => {
-                    codex_guardian_context::render_verified_answer(answer)
-                        .map(|text| (Some(order), GuardianRootMessage::UserInput(text)))
-                }
+                RetainedContextEntry::VerifiedAnswer(answer) => Some(RootMessageCandidate {
+                    order: Some(order),
+                    message: GuardianRootMessage::UserInput(
+                        codex_guardian_context::render_original_verified_answer(answer),
+                    ),
+                }),
                 RetainedContextEntry::AssistantMessage(_) => None,
             })
+            .collect::<Vec<_>>();
+        let mut messages = codex_guardian_context::prepare_root_user_messages(&user_candidates)
+            .into_iter()
+            .map(|message| (message.order, message.message))
             .collect::<Vec<_>>();
         // Old opt-out checkpoints have genuine instructions but no retained source order.
         // Keep them separately bounded and explicitly unordered; never replace newer facts.
@@ -210,10 +210,7 @@ impl LocalAgentControl {
                 latest_user_turn_id = latest_legacy_turn_id;
             }
         }
-        let mut missing_assistant_context = retained_context.has_omitted_assistant_messages();
-        // Prefer a renderable retained original over a shortened checkpoint copy.
-        // Otherwise preserve the bounded live evidence, including confirmed messaging sends.
-        let live_assistant_messages = root_history
+        let assistant_candidates = root_history
             .annotated_items()
             .iter()
             .filter(|envelope| {
@@ -223,45 +220,41 @@ impl LocalAgentControl {
                     .is_some_and(|metadata| metadata.compaction_output)
             })
             .filter_map(|envelope| {
-                let text = root_assistant_text(&envelope.item, &delivered_messages)?;
-                let id = envelope
-                    .item
-                    .id()
-                    .map(codex_protocol::ResponseItemId::as_str);
-                let retained = reconciled.ordered_entries().find_map(|(order, entry)| {
-                    let RetainedContextEntry::AssistantMessage(message) = entry else {
-                        return None;
-                    };
-                    id.filter(|id| message.message_id.as_deref() == Some(*id))
-                        .map(|_| (order, message))
-                });
-                if let Some((order, message)) = retained
-                    && let Some(text) = render_retained_assistant_context(message)
-                {
-                    return Some((id, Some(order), GuardianRootMessage::Assistant(text)));
-                }
-                let order = envelope
-                    .metadata
-                    .as_ref()
-                    .filter(|metadata| !metadata.inherited_user_message)
-                    .and_then(|metadata| metadata.user_input_order)
-                    .map(RetainedContextOrder::Local);
-                let order = retained.map(|(order, _)| order).or(order);
-                let message = if order.is_some() {
-                    GuardianRootMessage::Assistant(text)
-                } else {
-                    GuardianRootMessage::UnorderedAssistant(text)
+                let content = match &envelope.item {
+                    ResponseItem::FunctionCall { call_id, .. } => {
+                        RootAssistantContent::DeliveredCall {
+                            call_id: call_id.clone(),
+                        }
+                    }
+                    ResponseItem::Message {
+                        role,
+                        content,
+                        phase,
+                        ..
+                    } if role == "assistant" && *phase != Some(MessagePhase::Commentary) => {
+                        RootAssistantContent::Text(content)
+                    }
+                    _ => return None,
                 };
-                Some((id, order, message))
+                Some(RootAssistantCandidate {
+                    message_id: envelope.item.id().map(|id| id.as_str().to_owned()),
+                    order: envelope
+                        .metadata
+                        .as_ref()
+                        .filter(|metadata| !metadata.inherited_user_message)
+                        .and_then(|metadata| metadata.user_input_order)
+                        .map(RetainedContextOrder::Local),
+                    content,
+                })
             })
             .collect::<Vec<_>>();
-        let mut assistant_messages = reconciled
+        let retained_assistant_candidates = reconciled
             .ordered_entries()
             .filter_map(|(order, entry)| {
                 let RetainedContextEntry::AssistantMessage(message) = entry else {
                     return None;
                 };
-                if message.phase == Some(MessagePhase::Commentary)
+                let standalone_eligible = !(message.phase == Some(MessagePhase::Commentary)
                     || message.message_id.as_deref().is_some_and(|id| {
                         root_history
                             .raw_items()
@@ -271,29 +264,27 @@ impl LocalAgentControl {
                                 id: Some(source_id), phase: Some(MessagePhase::Commentary), ..
                             } if source_id.as_str() == id)
                             })
-                    })
-                {
-                    return None;
-                }
-                if message.message_id.as_deref().is_some_and(|id| {
-                    live_assistant_messages
-                        .iter()
-                        .any(|(live_id, _, _)| *live_id == Some(id))
-                }) {
-                    return None;
-                }
-                let rendered =
-                    render_retained_assistant_context(message).map(GuardianRootMessage::Assistant);
-                missing_assistant_context |= rendered.is_none();
-                rendered.map(|message| (Some(order), message))
+                    }));
+                Some(RootRetainedAssistant {
+                    order,
+                    message,
+                    standalone_eligible,
+                })
             })
             .collect::<Vec<_>>();
-        assistant_messages.extend(
-            live_assistant_messages
-                .into_iter()
-                .map(|(_, order, message)| (order, message)),
+        let assistants = codex_guardian_context::prepare_root_assistant_messages(
+            &assistant_candidates,
+            &retained_assistant_candidates,
+            &delivered_candidates,
+            retained_context.has_omitted_assistant_messages(),
         );
-        messages.extend(assistant_messages);
+        let mut missing_assistant_context = assistants.missing_context;
+        messages.extend(
+            assistants
+                .messages
+                .into_iter()
+                .map(|message| (message.order, message.message)),
+        );
         // Unknown order cannot establish recency; prune these assistants first.
         messages.sort_by_key(|(order, _)| *order);
         let mut review_context_revision = history.guardian_review_context_revision();
@@ -364,7 +355,8 @@ impl LocalAgentControl {
             );
         }
         let mut authorization_version = root_evidence.authorization_version(history.as_ref());
-        if !authorization_version.retained_context_complete {
+        let missing_verified_answers = !authorization_version.retained_context_complete;
+        if missing_verified_answers {
             messages.insert(
                 /*index*/ 0,
                 GuardianRootMessage::IncompleteVerifiedAnswers,
@@ -396,31 +388,4 @@ impl LocalAgentControl {
             trusted_skill_paths,
         })
     }
-}
-
-fn root_assistant_text(
-    item: &ResponseItem,
-    delivered_messages: &HashMap<&str, &str>,
-) -> Option<String> {
-    let text = match item {
-        ResponseItem::FunctionCall { call_id, .. } => {
-            (*delivered_messages.get(call_id.as_str())?).to_owned()
-        }
-        _ => {
-            let Some(TurnItem::AgentMessage(message)) = parse_turn_item(item) else {
-                return None;
-            };
-            if message.phase == Some(MessagePhase::Commentary) {
-                return None;
-            }
-            message
-                .content
-                .iter()
-                .map(|content| match content {
-                    AgentMessageContent::Text { text } => text.as_str(),
-                })
-                .collect::<String>()
-        }
-    };
-    Some(guardian_truncate_text(&text, GUARDIAN_MAX_ROOT_MESSAGE_TOKENS).0)
 }
