@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 pub(crate) use pid::PidBackend;
+pub(crate) use pid::wait_for_process_exit;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

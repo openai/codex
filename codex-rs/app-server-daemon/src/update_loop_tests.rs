@@ -829,6 +829,29 @@ async fn manual_update_restarts_managed_daemon_with_automatic_updates_disabled()
     check_manual_update_restart("standalone").await;
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn readiness_waits_for_a_slow_managed_daemon() {
+    let home = TempDir::new().unwrap();
+    let (daemon, _) = manual_update_daemon(&home);
+    let settings = crate::settings::DaemonSettings::default();
+    let backend = crate::backend::pid_backend(daemon.backend_paths(&settings));
+    backend.start().await.unwrap();
+
+    tokio::time::pause();
+    let (ready, listener) = tokio::join!(daemon.wait_until_ready(), async {
+        // Model a cold start that takes longer than the old Linux readiness deadline.
+        tokio::time::sleep(Duration::from_secs(15)).await;
+        tokio::time::resume();
+        test_control_server(&daemon, home.path())
+            .await
+            .abort_handle()
+    });
+    backend.stop().await.unwrap();
+    listener.abort();
+    assert_eq!(ready.unwrap().app_server_version, "1.0.0");
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn daemon_start_and_restart_preserve_launch_features() {
