@@ -10,9 +10,9 @@ use std::path::Path;
 
 /// Prepares the memory directory for git-baseline diffing.
 ///
-/// This keeps an existing usable `.git/` baseline intact. It initializes a new git baseline when the
-/// metadata is missing or unusable, and removes any stale generated `phase2_workspace_diff.md` file
-/// so that the next diff does not include a previous prompt artifact.
+/// This keeps an existing current-version `.git/` baseline intact. Missing, outdated or unusable
+/// metadata is replaced with an empty baseline so existing memory files are reconsidered. Any stale
+/// generated `phase2_workspace_diff.md` is removed so it does not enter the next diff.
 pub async fn prepare_memory_workspace(root: &Path) -> anyhow::Result<()> {
     crate::ensure_layout(root)
         .await
@@ -24,8 +24,8 @@ pub async fn prepare_memory_workspace(root: &Path) -> anyhow::Result<()> {
 
 /// Returns the current workspace diff after removing any stale generated diff artifact.
 ///
-/// The removed file is only `phase2_workspace_diff.md`; memory artifacts and `.git/` metadata are
-/// left intact.
+/// Memory artifacts are left intact. The baseline is invalidated if a tracked file has grown
+/// beyond the snapshot size limit since preparation.
 pub async fn memory_workspace_diff(root: &Path) -> anyhow::Result<GitBaselineDiff> {
     remove_workspace_diff(root).await?;
     diff_since_latest_init(root).await

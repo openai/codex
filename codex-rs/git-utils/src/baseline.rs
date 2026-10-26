@@ -6,13 +6,22 @@ use gix::objs::tree::EntryKind;
 use gix::objs::tree::EntryMode;
 use similar::TextDiff;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs;
+use std::io::Read;
+#[cfg(windows)]
+use std::os::windows::fs::FileTypeExt;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::task;
 
 use crate::operations::run_git_for_status;
+
+// Match the default file limit for automatic ghost snapshots. A baseline is derived data.
+const MAX_BASELINE_FILE_BYTES: u64 = 10 * 1024 * 1024;
+const BASELINE_VERSION_FILE: &str = "codex-baseline-version";
+const BASELINE_VERSION: &[u8] = b"1\n";
 
 const BASELINE_COMMIT_MESSAGE: &str =
     "Initialize Codex git baseline\n\nCo-authored-by: Codex <noreply@openai.com>";
@@ -67,96 +76,182 @@ struct GitBaselineFileEntry {
 /// This is intentionally destructive for `root/.git`. It is meant for internal directories where
 /// git is used only as a baseline/diff implementation detail, not for user repositories.
 pub async fn reset_git_repository(root: &Path) -> anyhow::Result<()> {
-    let root = root.to_path_buf();
-    task::spawn_blocking(move || reset_git_repository_sync(&root)).await?
+    with_baseline_lock(root, |root| {
+        reset_git_repository_sync(root, BaselineContents::Current)
+    })
+    .await
 }
 
-/// Ensures `root` has a usable git baseline repository.
+/// Ensures the internal directory has a usable, size-bounded baseline.
 ///
-/// Existing usable `.git/` metadata is preserved. Missing or unusable metadata is replaced with a
-/// fresh one-commit baseline.
+/// Old or incomplete baselines are discarded without reading their blobs. The replacement is
+/// empty so all eligible working files remain visible to the next consolidation as additions.
 pub async fn ensure_git_baseline_repository(root: &Path) -> anyhow::Result<()> {
-    let root = root.to_path_buf();
-    task::spawn_blocking(move || {
-        fs::create_dir_all(&root)
-            .with_context(|| format!("create git baseline root {}", root.display()))?;
-        if root.join(".git").is_dir()
-            && let Ok(repo) = gix::open(&root)
-            && head_file_entries(&repo).is_ok()
-        {
+    with_baseline_lock(root, ensure_git_baseline_repository_sync).await
+}
+
+fn ensure_git_baseline_repository_sync(root: &Path) -> anyhow::Result<()> {
+    let git_dir = root.join(".git");
+    let mut version = Vec::new();
+    // Never follow a gitfile or directory symlink into another repository.
+    if fs::symlink_metadata(&git_dir).is_ok_and(|metadata| metadata.is_dir())
+        && fs::File::open(git_dir.join(BASELINE_VERSION_FILE))
+            .and_then(|file| {
+                file.take(BASELINE_VERSION.len() as u64 + 1)
+                    .read_to_end(&mut version)
+            })
+            .is_ok()
+        && version == BASELINE_VERSION
+        && let Ok(repo) = gix::open::Options::isolated().open(&git_dir)
+    {
+        let repo = repo.to_thread_local();
+        if repo.common_dir() == repo.git_dir() && head_file_entries(&repo).is_ok() {
             return Ok(());
         }
-        reset_git_repository_sync(&root)
+    }
+    reset_git_repository_sync(root, BaselineContents::Empty)
+}
+
+// Imports and background consolidation can overlap, including across app-server processes.
+// A nested .git keeps the lock outside both the replaceable baseline and memory scans.
+async fn with_baseline_lock<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce(&Path) -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    let root = root.to_owned();
+    task::spawn_blocking(move || {
+        fs::create_dir_all(&root)?;
+        let root = fs::canonicalize(root)?;
+        let control = baseline_control(&root);
+        for dir in [root.join(".codex-baseline"), control.clone()] {
+            match fs::create_dir(&dir) {
+                Ok(()) => {}
+                Err(err)
+                    if err.kind() == std::io::ErrorKind::AlreadyExists
+                        && fs::symlink_metadata(&dir)?.is_dir()
+                        && fs::canonicalize(&dir)? == dir => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        anyhow::ensure!(
+            !control.join("HEAD").try_exists()?,
+            "baseline control directory contains a repository"
+        );
+        let lock = fs::File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(control.join("codex-baseline.lock"))?;
+        lock.lock().context("lock git baseline")?;
+        operation(&root)
     })
     .await?
 }
 
-fn reset_git_repository_sync(root: &Path) -> anyhow::Result<()> {
-    fs::create_dir_all(root)
-        .with_context(|| format!("create git baseline root {}", root.display()))?;
-    remove_git_metadata(root)?;
-    let repo = gix::init(root).with_context(|| format!("init git repo {}", root.display()))?;
-    commit_current_tree(&repo, BASELINE_COMMIT_MESSAGE)?;
-    write_index_from_head(root)?;
+fn baseline_control(root: &Path) -> PathBuf {
+    root.join(".codex-baseline").join(".git")
+}
+
+fn discard_baseline_path(path: &Path) -> anyhow::Result<()> {
+    match path.symlink_metadata() {
+        #[cfg(windows)]
+        Ok(meta) if meta.file_type().is_symlink_dir() => fs::remove_dir(path)?,
+        Ok(meta) if meta.is_dir() => {
+            // Invalidate before deletion: interruption must not leave trusted partial metadata.
+            match fs::remove_file(path.join(BASELINE_VERSION_FILE)) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
+            }
+            fs::remove_dir_all(path)?;
+        }
+        Ok(_) => fs::remove_file(path)?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
     Ok(())
 }
 
-/// Returns the diff between the latest baseline reset and the current directory contents.
+enum BaselineContents {
+    Empty,
+    Current,
+}
+
+fn reset_git_repository_sync(root: &Path, contents: BaselineContents) -> anyhow::Result<()> {
+    let git_dir = root.join(".git");
+    // Only metadata is disposable. An interrupted reset leaves no version marker, so the next
+    // operation retries with an empty baseline rather than trusting a partial snapshot.
+    discard_baseline_path(&git_dir)?;
+    let repo = gix::ThreadSafeRepository::init_opts(
+        root,
+        gix::create::Kind::WithWorktree,
+        gix::create::Options::default(),
+        gix::open::Options::isolated(),
+    )?
+    .to_thread_local();
+    let tree_id = match contents {
+        BaselineContents::Empty => repo.write_object(Tree::default())?.detach(),
+        BaselineContents::Current => write_tree(&repo, root)?,
+    };
+    let signature = codex_signature();
+    let mut time = gix::date::parse::TimeBuf::default();
+    let signature = signature.to_ref(&mut time);
+    repo.commit_as(
+        signature,
+        signature,
+        "HEAD",
+        BASELINE_COMMIT_MESSAGE,
+        tree_id,
+        Vec::<ObjectId>::new(),
+    )?;
+    write_index_from_head(root)?;
+    fs::write(git_dir.join(BASELINE_VERSION_FILE), BASELINE_VERSION)?;
+    Ok(())
+}
+
+fn write_index_from_head(root: &Path) -> anyhow::Result<()> {
+    // Pin the index write to this worktree. Relative paths also work with Git for Windows
+    // when Rust has canonicalized the working directory to a verbatim path.
+    run_git_for_status(
+        root,
+        ["read-tree", "--reset", "HEAD"],
+        Some(&[
+            ("GIT_DIR".into(), ".git".into()),
+            ("GIT_COMMON_DIR".into(), ".git".into()),
+            ("GIT_INDEX_FILE".into(), ".git/index".into()),
+            ("GIT_OBJECT_DIRECTORY".into(), ".git/objects".into()),
+            ("GIT_WORK_TREE".into(), ".".into()),
+        ]),
+    )?;
+    Ok(())
+}
+
+/// Returns the diff between the latest baseline and the current directory's bounded files.
 pub async fn diff_since_latest_init(root: &Path) -> anyhow::Result<GitBaselineDiff> {
-    let root = root.to_path_buf();
-    task::spawn_blocking(move || {
-        let repo = gix::open(&root).with_context(|| format!("open git repo {}", root.display()))?;
-        let head_entries = head_file_entries(&repo)?;
-        let current_entries = current_file_entries(&repo, &root)?;
+    with_baseline_lock(root, |root| {
+        ensure_git_baseline_repository_sync(root)?;
+        let mut repo = gix::open::Options::isolated().open(root)?.to_thread_local();
+        let mut head_entries = head_file_entries(&repo)?;
+        let mut current_entries = BTreeMap::new();
+        let mut excluded = BTreeSet::new();
+        collect_current_entries(&repo, root, root, &mut current_entries, &mut excluded)?;
+        // Inputs may grow during synchronization, after the initial baseline was prepared.
+        if excluded.iter().any(|path| head_entries.contains_key(path)) {
+            drop(repo);
+            reset_git_repository_sync(root, BaselineContents::Empty)?;
+            repo = gix::open::Options::isolated().open(root)?.to_thread_local();
+            head_entries.clear();
+        }
         let changes = diff_entries(&head_entries, &current_entries);
         let unified_diff =
-            render_unified_diff(&repo, &root, &head_entries, &current_entries, &changes)?;
+            render_unified_diff(&repo, root, &head_entries, &current_entries, &changes)?;
         Ok(GitBaselineDiff {
             changes,
             unified_diff,
         })
     })
-    .await?
-}
-
-fn remove_git_metadata(root: &Path) -> anyhow::Result<()> {
-    let git_path = root.join(".git");
-    let metadata = match fs::symlink_metadata(&git_path) {
-        Ok(metadata) => metadata,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err).with_context(|| format!("stat {}", git_path.display())),
-    };
-
-    if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
-        fs::remove_dir_all(&git_path).with_context(|| format!("remove {}", git_path.display()))
-    } else {
-        fs::remove_file(&git_path).with_context(|| format!("remove {}", git_path.display()))
-    }
-}
-
-fn commit_current_tree(repo: &gix::Repository, message: &str) -> anyhow::Result<()> {
-    let root = repo
-        .workdir()
-        .context("git baseline repo must have a worktree")?;
-    let tree_id = write_tree(repo, root)?;
-    let signature = codex_signature();
-    let mut time = gix::date::parse::TimeBuf::default();
-    let signature_ref = signature.to_ref(&mut time);
-    repo.commit_as(
-        signature_ref,
-        signature_ref,
-        "HEAD",
-        message,
-        tree_id,
-        Vec::<ObjectId>::new(),
-    )
-    .context("commit git baseline repo")?;
-    Ok(())
-}
-
-fn write_index_from_head(root: &Path) -> anyhow::Result<()> {
-    run_git_for_status(root, ["read-tree", "--reset", "HEAD"], /*env*/ None)
-        .context("write git baseline index from HEAD")
+    .await
 }
 
 fn codex_signature() -> gix::actor::Signature {
@@ -195,13 +290,15 @@ fn write_tree(repo: &gix::Repository, dir: &Path) -> anyhow::Result<ObjectId> {
                 oid,
             });
         } else if file_type.is_file() {
-            let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+            let Some((bytes, mode)) = read_baseline_file(&path)? else {
+                continue;
+            };
             let oid = repo
                 .write_blob(bytes)
                 .with_context(|| format!("write blob {}", path.display()))?
                 .detach();
             entries.push(Entry {
-                mode: file_mode(&path, EntryKind::Blob)?,
+                mode,
                 filename: os_str_to_bstring(&file_name),
                 oid,
             });
@@ -264,20 +361,12 @@ fn collect_tree_entries(
     Ok(())
 }
 
-fn current_file_entries(
-    repo: &gix::Repository,
-    root: &Path,
-) -> anyhow::Result<BTreeMap<String, GitBaselineFileEntry>> {
-    let mut entries = BTreeMap::new();
-    collect_current_entries(repo, root, root, &mut entries)?;
-    Ok(entries)
-}
-
 fn collect_current_entries(
     repo: &gix::Repository,
     root: &Path,
     dir: &Path,
     entries: &mut BTreeMap<String, GitBaselineFileEntry>,
+    excluded: &mut BTreeSet<String>,
 ) -> anyhow::Result<()> {
     for entry in fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
         let entry = entry?;
@@ -288,14 +377,17 @@ fn collect_current_entries(
 
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            collect_current_entries(repo, root, &path, entries)?;
+            collect_current_entries(repo, root, &path, entries, excluded)?;
         } else if file_type.is_file() {
-            let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+            let Some((bytes, mode)) = read_baseline_file(&path)? else {
+                excluded.insert(relative_slash_path(root, &path)?);
+                continue;
+            };
             entries.insert(
                 relative_slash_path(root, &path)?,
                 GitBaselineFileEntry {
                     oid: blob_oid(repo, &bytes)?,
-                    mode: file_mode(&path, EntryKind::Blob)?,
+                    mode,
                 },
             );
         } else if file_type.is_symlink() {
@@ -311,6 +403,21 @@ fn collect_current_entries(
         }
     }
     Ok(())
+}
+
+/// Bounds the read even if a file grows between checking its size and reaching EOF.
+fn read_baseline_file(path: &Path) -> anyhow::Result<Option<(Vec<u8>, EntryMode)>> {
+    let file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let metadata = file.metadata()?;
+    let len = metadata.len();
+    if len > MAX_BASELINE_FILE_BYTES {
+        return Ok(None);
+    }
+    // Reserve an EOF probe byte so bounded reads of stable files need no reallocation.
+    let mut bytes = Vec::with_capacity(len as usize + 1);
+    file.take(MAX_BASELINE_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    Ok((bytes.len() as u64 <= MAX_BASELINE_FILE_BYTES).then_some((bytes, file_mode(&metadata))))
 }
 
 fn blob_oid(repo: &gix::Repository, bytes: &[u8]) -> anyhow::Result<ObjectId> {
@@ -431,6 +538,10 @@ fn render_change_diff(
 }
 
 fn read_head_blob(repo: &gix::Repository, entry: &GitBaselineFileEntry) -> anyhow::Result<Vec<u8>> {
+    anyhow::ensure!(
+        repo.find_header(entry.oid)?.size() <= MAX_BASELINE_FILE_BYTES,
+        "baseline blob exceeds the snapshot file limit"
+    );
     let mut blob = repo.find_blob(entry.oid)?;
     Ok(blob.take_data())
 }
@@ -444,7 +555,9 @@ fn read_current_file_bytes(root: &Path, relative_path: &str) -> anyhow::Result<V
             fs::read_link(&path).with_context(|| format!("read symlink {}", path.display()))?;
         Ok(path_to_bytes(&target))
     } else {
-        fs::read(&path).with_context(|| format!("read {}", path.display()))
+        read_baseline_file(&path)?
+            .map(|(bytes, _mode)| bytes)
+            .context("file grew beyond the snapshot file limit during diff")
     }
 }
 
@@ -459,20 +572,19 @@ fn mode_label(mode: EntryMode) -> &'static str {
 }
 
 #[cfg(unix)]
-fn file_mode(path: &Path, default: EntryKind) -> anyhow::Result<EntryMode> {
+fn file_mode(metadata: &fs::Metadata) -> EntryMode {
     use std::os::unix::fs::PermissionsExt;
 
-    let mode = fs::metadata(path)?.permissions().mode();
-    Ok(if mode & 0o111 == 0 {
-        default.into()
+    if metadata.permissions().mode() & 0o111 == 0 {
+        EntryKind::Blob.into()
     } else {
         EntryKind::BlobExecutable.into()
-    })
+    }
 }
 
 #[cfg(not(unix))]
-fn file_mode(_path: &Path, default: EntryKind) -> anyhow::Result<EntryMode> {
-    Ok(default.into())
+fn file_mode(_metadata: &fs::Metadata) -> EntryMode {
+    EntryKind::Blob.into()
 }
 
 #[cfg(unix)]
@@ -526,6 +638,10 @@ fn path_to_slash_string(path: &Path) -> String {
 }
 
 #[cfg(test)]
+#[path = "baseline_recovery_tests.rs"]
+mod recovery_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
@@ -533,7 +649,7 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
 
-    fn git_stdout(root: &Path, args: &[&str]) -> String {
+    pub(super) fn git_stdout(root: &Path, args: &[&str]) -> String {
         let output = Command::new("git")
             .current_dir(root)
             .args(args)
@@ -555,6 +671,12 @@ mod tests {
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("MEMORY.md"), "baseline").expect("write memory");
 
+        let oversized = root.join("large-output");
+        fs::File::create(&oversized)
+            .expect("create large file")
+            .set_len(MAX_BASELINE_FILE_BYTES + 1)
+            .expect("size large file");
+
         reset_git_repository(&root).await.expect("reset repo");
 
         assert!(root.join(".git").is_dir());
@@ -562,8 +684,77 @@ mod tests {
         let diff = diff_since_latest_init(&root).await.expect("diff");
         assert!(!diff.has_changes());
         assert_eq!(diff.unified_diff, "");
-        assert_eq!(git_stdout(&root, &["status", "--porcelain"]), "");
+        assert_eq!(
+            git_stdout(&root, &["status", "--porcelain"]),
+            "?? large-output\n"
+        );
         assert_eq!(git_stdout(&root, &["ls-files"]), "MEMORY.md\n");
+
+        // An older baseline could already contain the oversized blob.
+        git_stdout(&root, &["add", "large-output"]);
+        git_stdout(
+            &root,
+            &[
+                "-c",
+                "user.name=Codex",
+                "-c",
+                "user.email=codex@example.com",
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "-m",
+                "Legacy baseline",
+            ],
+        );
+        fs::remove_file(root.join(".git").join(BASELINE_VERSION_FILE)).expect("remove version");
+        fs::write(root.join("MEMORY.md"), "pending edit").expect("edit memory");
+        ensure_git_baseline_repository(&root)
+            .await
+            .expect("migrate legacy baseline");
+        assert_eq!(
+            git_stdout(&root, &["ls-tree", "-r", "--name-only", "HEAD"]),
+            ""
+        );
+        assert_eq!(git_stdout(&root, &["ls-files"]), "");
+        let diff = diff_since_latest_init(&root)
+            .await
+            .expect("diff after migration");
+        assert_eq!(
+            diff.changes,
+            vec![GitBaselineChange {
+                status: GitBaselineChangeStatus::Added,
+                path: "MEMORY.md".to_string(),
+            }]
+        );
+        assert!(diff.unified_diff.contains("+pending edit"));
+        assert_eq!(
+            fs::metadata(oversized).expect("worktree file").len(),
+            MAX_BASELINE_FILE_BYTES + 1
+        );
+
+        // Phase 2 may grow a tracked input after preparation and before computing its diff.
+        fs::write(root.join("memory_summary.md"), "summary").expect("write summary");
+        reset_git_repository(&root)
+            .await
+            .expect("reset bounded baseline");
+        fs::File::options()
+            .write(true)
+            .open(root.join("MEMORY.md"))
+            .expect("open tracked")
+            .set_len(MAX_BASELINE_FILE_BYTES + 1)
+            .expect("grow tracked");
+        let diff = diff_since_latest_init(&root)
+            .await
+            .expect("diff after input synchronization");
+        assert_eq!(
+            diff.changes,
+            vec![GitBaselineChange {
+                status: GitBaselineChangeStatus::Added,
+                path: "memory_summary.md".to_string(),
+            }]
+        );
+        assert_eq!(git_stdout(&root, &["ls-files"]), "");
+        assert_eq!(git_stdout(&root, &["diff", "HEAD", "--stat"]), "");
     }
 
     #[tokio::test]
@@ -579,9 +770,18 @@ mod tests {
             .expect("ensure repo");
 
         let diff = diff_since_latest_init(&root).await.expect("diff");
-        assert!(!diff.has_changes());
-        assert_eq!(git_stdout(&root, &["status", "--porcelain"]), "");
-        assert_eq!(git_stdout(&root, &["ls-files"]), "MEMORY.md\n");
+        assert_eq!(
+            diff.changes,
+            vec![GitBaselineChange {
+                status: GitBaselineChangeStatus::Added,
+                path: "MEMORY.md".to_string(),
+            }]
+        );
+        assert_eq!(
+            git_stdout(&root, &["status", "--porcelain"]),
+            "?? MEMORY.md\n"
+        );
+        assert_eq!(git_stdout(&root, &["ls-files"]), "");
     }
 
     #[cfg(unix)]

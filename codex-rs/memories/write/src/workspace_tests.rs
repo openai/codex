@@ -107,7 +107,13 @@ async fn prepare_memory_workspace_recovers_unusable_git_dir() {
     let diff = memory_workspace_diff(&root)
         .await
         .expect("load workspace diff");
-    assert_eq!(diff.changes, Vec::new());
+    assert_eq!(
+        diff.changes,
+        vec![GitBaselineChange {
+            status: GitBaselineChangeStatus::Added,
+            path: "MEMORY.md".to_string(),
+        }]
+    );
 }
 
 #[test]

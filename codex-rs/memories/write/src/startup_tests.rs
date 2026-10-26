@@ -442,6 +442,46 @@ async fn memories_startup_phase2_tracks_workspace_diff_across_runs() -> anyhow::
 }
 
 #[tokio::test]
+async fn phase2_replays_legacy_baseline_with_unchanged_inputs() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let db = init_state_db(&home).await?;
+    let root = home.path().join("memories");
+    db.memories()
+        .enqueue_global_consolidation(/*input_watermark*/ 1)
+        .await?;
+    sync_rollout_summaries_from_memories(&root, &[], /*max_raw_memories_for_consolidation*/ 0)
+        .await?;
+    rebuild_raw_memories_file_from_memories(
+        &root,
+        &[],
+        /*max_raw_memories_for_consolidation*/ 0,
+    )
+    .await?;
+    seed_extension_instructions(&root).await?;
+    seed_required_memory_artifacts(&root).await?;
+    reset_git_repository(&root).await?;
+    assert!(!diff_since_latest_init(&root).await?.has_changes());
+    tokio::fs::remove_file(root.join(".git/codex-baseline-version")).await?;
+
+    let phase2 = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-phase2-replay"),
+            ev_assistant_message("msg-phase2-replay", "phase2 complete"),
+            ev_completed("resp-phase2-replay"),
+        ]),
+    )
+    .await;
+    let test = build_test_codex(&server, home.clone()).await?;
+    trigger_memories_startup(&test).await;
+    wait_for_single_request(&phase2).await;
+    wait_for_phase2_workspace_reset(db.memories(), &root).await?;
+    shutdown_test_codex(&test).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn phase2_retries_when_clean_workspace_is_missing_artifacts() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
