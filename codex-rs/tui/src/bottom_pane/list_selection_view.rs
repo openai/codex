@@ -812,11 +812,11 @@ impl ListSelectionView {
                             .auto_number_shortcuts
                             .then_some(item.display_shortcut)
                             .flatten(),
-                        match_indices: None,
                         description,
                         wrap_indent,
                         is_disabled,
                         disabled_reason: item.disabled_reason.clone(),
+                        ..Default::default()
                     }
                 })
             })

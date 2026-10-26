@@ -176,15 +176,12 @@ impl SkillPopup {
                         .into(),
                     ],
                     match_indices: indices,
-                    display_shortcut: None,
                     description: mention
                         .description
                         .as_ref()
                         .filter(|description| !description.is_empty())
                         .cloned(),
-                    is_disabled: false,
-                    disabled_reason: None,
-                    wrap_indent: None,
+                    ..Default::default()
                 }
             })
             .collect()

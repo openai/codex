@@ -376,7 +376,7 @@ fn question_options_reserve_wrapped_height_at_the_width_boundary() {
     let mut editor = editor();
     editor.state.pending.remove(/*index*/ 0);
     editor.state.pending[0].question.options =
-        Some(vec!["abcdefgh ijklmno".into(), "pqrstuvw xyzabcd".into()]);
+        Some(vec!["abcdefgh *ijklmno*".into(), "pqrstuvw xyzabcd".into()]);
     editor.restore_current_draft();
 
     // The five-column option prefix makes each named choice exactly 21 columns.
@@ -589,15 +589,20 @@ fn named_choices_share_selection_while_other_keeps_its_inline_cursor() {
         || {
             let mut editor = editor();
             editor.navigate(/*forward*/ true);
+            editor.state.pending[1].question.options =
+                Some(vec!["*Named* [guide](https://example.com)".into()]);
+            let linked_g = crate::terminal_hyperlinks::osc8_hyperlink("https://example.com", "g");
             for width in [40, 80] {
                 editor.select_option(/*index*/ 0);
                 let buffer = render_editor(&editor, width, /*height*/ 16);
+                assert!(buffer.content.iter().any(|cell| cell.symbol() == linked_g));
                 let cell = buffer
                     .content
                     .iter()
                     .find(|cell| cell.symbol() == "N")
                     .unwrap();
                 assert_eq!(cell.bg, crate::bottom_pane::selection_style().bg.unwrap());
+                assert!(cell.modifier.contains(Modifier::ITALIC));
                 editor.select_option(/*index*/ 1);
                 let buffer = render_editor(&editor, width, /*height*/ 16);
                 let cursor = editor.cursor_pos(buffer.area).unwrap();

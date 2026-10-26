@@ -36,6 +36,8 @@ use hyperlinks::wrap_two_column_row;
 #[derive(Default)]
 pub(crate) struct GenericDisplayRow {
     pub name: String,
+    /// Rich label already laid out at the picker width, including its gutter and links.
+    pub wrapped_name: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     /// Optional full-width selection treatment; other rows use the shared text accent.
     pub selection_style: Option<Style>,
     pub name_prefix_spans: Vec<Span<'static>>,

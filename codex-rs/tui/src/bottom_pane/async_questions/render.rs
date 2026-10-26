@@ -56,11 +56,10 @@ impl Renderable for AsyncQuestions {
         )
         .render(sections.question_area, buf);
 
-        let option_rows = self.option_rows();
-
         if self.other_selected() {
             self.render_inline_options(sections.options_area, buf);
         } else if self.has_options() && sections.options_area.height > 0 {
+            let option_rows = self.option_rows(sections.options_area.width);
             let mut options_state = self.state.pending[self.state.current_idx].options_state;
             let selected = options_state.selected_idx.unwrap_or(0);
             let heights: Vec<_> = option_rows
@@ -131,10 +130,7 @@ impl Renderable for AsyncQuestions {
                 buf,
             );
         }
-        let option_tip = (self.has_options()
-            && sections.options_area.height > 0
-            && self.options_required_height(content_area.width) > sections.options_area.height)
-            .then(|| self.option_tip());
+        let option_tip = sections.show_option_tip.then(|| self.option_tip());
         let lines = self
             .footer_lines(footer_area.width, option_tip)
             .into_iter()

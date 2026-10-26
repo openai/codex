@@ -1,8 +1,9 @@
 //! Markdown-to-ratatui rendering entry points.
 //!
 //! This module provides the public API surface that the rest of the TUI uses
-//! to turn markdown source into `Vec<Line<'static>>`.  Two variants exist:
+//! to turn Markdown source into terminal lines. Common entry points include:
 //!
+//! - [`render_markdown_for_viewport`] -- physical rows for widgets that measure their content.
 //! - [`append_markdown`] -- general-purpose, used for plan blocks and history
 //!   cells that already hold pre-processed markdown (no fence unwrapping).
 //! - [`append_markdown_agent`] -- for agent responses.  Runs
@@ -34,6 +35,31 @@ use crate::inline_visualization::rewrite_inline_visualizations;
 use crate::markdown_render::ListSpacing;
 use crate::table_detect;
 use crate::terminal_hyperlinks::HyperlinkLine;
+
+/// Render Markdown for a widget that measures its height in terminal rows.
+/// Split overwide tokens (such as URLs) while retaining their full hyperlink destinations.
+pub(crate) fn render_markdown_for_viewport(input: &str, width: u16) -> Vec<HyperlinkLine> {
+    let width = usize::from(width.max(1));
+    let lines =
+        crate::markdown_render::render_markdown_lines_with_width_cwd_and_hidden_link_destinations(
+            input,
+            Some(width),
+            /*cwd*/ None,
+            &crate::markdown_render::hide_web_link_destination,
+        );
+    let mut rows = Vec::with_capacity(lines.len());
+    for line in lines {
+        if line.width() <= width {
+            rows.push(line);
+        } else {
+            let wrapped = crate::wrapping::word_wrap_line_with_source(&line.line, width);
+            rows.extend(crate::terminal_hyperlinks::remap_source_wrapped_line(
+                &line, wrapped,
+            ));
+        }
+    }
+    rows
+}
 
 /// Render markdown source to styled ratatui lines and append them to `lines`.
 ///

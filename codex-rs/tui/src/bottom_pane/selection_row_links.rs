@@ -165,6 +165,9 @@ pub(super) fn wrap_row_lines(
     width: u16,
     description_layout: SelectionDescriptionLayout,
 ) -> Vec<HyperlinkLine> {
+    if !row.wrapped_name.is_empty() {
+        return row.wrapped_name.clone();
+    }
     if desc_col > 0 && should_wrap_name_in_column(row) {
         let wrapped = wrap_two_column_row(row, desc_col, width);
         if !wrapped.is_empty() {

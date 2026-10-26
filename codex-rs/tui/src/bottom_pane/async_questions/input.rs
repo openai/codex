@@ -89,7 +89,7 @@ impl AsyncQuestions {
 
         let input = self.other_input_area(area);
         let named_area = Rect::new(area.x, area.y, area.width, input.y.saturating_sub(area.y));
-        let mut rows = self.option_rows();
+        let mut rows = self.option_rows(named_area.width);
         rows.pop();
         let mut state = ScrollState::default();
         while state.scroll_top + 1 < rows.len()

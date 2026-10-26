@@ -13,6 +13,9 @@ pub(super) struct LayoutSections {
     pub(super) question_area: Rect,
     pub(super) question_lines: Vec<HyperlinkLine>,
     pub(super) options_area: Rect,
+    /// Layout already measured the wrapped choices, so the footer can use this flag
+    /// without parsing and wrapping their Markdown again.
+    pub(super) show_option_tip: bool,
     pub(super) notes_area: Rect,
     pub(super) footer_lines: u16,
     pub(super) spacer_after_input: u16,
@@ -21,11 +24,12 @@ pub(super) struct LayoutSections {
 impl AsyncQuestions {
     pub(super) fn layout_sections(&self, area: Rect) -> LayoutSections {
         let has_options = self.has_options();
+        let full_options_height = self.options_required_height(area.width);
         let mut question_lines = self.wrapped_question_lines(area.width);
         let mut footer_pref = self.footer_lines(area.width, /*option_tip*/ None).len() as u16;
         if has_options
             && question_lines.len()
-                + usize::from(self.options_required_height(area.width))
+                + usize::from(full_options_height)
                 + usize::from(footer_pref)
                 + usize::from(self.unanswered_count() > 1)
                 + usize::from(DESIRED_SPACERS_BETWEEN_SECTIONS)
@@ -50,7 +54,6 @@ impl AsyncQuestions {
         let footer_lines;
 
         let notes_height = if has_options {
-            let full_options_height = self.options_required_height(area.width);
             let min_options_height = remaining.min(1);
             // Reserve hints and spacers while retaining a row for the selected option.
             let reserved = footer_pref + progress_pref + DESIRED_SPACERS_BETWEEN_SECTIONS;
@@ -107,6 +110,7 @@ impl AsyncQuestions {
             question_area,
             question_lines,
             options_area,
+            show_option_tip: options_height > 0 && options_height < full_options_height,
             notes_area,
             footer_lines,
             spacer_after_input,
