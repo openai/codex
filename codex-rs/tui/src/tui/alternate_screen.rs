@@ -24,7 +24,7 @@ use super::DisableAlternateScroll;
 use super::EnableAlternateScroll;
 use super::KeyboardRestore;
 use super::keyboard_modes;
-use super::tmux::MouseCapture;
+use super::tmux;
 
 // Panic and exit cleanup cannot borrow Tui. Track the actual screen independently of its owner.
 pub(super) static ALTERNATE_SCREEN: AlternateScreen = AlternateScreen {
@@ -98,7 +98,7 @@ impl AlternateScreen {
             Ordering::Relaxed,
         );
         self.mouse_capture_disabled.store(
-            mouse_capture == MouseCapture::DisabledByTmux,
+            mouse_capture == tmux::MouseCapture::DisabledByTmux,
             Ordering::Relaxed,
         );
         self.configure_input(writer, capture_mouse)
@@ -227,7 +227,7 @@ impl AlternateScreen {
     }
 }
 
-impl super::OverlayInput {
+impl super::MouseCapture {
     /// Roll back a partial overlay setup immediately; callers still receive the original error.
     /// The fallback keeps capture when the session owns the screen, otherwise restores the picker.
     pub(super) fn apply(
@@ -242,7 +242,7 @@ impl super::OverlayInput {
         }
         *self = next;
         if let Err(error) = screen.configure_input(writer, next.captures_mouse(owned)) {
-            *self = Self::Default;
+            *self = Self::Inherit;
             let _ = screen.configure_input(writer, owned);
             return Err(error);
         }

@@ -2,7 +2,7 @@
 
 #![cfg(unix)]
 
-use super::OverlayInput;
+use super::MouseCapture;
 use super::TuiEvent;
 use crate::pager_overlay::Overlay;
 use crossterm::event::KeyCode;
@@ -59,9 +59,9 @@ async fn owned_screen_lifecycle_child() {
     tui.terminal.set_viewport_area(inline);
     tui.set_alt_screen_enabled(/*enabled*/ false);
     tui.set_owned_screen(/*owned*/ true).expect("honor no-alt");
-    tui.set_overlay_input(OverlayInput::Transcript)
+    tui.set_mouse_capture(MouseCapture::Enabled)
         .expect("no-alt overlay");
-    tui.set_overlay_input(OverlayInput::Default)
+    tui.set_mouse_capture(MouseCapture::Inherit)
         .expect("close no-alt overlay");
     assert_eq!(
         (
@@ -80,7 +80,7 @@ async fn owned_screen_lifecycle_child() {
     pager
         .handle_event(&mut tui, TuiEvent::FocusLost)
         .expect("request no-alt static input");
-    assert!(tui.overlay_input == OverlayInput::StaticPager);
+    assert!(tui.mouse_capture == MouseCapture::Disabled);
     assert!(!tui.is_alt_screen_active());
     pager
         .handle_event(
@@ -89,20 +89,20 @@ async fn owned_screen_lifecycle_child() {
         )
         .expect("close no-alt static pager");
     assert!(pager.is_done());
-    assert!(tui.overlay_input == OverlayInput::Default);
+    assert!(tui.mouse_capture == MouseCapture::Inherit);
     assert_eq!(tui.terminal.viewport_area, inline);
 
     tui.set_alt_screen_enabled(/*enabled*/ true);
     // A startup overlay may already hold the alternate screen when App selects ownership.
     tui.enter_alt_screen().expect("startup overlay");
-    tui.set_overlay_input(OverlayInput::Transcript)
+    tui.set_mouse_capture(MouseCapture::Enabled)
         .expect("nested transcript input");
     tui.leave_alt_screen_for_handoff()
         .expect("yield transcript to editor");
-    assert!(tui.overlay_input == OverlayInput::Transcript);
+    assert!(tui.mouse_capture == MouseCapture::Enabled);
     tui.enter_alt_screen()
         .expect("restore transcript after editor");
-    tui.set_overlay_input(OverlayInput::Default)
+    tui.set_mouse_capture(MouseCapture::Inherit)
         .expect("return to picker input");
     assert!(tui.is_alt_screen_active());
     let mut pager = Overlay::new_static_with_lines(
@@ -113,10 +113,10 @@ async fn owned_screen_lifecycle_child() {
     pager
         .handle_event(&mut tui, TuiEvent::FocusLost)
         .expect("request native static input");
-    assert!(tui.overlay_input == OverlayInput::StaticPager);
+    assert!(tui.mouse_capture == MouseCapture::Disabled);
     tui.leave_alt_screen_for_handoff()
         .expect("yield static pager to editor");
-    assert!(tui.overlay_input == OverlayInput::StaticPager);
+    assert!(tui.mouse_capture == MouseCapture::Disabled);
     assert_eq!(tui.terminal.viewport_area, inline);
     tui.enter_alt_screen().expect("restore static pager");
     super::ALTERNATE_SCREEN
@@ -127,7 +127,7 @@ async fn owned_screen_lifecycle_child() {
             &mut tui.terminal,
             Size::new(/*width*/ 80, /*height*/ 24),
             /*owned*/ false,
-            tui.overlay_input.captures_mouse(/*owned_screen*/ false),
+            tui.mouse_capture.captures_mouse(/*owned_screen*/ false),
         )
         .expect("resume static pager");
     pager
@@ -137,7 +137,7 @@ async fn owned_screen_lifecycle_child() {
         )
         .expect("close static pager back to picker");
     assert!(pager.is_done());
-    assert!(tui.overlay_input == OverlayInput::Default);
+    assert!(tui.mouse_capture == MouseCapture::Inherit);
     assert!(tui.is_alt_screen_active());
     tui.set_owned_screen(/*owned*/ true)
         .expect("promote overlay");
