@@ -18,4 +18,9 @@ expression: "models.iter().map(|model|\n(&model.model, model.show_in_picker, mod
         true,
         false,
     ),
+    (
+        "gpt-6.1-terra",
+        true,
+        false,
+    ),
 ]

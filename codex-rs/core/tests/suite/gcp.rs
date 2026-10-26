@@ -31,8 +31,12 @@ use test_case::test_case;
 
 use super::client::ProviderAuthCommandFixture;
 
+#[test_case("gpt-6.1-sol"; "sol")]
+#[test_case("gpt-6.1-terra"; "terra")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn vertex_requests_use_command_auth_with_namespaces_and_tool_search() -> Result<()> {
+async fn vertex_requests_use_command_auth_with_namespaces_and_tool_search(
+    model: &str,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -53,13 +57,14 @@ async fn vertex_requests_use_command_auth_with_namespaces_and_tool_search() -> R
     provider.auth = Some(auth_fixture.auth());
 
     let mut test = test_codex()
-        .with_model_info_override("gpt-6.1-sol", |model| {
+        .with_model_info_override(model, |model| {
             model.use_responses_lite = true;
             model.tool_mode = Some(ToolMode::CodeModeOnly);
             model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
             model.supports_search_tool = true;
             model.multi_agent_version = Some(MultiAgentVersion::V2);
         })
+        .with_model(model)
         .with_config(move |config| {
             config.model_provider_id = GCP_PROVIDER_ID.to_string();
             config.model_provider = provider;
@@ -120,7 +125,7 @@ async fn vertex_requests_use_command_auth_with_namespaces_and_tool_search() -> R
         "Vertex request must omit Responses Lite additional_tools inputs"
     );
     let body = request.body_json();
-    assert_eq!(body["model"], "gpt-6.1-sol");
+    assert_eq!(body["model"], model);
     assert_eq!(request.instructions_text(), "Vertex test instructions");
     let tools = body["tools"]
         .as_array()
