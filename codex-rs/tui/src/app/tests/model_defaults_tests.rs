@@ -155,6 +155,86 @@ async fn standard_speed_selection_falls_back_for_older_app_servers() -> Result<(
 }
 
 #[tokio::test]
+async fn cloud_model_selection_requires_server_acceptance() -> Result<()> {
+    for event in [
+        AppEvent::SelectSessionModel {
+            model: "gpt-5.6-terra".into(),
+            effort: Some(ReasoningEffortConfig::High),
+            service_tier: None,
+        },
+        AppEvent::ApplyModelSelection {
+            model: "gpt-5.6-terra".into(),
+            effort: Some(ReasoningEffortConfig::High),
+        },
+        AppEvent::ApplyAdvancedReasoning {
+            model: "gpt-5.6-terra".into(),
+            effort: ReasoningEffortConfig::Ultra,
+        },
+    ] {
+        let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+        let original_model = app.chat_widget.current_model().to_string();
+        let original_effort = app.chat_widget.current_reasoning_effort();
+        let (client, mut commands, _server_events) =
+            codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+        let mut server = AppServerSession::new(
+            crate::backend_id::BackendId::new(),
+            AppServerClient::Cloud(client),
+            crate::app_server_session::ThreadParamsMode::Cloud,
+        );
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        while events.try_recv().is_ok() {}
+
+        let (result, operation) =
+            tokio::join!(app.handle_event(&mut tui, &mut server, event), async {
+                let command = commands.recv().await.expect("cloud settings update");
+                let codex_app_server_client::CloudOperation::Request(request) = command.operation
+                else {
+                    panic!("expected cloud request")
+                };
+                let ClientRequest::ThreadSettingsUpdate { params, .. } = *request else {
+                    panic!("expected thread/settings/update request")
+                };
+                command
+                    .response
+                    .send(Ok(Err(JSONRPCErrorError {
+                        code: -32601,
+                        data: None,
+                        message: "method not found".to_string(),
+                    })))
+                    .expect("model selection should still await its response");
+                params
+            });
+
+        result?;
+        assert_eq!(operation.thread_id, thread_id.to_string());
+        assert_eq!(
+            (
+                app.chat_widget.current_model(),
+                app.chat_widget.current_reasoning_effort(),
+            ),
+            (original_model.as_str(), original_effort)
+        );
+        let messages = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    Some(lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(
+                messages.join("\n"),
+                @"■ This cloud conversation does not support changing its model from the TUI."
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn model_default_saves_report_server_outcomes_and_target_server_profile() -> Result<()> {
     for outcome in ["saved", "overridden", "rejected"] {
         let (mut app, mut events, _ops) = make_test_app_with_channels().await;

@@ -351,6 +351,17 @@ pub(crate) struct AppServerSession {
 pub(crate) enum ThreadParamsMode {
     Embedded,
     Remote,
+    /// Native hosted sessions own their execution settings and workspace.
+    Cloud,
+}
+
+/// Identifies which side supplies execution settings for a conversation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ThreadSettingsOwner {
+    /// The client may send its configured settings as request overrides.
+    Client,
+    /// The server retains its settings unless changed through a dedicated API.
+    Server,
 }
 
 /// Determines where model settings come from when resuming a thread.
@@ -365,12 +376,19 @@ pub(crate) enum ResumeModelSettings {
 }
 
 impl ThreadParamsMode {
+    pub(crate) fn settings_owner(self) -> ThreadSettingsOwner {
+        match self {
+            Self::Embedded | Self::Remote => ThreadSettingsOwner::Client,
+            Self::Cloud => ThreadSettingsOwner::Server,
+        }
+    }
+
     fn workspace_roots_from_config(self, config: &Config) -> Option<Vec<AbsolutePathBuf>> {
         match self {
             Self::Embedded => Some(config.workspace_roots.clone()),
             // Client config paths belong to the client host. Let the server resolve its
             // defaults or restore the saved roots, then adopt the roots in its response.
-            Self::Remote => None,
+            Self::Remote | Self::Cloud => None,
         }
     }
 }
@@ -480,6 +498,9 @@ impl AppServerSession {
         app_event_tx: AppEventSender,
         status_updates: tokio::sync::broadcast::Sender<ThreadStatusChangedNotification>,
     ) -> std::io::Result<()> {
+        if self.thread_params_mode == ThreadParamsMode::Cloud {
+            return Ok(());
+        }
         let worktrees = if !self.uses_remote_workspace() && !config.active_project.is_untrusted() {
             // Listing a fresh, nonexistent thread is read-only and returns an empty page
             // on supported stores. Probe before advertising tools or allocating a checkout.
@@ -608,7 +629,10 @@ impl AppServerSession {
     }
 
     pub(crate) fn uses_remote_workspace(&self) -> bool {
-        matches!(self.thread_params_mode, ThreadParamsMode::Remote)
+        matches!(
+            self.thread_params_mode,
+            ThreadParamsMode::Remote | ThreadParamsMode::Cloud
+        )
     }
 
     pub(crate) fn uses_embedded_app_server(&self) -> bool {
@@ -724,7 +748,8 @@ impl AppServerSession {
                     })
             },
             async {
-                self.client
+                match self
+                    .client
                     .request_typed::<ConfigRequirementsReadResponse>(
                         ClientRequest::ConfigRequirementsRead {
                             request_id: requirements_request_id,
@@ -732,12 +757,22 @@ impl AppServerSession {
                         },
                     )
                     .await
-                    .map_err(|err| {
-                        bootstrap_request_error(
-                            "configRequirements/read failed during TUI bootstrap",
-                            err,
-                        )
-                    })
+                {
+                    Ok(requirements) => Ok(Some(requirements)),
+                    // A native transport may expose resolved thread permissions without
+                    // exposing the conventional requirements catalog. Keep that absence
+                    // distinct from an authoritative response with no requirements.
+                    Err(TypedRequestError::Server { source, .. })
+                        if self.thread_params_mode == ThreadParamsMode::Cloud
+                            && source.code == -32601 =>
+                    {
+                        Ok(None)
+                    }
+                    Err(error) => Err(bootstrap_request_error(
+                        "configRequirements/read failed during TUI bootstrap",
+                        error,
+                    )),
+                }
             },
             async { Ok(crate::collaboration_modes::list(self.request_handle()).await) },
         )?;
@@ -746,31 +781,36 @@ impl AppServerSession {
             .into_iter()
             .map(model_preset_from_api_model)
             .collect::<Vec<_>>();
-        crate::service_tier_resolution::constrain_server_service_tiers(
-            &mut available_models,
-            &requirements,
-        );
+        if let Some(requirements) = &requirements {
+            crate::service_tier_resolution::constrain_server_service_tiers(
+                &mut available_models,
+                requirements,
+            );
+        }
         if matches!(account.account, Some(Account::ApiKey {})) {
             available_models = self
                 .constrain_api_key_models(
                     config,
                     /*thread_id*/ None,
-                    requirements.requirements.as_ref(),
+                    requirements
+                        .as_ref()
+                        .and_then(|response| response.requirements.as_ref()),
                     available_models,
                 )
                 .await;
         }
         let allowed_approval_policies = requirements
-            .requirements
             .as_ref()
+            .and_then(|response| response.requirements.as_ref())
             .and_then(|requirements| requirements.allowed_approval_policies.clone());
         self.managed_new_thread_defaults = requirements
-            .requirements
+            .and_then(|response| response.requirements)
             .and_then(|requirements| requirements.models)
             .and_then(|models| models.new_thread);
-        let default_model = config
-            .model
-            .clone()
+        let default_model = (self.thread_params_mode.settings_owner()
+            == ThreadSettingsOwner::Client)
+            .then(|| config.model.clone())
+            .flatten()
             .or_else(|| {
                 available_models
                     .iter()
@@ -902,6 +942,13 @@ impl AppServerSession {
         remote_cwd_override: Option<&std::path::Path>,
         selected_profile: Option<&PermissionProfileSelection>,
     ) -> Result<AppServerStartedThread> {
+        if self.thread_params_mode.settings_owner() == ThreadSettingsOwner::Server
+            && selected_profile.is_some()
+        {
+            color_eyre::eyre::bail!(
+                "Cloud conversations currently use server-selected permissions."
+            );
+        }
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(config);
         let mut params = thread_start_params_from_config(
@@ -910,11 +957,14 @@ impl AppServerSession {
             remote_cwd_override.or(self.remote_cwd_override.as_deref()),
             session_start_source,
         );
-        params.model_provider = self
-            .model_provider_override
-            .clone()
-            .or(params.model_provider);
-        params.daybreak_enabled = (config.daybreak_enabled && !config.ephemeral).then_some(true);
+        if self.thread_params_mode.settings_owner() == ThreadSettingsOwner::Client {
+            params.model_provider = self
+                .model_provider_override
+                .clone()
+                .or(params.model_provider);
+            params.daybreak_enabled =
+                (config.daybreak_enabled && !config.ephemeral).then_some(true);
+        }
         if let Some(selected_profile) = selected_profile {
             params.runtime_workspace_roots = None;
             params.permissions = Some(selected_profile.profile_id.clone());
@@ -926,8 +976,10 @@ impl AppServerSession {
         if self.history_support == ThreadHistorySupport::LegacyOnly {
             params.history_mode = None;
         }
-        self.thread_tool_transport().validate_config(config)?;
-        self.thread_tool_transport().configure(&mut params);
+        if self.thread_params_mode.settings_owner() == ThreadSettingsOwner::Client {
+            self.thread_tool_transport().validate_config(config)?;
+            self.thread_tool_transport().configure(&mut params);
+        }
         let request_handle = self.request_handle();
         let (response, history_support, task_tools_available) =
             request_thread_start_with_history_fallback(&request_handle, request_id, params)
@@ -1068,6 +1120,9 @@ impl AppServerSession {
         permission_mode: ForkPermissionMode,
         config_source: ForkConfigSource,
     ) -> Result<AppServerStartedThread> {
+        if self.thread_params_mode == ThreadParamsMode::Cloud {
+            color_eyre::eyre::bail!("Cloud conversations cannot be forked in the TUI yet.");
+        }
         self.thread_tool_transport().validate_config(&config)?;
         let fork_parent = match presentation {
             ForkPresentation::Regular => self
@@ -1474,42 +1529,32 @@ impl AppServerSession {
         cyber_access_program: Option<codex_app_server_protocol::CyberAccessProgram>,
     ) -> Result<TurnStartResponse> {
         let request_id = self.next_request_id();
-        let (sandbox_policy, permissions) =
-            turn_permissions_overrides(permissions_override, cwd.as_path())?;
+        let mut params = TurnStartParams {
+            thread_id: thread_id.to_string(),
+            turn_trigger: Some("user".to_string()),
+            client_user_message_id: Some(client_user_message_id),
+            input: items,
+            output_schema,
+            cyber_access_program,
+            ..TurnStartParams::default()
+        };
+        if self.thread_params_mode.settings_owner() == ThreadSettingsOwner::Client {
+            let (sandbox_policy, permissions) =
+                turn_permissions_overrides(permissions_override, cwd.as_path())?;
+            params.cwd = Some(cwd);
+            params.runtime_workspace_roots = Some(workspace_roots.to_vec());
+            params.approval_policy = approval_policy;
+            params.approvals_reviewer = approvals_reviewer;
+            params.sandbox_policy = sandbox_policy;
+            params.permissions = permissions;
+            params.model = Some(model);
+            params.service_tier = service_tier;
+            params.effort = effort;
+            params.summary = summary;
+            params.collaboration_mode = collaboration_mode;
+        }
         self.client
-            .request_typed(ClientRequest::TurnStart {
-                request_id,
-                params: TurnStartParams {
-                    disabled_plugin_ids: None,
-                    thread_id: thread_id.to_string(),
-                    turn_trigger: Some("user".to_string()),
-                    parent_turn_id: None,
-                    root_turn_id: None,
-                    client_user_message_id: Some(client_user_message_id),
-                    input: items,
-                    tool_output: None,
-                    responsesapi_client_metadata: None,
-                    responsesapi_client_metadata_patch: None,
-                    additional_context: None,
-                    environments: None,
-                    cwd: Some(cwd),
-                    runtime_workspace_roots: Some(workspace_roots.to_vec()),
-                    approval_policy,
-                    approvals_reviewer,
-                    sandbox_policy,
-                    permissions,
-                    model: Some(model),
-                    service_tier,
-                    service_tier_for_turn: None,
-                    effort,
-                    summary,
-                    personality: None,
-                    output_schema,
-                    collaboration_mode,
-                    multi_agent_mode: None,
-                    cyber_access_program,
-                },
-            })
+            .request_typed(ClientRequest::TurnStart { request_id, params })
             .await
             .wrap_err("turn/start failed in TUI")
     }
@@ -1865,10 +1910,12 @@ pub(crate) async fn start_thread_with_request_handle(
         launch_choices.approvals_reviewer,
         &launch_choices.approval_policy,
     );
-    thread_tool_transport.validate_config(&config)?;
-    launch_choices.configure(&mut params);
-    params.daybreak_enabled = (config.daybreak_enabled && !config.ephemeral).then_some(true);
-    thread_tool_transport.configure(&mut params);
+    if thread_params_mode.settings_owner() == ThreadSettingsOwner::Client {
+        thread_tool_transport.validate_config(&config)?;
+        launch_choices.configure(&mut params);
+        params.daybreak_enabled = (config.daybreak_enabled && !config.ephemeral).then_some(true);
+        thread_tool_transport.configure(&mut params);
+    }
     let (response, _history_support, task_tools_available) =
         request_thread_start_with_history_fallback(&request_handle, request_id, params)
             .await
@@ -2203,6 +2250,9 @@ fn thread_start_params_with_reviewer(
     reviewer_source: startup_launch::StartupApprovalsReviewer,
     policy_source: &startup_launch::StartupApprovalPolicy,
 ) -> ThreadStartParams {
+    if thread_params_mode.settings_owner() == ThreadSettingsOwner::Server {
+        return ThreadStartParams::default();
+    }
     let permissions = permissions_selection_from_config(config, thread_params_mode);
     let sandbox = permissions
         .is_none()
@@ -2254,7 +2304,9 @@ fn thread_resume_params_from_config(
     model_settings: ResumeModelSettings,
     permission_overrides: crate::resume_permissions::ResumePermissions,
 ) -> ThreadResumeParams {
-    if model_settings == ResumeModelSettings::PreserveExistingThread {
+    if thread_params_mode.settings_owner() == ThreadSettingsOwner::Server
+        || model_settings == ResumeModelSettings::PreserveExistingThread
+    {
         return ThreadResumeParams {
             thread_id: thread_id.to_string(),
             ..ThreadResumeParams::default()
@@ -2373,7 +2425,7 @@ fn thread_cwd_from_config(
 ) -> Option<String> {
     match thread_params_mode {
         ThreadParamsMode::Embedded => Some(config.cwd.to_string_lossy().to_string()),
-        ThreadParamsMode::Remote => {
+        ThreadParamsMode::Remote | ThreadParamsMode::Cloud => {
             remote_cwd_override.map(|cwd| cwd.to_string_lossy().to_string())
         }
     }
@@ -2576,7 +2628,7 @@ fn display_permission_profile_from_thread_response(
             PermissionProfile::from_legacy_sandbox_policy_for_cwd(&sandbox.to_core(), cwd)
         }
         ThreadParamsMode::Embedded => config.permissions.effective_permission_profile(),
-        ThreadParamsMode::Remote => {
+        ThreadParamsMode::Remote | ThreadParamsMode::Cloud => {
             PermissionProfile::from_legacy_sandbox_policy_for_cwd(&sandbox.to_core(), cwd)
         }
     }
@@ -2840,6 +2892,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cloud_bootstrap_uses_server_models_without_config_requirements() -> Result<()> {
+        let codex_home = tempfile::tempdir()?;
+        let config = build_config(&codex_home).await;
+        let (client, mut commands, _events) =
+            codex_app_server_client::CloudClient::channel(/*capacity*/ 3);
+        let mut app_server = AppServerSession::new(
+            crate::backend_id::BackendId::new(),
+            AppServerClient::Cloud(client),
+            ThreadParamsMode::Cloud,
+        );
+        let account = GetAccountResponse {
+            account: Some(Account::Chatgpt {
+                email: Some("teammate@openai.com".to_string()),
+                plan_type: codex_protocol::account::PlanType::Plus,
+            }),
+            requires_openai_auth: true,
+            workspace_routing: None,
+        };
+
+        let (bootstrap, ()) =
+            tokio::join!(app_server.bootstrap_with_account(&config, account), async {
+                for _ in 0..3 {
+                    let command = commands.recv().await.expect("bootstrap request");
+                    let codex_app_server_client::CloudOperation::Request(request) =
+                        command.operation
+                    else {
+                        panic!("expected bootstrap request")
+                    };
+                    let result = match *request {
+                        ClientRequest::ModelList { .. } => {
+                            Ok(serde_json::to_value(ModelListResponse {
+                                data: vec![api_model_with_upgrade_retirement_at(
+                                    /*retirement_at*/ None,
+                                )],
+                                next_cursor: None,
+                            })
+                            .expect("model response should serialize"))
+                        }
+                        ClientRequest::ConfigRequirementsRead { .. } => Err(JSONRPCErrorError {
+                            code: JSONRPC_METHOD_NOT_FOUND,
+                            message: "method not found".to_string(),
+                            data: None,
+                        }),
+                        ClientRequest::CollaborationModeList { .. } => {
+                            Ok(serde_json::json!({"data": []}))
+                        }
+                        request => panic!("unexpected bootstrap request: {request:?}"),
+                    };
+                    command.response.send(Ok(result)).unwrap();
+                }
+            });
+        let bootstrap = bootstrap?;
+
+        assert_ne!(config.model.as_deref(), Some("current-model"));
+        assert_eq!(bootstrap.default_model, "current-model");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn bootstrap_empty_catalog_reports_configuration_error() -> Result<()> {
         let codex_home = tempfile::tempdir()?;
         let mut config = build_config(&codex_home).await;
@@ -3067,6 +3178,148 @@ mod tests {
 
         assert_eq!(params.ephemeral, Some(true));
         assert_eq!(params.history_mode, None);
+    }
+
+    #[tokio::test]
+    async fn cloud_start_resume_and_turn_leave_settings_server_owned() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.base_instructions = Some("local base instructions".to_string());
+        config.developer_instructions = Some("local developer instructions".to_string());
+        config.daybreak_enabled = true;
+        config.ephemeral = true;
+        let thread_id = ThreadId::new();
+        let (client, mut commands, _events) =
+            codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+        let request_handle = AppServerClient::Cloud(client).request_handle();
+        let mut launch_choices = StartupLaunchChoices::default();
+        launch_choices.model = Some("local-model".to_string());
+        launch_choices.effort = Some(serde_json::json!("high"));
+        let local_settings = LocalSettings::from(&config);
+
+        let (start, sent_params) = tokio::join!(
+            start_thread_with_request_handle(
+                request_handle,
+                &local_settings,
+                config.clone(),
+                ThreadParamsMode::Cloud,
+                Some(std::path::PathBuf::from("/local/workspace")),
+                ThreadToolTransport::Dynamic,
+                launch_choices,
+            ),
+            async {
+                let command = commands.recv().await.expect("cloud thread start");
+                let codex_app_server_client::CloudOperation::Request(request) = command.operation
+                else {
+                    panic!("expected cloud request")
+                };
+                let ClientRequest::ThreadStart { params, .. } = *request else {
+                    panic!("expected thread/start request")
+                };
+                command
+                    .response
+                    .send(Ok(Err(JSONRPCErrorError {
+                        code: JSONRPC_INVALID_PARAMS,
+                        data: None,
+                        message: "stop after recording request".to_string(),
+                    })))
+                    .expect("startup should still be waiting for its response");
+                params
+            },
+        );
+        let _ = start.expect_err("recording response should stop startup");
+        let resume = thread_resume_params_from_config(
+            config,
+            thread_id,
+            ThreadParamsMode::Cloud,
+            Some(std::path::Path::new("/local/workspace")),
+            ResumeModelSettings::OverrideFromCurrentConfig,
+            crate::resume_permissions::ResumePermissions::CURRENT_CONFIG,
+        );
+
+        assert_eq!(sent_params, ThreadStartParams::default());
+        assert_eq!(
+            resume,
+            ThreadResumeParams {
+                thread_id: thread_id.to_string(),
+                ..ThreadResumeParams::default()
+            }
+        );
+
+        let (client, mut commands, _events) =
+            codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+        let mut app_server = AppServerSession::new(
+            crate::backend_id::BackendId::new(),
+            AppServerClient::Cloud(client),
+            ThreadParamsMode::Cloud,
+        );
+        let client_user_message_id = "local-message-id".to_string();
+        let input = vec![UserInput::Text {
+            text: "hello from the TUI".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let output_schema = serde_json::json!({"type": "string"});
+        let workspace_roots = vec![test_path_buf("/local/workspace").abs()];
+        let (turn, sent_params) = tokio::join!(
+            app_server.turn_start(
+                thread_id,
+                client_user_message_id.clone(),
+                input.clone(),
+                test_path_buf("/local/workspace"),
+                Some(codex_app_server_protocol::AskForApproval::Never),
+                Some(codex_app_server_protocol::ApprovalsReviewer::User),
+                TurnPermissionsOverride::ActiveProfile(ActivePermissionProfile::new(
+                    "local-permission-profile".to_string(),
+                )),
+                &workspace_roots,
+                "local-model".to_string(),
+                Some(ReasoningEffort::High),
+                Some(ReasoningSummary::Detailed),
+                Some(Some("local-service-tier".to_string())),
+                Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Plan,
+                    settings: codex_protocol::config_types::Settings {
+                        model: "local-plan-model".to_string(),
+                        reasoning_effort: Some(ReasoningEffort::High),
+                        developer_instructions: Some("local plan instructions".to_string()),
+                    },
+                }),
+                Some(output_schema.clone()),
+                Some(CyberAccessProgram::DaybreakBlue.into()),
+            ),
+            async {
+                let command = commands.recv().await.expect("cloud turn start");
+                let codex_app_server_client::CloudOperation::Request(request) = command.operation
+                else {
+                    panic!("expected cloud request")
+                };
+                let ClientRequest::TurnStart { params, .. } = *request else {
+                    panic!("expected turn/start request")
+                };
+                command
+                    .response
+                    .send(Ok(Err(JSONRPCErrorError {
+                        code: JSONRPC_INVALID_PARAMS,
+                        data: None,
+                        message: "stop after recording request".to_string(),
+                    })))
+                    .expect("turn start should still be waiting for its response");
+                params
+            },
+        );
+        let _ = turn.expect_err("recording response should stop turn start");
+        assert_eq!(
+            sent_params,
+            TurnStartParams {
+                thread_id: thread_id.to_string(),
+                client_user_message_id: Some(client_user_message_id),
+                input,
+                turn_trigger: Some("user".to_string()),
+                output_schema: Some(output_schema),
+                cyber_access_program: Some(CyberAccessProgram::DaybreakBlue.into()),
+                ..TurnStartParams::default()
+            }
+        );
     }
 
     #[tokio::test]
@@ -4093,6 +4346,30 @@ mod tests {
         );
 
         assert_eq!(params.base_instructions, None);
+    }
+
+    #[tokio::test]
+    async fn cloud_fork_is_rejected_before_sending_local_settings() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+        let (client, mut commands, _events) =
+            codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+        let mut app_server = AppServerSession::new(
+            crate::backend_id::BackendId::new(),
+            AppServerClient::Cloud(client),
+            ThreadParamsMode::Cloud,
+        );
+
+        let error = app_server
+            .fork_thread(&LocalSettings::from(&config), config, ThreadId::new())
+            .await
+            .expect_err("cloud fork should be unavailable");
+
+        assert_eq!(
+            error.to_string(),
+            "Cloud conversations cannot be forked in the TUI yet."
+        );
+        assert!(commands.try_recv().is_err());
     }
 
     #[tokio::test]

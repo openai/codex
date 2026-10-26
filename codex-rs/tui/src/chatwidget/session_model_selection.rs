@@ -10,6 +10,9 @@ use crate::model_catalog::LUNA_RESERVE_MODEL;
 #[derive(Debug)]
 pub(crate) enum AstraModelPickerAction {
     UpdateModel,
+    ApplyModelSelection {
+        effort: Option<ReasoningEffortConfig>,
+    },
     ApplyAdvancedReasoning {
         effort: ReasoningEffortConfig,
     },
@@ -34,6 +37,7 @@ impl AstraModelPickerAction {
     pub(crate) fn into_app_event(self, model: String) -> AppEvent {
         match self {
             Self::UpdateModel => AppEvent::UpdateModel(model),
+            Self::ApplyModelSelection { effort } => AppEvent::ApplyModelSelection { model, effort },
             Self::ApplyAdvancedReasoning { effort } => {
                 AppEvent::ApplyAdvancedReasoning { model, effort }
             }

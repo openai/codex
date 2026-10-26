@@ -156,6 +156,6 @@ async fn session_model_selection_hides_conflicting_shortcut() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Char('s')));
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok())
-            .any(|event| matches!(event, AppEvent::PersistModelSelection { .. }))
+            .any(|event| matches!(event, AppEvent::ApplyModelSelection { .. }))
     );
 }

@@ -26,6 +26,7 @@ use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::ThreadId;
 use codex_protocol::models::MessagePhase;
 use core_test_support::responses;
 use crossterm::event::KeyCode;
@@ -88,6 +89,29 @@ fn bounds_the_entire_title_prompt_for_dense_unicode() {
             message.chars().next()
         );
     }
+}
+
+#[tokio::test]
+async fn cloud_conversations_skip_tui_generated_titles() {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    let (client, mut commands, _server_events) =
+        codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+    let app_server = crate::app_server_session::AppServerSession::new(
+        crate::backend_id::BackendId::new(),
+        codex_app_server_client::AppServerClient::Cloud(client),
+        crate::app_server_session::ThreadParamsMode::Cloud,
+    );
+
+    app.generate_thread_title(
+        &app_server,
+        thread_id,
+        ThreadTitleDestination::Automatic,
+        thread_title_prompt("Fix the login timeout"),
+    );
+
+    assert!(app.pending_thread_titles.is_empty());
+    assert!(commands.try_recv().is_err());
 }
 
 #[tokio::test]

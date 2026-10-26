@@ -5,6 +5,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::ThreadParamsMode;
+use crate::app_server_session::ThreadSettingsOwner;
 use crate::legacy_core::config::Config;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ApprovalsReviewer;
@@ -88,10 +89,17 @@ pub(crate) fn fetch(
 ) {
     let handle = app_server.request_handle();
     let mode = app_server.thread_params_mode();
+    if mode.settings_owner() == ThreadSettingsOwner::Server {
+        tx.send(AppEvent::PermissionProfilesLoaded {
+            request_id,
+            result: Err("Cloud conversations use server-selected permissions.".to_string()),
+        });
+        return;
+    }
     let cwd = thread_cwd
         .or_else(|| match mode {
             ThreadParamsMode::Embedded => Some(config.cwd.as_path()),
-            ThreadParamsMode::Remote => app_server.remote_cwd_override(),
+            ThreadParamsMode::Remote | ThreadParamsMode::Cloud => app_server.remote_cwd_override(),
         })
         .map(|cwd| cwd.to_string_lossy().into_owned());
     tokio::spawn(async move {

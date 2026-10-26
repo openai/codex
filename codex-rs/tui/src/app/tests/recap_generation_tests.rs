@@ -3,6 +3,7 @@ use crate::app::session_lifecycle::ThreadAttachPresentation;
 use crate::app::tests::session_lifecycle_requests::recorded_params;
 use crate::app::tests::session_lifecycle_requests::start_recording_remote_app_server;
 use crate::app_event::RecapTrigger;
+use codex_app_server_client::AppServerClient;
 use codex_model_provider_info::ModelProviderInfo;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -332,6 +333,45 @@ async fn manual_recap_works_when_auto_recap_disabled() -> Result<()> {
 
     app_server.shutdown().await?;
     proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cloud_recap_stays_idle_and_reports_manual_unavailability() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    let (client, mut commands, _server_events) =
+        codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+    let app_server = AppServerSession::new(
+        crate::backend_id::BackendId::new(),
+        AppServerClient::Cloud(client),
+        crate::app_server_session::ThreadParamsMode::Cloud,
+    );
+    while events.try_recv().is_ok() {}
+
+    app.request_recap(&app_server, thread_id, RecapTrigger::Automatic);
+    app.request_recap(&app_server, thread_id, RecapTrigger::Manual);
+
+    assert!(commands.try_recv().is_err());
+    let observed = std::iter::from_fn(|| events.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        !observed
+            .iter()
+            .any(|event| matches!(event, AppEvent::RecapStarted { .. }))
+    );
+    let messages = observed
+        .into_iter()
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                Some(lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    insta::assert_snapshot!(
+        messages.join("\n"),
+        @"■ Conversation recaps are not available for cloud conversations."
+    );
     Ok(())
 }
 

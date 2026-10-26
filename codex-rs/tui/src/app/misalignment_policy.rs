@@ -2,6 +2,7 @@
 //! the ordinary input queue, which must remain blocked until the server accepts the new turn.
 
 use super::*;
+use crate::app_server_session::ThreadSettingsOwner;
 use crate::app_server_session::turn_permissions_overrides;
 use crate::chatwidget::MisalignmentReview;
 use crate::chatwidget::MisalignmentTurnSource;
@@ -130,53 +131,55 @@ impl App {
                 return;
             }
         };
-        let config = self.chat_widget.config_ref();
-        let explicit_profile =
-            self.runtime_permission_profile_override
-                .as_ref()
-                .filter(|profile| {
-                    profile.turn_override == RuntimePermissionProfileTurnOverride::LegacySandbox
-                });
-        let permissions_override = Self::turn_permissions_override_from_config(
-            config,
-            explicit_profile.and_then(|profile| profile.active_permission_profile.as_ref()),
-            explicit_profile.and_then(RuntimePermissionProfileOverride::turn_permission_profile),
-        );
-        let Ok((sandbox_policy, permissions)) =
-            turn_permissions_overrides(permissions_override, config.cwd.as_path())
-        else {
-            self.chat_widget.add_error_message(
-                "Couldn’t continue this chat. Review its latest status before trying again."
-                    .to_string(),
-            );
-            return;
+        let mut params = TurnStartParams {
+            thread_id: review.thread_id.to_string(),
+            cyber_access_program: cyber_access_program.map(Into::into),
+            input: vec![UserInput::Text {
+                text: message.to_string(),
+                text_elements: Vec::new(),
+            }],
+            responsesapi_client_metadata: Some(HashMap::from([(
+                "misalignment_override".to_string(),
+                serde_json::json!({"timestamp": chrono::Utc::now().timestamp_millis()}).to_string(),
+            )])),
+            ..Default::default()
         };
+        if app_server.thread_params_mode().settings_owner() == ThreadSettingsOwner::Client {
+            let config = self.chat_widget.config_ref();
+            let explicit_profile =
+                self.runtime_permission_profile_override
+                    .as_ref()
+                    .filter(|profile| {
+                        profile.turn_override == RuntimePermissionProfileTurnOverride::LegacySandbox
+                    });
+            let permissions_override = Self::turn_permissions_override_from_config(
+                config,
+                explicit_profile.and_then(|profile| profile.active_permission_profile.as_ref()),
+                explicit_profile
+                    .and_then(RuntimePermissionProfileOverride::turn_permission_profile),
+            );
+            let Ok((sandbox_policy, permissions)) =
+                turn_permissions_overrides(permissions_override, config.cwd.as_path())
+            else {
+                self.chat_widget.add_error_message(
+                    "Couldn’t continue this chat. Review its latest status before trying again."
+                        .to_string(),
+                );
+                return;
+            };
+            params.cwd = Some(config.cwd.to_path_buf());
+            params.runtime_workspace_roots =
+                Some(config.permissions.user_visible_workspace_roots().to_vec());
+            params.approval_policy = Some(config.permissions.approval_policy.value().into());
+            params.approvals_reviewer = Some(config.approvals_reviewer.into());
+            params.sandbox_policy = sandbox_policy;
+            params.permissions = permissions;
+        }
         let result = app_server
             .request_handle()
             .request_typed::<TurnStartResponse>(ClientRequest::TurnStart {
                 request_id: app_server.next_request_id(),
-                params: TurnStartParams {
-                    thread_id: review.thread_id.to_string(),
-                    cwd: Some(config.cwd.to_path_buf()),
-                    runtime_workspace_roots: Some(
-                        config.permissions.user_visible_workspace_roots().to_vec(),
-                    ),
-                    approval_policy: Some(config.permissions.approval_policy.value().into()),
-                    approvals_reviewer: Some(config.approvals_reviewer.into()),
-                    sandbox_policy,
-                    permissions,
-                    cyber_access_program: cyber_access_program.map(Into::into),
-                    input: vec![UserInput::Text {
-                        text: message.to_string(),
-                        text_elements: Vec::new(),
-                    }],
-                    responsesapi_client_metadata: Some(HashMap::from([(
-                        "misalignment_override".to_string(),
-                        serde_json::json!({"timestamp": chrono::Utc::now().timestamp_millis()})
-                            .to_string(),
-                    )])),
-                    ..Default::default()
-                },
+                params,
             })
             .await;
         match result {

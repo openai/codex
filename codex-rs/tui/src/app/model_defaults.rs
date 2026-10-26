@@ -5,6 +5,7 @@
 
 use super::App;
 use crate::app_server_session::AppServerSession;
+use crate::app_server_session::ThreadSettingsOwner;
 use crate::service_tier_resolution;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ConfigEdit;
@@ -16,6 +17,73 @@ use codex_protocol::openai_models::ReasoningEffort;
 use color_eyre::eyre::Result;
 
 impl App {
+    pub(super) async fn apply_default_model_selection(
+        &mut self,
+        app_server: &mut AppServerSession,
+        model: String,
+        effort: Option<ReasoningEffort>,
+    ) {
+        if self
+            .active_thread_model_setting_update_params(model.clone())
+            .is_some_and(|params| params.permissions.is_some())
+            && self.reject_pending_permission_change()
+        {
+            return;
+        }
+        let model_changed = self.chat_widget.current_model() != model
+            || self.chat_widget.current_collaboration_mode().model() != model;
+        if model_changed {
+            self.chat_widget.set_model(&model);
+            self.sync_active_thread_model_setting(app_server, model.clone(), /*effort*/ None)
+                .await;
+            self.sync_active_thread_service_tier_to_cached_session()
+                .await;
+        }
+        self.on_update_reasoning_effort(effort.clone());
+        self.sync_active_thread_reasoning_setting(app_server, effort.clone())
+            .await;
+        self.persist_default_model_selection(app_server.request_handle(), model, effort)
+            .await;
+    }
+
+    pub(super) async fn persist_default_model_selection(
+        &mut self,
+        request_handle: AppServerRequestHandle,
+        model: String,
+        effort: Option<ReasoningEffort>,
+    ) {
+        self.app_event_tx
+            .send(crate::app_event::AppEvent::FollowTranscript);
+        match self
+            .persist_model_defaults(
+                request_handle,
+                crate::config_update::build_model_selection_edits(model.as_str(), effort.as_ref()),
+                "default model and reasoning effort",
+            )
+            .await
+        {
+            Ok(()) => {
+                let effort_label = effort
+                    .as_ref()
+                    .map(std::string::ToString::to_string)
+                    .unwrap_or_else(|| "default".to_string());
+                tracing::info!("Selected model: {model}, Selected effort: {effort_label}");
+                let mut message = format!("Model changed to {model}");
+                if let Some(label) = Self::reasoning_label_for(&model, effort.as_ref()) {
+                    message.push(' ');
+                    message.push_str(&label);
+                }
+                self.chat_widget.add_info_message(message, /*hint*/ None);
+            }
+            Err(err) => {
+                let error = crate::config_update::format_config_error(&err);
+                tracing::error!(error = %error, "failed to persist model selection");
+                self.chat_widget
+                    .add_error_message(format!("Failed to save default model: {error}"));
+            }
+        }
+    }
+
     pub(super) async fn select_session_model(
         &mut self,
         app_server: &mut AppServerSession,
@@ -55,6 +123,13 @@ impl App {
             };
             if !self.send_model_settings_update(app_server, params).await {
                 if app_server.thread_settings_update_supported {
+                    return;
+                }
+                if app_server.thread_params_mode().settings_owner() == ThreadSettingsOwner::Server {
+                    self.chat_widget.add_error_message(
+                        "This cloud conversation does not support changing its model from the TUI."
+                            .into(),
+                    );
                     return;
                 }
                 if service_tier

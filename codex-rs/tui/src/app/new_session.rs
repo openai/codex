@@ -67,7 +67,8 @@ impl App {
         let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
         let defaults_cwd = match app_server.thread_params_mode() {
             crate::app_server_session::ThreadParamsMode::Embedded => cwd.as_path(),
-            crate::app_server_session::ThreadParamsMode::Remote => {
+            crate::app_server_session::ThreadParamsMode::Remote
+            | crate::app_server_session::ThreadParamsMode::Cloud => {
                 app_server.remote_cwd_override().unwrap_or(Path::new("."))
             }
         };

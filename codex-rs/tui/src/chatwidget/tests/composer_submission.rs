@@ -325,6 +325,7 @@ async fn parent_owned_thread_blocks_settings_shortcuts() {
         event,
         AppEvent::SubmitThreadOp { .. }
             | AppEvent::UpdateModel(_)
+            | AppEvent::ApplyModelSelection { .. }
             | AppEvent::UpdateReasoningEffort(_)
             | AppEvent::UpdatePlanModeReasoningEffort(_)
     )));

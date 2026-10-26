@@ -500,6 +500,10 @@ async fn queued_settings_selection_applies_before_next_input() {
             AppEvent::OpenReasoningPopup { model } => chat.open_reasoning_popup(model),
             AppEvent::UpdateModel(model) => chat.set_model(&model),
             AppEvent::UpdateReasoningEffort(effort) => chat.set_reasoning_effort(effort),
+            AppEvent::ApplyModelSelection { model, effort } => {
+                chat.set_model(&model);
+                chat.set_reasoning_effort(effort);
+            }
             AppEvent::SettingsSelectionClosed => {
                 chat.app_event_tx.send(AppEvent::SettingsSelectionSettled);
             }

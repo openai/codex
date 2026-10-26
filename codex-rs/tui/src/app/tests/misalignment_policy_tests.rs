@@ -1,5 +1,7 @@
+use super::session_lifecycle_requests::HistoryCapabilities;
 use super::session_lifecycle_requests::recorded_params;
 use super::session_lifecycle_requests::start_recording_app_server;
+use super::session_lifecycle_requests::start_recording_app_server_with_history;
 use super::*;
 use codex_app_server_protocol::MisalignmentErrorDetails;
 use codex_app_server_protocol::MisalignmentSteer;
@@ -40,27 +42,41 @@ fn error_notification(
 
 #[tokio::test]
 async fn misalignment_continuation_requires_current_review_and_submits_once() -> Result<()> {
-    for (reject, preserve, daybreak, rollout_enabled, has_chatgpt_account) in [
-        (false, false, false, true, true),
-        (false, true, true, true, true),
-        (true, false, false, true, true),
-        (false, false, false, false, true),
-        (false, true, true, false, true),
+    for (reject, preserve, daybreak, rollout_enabled, has_chatgpt_account, server_owned) in [
+        (false, false, false, true, true, false),
+        (false, true, true, true, true, false),
+        (true, false, false, true, true, false),
+        (false, false, false, false, true, false),
+        (false, true, true, false, true, false),
         // Continuations submit directly rather than via the normal turn-start path.
-        (false, false, false, true, false),
-        (false, true, true, true, false),
+        (false, false, false, true, false, false),
+        (false, true, true, true, false, false),
+        // Server-owned continuations preserve the acknowledgement without local overrides.
+        (false, false, false, true, true, true),
     ] {
         let (mut app, mut rx, _) = make_test_app_with_channels().await;
         app.chat_widget
             .set_feature_enabled(Feature::CliDaybreak, rollout_enabled);
         app.chat_widget
             .set_feature_enabled(Feature::ApiKeyCyberAccessPrograms, !has_chatgpt_account);
-        let (mut server, requests, proxy) = start_recording_app_server(
-            &app.config,
-            /*blocked_thread_list*/ None,
-            /*failed_thread_name*/ None,
-        )
-        .await?;
+        let (mut server, requests, proxy) = if server_owned {
+            start_recording_app_server_with_history(
+                &app.config,
+                HistoryCapabilities::Current,
+                /*blocked_thread_list*/ None,
+                /*failed_thread_name*/ None,
+                crate::app_server_session::ThreadParamsMode::Cloud,
+                codex_config::LoaderOverrides::without_managed_config_for_tests(),
+            )
+            .await?
+        } else {
+            start_recording_app_server(
+                &app.config,
+                /*blocked_thread_list*/ None,
+                /*failed_thread_name*/ None,
+            )
+            .await?
+        };
         let mut session = if reject {
             test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf())
         } else {
@@ -232,13 +248,13 @@ async fn misalignment_continuation_requires_current_review_and_submits_once() ->
             params,
             codex_app_server_protocol::TurnStartParams {
                 thread_id: thread_id.to_string(),
-                cwd: Some(config.cwd.to_path_buf()),
-                runtime_workspace_roots: Some(
-                    config.permissions.user_visible_workspace_roots().to_vec()
-                ),
-                approval_policy: Some(AskForApproval::OnRequest),
-                approvals_reviewer: Some(config.approvals_reviewer.into()),
-                sandbox_policy: (!preserve).then(|| config.legacy_sandbox_policy().into()),
+                cwd: (!server_owned).then(|| config.cwd.to_path_buf()),
+                runtime_workspace_roots: (!server_owned)
+                    .then(|| config.permissions.user_visible_workspace_roots().to_vec()),
+                approval_policy: (!server_owned).then_some(AskForApproval::OnRequest),
+                approvals_reviewer: (!server_owned).then(|| config.approvals_reviewer.into()),
+                sandbox_policy: (!server_owned && !preserve)
+                    .then(|| config.legacy_sandbox_policy().into()),
                 cyber_access_program: rollout_enabled.then_some(if daybreak {
                     CyberAccessProgram::DaybreakBlue.into()
                 } else {
