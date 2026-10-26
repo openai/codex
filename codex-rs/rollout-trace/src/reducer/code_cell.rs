@@ -696,13 +696,12 @@ impl TraceReducer {
         kind: ConversationItemKind,
     ) -> Vec<String> {
         self.rollout
-            .conversation_items
-            .values()
-            .filter(|item| {
-                item.thread_id == thread_id
-                    && item.call_id.as_deref() == Some(call_id)
-                    && item.kind == kind
-            })
+            .threads
+            .get(thread_id)
+            .into_iter()
+            .flat_map(|thread| &thread.conversation_item_ids)
+            .map(|item_id| &self.rollout.conversation_items[item_id])
+            .filter(|item| item.call_id.as_deref() == Some(call_id) && item.kind == kind)
             .map(|item| item.item_id.clone())
             .collect()
     }

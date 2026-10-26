@@ -11,6 +11,7 @@ use crate::model::ToolCallSummary;
 use crate::payload::RawPayloadKind;
 use crate::raw_event::RawToolCallRequester;
 use crate::raw_event::RawTraceEventPayload;
+use crate::reducer::test_support::append_inference_request;
 use crate::reducer::test_support::create_started_writer;
 use crate::reducer::test_support::message;
 use crate::reducer::test_support::start_turn;
@@ -215,20 +216,17 @@ fn fast_code_cell_lifecycle_waits_for_source_item() -> anyhow::Result<()> {
     let writer = create_started_writer(&temp)?;
     start_turn(&writer, "turn-1")?;
 
-    let request = writer.write_json_payload(
-        RawPayloadKind::InferenceRequest,
-        &json!({
-            "input": [message("user", "count files")]
-        }),
+    // Put outputs on either side of ordinal 10, where map-key order differs from history order.
+    let mut input: Vec<_> = (0..7)
+        .map(|index| message("user", &format!("context {index}")))
+        .collect();
+    append_inference_request(
+        &writer,
+        "thread-root",
+        "turn-1",
+        "inference-1",
+        input.clone(),
     )?;
-    writer.append(RawTraceEventPayload::InferenceStarted {
-        inference_call_id: "inference-1".to_string(),
-        thread_id: "thread-root".to_string(),
-        codex_turn_id: "turn-1".to_string(),
-        model: "gpt-test".to_string(),
-        provider_name: "test-provider".to_string(),
-        request_payload: request,
-    })?;
     writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::CodeCellStarted {
@@ -261,16 +259,39 @@ fn fast_code_cell_lifecycle_waits_for_source_item() -> anyhow::Result<()> {
             response_payload: Some(final_response.clone()),
         },
     )?;
+    let call = json!({
+        "type": "custom_tool_call",
+        "name": "exec",
+        "call_id": "call-code",
+        "input": "not valid js"
+    });
+    // Compaction exposes the source and original output before the response is recorded.
+    // Its replacement output must be appended before the queued cell is materialized.
+    input.push(call.clone());
+    input.push(json!({
+        "type": "custom_tool_call_output", "call_id": "call-code", "output": "initial caller result"
+    }));
+    let checkpoint = writer.write_json_payload(
+        RawPayloadKind::CompactionCheckpoint,
+        &json!({
+            "input_history": input,
+            "replacement_history": [call, {
+                "type": "custom_tool_call_output", "call_id": "call-code", "output": "later runtime result"
+            }]
+        }),
+    )?;
+    writer.append_with_context(
+        trace_context("turn-1"),
+        RawTraceEventPayload::CompactionInstalled {
+            compaction_id: "compaction-1".to_string(),
+            checkpoint_payload: checkpoint,
+        },
+    )?;
     let response = writer.write_json_payload(
         RawPayloadKind::InferenceResponse,
         &json!({
             "response_id": "resp-1",
-            "output_items": [{
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "call-code",
-                "input": "not valid js"
-            }]
+            "output_items": [call]
         }),
     )?;
     writer.append(RawTraceEventPayload::InferenceCompleted {
@@ -284,6 +305,10 @@ fn fast_code_cell_lifecycle_waits_for_source_item() -> anyhow::Result<()> {
     let code_cell_id = test_reduced_code_cell_id("call-code");
     let cell = &rollout.code_cells[&code_cell_id];
 
+    assert_eq!(
+        cell.output_item_ids,
+        vec!["conversation_item:9", "conversation_item:12"]
+    );
     assert_eq!(
         (
             &cell.initial_response_status,

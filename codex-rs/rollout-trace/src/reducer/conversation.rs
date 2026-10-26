@@ -4,6 +4,8 @@
 //! request inputs, compaction checkpoints, and harness acceptance events.
 //! Tool messages use the content sent to the model in subsequent requests.
 
+use std::collections::HashSet;
+
 use anyhow::Context;
 use anyhow::Ok;
 use anyhow::Result;
@@ -223,16 +225,19 @@ impl TraceReducer {
             <[_]>::to_vec,
         );
         let mut item_ids = Vec::with_capacity(items.len());
+        let mut used_item_ids = HashSet::with_capacity(items.len());
 
         for (offset, item) in items.into_iter().enumerate() {
             let index = context.start_index + offset;
             let tool_link_item = item.clone();
             self.ensure_call_id_consistency(context.thread_id, &item)?;
             let item_id = if let Some(previous_item_id) = previous_snapshot.get(index) {
-                if self.item_matches(previous_item_id, &item) {
+                if !used_item_ids.contains(previous_item_id)
+                    && self.item_matches(previous_item_id, &item)
+                {
                     previous_item_id.clone()
                 } else if matches!(context.mode, ReconcileMode::FullSnapshot) {
-                    self.find_matching_snapshot_item(&previous_snapshot, &item_ids, &item)
+                    self.find_matching_snapshot_item(&previous_snapshot, &used_item_ids, &item)
                         .unwrap_or_else(|| {
                             self.create_conversation_item(
                                 context.thread_id,
@@ -252,7 +257,7 @@ impl TraceReducer {
                     );
                 }
             } else if matches!(context.mode, ReconcileMode::FullSnapshot) {
-                self.find_matching_snapshot_item(&previous_snapshot, &item_ids, &item)
+                self.find_matching_snapshot_item(&previous_snapshot, &used_item_ids, &item)
                     .unwrap_or_else(|| {
                         self.create_conversation_item(
                             context.thread_id,
@@ -287,10 +292,10 @@ impl TraceReducer {
                 &tool_link_item.kind,
             )?;
             self.resolve_pending_agent_edges_for_item(&item_id)?;
+            used_item_ids.insert(item_id.clone());
             item_ids.push(item_id);
         }
 
-        self.flush_pending_code_cell_starts()?;
         Ok(item_ids)
     }
 
@@ -382,12 +387,13 @@ impl TraceReducer {
         context: DetachedReconcileItems<'_>,
     ) -> Result<Vec<String>> {
         let mut item_ids = Vec::with_capacity(items.len());
+        let mut used_item_ids = HashSet::with_capacity(items.len());
 
         for item in items {
             let tool_link_item = item.clone();
             self.ensure_call_id_consistency(context.thread_id, &item)?;
             let item_id = self
-                .find_matching_snapshot_item(&context.candidates, &item_ids, &item)
+                .find_matching_snapshot_item(&context.candidates, &used_item_ids, &item)
                 .unwrap_or_else(|| {
                     self.create_conversation_item(
                         context.thread_id,
@@ -413,10 +419,10 @@ impl TraceReducer {
                 &tool_link_item.kind,
             )?;
             self.resolve_pending_agent_edges_for_item(&item_id)?;
+            used_item_ids.insert(item_id.clone());
             item_ids.push(item_id);
         }
 
-        self.flush_pending_code_cell_starts()?;
         Ok(item_ids)
     }
 
@@ -491,13 +497,13 @@ impl TraceReducer {
     fn find_matching_snapshot_item(
         &self,
         previous_snapshot: &[String],
-        used_item_ids: &[String],
+        used_item_ids: &HashSet<String>,
         normalized: &NormalizedConversationItem,
     ) -> Option<String> {
         previous_snapshot
             .iter()
             .find(|item_id| {
-                !used_item_ids.contains(item_id) && self.item_matches(item_id, normalized)
+                !used_item_ids.contains(*item_id) && self.item_matches(item_id, normalized)
             })
             .cloned()
     }
@@ -507,6 +513,15 @@ impl TraceReducer {
         thread_id: &str,
         normalized: &NormalizedConversationItem,
     ) -> Result<()> {
+        // One call can emit several outputs, and history trimming can rewrite
+        // them. Keep distinct outputs as separate items; only the invocation
+        // itself must remain consistent.
+        if !matches!(
+            normalized.kind,
+            ConversationItemKind::FunctionCall | ConversationItemKind::CustomToolCall
+        ) {
+            return Ok(());
+        }
         let Some(call_id) = normalized.call_id.as_deref() else {
             return Ok(());
         };
