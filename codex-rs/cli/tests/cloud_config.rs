@@ -46,7 +46,7 @@ struct CloudManagedConfigFixture {
 }
 
 impl CloudManagedConfigFixture {
-    async fn new() -> Result<Option<Self>> {
+    async fn for_backend() -> Result<Option<Self>> {
         let server = MockServer::start().await;
         let chatgpt_base_url = format!("{}/backend-api", server.uri());
         let codex_home = TempDir::new()?;
@@ -84,6 +84,19 @@ impl CloudManagedConfigFixture {
         )?;
 
         let mcp_url = format!("{}/mcp", server.uri());
+        Ok(Some(Self {
+            server,
+            codex_home,
+            user_config,
+            mcp_url,
+        }))
+    }
+
+    async fn new() -> Result<Option<Self>> {
+        let Some(fixture) = Self::for_backend().await? else {
+            return Ok(None);
+        };
+        let mcp_url = &fixture.mcp_url;
         let managed_config = format!(
             "mcp_oauth_credentials_store = \"file\"\n\n\
              [mcp_servers.{MANAGED_SERVER_NAME}]\n\
@@ -110,15 +123,10 @@ impl CloudManagedConfigFixture {
                 },
             })))
             .expect(1)
-            .mount(&server)
+            .mount(&fixture.server)
             .await;
 
-        Ok(Some(Self {
-            server,
-            codex_home,
-            user_config,
-            mcp_url,
-        }))
+        Ok(Some(fixture))
     }
 
     fn command(&self, args: &[&str]) -> Result<Command> {
@@ -455,6 +463,7 @@ async fn mock_startup_bundle(server: &MockServer, status: u16, config: &str, req
     };
     Mock::given(method("GET"))
         .and(path("/backend-api/wham/config/bundle"))
+        .and(header("authorization", "Bearer chatgpt-token"))
         .respond_with(ResponseTemplate::new(status).set_body_json(json!({
             "config_toml": layer(config), "requirements_toml": layer(requirements),
         })))
@@ -577,5 +586,95 @@ async fn startup_config_sign_out_reloads_policy_without_starting_runtime() -> Re
         assert!(!status.status.success());
         fixture.server.verify().await;
     }
+    Ok(())
+}
+
+const BUNDLE: &str = "/backend-api/wham/config/bundle";
+const REGISTER: &str = "/cloud/environment/test/register";
+const REGISTRATION_REACHED: &str = "registration reached";
+
+#[tokio::test]
+async fn remote_exec_server_loads_cloud_provider_with_chatgpt_auth() -> Result<()> {
+    check_registration(
+        "forced_login_method = 'chatgpt'\nmodel_provider = 'cloud-provider'",
+        Some((
+            "[model_providers.cloud-provider]\nname = 'Cloud provider'\nwire_api = 'responses'",
+            "",
+        )),
+        "Bearer chatgpt-token",
+        REGISTRATION_REACHED,
+        &[BUNDLE, REGISTER],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn remote_exec_server_api_key_skips_chatgpt_cloud_config() -> Result<()> {
+    check_registration(
+        "",
+        /*bundle*/ None,
+        "Bearer test-api-key",
+        REGISTRATION_REACHED,
+        &[REGISTER],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn remote_exec_server_cloud_policy_denies_registration() -> Result<()> {
+    check_registration(
+        "forced_login_method = 'chatgpt'",
+        Some(("", "[application.network]\nenabled = true\n[application.network.domains]\n'gateway.example.com' = 'allow'")),
+        "Bearer chatgpt-token",
+        "destination denied by application network policy",
+        &[BUNDLE],
+    )
+    .await
+}
+
+async fn check_registration(
+    config: &str,
+    bundle: Option<(&str, &str)>,
+    registration_auth: &str,
+    expected_error: &str,
+    expected_paths: &[&str],
+) -> Result<()> {
+    let fixture = CloudManagedConfigFixture::for_backend()
+        .await?
+        .context("remote registration test requires isolated mock credentials")?;
+    let server = &fixture.server;
+    if let Some((config, requirements)) = bundle {
+        mock_startup_bundle(server, /*status*/ 200, config, requirements).await;
+    }
+    Mock::given(method("POST"))
+        .and(path(REGISTER))
+        .and(header("authorization", registration_auth))
+        .respond_with(ResponseTemplate::new(400).set_body_string(REGISTRATION_REACHED))
+        .mount(server)
+        .await;
+    std::fs::write(
+        fixture.codex_home.path().join("config.toml"),
+        format!("{}{config}\n", fixture.user_config),
+    )?;
+    let mut command = fixture.command(&[
+        "exec-server",
+        "--remote",
+        &server.uri(),
+        "--environment-id",
+        "test",
+    ])?;
+    command.env("CODEX_API_KEY", "test-api-key");
+    let output = timeout(Duration::from_secs(30), command.output()).await??;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success() && stderr.contains(expected_error),
+        "{stderr}"
+    );
+    let requests = server
+        .received_requests()
+        .await
+        .context("mock request log")?;
+    let paths: Vec<_> = requests.iter().map(|request| request.url.path()).collect();
+    assert_eq!(paths, expected_paths);
     Ok(())
 }

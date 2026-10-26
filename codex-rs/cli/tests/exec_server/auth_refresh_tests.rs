@@ -27,7 +27,9 @@ async fn noise_executor_refreshes_on_401_and_reloads_rotated_credentials() -> Re
     )?;
     write_chatgpt_auth(
         home.path(),
-        ChatGptAuthFixture::new("old-token").account_id("account"),
+        ChatGptAuthFixture::new("old-token")
+            .account_id("account")
+            .chatgpt_user_id("user"),
         AuthCredentialsStoreMode::File,
     )?;
     Mock::given(path("/refresh"))
@@ -94,7 +96,9 @@ async fn noise_executor_refreshes_on_401_and_reloads_rotated_credentials() -> Re
     // Update storage while the executor is alive, then force a new registration.
     write_chatgpt_auth(
         home.path(),
-        ChatGptAuthFixture::new("rotated-token").account_id("account"),
+        ChatGptAuthFixture::new("rotated-token")
+            .account_id("account")
+            .chatgpt_user_id("user"),
         AuthCredentialsStoreMode::File,
     )?;
     websocket.close(None).await?;

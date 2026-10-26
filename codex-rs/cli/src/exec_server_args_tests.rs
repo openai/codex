@@ -73,6 +73,20 @@ fn exec_server_defaults_preserve_local_and_noise_modes() {
 }
 
 #[test]
+fn remote_forwarder_skips_cloud_config() {
+    let command = exec_server_from_args(&[
+        "forward",
+        "--connect",
+        "ws://localhost:8765",
+        "--remote",
+        "https://registry.example.com",
+        "--environment-id",
+        "env-1",
+    ]);
+    assert!(!command.should_load_cloud_config());
+}
+
+#[test]
 fn exec_server_parses_direct_aws_options() {
     for (options, expected) in [
         (vec![], (None, None, "execute-api")),
@@ -107,6 +121,7 @@ fn exec_server_parses_direct_aws_options() {
         assert_eq!(command.environment_id.as_deref(), Some("env-1"));
         assert_eq!(command.remote_transport, ExecServerRemoteTransport::Direct);
         assert!(command.aws_sigv4);
+        assert!(!command.should_load_cloud_config());
         assert_eq!(
             (
                 command.aws_profile.as_deref(),

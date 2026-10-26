@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use clap::Parser;
+use codex_app_server::in_process::EmbeddedNetworkPolicy;
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_config::chatgpt_config_bundle_loader_for_storage;
 use codex_config::LoaderOverrides;
@@ -19,7 +20,6 @@ use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::is_workload_identity_selected;
 use codex_login::read_codex_access_token_from_env;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
@@ -176,6 +176,7 @@ impl ExecServerCommand {
     ) -> anyhow::Result<()> {
         let strict_config = self.strict_config;
         self.validate_remote_transport()?;
+        let enable_cloud_config = self.should_load_cloud_config();
         let websocket_auth = self.websocket_auth.try_into_settings()?;
         if websocket_auth.config.is_some() && (self.remote.is_some() || self.command.is_some()) {
             anyhow::bail!("WebSocket listener auth cannot be used with --remote or forward");
@@ -203,12 +204,9 @@ impl ExecServerCommand {
             let environment_id = self.environment_id.take().ok_or_else(|| {
                 anyhow::anyhow!("--environment-id is required when --remote is set")
             })?;
-            let config = load_exec_server_config(
-                root_config_overrides,
-                strict_config,
-                /*enable_workload_identity*/ !self.executor_credential_stdin,
-            )
-            .await?;
+            let config =
+                load_exec_server_config(root_config_overrides, strict_config, enable_cloud_config)
+                    .await?;
             let direct_transport = self.remote_transport == ExecServerRemoteTransport::Direct;
             // Configured exporters may contain account-wide credentials or client keys.
             // The scoped executor must not initialize those exporters.
@@ -309,12 +307,9 @@ impl ExecServerCommand {
             }
             result
         } else {
-            let config_result = load_exec_server_config(
-                root_config_overrides,
-                strict_config,
-                /*enable_workload_identity*/ false,
-            )
-            .await;
+            let config_result =
+                load_exec_server_config(root_config_overrides, strict_config, enable_cloud_config)
+                    .await;
             let config = if strict_config {
                 Some(config_result?)
             } else {
@@ -351,6 +346,14 @@ impl ExecServerCommand {
             );
             run.await.map_err(anyhow::Error::from_boxed)
         }
+    }
+
+    pub(super) fn should_load_cloud_config(&self) -> bool {
+        self.remote.is_some()
+            && self.command.is_none()
+            && !self.executor_credential_stdin
+            && !self.aws_sigv4
+            && !self.use_agent_identity_auth
     }
 
     pub(super) fn validate_remote_transport(&self) -> anyhow::Result<()> {
@@ -482,7 +485,7 @@ pub(super) fn validate_api_key_remote_host(base_url: &str) -> anyhow::Result<()>
 async fn load_exec_server_config(
     root_config_overrides: &CliConfigOverrides,
     strict_config: bool,
-    enable_workload_identity: bool,
+    enable_cloud_config: bool,
 ) -> anyhow::Result<codex_core::config::Config> {
     let cli_kv_overrides = root_config_overrides
         .parse_overrides()
@@ -491,15 +494,17 @@ async fn load_exec_server_config(
     let mut builder = ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .strict_config(strict_config);
-    if enable_workload_identity && is_workload_identity_selected() {
+    if enable_cloud_config {
         let codex_home = find_codex_home()?;
+        let loader_overrides = LoaderOverrides::default();
+        let network_policy = EmbeddedNetworkPolicy::load(&loader_overrides).await;
         let bootstrap_cwd = AbsolutePathBuf::current_dir()?;
         let bootstrap_config = load_config_toml_with_layer_stack(
             &codex_home,
             Some(&bootstrap_cwd),
             bootstrap_cli_overrides,
             ConfigLoadOptions {
-                loader_overrides: LoaderOverrides::default(),
+                loader_overrides,
                 strict_config,
                 cloud_config_bundle: Default::default(),
             },
@@ -507,13 +512,15 @@ async fn load_exec_server_config(
         .await?;
         let bootstrap_auth_config = bootstrap_auth_config(&codex_home, &bootstrap_config)?;
         let cloud_config_bundle = chatgpt_config_bundle_loader_for_storage(
-            bootstrap_auth_config,
-            /*enable_codex_api_key_env*/ false,
+            network_policy.bind_bootstrap_auth(bootstrap_auth_config),
+            /*enable_codex_api_key_env*/ true,
         )
         .await?;
         builder = builder.cloud_config_bundle(cloud_config_bundle);
     }
-    Ok(builder.build().await?)
+    let mut config = builder.build().await?;
+    EmbeddedNetworkPolicy::default().activate(&mut config);
+    Ok(config)
 }
 
 async fn load_exec_server_remote_auth(

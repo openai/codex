@@ -34,14 +34,53 @@ enabled = true
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sandbox_fetches_and_enforces_cloud_managed_permission_profile() -> Result<()> {
+    let requirements = json!({"enterprise_managed": [{
+        "id": "req-managed-cloud", "name": "Managed permissions",
+        "contents": CLOUD_MANAGED_PERMISSION_PROFILE_REQUIREMENTS,
+    }]});
+    let Some(codex_home) = run_cloud_sandbox(
+        &["-P", "managed-cloud", "--include-managed-config"],
+        json!({"requirements_toml": requirements}),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+    let cache: Value = serde_json::from_slice(&std::fs::read(
+        codex_home.path().join("cloud-config-bundle-cache.json"),
+    )?)?;
+    let payload = &cache["signed_payload"];
+    assert_eq!(payload["chatgpt_user_id"], "user-123");
+    assert_eq!(payload["account_id"], "workspace-123");
+    assert_eq!(payload["bundle"]["requirements_toml"], requirements);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sandbox_loads_cloud_provider_for_cua_style_invocation() -> Result<()> {
+    run_cloud_sandbox(
+        &[
+            "-c",
+            "model_provider='cloud-provider'",
+            "-c",
+            "default_permissions='cua'",
+            "-c",
+            "permissions.cua={extends=':workspace',network={enabled=true}}",
+            "-c",
+            "approval_policy='never'",
+        ],
+        json!({"config_toml": {"enterprise_managed": [{
+            "id": "cloud-provider", "name": "Cloud provider",
+            "contents": "[model_providers.cloud-provider]\nname = 'Cloud provider'\nwire_api = 'responses'",
+        }]}}),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn run_cloud_sandbox(args: &[&str], bundle: Value) -> Result<Option<TempDir>> {
     let server = MockServer::start().await;
     let chatgpt_base_url = format!("{}/backend-api", server.uri());
-    let expected_requirements = json!([{
-        "id": "req-managed-cloud",
-        "name": "Managed permissions",
-        "contents": CLOUD_MANAGED_PERMISSION_PROFILE_REQUIREMENTS,
-    }]);
-
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("config.toml"),
@@ -73,7 +112,7 @@ async fn sandbox_fetches_and_enforces_cloud_managed_permission_profile() -> Resu
         eprintln!(
             "skipping cloud-managed sandbox subprocess: host-managed authentication or backend routing prevents isolated mock credentials"
         );
-        return Ok(());
+        return Ok(None);
     }
 
     write_chatgpt_auth(
@@ -89,11 +128,7 @@ async fn sandbox_fetches_and_enforces_cloud_managed_permission_profile() -> Resu
         .and(path("/backend-api/wham/config/bundle"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "workspace-123"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "requirements_toml": {
-                "enterprise_managed": expected_requirements.clone(),
-            },
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(bundle))
         .expect(1)
         .mount(&server)
         .await;
@@ -107,15 +142,14 @@ async fn sandbox_fetches_and_enforces_cloud_managed_permission_profile() -> Resu
         .env("no_proxy", "127.0.0.1,localhost")
         .env_remove("CODEX_ACCESS_TOKEN")
         .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENAI_FEDERATION_RULE_ID")
+        .env_remove("OPENAI_IDENTITY_TOKEN_FILE")
+        .env_remove("OPENAI_WORKLOAD_IDENTITY_CONTEXT")
         .args(["-c", "cli_auth_credentials_store=\"file\""])
         .args(["-c", chatgpt_base_url_override.as_str()])
-        .args([
-            "sandbox",
-            "-P",
-            "managed-cloud",
-            "--include-managed-config",
-            "--",
-        ])
+        .arg("sandbox")
+        .args(args)
+        .arg("--")
         .arg(&codex)
         .arg("--version")
         .output()?;
@@ -145,24 +179,6 @@ async fn sandbox_fetches_and_enforces_cloud_managed_permission_profile() -> Resu
         );
     }
 
-    let cache: Value = serde_json::from_slice(&std::fs::read(
-        codex_home.path().join("cloud-config-bundle-cache.json"),
-    )?)?;
-    assert_eq!(
-        json!({
-            "chatgpt_user_id": cache["signed_payload"]["chatgpt_user_id"],
-            "account_id": cache["signed_payload"]["account_id"],
-            "requirements_toml": cache["signed_payload"]["bundle"]["requirements_toml"],
-        }),
-        json!({
-            "chatgpt_user_id": "user-123",
-            "account_id": "workspace-123",
-            "requirements_toml": {
-                "enterprise_managed": expected_requirements,
-            },
-        }),
-    );
     server.verify().await;
-
-    Ok(())
+    Ok(Some(codex_home))
 }
