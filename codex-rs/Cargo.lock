@@ -4381,6 +4381,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-plugin-host"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-cargo-bin",
+ "codex-utils-process",
+ "codex-utils-pty",
+ "futures",
+ "libc",
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "codex-process-hardening"
 version = "0.0.0"
 dependencies = [

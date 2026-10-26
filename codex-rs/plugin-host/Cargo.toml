@@ -1,0 +1,39 @@
+[package]
+name = "codex-plugin-host"
+autotests = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+test = false
+
+[[bin]]
+name = "codex-plugin-test-helper"
+path = "tests/fixtures/plugin_process.rs"
+test = false
+bench = false
+doc = false
+
+[[test]]
+name = "process"
+path = "tests/process.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+futures = { workspace = true, features = ["executor", "std"] }
+tokio-util = { workspace = true, features = ["codec", "compat", "rt"] }
+codex-utils-process = { workspace = true }
+codex-utils-pty = { workspace = true }
+libc = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }
+
+[dev-dependencies]
+codex-utils-cargo-bin = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }

@@ -193,6 +193,7 @@ def codex_rust_crate(
         build_script_data = [],
         compile_data = [],
         binary_compile_data_extra = {},
+        test_only_binaries = [],
         lib_data_extra = [],
         rustc_flags_extra = [],
         binary_rustc_flags_extra = {},
@@ -238,6 +239,7 @@ def codex_rust_crate(
         compile_data: Non-Rust compile-time data for the library target.
         binary_compile_data_extra: Mapping from binary names to extra non-Rust
             compile-time data for those binary targets.
+        test_only_binaries: Binary names used only as test fixtures.
         lib_data_extra: Extra runtime data for the library target.
         binary_rustc_flags_extra: Mapping from binary names to extra rustc
             flags for those binary targets.
@@ -432,7 +434,8 @@ def codex_rust_crate(
             # Isolate status inputs in build-commit-env's cheap action so its
             # output, and hence this compiler input, changes only with the commit.
             rustc_env_files = ["//bazel/build-info:build-commit-env"] if binary in binaries_with_build_commit else [],
-            srcs = native.glob(["src/**/*.rs"]),
+            srcs = native.glob(["src/**/*.rs"], exclude = [main], allow_empty = True) + [main],
+            testonly = binary in test_only_binaries,
             stamp = 0,
             version = crate_version,
             visibility = ["//visibility:public"],

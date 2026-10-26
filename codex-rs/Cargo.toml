@@ -30,6 +30,7 @@ members = [
     "code-mode-host",
     "code-mode-protocol",
     "code-mode-runtime",
+    "plugin-host",
     "codex-home",
     "cloud-config",
     "cloud-tasks",
