@@ -9,6 +9,7 @@ use super::StatusLineItem;
 use super::TerminalTitleItem;
 use super::ThreadId;
 use crate::status::StatusHistoryHandle;
+use crate::status::thread_cost_micros;
 use codex_app_server_protocol::ThreadUsage;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,7 +99,7 @@ impl ChatWidget {
             .thread_usage
             .estimate
             .as_ref()
-            .and_then(|estimate| estimate.estimated_usage_usd_micros);
+            .and_then(|estimate| thread_cost_micros(estimate, self.plan_type));
         self.schedule_next_thread_usage_settlement();
         self.request_thread_usage();
     }
@@ -252,7 +253,7 @@ impl ChatWidget {
                     usage.groups.clone_from(&previous_usage.groups);
                 }
                 let estimated_credits_micros = usage.estimated_usage_credits_micros;
-                let estimated_usd_micros = usage.estimated_usage_usd_micros;
+                let estimated_usd_micros = thread_cost_micros(&usage, self.plan_type);
                 self.thread_usage.estimate = Some(usage);
                 if let Some(baseline) = self.thread_usage.settlement_baseline_credits_micros {
                     if !post_turn_request {
@@ -268,10 +269,10 @@ impl ChatWidget {
                     } else {
                         let mut selected = self.selected_thread_usage();
                         if !self.thread_usage.status_history_handles.is_empty() {
-                            selected.credits = true;
-                            selected.estimated_cost |=
-                                self.thread_usage.settlement_baseline_usd_micros.is_some()
-                                    || estimated_usd_micros.is_some();
+                            selected.credits = self.plan_type != Some(PlanType::Ent26);
+                            selected.estimated_cost |= self.plan_type == Some(PlanType::Ent26)
+                                || self.thread_usage.settlement_baseline_usd_micros.is_some()
+                                || estimated_usd_micros.is_some();
                         }
                         let credits_settled =
                             !selected.credits || estimated_credits_micros > baseline;
@@ -361,7 +362,8 @@ impl ChatWidget {
             && matches!(
                 self.plan_type,
                 Some(
-                    PlanType::Business
+                    PlanType::Ent26
+                        | PlanType::Business
                         | PlanType::EnterpriseCbpUsageBased
                         | PlanType::EnterpriseCbpAutomation
                 )
@@ -389,6 +391,7 @@ impl ChatWidget {
                 Ok(_) | Err(_) => {}
             }
         }
+        selected.credits &= self.plan_type != Some(PlanType::Ent26);
         selected
     }
 

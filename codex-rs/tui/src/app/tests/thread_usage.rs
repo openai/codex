@@ -56,6 +56,7 @@ fn successful_thread_usage(thread_id: ThreadId, request_id: u64) -> AppEvent {
         thread_id,
         request_id,
         result: Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            native_usage_usd_micros: None,
             thread_id: thread_id.to_string(),
             estimated_usage_credits_micros: 50_000_000,
             estimated_usage_usd_micros: Some(1_820_000),

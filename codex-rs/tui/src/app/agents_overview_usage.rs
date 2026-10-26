@@ -12,6 +12,7 @@ use crate::chatwidget::ThreadUsageOutcome;
 use crate::status::format_credit_micros;
 use crate::status::format_estimated_usd_micros;
 use crate::status::format_tokens_compact;
+use crate::status::thread_cost_micros;
 use crate::tui::FrameRequester;
 use codex_app_server_protocol::ThreadUsage;
 use codex_app_server_protocol::ThreadUsageBreakdownGroup;
@@ -46,7 +47,8 @@ impl App {
             || !matches!(
                 self.chat_widget.current_plan_type(),
                 Some(
-                    PlanType::Business
+                    PlanType::Ent26
+                        | PlanType::Business
                         | PlanType::EnterpriseCbpUsageBased
                         | PlanType::EnterpriseCbpAutomation
                 )
@@ -144,7 +146,10 @@ impl App {
     }
 }
 
-pub(super) fn usage_lines(usage: &AgentsOverviewUsage) -> Vec<Line<'static>> {
+pub(super) fn usage_lines(
+    usage: &AgentsOverviewUsage,
+    plan_type: Option<PlanType>,
+) -> Vec<Line<'static>> {
     let sum = |count: fn(&ThreadUsageBreakdownGroup) -> Option<i64>| {
         let groups = &usage.estimate.as_ref()?.groups;
         if groups.is_empty() {
@@ -179,15 +184,14 @@ pub(super) fn usage_lines(usage: &AgentsOverviewUsage) -> Vec<Line<'static>> {
     }
     if let Some(estimate) = &usage.estimate {
         let mut values = Vec::new();
-        if estimate.estimated_usage_credits_micros >= 0 {
+        if plan_type != Some(PlanType::Ent26) && estimate.estimated_usage_credits_micros >= 0 {
             values.push(format!(
                 "{} credits",
                 format_credit_micros(estimate.estimated_usage_credits_micros)
             ));
         }
-        if let Some(cost) = estimate
-            .estimated_usage_usd_micros
-            .and_then(format_estimated_usd_micros)
+        if let Some(cost) =
+            thread_cost_micros(estimate, plan_type).and_then(format_estimated_usd_micros)
         {
             values.push(cost);
         }

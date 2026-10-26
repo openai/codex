@@ -13,6 +13,7 @@ use crate::model_catalog::LUNA_RESERVE_MODEL;
 use crate::status::format_credit_micros;
 use crate::status::format_estimated_usd_micros;
 use crate::status::format_tokens_compact;
+use crate::status::thread_cost_micros;
 use crate::terminal_program_status::ProgramStatus;
 use codex_app_server_protocol::AskForApproval;
 use codex_config::ConfigLayerSource;
@@ -807,11 +808,12 @@ impl ChatWidget {
             }),
             StatusLineItem::ThreadCredits => self
                 .estimated_thread_usage()
+                .filter(|_| self.plan_type != Some(PlanType::Ent26))
                 .map(|usage| usage.estimated_usage_credits_micros)
                 .map(|credits| format!("{} credits", format_credit_micros(credits))),
             StatusLineItem::EstimatedThreadCost => self
                 .estimated_thread_usage()
-                .and_then(|usage| usage.estimated_usage_usd_micros)
+                .and_then(|usage| thread_cost_micros(usage, self.plan_type))
                 .and_then(format_estimated_usd_micros),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
             StatusLineItem::FastMode => self

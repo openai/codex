@@ -35,6 +35,7 @@ fn thread_usage(
     estimated_usage_usd_micros: Option<i64>,
 ) -> ThreadUsage {
     ThreadUsage {
+        native_usage_usd_micros: None,
         thread_id: thread_id.to_string(),
         estimated_usage_credits_micros,
         estimated_usage_usd_micros,
@@ -472,27 +473,44 @@ async fn transient_zero_credits_preserves_credits_only_estimates() {
 
 #[tokio::test]
 async fn cost_settlement_waits_for_new_or_missing_usd_estimates() {
-    for (previous_usd_micros, stale_usd_micros) in [
-        (Some(1_820_000), Some(1_820_000)),
-        (None, None),
-        (None, Some(0)),
+    for (plan_type, previous_usd_micros, stale_usd_micros) in [
+        (PlanType::Business, Some(1_820_000), Some(1_820_000)),
+        (PlanType::Business, None, None),
+        (PlanType::Business, None, Some(0)),
+        (PlanType::Ent26, Some(1_820_000), Some(1_820_000)),
+        (PlanType::Ent26, None, None),
+        (PlanType::Ent26, None, Some(0)),
+        (PlanType::Ent26, Some(1_820_000), Some(0)),
     ] {
         let (mut chat, _sender, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let thread_id = ThreadId::new();
+        let [previous_usage, stale_usage, settled_usage] = [
+            (40_000_000, previous_usd_micros),
+            (50_000_000, stale_usd_micros),
+            (50_000_000, Some(2_100_000)),
+        ]
+        .map(|(credits, cost)| {
+            let mut usage = thread_usage(thread_id, credits, cost);
+            usage.native_usage_usd_micros = cost;
+            if plan_type == PlanType::Ent26 {
+                usage.estimated_usage_credits_micros = 0;
+                usage.estimated_usage_usd_micros = Some(0);
+            }
+            usage
+        });
+        let previous_credits_micros = previous_usage.estimated_usage_credits_micros;
         chat.thread_id = Some(thread_id);
         chat.has_codex_backend_auth = true;
-        chat.plan_type = Some(PlanType::Business);
+        chat.plan_type = Some(plan_type);
         chat.local_settings.tui.status_line = Some(vec!["estimated-thread-cost".to_string()]);
+        chat.local_settings.tui.terminal_title =
+            (plan_type == PlanType::Ent26).then(|| vec!["thread-credits".to_string()]);
         chat.refresh_status_line();
         let request_id = thread_usage_request_id(&mut rx);
         assert!(chat.finish_thread_usage_refresh(
             thread_id,
             request_id,
-            Ok(ThreadUsageOutcome::Available(thread_usage(
-                thread_id,
-                /*estimated_usage_credits_micros*/ 40_000_000,
-                previous_usd_micros,
-            ))),
+            Ok(ThreadUsageOutcome::Available(previous_usage)),
         ));
 
         chat.refresh_thread_usage_after_turn();
@@ -500,15 +518,17 @@ async fn cost_settlement_waits_for_new_or_missing_usd_estimates() {
         assert!(chat.finish_thread_usage_refresh(
             thread_id,
             request_id,
-            Ok(ThreadUsageOutcome::Available(thread_usage(
-                thread_id,
-                /*estimated_usage_credits_micros*/ 50_000_000,
-                stale_usd_micros,
-            ))),
+            Ok(ThreadUsageOutcome::Available(stale_usage)),
         ));
+        if plan_type == PlanType::Ent26 {
+            assert_eq!(
+                chat.status_line_text(),
+                stale_usd_micros.and_then(format_estimated_usd_micros)
+            );
+        }
         assert_eq!(
             chat.thread_usage.settlement_baseline_credits_micros,
-            Some(40_000_000)
+            Some(previous_credits_micros)
         );
         assert_eq!(
             chat.thread_usage.settlement_baseline_usd_micros,
@@ -522,11 +542,7 @@ async fn cost_settlement_waits_for_new_or_missing_usd_estimates() {
         assert!(chat.finish_thread_usage_refresh(
             thread_id,
             request_id,
-            Ok(ThreadUsageOutcome::Available(thread_usage(
-                thread_id,
-                /*estimated_usage_credits_micros*/ 50_000_000,
-                Some(2_100_000),
-            ))),
+            Ok(ThreadUsageOutcome::Available(settled_usage)),
         ));
 
         assert_eq!(chat.status_line_text(), Some("~$2.10".to_string()));
@@ -635,6 +651,7 @@ async fn billing_surfaces_render_for_every_supported_enterprise_plan() {
         PlanType::Business,
         PlanType::EnterpriseCbpUsageBased,
         PlanType::EnterpriseCbpAutomation,
+        PlanType::Ent26,
     ] {
         let (mut chat, _sender, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let thread_id = ThreadId::new();
@@ -651,12 +668,44 @@ async fn billing_surfaces_render_for_every_supported_enterprise_plan() {
         assert!(chat.finish_thread_usage_refresh(
             thread_id,
             request_id,
-            Ok(ThreadUsageOutcome::Available(thread_usage(
-                thread_id,
-                /*estimated_usage_credits_micros*/ 5_200_000,
-                Some(210_000),
-            ))),
+            Ok(ThreadUsageOutcome::Available(ThreadUsage {
+                native_usage_usd_micros: Some(750_000),
+                ..thread_usage(
+                    thread_id,
+                    if plan_type == PlanType::Ent26 {
+                        0
+                    } else {
+                        5_200_000
+                    },
+                    Some(if plan_type == PlanType::Ent26 {
+                        0
+                    } else {
+                        210_000
+                    }),
+                )
+            })),
         ));
+
+        assert!(rx.try_recv().is_err(), "billing surfaces share a request");
+        if plan_type == PlanType::Ent26 {
+            insta::assert_snapshot!(chat.status_line_text().unwrap(), @"~$0.75");
+            insta::assert_snapshot!(chat.last_terminal_title.as_ref().unwrap(), @"~$0.75");
+            chat.add_status_output(
+                /*refreshing_rate_limits*/ false, /*request_id*/ None,
+            );
+            let status_cell = match rx.try_recv() {
+                Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+                event => panic!("expected /status card, got {event:?}"),
+            };
+            let usage_row = status_cell
+                .display_lines(/*width*/ 90)
+                .into_iter()
+                .map(|line| line.to_string())
+                .find(|line| line.contains("Thread usage:"))
+                .unwrap();
+            insta::assert_snapshot!(usage_row, @"  Thread usage:        ~$0.75");
+            continue;
+        }
 
         assert_eq!(
             chat.status_line_text(),
@@ -666,7 +715,6 @@ async fn billing_surfaces_render_for_every_supported_enterprise_plan() {
             chat.last_terminal_title,
             Some("5.2 credits | ~$0.21".to_string())
         );
-        assert!(rx.try_recv().is_err(), "billing surfaces share a request");
     }
 }
 
@@ -726,6 +774,7 @@ async fn unchanged_thread_usage_has_bounded_settlement_refreshes() {
         thread_id,
         initial_request_id,
         Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            native_usage_usd_micros: None,
             thread_id: thread_id.to_string(),
             estimated_usage_credits_micros: 46_000_000,
             estimated_usage_usd_micros: Some(1_820_000),
@@ -745,6 +794,7 @@ async fn unchanged_thread_usage_has_bounded_settlement_refreshes() {
             thread_id,
             request_id,
             Ok(ThreadUsageOutcome::Available(ThreadUsage {
+                native_usage_usd_micros: None,
                 thread_id: thread_id.to_string(),
                 estimated_usage_credits_micros: 46_000_000,
                 estimated_usage_usd_micros: Some(1_820_000),
@@ -783,6 +833,7 @@ async fn early_draw_rearms_thread_usage_settlement_after_immediate_redraw() {
         event => panic!("expected initial thread usage request, got {event:?}"),
     };
     let usage = ThreadUsage {
+        native_usage_usd_micros: None,
         thread_id: thread_id.to_string(),
         estimated_usage_credits_micros: 46_000_000,
         estimated_usage_usd_micros: Some(1_820_000),
@@ -848,6 +899,7 @@ async fn thread_usage_settlement_requires_request_started_after_turn_completion(
         thread_id,
         initial_request_id,
         Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            native_usage_usd_micros: None,
             thread_id: thread_id.to_string(),
             estimated_usage_credits_micros: 40_000_000,
             estimated_usage_usd_micros: Some(1_600_000),
@@ -872,6 +924,7 @@ async fn thread_usage_settlement_requires_request_started_after_turn_completion(
         thread_id,
         pre_turn_request_id,
         Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            native_usage_usd_micros: None,
             thread_id: thread_id.to_string(),
             estimated_usage_credits_micros: 46_000_000,
             estimated_usage_usd_micros: Some(1_820_000),
@@ -892,6 +945,7 @@ async fn thread_usage_settlement_requires_request_started_after_turn_completion(
         thread_id,
         post_turn_request_id,
         Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            native_usage_usd_micros: None,
             thread_id: thread_id.to_string(),
             estimated_usage_credits_micros: 46_000_000,
             estimated_usage_usd_micros: Some(1_820_000),
@@ -910,6 +964,7 @@ async fn thread_usage_settlement_requires_request_started_after_turn_completion(
         thread_id,
         settlement_request_id,
         Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            native_usage_usd_micros: None,
             thread_id: thread_id.to_string(),
             estimated_usage_credits_micros: 50_000_000,
             estimated_usage_usd_micros: Some(2_100_000),
@@ -939,6 +994,7 @@ async fn deselecting_billing_surfaces_cancels_polling_and_preserves_status_cache
         thread_id,
         initial_request_id,
         Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            native_usage_usd_micros: None,
             thread_id: thread_id.to_string(),
             estimated_usage_credits_micros: 46_000_000,
             estimated_usage_usd_micros: Some(1_820_000),
@@ -981,6 +1037,7 @@ async fn deselecting_billing_surfaces_cancels_polling_and_preserves_status_cache
     assert_eq!(
         chat.estimated_thread_usage(),
         Some(&ThreadUsage {
+            native_usage_usd_micros: None,
             thread_id: thread_id.to_string(),
             estimated_usage_credits_micros: 46_000_000,
             estimated_usage_usd_micros: Some(1_820_000),
@@ -991,6 +1048,7 @@ async fn deselecting_billing_surfaces_cancels_polling_and_preserves_status_cache
         thread_id,
         settlement_request_id,
         Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            native_usage_usd_micros: None,
             thread_id: thread_id.to_string(),
             estimated_usage_credits_micros: 50_000_000,
             estimated_usage_usd_micros: Some(2_100_000),

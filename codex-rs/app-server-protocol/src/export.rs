@@ -2409,6 +2409,8 @@ mod tests {
                 let legacy_optional_nullable_field = (path
                     == Path::new("v2/GetAccountTokenUsageResponse.ts")
                     && field_prefix.trim() == "threadUsage?")
+                    || (path == Path::new("v2/ThreadUsage.ts")
+                        && field_prefix.trim() == "nativeUsageUsdMicros?")
                     || (path == Path::new("v2/McpServerOauthLoginCompletedNotification.ts")
                         && field_prefix.trim() == "loginId?")
                     || (path == Path::new("v2/MisalignmentErrorDetails.ts")

@@ -224,7 +224,12 @@ impl App {
             usage_lines: ThreadId::from_string(&root.id)
                 .ok()
                 .and_then(|id| self.agents_overview.usage.get(&id))
-                .map(super::agents_overview_usage::usage_lines)
+                .map(|usage| {
+                    super::agents_overview_usage::usage_lines(
+                        usage,
+                        self.chat_widget.current_plan_type(),
+                    )
+                })
                 .unwrap_or_default(),
             last_message,
         }

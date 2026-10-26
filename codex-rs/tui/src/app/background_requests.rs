@@ -1428,8 +1428,9 @@ mod tests {
                 serde_json::json!({
                     "threads": [{
                         "thread_id": thread_id.to_string(),
-                        "estimated_usage_credits_micros": 46_000_000,
-                        "estimated_usage_usd_micros": 1_820_000
+                        "estimated_usage_credits_micros": 0,
+                        "estimated_usage_usd_micros": 0,
+                        "native_usage_usd_micros": 750_000
                     }]
                 }),
             ))
@@ -1442,9 +1443,10 @@ mod tests {
                 .await
                 .expect("read thread usage through the authenticated app server"),
             ThreadUsageOutcome::Available(ThreadUsage {
+                native_usage_usd_micros: Some(750_000),
                 thread_id: thread_id.to_string(),
-                estimated_usage_credits_micros: 46_000_000,
-                estimated_usage_usd_micros: Some(1_820_000),
+                estimated_usage_credits_micros: 0,
+                estimated_usage_usd_micros: Some(0),
                 groups: Vec::new(),
             })
         );

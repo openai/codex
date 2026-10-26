@@ -199,6 +199,47 @@ async fn selected_usage_is_cached_and_account_changes_discard_old_results() -> R
         assert_eq!(app.agents_overview.pending_usage, None);
         assert!(!app.agents_overview.usage_disabled);
     }
+    app.chat_widget.update_account_state(
+        /*status_account_display*/ None,
+        Some(PlanType::Ent26),
+        /*has_chatgpt_account*/ false,
+        /*has_codex_backend_auth*/ true,
+    );
+    let view = app.agents_overview_view(threads.to_vec(), Some(selected));
+    app.agents_overview.visible_thread_ids = view.thread_ids();
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    app.refresh_agents_overview_usage(&app_server, tui.frame_requester());
+    let (thread_id, request_id) = app
+        .agents_overview
+        .pending_usage
+        .expect("request ENT26 usage");
+    assert_eq!(thread_id, selected);
+    let mut native_usage = expected.clone();
+    native_usage.estimated_usage_credits_micros = 0;
+    native_usage.estimated_usage_usd_micros = Some(0);
+    native_usage.native_usage_usd_micros = Some(750_000);
+    app.finish_agents_overview_usage(
+        thread_id,
+        request_id,
+        Ok(ThreadUsageOutcome::Available(native_usage)),
+    );
+    let view = app.agents_overview_view(threads.to_vec(), Some(selected));
+    let rendered = view
+        .rows
+        .iter()
+        .find(|row| row.thread_id == selected)
+        .unwrap()
+        .details
+        .usage_lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(rendered, @"
+    Tokens: 12K in · 3K out
+    Est. usage: ~$0.75
+    ");
+
     app.agents_overview.usage_disabled = true;
     app.agents_overview.pending_usage = Some((thread_id, request_id));
     app.app_server_target = AppServerTarget::LocalDaemon {
@@ -231,7 +272,7 @@ fn incomplete_billing_groups_do_not_display_partial_token_totals() {
     .unwrap();
     let mut usage = AgentsOverviewUsage::default();
     usage.estimate = Some(estimate);
-    let text = usage_lines(&usage)
+    let text = usage_lines(&usage, Some(PlanType::Business))
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>();

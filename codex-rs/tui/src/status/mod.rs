@@ -33,6 +33,7 @@ pub(crate) use rate_limits::rate_limit_snapshot_display;
 pub(crate) use rate_limits::rate_limit_snapshot_display_for_limit;
 pub(crate) use thread_usage::format_credit_micros;
 pub(crate) use thread_usage::format_estimated_usd_micros;
+pub(crate) use thread_usage::thread_cost_micros;
 
 #[cfg(test)]
 mod tests;

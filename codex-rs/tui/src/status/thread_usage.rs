@@ -7,6 +7,7 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
 use codex_app_server_protocol::ThreadUsage;
 use codex_app_server_protocol::ThreadUsageBreakdownGroup;
+use codex_protocol::account::PlanType;
 use ratatui::prelude::Line;
 use ratatui::style::Stylize;
 use std::collections::BTreeMap;
@@ -31,6 +32,15 @@ const MODELS_LABEL: &str = "  Models";
 const REASONING_LABEL: &str = "  Reasoning";
 const SPEED_LABEL: &str = "  Speed";
 const BILLED_TOKENS_LABEL: &str = "  Billed tokens";
+
+/// ENT26 is billed directly in dollars; missing native usage is not a zero estimate.
+pub(crate) fn thread_cost_micros(usage: &ThreadUsage, plan_type: Option<PlanType>) -> Option<i64> {
+    if plan_type == Some(PlanType::Ent26) {
+        usage.native_usage_usd_micros
+    } else {
+        usage.estimated_usage_usd_micros
+    }
+}
 
 /// Shared state updates a committed `/status` card when its asynchronous estimate arrives.
 #[derive(Clone, Debug, Default)]
@@ -87,6 +97,7 @@ impl StatusThreadUsage {
         &self,
         formatter: &FieldFormatter,
         value_width: usize,
+        plan_type: Option<PlanType>,
     ) -> Vec<Line<'static>> {
         #[expect(clippy::expect_used)]
         let stored_estimate = self
@@ -96,6 +107,14 @@ impl StatusThreadUsage {
         let Some(estimate) = stored_estimate.as_ref() else {
             return Vec::new();
         };
+
+        if plan_type == Some(PlanType::Ent26) {
+            // Credit-weighted breakdowns do not describe native dollar usage.
+            return thread_cost_micros(estimate, plan_type)
+                .and_then(format_estimated_usd_micros)
+                .map(|cost| vec![formatter.line("Thread usage", vec![cost.into()])])
+                .unwrap_or_default();
+        }
 
         let credits_micros = estimate.estimated_usage_credits_micros;
         let mut usage = vec![format!("{} credits", format_credit_micros(credits_micros)).into()];

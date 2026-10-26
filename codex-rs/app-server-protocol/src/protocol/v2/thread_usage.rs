@@ -1,3 +1,5 @@
+//! Thread billing amounts, keeping native dollars separate from credit estimates.
+
 use crate::JsonSchema;
 use crate::TS;
 use serde::Deserialize;
@@ -10,6 +12,9 @@ pub struct ThreadUsage {
     pub thread_id: String,
     pub estimated_usage_credits_micros: i64,
     pub estimated_usage_usd_micros: Option<i64>,
+    /// Native dollar usage, independent of credit estimates. None means unknown, not zero.
+    #[ts(optional, as = "Option<Option<i64>>")]
+    pub native_usage_usd_micros: Option<i64>,
     pub groups: Vec<ThreadUsageBreakdownGroup>,
 }
 

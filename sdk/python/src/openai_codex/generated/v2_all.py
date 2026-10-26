@@ -10784,6 +10784,13 @@ class ThreadUsage(BaseModel):
     estimated_usage_credits_micros: Annotated[int, Field(alias="estimatedUsageCreditsMicros")]
     estimated_usage_usd_micros: Annotated[int | None, Field(alias="estimatedUsageUsdMicros")] = None
     groups: list[ThreadUsageBreakdownGroup]
+    native_usage_usd_micros: Annotated[
+        int | None,
+        Field(
+            alias="nativeUsageUsdMicros",
+            description="Native dollar usage, independent of credit estimates. None means unknown, not zero.",
+        ),
+    ] = None
     thread_id: Annotated[str, Field(alias="threadId")]
 
 

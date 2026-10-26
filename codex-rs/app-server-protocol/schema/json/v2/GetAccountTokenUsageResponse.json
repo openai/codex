@@ -76,6 +76,14 @@
           },
           "type": "array"
         },
+        "nativeUsageUsdMicros": {
+          "description": "Native dollar usage, independent of credit estimates. None means unknown, not zero.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "threadId": {
           "type": "string"
         }

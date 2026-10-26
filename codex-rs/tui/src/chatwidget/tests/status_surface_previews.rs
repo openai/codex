@@ -304,6 +304,7 @@ async fn status_surface_preview_lines_thread_usage_snapshot() {
         thread_id,
         request_id,
         Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            native_usage_usd_micros: None,
             thread_id: thread_id.to_string(),
             estimated_usage_credits_micros: 5_200_000,
             estimated_usage_usd_micros: Some(210_000),
@@ -351,6 +352,7 @@ async fn status_surface_thread_usage_previews_omit_unavailable_usd_estimates() {
         thread_id,
         request_id,
         Ok(ThreadUsageOutcome::Available(ThreadUsage {
+            native_usage_usd_micros: None,
             thread_id: thread_id.to_string(),
             estimated_usage_credits_micros: 5_200_000,
             estimated_usage_usd_micros: None,

@@ -1295,6 +1295,7 @@ impl AccountRequestProcessor {
                     thread_id: usage.thread_id,
                     estimated_usage_credits_micros: usage.estimated_usage_credits_micros,
                     estimated_usage_usd_micros: usage.estimated_usage_usd_micros,
+                    native_usage_usd_micros: usage.native_usage_usd_micros,
                     groups: usage
                         .groups
                         .into_iter()
