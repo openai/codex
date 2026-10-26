@@ -29,6 +29,7 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
+use crate::tools::registry::ToolTelemetryTags;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
@@ -492,6 +493,19 @@ fn one_shot_exec_command_spec(spec: ToolSpec) -> ToolSpec {
 }
 
 impl CoreToolRuntime for ExecCommandHandler {
+    fn telemetry_tags(&self, invocation: &ToolInvocation) -> ToolTelemetryTags {
+        // Record the configured mode so fallback calls remain in their rollout cohort.
+        // This does not indicate whether the command actually used a snapshot.
+        let mode = if invocation.session.enabled(Feature::ShellSnapshotV2) {
+            "v2"
+        } else if invocation.session.enabled(Feature::ShellSnapshot) {
+            "v1"
+        } else {
+            "disabled"
+        };
+        vec![("shell_snapshot_mode", mode.to_string())]
+    }
+
     fn environments_for_input(
         &self,
         invocation: &ToolInvocation,

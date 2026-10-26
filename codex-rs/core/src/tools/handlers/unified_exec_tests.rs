@@ -777,3 +777,60 @@ async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separ
         ]
     );
 }
+
+#[test_case::test_case(false, false, "disabled"; "disabled")]
+#[test_case::test_case(true, false, "v1"; "v1")]
+#[test_case::test_case(true, true, "v2"; "v2")]
+#[test_case::test_case(false, true, "v2"; "v2 without v1")]
+#[tokio::test]
+async fn exec_command_telemetry_records_configured_snapshot_mode(
+    v1_enabled: bool,
+    v2_enabled: bool,
+    expected_mode: &str,
+) {
+    use crate::session::tests::make_session_and_context_with_auth_and_config_and_rx;
+    use codex_features::Feature;
+
+    let (session, turn, _events) = make_session_and_context_with_auth_and_config_and_rx(
+        codex_login::CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            for (feature, enabled) in [
+                (Feature::ShellSnapshot, v1_enabled),
+                (Feature::ShellSnapshotV2, v2_enabled),
+            ] {
+                if enabled {
+                    config
+                        .features
+                        .enable(feature)
+                        .expect("enable snapshot feature");
+                } else {
+                    config
+                        .features
+                        .disable(feature)
+                        .expect("disable snapshot feature");
+                }
+            }
+        },
+    )
+    .await;
+    let invocation = ToolInvocation {
+        session,
+        step_context: StepContext::for_test(Arc::clone(&turn)),
+        turn,
+        cancellation_token: tokio_util::sync::CancellationToken::new(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "snapshot-metric".to_string(),
+        tool_name: codex_tools::ToolName::plain("exec_command"),
+        source: ToolCallSource::Direct,
+        // Non-login commands cannot use V2 but must stay in the configured cohort.
+        payload: ToolPayload::Function {
+            arguments: r#"{"cmd":"true","login":false}"#.to_string(),
+        },
+        environments: Default::default(),
+    };
+    assert_eq!(
+        ExecCommandHandler::default().telemetry_tags(&invocation),
+        vec![("shell_snapshot_mode", expected_mode.to_string())],
+    );
+}
