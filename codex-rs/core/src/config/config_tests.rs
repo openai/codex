@@ -258,9 +258,9 @@ async fn load_config_applies_optional_mcp_startup_grace() -> std::io::Result<()>
 async fn load_config_resolves_thread_unload_delay() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     for (toml, seconds) in [
-        ("", 1800),
+        ("", 60),
         ("thread_unload_delay_secs = 0", 0),
-        ("thread_unload_delay_secs = 60", 60),
+        ("thread_unload_delay_secs = 1800", 1800),
     ] {
         let config = Config::load_from_base_config_with_overrides(
             toml::from_str(toml)?,
