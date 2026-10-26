@@ -45,10 +45,9 @@ impl CellHost for TestHost {
         &self,
         _stored_value_writes: HashMap<String, Arc<JsonValue>>,
         event: CellEvent,
-        pending_initial_yield_items: Option<Vec<OutputItem>>,
         cell_state: Arc<CellState>,
     ) -> CompletionCommit {
-        cell_state.commit_completion(event, pending_initial_yield_items, || {})
+        cell_state.commit_completion(event, || {})
     }
 
     async fn closed(&self) {}
@@ -77,10 +76,9 @@ impl CellHost for RecordingHost {
         &self,
         _stored_value_writes: HashMap<String, Arc<JsonValue>>,
         event: CellEvent,
-        pending_initial_yield_items: Option<Vec<OutputItem>>,
         cell_state: Arc<CellState>,
     ) -> CompletionCommit {
-        cell_state.commit_completion(event, pending_initial_yield_items, || {})
+        cell_state.commit_completion(event, || {})
     }
 
     async fn closed(&self) {}
@@ -479,11 +477,7 @@ async fn only_the_first_termination_claims_a_buffered_completion() {
         error_text: None,
     };
     assert_eq!(
-        cell_state.commit_completion(
-            completion.clone(),
-            /*pending_initial_yield_items*/ None,
-            || {}
-        ),
+        cell_state.commit_completion(completion.clone(), || {}),
         CompletionCommit::Committed
     );
     assert!(matches!(
@@ -517,11 +511,7 @@ async fn termination_claim_prevents_stored_value_commit() {
     };
 
     assert_eq!(
-        cell_state.commit_completion(
-            completion.clone(),
-            /*pending_initial_yield_items*/ None,
-            || commit_ran = true
-        ),
+        cell_state.commit_completion(completion.clone(), || commit_ran = true),
         CompletionCommit::Rejected(completion)
     );
     assert!(!commit_ran);
@@ -539,17 +529,15 @@ async fn termination_claim_prevents_stored_value_commit() {
 #[tokio::test(start_paused = true)]
 async fn failed_completion_delivery_rebuffers_the_event() {
     let cell_state = CellState::new(CancellationToken::new());
-    let event = CellEvent::Completed {
-        content_items: Vec::new(),
-        result_buffered_for: Duration::ZERO,
+    let completion = |result_buffered_for| CellEvent::Completed {
+        content_items: vec![OutputItem::Text {
+            text: "done".to_string(),
+        }],
+        result_buffered_for,
         error_text: None,
     };
     assert_eq!(
-        cell_state.commit_completion(
-            event.clone(),
-            /*pending_initial_yield_items*/ None,
-            || {}
-        ),
+        cell_state.commit_completion(completion(Duration::ZERO), || {}),
         CompletionCommit::Committed
     );
     let (response_tx, response_rx) = oneshot::channel();
@@ -560,159 +548,20 @@ async fn failed_completion_delivery_rebuffers_the_event() {
     ));
     assert!(cell_state.accepting_observations());
 
-    let (response_tx, mut response_rx) = oneshot::channel();
-    assert!(matches!(
-        cell_state.route_observation(ObserveMode::YieldAfter(Duration::ZERO), response_tx),
-        ObservationDelivery::Delivered
-    ));
-    assert_eq!(response_rx.try_recv(), Ok(Ok(event)));
-}
-
-#[tokio::test(start_paused = true)]
-async fn buffered_initial_yield_precedes_buffered_completion_for_yield_observer() {
-    let cell_state = CellState::new(CancellationToken::new());
-    let completion = CellEvent::Completed {
-        content_items: vec![OutputItem::Text {
-            text: "after".to_string(),
-        }],
-        result_buffered_for: Duration::ZERO,
-        error_text: None,
-    };
-    assert_eq!(
-        cell_state.commit_completion(
-            completion.clone(),
-            Some(vec![OutputItem::Text {
-                text: "before".to_string(),
-            }]),
-            || {}
-        ),
-        CompletionCommit::Committed
-    );
-    assert!(matches!(
-        cell_state.deliver_completion(/*response_tx*/ None),
-        CompletionDelivery::Buffered
-    ));
-
-    let (response_tx, mut response_rx) = oneshot::channel();
-    assert!(matches!(
-        cell_state.route_observation(ObserveMode::YieldAfter(Duration::ZERO), response_tx),
-        ObservationDelivery::Buffered
-    ));
-    assert_eq!(
-        response_rx.try_recv(),
-        Ok(Ok(CellEvent::Yielded {
-            content_items: vec![OutputItem::Text {
-                text: "before".to_string(),
-            }],
-        }))
-    );
-
-    let (response_tx, mut response_rx) = oneshot::channel();
-    assert!(matches!(
-        cell_state.route_observation(ObserveMode::YieldAfter(Duration::ZERO), response_tx),
-        ObservationDelivery::Delivered
-    ));
-    assert_eq!(response_rx.try_recv(), Ok(Ok(completion)));
-}
-
-#[tokio::test(start_paused = true)]
-async fn pending_observer_merges_initial_yield_and_completion_output() {
-    let cell_state = CellState::new(CancellationToken::new());
-    assert_eq!(
-        cell_state.commit_completion(
-            CellEvent::Completed {
-                content_items: vec![OutputItem::Text {
-                    text: "after".to_string(),
-                }],
-                result_buffered_for: Duration::ZERO,
-                error_text: None,
-            },
-            Some(vec![OutputItem::Text {
-                text: "before".to_string(),
-            }]),
-            || {}
-        ),
-        CompletionCommit::Committed
-    );
-    assert!(matches!(
-        cell_state.deliver_completion(/*response_tx*/ None),
-        CompletionDelivery::Buffered
-    ));
-
-    let buffered = Duration::from_secs(30);
-    tokio::time::advance(buffered).await;
-    let (response_tx, mut response_rx) = oneshot::channel();
-    assert!(matches!(
-        cell_state.route_observation(ObserveMode::PendingFrontier, response_tx),
-        ObservationDelivery::Delivered
-    ));
-    assert_eq!(
-        response_rx.try_recv(),
-        Ok(Ok(CellEvent::Completed {
-            content_items: vec![
-                OutputItem::Text {
-                    text: "before".to_string(),
-                },
-                OutputItem::Text {
-                    text: "after".to_string(),
-                },
-            ],
-            result_buffered_for: buffered,
-            error_text: None,
-        }))
-    );
-}
-
-#[tokio::test(start_paused = true)]
-async fn dropped_pending_observation_preserves_the_initial_yield_boundary() {
-    let cell_state = CellState::new(CancellationToken::new());
-    let completion = CellEvent::Completed {
-        content_items: vec![OutputItem::Text {
-            text: "after".to_string(),
-        }],
-        result_buffered_for: Duration::ZERO,
-        error_text: None,
-    };
-    assert_eq!(
-        cell_state.commit_completion(
-            completion.clone(),
-            Some(vec![OutputItem::Text {
-                text: "before".to_string(),
-            }]),
-            || {}
-        ),
-        CompletionCommit::Committed
-    );
-    assert!(matches!(
-        cell_state.deliver_completion(/*response_tx*/ None),
-        CompletionDelivery::Buffered
-    ));
-
+    let interval = Duration::from_secs(5);
+    tokio::time::advance(interval).await;
     let (response_tx, response_rx) = oneshot::channel();
     drop(response_rx);
     assert!(matches!(
-        cell_state.route_observation(ObserveMode::PendingFrontier, response_tx),
+        cell_state.route_observation(response_tx),
         ObservationDelivery::Buffered
     ));
 
+    tokio::time::advance(interval).await;
     let (response_tx, mut response_rx) = oneshot::channel();
     assert!(matches!(
-        cell_state.route_observation(ObserveMode::YieldAfter(Duration::ZERO), response_tx),
-        ObservationDelivery::Buffered
-    ));
-    assert_eq!(
-        response_rx.try_recv(),
-        Ok(Ok(CellEvent::Yielded {
-            content_items: vec![OutputItem::Text {
-                text: "before".to_string(),
-            }],
-        }))
-    );
-
-    let (response_tx, mut response_rx) = oneshot::channel();
-    assert!(matches!(
-        cell_state.route_observation(ObserveMode::YieldAfter(Duration::ZERO), response_tx),
+        cell_state.route_observation(response_tx),
         ObservationDelivery::Delivered
     ));
-    assert_eq!(response_rx.try_recv(), Ok(Ok(completion)));
+    assert_eq!(response_rx.try_recv(), Ok(Ok(completion(2 * interval))));
 }

@@ -119,7 +119,6 @@ async fn termination_rejects_a_waiting_store_commit_before_the_next_cell_can_loa
             Arc::new(JsonValue::String("lost".to_string())),
         )]),
         completion.clone(),
-        /*pending_initial_yield_items*/ None,
         Arc::clone(&cell_state),
     );
     tokio::pin!(commit);
