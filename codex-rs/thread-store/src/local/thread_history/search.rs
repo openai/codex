@@ -75,7 +75,7 @@ pub(in crate::local) async fn search_thread_occurrences(
     )?;
     let matcher = LiteralMatcher::new(params.search_term.as_str());
     let lineage = store
-        .resolve_rollout_lineage(params.thread_id, /*initial_path*/ None)
+        .resolve_rollout_lineage_for_history_page(params.thread_id)
         .await?;
     let cursor_segment = cursor
         .as_ref()

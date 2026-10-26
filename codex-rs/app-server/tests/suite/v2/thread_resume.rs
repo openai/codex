@@ -4302,6 +4302,38 @@ async fn cold_paginated_resume_restores_usage_without_loading_turns() -> Result<
         timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(turns_id)).await??;
     assert_eq!(notification.turn_id, turns.data[0].id);
 
+    let id = app_server
+        .send_raw_request(
+            "thread/fork",
+            Some(json!({"threadId": notification.thread_id, "attachToSource": true})),
+        )
+        .await?;
+    let child: ThreadForkResponse = app_server.read_response(id).await?;
+    app_server.shutdown_gracefully().await?;
+
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    for (method, params) in [
+        ("thread/resume", json!({"threadId": child.thread.id})),
+        ("thread/resume", json!({"threadId": child.thread.id})),
+        ("thread/fork", json!({"threadId": child.thread.id})),
+    ] {
+        let id = app_server.send_raw_request(method, Some(params)).await?;
+        let _: serde_json::Value = app_server.read_response(id).await?;
+    }
+    app_server
+        .read_stream_until_notification_message("thread/started")
+        .await?;
+    assert!(
+        app_server
+            .pending_notification_methods()
+            .iter()
+            .all(|method| method != "thread/tokenUsage/updated"),
+        "an empty attached thread must not replay its parent's usage"
+    );
+
     Ok(())
 }
 

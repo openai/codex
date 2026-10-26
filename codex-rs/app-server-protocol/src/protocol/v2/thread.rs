@@ -624,7 +624,7 @@ pub struct ThreadForkParams {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
     /// Persist the fork as an attached thread of its resolved source, hidden from ordinary
-    /// lists. The source cannot be deleted while attached threads exist. Requires local storage;
+    /// lists. The source cannot be deleted while attached threads exist. Requires a paginated source and local storage;
     /// incompatible with ephemeral and deferGoalContinuation. Omitted or false creates an ordinary fork.
     #[experimental("thread/fork.attachToSource")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

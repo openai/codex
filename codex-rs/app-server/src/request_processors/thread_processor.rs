@@ -4514,7 +4514,8 @@ impl ThreadRequestProcessor {
                         };
                         restored_token_usage_turn_id(response_history.get_rollout_items(), turns)
                     })
-                    .filter(|turn_id| !turn_id.is_empty());
+                    .filter(|turn_id| !turn_id.is_empty())
+                    .filter(|_| !paginated_resume || thread.forked_from_id.is_none());
                 if redact_resume_payloads {
                     redact_thread_resume_payloads(&mut thread.turns);
                     if let Some(initial_turns_page) = initial_turns_page.as_mut() {
@@ -4858,7 +4859,8 @@ impl ThreadRequestProcessor {
                         });
                     restored_token_usage_turn_id(history, turns)
                 })
-                .filter(|turn_id| !turn_id.is_empty());
+                .filter(|turn_id| !turn_id.is_empty())
+                .filter(|_| !paginated_resume || thread_summary.forked_from_id.is_none());
             let paginated_initial_turns_page_with_active_slot = if paginated_resume {
                 match params.initial_turns_page.as_ref() {
                     Some(params)
@@ -5391,6 +5393,11 @@ impl ThreadRequestProcessor {
             None
         };
         let paginated_source = matches!(source_thread.history_mode, ThreadHistoryMode::Paginated);
+        if attach_to_source && !paginated_source {
+            return Err(invalid_request(
+                "attachToSource requires a paginated parent",
+            ));
+        }
         if last_turn_id.is_some() && before_turn_id.is_some() {
             return Err(invalid_request(
                 "`beforeTurnId` cannot be combined with `lastTurnId`",
@@ -5839,6 +5846,8 @@ impl ThreadRequestProcessor {
                 thread.turns.as_slice(),
             ));
         }
+        let token_usage_turn_id =
+            token_usage_turn_id.filter(|id| thread.turns.iter().any(|turn| turn.id == *id));
         if let Some(name) = source_thread_name {
             set_thread_name_from_title(&mut thread, name);
         }

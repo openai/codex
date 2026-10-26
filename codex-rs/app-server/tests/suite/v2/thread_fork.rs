@@ -1860,18 +1860,13 @@ async fn thread_fork_warns_for_paginated_full_history_hydration() -> Result<()> 
     Ok(())
 }
 
+#[test_case::test_case(MultiAgentVersion::V1, false; "ordinary v1")]
+#[test_case::test_case(MultiAgentVersion::V2, false; "ordinary v2")]
+#[test_case::test_case(MultiAgentVersion::V1, true; "attached")]
 #[tokio::test]
-async fn thread_fork_freezes_active_paginated_turn_as_interrupted() -> Result<()> {
-    assert_thread_fork_freezes_active_paginated_turn_as_interrupted(MultiAgentVersion::V1).await
-}
-
-#[tokio::test]
-async fn thread_fork_persists_developer_interruption_marker_for_multi_agent_v2() -> Result<()> {
-    assert_thread_fork_freezes_active_paginated_turn_as_interrupted(MultiAgentVersion::V2).await
-}
-
-async fn assert_thread_fork_freezes_active_paginated_turn_as_interrupted(
+async fn thread_fork_freezes_active_paginated_turn_as_interrupted(
     multi_agent_version: MultiAgentVersion,
+    attach_to_source: bool,
 ) -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -1995,6 +1990,7 @@ async fn assert_thread_fork_freezes_active_paginated_turn_as_interrupted(
             params: ThreadForkParams {
                 thread_id: source_thread_id.clone(),
                 thread_source,
+                attach_to_source,
                 ..Default::default()
             },
         })
@@ -2108,6 +2104,25 @@ async fn assert_thread_fork_freezes_active_paginated_turn_as_interrupted(
             },
         })
         .await?;
+    if attach_to_source {
+        assert!(turns.is_empty());
+        for (method, field) in [
+            ("thread/revert", "beforeTurnId"),
+            ("thread/fork", "lastTurnId"),
+        ] {
+            let id = mcp
+                .send_raw_request(
+                    method,
+                    Some(json!({"threadId": forked_thread_id, (field): "active-turn"})),
+                )
+                .await?;
+            let error = mcp
+                .read_stream_until_error_message(RequestId::Integer(id))
+                .await?;
+            assert!(error.error.message.contains("turn not found: active-turn"));
+        }
+        return Ok(());
+    }
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].id, "active-turn");
     assert_eq!(turns[0].root_turn_id.as_deref(), Some("causal-root"));
